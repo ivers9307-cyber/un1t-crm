@@ -21,7 +21,10 @@ import { selectAll } from './select-all.js'
 import { paidTrialClaim } from '../../shared/pipelines/paid-trial.js'
 import { matchProgrammeSignal, programmeClaimLive } from '../../shared/pipelines/programmes.js'
 import { BOARD_KEYS, CLAIM_BOARD_MODULES, OFFER_MODULES } from '../../shared/pipelines/router.js'
-import { loadOfferClaimsForContact, readMembershipSource, UN1T_MEMBERSHIP_SOURCES } from './pipeline-offer-claims.js'
+import {
+  loadOfferClaimsForContact, readMembershipSource, UN1T_MEMBERSHIP_SOURCES,
+  offerPurchaseEntries, withoutOfferPurchases,
+} from './pipeline-offer-claims.js'
 
 export const PROGRAMME_RULES_PATH = Object.freeze(['pipelines', 'programmes'])
 const PROGRAMME_BOARD = BOARD_KEYS.PROGRAMMES
@@ -87,11 +90,17 @@ export const toProgrammeClaim = (row) => {
  * (the run's contact set: a Hatch-home buyer of the Stillorgan trial is not
  * in it, and is placed only as today — spec, Routing).
  *
+ * PIPEBUILD.3g — `offerBoards` (the run's enabled offer boards) takes a
+ * purchase a trial_purchase offer board matches out of the €39 paid claim: it
+ * is that board's claim. The same rows already read, filtered in memory, so a
+ * studio with no trial_purchase offer board computes exactly today's claims.
+ *
  * @returns {Promise<{ ok: true, paidByContact: Map, programmeByContact: Map }
  *   | { ok: false, reason: 'purchases_unreadable'|'claims_unreadable', err: string }>}
  */
-export async function loadClaimsForLocation(db, { locationId, contactIds, now = Date.now() }) {
+export async function loadClaimsForLocation(db, { locationId, contactIds, now = Date.now(), offerBoards = null }) {
   const wanted = contactIds instanceof Set ? contactIds : new Set(contactIds || [])
+  const offerEntries = offerPurchaseEntries(offerBoards)
 
   let purchases
   try {
@@ -121,7 +130,7 @@ export async function loadClaimsForLocation(db, { locationId, contactIds, now = 
   }
 
   const byContact = new Map()
-  for (const p of purchases) {
+  for (const p of withoutOfferPurchases(purchases, offerEntries)) {
     if (!p?.contact_id || !wanted.has(p.contact_id)) continue
     if (!byContact.has(p.contact_id)) byContact.set(p.contact_id, [])
     byContact.get(p.contact_id).push(p)
@@ -213,10 +222,16 @@ export const upsertProgrammeClaims = upsertBoardClaims
  * programme claim when `write` is true; a failed WRITE still returns the claim
  * (the nightly pass records it again), a failed READ is reported.
  *
- * @returns {Promise<{ ok: true, claims: { paid: object|null, programme: { claimedAt:number, source:string|null }|null } }
+ * PIPEBUILD.3g — `offerBoards` as in loadClaimsForLocation: a purchase a
+ * trial_purchase offer board matches is not a €39 paid claim. When one is
+ * given, `purchasePaid` carries the claim over EVERY purchase, for the Class
+ * Pack guard (an offer trial's credits are the trial's, never a pack). With no
+ * such board the result is exactly today's shape.
+ *
+ * @returns {Promise<{ ok: true, claims: { paid: object|null, programme: { claimedAt:number, source:string|null }|null }, purchasePaid?: object|null }
  *   | { ok: false, reason: string, err?: string }>}
  */
-export async function loadClaimsForContact(db, { locationId, contactId, contact, now = Date.now(), rules = EMPTY_RULES, write = true }) {
+export async function loadClaimsForContact(db, { locationId, contactId, contact, now = Date.now(), rules = EMPTY_RULES, write = true, offerBoards = null }) {
   const { data: purchases, error: pErr } = await db
     .from('trial_purchases')
     .select(PURCHASE_COLS)
@@ -237,7 +252,10 @@ export async function loadClaimsForContact(db, { locationId, contactId, contact,
     return { ok: false, reason: 'claims_unreadable', err: bounded(cErr) }
   }
 
-  const paid = paidTrialClaim(Array.isArray(purchases) ? purchases : [], now)
+  const allPurchases = Array.isArray(purchases) ? purchases : []
+  const offerEntries = offerPurchaseEntries(offerBoards)
+  const purchasePaid = paidTrialClaim(allPurchases, now)
+  const paid = offerEntries.length > 0 ? paidTrialClaim(withoutOfferPurchases(allPurchases, offerEntries), now) : purchasePaid
   const stored = Array.isArray(claimRows) && claimRows[0] ? toProgrammeClaim(claimRows[0]) : null
   const storedMap = new Map(stored ? [[contactId, stored]] : [])
   const pending = pendingProgrammeClaims([{ ...(contact || {}), id: contactId }], storedMap, rules, now)
@@ -246,7 +264,7 @@ export async function loadClaimsForContact(db, { locationId, contactId, contact,
     programme = { claimedAt: Date.parse(pending[0].claimed_at), source: pending[0].source }
     if (write) await upsertProgrammeClaims(db, locationId, pending, now)
   }
-  return { ok: true, claims: { paid, programme } }
+  return { ok: true, claims: { paid, programme }, ...(offerEntries.length > 0 ? { purchasePaid } : {}) }
 }
 
 /**
@@ -266,7 +284,7 @@ export async function loadClaimsForContact(db, { locationId, contactId, contact,
  * A failed offer READ fails the call; a recorded claim already written by then
  * is a fact the nightly pass would record the same way.
  *
- * @returns {Promise<{ ok: true, boards: object[], claimBoards: boolean, claims: { paid, programme, offers? }|null, offersRefused?: string }
+ * @returns {Promise<{ ok: true, boards: object[], claimBoards: boolean, claims: { paid, programme, offers? }|null, offersRefused?: string, purchasePaid?: object|null }
  *   | { ok: false, reason: string, boards?: object[] }>}
  */
 export async function loadPlacementClaims(db, { locationId, contactId, contact, now = Date.now(), write = true }) {
@@ -278,29 +296,44 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
   const offerRows = derived.filter((b) => OFFER_MODULES.includes(b.module))
   if (!legacyBoards && offerRows.length === 0) return { ok: true, boards, claimBoards: false, claims: null }
 
+  // The membership source is read first (only when an offer board runs), so a
+  // refused studio's offer boards take nothing out of the €39 claim, exactly
+  // as on the nightly pass, which drops refused boards before reading claims.
+  let offersRefused = null
+  if (offerRows.length > 0) {
+    const source = await readMembershipSource(db, locationId)
+    offersRefused = !source.ok
+      ? source.reason
+      : (UN1T_MEMBERSHIP_SOURCES.includes(source.source) ? 'un1t_online_studio' : null)
+  }
+
   let claims = { paid: null, programme: null }
+  let purchasePaid
   if (legacyBoards) {
     const rulesRes = await loadProgrammeRules(db, locationId)
     if (!rulesRes.ok) return { ok: false, reason: rulesRes.reason, boards }
-    const claimsRes = await loadClaimsForContact(db, { locationId, contactId, contact, now, rules: rulesRes.rules, write })
+    const claimsRes = await loadClaimsForContact(db, {
+      locationId, contactId, contact, now, rules: rulesRes.rules, write,
+      offerBoards: offersRefused ? null : offerRows,
+    })
     if (!claimsRes.ok) return { ok: false, reason: claimsRes.reason, boards }
     claims = claimsRes.claims
+    if ('purchasePaid' in claimsRes) purchasePaid = claimsRes.purchasePaid
   }
-  if (offerRows.length === 0) return { ok: true, boards, claimBoards: true, claims }
+  // PIPEBUILD.3g — the paid claim over every purchase, present only when an
+  // offer board took a purchase out of `claims.paid` (the Class Pack guard).
+  const extra = purchasePaid !== undefined ? { purchasePaid } : {}
+  if (offerRows.length === 0) return { ok: true, boards, claimBoards: true, claims, ...extra }
 
-  const source = await readMembershipSource(db, locationId)
-  const offersRefused = !source.ok
-    ? source.reason
-    : (UN1T_MEMBERSHIP_SOURCES.includes(source.source) ? 'un1t_online_studio' : null)
   if (offersRefused) {
     logWarn('pipeline-claims', 'offer boards refused', { locationId, reason: offersRefused })
-    return { ok: true, boards, claimBoards: true, claims: { ...claims, offers: null }, offersRefused }
+    return { ok: true, boards, claimBoards: true, claims: { ...claims, offers: null }, offersRefused, ...extra }
   }
   const offerRes = await loadOfferClaimsForContact(db, {
     locationId, boards: offerRows, contact: { ...(contact || {}), id: contactId }, now, write,
   })
   if (!offerRes.ok) return { ok: false, reason: offerRes.reason, boards }
-  return { ok: true, boards, claimBoards: true, claims: { ...claims, offers: offerRes.offers } }
+  return { ok: true, boards, claimBoards: true, claims: { ...claims, offers: offerRes.offers }, ...extra }
 }
 
 /**

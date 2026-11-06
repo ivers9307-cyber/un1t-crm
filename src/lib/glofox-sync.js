@@ -2391,7 +2391,11 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     } else if (placement.claimBoards) {
       // The boards ride along so ensureDealForContact reads `pipelines` no more.
       placementOpts = { claims: placement.claims, boards: placement.boards }
-      liveTrialClaim = paidClaimLive(placement.claims?.paid ?? null, claimsRow, syncNow)
+      // PIPEBUILD.3g — when an offer board took a purchase out of claims.paid,
+      // purchasePaid is the claim over EVERY purchase: an offer trial's credits
+      // are the trial's too, never a Class Pack.
+      const packGuardClaim = 'purchasePaid' in placement ? placement.purchasePaid : (placement.claims?.paid ?? null)
+      liveTrialClaim = paidClaimLive(packGuardClaim, claimsRow, syncNow)
     }
   } else {
     // PIPE3 fix pass (review #2) — a sync that skips placement (the detail
@@ -2620,14 +2624,16 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
   // pipeline_stage_change sequence with a to_status other than the creation
   // stage could ever fire.
   //
-  // The adapter fires on 'move' only — NOT on 'leave' (the classifier is
-  // idempotent, so an unchanged member returns 'leave' on every single sync)
-  // and NOT on 'create' (that's contact creation, already covered). Volume is
-  // therefore bounded by real reclassifications of members Glofox reports as
-  // modified, which is the same population the membership_state trigger
-  // already fires for. The NIGHTLY BULK reclassify (pipeline-reclassify.js,
-  // /api/cron/pipeline-classify) is deliberately NOT wired — it moves
-  // thousands of deals in one pass.
+  // It fires on a landed 'move', never on 'leave' (the classifier is
+  // idempotent, so an unchanged member returns 'leave' on every single sync).
+  // A 'create' fires only for a CONFIGURED board (PIPEBUILD.3e: an offer board,
+  // read off the board's board_type by triggerSequencesForDealPlacement, which
+  // fires its entry stage); a first deal on any other board fires nothing, as
+  // contact creation already covers it. Volume is bounded by real
+  // reclassifications of members Glofox reports as modified. The NIGHTLY pass
+  // (pipeline-reclassify.js, /api/cron/pipeline-classify) fires too: its
+  // landed moves on the un1t.online, €39 and offer boards, and its offer-board
+  // creates (TDSEQ.1 / STILL39SEQ.1 / PIPEBUILD.3d).
   let stageChangeTriggerResult = null
   if (dealResult?.action === 'move') {
     try {

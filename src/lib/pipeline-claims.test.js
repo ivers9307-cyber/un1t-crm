@@ -17,6 +17,7 @@ const RULES = { lead_sources: ['meta_50plus'], glofox_plan_patterns: ['elites tr
 // carries the column, error injection per table, upserts logged.
 function fakeDb(tables = {}, { errors = {} } = {}) {
   const writes = []
+  const reads = []
   function chain(table) {
     const filters = []
     let op = 'select'
@@ -41,13 +42,14 @@ function fakeDb(tables = {}, { errors = {} } = {}) {
         writes.push({ table, rows: payload, onConflict })
         return resolve({ data: null, error: null })
       }
+      reads.push(table)
       const data = apply(tables[table])
       if (op === 'single') return resolve({ data: data[0] ?? null, error: null })
       return resolve({ data, error: null })
     }
     return c
   }
-  return { db: { from: (t) => chain(t) }, writes }
+  return { db: { from: (t) => chain(t) }, writes, reads }
 }
 
 describe('programmeRulesFromSettings', () => {
@@ -251,7 +253,7 @@ describe('loadPlacementClaims — offer boards (PIPEBUILD.3e)', () => {
     },
   }
   const contact = { id: 'c1', location_id: LOC }
-  const promo = { id: 'cp1', location_id: LOC, contact_id: 'c1', promo_key: 'acme', status: 'granted', updated_at: iso(T0) }
+  const promo = { id: 'cp1', location_id: LOC, contact_id: 'c1', promo_key: 'acme', status: 'granted', created_at: iso(T0), updated_at: iso(T0) }
 
   it('an offer board alone is a claim board: its claims are read, the €39/Programmes tables are not', async () => {
     const { db } = fakeDb(
@@ -304,5 +306,96 @@ describe('loadPlacementClaims — offer boards (PIPEBUILD.3e)', () => {
   it('a failed offer claim read is reported with its reason', async () => {
     const { db } = fakeDb({ pipelines: [ACQ, CORP], locations: [{ id: LOC, membership_source: 'glofox' }] }, { errors: { corp_promo_claims: 'x' } })
     expect(await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })).toMatchObject({ ok: false, reason: 'promos_unreadable' })
+  })
+})
+
+// PIPEBUILD.3g — a purchase an enabled trial_purchase offer board matches is
+// that board's claim, never also a €39 paid claim: else, when the offer claim
+// lapses first, the buyer drops onto the €39 board and its sequences.
+describe('offer-matched purchases are not €39 paid claims (PIPEBUILD.3g)', () => {
+  const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null }
+  const PAID = { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false, board_type: null }
+  const RESET = {
+    id: 'p3', location_id: LOC, key: 'reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
+    config: {
+      entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] },
+      stages: [{ role: 'new', slug: 'reset_new', name: 'New' }, { role: 'converted', slug: 'reset_converted', name: 'Converted' }],
+      duration_days: 10,
+    },
+  }
+  const TAGGED = { ...RESET, id: 'p4', key: 'tagged', config: { ...RESET.config, entry: { type: 'tag', values: ['vip'] } } }
+  const buy = (id, contactId, planCode, at = T0) => ({
+    id, location_id: LOC, contact_id: contactId, status: 'granted', payment_status: 'paid',
+    paid_at: iso(at), granted_at: iso(at), duration_days: 14, plan_code: planCode, landing_path: null, page_id: null,
+  })
+  const contact = { id: 'c1', location_id: LOC }
+
+  it('offerMatchedPurchaseNotAPaidClaim (nightly)', async () => {
+    const { db } = fakeDb({ trial_purchases: [buy('t1', 'c1', 'RESET14'), buy('t2', 'c2', 'EUR39')], pipeline_board_claims: [] })
+    const out = await loadClaimsForLocation(db, { locationId: LOC, contactIds: new Set(['c1', 'c2']), now: T0, offerBoards: [RESET] })
+    expect(out.ok).toBe(true)
+    expect(out.paidByContact.has('c1')).toBe(false)
+    expect(out.paidByContact.get('c2')).toMatchObject({ start: T0 })
+  })
+
+  it('offerMatchedPurchaseNotAPaidClaim (single contact)', async () => {
+    const { db } = fakeDb({ trial_purchases: [buy('t1', 'c1', 'RESET14')], pipeline_board_claims: [] })
+    const out = await loadClaimsForContact(db, { locationId: LOC, contactId: 'c1', contact, now: T0, rules: RULES, write: false, offerBoards: [RESET] })
+    expect(out.claims.paid).toBeNull()
+    // the claim over every purchase rides along for the Class Pack guard
+    expect(out.purchasePaid).toMatchObject({ start: T0 })
+
+    const placed = fakeDb({
+      pipelines: [ACQ, PAID, RESET], locations: [{ id: LOC, settings: {}, membership_source: 'glofox' }],
+      trial_purchases: [buy('t1', 'c1', 'RESET14')], pipeline_board_claims: [],
+    })
+    const res = await loadPlacementClaims(placed.db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+    expect(res.ok).toBe(true)
+    expect(res.claims.paid).toBeNull()
+    expect(res.claims.offers.get('reset')).toMatchObject({ start: T0, end: T0 + 10 * 86_400_000, source: 'trial_purchase' })
+    expect(res.purchasePaid).toMatchObject({ start: T0 })
+  })
+
+  it('unmatchedPurchaseStillPaid', async () => {
+    const rows = [buy('t1', 'c1', 'EUR39')]
+    const nightly = await loadClaimsForLocation(fakeDb({ trial_purchases: rows, pipeline_board_claims: [] }).db, { locationId: LOC, contactIds: new Set(['c1']), now: T0, offerBoards: [RESET] })
+    expect(nightly.paidByContact.get('c1')).toMatchObject({ start: T0 })
+    const single = await loadClaimsForContact(fakeDb({ trial_purchases: rows, pipeline_board_claims: [] }).db, { locationId: LOC, contactId: 'c1', contact, now: T0, rules: RULES, write: false, offerBoards: [RESET] })
+    expect(single.claims.paid).toMatchObject({ start: T0 })
+    // an older offer purchase beside a newer €39 one: the €39 one is the paid claim
+    const both = await loadClaimsForLocation(fakeDb({ trial_purchases: [buy('t0', 'c1', 'RESET14', T0 + 1000), buy('t1', 'c1', 'EUR39')], pipeline_board_claims: [] }).db,
+      { locationId: LOC, contactIds: new Set(['c1']), now: T0 + 2000, offerBoards: [RESET] })
+    expect(both.paidByContact.get('c1')).toMatchObject({ start: T0 })
+  })
+
+  it('noOfferBoardPaidClaimsUnchanged', async () => {
+    const rows = [buy('t1', 'c1', 'RESET14')]
+    for (const offerBoards of [undefined, null, [], [TAGGED], [{ ...RESET, enabled: false }], [{ ...RESET, board_type: null }]]) {
+      const { db, reads } = fakeDb({ trial_purchases: rows, pipeline_board_claims: [] })
+      const nightly = await loadClaimsForLocation(db, { locationId: LOC, contactIds: new Set(['c1']), now: T0, offerBoards })
+      expect(nightly.paidByContact.get('c1')).toMatchObject({ start: T0 })
+      expect(reads).toEqual(['trial_purchases', 'pipeline_board_claims'])
+      const one = fakeDb({ trial_purchases: rows, pipeline_board_claims: [] })
+      const single = await loadClaimsForContact(one.db, { locationId: LOC, contactId: 'c1', contact, now: T0, rules: RULES, write: false, offerBoards })
+      expect(Object.keys(single).sort()).toEqual(['claims', 'ok'])
+      expect(single.claims.paid).toMatchObject({ start: T0 })
+      expect(one.reads).toEqual(['trial_purchases', 'pipeline_board_claims'])
+    }
+    // a studio with no offer board: loadPlacementClaims has no purchasePaid key
+    const { db } = fakeDb({ pipelines: [ACQ, PAID], locations: [{ id: LOC, settings: {} }], trial_purchases: rows, pipeline_board_claims: [] })
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+    expect('purchasePaid' in out).toBe(false)
+    expect(out.claims.paid).toMatchObject({ start: T0 })
+  })
+
+  it('a refused studio\'s offer boards take nothing out of the €39 claim', async () => {
+    const { db } = fakeDb({
+      pipelines: [ACQ, PAID, RESET], locations: [{ id: LOC, settings: {}, membership_source: 'un1t_online' }],
+      trial_purchases: [buy('t1', 'c1', 'RESET14')], pipeline_board_claims: [],
+    })
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+    expect(out.offersRefused).toBe('un1t_online_studio')
+    expect(out.claims.paid).toMatchObject({ start: T0 })
+    expect('purchasePaid' in out).toBe(false)
   })
 })

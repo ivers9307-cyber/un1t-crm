@@ -1558,6 +1558,7 @@ function fakeDb({
     c.ilike = (col) => { if (col === 'email') mode = 'email'; return c }
     c.limit = () => c
     c.order = () => c
+    c.range = () => c // PIPEBUILD.3g: the offer claim loader pages its reads
     c.in = () => c
     c.is = () => c
     c.gt = () => c
@@ -2949,6 +2950,35 @@ describe('applyMemberSync — pack stamp on the skipBookings path (PIPE3 fix pas
 })
 
 
+// PIPEBUILD.3g — a purchase a trial_purchase offer board matches is not a €39
+// paid claim, but its credits are still the trial's: the pack guard reads the
+// claim over EVERY purchase (loadPlacementClaims' purchasePaid).
+describe('applyMemberSync — pack stamp beside a trial_purchase offer board (PIPEBUILD.3g)', () => {
+  const member = { _id: 'g-buyer', email: 'buyer@x.com', first_name: 'Buy', last_name: 'Er', lead_status: 'TRIAL' }
+  const existing = { id: 'c-buyer', email: 'buyer@x.com', first_name: 'Buy', last_name: 'Er', glofox_member_id: 'g-buyer', glofox_membership_status: 'trial', trial_credits_remaining: 10, pack_customer_at: null, location_id: 'stillorgan' }
+  const at = new Date(Date.now() - 2 * 86_400_000).toISOString()
+  const granted = { id: 'tp1', location_id: 'stillorgan', contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: at, granted_at: at, duration_days: 14, plan_code: 'RESET14', landing_path: null, page_id: null }
+  const RESET = {
+    id: 'p-reset', key: 'reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
+    config: {
+      entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] },
+      stages: [{ role: 'new', slug: 'reset_new', name: 'New' }, { role: 'converted', slug: 'reset_converted', name: 'Converted' }],
+    },
+  }
+  const pipelines = [
+    { id: 'p-acq', key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true },
+    { id: 'p-paid', key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false },
+    RESET,
+  ]
+  const packStamps = (writes) => writes.filter((w) => w.table === 'contacts' && w.op === 'update' && w.payload && 'pack_customer_at' in w.payload)
+
+  it('an offer-board trial buyer with 10 credits is not stamped a Class Pack customer', async () => {
+    const writes = []
+    await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [granted], pipelines, writes }), 'stillorgan', member, { bookings: [], skipInteractions: true })
+    expect(packStamps(writes)).toHaveLength(0)
+  })
+})
+
 // HATCH39 — once Hatch's primary is the derived un1t.online acquisition board,
 // the Glofox-shaped webhook path must leave it alone: the hourly un1t pass
 // places people there (the Cold route already runs reclassifyUn1tBoardNow).
@@ -3066,7 +3096,7 @@ describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e
   }
   const lead = { glofox_membership_status: 'lead', joined_at: ago(1), created_at: ago(1), recent_bookings: [] }
   const fiftyLead = { ...lead, last_lead_source: 'meta_50plus', last_lead_source_at: ago(1) }
-  const promo = { id: 'cp1', location_id: LOC, contact_id: 'c1', promo_key: 'acme', status: 'granted', updated_at: ago(1) }
+  const promo = { id: 'cp1', location_id: LOC, contact_id: 'c1', promo_key: 'acme', status: 'granted', created_at: ago(1), updated_at: ago(1) }
 
   describe('ensureDealUsesBoardKeys', () => {
     it('Hatch-style: a board whose key is not its module name is matched by KEY, so a programmes-module board keyed otherwise is not the Programmes board', async () => {

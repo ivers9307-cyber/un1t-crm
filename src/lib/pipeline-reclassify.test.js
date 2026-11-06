@@ -2048,6 +2048,25 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     ])
   })
 
+  it('offerMatchedPurchaseNotAPaidClaim (nightly): a trial_purchase offer board\'s buyer is never placed on the €39 board', async () => {
+    // The offer board sorts AFTER the €39 board (250 > 200): were the purchase
+    // also a €39 paid claim, the buyer would land on the €39 board.
+    const RESET = { ...CORP, id: 'p-reset', key: 'reset', priority: 250, config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] }, stages: CORP_CONFIG.stages.map((st) => ({ ...st, slug: st.slug.replace('corp_', 'reset_') })) } }
+    const RESET_STAGES = ['reset_new', 'reset_first_class', 'reset_done', 'reset_converted'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-reset', location_id: STILL }))
+    const buyer = { id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', joined_at: ago(2), created_at: ago(2), recent_bookings: [] }
+    const eur39 = { id: 'c-39', name: 'Buyer39', email: null, glofox_membership_status: 'trial', joined_at: ago(2), created_at: ago(2), recent_bookings: [] }
+    const rec = recordingDb(corpFixtures({
+      pipelines: [ACQ, PAID, RESET], pipeline_stages: [...ACQ_STAGES, ...PAID_STAGES, ...RESET_STAGES],
+      contacts: [buyer, eur39], deals: [],
+      trial_purchases: [
+        { id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(2), granted_at: ago(2), duration_days: 14, plan_code: 'RESET14', landing_path: null, page_id: null },
+        { id: 'tp-2', location_id: STILL, contact_id: 'c-39', status: 'granted', payment_status: 'paid', paid_at: ago(2), granted_at: ago(2), duration_days: 14, plan_code: 'EUR39', landing_path: null, page_id: null },
+      ],
+    }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true })
+    expect(out).toMatchObject({ ok: true, board_histogram: { reset: 1, paid_trial: 1 } })
+  })
+
   it('offerClaimReadFailureFailsRun: an unreadable pipeline_board_claims read fails the run before any write', async () => {
     const rec = recordingDb(corpFixtures(), { errors: { pipeline_board_claims: 'claims down' } })
     const out = await reclassifyAllContacts(rec.db, { locationId: STILL })

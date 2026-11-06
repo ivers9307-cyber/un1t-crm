@@ -132,11 +132,38 @@ export function placementDescriptors(boards, { offersKnown = true } = {}) {
   return { descriptors, heldIds }
 }
 
-/** The descriptors alone (an array carrying the skipped list as `.skipped`). */
-export function offerBoardsOf(boards) {
-  const { descriptors, skipped } = splitOfferBoards(boards)
-  descriptors.skipped = skipped
-  return descriptors
+/**
+ * PIPEBUILD.3g — the trial_purchase entries ({ match, values }) of the given
+ * ENABLED offer boards (board_type 'offer', as splitOfferBoards reads them)
+ * whose config parses. Pure and quiet (the loaders log a
+ * bad config; this is asked again by the €39 claim loaders).
+ * @returns {Array<{ match: string, values: string[] }>}
+ */
+export function offerPurchaseEntries(boards) {
+  const out = []
+  for (const b of Array.isArray(boards) ? boards : []) {
+    if (!b || b.enabled !== true || b.board_type !== 'offer') continue
+    const parsed = parseOfferConfig(b.config, { boardKey: b.key })
+    if (parsed.ok && parsed.config.entry.type === 'trial_purchase') out.push(parsed.config.entry)
+  }
+  return out
+}
+
+/** Does this trial_purchases row match a trial_purchase entry? Pure. */
+export function purchaseMatchesEntry(p, entry) {
+  const v = p?.[entry.match]
+  return typeof v === 'string' && entry.values.includes(v)
+}
+
+/**
+ * PIPEBUILD.3g — the purchases that are NOT an offer board's: a purchase an
+ * enabled trial_purchase offer board matches is that board's claim, never also
+ * a €39 paid claim (else, when the offer claim lapses first, the buyer drops
+ * onto the €39 board and its sequences). No entries → the same array.
+ */
+export function withoutOfferPurchases(purchases, entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return purchases
+  return (purchases || []).filter((p) => !entries.some((e) => purchaseMatchesEntry(p, e)))
 }
 
 const claimOf = (start, durationDays, source) => ({ start, end: start + durationDays * DAY_MS, source })
@@ -203,14 +230,15 @@ async function loadOffers(db, { locationId, boards, contacts, now, scopeContactI
       }, { pageSize: PAGE })
     } catch (e) { return failed('purchases_unreadable', 'trial_purchases', locationId, e) }
     for (const board of trialBoards) {
-      const col = board.entry.match
       const byContact = new Map()
       for (const p of rows) {
         if (!p?.contact_id || !wanted.has(p.contact_id)) continue
-        if (typeof p[col] !== 'string' || !board.entry.values.includes(p[col])) continue
-        const dur = Number(p.duration_days) > 0 ? p.duration_days : board.durationDays
+        if (!purchaseMatchesEntry(p, board.entry)) continue
+        // PIPEBUILD.3g — the BOARD's duration_days wins over the purchase row's:
+        // the builder sets the offer's length, and the row's own (the €39
+        // trial's 14 days, a plan default) says nothing about this board.
         if (!byContact.has(p.contact_id)) byContact.set(p.contact_id, [])
-        byContact.get(p.contact_id).push({ ...p, duration_days: dur })
+        byContact.get(p.contact_id).push({ ...p, duration_days: board.durationDays })
       }
       for (const [contactId, list] of byContact) {
         const c = paidTrialClaim(list, now)
@@ -225,7 +253,7 @@ async function loadOffers(db, { locationId, boards, contacts, now, scopeContactI
     let rows
     try {
       rows = await selectAll((from, to) => {
-        let q = db.from('corp_promo_claims').select('id, contact_id, promo_key, status, updated_at')
+        let q = db.from('corp_promo_claims').select('id, contact_id, promo_key, status, created_at')
           .eq('location_id', locationId).eq('status', 'granted')
         if (scopeContactId) q = q.eq('contact_id', scopeContactId)
         return q.order('id', { ascending: true }).range(from, to)
@@ -236,7 +264,9 @@ async function loadOffers(db, { locationId, boards, contacts, now, scopeContactI
       for (const r of rows) {
         if (!r?.contact_id || !wanted.has(r.contact_id) || r.status !== 'granted') continue
         if (!board.entry.values.includes(lower(r.promo_key))) continue
-        const at = parseMs(r.updated_at)
+        // PIPEBUILD.3g — the claim starts when the promo was claimed: created_at.
+        // updated_at is trigger-maintained, so any later edit would restart it.
+        const at = parseMs(r.created_at)
         if (at == null) continue
         if (!best.has(r.contact_id) || at > best.get(r.contact_id)) best.set(r.contact_id, at)
       }

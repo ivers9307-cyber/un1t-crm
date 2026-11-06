@@ -497,10 +497,18 @@ export async function reclassifyAllContacts(db, args) {
     return { ok: false, error: errorMessage, run_id: runId, input_source: inputSource, pipelines_skipped: pipelinesSkipped }
   }
   let programmePending = []
+  // The offer boards running here, as the claim loaders read them. Treated as
+  // running (a dry-run preview of a disabled row included).
+  const offerBoardRows = offerPipelines.map((p) => ({ id: p.id, key: p.key, priority: p.priority, board_type: p.board_type, config: p.config, enabled: true }))
   if (needsLegacyClaims) {
     const rules = await loadProgrammeRules(db, locationId)
     if (!rules.ok) return failClaims(rules.reason)
-    const claims = await loadClaimsForLocation(db, { locationId, contactIds: new Set(contacts.map((c) => c.id)), now: nowMs })
+    // PIPEBUILD.3g — a purchase a trial_purchase offer board matches is that
+    // board's claim, never also a €39 paid claim (offerBoards; no such board =
+    // today's claims exactly).
+    const claims = await loadClaimsForLocation(db, {
+      locationId, contactIds: new Set(contacts.map((c) => c.id)), now: nowMs, offerBoards: offerBoardRows,
+    })
     if (!claims.ok) return failClaims(claims.reason)
     paidByContact = claims.paidByContact
     programmeByContact = claims.programmeByContact
@@ -512,8 +520,7 @@ export async function reclassifyAllContacts(db, args) {
     try {
       offers = await loadOfferClaimsForLocation(db, {
         locationId,
-        // Treated as running (a dry-run preview of a disabled row included).
-        boards: offerPipelines.map((p) => ({ id: p.id, key: p.key, priority: p.priority, board_type: p.board_type, config: p.config, enabled: true })),
+        boards: offerBoardRows,
         contacts,
         now: nowMs,
       })
