@@ -19,7 +19,8 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
-import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { findOrCreateRaceContactWithOutcome } from '@/lib/race-contact-linking'
+import { applyOfferFormConsent } from '@/lib/offer-form-consent'
 import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
@@ -55,7 +56,8 @@ const Schema = z.object({
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
   phone: z.string().trim().min(1).max(50).refine(isValidMobileNumber, 'Enter a valid mobile number'),
-  consent: z.boolean().refine((v) => v === true, { message: 'Please tick consent to continue' }),
+  // MOBILEFUNNEL.1 — optional, unticked by default (src/lib/offer-form-consent.js).
+  consent: z.boolean().optional(),
   // ADS-REPORT.2 — optional first-touch ad-click attribution captured by the
   // /start funnel from the landing URL's UTM/meta_ad_id params. Low-trust:
   // sanitised + length-capped before it ever reaches the DB (see below).
@@ -322,7 +324,7 @@ export async function POST(request) {
   // made every Hatch ad lead look like a race entrant in the contacts
   // list. insertFields applies on CREATE only; a matched contact keeps
   // whatever source it already has.
-  const contactId = await findOrCreateRaceContact({ db, locationId, email: b.email.toLowerCase(), name, phone: b.phone, restrictToOrg: true, insertFields: { source: 'class_booking' } })
+  const { contactId, created: contactCreated } = await findOrCreateRaceContactWithOutcome({ db, locationId, email: b.email.toLowerCase(), name, phone: b.phone, restrictToOrg: true, insertFields: { source: 'class_booking' } })
   if (!contactId) return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
 
   try { await db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null) } catch (e) { logWarn('classbook', 'lead_source failed', { err: e }) }
@@ -363,9 +365,11 @@ export async function POST(request) {
     }
   } catch (e) { logWarn('attribution', 'visit origin failed', { err: e }) }
   try { await writeContactTag(db, { contactId, locationId, tag }) } catch (e) { logWarn('classbook', 'tag failed', { err: e }) }
+  // MOBILEFUNNEL.1 — ticked: opt in; unticked: opt a contact made just now out
+  // (a new contact's marketing defaults to on), leave an existing one alone.
   try {
-    const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
-    await applyFormMarketingConsent(db, { contactId, consent: true, source: 'start_class', ipAddress: ip, locationId })
+    const consentOut = await applyOfferFormConsent(db, { contactId, created: contactCreated, consent: b.consent, source: 'start_class', ipAddress: ip, locationId })
+    if (consentOut.result && consentOut.result.ok === false) logError('classbook', 'consent write failed', { contactId, locationId, applied: consentOut.applied })
   } catch (e) { logWarn('classbook', 'consent failed', { err: e }) }
   // Open (or re-open) this lead's place on the studio's primary board.
   // Best-effort — losing the deal must never cost the booking. Same helper as

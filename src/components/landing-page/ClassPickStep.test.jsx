@@ -7,7 +7,7 @@
 // unreadable list and only when the parent allows it.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, renderHook, waitFor } from '@testing-library/react'
-import ClassPickStep, { useClassList, cadenceGroups, ctaLabelFor, campaignFunnelClassesUrl, isDayFirst } from './ClassPickStep'
+import ClassPickStep, { useClassList, cadenceGroups, ctaLabelFor, campaignFunnelClassesUrl, isDayFirst, keepSelectedInView } from './ClassPickStep'
 
 const COPY = { not_configured_text: 'Not open', timetable_unavailable_text: 'Try later', no_classes_text: 'Nothing open', skip_class_label: 'Carry on without a class' }
 const CLASSES = [
@@ -49,6 +49,8 @@ describe('ClassPickStep', () => {
     expect(chosenTile.getAttribute('data-tile')).toBe('b')
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     expect(onContinue).toHaveBeenCalledTimes(1)
+    // MOBILEFUNNEL.1 — the chosen class travels with the call, never the click event.
+    expect(onContinue).toHaveBeenCalledWith(CLASSES[1])
   })
 
   it('the empty states speak the operator words; the skip button shows only on empty or unavailable, only with onSkip', () => {
@@ -113,11 +115,70 @@ describe('ClassPickStep — day-first for a busy timetable', () => {
     fireEvent.click(document.querySelector('[data-tile="t18"]'))
     expect(onPick).toHaveBeenCalledWith(BUSY[4])
   })
-  it('a chosen slot keeps its day in view and the continue button enabled', () => {
+  it('a chosen slot keeps its day selected', () => {
     mount({ list: loaded(BUSY), chosen: BUSY[5] })
     expect(document.querySelector('[data-day="2099-01-07"]').getAttribute('aria-pressed')).toBe('true')
     expect(document.querySelector('[data-tile="w9"]').getAttribute('aria-pressed')).toBe('true')
-    expect(screen.getByRole('button', { name: 'Next' }).disabled).toBe(false)
+  })
+  it('MOBILEFUNNEL.1: a tapped day wins over the chosen slot\'s day', () => {
+    mount({ list: loaded(BUSY), chosen: BUSY[0] })
+    fireEvent.click(document.querySelector('[data-day="2099-01-06"]'))
+    expect(document.querySelector('[data-day="2099-01-06"]').getAttribute('aria-pressed')).toBe('true')
+    expect(Array.from(document.querySelectorAll('[data-tile]')).map((b) => b.getAttribute('data-tile'))).toEqual(['t6', 't18'])
+  })
+  it('MOBILEFUNNEL.1: tapping a time picks it AND continues with that class; no continue button', () => {
+    const calls = []
+    const onPick = vi.fn((cls) => calls.push(['pick', cls.event_id]))
+    const onContinue = vi.fn((cls) => calls.push(['continue', cls?.event_id]))
+    mount({ list: loaded(BUSY), onPick, onContinue })
+    expect(screen.queryByRole('button', { name: 'Next' })).toBeNull()
+    fireEvent.click(document.querySelector('[data-tile="m7"]'))
+    expect(onPick).toHaveBeenCalledWith(BUSY[1])
+    expect(onContinue).toHaveBeenCalledWith(BUSY[1])
+    expect(calls).toEqual([['pick', 'm7'], ['continue', 'm7']])
+  })
+  it('MOBILEFUNNEL.1: below lg the days are one sideways snapping row of 52x44 tiles; lg keeps the 7-column grid', () => {
+    mount({ list: loaded(BUSY) })
+    const row = screen.getByRole('group', { name: 'Day' })
+    for (const cls of ['flex', 'overflow-x-auto', 'snap-x', 'lg:grid', 'lg:grid-cols-7']) expect(row.classList.contains(cls)).toBe(true)
+    for (const d of document.querySelectorAll('[data-day]')) {
+      for (const cls of ['shrink-0', 'snap-start', 'w-[3.25rem]', 'min-h-[44px]', 'lg:w-auto']) expect(d.classList.contains(cls)).toBe(true)
+    }
+  })
+})
+
+// MOBILEFUNNEL.1 — the selected day is scrolled into the row's view (the row
+// only: the page never moves). jsdom lays nothing out, so the geometry is stubbed.
+describe('keepSelectedInView', () => {
+  const rowWith = ({ scrollLeft = 0, clientWidth = 200, scrollWidth = 800, tileLeft, tileWidth = 52 }) => {
+    const row = document.createElement('div')
+    const tile = document.createElement('button')
+    tile.setAttribute('aria-pressed', 'true')
+    row.appendChild(tile)
+    Object.defineProperty(row, 'clientWidth', { value: clientWidth })
+    Object.defineProperty(row, 'scrollWidth', { value: scrollWidth })
+    Object.defineProperty(tile, 'offsetLeft', { value: tileLeft })
+    Object.defineProperty(tile, 'offsetWidth', { value: tileWidth })
+    row.scrollLeft = scrollLeft
+    return row
+  }
+  it('scrolls right to a tile past the right edge, left to one before the left edge, and leaves a visible one', () => {
+    const right = rowWith({ tileLeft: 500 })
+    keepSelectedInView(right)
+    expect(right.scrollLeft).toBe(500 + 52 + 8 - 200)
+    const left = rowWith({ scrollLeft: 400, tileLeft: 100 })
+    keepSelectedInView(left)
+    expect(left.scrollLeft).toBe(92)
+    const visible = rowWith({ scrollLeft: 0, tileLeft: 60 })
+    keepSelectedInView(visible)
+    expect(visible.scrollLeft).toBe(0)
+  })
+  it('does nothing when the row does not overflow or has no selected tile', () => {
+    const fits = rowWith({ tileLeft: 500, scrollWidth: 200 })
+    keepSelectedInView(fits)
+    expect(fits.scrollLeft).toBe(0)
+    expect(() => keepSelectedInView(null)).not.toThrow()
+    expect(() => keepSelectedInView(document.createElement('div'))).not.toThrow()
   })
 })
 

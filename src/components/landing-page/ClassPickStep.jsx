@@ -21,6 +21,13 @@
 // step change (Change on the details step returns to the tiles with no
 // second fetch) and is passed in as `list`.
 //
+// MOBILEFUNNEL.1 — day-first: below `lg` the day tiles are one row that
+// scrolls sideways (the selected day is kept in view), and tapping a time
+// picks it AND continues (`onContinue(cls)`: the class travels with the call,
+// because the parent's `chosen` is still the old value until it re-renders),
+// so that shape has no continue button. The flat tiles keep theirs, which
+// calls `onContinue(chosen)`.
+//
 // `onSkip` (optional): with the list empty or unreadable, a typed button
 // (`copy.skip_class_label`) lets the visitor go on without a class: a paid
 // trial still sells on a timetable blip. `showClassName` puts the class name
@@ -97,6 +104,11 @@ export function isDayFirst(groups) {
   return Array.isArray(groups) && groups.some((g) => (g.classes || []).length > 1)
 }
 
+// MOBILEFUNNEL.1 — below `lg` the days are one sideways row: each tile at
+// least 52px wide and 44px tall, snapping; from `lg` the 7-column grid.
+export const DAY_ROW_CLS = 'relative flex gap-1.5 overflow-x-auto snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:grid lg:grid-cols-7 lg:overflow-visible lg:snap-none'
+const DAY_TILE_SIZE_CLS = 'shrink-0 snap-start w-[3.25rem] min-h-[44px] lg:w-auto lg:min-h-0'
+
 function DayTile({ group, selected, onPick }) {
   const [weekday, dateNumber = ''] = labelParts(group.day_label)
   return (
@@ -105,7 +117,7 @@ function DayTile({ group, selected, onPick }) {
       data-day={group.day}
       onClick={() => onPick(group.day)}
       aria-pressed={selected}
-      className={`rounded-xl px-1 py-2 text-center transition ${selected ? 'bg-black text-white' : 'bg-white border border-black/15 text-black hover:border-black/40'}`}
+      className={`${DAY_TILE_SIZE_CLS} rounded-xl px-1 py-2 text-center transition ${selected ? 'bg-black text-white' : 'bg-white border border-black/15 text-black hover:border-black/40'}`}
     >
       <span className={`block text-[11px] ${selected ? 'text-white/70' : 'text-black/60'}`}>{weekday}</span>
       <span className="block font-display font-extrabold text-xl leading-tight">{dateNumber}</span>
@@ -128,6 +140,23 @@ function SlotRow({ cls, selected, onPick }) {
       <span className="sr-only">{cls.day_label}</span>
     </button>
   )
+}
+
+/**
+ * Scroll a sideways row so its selected tile is in view. Only the row moves
+ * (its scrollLeft), never the page: scrollIntoView would also scroll the
+ * window to the card. The row is `relative`, so a tile's offsetLeft is
+ * measured from it. Pure DOM, no-op when the row does not overflow.
+ */
+export function keepSelectedInView(row) {
+  if (!row) return
+  const tile = row.querySelector('[aria-pressed="true"]')
+  if (!tile || row.scrollWidth <= row.clientWidth) return
+  const pad = 8
+  const left = tile.offsetLeft
+  const right = left + tile.offsetWidth
+  if (left - pad < row.scrollLeft) row.scrollLeft = Math.max(0, left - pad)
+  else if (right + pad > row.scrollLeft + row.clientWidth) row.scrollLeft = right + pad - row.clientWidth
 }
 
 /**
@@ -179,7 +208,7 @@ export function useClassList({ page = null, publicPath = null, campaign = null, 
 
 /**
  * @param {{ list: { classes: object[], loading: boolean, configured: boolean, unavailable: boolean },
- *   copy: object, chosen: object|null, onPick: (cls: object) => void, onContinue: () => void,
+ *   copy: object, chosen: object|null, onPick: (cls: object) => void, onContinue: (cls: object|null) => void,
  *   onSkip?: (() => void)|null, showClassName?: boolean, stepLabel?: string|null,
  *   ctaLabel: string, error?: string|null,
  *   title: import('react').ReactNode, body: import('react').ReactNode, reassurance?: string|null }} props
@@ -192,17 +221,27 @@ export default function ClassPickStep({
   const c = copy && typeof copy === 'object' ? copy : {}
   const { classes = [], loading = true, configured = true, unavailable = false } = list || {}
   const [showAll, setShowAll] = useState(false)
-  // Day-first: the day in view (the chosen slot's, else the one tapped, else the first).
+  // Day-first: the day in view (the one tapped, else the chosen slot's, else
+  // the first). MOBILEFUNNEL.1: a tapped day wins over the chosen slot's, so
+  // the day tiles still work with a class chosen (back from Change, or the
+  // first slot preselected).
   const [dayPick, setDayPick] = useState(null)
+  const dayRowRef = useRef(null)
 
   const groups = cadenceGroups(classes)
   const flat = groups.flatMap((g) => g.classes)
   const hiddenCount = showAll ? 0 : Math.max(0, flat.length - VISIBLE_TILES)
   const dayFirst = isDayFirst(groups)
   const chosenDay = chosen ? groups.find((g) => g.classes.some((c) => c.event_id === chosen.event_id))?.day : null
-  const day = chosenDay || (groups.some((g) => g.day === dayPick) ? dayPick : groups[0]?.day) || null
+  const day = (groups.some((g) => g.day === dayPick) ? dayPick : null) || chosenDay || groups[0]?.day || null
   const daySlots = groups.find((g) => g.day === day)?.classes || []
   const empty = !loading && configured && (unavailable || flat.length === 0)
+  // MOBILEFUNNEL.1 — the selected day stays in view in the sideways row,
+  // when the list loads and whenever the day changes.
+  useEffect(() => { if (dayFirst) keepSelectedInView(dayRowRef.current) }, [dayFirst, day, groups.length])
+  // MOBILEFUNNEL.1 — a time tapped in the day-first shape is the choice and
+  // the step forward in one; the class goes with the call.
+  const pickAndContinue = (cls) => { onPick(cls); onContinue(cls) }
   const skip = onSkip && empty ? (
     <button type="button" onClick={onSkip} className={`${PICK_CTA_CLS} mt-4`}>{c.skip_class_label || 'Continue without picking a class'}</button>
   ) : null
@@ -230,15 +269,14 @@ export default function ClassPickStep({
         </>
       ) : dayFirst ? (
         <>
-          <div className="grid grid-cols-7 gap-1.5" role="group" aria-label="Day">
+          <div ref={dayRowRef} className={DAY_ROW_CLS} role="group" aria-label="Day">
             {groups.map((g) => <DayTile key={g.day} group={g} selected={g.day === day} onPick={setDayPick} />)}
           </div>
           <div className="mt-4 space-y-2" role="group" aria-label="Class">
-            {daySlots.map((cls) => <SlotRow key={cls.event_id} cls={cls} selected={chosen?.event_id === cls.event_id} onPick={onPick} />)}
+            {daySlots.map((cls) => <SlotRow key={cls.event_id} cls={cls} selected={chosen?.event_id === cls.event_id} onPick={pickAndContinue} />)}
           </div>
           {error && <p className="mt-3 text-sm text-red-700" role="alert">{error}</p>}
-          <button type="button" onClick={onContinue} disabled={!chosen} className={`${PICK_CTA_CLS} mt-5`}>{ctaLabel}</button>
-          {reassurance ? <p className="text-center text-sm text-black/55 mt-3">{reassurance}</p> : null}
+          {reassurance ? <p className="text-center text-sm text-black/55 mt-4">{reassurance}</p> : null}
         </>
       ) : (
         <>
@@ -253,7 +291,7 @@ export default function ClassPickStep({
             </button>
           )}
           {error && <p className="mt-3 text-sm text-red-700" role="alert">{error}</p>}
-          <button type="button" onClick={onContinue} disabled={!chosen} className={`${PICK_CTA_CLS} mt-5`}>{ctaLabel}</button>
+          <button type="button" onClick={() => onContinue(chosen)} disabled={!chosen} className={`${PICK_CTA_CLS} mt-5`}>{ctaLabel}</button>
           {reassurance ? <p className="text-center text-sm text-black/55 mt-3">{reassurance}</p> : null}
         </>
       )}

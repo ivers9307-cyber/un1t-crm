@@ -34,7 +34,12 @@ vi.mock('@/lib/rate-limit', () => ({
   rateLimitResponse: vi.fn(),
 }))
 vi.mock('@/lib/public-classes', () => ({ readPublicClasses: vi.fn(), listPublicClasses: vi.fn(async () => []) }))
-vi.mock('@/lib/race-contact-linking', () => ({ findOrCreateRaceContact: vi.fn(async () => null) }))
+// MOBILEFUNNEL.1 — the route reads the outcome form; it wraps this mock so
+// every findOrCreateRaceContact assertion below still holds (an existing contact).
+vi.mock('@/lib/race-contact-linking', () => {
+  const findOrCreateRaceContact = vi.fn(async () => null)
+  return { findOrCreateRaceContact, findOrCreateRaceContactWithOutcome: vi.fn(async (a) => ({ contactId: await findOrCreateRaceContact(a), created: false })) }
+})
 vi.mock('@/lib/contact-tags', () => ({ writeContactTag: vi.fn() }))
 vi.mock('@/lib/qstash', () => ({ publishQueuePush: vi.fn(), CLASS_BOOKINGS_WORKER_PATH: '/api/webhooks/qstash/class-bookings' }))
 vi.mock('@/lib/waitlist-entry', () => ({ placeWaitlistEntry: vi.fn() }))
