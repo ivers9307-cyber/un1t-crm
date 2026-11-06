@@ -21,6 +21,7 @@
 import { classifyContact } from '../pipeline-classifier.js'
 import { claimLive as paidClaimLive, classify as classifyPaid } from './paid-trial.js'
 import { programmeClaimLive, classify as classifyProgramme } from './programmes.js'
+import { offerClaimLive, classify as classifyOffer } from './offer.js'
 
 export const BOARD_KEYS = Object.freeze({
   ACQUISITION: 'acquisition',
@@ -30,6 +31,9 @@ export const BOARD_KEYS = Object.freeze({
 
 /** The board modules that need claims loaded before they can place anyone. */
 export const CLAIM_BOARD_MODULES = Object.freeze([BOARD_KEYS.PAID_TRIAL, BOARD_KEYS.PROGRAMMES])
+
+/** PIPEBUILD.3b — modules whose boards are configured offers, placed first, by priority. */
+export const OFFER_MODULES = Object.freeze(['offer'])
 
 // The acquisition piles that outrank every claim.
 const OUTRANKS_CLAIMS = new Set(['cold_lead', 'gympass'])
@@ -50,11 +54,29 @@ const OUTRANKS_CLAIMS = new Set(['cold_lead', 'gympass'])
  */
 export function routeContact(contact, claims, now = Date.now(), boards = null, { classifyAcquisition = classifyContact } = {}) {
   const acq = classifyAcquisition(contact, now)
-  const has = (key) => boards instanceof Set && boards.has(key)
+  // `boards` is today's Set of board KEYS, or an array of descriptors
+  // { key, module, board_type, priority, config } (PIPEBUILD.3b). Descriptors
+  // normalise to the same key Set for the legacy branches below.
+  const descriptors = Array.isArray(boards) ? boards.filter((d) => d && typeof d.key === 'string') : null
+  const keys = descriptors ? new Set(descriptors.map((d) => d.key)) : boards
+  const has = (key) => keys instanceof Set && keys.has(key)
   const paid = claims?.paid ?? null
   const programme = claims?.programme ?? null
 
   if (OUTRANKS_CLAIMS.has(acq)) return { boardKey: BOARD_KEYS.ACQUISITION, slug: acq }
+  if (descriptors) {
+    const offers = claims?.offers instanceof Map ? claims.offers : null
+    const offerBoards = descriptors
+      .filter((d) => d.board_type === 'offer' && OFFER_MODULES.includes(d.module))
+      .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    for (const d of offerBoards) {
+      if (!offers || !d.config || !Array.isArray(d.config.stages)) continue
+      const claim = offers.get(d.key) ?? null
+      if (offerClaimLive(claim, contact, now, d.config)) {
+        return { boardKey: d.key, slug: classifyOffer(contact, now, claim, d.config) }
+      }
+    }
+  }
   if (has(BOARD_KEYS.PAID_TRIAL) && paidClaimLive(paid, contact, now)) {
     return { boardKey: BOARD_KEYS.PAID_TRIAL, slug: classifyPaid(contact, now, paid) }
   }

@@ -1,7 +1,8 @@
 // PIPE3.3 — one router decides which Stillorgan board a contact sits on.
 // Spec: docs/superpowers/specs/2026-10-31-stillorgan-three-pipelines-design.md
 import { describe, it, expect } from 'vitest'
-import { routeContact, BOARD_KEYS, CLAIM_BOARD_MODULES } from './router.js'
+import { routeContact, BOARD_KEYS, CLAIM_BOARD_MODULES, OFFER_MODULES } from './router.js'
+import { parseOfferConfig } from './offer-config.js'
 import { paidTrialClaim, DAY_MS } from './paid-trial.js'
 
 const T0 = Date.parse('2026-10-30T19:44:05Z')
@@ -76,5 +77,82 @@ describe('routeContact — classifyAcquisition option', () => {
   })
   it('a live claim still wins over an ordinary answer from the given classify', () => {
     expect(routeContact(trialer, { paid, programme: null }, T0 + DAY_MS, ALL, { classifyAcquisition: stub }).boardKey).toBe('paid_trial')
+  })
+})
+
+
+// PIPEBUILD.3b — the router also takes board descriptors and places offer boards first.
+const cold = { ...trialer, pack_customer_at: null, trial_credits_remaining: 0, pipeline_dismissed_at: iso(T0 + 2 * DAY_MS) }
+const back = { ...cold, last_lead_source_at: iso(T0 + 3 * DAY_MS) }
+const lead = { glofox_membership_status: 'lead', joined_at: iso(T0) }
+const trialC = { glofox_membership_status: 'trial', joined_at: iso(T0) }
+const member = { glofox_membership_status: 'member', converted_at: iso(T0 + 5 * DAY_MS), joined_at: iso(T0) }
+const goldenCases = [
+  [lead, { paid: null, programme: null }, T0 + DAY_MS, ALL],
+  [trialer, { paid, programme: null }, T0 + DAY_MS, ALL],
+  [trialer, { paid, programme }, T0 + DAY_MS, ALL],
+  [trialC, { paid: null, programme }, T0 + DAY_MS, ALL],
+  [cold, { paid, programme }, T0 + 3 * DAY_MS, ALL],
+  [back, { paid, programme: null }, T0 + 4 * DAY_MS, ALL],
+  [{ glofox_membership_status: 'trial', gympass_member_id: 'g1' }, { paid, programme }, T0 + DAY_MS, ALL],
+  [trialC, { paid, programme: null }, T0 + 80 * DAY_MS, ALL],
+  [member, { paid, programme: null }, T0 + 70 * DAY_MS, ALL],
+  [member, { paid, programme: null }, T0 + 20 * DAY_MS, ALL],
+  [trialer, { paid, programme }, T0 + DAY_MS, new Set(['acquisition'])],
+  [trialer, { paid, programme }, T0 + DAY_MS, new Set(['acquisition', 'programmes'])],
+  [trialer, null, T0 + DAY_MS, ALL],
+  [trialer, { paid, programme }, T0 + DAY_MS, null],
+]
+const descriptorsFor = (set, paidModule) => [...set].map((key) => ({
+  key, module: key === 'paid_trial' ? paidModule : key, board_type: key === 'acquisition' ? 'acquisition' : 'claim', priority: 0, config: null,
+}))
+
+const OFFER_START = T0
+const offerClaim = { start: OFFER_START, end: OFFER_START + 14 * DAY_MS, source: 'tag' }
+const offerCfg = (key) => parseOfferConfig({
+  entry: { type: 'tag', values: ['x'] },
+  stages: [{ role: 'new', slug: `${key}_new`, name: 'New' }, { role: 'done', slug: `${key}_done`, name: 'Done' }],
+}, { boardKey: key }).config
+const offerBoard = (key, priority) => ({ key, module: 'offer', board_type: 'offer', priority, config: offerCfg(key) })
+const acqD = { key: 'acquisition', module: 'acquisition', board_type: 'acquisition', priority: 0, config: null }
+const paidD = { key: 'paid_trial', module: 'paid_trial', board_type: 'claim', priority: 0, config: null }
+
+describe('routeContact — board descriptors and offer boards', () => {
+  it('goldenSetVsDescriptors', () => {
+    for (const [c, claims, now, set] of goldenCases) {
+      const want = routeContact(c, claims, now, set)
+      for (const paidModule of ['paid_trial', 'paid_trial_un1t']) {
+        expect(routeContact(c, claims, now, set && descriptorsFor(set, paidModule))).toEqual(want)
+      }
+    }
+  })
+  it('exports OFFER_MODULES', () => {
+    expect([...OFFER_MODULES]).toEqual(['offer'])
+  })
+  it('offerBeatsPaid', () => {
+    const offers = new Map([['b_one', offerClaim]])
+    expect(routeContact(trialer, { paid, programme: null, offers }, T0 + DAY_MS, [acqD, paidD, offerBoard('b_one', 5)]))
+      .toEqual({ boardKey: 'b_one', slug: 'b_one_new' })
+  })
+  it('offerPriorityThenKey', () => {
+    const offers = new Map([['b_a', offerClaim], ['b_b', offerClaim], ['b_c', offerClaim]])
+    const boards = [acqD, offerBoard('b_b', 2), offerBoard('b_c', 1), offerBoard('b_a', 2)]
+    expect(routeContact(trialC, { offers }, T0 + DAY_MS, boards).boardKey).toBe('b_c')
+    const tie = [acqD, offerBoard('b_b', 2), offerBoard('b_a', 2)]
+    expect(routeContact(trialC, { offers }, T0 + DAY_MS, tie).boardKey).toBe('b_a')
+  })
+  it('deadOfferFallsThrough', () => {
+    const dead = new Map([['b_one', offerClaim]])
+    const late = T0 + 200 * DAY_MS
+    expect(routeContact(trialC, { paid: null, programme, offers: dead }, T0 + DAY_MS, [acqD, offerBoard('b_two', 1), offerBoard('b_one', 2), { key: 'programmes', module: 'programmes', board_type: 'claim', priority: 0, config: null }]).boardKey).toBe('b_one')
+    expect(routeContact(trialC, { offers: dead }, late, [acqD, offerBoard('b_one', 1)]).boardKey).toBe('acquisition')
+    // no claim for a board, or an unparsed config, skips it without throwing
+    expect(routeContact(trialC, { paid: null, programme, offers: new Map() }, T0 + DAY_MS, [acqD, offerBoard('b_one', 1), { key: 'programmes', module: 'programmes', board_type: 'claim', priority: 0, config: null }]).boardKey).toBe('programmes')
+    const bad = { ...offerBoard('b_one', 1), config: null }
+    expect(routeContact(trialC, { offers: dead }, T0 + DAY_MS, [acqD, bad]).boardKey).toBe('acquisition')
+  })
+  it('coldBeatsOffer', () => {
+    const offers = new Map([['b_one', offerClaim]])
+    expect(routeContact(cold, { offers }, T0 + 3 * DAY_MS, [acqD, offerBoard('b_one', 1)])).toEqual({ boardKey: 'acquisition', slug: 'cold_lead' })
   })
 })
