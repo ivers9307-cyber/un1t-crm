@@ -269,7 +269,7 @@ describe('/pipeline — un1t card signals (HATCHCARD.1)', () => {
     sC: [{ id: 'd2', stage_id: 'sC', title: 'Bo', created_at: '2026-10-20T00:00:00Z', contacts: { id: 'c2', name: 'Bo', pipeline_stage_slug: 'converted' } }],
     sD: [{ id: 'd3', stage_id: 'sD', title: 'Cy', created_at: '2026-10-20T00:00:00Z', contacts: { id: 'c3', name: 'Cy', pipeline_stage_slug: 'dormant' } }],
   }
-  function dbFor(module) {
+  function dbFor(module, { board_type, stageOverride } = {}) {
     return {
       from: (table) => {
         const st = { stageId: null, head: false }
@@ -279,8 +279,8 @@ describe('/pipeline — un1t card signals (HATCHCARD.1)', () => {
         for (const m of ['in', 'order', 'range']) chain[m] = () => chain
         chain.then = (res, rej) => {
           let out
-          if (table === 'pipelines') out = { data: [{ id: 'p1', key: 'acquisition', name: 'Acquisition', mode: 'derived', module }], error: null }
-          else if (table === 'pipeline_stages') out = { data: stages, error: null }
+          if (table === 'pipelines') out = { data: [{ id: 'p1', key: 'acquisition', name: 'Acquisition', mode: 'derived', module, board_type: board_type ?? null }], error: null }
+          else if (table === 'pipeline_stages') out = { data: stageOverride || stages, error: null }
           else if (st.head) out = { count: (dealsByStage[st.stageId] || []).length, error: null }
           else out = { data: dealsByStage[st.stageId] || [], error: null }
           return Promise.resolve(out).then(res, rej)
@@ -304,6 +304,20 @@ describe('/pipeline — un1t card signals (HATCHCARD.1)', () => {
     expect(args.locationId).toBe(LOC)
     expect(args.contactIds).toEqual(['c1'])          // Converted (c2) carries none
     const byId = Object.fromEntries(boardProps.last.initialDeals.map((d) => [d.id, d]))
+    expect(byId.d1.signals).toEqual(SIG)
+  })
+
+  it('a configured board reads signals for the stages whose ROLE is live funnel', async () => {
+    const roleStages = [
+      { id: 'sN', slug: 'my_first', name: 'First', is_dormant: false, stage_role: 'first_class', display_order: 301, pipeline_id: 'p1' },
+      { id: 'sC', slug: 'my_bought', name: 'Bought', is_dormant: false, stage_role: 'converted', display_order: 305, pipeline_id: 'p1' },
+    ]
+    createServerClient.mockReturnValue(dbFor('acquisition_un1t', { board_type: 'offer', stageOverride: roleStages }))
+    renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(loadUn1tCardSignals).toHaveBeenCalledTimes(1)
+    expect(loadUn1tCardSignals.mock.calls[0][1].contactIds).toEqual(['c1'])
+    const byId = Object.fromEntries(boardProps.last.initialDeals.map((d) => [d.id, d]))
+    expect(byId.d1.showSignals).toBe(true)
     expect(byId.d1.signals).toEqual(SIG)
   })
 

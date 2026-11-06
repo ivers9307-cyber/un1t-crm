@@ -51,7 +51,8 @@ import { splitStagesByFunnel } from '@/lib/pipeline-classifier'
 import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
 import Link from 'next/link'
 import { zoneOfLocation } from '@/lib/location-time'
-import { loadUn1tCardSignals, cardSignalsEnabledForModule, SIGNAL_SLUGS } from '@/lib/pipeline-card-signals'
+import { loadUn1tCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
+import { stageShowsSignals } from '@/lib/pipeline-card-signal-slugs'
 import { logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
@@ -80,7 +81,7 @@ export default async function PipelinePage(props) {
   //    is the tab order.
   const { data: pipelineRows, error: pipelinesError } = await db
     .from('pipelines')
-    .select('id, key, name, mode, module')
+    .select('id, key, name, mode, module, board_type')
     .eq('location_id', locationId)
     .eq('enabled', true)
     .order('display_order', { ascending: true })
@@ -192,14 +193,16 @@ export default async function PipelinePage(props) {
   let signals = null
   if (view === 'active' && cardSignalsEnabledForModule(activePipeline.module)) {
     const contactIds = perStage
-      .filter((sg) => SIGNAL_SLUGS.has(sg.stage.slug))
+      .filter((sg) => stageShowsSignals({ board: activePipeline, stage: sg.stage }))
       .flatMap((sg) => sg.rows.map((d) => d.contacts?.id).filter(Boolean))
     const res = await loadUn1tCardSignals(db, { locationId, contactIds, zone: zoneOfLocation(user.activeLocation) })
     if (res?.error) logWarn('pipeline-page', 'card signals read failed; board shown without them', { locationId, pipelineId: activePipeline.id })
     else signals = res?.signals ?? null
   }
-  const toBoard = boardDealMapper({ ...cardOptions, signals })
-  const boardDeals = perStage.flatMap((sg) => sg.rows.map(toBoard))
+  // PIPEBUILD.2e — each column's mapper carries that column's decision.
+  const boardDeals = perStage.flatMap((sg) => sg.rows.map(boardDealMapper({
+    ...cardOptions, signals, showSignals: stageShowsSignals({ board: activePipeline, stage: sg.stage }),
+  })))
   const stageCounts = Object.fromEntries(perStage.map((sg) => [sg.stage.id, sg.count]))
   const visibleTotal = perStage.reduce((n, sg) => n + sg.count, 0)
 
