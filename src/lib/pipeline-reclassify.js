@@ -57,8 +57,9 @@ const DRY_RUN_SELF_MODULES = Object.freeze([...CLAIM_BOARD_MODULES, 'paid_trial_
 // PIPEBUILD.3d — the pipelines columns a run reads: the board settings (mig 814)
 // ride along so an offer board's config and priority reach the router.
 // PIPEBUILD.5c — and baseline_at (mig 815): an offer board switched on and not
-// yet baselined places silently this run and is stamped after it.
-const PIPELINE_COLS = 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at'
+// yet baselined places silently this run and is stamped after it. updated_at
+// (mig 814) guards that stamp: a board changed mid-run is not stamped.
+const PIPELINE_COLS = 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at, updated_at'
 const OFFER_BOARD_TYPE = 'offer'
 // PIPEBUILD.3d — UN1T_MEMBERSHIP_SOURCES (pipeline-offer-claims.js): the
 // locations.membership_source values whose members live in un1t.online. An
@@ -126,11 +127,15 @@ function selectColsFor(modules) {
  *   unlinked?: number,             un1t path: clients with no contact
  *   skipped_no_contact?: number,   un1t path: clients whose contact is gone
  *   stage_histogram?: object,      dry runs only: { [target slug]: n }
- *   board_overlap?: object,        dry runs only, PIPEBUILD.5c: planned cross-board
- *                                  moves INTO an offer board,
+ *   board_overlap?: object,        dry runs only, PIPEBUILD.5c: the planned moves
+ *                                  INTO an offer board FROM ANOTHER board (cross-
+ *                                  board moves only; creates and same-board moves
+ *                                  are not counted),
  *                                  { [offer board key]: { [from board key]: n } }
  *   boards_baselined?: string[],   real runs, PIPEBUILD.5c: the keys of the offer
  *                                  boards this run stamped baseline_at on
+ *   baseline_held?: string,        real runs, PIPEBUILD.5c: why an unbaselined
+ *                                  board was not stamped ('read_truncated')
  *   deals_left_board?: number,     PIPEEXCL.1 (acquisition_un1t boards only): open deals closed (status 'lost')
  *                                  because the person is an active member at
  *                                  another studio of the organisation
@@ -1103,9 +1108,21 @@ export async function reclassifyAllContacts(db, args) {
   // loudly), and not when the other-studio read failed (every create was held,
   // so the people who already qualify are still to be placed). A failed stamp
   // is logged and leaves the board silent another night; the run stays ok.
+  // Nor when either read stopped at HARD_LIMIT: the people past the cap were
+  // never classified, so they would be placed loudly after the stamp.
+  const readTruncated = contacts.length >= HARD_LIMIT || dealRows.length >= HARD_LIMIT
   let baselined = null
+  let baselineHeld = null
   if (!dryRun && unbaselinedOffers.length > 0 && errors === 0 && !exclusionFailed) {
-    baselined = await stampBaselines(db, locationId, unbaselinedOffers)
+    if (readTruncated) {
+      baselineHeld = 'read_truncated'
+      logWarn('pipeline-reclassify', 'offer board baseline held: read truncated', {
+        locationId, contacts: contacts.length, deals: dealRows.length, limit: HARD_LIMIT,
+        keys: unbaselinedOffers.map((p) => p.key),
+      })
+    } else {
+      baselined = await stampBaselines(db, locationId, unbaselinedOffers)
+    }
   }
 
   return {
@@ -1135,31 +1152,40 @@ export async function reclassifyAllContacts(db, args) {
     ...(heldPipelineIds.size > 0 ? { deals_held: dealsHeld } : {}),
     ...(dryRun ? { board_overlap: boardOverlap } : {}),
     ...(baselined ? { boards_baselined: baselined } : {}),
+    ...(baselineHeld ? { baseline_held: baselineHeld } : {}),
   }
 }
 
 // PIPEBUILD.5c — stamp baseline_at on offer boards a real run classified while
-// they were unbaselined. Guarded on the studio and on baseline_at still null
-// (a board stamped since, or switched off and on again, is left to its own
-// state). Every failure is logged with ids only and never fails the run: the
-// board just stays silent until a later pass stamps it.
+// they were unbaselined. Guarded on the studio, on baseline_at still null and
+// on updated_at still the value this run read: a board stamped since, or
+// changed in any way mid-run (switched off and on again, renamed), matches no
+// row and stays silent one more night, which is the safe direction. Every
+// failure is logged with ids only and never fails the run.
 async function stampBaselines(db, locationId, boards) {
   const nowIso = new Date().toISOString()
   const stamped = []
   for (const p of boards) {
+    // No updated_at read (never expected: NOT NULL) = cannot guard: no stamp.
+    if (p.updated_at == null) {
+      logWarn('pipeline-reclassify', 'offer board baseline held: updated_at unread', { locationId, pipelineId: p.id, key: p.key })
+      continue
+    }
     try {
       const { data, error } = await db
         .from('pipelines')
         .update({ baseline_at: nowIso, updated_at: nowIso })
         .eq('id', p.id)
         .eq('location_id', locationId)
+        .eq('updated_at', p.updated_at)
         .is('baseline_at', null)
         .select('id')
       if (error) {
         logError('pipeline-reclassify', 'offer board baseline not stamped', { locationId, pipelineId: p.id, key: p.key, err: boundedErr(error.message) })
         continue
       }
-      // Zero rows: stamped already, or no longer this studio's — nothing to do.
+      // Zero rows: stamped already, changed since the read, or no longer this
+      // studio's: nothing to do (a changed board is stamped by a later pass).
       if (Array.isArray(data) && data.length > 0) stamped.push(p.key)
     } catch (e) {
       logError('pipeline-reclassify', 'offer board baseline not stamped', { locationId, pipelineId: p.id, key: p.key, err: boundedErr(e?.message || e) })

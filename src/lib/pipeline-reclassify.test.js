@@ -395,7 +395,7 @@ describe('PIPELINES.3 — per-pipeline orchestration', () => {
  * audit close are replaced so the log is deterministic. SELECT filters apply
  * as in fakeDb (a filter on a column a fixture row lacks is ignored).
  */
-function recordingDb(fixtures = {}, { errors = {}, insertErrors = {}, updateErrors = {} } = {}) {
+function recordingDb(fixtures = {}, { errors = {}, insertErrors = {}, updateErrors = {}, matchUpdates = [] } = {}) {
   const calls = []
   const norm = (v) => {
     if (v && typeof v === 'object' && !Array.isArray(v)) {
@@ -411,6 +411,7 @@ function recordingDb(fixtures = {}, { errors = {}, insertErrors = {}, updateErro
     calls.push(entry)
     let op = 'select'
     const filters = []
+    const isFilters = [] // PIPEBUILD.5c: read only by matchUpdates
     const c = {}
     for (const m of ['select', 'eq', 'in', 'is', 'order', 'range', 'single', 'maybeSingle', 'limit', 'gte', 'update', 'insert', 'upsert']) {
       c[m] = (...args) => {
@@ -419,6 +420,7 @@ function recordingDb(fixtures = {}, { errors = {}, insertErrors = {}, updateErro
         if ((m === 'single' || m === 'maybeSingle') && op === 'select') op = 'single'
         if (m === 'eq') filters.push({ op: 'eq', col: args[0], val: args[1] })
         if (m === 'in') filters.push({ op: 'in', col: args[0], vals: args[1] })
+        if (m === 'is') isFilters.push({ col: args[0], val: args[1] })
         return c
       }
     }
@@ -440,6 +442,15 @@ function recordingDb(fixtures = {}, { errors = {}, insertErrors = {}, updateErro
       }
       // PIPEBUILD.5c — updateErrors[table] (a message) fails every UPDATE on it.
       if (op === 'update' && updateErrors[table]) return resolve({ data: null, error: { message: updateErrors[table] } })
+      // PIPEBUILD.5c — a table in matchUpdates answers an UPDATE … .select('id')
+      // with the fixture rows EVERY filter matches (a column the row lacks
+      // matches nothing), as a guarded write against the live row would.
+      if (op === 'update' && matchUpdates.includes(table) && entry.some((x) => Array.isArray(x) && x[0] === 'select')) {
+        const hit = (fixtures[table] || []).filter((row) => filters.every((f) => Object.prototype.hasOwnProperty.call(row, f.col)
+          && (f.op === 'in' ? f.vals.includes(row[f.col]) : row[f.col] === f.val))
+          && isFilters.every((f) => (row[f.col] ?? null) === f.val))
+        return resolve({ data: hit.map((row) => ({ id: row.id })), error: null })
+      }
       // An UPDATE … .select('id') answers the ids it matched, as PostgREST does
       // (PIPE3: the duplicate-deal and leave-board closes count those rows).
       if (op === 'update' && entry.some((x) => Array.isArray(x) && x[0] === 'select')) {
@@ -495,7 +506,7 @@ describe('HATCHPIPE.2 — contacts-input path is unchanged', () => {
         ['insert', { location_id: 'loc-st', source: 'cron', dry_run: false, status: 'running', created_by: 'u-1' }],
         ['select', 'id'], ['single']],
       ['pipelines',
-        ['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at'], // PIPEBUILD.3d: the board settings ride along
+        ['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at, updated_at'], // PIPEBUILD.3d: the board settings ride along
         ['eq', 'location_id', 'loc-st'], ['eq', 'enabled', true]],
       ['pipeline_stages',
         ['select', 'id, slug, pipeline_id'],
@@ -860,7 +871,7 @@ describe('HATCHPIPE.2 — dry run of a disabled board (includeDisabled)', () => 
     const pipelineCalls = dry.calls.filter((e) => e[0] === 'pipelines')
     expect(pipelineCalls).toHaveLength(2)
     expect(pipelineCalls[1].slice(1)).toEqual([
-      ['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at'], // PIPEBUILD.3d: the board settings ride along
+      ['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at, updated_at'], // PIPEBUILD.3d: the board settings ride along
       ['eq', 'location_id', HATCH], ['eq', 'enabled', false], ['in', 'key', ['acquisition']],
     ])
     expect(pipelineInputs).toHaveBeenCalledTimes(1)
@@ -1850,7 +1861,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     ],
     duration_days: 14,
   }
-  const CORP = { id: 'p-corp', location_id: STILL, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', config: CORP_CONFIG, priority: 10, baseline_at: '2026-10-01T00:00:00Z' } // PIPEBUILD.5c: baselined, so it places and fires as in PR 3
+  const CORP = { id: 'p-corp', location_id: STILL, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', config: CORP_CONFIG, priority: 10, baseline_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00.123456+00:00' } // PIPEBUILD.5c: baselined, so it places and fires as in PR 3
   const ACQ_STAGES = ['new_lead', 'first_class', 'second_class', 'trial_done', 'converted', 'member', 'pack_member', 'classpass', 'gympass', 'cold_lead', 'dormant']
     .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq', location_id: STILL }))
   const PAID_STAGES = ['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted']
@@ -1895,7 +1906,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
         ['insert', { location_id: STILL, source: 'cron', dry_run: false, status: 'running', created_by: 'u-1' }],
         ['select', 'id'], ['single']],
       ['pipelines',
-        ['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at'],
+        ['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at, updated_at'],
         ['eq', 'location_id', STILL], ['eq', 'enabled', true]],
       ['pipeline_stages', ['select', 'id, slug, pipeline_id'], ['eq', 'location_id', STILL], ['in', 'pipeline_id', ['p-acq', 'p-paid']]],
       ['contacts',
@@ -2100,7 +2111,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     const out = await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true, includeDisabledBoardIds: ['p-corp'] })
     const pipelineCalls = rec.calls.filter((e) => e[0] === 'pipelines')
     expect(pipelineCalls).toHaveLength(2)
-    expect(rec.argOf(pipelineCalls[1], 'select')).toEqual(['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at'])
+    expect(rec.argOf(pipelineCalls[1], 'select')).toEqual(['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at, updated_at'])
     expect(pipelineCalls[1]).toContainEqual(['eq', 'enabled', false])
     expect(pipelineCalls[1]).toContainEqual(['in', 'id', ['p-corp']])
     expect(rec.calls.filter((e) => e.some((x) => Array.isArray(x) && ['update', 'insert', 'upsert'].includes(x[0])))).toHaveLength(0)
@@ -2272,6 +2283,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
       expect(stamps[0]).toContainEqual(['eq', 'id', 'p-corp'])
       expect(stamps[0]).toContainEqual(['eq', 'location_id', STILL])
       expect(stamps[0]).toContainEqual(['is', 'baseline_at', null])
+      expect(stamps[0]).toContainEqual(['eq', 'updated_at', '2026-10-01T00:00:00.123456+00:00'])
       // Stamped after every deal write.
       const lastDealWrite = Math.max(...rec.writesTo('deals').map((e) => rec.calls.indexOf(e)))
       expect(rec.calls.indexOf(stamps[0])).toBeGreaterThan(lastDealWrite)
@@ -2285,7 +2297,13 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
         deals: [{ id: 'd-buyer', contact_id: 'c-buyer', stage_id: 's-paid_trial_first_class', pipeline_id: 'p-paid', location_id: STILL, status: 'open' }],
         trial_purchases: [{ id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(8), granted_at: ago(8), duration_days: 14 }],
       }))
-      await reclassifyAllContacts(rec.db, { locationId: STILL, silentBoardIds: ['p-paid'] })
+      const out = await reclassifyAllContacts(rec.db, { locationId: STILL, silentBoardIds: ['p-paid'] })
+      // Both boards were placed: the Corp create and the €39 Day 7 move landed.
+      expect(out).toMatchObject({ ok: true, errors: 0, deals_created: 1, deals_moved: 1, boards_baselined: ['o_corp'] })
+      const inserts = rec.writesTo('deals').filter((e) => rec.argOf(e, 'insert'))
+      expect(rec.argOf(inserts[0], 'insert')[1]).toMatchObject({ contact_id: 'c-new', pipeline_id: 'p-corp' })
+      const updates = rec.writesTo('deals').filter((e) => rec.argOf(e, 'update'))
+      expect(rec.argOf(updates[0], 'update')[1]).toEqual({ stage_id: 's-paid_trial_day_7' })
       expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
     })
 
@@ -2352,6 +2370,53 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
       const rec = recordingDb(corpFixtures({ pipelines: [ACQ, UNBASED], contacts: [], deals: [] }))
       const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
       expect(out).toMatchObject({ ok: true, contacts_seen: 0, boards_baselined: ['o_corp'] })
+    })
+
+    it('a run whose contacts read stops at HARD_LIMIT does not stamp (people past the cap were never classified)', async () => {
+      const contacts = Array.from({ length: 20_000 }, (_, i) => corpNew(`c-${String(i).padStart(5, '0')}`))
+      const rec = recordingDb(corpFixtures({ pipelines: [ACQ, UNBASED], contacts, deals: [] }))
+      const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+      expect(out).toMatchObject({ ok: true, errors: 0, contacts_seen: 20_000, baseline_held: 'read_truncated' })
+      expect(out).not.toHaveProperty('boards_baselined')
+      expect(stampWrites(rec)).toHaveLength(0)
+      expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'offer board baseline held: read truncated', expect.objectContaining({ contacts: 20_000, limit: 20_000 }))
+    })
+
+    it('a run whose deals read stops at HARD_LIMIT does not stamp', async () => {
+      const deals = Array.from({ length: 20_000 }, (_, i) => ({ id: `d-x-${i}`, contact_id: `c-gone-${i}`, stage_id: 's-new_lead', pipeline_id: 'p-acq', location_id: STILL, status: 'open' }))
+      const rec = recordingDb(corpFixtures({ pipelines: [ACQ, UNBASED], deals }))
+      const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+      expect(out).toMatchObject({ ok: true, errors: 0, baseline_held: 'read_truncated' })
+      expect(stampWrites(rec)).toHaveLength(0)
+    })
+
+    it('a board changed mid-run (switched off and on, renamed) is not stamped: its updated_at no longer matches, 0 rows, it stays unbaselined', async () => {
+      const board = { ...UNBASED }
+      const fixtures = corpFixtures({ pipelines: [ACQ, board] })
+      // The owner touches the board while the run is placing people: after the
+      // pipelines read, before the stamp (the deal insert is in between).
+      const rec = recordingDb(fixtures, {
+        matchUpdates: ['pipelines'],
+        insertErrors: { deals: () => { board.updated_at = '2026-11-06T22:00:00.000001+00:00'; return null } },
+      })
+      const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+      expect(out).toMatchObject({ ok: true, errors: 0, deals_created: 1, boards_baselined: [] })
+      const stamps = stampWrites(rec)
+      expect(stamps).toHaveLength(1)
+      expect(stamps[0]).toContainEqual(['eq', 'updated_at', '2026-10-01T00:00:00.123456+00:00'])
+      expect(board.baseline_at).toBeNull()
+
+      // Untouched, the same guarded write matches the row and lands.
+      const calm = recordingDb(corpFixtures({ pipelines: [ACQ, { ...UNBASED }] }), { matchUpdates: ['pipelines'] })
+      expect(await reclassifyAllContacts(calm.db, { locationId: STILL })).toMatchObject({ boards_baselined: ['o_corp'] })
+    })
+
+    it('a board row read without updated_at cannot be guarded and is not stamped', async () => {
+      const { updated_at: _drop, ...noStamp } = UNBASED
+      const rec = recordingDb(corpFixtures({ pipelines: [ACQ, noStamp] }))
+      const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+      expect(out).toMatchObject({ ok: true, boards_baselined: [] })
+      expect(stampWrites(rec)).toHaveLength(0)
     })
 
     it('dryRunReportsBoardOverlap: a €39 buyer who routes to a higher-priority offer board counts under board_overlap[o_corp][paid_trial]', async () => {
