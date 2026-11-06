@@ -540,6 +540,11 @@ const config = [
       // revolut_customers write reads its error (a failure only logs, the
       // order still goes out).
       'src/lib/revolut-customers.js',
+      // PIPEBUILD.5d — the board builder: born clean. A silent failed write
+      // would report a board switched on (or a stage removed) that was not.
+      'src/lib/pipeline-boards.js',
+      'src/app/api/pipelines/**',
+      'src/app/api/locations/[[]id]/pipelines/**',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

@@ -557,3 +557,24 @@ export const usageEventsSchema = z.object({
   // The device clock when the batch was sent (the route corrects skew by it).
   sent_at: usageInstant.optional(),
 })
+
+// PIPEBUILD.5d — the board builder's bodies. `config` is shape-checked here
+// only: parseOfferConfig (shared/pipelines/offer-config.js) is the real
+// validator, and every stage slug is overwritten server-side from the key.
+export const BOARD_NAME_MAX = 80
+const boardName = z.string().trim().min(1, 'Give the board a name').max(BOARD_NAME_MAX)
+const boardPriority = z.number().int().min(1).max(1000)
+const boardConfig = z.record(z.string(), z.unknown())
+export const boardCreateSchema = z.object({
+  name: boardName,
+  recipe_key: z.string().trim().min(1).max(60),
+  config: boardConfig,
+  priority: boardPriority.optional(),
+})
+export const boardPatchSchema = z.object({
+  name: boardName.optional(),
+  priority: boardPriority.optional(),
+  config: boardConfig.optional(),
+}).refine((v) => v.name !== undefined || v.priority !== undefined || v.config !== undefined, {
+  message: 'Nothing to change',
+})
