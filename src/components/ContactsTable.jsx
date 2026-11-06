@@ -15,6 +15,7 @@ import { useState, useMemo } from 'react'
 import Link from 'next/link'
 import { ChevronRight, Mail, X, GitMerge, Trash2 } from 'lucide-react'
 import dynamic from 'next/dynamic'
+import { useStudioStages } from '@/lib/use-studio-stages'
 
 // PERF.3 — three modal components that only render when the operator
 // actively picks the matching bulk action. Lazy-loaded so the
@@ -50,6 +51,16 @@ export const statusBadge = {
   programme_lead:         'bg-blue-500/20 text-blue-700',
   programme_first_class:  'bg-green-500/20 text-green-700',
   programme_converted:    'bg-emerald-500/20 text-emerald-700',
+}
+
+// PIPEBUILD.2d — known slugs keep today's chip; an unknown slug with a loaded
+// studio stage shows that stage's name in a neutral chip.
+const UNKNOWN_STAGE_CHIP = 'bg-slate-500/10 text-slate-700'
+function stageChip(slug, bySlug) {
+  if (statusBadge[slug]) return { cls: statusBadge[slug], text: formatStage(slug) }
+  const st = slug ? bySlug?.get(slug) : null
+  if (st) return { cls: UNKNOWN_STAGE_CHIP, text: st.name }
+  return { cls: 'bg-un1t-border text-un1t-subtle', text: formatStage(slug) }
 }
 
 function formatStage(slug) {
@@ -126,6 +137,7 @@ function LinkedMarker({ contact }) {
 }
 
 export default function ContactsTable({ contacts, locationId, crossoverContext = {}, listFlags = {}, canMerge = false, canDelete = false }) {
+  const { bySlug: stageBySlug } = useStudioStages(locationId)
   // Set<contactId>. Set so toggle is O(1) and resilient to the contact
   // list changing under us (filter / search updates).
   const [selectedIds, setSelectedIds] = useState(() => new Set())
@@ -275,8 +287,8 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
                     <span className="text-xs px-1.5 py-0.5 bg-un1t-border rounded">{c.lead_source || '—'}</span>
                   </td>
                   <td className="p-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge[c.studio_stage_slug] || 'bg-un1t-border text-un1t-subtle'}`}>
-                      {formatStage(c.studio_stage_slug)}
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${stageChip(c.studio_stage_slug, stageBySlug).cls}`}>
+                      {stageChip(c.studio_stage_slug, stageBySlug).text}
                     </span>
                   </td>
                   <td className="p-3 text-un1t-subtle">{c.trial_credits_remaining ?? '—'}</td>
@@ -337,9 +349,9 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
                           {c.name}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full uppercase tracking-wider ${
-                          statusBadge[c.studio_stage_slug] || 'bg-un1t-border text-un1t-subtle'
+                          stageChip(c.studio_stage_slug, stageBySlug).cls
                         }`}>
-                          {formatStage(c.studio_stage_slug)}
+                          {stageChip(c.studio_stage_slug, stageBySlug).text}
                         </span>
                         <CrossoverMarker ctx={crossoverContext[c.id]} />
                         <ListFlagMarker flags={listFlags[c.id]} />

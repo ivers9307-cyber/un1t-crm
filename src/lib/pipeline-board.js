@@ -160,13 +160,15 @@ export function boardCardOptionsForModule(moduleName) {
 // un1t.online board; a contact missing from the map gets null. Without a map
 // (a Glofox board, or a signals read that failed) the row carries no `signals`
 // key at all, so Stillorgan's rows are exactly what they were.
-export function boardDealMapper({ badge = true, glofoxCredits = true, signals = null } = {}) {
+export function boardDealMapper({ badge = true, glofoxCredits = true, signals = null, showSignals = false } = {}) {
   return (deal) => {
     const { recent_bookings, ...contact } = deal.contacts || {}
     if (!glofoxCredits) delete contact.trial_credits_remaining
     return {
       ...deal,
-      ...(signals instanceof Map ? { signals: signals.get(contact.id) ?? null } : {}),
+      // PIPEBUILD.2e — the SERVER decides whether this column shows signals
+      // (stageShowsSignals); the card renders them iff this is true.
+      ...(signals instanceof Map ? { signals: signals.get(contact.id) ?? null, showSignals: showSignals === true } : {}),
       age: dealAge(deal, Date.now()),
       // HATCHPIPE.5 — the card must know the badge is OFF, not merely that no
       // class is booked: a null next_class_at alone renders "No class booked"

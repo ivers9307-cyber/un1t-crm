@@ -5,6 +5,8 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { liveSequenceTemplateRefusal } from '@/lib/sequences/template-approval'
+import { logError } from '@/lib/log'
 
 const StepUpdateSchema = z.object({
   step_order: z.number().int().min(0).max(1000).optional(),
@@ -35,6 +37,12 @@ async function loadSequenceLocation(db, sequenceId) {
   return data?.location_id
 }
 
+async function loadSequenceGate(db, sequenceId) {
+  const { data } = await db.from('email_sequences')
+    .select('location_id, status').eq('id', sequenceId).single()
+  return data || null
+}
+
 // PUT /api/sequences/[id]/steps/[stepId]
 export async function PUT(request, props) {
   const params = await props.params;
@@ -43,7 +51,8 @@ export async function PUT(request, props) {
   if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
-  const seqLocation = await loadSequenceLocation(db, params.id)
+  const seq = await loadSequenceGate(db, params.id)
+  const seqLocation = seq?.location_id
   if (!seqLocation) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, seqLocation)
   if (guard) return guard
@@ -53,6 +62,21 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, StepUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
+
+  // PIPEBUILD.2f — a live sequence refuses an unapproved WhatsApp template.
+  if (updates.whatsapp_template_id) {
+    const refusal = await liveSequenceTemplateRefusal(db, {
+      sequenceStatus: seq.status,
+      locationId: seqLocation,
+      templateRefs: [{ stepNumber: updates.step_order, templateId: updates.whatsapp_template_id }],
+    })
+    if (refusal) {
+      if (refusal.readFailed) {
+        logError('sequences', 'step: whatsapp_templates read failed', { sequenceId: params.id, err: refusal.readFailed?.message || String(refusal.readFailed) })
+      }
+      return NextResponse.json({ success: false, error: refusal.error }, { status: refusal.status })
+    }
+  }
 
   const { data, error } = await db.from('sequence_steps')
     .update(updates)

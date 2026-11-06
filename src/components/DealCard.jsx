@@ -16,7 +16,6 @@ import PersonActionBar from './PersonActionBar'
 import { personActionsFor } from '@/lib/activity-write-gate'
 import { nextClassLabel } from '@/components/contact/format'
 import { useViewerZone } from '@/lib/use-viewer-zone'
-import { SIGNAL_SLUGS } from '@/lib/pipeline-card-signal-slugs'
 
 // HATCHCARD.1 — a un1t.online board's card shows the person's signals (the
 // server attaches deal.signals: src/lib/pipeline-card-signals.js). Chip tones
@@ -151,10 +150,11 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
     ? (age.backfilled ? "since May '26" : `${age.total} total`)
     : null
 
-  // HATCHCARD.1 — signals render only in a live funnel column (this board's
-  // column, not the home studio's slug), and only when the server sent them.
+  // HATCHCARD.1 — signals render only in a live funnel column, and only when
+  // the server sent them. PIPEBUILD.2e — the server decides the column
+  // (stageShowsSignals: slug set or stage role) and says so in showSignals.
   const columnSlug = stageSlug ?? contact.pipeline_stage_slug
-  const sig = deal.signals && SIGNAL_SLUGS.has(columnSlug) ? deal.signals : null
+  const sig = deal.signals && deal.showSignals === true ? deal.signals : null
   const paidBoard = typeof columnSlug === 'string' && columnSlug.startsWith('paid_trial_')
   const classesLabel = sig
     ? (!paidBoard && sig.classes_attended <= 3

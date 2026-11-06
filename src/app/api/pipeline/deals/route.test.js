@@ -119,6 +119,24 @@ describe('GET /api/pipeline/deals — un1t card signals (HATCHCARD.1)', () => {
     expect(loadUn1tCardSignals.mock.calls[0][1]).toMatchObject({ locationId: LOC, contactIds: ['c1'] })
     expect(body.deals[0].signals).toEqual(SIG)
   })
+  it('a configured board decides by stage role: a checkpoint column shows signals, a converted one does not', async () => {
+    const configured = (stage) => {
+      db = fakeDb({
+        pipeline_stages: { data: { id: STAGE, pipeline_id: PIPELINE, ...stage }, error: null },
+        pipelines: { data: { module: 'acquisition_un1t', board_type: 'offer' }, error: null },
+        deals: { data: [dealRow()], error: null },
+      })
+    }
+    configured({ slug: 'day_7_check', stage_role: 'checkpoint', is_dormant: false })
+    const live = await (await GET(req())).json()
+    expect(live.deals[0].signals).toEqual(SIG)
+    expect(live.deals[0].showSignals).toBe(true)
+    loadUn1tCardSignals.mockClear()
+    configured({ slug: 'bought', stage_role: 'converted', is_dormant: false })
+    const done = await (await GET(req())).json()
+    expect('signals' in done.deals[0]).toBe(false)
+    expect(loadUn1tCardSignals).not.toHaveBeenCalled()
+  })
   it('a Glofox board, a pile column, or the dormant view: no read and no signals key', async () => {
     withStage('new_lead', 'acquisition')
     expect('signals' in (await (await GET(req())).json()).deals[0]).toBe(false)

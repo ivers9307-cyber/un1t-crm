@@ -9,6 +9,8 @@
  * @param {Array<{id:string, name?:string, status?:string}>} templates
  * @returns {Array<{code:'template_not_found'|'template_not_approved', nodeId?:string, message:string}>}
  */
+const stepWho = (n) => (Number.isInteger(n) ? `Step ${n}` : 'This step')
+
 export function whatsappApprovalIssues(refs, templates) {
   const byId = new Map((Array.isArray(templates) ? templates : []).map(t => [t.id, t]))
   const out = []
@@ -18,7 +20,7 @@ export function whatsappApprovalIssues(refs, templates) {
     if (!template) {
       out.push(withNode({
         code: 'template_not_found',
-        message: `Step ${ref.stepNumber} uses a WhatsApp template that could not be found at this studio. Pick another template.`,
+        message: `${stepWho(ref.stepNumber)} uses a WhatsApp template that could not be found at this studio. Pick another template.`,
       }))
       continue
     }
@@ -26,7 +28,7 @@ export function whatsappApprovalIssues(refs, templates) {
     if (status !== 'APPROVED') {
       out.push(withNode({
         code: 'template_not_approved',
-        message: `Step ${ref.stepNumber} uses the WhatsApp template "${template.name || 'unnamed'}", which is ${status || 'not approved'} at Meta.`,
+        message: `${stepWho(ref.stepNumber)} uses the WhatsApp template "${template.name || 'unnamed'}", which is ${status || 'not approved'} at Meta.`,
       }))
     }
   }
@@ -50,5 +52,34 @@ export async function loadTemplatesForApproval(db, { locationId, templateIds }) 
     return { ok: true, rows: data || [] }
   } catch (error) {
     return { ok: false, error }
+  }
+}
+
+/**
+ * PIPEBUILD.2f — the legacy steps API's gate. A LIVE (active) sequence may not
+ * have a step pointed at a template that is not approved; a draft is never
+ * checked. `templateRefs` are the non-null whatsapp_template_id values the
+ * request sets, as { stepNumber, templateId }.
+ * @returns {Promise<null|{status:number, error:string, readFailed?:object}>}
+ */
+export async function liveSequenceTemplateRefusal(db, { sequenceStatus, locationId, templateRefs }) {
+  if (sequenceStatus !== 'active') return null
+  const refs = (templateRefs || []).filter(r => r.templateId)
+  if (refs.length === 0) return null
+  const loaded = await loadTemplatesForApproval(db, { locationId, templateIds: refs.map(r => r.templateId) })
+  if (!loaded.ok) {
+    return {
+      status: 503,
+      error: 'Could not check the WhatsApp templates just now. The step was not saved.',
+      readFailed: loaded.error,
+    }
+  }
+  const [issue] = whatsappApprovalIssues(refs, loaded.rows)
+  if (!issue) return null
+  return {
+    status: 400,
+    error: issue.code === 'template_not_approved'
+      ? `${issue.message} Use it once the template is approved.`
+      : issue.message,
   }
 }

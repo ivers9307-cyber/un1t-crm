@@ -204,7 +204,9 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
         {initialStages.map((stage) => {
           const loaded = sortColumn(columnDeals[stage.id] || [])
           const total = stageCounts[stage.id] ?? loaded.length
-          const color = stageColors[stage.slug] || '#6B7280'
+          // PIPEBUILD.2d — the stage row's colour wins (prod rows equal this map for
+          // every current slug); the map stays as the fallback for a row with none.
+          const color = stage.color || stageColors[stage.slug] || '#6B7280'
           const hasMore = loaded.length < total
           const isDropTarget = manual && dropStageId === stage.id
 

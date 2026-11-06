@@ -575,3 +575,17 @@ describe('Stage pickers — real stages (PIPEBUILD.1e)', () => {
     expect(set.queryByText(hint)).toBeNull()
   })
 })
+
+describe('Audience builder gets the sequence studio (PIPEBUILD.2g)', () => {
+  afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+  it('loads the studio stages for the sequence location', () => {
+    const fetchMock = vi.fn(() => new Promise(() => {}))
+    vi.stubGlobal('fetch', fetchMock)
+    const { getByText } = render(
+      <SequenceSettings sequence={{ id: 'seq-9', location_id: 'loc-stages-9', name: 'X', status: 'draft' }} />,
+    )
+    fireEvent.click(getByText('Settings & trigger'))
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toContain('/api/locations/loc-stages-9/stages')
+  })
+})

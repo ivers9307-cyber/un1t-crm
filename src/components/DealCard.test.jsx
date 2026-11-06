@@ -154,7 +154,7 @@ describe('DealCard — Cold on the board it is drawn on', () => {
 describe('DealCard — un1t card signals (HATCHCARD.1)', () => {
   const SIG = { classes_attended: 1, credits_left: 2, credits_unlimited: false, next_class_at: null, last_class_days: 9, last_class_warm: true, wa_state: 'no_reply', wa_days: 6 }
   const deal = (signals, slug = 'first_class', over = {}) => ({
-    id: 'd-9', title: 'Jane O\'Quigley', next_class_badge: false, signals,
+    id: 'd-9', title: 'Jane O\'Quigley', next_class_badge: false, signals, showSignals: true,
     contacts: { id: 'c-9', name: 'Jane O\'Quigley', lead_source: 'website', pipeline_stage_slug: slug },
     ...over,
   })
@@ -201,9 +201,14 @@ describe('DealCard — un1t card signals (HATCHCARD.1)', () => {
     expect(html).not.toContain('Never messaged')
   })
   it('a Converted or pile column shows no signal chips even when a deal carries them', () => {
-    const html = r(deal(SIG, 'converted'), 'converted')
+    const html = r(deal(SIG, 'converted', { showSignals: false }), 'converted')
     expect(html).not.toContain('of 3 classes')
     expect(html).not.toContain('No reply')
+  })
+  it('renders signals iff the server said showSignals, whatever the slug', () => {
+    expect(r(deal(SIG, 'my_custom_stage'), 'my_custom_stage')).toContain('of 3 classes')
+    expect(r(deal(SIG, 'new_lead', { showSignals: false }), 'new_lead')).not.toContain('of 3 classes')
+    expect(r(deal(SIG, 'new_lead', { showSignals: undefined }), 'new_lead')).not.toContain('of 3 classes')
   })
   it('a Glofox card (no signals key) renders exactly as before', () => {
     const glofox = { id: 'd-1', title: 'Ada', contacts: { id: 'c-1', name: 'Ada Lovelace', pipeline_stage_slug: 'new_lead', lead_source: 'website', trial_credits_remaining: 3 } }
@@ -220,7 +225,7 @@ describe('DealCard — un1t card signals (HATCHCARD.1)', () => {
 describe('DealCard — trial end chip (HATCHCARD.2)', () => {
   const base = { classes_attended: 0, credits_left: null, credits_unlimited: true, next_class_at: null, last_class_days: null, last_class_warm: false, wa_state: 'never', wa_days: null, trial_kind: null, trial_ends_at: null, trial_days_left: null, trial_ended_days: null }
   const card = (sig, slug = 'paid_trial_new_lead', tz = 'Europe/Dublin') => renderToStaticMarkup(
-    <DealCard deal={{ id: 'd', title: 'Aoife Morgan', next_class_badge: false, signals: { ...base, ...sig }, contacts: { id: 'c', name: 'Aoife Morgan', pipeline_stage_slug: slug } }}
+    <DealCard deal={{ id: 'd', title: 'Aoife Morgan', next_class_badge: false, showSignals: true, signals: { ...base, ...sig }, contacts: { id: 'c', name: 'Aoife Morgan', pipeline_stage_slug: slug } }}
       locationId="l-1" stageName="New Leads" stageSlug={slug} timezone={tz} />,
   )
   it('a running €39 trial: its end date in the studio zone and the days left', () => {

@@ -2,6 +2,8 @@
 
 import { useEffect, useId, useRef, useState } from 'react'
 import { Plus, Trash2, Users, AlertTriangle, Sparkles } from 'lucide-react'
+// PIPEBUILD.2d — stages of boards the code doesn't know come from the studio's rows.
+import { useStudioStages } from '@/lib/use-studio-stages'
 // FILTER-A.1 — the verified preset definitions live in their own module so the
 // counts they produce can be checked against the spec table without rendering.
 import { presetFilter } from '@/lib/audience-presets'
@@ -350,8 +352,23 @@ const OPS_BY_TYPE = {
 // lead_status) silently masquerade as a 'Stage' row: the display bore no
 // relation to what was saved, and touching the op wrote Stage-ops onto the
 // foreign field. Unknown fields now render an inert warning row instead.
-function getFieldConfig(fieldValue) {
+function baseFieldConfig(fieldValue) {
   return FIELD_OPTIONS.find(f => f.value === fieldValue) || null
+}
+
+// PIPEBUILD.2d — today's 11 stage slugs first, then every studio stage the map
+// doesn't list, labelled "<board>: <stage>". No studio stages loaded (no
+// studio id, loading, failed) = exactly the static field.
+export function withStudioStages(cfg, stages) {
+  if (!cfg || cfg.value !== 'pipeline_stage_slug' || !Array.isArray(stages)) return cfg
+  const options = [...cfg.options]
+  const valueLabels = { ...cfg.valueLabels }
+  for (const st of stages) {
+    if (options.includes(st.slug)) continue
+    options.push(st.slug)
+    valueLabels[st.slug] ??= `${st.board_name ? `${st.board_name}: ` : ''}${st.name}`
+  }
+  return { ...cfg, options, valueLabels }
 }
 
 // The ops offered for a row = the per-type list ∩ the server allowlist for
@@ -596,6 +613,8 @@ const AWAITS_A_VALUE = ['tag-select', 'event-select', 'plan-select', 'location-s
 // live number now mount the shared <AudienceCount> instead of feeding this
 // footer, which survives only for CampaignEditor's own count state.
 export default function AudienceBuilder({ filter, onChange, audienceCount = null, disabled = false, defaultFilterRow = null, presets = null, locationId = null, timeZone = null }) {
+  const { stages: studioStages } = useStudioStages(locationId)
+  const getFieldConfig = (v) => withStudioStages(baseFieldConfig(v), studioStages)
   const filters = filter?.filters || []
   const logic = filter?.logic || 'and'
 

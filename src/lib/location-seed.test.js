@@ -23,6 +23,14 @@ describe('defaultPipelineStages', () => {
     }
   })
 
+  it('seeds each stage with its role: new_lead is new, every dormant stage is pile', () => {
+    const stages = defaultPipelineStages()
+    expect(stages.find((s) => s.slug === 'new_lead').stage_role).toBe('new')
+    expect(stages.find((s) => s.slug === 'second_class')).toMatchObject({ stage_role: 'class_n', role_config: { count: 2 } })
+    for (const s of stages.filter((x) => x.is_dormant)) expect(s.stage_role, s.slug).toBe('pile')
+    for (const s of stages) expect(s.stage_role, s.slug).not.toBe('custom')
+  })
+
   it('gives every stage a name, a hex color, and a unique display_order', () => {
     // NOTE: array order follows the classifier taxonomy (cold_lead before
     // dormant), while display_order follows prod (dormant 309, cold 310 —
