@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   programmeRulesFromSettings, loadBoardsForLocation, loadClaimsForLocation, pendingProgrammeClaims,
   upsertProgrammeClaims, loadClaimsForContact, loadProgrammeRules, loadPlacementClaims,
+  placementPackGuard, loadPackGuardForContact,
 } from './pipeline-claims.js'
 
 vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
@@ -397,5 +398,116 @@ describe('offer-matched purchases are not €39 paid claims (PIPEBUILD.3g)', () 
     expect(out.offersRefused).toBe('un1t_online_studio')
     expect(out.claims.paid).toMatchObject({ start: T0 })
     expect('purchasePaid' in out).toBe(false)
+  })
+})
+
+// PIPEBUILD.3h — an unreadable studio setting places nobody beside a
+// trial_purchase offer board; the Class Pack guard follows the offer window.
+describe('PIPEBUILD.3h — unreadable source and the pack guard', () => {
+  const DAY = 86_400_000
+  const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null }
+  const PAID = { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false, board_type: null }
+  const RESET = {
+    id: 'p3', location_id: LOC, key: 'reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
+    config: {
+      entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] },
+      stages: [{ role: 'new', slug: 'reset_new', name: 'New' }, { role: 'converted', slug: 'reset_converted', name: 'Converted' }],
+      duration_days: 90,
+    },
+  }
+  const CORP = { ...RESET, id: 'p4', key: 'corp', config: { ...RESET.config, entry: { type: 'corp_promo', values: ['acme'] } } }
+  const buy = (at, planCode = 'RESET14') => ({
+    id: 't1', location_id: LOC, contact_id: 'c1', status: 'granted', payment_status: 'paid',
+    paid_at: iso(at), granted_at: iso(at), duration_days: 14, plan_code: planCode, landing_path: null, page_id: null,
+  })
+  const contact = { id: 'c1', location_id: LOC }
+
+  it('unreadableSourceWithTrialPurchaseOfferPlacesNobody (event path): claims unreadable, nothing past the source read', async () => {
+    for (const pipelines of [[ACQ, PAID, RESET], [ACQ, RESET], [ACQ, PAID, RESET, CORP]]) {
+      const { db, reads } = fakeDb({ pipelines, trial_purchases: [buy(T0)], pipeline_board_claims: [] }, { errors: { locations: 'down' } })
+      const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+      expect(out).toMatchObject({ ok: false, reason: 'membership_source_unreadable' })
+      expect(reads).toEqual(['pipelines'])
+    }
+  })
+
+  it('unreadableSourceWithoutTrialPurchaseOfferHoldsOnly (event path): the offer boards are held, the €39 claim still reads', async () => {
+    const { db } = fakeDb({ pipelines: [ACQ, PAID, CORP], trial_purchases: [buy(T0, 'EUR39')], pipeline_board_claims: [] }, { errors: { locations: 'down' } })
+    // The programme settings live on `locations` too: only the FIRST locations
+    // read (the membership source) fails here.
+    const settings = fakeDb({ locations: [{ id: LOC, settings: {} }] }).db
+    let locationReads = 0
+    const sourceDown = { from: (t) => (t === 'locations' && locationReads++ > 0 ? settings.from(t) : db.from(t)) }
+    const out = await loadPlacementClaims(sourceDown, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+    expect(out).toMatchObject({ ok: true, offersRefused: 'membership_source_unreadable' })
+    expect(out.claims.offers).toBeNull()
+    expect(out.claims.paid).toMatchObject({ start: T0 })
+    // a un1t.online answer beside a trial_purchase board still only holds the
+    // offer boards: a deliberate answer, not an unknown
+    const un1t = fakeDb({ pipelines: [ACQ, PAID, RESET], locations: [{ id: LOC, settings: {}, membership_source: 'un1t_online' }], trial_purchases: [buy(T0)], pipeline_board_claims: [] })
+    const held = await loadPlacementClaims(un1t.db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+    expect(held).toMatchObject({ ok: true, offersRefused: 'un1t_online_studio' })
+    expect(held.claims.paid).toMatchObject({ start: T0 })
+  })
+
+  it('packGuardAtStudioWithOnlyOfferBoard: the claim over every purchase rides along; a failed purchases read fails the call', async () => {
+    const { db } = fakeDb({ pipelines: [ACQ, RESET], locations: [{ id: LOC, membership_source: 'glofox' }], trial_purchases: [buy(T0)], pipeline_board_claims: [] })
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+    expect(out.ok).toBe(true)
+    expect(out.claims.paid).toBeNull()
+    expect(out.purchasePaid).toMatchObject({ start: T0, durationDays: 14 })
+    expect(placementPackGuard(out, contact, T0)).toBe(true)
+    const down = fakeDb({ pipelines: [ACQ, RESET], locations: [{ id: LOC, membership_source: 'glofox' }] }, { errors: { trial_purchases: 'x' } })
+    expect(await loadPlacementClaims(down.db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })).toMatchObject({ ok: false, reason: 'purchases_unreadable' })
+    // a corp_promo offer board alone reads no purchases (no trial_purchase entry)
+    const corp = fakeDb({ pipelines: [ACQ, CORP], locations: [{ id: LOC, membership_source: 'glofox' }], corp_promo_claims: [] }, { errors: { trial_purchases: 'must not be read' } })
+    const corpOut = await loadPlacementClaims(corp.db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+    expect(corpOut.ok).toBe(true)
+    expect('purchasePaid' in corpOut).toBe(false)
+  })
+
+  it('packGuardHonoursLongerOfferWindow: day 80 of a 14-day row on a 90-day board (placement guard)', async () => {
+    const now = T0 + 80 * DAY
+    const { db } = fakeDb({ pipelines: [ACQ, PAID, RESET], locations: [{ id: LOC, settings: {}, membership_source: 'glofox' }], trial_purchases: [buy(T0)], pipeline_board_claims: [] })
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now, write: false })
+    expect(out.ok).toBe(true)
+    // the €39 claim over every purchase lapsed at day 74 (14 + 60 quiet)…
+    expect(placementPackGuard({ ...out, claims: { ...out.claims, offers: new Map() } }, contact, now)).toBe(false)
+    // …the offer claim (90 days) is live: the guard holds
+    expect(out.claims.offers.get('reset')).toMatchObject({ start: T0, end: T0 + 90 * DAY })
+    expect(placementPackGuard(out, contact, now)).toBe(true)
+    // past the offer's own quiet window it lapses too
+    expect(placementPackGuard(out, contact, T0 + 151 * DAY)).toBe(false)
+  })
+
+  it('placementPackGuard with no offer board is exactly claimLive(claims.paid)', () => {
+    const paid = { start: T0, end: T0 + 14 * DAY }
+    expect(placementPackGuard({ ok: true, boards: [ACQ, PAID], claimBoards: true, claims: { paid, programme: null } }, contact, T0 + DAY)).toBe(true)
+    expect(placementPackGuard({ ok: true, boards: [ACQ, PAID], claimBoards: true, claims: { paid, programme: null } }, contact, T0 + 80 * DAY)).toBe(false)
+    expect(placementPackGuard({ ok: true, boards: [ACQ, PAID], claimBoards: true, claims: { paid: null, programme: null } }, contact, T0)).toBe(false)
+  })
+
+  it('packGuardHonoursLongerOfferWindow (skip-placement): loadPackGuardForContact', async () => {
+    const now = T0 + 80 * DAY
+    // a live €39 claim: one read, live
+    const live = fakeDb({ trial_purchases: [buy(T0, 'EUR39')] }, { errors: { pipelines: 'must not be read' } })
+    expect(await loadPackGuardForContact(live.db, { locationId: LOC, contactId: 'c1', contact, now: T0 + DAY })).toEqual({ ok: true, live: true })
+    expect(live.reads).toEqual(['trial_purchases'])
+    // no purchase: one read, not live
+    const none = fakeDb({ trial_purchases: [] }, { errors: { pipelines: 'must not be read' } })
+    expect(await loadPackGuardForContact(none.db, { locationId: LOC, contactId: 'c1', contact, now })).toEqual({ ok: true, live: false })
+    expect(none.reads).toEqual(['trial_purchases'])
+    // a lapsed €39 claim, the 90-day offer board holds it
+    const long = fakeDb({ trial_purchases: [buy(T0)], pipelines: [ACQ, PAID, RESET] })
+    expect(await loadPackGuardForContact(long.db, { locationId: LOC, contactId: 'c1', contact, now })).toEqual({ ok: true, live: true })
+    expect(long.reads).toEqual(['trial_purchases', 'pipelines'])
+    // the same purchase at a studio with no offer board (or a non-matching plan): not live
+    for (const [pipelines, plan] of [[[ACQ, PAID], 'RESET14'], [[ACQ, PAID, RESET], 'EUR39'], [[ACQ, PAID, CORP], 'RESET14']]) {
+      const no = fakeDb({ trial_purchases: [buy(T0, plan)], pipelines })
+      expect(await loadPackGuardForContact(no.db, { locationId: LOC, contactId: 'c1', contact, now })).toEqual({ ok: true, live: false })
+    }
+    // a failed boards or purchases read: { ok: false } (the caller keeps the guard live)
+    expect(await loadPackGuardForContact(fakeDb({ trial_purchases: [buy(T0)] }, { errors: { pipelines: 'x' } }).db, { locationId: LOC, contactId: 'c1', contact, now })).toEqual({ ok: false, reason: 'boards_unreadable' })
+    expect(await loadPackGuardForContact(fakeDb({}, { errors: { trial_purchases: 'x' } }).db, { locationId: LOC, contactId: 'c1', contact, now })).toEqual({ ok: false, reason: 'purchases_unreadable' })
   })
 })

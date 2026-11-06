@@ -2169,6 +2169,19 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'mixed_input_sources' }))
   })
 
+  it('unreadableSourceWithTrialPurchaseOffer at a un1t-boards studio keeps its answer: the offer board is refused, the un1t boards still run', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-l', name: 'L', email: null, location_id: HATCH }],
+      snapshots: [['c-l', leadSnap()]],
+    })))
+    const RESET = { ...CORP, location_id: HATCH, id: 'p-reset', key: 'reset', config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] } } }
+    const rec = recordingDb({
+      pipelines: [HATCH_PIPELINES[0], RESET], pipeline_stages: HATCH_STAGES, deals: [],
+    }, { errors: { locations: 'locations down' } })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['reset'] })
+  })
+
   it('offerBoardRefusedAtUn1tStudioAlone: a un1t.online studio with ONLY an offer board enabled reads no contacts, writes nothing, fires nothing', async () => {
     const offerAtHatch = { ...CORP, location_id: HATCH }
     const rec = recordingDb({
@@ -2188,7 +2201,32 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'un1t_online_studio' }))
   })
 
-  it('membershipSourceReadFailureHoldsOffer: an unreadable membership_source holds the offer board (never guesses contacts); the acquisition board still runs', async () => {
+  it('unreadableSourceWithTrialPurchaseOfferPlacesNobody (nightly): an unreadable membership_source beside a trial_purchase offer board fails the run before any claim, contact or deal is touched', async () => {
+    // Held, the offer board would leave the buyer's purchase in the €39 claim
+    // and the €39 board (sorted ahead at 200) would take them.
+    const RESET = { ...CORP, id: 'p-reset', key: 'reset', priority: 250, config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] }, stages: CORP_CONFIG.stages.map((st) => ({ ...st, slug: st.slug.replace('corp_', 'reset_') })) } }
+    const RESET_STAGES = ['reset_new', 'reset_first_class', 'reset_done', 'reset_converted'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-reset', location_id: STILL }))
+    const buyer = { id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', joined_at: ago(2), created_at: ago(2), recent_bookings: [] }
+    for (const pipelines of [[ACQ, PAID, RESET], [ACQ, RESET]]) {
+      vi.mocked(triggerSequencesForPipelineStageChange).mockClear()
+      const rec = recordingDb(corpFixtures({
+        pipelines, pipeline_stages: [...ACQ_STAGES, ...PAID_STAGES, ...RESET_STAGES],
+        contacts: [buyer, corpAttended('c-move')], deals: [acqDeal('d-move', 'c-move')],
+        trial_purchases: [{ id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(2), granted_at: ago(2), duration_days: 14, plan_code: 'RESET14', landing_path: null, page_id: null }],
+      }), { errors: { locations: 'locations down' } })
+      const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+      expect(out).toMatchObject({ ok: false, error: 'claims unavailable: membership_source_unreadable', pipelines_skipped: ['reset'] })
+      expect(rec.tables()).not.toContain('contacts')
+      expect(rec.tables()).not.toContain('trial_purchases')
+      expect(rec.writesTo('deals')).toHaveLength(0)
+      expect(rec.writesTo('pipeline_board_claims')).toHaveLength(0)
+      const close = rec.writesTo('pipeline_classification_runs').find((e) => rec.argOf(e, 'update'))
+      expect(rec.argOf(close, 'update')[1]).toMatchObject({ status: 'failed', error_message: 'claims unavailable: membership_source_unreadable' })
+      expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+    }
+  })
+
+  it('membershipSourceReadFailureHoldsOffer / unreadableSourceWithoutTrialPurchaseOfferHoldsOnly (nightly): an unreadable membership_source holds the offer board (never guesses contacts); the acquisition board still runs', async () => {
     const rec = recordingDb(corpFixtures({
       contacts: [corpNew('c-new'), corpAttended('c-move')],
       deals: [acqDeal('d-move', 'c-move'), { id: 'd-held', contact_id: 'c-new', stage_id: 's-corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' }],

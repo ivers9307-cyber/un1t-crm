@@ -140,13 +140,62 @@ export function placementDescriptors(boards, { offersKnown = true } = {}) {
  * @returns {Array<{ match: string, values: string[] }>}
  */
 export function offerPurchaseEntries(boards) {
+  return trialPurchaseOfferConfigs(boards).map((d) => d.config.entry)
+}
+
+/**
+ * PIPEBUILD.3h — the ENABLED trial_purchase offer boards (board_type 'offer')
+ * whose config parses, as { key, config }. Pure and quiet, like
+ * offerPurchaseEntries.
+ * @returns {Array<{ key: string, config: object }>}
+ */
+export function trialPurchaseOfferConfigs(boards) {
   const out = []
   for (const b of Array.isArray(boards) ? boards : []) {
     if (!b || b.enabled !== true || b.board_type !== 'offer') continue
     const parsed = parseOfferConfig(b.config, { boardKey: b.key })
-    if (parsed.ok && parsed.config.entry.type === 'trial_purchase') out.push(parsed.config.entry)
+    if (parsed.ok && parsed.config.entry.type === 'trial_purchase') out.push({ key: b.key, config: parsed.config })
   }
   return out
+}
+
+/**
+ * PIPEBUILD.3h — a trial_purchase offer board's claim over this contact's
+ * purchases: the matching rows, each on the BOARD's duration_days (the same
+ * rule as the offer loader). Pure.
+ */
+export function trialPurchaseOfferClaim(purchases, config, now = Date.now()) {
+  const rows = (Array.isArray(purchases) ? purchases : [])
+    .filter((p) => purchaseMatchesEntry(p, config.entry))
+    .map((p) => ({ ...p, duration_days: config.duration_days }))
+  return paidTrialClaim(rows, now)
+}
+
+/**
+ * PIPEBUILD.3h — is any trial_purchase offer claim in `offers` (a placement's
+ * claims.offers, Map<boardKey, claim>) live on its own board's windows? The
+ * Class Pack guard: an offer trial's credits are the trial's while its claim
+ * is live, whatever the purchase row's own duration says. Pure.
+ */
+export function liveTrialPurchaseOffer(offers, boards, contact, now = Date.now()) {
+  if (!(offers instanceof Map) || offers.size === 0) return false
+  for (const { key, config } of trialPurchaseOfferConfigs(boards)) {
+    const claim = offers.get(key)
+    if (claim && claim.source === 'trial_purchase' && offerClaimLive(claim, contact, now, config)) return true
+  }
+  return false
+}
+
+/**
+ * PIPEBUILD.3h — the same test straight from this contact's purchases (the
+ * sync path that skips placement and so has no claims.offers). Pure.
+ */
+export function liveTrialPurchaseOfferFromPurchases(purchases, boards, contact, now = Date.now()) {
+  for (const { config } of trialPurchaseOfferConfigs(boards)) {
+    const c = trialPurchaseOfferClaim(purchases, config, now)
+    if (c && offerClaimLive({ start: c.start, end: c.end }, contact, now, config)) return true
+  }
+  return false
 }
 
 /** Does this trial_purchases row match a trial_purchase entry? Pure. */
@@ -233,15 +282,14 @@ async function loadOffers(db, { locationId, boards, contacts, now, scopeContactI
       const byContact = new Map()
       for (const p of rows) {
         if (!p?.contact_id || !wanted.has(p.contact_id)) continue
-        if (!purchaseMatchesEntry(p, board.entry)) continue
+        if (!byContact.has(p.contact_id)) byContact.set(p.contact_id, [])
+        byContact.get(p.contact_id).push(p)
+      }
+      for (const [contactId, list] of byContact) {
         // PIPEBUILD.3g — the BOARD's duration_days wins over the purchase row's:
         // the builder sets the offer's length, and the row's own (the €39
         // trial's 14 days, a plan default) says nothing about this board.
-        if (!byContact.has(p.contact_id)) byContact.set(p.contact_id, [])
-        byContact.get(p.contact_id).push({ ...p, duration_days: board.durationDays })
-      }
-      for (const [contactId, list] of byContact) {
-        const c = paidTrialClaim(list, now)
+        const c = trialPurchaseOfferClaim(list, board.config, now)
         if (c) addOffer(offersByContact, contactId, board.key, { start: c.start, end: c.end, source: 'trial_purchase' })
       }
     }

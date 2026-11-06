@@ -303,6 +303,22 @@ export async function reclassifyAllContacts(db, args) {
       sourceUnreadable = true
       logWarn('pipeline-reclassify', 'membership source unreadable', { locationId, err: boundedErr(e?.message || e) })
     }
+    // PIPEBUILD.3h — an unreadable source beside a trial_purchase offer board
+    // is "cannot tell" for the claims as well: holding the offer board would
+    // leave its buyers' purchases in the €39 claim, so they could land on the
+    // €39 board and its follow-ups. The run places nobody (failed, retried
+    // next tick), like any unreadable claim. A studio whose boards are all
+    // un1t.online (+ offer) is refused as mixed_input_sources below whatever
+    // its source says, so it keeps that answer; offer boards without a trial
+    // purchase are held as before.
+    const trialPurchaseOffer = activePipelines.some((p) => isOffer(p) && p.offerConfig?.entry?.type === 'trial_purchase')
+    const un1tOnly = activePipelines.some(isUn1t) && activePipelines.every((p) => isUn1t(p) || isOffer(p))
+    if (sourceUnreadable && trialPurchaseOffer && !un1tOnly) {
+      refuseOffers('membership_source_unreadable')
+      const errorMessage = 'claims unavailable: membership_source_unreadable'
+      await markRun(db, runId, { status: 'failed', error_message: errorMessage }, startedAt)
+      return { ok: false, error: errorMessage, run_id: runId, input_source: inputSource, pipelines_skipped: pipelinesSkipped }
+    }
     if (sourceUnreadable) refuseOffers('membership_source_unreadable')
     else if (UN1T_MEMBERSHIP_SOURCES.includes(membershipSource)) refuseOffers('un1t_online_studio')
   }

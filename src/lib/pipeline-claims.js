@@ -18,12 +18,12 @@
 
 import { logWarn } from './log.js'
 import { selectAll } from './select-all.js'
-import { paidTrialClaim } from '../../shared/pipelines/paid-trial.js'
+import { paidTrialClaim, claimLive as paidClaimLive } from '../../shared/pipelines/paid-trial.js'
 import { matchProgrammeSignal, programmeClaimLive } from '../../shared/pipelines/programmes.js'
 import { BOARD_KEYS, CLAIM_BOARD_MODULES, OFFER_MODULES } from '../../shared/pipelines/router.js'
 import {
   loadOfferClaimsForContact, readMembershipSource, UN1T_MEMBERSHIP_SOURCES,
-  offerPurchaseEntries, withoutOfferPurchases,
+  offerPurchaseEntries, withoutOfferPurchases, liveTrialPurchaseOffer, liveTrialPurchaseOfferFromPurchases,
 } from './pipeline-offer-claims.js'
 
 export const PROGRAMME_RULES_PATH = Object.freeze(['pipelines', 'programmes'])
@@ -284,6 +284,13 @@ export async function loadClaimsForContact(db, { locationId, contactId, contact,
  * A failed offer READ fails the call; a recorded claim already written by then
  * is a fact the nightly pass would record the same way.
  *
+ * PIPEBUILD.3h — an unreadable membership source beside a trial_purchase
+ * offer board fails the call (membership_source_unreadable: places nobody,
+ * no pack stamp). Whenever a trial_purchase offer board runs, the claim over
+ * every purchase reaches placementPackGuard: as `purchasePaid`, at a studio
+ * with no €39/Programmes board too, or as claims.paid itself when a €39 board
+ * runs beside refused offer boards (which take nothing out of it).
+ *
  * @returns {Promise<{ ok: true, boards: object[], claimBoards: boolean, claims: { paid, programme, offers? }|null, offersRefused?: string, purchasePaid?: object|null }
  *   | { ok: false, reason: string, boards?: object[] }>}
  */
@@ -299,9 +306,21 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
   // The membership source is read first (only when an offer board runs), so a
   // refused studio's offer boards take nothing out of the €39 claim, exactly
   // as on the nightly pass, which drops refused boards before reading claims.
+  // PIPEBUILD.3h — an UNREADABLE source beside a trial_purchase offer board
+  // is "cannot tell" for the claims too: whether the purchase is the offer's
+  // or the €39 claim hangs on it, and keeping it as €39 could put an offer
+  // buyer on the €39 board and its follow-ups. So it places nobody this time
+  // (and no pack stamp). A un1t.online studio is a deliberate answer, not an
+  // unknown, and is unchanged; so is an unreadable source whose offer boards
+  // hold no trial purchase (they are held, the other boards run).
+  const offerTrialEntries = offerPurchaseEntries(offerRows)
   let offersRefused = null
   if (offerRows.length > 0) {
     const source = await readMembershipSource(db, locationId)
+    if (!source.ok && offerTrialEntries.length > 0) {
+      logWarn('pipeline-claims', 'membership source unreadable beside a trial_purchase offer board; placing nobody', { locationId })
+      return { ok: false, reason: source.reason, boards }
+    }
     offersRefused = !source.ok
       ? source.reason
       : (UN1T_MEMBERSHIP_SOURCES.includes(source.source) ? 'un1t_online_studio' : null)
@@ -319,6 +338,14 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
     if (!claimsRes.ok) return { ok: false, reason: claimsRes.reason, boards }
     claims = claimsRes.claims
     if ('purchasePaid' in claimsRes) purchasePaid = claimsRes.purchasePaid
+  } else if (offerTrialEntries.length > 0) {
+    // PIPEBUILD.3h — no €39/Programmes board, but a trial_purchase offer
+    // board: the Class Pack guard still needs the claim over every purchase
+    // (else an offer trial's credits could stamp a pack here while the
+    // skip-placement path guards them). One indexed read.
+    const paidRes = await loadPaidClaimForContact(db, { locationId, contactId, now })
+    if (!paidRes.ok) return { ok: false, reason: paidRes.reason, boards }
+    purchasePaid = paidRes.claim
   }
   // PIPEBUILD.3g — the paid claim over every purchase, present only when an
   // offer board took a purchase out of `claims.paid` (the Class Pack guard).
@@ -336,15 +363,7 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
   return { ok: true, boards, claimBoards: true, claims: { ...claims, offers: offerRes.offers }, ...extra }
 }
 
-/**
- * PIPE3 fix pass — this contact's PAID claim alone, one indexed read. For the
- * sync paths that skip placement (the detail backfill: skipBookings +
- * skipReclassify) and must still decide the Class Pack stamp: a live €39 claim
- * means the credits are the trial's. Independent of the studio's boards: the
- * purchase row is the fact.
- * @returns {Promise<{ ok: true, claim: object|null } | { ok: false, reason: 'purchases_unreadable', err: string }>}
- */
-export async function loadPaidClaimForContact(db, { locationId, contactId, now = Date.now() }) {
+async function readContactPurchases(db, { locationId, contactId }) {
   const { data, error } = await db
     .from('trial_purchases')
     .select(PURCHASE_COLS)
@@ -354,5 +373,56 @@ export async function loadPaidClaimForContact(db, { locationId, contactId, now =
     logWarn('pipeline-claims', 'trial_purchases read failed', { locationId, contactId, err: bounded(error) })
     return { ok: false, reason: 'purchases_unreadable', err: bounded(error) }
   }
-  return { ok: true, claim: paidTrialClaim(Array.isArray(data) ? data : [], now) }
+  return { ok: true, purchases: Array.isArray(data) ? data : [] }
+}
+
+/**
+ * PIPE3 fix pass — this contact's PAID claim alone, one indexed read: the
+ * claim over EVERY purchase. Independent of the studio's boards: the purchase
+ * row is the fact.
+ * @returns {Promise<{ ok: true, claim: object|null } | { ok: false, reason: 'purchases_unreadable', err: string }>}
+ */
+export async function loadPaidClaimForContact(db, { locationId, contactId, now = Date.now() }) {
+  const res = await readContactPurchases(db, { locationId, contactId })
+  if (!res.ok) return res
+  return { ok: true, claim: paidTrialClaim(res.purchases, now) }
+}
+
+/**
+ * PIPEBUILD.3h — the Class Pack guard from a placement's claims (the sync path
+ * that places): live when the €39 claim over every purchase is live
+ * (`purchasePaid` when an offer board took a purchase out of claims.paid,
+ * else claims.paid), OR any trial_purchase offer claim in claims.offers is
+ * live on its own board's windows (an offer of 21 days outlives the row's 14).
+ * A studio with no offer board: exactly the old `claimLive(claims.paid)`. Pure.
+ */
+export function placementPackGuard(placement, contact, now = Date.now()) {
+  const paidClaim = placement && 'purchasePaid' in placement ? placement.purchasePaid : (placement?.claims?.paid ?? null)
+  if (paidClaimLive(paidClaim, contact, now)) return true
+  return liveTrialPurchaseOffer(placement?.claims?.offers, offerBoardRows(placement?.boards), contact, now)
+}
+
+const offerBoardRows = (boards) => (Array.isArray(boards) ? boards : [])
+  .filter((b) => b && b.mode === 'derived' && OFFER_MODULES.includes(b.module))
+
+/**
+ * PIPEBUILD.3h — the Class Pack guard for the sync paths that skip placement
+ * (the detail backfill: skipBookings + skipReclassify), which must still
+ * decide the stamp. Live when the €39 claim over every purchase is live, or a
+ * trial_purchase offer board at the studio holds a live claim over them (its
+ * own duration and windows). The boards are read only when the contact has a
+ * purchase whose €39 claim is not live: no purchase, or a live one, is today's
+ * one read. Any failed read is { ok: false } and the caller keeps the guard
+ * live (no stamp this sync).
+ * @returns {Promise<{ ok: true, live: boolean } | { ok: false, reason: string }>}
+ */
+export async function loadPackGuardForContact(db, { locationId, contactId, contact, now = Date.now() }) {
+  const res = await readContactPurchases(db, { locationId, contactId })
+  if (!res.ok) return { ok: false, reason: res.reason }
+  const claim = paidTrialClaim(res.purchases, now)
+  if (!claim) return { ok: true, live: false }
+  if (paidClaimLive(claim, contact, now)) return { ok: true, live: true }
+  const boardsRes = await loadBoardsForLocation(db, locationId)
+  if (!boardsRes.ok) return { ok: false, reason: boardsRes.reason }
+  return { ok: true, live: liveTrialPurchaseOfferFromPurchases(res.purchases, offerBoardRows(boardsRes.boards), contact, now) }
 }

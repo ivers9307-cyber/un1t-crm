@@ -18,8 +18,7 @@ import { PIPELINE_MODES, getBoardModule } from '../../shared/pipelines/index.js'
 // (Stillorgan's €39 Trial / Programmes) a contact is placed on ONE of several
 // boards, and the trial's own credits are never a Class Pack.
 import { routeContact, CLAIM_BOARD_MODULES, OFFER_MODULES, BOARD_KEYS } from '../../shared/pipelines/router.js'
-import { claimLive as paidClaimLive } from '../../shared/pipelines/paid-trial.js'
-import { loadPlacementClaims, loadBoardsForLocation, loadPaidClaimForContact } from './pipeline-claims.js'
+import { loadPlacementClaims, loadBoardsForLocation, loadPackGuardForContact, placementPackGuard } from './pipeline-claims.js'
 import { placementDescriptors } from './pipeline-offer-claims.js'
 import { findGlofoxCrossoverContact, recordGlofoxCrossover } from './glofox-crossover.js'
 import { upsertContactStudio } from './contact-studios.js'
@@ -2391,20 +2390,21 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     } else if (placement.claimBoards) {
       // The boards ride along so ensureDealForContact reads `pipelines` no more.
       placementOpts = { claims: placement.claims, boards: placement.boards }
-      // PIPEBUILD.3g — when an offer board took a purchase out of claims.paid,
-      // purchasePaid is the claim over EVERY purchase: an offer trial's credits
-      // are the trial's too, never a Class Pack.
-      const packGuardClaim = 'purchasePaid' in placement ? placement.purchasePaid : (placement.claims?.paid ?? null)
-      liveTrialClaim = paidClaimLive(packGuardClaim, claimsRow, syncNow)
+      // PIPEBUILD.3g/3h — the €39 claim over EVERY purchase, or a live
+      // trial_purchase offer claim (its own, possibly longer, window): an
+      // offer trial's credits are the trial's too, never a Class Pack. The
+      // same rule whatever boards the studio runs (placementPackGuard).
+      liveTrialClaim = placementPackGuard(placement, claimsRow, syncNow)
     }
   } else {
     // PIPE3 fix pass (review #2) — a sync that skips placement (the detail
     // backfill, every ~30 min over every Stillorgan contact) still runs the
     // pack stamp with fresh credits, so it must still know about a live €39
-    // claim: one indexed read of this contact's purchases. Unreadable = no
-    // stamp this sync.
-    const paid = await loadPaidClaimForContact(db, { locationId, contactId, now: syncNow })
-    liveTrialClaim = paid.ok ? paidClaimLive(paid.claim, claimsRow, syncNow) : true
+    // claim: one indexed read of this contact's purchases (PIPEBUILD.3h: and
+    // the boards, only for a lapsed €39 claim, in case a trial_purchase offer
+    // board's longer window still holds it). Unreadable = no stamp this sync.
+    const guard = await loadPackGuardForContact(db, { locationId, contactId, contact: claimsRow, now: syncNow })
+    liveTrialClaim = guard.ok ? guard.live : true
   }
 
   // FUNNEL.3 — stamp the Class Pack moment. Same write-once/best-effort

@@ -1536,14 +1536,16 @@ function fakeDb({
   purchases = [],
   crossoverLinks = [], orgRowsByGlofoxId = [], orgRowsByEmail = [], contactsById = {},
   lookupError = null, writes = [], studioWriteError = null,
+  membershipSourceError = null,
 } = {}) {
   function chain(table) {
+    let selected = ''
     let mode = null
     let scope = null
     let single = false
     let byId = null
     const c = {}
-    c.select = () => c
+    c.select = (cols) => { if (typeof cols === 'string') selected = cols; return c }
     c.eq = (col, val) => {
       if (col === 'location_id')                            scope = scope || 'location'
       if (col === 'organization_id')                        scope = 'org'
@@ -1571,6 +1573,8 @@ function fakeDb({
       let data
       if (table === 'pipelines')                                data = pipelines
       else if (table === 'trial_purchases')                     data = purchases
+      else if (table === 'locations' && membershipSourceError && selected.includes('membership_source'))
+        return resolve({ data: null, error: membershipSourceError })
       else if (table === 'locations')                           data = [{ organization_id: 'org-1' }]
       else if (table === 'studio_contacts')                     data = crossoverLinks.map((l) => ({ ...(contactsById[l.contact_id] || { id: l.contact_id, location_id: 'hatch' }), studio_location_id: 'stillorgan', studio_source: 'glofox' }))
       else if (table === 'contact_location_preferences')        data = writes.length && writes.at(-1).table === table ? [{ contact_id: writes.at(-1).payload[0]?.contact_id }] : []
@@ -2976,6 +2980,58 @@ describe('applyMemberSync — pack stamp beside a trial_purchase offer board (PI
     const writes = []
     await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [granted], pipelines, writes }), 'stillorgan', member, { bookings: [], skipInteractions: true })
     expect(packStamps(writes)).toHaveLength(0)
+  })
+
+  // PIPEBUILD.3h — finding 1, event path: an unreadable membership source
+  // beside a trial_purchase offer board is "cannot tell": no placement, no
+  // pack stamp (never the €39 board for an offer buyer).
+  it('unreadableSourceWithTrialPurchaseOfferPlacesNobody (event path)', async () => {
+    const dealWrites = (writes) => writes.filter((w) => w.table === 'deals')
+    for (const boards of [pipelines, [pipelines[0], RESET]]) {
+      const writes = []
+      await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [granted], pipelines: boards, writes, membershipSourceError: { message: 'locations down' } }), 'stillorgan', member, { bookings: [], skipInteractions: true })
+      expect(packStamps(writes)).toHaveLength(0)
+      expect(dealWrites(writes)).toHaveLength(0)
+    }
+    // the same sync with the source readable places the buyer (a deal is written)
+    const writes = []
+    await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [granted], pipelines, writes }), 'stillorgan', member, { bookings: [], skipInteractions: true })
+    expect(dealWrites(writes).length).toBeGreaterThan(0)
+  })
+
+  // PIPEBUILD.3h — finding 2: the purchase row says 14 days, the board 90.
+  // Day 80, no activity: the €39 claim over every purchase lapsed at day 74
+  // (14 + 60 quiet), the offer claim runs to day 90. Still the trial's credits.
+  it('packGuardHonoursLongerOfferWindow (placement and skip-placement paths)', async () => {
+    const old = new Date(Date.now() - 80 * 86_400_000).toISOString()
+    const lapsedRow = { ...granted, paid_at: old, granted_at: old, duration_days: 14 }
+    const LONG = { ...RESET, config: { ...RESET.config, duration_days: 90 } }
+    const longBoards = [pipelines[0], pipelines[1], LONG]
+    const shortBoards = [pipelines[0], pipelines[1], { ...RESET, config: { ...RESET.config, duration_days: 14 } }]
+    for (const opts of [{ bookings: [], skipInteractions: true }, { skipBookings: true, skipReclassify: true, skipInteractions: true }]) {
+      const held = []
+      await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [lapsedRow], pipelines: longBoards, writes: held }), 'stillorgan', member, opts)
+      expect(packStamps(held)).toHaveLength(0)
+      // the board at the row's own 14 days: both claims lapsed, the pack stamps
+      const stamped = []
+      await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [lapsedRow], pipelines: shortBoards, writes: stamped }), 'stillorgan', member, opts)
+      expect(packStamps(stamped)).toHaveLength(1)
+    }
+  })
+
+  // PIPEBUILD.3h — finding 3: a studio running an offer board and no
+  // €39/Programmes board guards the pack the same way on both paths.
+  it('packGuardAtStudioWithOnlyOfferBoard', async () => {
+    const onlyOffer = [pipelines[0], RESET]
+    for (const opts of [{ bookings: [], skipInteractions: true }, { skipBookings: true, skipReclassify: true, skipInteractions: true }]) {
+      const held = []
+      await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [granted], pipelines: onlyOffer, writes: held }), 'stillorgan', member, opts)
+      expect(packStamps(held)).toHaveLength(0)
+      // no purchase: the pack stamps as before
+      const stamped = []
+      await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [], pipelines: onlyOffer, writes: stamped }), 'stillorgan', member, opts)
+      expect(packStamps(stamped)).toHaveLength(1)
+    }
   })
 })
 
