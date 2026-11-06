@@ -15,13 +15,19 @@
 // query is scoped by location here). A follow-up is found by the template id
 // appearing in its sequence's `draft_graph ?? graph` WhatsApp nodes, since a
 // pack can use more than one template (trial_done: main + followup) and the
-// row's `whatsapp_template_id` holds only the first.
+// row's `whatsapp_template_id` holds only the first. The row's link is used
+// ONLY when the follow-up has no readable sequence: once the graph exists it
+// is the truth, so a template an operator has since swapped out of the graph
+// can no longer approve or reject the follow-up.
 //
 // The claim mirrors installFollowupPack: CAS `awaiting_approval → live`, then
 // publish, and on failure CAS `live → awaiting_approval` back. The state check
 // allows only draft|awaiting_approval|live|rejected|off, so there is no
 // intermediate "publishing" state; a 0-row claim means someone else (the
-// installer, or a second delivery of the same approval) is publishing it.
+// installer, or a second delivery of the same approval) is publishing it. If
+// the publish fails AND the revert write fails, the row reads `live` over a
+// draft sequence; that is logged under its own message, and a reinstall of
+// the pack repairs it (installFollowupPack's recheckInstalled).
 //
 // Never throws: a failure is logged and the counts so far are returned, so it
 // can never block onTemplateApproved or the webhook's 200.
@@ -88,9 +94,10 @@ async function waitingFollowups(db, template, { wantLiveOnly }) {
   const target = String(template.id)
   const out = []
   for (const f of followups) {
-    const templateIds = f.sequence_id ? graphs.get(f.sequence_id) || [] : []
-    const linked = String(f.whatsapp_template_id ?? '') === target
-    if (templateIds.includes(target) || linked) out.push({ ...f, templateIds, hasSequence: graphs.has(f.sequence_id) })
+    const hasSequence = Boolean(f.sequence_id) && graphs.has(f.sequence_id)
+    const templateIds = hasSequence ? graphs.get(f.sequence_id) : []
+    const uses = hasSequence ? templateIds.includes(target) : String(f.whatsapp_template_id ?? '') === target
+    if (uses) out.push({ ...f, templateIds, hasSequence })
   }
   return out
 }
@@ -145,12 +152,23 @@ async function publishWaiting(db, template, result) {
       .eq('id', f.id)
       .eq('location_id', template.location_id)
       .eq('state', 'live')
+    if (revertErr) {
+      // Stuck: the row says live, the sequence is still a draft, nothing
+      // sends. A reinstall of the pack puts it back and re-checks.
+      logError(MODULE, 'publish failed and the follow-up could not be put back; it reads live over a draft sequence', {
+        followupId: f.id,
+        sequenceId: f.sequence_id,
+        templateId: template.id,
+        err: published?.error,
+        revertErr: revertErr.message,
+      })
+      continue
+    }
     logError(MODULE, 'publish failed; follow-up left awaiting approval', {
       followupId: f.id,
       sequenceId: f.sequence_id,
       templateId: template.id,
       err: published?.error,
-      revertErr: revertErr?.message,
     })
   }
 }

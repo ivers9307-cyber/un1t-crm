@@ -4,8 +4,19 @@
 // every template is already APPROVED (a reinstall), publish at once: no Meta
 // webhook will ever arrive to do it.
 //
-// Service role, so every read and write is scoped by location here. Never
-// throws: every failure is a { ok: false, status, error, code? } result.
+// Service role, so every read and write is scoped by location here. Every
+// failure it can name is a { ok: false, status, error, code? } result; the
+// calls that reach Meta or another library (the template submits and the
+// publish) are wrapped, so a throw from one becomes a 500 result too.
+//
+// Approval can land at any moment. The go-live decision is never taken from
+// the statuses submit returned: after the link is written the template rows
+// are re-read, so an approval the webhook delivered while this was still
+// submitting (when the hook found no awaiting_approval row to move) is seen
+// here. A reinstall over an awaiting_approval row runs the same re-check, and
+// a `live` row whose sequence is still a draft (a publish failed and the
+// revert write failed too) is put back and re-checked: either way a stranded
+// follow-up recovers by installing it again.
 //
 // No half-installs: a template failure creates no sequence and no link row.
 // Templates a failed run DID submit stay saved here; a reinstall meets them as
@@ -20,6 +31,7 @@ import { submitWhatsappTemplate } from '@/lib/whatsapp-template-submit'
 import { publishSequence } from '@/lib/sequences/publish'
 import { parseGraphShape } from '@/lib/sequences/graph/schema'
 import { logError } from '@/lib/log'
+import { graphTemplateIds } from '@/lib/pipeline-followup-approval'
 import { RECIPES, renderPack, studioSlugFor } from '../../shared/pipelines/recipes.js'
 
 const MODULE = 'pipeline-followups'
@@ -27,11 +39,13 @@ const MODULE = 'pipeline-followups'
 // Same-file literal so check:select-columns resolves it.
 const FOLLOWUP_COLUMNS = 'id, location_id, pipeline_id, stage_id, sequence_id, whatsapp_template_id, pack_key, state, want_live, created_by, created_at, updated_at'
 
-// A row in one of these states is already installed; return it untouched.
+// A row in one of these states is already installed; it is returned (after
+// the recovery re-checks in step 2), never reinstalled over.
 const INSTALLED_STATES = ['awaiting_approval', 'live']
 // A saved template in one of these states can never be approved, so linking
 // it on a reinstall would leave the follow-up waiting for ever.
 const DEAD_TEMPLATE_STATUSES = ['REJECTED', 'DISABLED', 'PENDING_DELETION', 'DELETED']
+const DEAD_TEMPLATE_WORDS = { REJECTED: 'rejected', DISABLED: 'disabled', PENDING_DELETION: 'deleted', DELETED: 'deleted' }
 
 const LEGACY_BOARD_ERROR = "This board is built in code and can't be changed here."
 
@@ -45,8 +59,12 @@ const fail = (status, error, code) => (code ? { ok: false, status, error, code }
  *   render?: { studioName?, offerName?, durationDays?, signer?, bookingFlowId?, appLinks? },
  *   createdBy?: string|null, wantLive?: boolean,
  * }} opts
- * @returns {Promise<{ ok: true, followup: object, created: boolean, publishError?: string }
+ * @returns {Promise<{ ok: true, followup: object, created: boolean, publishError?: string,
+ *     code?: 'publish_failed_state_stuck' }
  *   | { ok: false, status: number, error: string, code?: string }>}
+ *   `followup.state` is what is on disk: `code: 'publish_failed_state_stuck'`
+ *   means a publish failed AND putting the row back failed, so it reads
+ *   `live` over a draft sequence until a reinstall repairs it.
  */
 export async function installFollowupPack(db, {
   locationId,
@@ -90,7 +108,8 @@ export async function installFollowupPack(db, {
   if (locErr) return fail(500, 'Could not read the studio just now. Try again.')
   if (!location) return fail(404, 'Studio not found')
 
-  // 2. Already installed → return it as it stands.
+  // 2. Already installed → return it (a stranded one is recovered first:
+  // recheckInstalled).
   const { data: existing, error: existingErr } = await db.from('pipeline_stage_followups')
     .select(FOLLOWUP_COLUMNS)
     .eq('location_id', locationId)
@@ -99,7 +118,21 @@ export async function installFollowupPack(db, {
     .maybeSingle()
   if (existingErr) return fail(500, 'Could not read this stage\'s follow-ups just now. Try again.')
   if (existing && INSTALLED_STATES.includes(existing.state)) {
-    return { ok: true, followup: existing, created: false }
+    return recheckInstalled(db, locationId, existing)
+  }
+  // An `off` row whose old sequence still runs: installing over it would
+  // leave that sequence active beside the new one, two sequences sending the
+  // same follow-up.
+  if (existing?.state === 'off' && existing.sequence_id) {
+    const { data: oldSeq, error: oldSeqErr } = await db.from('email_sequences')
+      .select('id, status')
+      .eq('id', existing.sequence_id)
+      .eq('location_id', locationId)
+      .maybeSingle()
+    if (oldSeqErr) return fail(500, 'Could not read this follow-up\'s sequence just now. Try again.')
+    if (oldSeq?.status === 'active') {
+      return fail(409, 'This follow-up is switched off but its old sequence is still running. Pause that sequence first, then install again.', 'old_sequence_active')
+    }
   }
 
   // 3. Render the pack. A bad fill-in or an unknown recipe/pack throws; the
@@ -121,32 +154,36 @@ export async function installFollowupPack(db, {
     return fail(400, err.message)
   }
 
+  // The statuses submit returns are NOT kept: they are stale the moment Meta
+  // approves, which can happen before this run finishes (step 6 re-reads).
   const templateIds = {}
-  const templateStatuses = []
-  for (const t of rendered.templates) {
-    const submitted = await submitWhatsappTemplate(db, {
-      locationId,
-      name: t.name,
-      category: t.category,
-      language: t.language,
-      components: t.components,
-      createdBy,
-    })
-    if (submitted.ok) {
-      templateIds[t.ref] = submitted.template.id
-      templateStatuses.push(submitted.template.status)
-      continue
+  try {
+    for (const t of rendered.templates) {
+      const submitted = await submitWhatsappTemplate(db, {
+        locationId,
+        name: t.name,
+        category: t.category,
+        language: t.language,
+        components: t.components,
+        createdBy,
+      })
+      if (submitted.ok) {
+        templateIds[t.ref] = submitted.template.id
+        continue
+      }
+      // A reinstall: this studio already holds the template (same name and
+      // language on its WABA). Link it instead of failing.
+      if (submitted.code === 'name_clash' && submitted.existing?.id) {
+        const linked = await readOwnTemplate(db, locationId, submitted.existing.id, t.name)
+        if (!linked.ok) return linked
+        templateIds[t.ref] = linked.template.id
+        continue
+      }
+      return fail(submitted.status || 500, submitted.error || 'Could not submit the WhatsApp template.', submitted.code)
     }
-    // A reinstall: this studio already holds the template (same name and
-    // language on its WABA). Link it instead of failing.
-    if (submitted.code === 'name_clash' && submitted.existing?.id) {
-      const linked = await readOwnTemplate(db, locationId, submitted.existing.id, t.name)
-      if (!linked.ok) return linked
-      templateIds[t.ref] = linked.template.id
-      templateStatuses.push(linked.template.status)
-      continue
-    }
-    return fail(submitted.status || 500, submitted.error || 'Could not submit the WhatsApp template.', submitted.code)
+  } catch (err) {
+    logError(MODULE, 'template submit threw', { locationId, pipelineId, packKey, err: err?.message || String(err) })
+    return fail(500, 'Could not submit the WhatsApp templates just now. Install it again to finish.')
   }
 
   const parsed = parseGraphShape(rendered.buildGraph(templateIds, stageRow.slug))
@@ -208,11 +245,82 @@ export async function installFollowupPack(db, {
     return fail(500, 'The templates were submitted, but the follow-up could not be linked to the stage. Install it again to finish.')
   }
 
-  // 6. Every template already approved: go live now (same claim pattern as
-  // the approval hook, so the two can never both publish).
-  const allApproved = templateStatuses.length > 0 && templateStatuses.every((s) => s === 'APPROVED')
-  if (!wantLive || !allApproved) return { ok: true, followup, created: true }
+  // 6. Every template approved: go live now. Judged on the template rows
+  // AS THEY ARE NOW, read after the link exists: from here on an approval
+  // finds the awaiting_approval row (the hook publishes it), and one that
+  // landed before the link is caught by this read. Same claim pattern as the
+  // hook, so the two can never both publish.
+  if (!wantLive) return { ok: true, followup, created: true }
+  const outcome = await publishIfAllApproved(db, locationId, followup, sequence.id, Object.values(templateIds))
+  return { ok: true, ...outcome, created: true }
+}
 
+// Step 2: an installed row is returned as it stands, unless it is stranded.
+//  - `live` over a sequence that is still a draft: a publish failed and the
+//    revert write failed too, so nothing sends and no approval will ever move
+//    it. Put it back to awaiting_approval, then re-check as below.
+//  - `awaiting_approval` (want_live): every template may already be approved
+//    (an approval that landed mid-install, or a publish that failed after the
+//    claim). Re-read the statuses at this studio and publish if so.
+async function recheckInstalled(db, locationId, existing) {
+  const asIs = { ok: true, followup: existing, created: false }
+  if (!existing.sequence_id) return asIs
+  if (existing.state === 'awaiting_approval' && !existing.want_live) return asIs
+
+  const { data: seq, error: seqErr } = await db.from('email_sequences')
+    .select('id, status, graph, draft_graph')
+    .eq('id', existing.sequence_id)
+    .eq('location_id', locationId)
+    .maybeSingle()
+  if (seqErr) {
+    logError(MODULE, 'reinstall: sequence read failed', { followupId: existing.id, err: seqErr.message })
+    return fail(500, 'Could not read this follow-up\'s sequence just now. Try again.')
+  }
+  if (!seq) return asIs
+
+  let followup = existing
+  if (existing.state === 'live') {
+    if (seq.status !== 'draft') return asIs
+    const { data: reverted, error: revertErr } = await db.from('pipeline_stage_followups')
+      .update({ state: 'awaiting_approval', updated_at: new Date().toISOString() })
+      .eq('id', existing.id)
+      .eq('location_id', locationId)
+      .eq('state', 'live')
+      .select('id')
+    if (revertErr) {
+      logError(MODULE, 'reinstall: stuck live follow-up could not be put back', { followupId: existing.id, sequenceId: seq.id, err: revertErr.message })
+      return fail(500, 'This follow-up is marked live but its sequence never went live, and it could not be repaired just now. Try again.', 'publish_failed_state_stuck')
+    }
+    // 0 rows: it moved under us (another install or the hook); leave it.
+    if (!reverted?.length) return asIs
+    followup = { ...existing, state: 'awaiting_approval' }
+    if (!existing.want_live) return { ok: true, followup, created: false }
+  }
+
+  const outcome = await publishIfAllApproved(db, locationId, followup, seq.id, graphTemplateIds(seq.draft_graph ?? seq.graph))
+  return { ok: true, ...outcome, created: false }
+}
+
+// Fresh statuses of every template the follow-up sends, at THIS studio only
+// (an id from another studio never counts as approved here). All APPROVED →
+// claim and publish. Returns { followup, publishError?, code? }.
+async function publishIfAllApproved(db, locationId, followup, sequenceId, templateIds) {
+  const ids = [...new Set(templateIds.filter(Boolean).map(String))]
+  if (ids.length === 0) return { followup }
+  const { data: rows, error } = await db.from('whatsapp_templates')
+    .select('id, status')
+    .eq('location_id', locationId)
+    .in('id', ids)
+  if (error) {
+    logError(MODULE, 'install: template status re-read failed', { followupId: followup.id, err: error.message })
+    return { followup, publishError: 'Could not check whether Meta has approved the templates just now. Install it again to finish.' }
+  }
+  const approved = new Set((rows || []).filter((t) => t.status === 'APPROVED').map((t) => String(t.id)))
+  if (!ids.every((id) => approved.has(id))) return { followup }
+  return claimAndPublish(db, locationId, followup, sequenceId)
+}
+
+async function claimAndPublish(db, locationId, followup, sequenceId) {
   const { data: claimed, error: claimErr } = await db.from('pipeline_stage_followups')
     .update({ state: 'live', updated_at: new Date().toISOString() })
     .eq('id', followup.id)
@@ -221,26 +329,46 @@ export async function installFollowupPack(db, {
     .select('id')
   if (claimErr) {
     logError(MODULE, 'install: live claim failed', { followupId: followup.id, err: claimErr.message })
-    return { ok: true, followup, created: true, publishError: 'Could not switch the follow-up on just now.' }
+    return { followup, publishError: 'Could not switch the follow-up on just now.' }
   }
-  // 0 rows: the approval hook claimed it first and is publishing it.
-  if (!claimed?.length) return { ok: true, followup, created: true }
+  // 0 rows: the approval hook claimed it first and is publishing it. Report
+  // the row as it now stands.
+  if (!claimed?.length) return { followup: await rereadFollowup(db, locationId, followup) }
 
-  const published = await publishSequence(db, { sequenceId: sequence.id })
-  if (published.ok) return { ok: true, followup: { ...followup, state: 'live' }, created: true }
+  let published
+  try {
+    published = await publishSequence(db, { sequenceId })
+  } catch (err) {
+    published = { ok: false, error: err?.message || String(err) }
+  }
+  if (published?.ok) return { followup: { ...followup, state: 'live' } }
 
   const { error: revertErr } = await db.from('pipeline_stage_followups')
     .update({ state: 'awaiting_approval', updated_at: new Date().toISOString() })
     .eq('id', followup.id)
     .eq('location_id', locationId)
     .eq('state', 'live')
-  logError(MODULE, 'install: publish failed', {
-    followupId: followup.id,
-    sequenceId: sequence.id,
-    err: published.error,
-    revertErr: revertErr?.message,
-  })
-  return { ok: true, followup, created: true, publishError: published.error }
+  if (revertErr) {
+    // The row reads live over a draft sequence. Say so: reporting
+    // awaiting_approval would be a lie about what is on disk. A reinstall
+    // repairs it (recheckInstalled).
+    logError(MODULE, 'install: publish failed and the follow-up could not be put back; it reads live over a draft sequence', {
+      followupId: followup.id, sequenceId, err: published?.error, revertErr: revertErr.message,
+    })
+    return { followup: { ...followup, state: 'live' }, publishError: published?.error, code: 'publish_failed_state_stuck' }
+  }
+  logError(MODULE, 'install: publish failed', { followupId: followup.id, sequenceId, err: published?.error })
+  return { followup: { ...followup, state: 'awaiting_approval' }, publishError: published?.error }
+}
+
+async function rereadFollowup(db, locationId, followup) {
+  const { data, error } = await db.from('pipeline_stage_followups')
+    .select(FOLLOWUP_COLUMNS)
+    .eq('id', followup.id)
+    .eq('location_id', locationId)
+    .maybeSingle()
+  if (error || !data) return followup
+  return data
 }
 
 // The clashing row submitWhatsappTemplate named, re-read at THIS studio.
@@ -252,8 +380,10 @@ async function readOwnTemplate(db, locationId, templateId, name) {
     .maybeSingle()
   if (error) return fail(500, 'Could not read the saved WhatsApp template just now. Try again.')
   if (!data) return fail(409, `The template ${name} could not be found at this studio.`, 'name_clash')
+  // Template names are fixed per studio, board and pack, so new wording under
+  // the same name is not a way out; replacing the template is an admin job.
   if (DEAD_TEMPLATE_STATUSES.includes(data.status)) {
-    return fail(409, `Meta has ${String(data.status).toLowerCase()} the template ${name}. Change its wording before installing this follow-up again.`, 'template_rejected')
+    return fail(409, `This step's WhatsApp template (${name}) was ${DEAD_TEMPLATE_WORDS[data.status]} by Meta. Ask an admin to replace it before installing again.`, 'template_rejected')
   }
   return { ok: true, template: data }
 }

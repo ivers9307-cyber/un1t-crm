@@ -13,7 +13,7 @@ const OTHER_LOC = 'loc-2'
 // In-memory tables behind a chainable supabase-ish builder (Task 4's shape,
 // plus order/range). Every query is filtered by its .eq/.in filters, so a lib
 // that forgets to scope by location finds the wrong rows (or none).
-function fakeDb(seed = {}, { fail = {}, beforeUpdate } = {}) {
+function fakeDb(seed = {}, { fail = {}, failWhen, beforeUpdate } = {}) {
   const tables = {
     pipeline_stage_followups: [],
     email_sequences: [],
@@ -27,6 +27,8 @@ function fakeDb(seed = {}, { fail = {}, beforeUpdate } = {}) {
     ops.push(q)
     const key = `${q.table}.${q.op}`
     if (fail[key]) return { data: null, error: fail[key] }
+    const forced = failWhen?.(q)
+    if (forced) return { data: null, error: forced }
     const rows = tables[q.table]
     if (!rows) throw new Error(`unexpected table ${q.table}`)
     let out
@@ -236,6 +238,50 @@ describe('onTemplateStatusForFollowups', () => {
     })
     await onTemplateStatusForFollowups(thrown.db, { id: 'wt-1', location_id: LOC }, 'APPROVED')
     expect(thrown.tables.pipeline_stage_followups[0].state).toBe('awaiting_approval')
+  })
+
+  it('rejectIgnoresTemplateNoLongerInGraph', async () => {
+    // The row still links wt-1 (its first template at install), but the
+    // sequence's graph now sends wt-5 only: wt-1's fate is not this
+    // follow-up's any more.
+    const seed = () => ({
+      pipeline_stage_followups: [followup({ whatsapp_template_id: 'wt-1' })],
+      email_sequences: [sequence({ draft_graph: graphOf('wt-5') })],
+      whatsapp_templates: [tpl('wt-1', 'APPROVED'), tpl('wt-5', 'PENDING')],
+    })
+    const rej = fakeDb(seed())
+    expect(await onTemplateStatusForFollowups(rej.db, { id: 'wt-1', location_id: LOC }, 'REJECTED')).toEqual({ published: 0, rejected: 0 })
+    expect(rej.tables.pipeline_stage_followups[0].state).toBe('awaiting_approval')
+
+    // Nor does its approval publish (wt-5 is still pending, and wt-1 is not sent).
+    const app = fakeDb(seed())
+    expect(await onTemplateStatusForFollowups(app.db, { id: 'wt-1', location_id: LOC }, 'APPROVED')).toEqual({ published: 0, rejected: 0 })
+    expect(publishSequence).not.toHaveBeenCalled()
+
+    // With NO readable sequence the row's link is all there is, and it counts.
+    const bare = fakeDb({ pipeline_stage_followups: [followup({ whatsapp_template_id: 'wt-1', sequence_id: 'seq-gone' })] })
+    expect(await onTemplateStatusForFollowups(bare.db, { id: 'wt-1', location_id: LOC }, 'REJECTED')).toEqual({ published: 0, rejected: 1 })
+  })
+
+  it('a publish failure whose revert also fails is logged as stuck live', async () => {
+    publishSequence.mockResolvedValue({ ok: false, status: 422, error: 'Flow has problems' })
+    const { db, tables } = fakeDb({
+      pipeline_stage_followups: [followup()],
+      email_sequences: [sequence()],
+      whatsapp_templates: [tpl('wt-1', 'APPROVED')],
+    }, {
+      failWhen: (q) => (q.table === 'pipeline_stage_followups' && q.op === 'update' && q.payload?.state === 'awaiting_approval'
+        ? { message: 'db down' } : null),
+    })
+    const r = await onTemplateStatusForFollowups(db, { id: 'wt-1', location_id: LOC }, 'APPROVED')
+    expect(r).toEqual({ published: 0, rejected: 0 })
+    expect(tables.pipeline_stage_followups[0].state).toBe('live')
+    expect(logError).toHaveBeenCalledWith(
+      'pipeline-followup-approval',
+      expect.stringContaining('reads live over a draft sequence'),
+      expect.objectContaining({ followupId: 'fu-1', err: 'Flow has problems', revertErr: 'db down' }),
+    )
+    expect(logError).not.toHaveBeenCalledWith('pipeline-followup-approval', 'publish failed; follow-up left awaiting approval', expect.anything())
   })
 
   it('neverThrows', async () => {

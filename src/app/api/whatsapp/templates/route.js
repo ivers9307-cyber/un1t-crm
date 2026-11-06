@@ -15,6 +15,10 @@ import { logError } from '@/lib/log'
 import { onTemplateApproved } from '@/lib/sequences/template-wait'
 import { onTemplateStatusForFollowups } from '@/lib/pipeline-followup-approval'
 
+// Template statuses that move a stage follow-up (whatsapp-template-events.js
+// hands the hook the same three).
+const FOLLOWUP_STATUSES = new Set(['APPROVED', 'REJECTED', 'DISABLED'])
+
 const WaTemplateCreateSchema = z.object({
   name: z.string().min(1).max(200),
   category: z.enum(['MARKETING', 'UTILITY', 'AUTHENTICATION']).optional(),
@@ -196,11 +200,17 @@ async function syncTemplatesFromMeta(db, locationId) {
       for (const u of plan.updates) {
         const { error } = await db.from('whatsapp_templates').update(u.row).eq('id', u.id)
         if (error) { failed++; continue }
+        const newStatus = u.row.status
+        const transitioned = Boolean(newStatus) && storedStatus.get(u.id) !== newStatus
         // PIPEBUILD.1c — newly approved: wake enrolments waiting on it.
-        if (u.row.status === 'APPROVED' && storedStatus.get(u.id) !== 'APPROVED') {
+        if (transitioned && newStatus === 'APPROVED') {
           await onTemplateApproved(db, { id: u.id, location_id: u.row.location_id })
-          // PIPEBUILD.4e — and stage follow-ups waiting on it (never throws).
-          await onTemplateStatusForFollowups(db, { id: u.id, location_id: u.row.location_id }, 'APPROVED')
+        }
+        // PIPEBUILD.4e — and stage follow-ups waiting on it: an approval may
+        // publish them, a rejection or a disable marks them rejected (the
+        // same statuses the webhook path hands over). Never throws.
+        if (transitioned && FOLLOWUP_STATUSES.has(newStatus)) {
+          await onTemplateStatusForFollowups(db, { id: u.id, location_id: u.row.location_id }, newStatus)
         }
       }
       for (const row of plan.inserts) {

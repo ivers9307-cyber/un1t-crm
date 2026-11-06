@@ -17,7 +17,10 @@ const USER = 'user-1'
 // In-memory tables behind a chainable supabase-ish builder. Every query is
 // filtered by its .eq/.in filters, so a lib that forgets to scope by
 // location simply finds the wrong rows (or none).
-function fakeDb(seed = {}, { fail = {} } = {}) {
+// `failWhen(q)` returns an error for one specific query; `afterOp(q, tables)`
+// runs after a query (to simulate a webhook landing mid-install).
+let lastTables = null
+function fakeDb(seed = {}, { fail = {}, failWhen, afterOp } = {}) {
   const tables = {
     pipelines: [{ id: PIPE, key: 'reset', name: '14 Day Reset', location_id: LOC, board_type: 'offer' }],
     pipeline_stages: [{ id: STAGE, slug: 'reset_new', pipeline_id: PIPE, location_id: LOC }],
@@ -32,9 +35,17 @@ function fakeDb(seed = {}, { fail = {} } = {}) {
   const ops = []
 
   function run(q) {
+    const res = exec(q)
+    if (afterOp) afterOp(q, tables)
+    return res
+  }
+
+  function exec(q) {
     ops.push(q)
     const key = `${q.table}.${q.op}`
     if (fail[key]) return { data: null, error: fail[key] }
+    const forced = failWhen?.(q)
+    if (forced) return { data: null, error: forced }
     const rows = tables[q.table]
     if (!rows) throw new Error(`unexpected table ${q.table}`)
     let out
@@ -77,6 +88,7 @@ function fakeDb(seed = {}, { fail = {} } = {}) {
       return b
     }),
   }
+  lastTables = tables
   return { db, tables, ops }
 }
 
@@ -93,13 +105,16 @@ const args = (over = {}) => ({
   ...over,
 })
 
+// Like the real helper, a submit saves the row; the installer re-reads it.
 let tplN = 0
 function submitsOk(status = 'PENDING') {
-  submitWhatsappTemplate.mockImplementation(async (_db, t) => ({
-    ok: true,
-    template: { id: `wt-${++tplN}`, name: t.name, status, location_id: t.locationId },
-  }))
+  submitWhatsappTemplate.mockImplementation(async (_db, t) => {
+    const template = { id: `wt-${++tplN}`, name: t.name, status, location_id: t.locationId }
+    lastTables?.whatsapp_templates.push({ ...template })
+    return { ok: true, template }
+  })
 }
+const waIdsOf = (graph) => graph.nodes.filter((x) => x.type === 'whatsapp').map((x) => x.config.template_id)
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -252,6 +267,8 @@ describe('installFollowupPack', () => {
     const { db, tables } = fakeDb({ whatsapp_templates: [{ id: 'wt-saved', location_id: LOC, status: 'REJECTED' }] })
     const r = await installFollowupPack(db, args())
     expect(r).toMatchObject({ ok: false, status: 409, code: 'template_rejected' })
+    // No promise that new wording would help: the name is fixed.
+    expect(r.error).toBe("This step's WhatsApp template (un1t_stillorgan_reset_book_first_class_main) was rejected by Meta. Ask an admin to replace it before installing again.")
     expect(tables.email_sequences).toHaveLength(0)
     expect(tables.pipeline_stage_followups).toHaveLength(0)
   })
@@ -334,13 +351,234 @@ describe('installFollowupPack', () => {
     expect(tables.pipeline_stage_followups[0]).toMatchObject({ state: 'awaiting_approval', want_live: false })
   })
 
+  it('approvedDuringInstallPublishes', async () => {
+    // Meta approves while the installer is still linking: the webhook's hook
+    // ran before the row existed and found nothing to move. Submit said
+    // PENDING, but the re-read after the link sees APPROVED and publishes.
+    submitsOk('PENDING')
+    const { db, tables } = fakeDb({}, {
+      afterOp: (q, t) => {
+        if (q.table === 'pipeline_stage_followups' && q.op === 'insert') {
+          t.whatsapp_templates.forEach((w) => { w.status = 'APPROVED' })
+        }
+      },
+    })
+    const r = await installFollowupPack(db, args({ packKey: 'trial_done' }))
+    expect(r).toMatchObject({ ok: true, created: true })
+    expect(publishSequence).toHaveBeenCalledTimes(1)
+    expect(publishSequence.mock.calls[0][1]).toEqual({ sequenceId: tables.email_sequences[0].id })
+    expect(tables.pipeline_stage_followups[0].state).toBe('live')
+    expect(r.followup.state).toBe('live')
+  })
+
+  it('submit-time APPROVED is not trusted: a template no longer approved holds it', async () => {
+    // Submit answered APPROVED, but by the re-read Meta has rejected it.
+    submitsOk('APPROVED')
+    const { db, tables } = fakeDb({}, {
+      afterOp: (q, t) => {
+        if (q.table === 'pipeline_stage_followups' && q.op === 'insert') t.whatsapp_templates[0].status = 'REJECTED'
+      },
+    })
+    const r = await installFollowupPack(db, args())
+    expect(r.ok).toBe(true)
+    expect(publishSequence).not.toHaveBeenCalled()
+    expect(tables.pipeline_stage_followups[0].state).toBe('awaiting_approval')
+  })
+
+  it('the re-read is scoped to this studio', async () => {
+    submitsOk('PENDING')
+    const { db } = fakeDb({}, {
+      afterOp: (q, t) => {
+        if (q.table === 'pipeline_stage_followups' && q.op === 'insert') t.whatsapp_templates.forEach((w) => { w.location_id = OTHER_LOC; w.status = 'APPROVED' })
+      },
+    })
+    const r = await installFollowupPack(db, args())
+    expect(r.ok).toBe(true)
+    expect(publishSequence).not.toHaveBeenCalled()
+  })
+
+  it('a failed re-read publishes nothing and says so', async () => {
+    submitsOk('APPROVED')
+    const { db, tables } = fakeDb({}, {
+      failWhen: (q) => (q.table === 'whatsapp_templates' && q.op === 'select' ? { message: 'db down' } : null),
+    })
+    const r = await installFollowupPack(db, args())
+    expect(r).toMatchObject({ ok: true, created: true })
+    expect(r.publishError).toMatch(/Install it again/)
+    expect(publishSequence).not.toHaveBeenCalled()
+    expect(tables.pipeline_stage_followups[0].state).toBe('awaiting_approval')
+  })
+
+  it('reinstallRecoversStrandedFollowup', async () => {
+    // An earlier install linked with stale PENDING statuses (or its publish
+    // failed after the claim): the row waits though every template is now
+    // approved. Installing again re-checks and publishes.
+    const seed = () => ({
+      pipeline_stage_followups: [{
+        id: 'fu-1', location_id: LOC, pipeline_id: PIPE, stage_id: STAGE, sequence_id: 'seq-1',
+        whatsapp_template_id: 'wt-a', pack_key: 'trial_done', state: 'awaiting_approval', want_live: true,
+      }],
+      email_sequences: [{ id: 'seq-1', location_id: LOC, status: 'draft', graph: null, draft_graph: { nodes: [
+        { id: 'n1', type: 'whatsapp', config: { template_id: 'wt-a' } },
+        { id: 'n2', type: 'whatsapp', config: { template_id: 'wt-b' } },
+      ] } }],
+    })
+    submitsOk()
+    // Still one pending: nothing happens, the row comes back as it was.
+    const pending = fakeDb({ ...seed(), whatsapp_templates: [{ id: 'wt-a', location_id: LOC, status: 'APPROVED' }, { id: 'wt-b', location_id: LOC, status: 'PENDING' }] })
+    const r0 = await installFollowupPack(pending.db, args({ packKey: 'trial_done' }))
+    expect(r0).toMatchObject({ ok: true, created: false, followup: { id: 'fu-1', state: 'awaiting_approval' } })
+    expect(publishSequence).not.toHaveBeenCalled()
+
+    // wt-b APPROVED only at another studio does not count.
+    const cross = fakeDb({ ...seed(), whatsapp_templates: [{ id: 'wt-a', location_id: LOC, status: 'APPROVED' }, { id: 'wt-b', location_id: OTHER_LOC, status: 'APPROVED' }] })
+    await installFollowupPack(cross.db, args({ packKey: 'trial_done' }))
+    expect(publishSequence).not.toHaveBeenCalled()
+
+    // Both approved here: it publishes the SAME sequence, submits nothing.
+    const { db, tables } = fakeDb({ ...seed(), whatsapp_templates: [{ id: 'wt-a', location_id: LOC, status: 'APPROVED' }, { id: 'wt-b', location_id: LOC, status: 'APPROVED' }] })
+    const r = await installFollowupPack(db, args({ packKey: 'trial_done' }))
+    expect(r).toMatchObject({ ok: true, created: false, followup: { id: 'fu-1', state: 'live' } })
+    expect(submitWhatsappTemplate).not.toHaveBeenCalled()
+    expect(publishSequence).toHaveBeenCalledTimes(1)
+    expect(publishSequence.mock.calls[0][1]).toEqual({ sequenceId: 'seq-1' })
+    expect(tables.pipeline_stage_followups[0].state).toBe('live')
+    expect(tables.email_sequences).toHaveLength(1)
+  })
+
+  it('a waiting row that does not want to go live is not published by a reinstall', async () => {
+    submitsOk()
+    const { db } = fakeDb({
+      pipeline_stage_followups: [{
+        id: 'fu-1', location_id: LOC, pipeline_id: PIPE, stage_id: STAGE, sequence_id: 'seq-1',
+        whatsapp_template_id: 'wt-a', pack_key: 'book_first_class', state: 'awaiting_approval', want_live: false,
+      }],
+      email_sequences: [{ id: 'seq-1', location_id: LOC, status: 'draft', draft_graph: { nodes: [{ id: 'n1', type: 'whatsapp', config: { template_id: 'wt-a' } }] } }],
+      whatsapp_templates: [{ id: 'wt-a', location_id: LOC, status: 'APPROVED' }],
+    })
+    const r = await installFollowupPack(db, args())
+    expect(r).toMatchObject({ ok: true, created: false, followup: { state: 'awaiting_approval' } })
+    expect(publishSequence).not.toHaveBeenCalled()
+  })
+
+  it('revertFailureReportsStuckLive', async () => {
+    submitsOk('APPROVED')
+    publishSequence.mockResolvedValue({ ok: false, status: 422, error: 'Flow has problems' })
+    const { db, tables } = fakeDb({}, {
+      failWhen: (q) => (q.table === 'pipeline_stage_followups' && q.op === 'update' && q.payload?.state === 'awaiting_approval'
+        ? { message: 'db down' } : null),
+    })
+    const r = await installFollowupPack(db, args())
+    expect(r).toMatchObject({ ok: true, created: true, code: 'publish_failed_state_stuck', publishError: 'Flow has problems' })
+    // What is on disk, not a stale awaiting_approval.
+    expect(r.followup.state).toBe('live')
+    expect(tables.pipeline_stage_followups[0].state).toBe('live')
+    expect(tables.email_sequences[0].status).toBe('draft')
+  })
+
+  it('a publish that throws is reverted like a failed one', async () => {
+    submitsOk('APPROVED')
+    publishSequence.mockRejectedValue(new Error('boom'))
+    const { db, tables } = fakeDb()
+    const r = await installFollowupPack(db, args())
+    expect(r).toMatchObject({ ok: true, created: true, publishError: 'boom' })
+    expect(tables.pipeline_stage_followups[0].state).toBe('awaiting_approval')
+  })
+
+  it('reinstallRepairsStuckLive', async () => {
+    const seed = (seqStatus) => ({
+      pipeline_stage_followups: [{
+        id: 'fu-1', location_id: LOC, pipeline_id: PIPE, stage_id: STAGE, sequence_id: 'seq-1',
+        whatsapp_template_id: 'wt-a', pack_key: 'book_first_class', state: 'live', want_live: true,
+      }],
+      email_sequences: [{ id: 'seq-1', location_id: LOC, status: seqStatus, graph: null, draft_graph: { nodes: [{ id: 'n1', type: 'whatsapp', config: { template_id: 'wt-a' } }] } }],
+      whatsapp_templates: [{ id: 'wt-a', location_id: LOC, status: 'APPROVED' }],
+    })
+    submitsOk()
+
+    // A genuinely live follow-up (sequence active) is returned untouched.
+    const healthy = fakeDb(seed('active'))
+    const r0 = await installFollowupPack(healthy.db, args())
+    expect(r0).toMatchObject({ ok: true, created: false, followup: { state: 'live' } })
+    expect(publishSequence).not.toHaveBeenCalled()
+    expect(healthy.ops.filter((q) => q.op === 'update')).toHaveLength(0)
+
+    // Live over a draft sequence: put back, re-checked, published.
+    const { db, tables, ops } = fakeDb(seed('draft'))
+    const r = await installFollowupPack(db, args())
+    expect(r).toMatchObject({ ok: true, created: false, followup: { id: 'fu-1', state: 'live' } })
+    expect(publishSequence).toHaveBeenCalledTimes(1)
+    expect(publishSequence.mock.calls[0][1]).toEqual({ sequenceId: 'seq-1' })
+    expect(submitWhatsappTemplate).not.toHaveBeenCalled()
+    expect(tables.pipeline_stage_followups[0].state).toBe('live')
+    const states = ops.filter((q) => q.table === 'pipeline_stage_followups' && q.op === 'update').map((q) => q.payload.state)
+    expect(states).toEqual(['awaiting_approval', 'live'])
+
+    // Templates no longer all approved: it is left waiting, not live.
+    const held = fakeDb({ ...seed('draft'), whatsapp_templates: [{ id: 'wt-a', location_id: LOC, status: 'PAUSED' }] })
+    const r2 = await installFollowupPack(held.db, args())
+    expect(r2).toMatchObject({ ok: true, created: false, followup: { state: 'awaiting_approval' } })
+    expect(held.tables.pipeline_stage_followups[0].state).toBe('awaiting_approval')
+  })
+
+  it('refusesReinstallOverActiveOff', async () => {
+    submitsOk()
+    const seed = (seqStatus) => ({
+      pipeline_stage_followups: [{
+        id: 'fu-1', location_id: LOC, pipeline_id: PIPE, stage_id: STAGE, sequence_id: 'seq-old',
+        whatsapp_template_id: 'wt-old', pack_key: 'book_first_class', state: 'off', want_live: true,
+      }],
+      email_sequences: [{ id: 'seq-old', location_id: LOC, status: seqStatus }],
+    })
+    const { db, tables } = fakeDb(seed('active'))
+    const r = await installFollowupPack(db, args())
+    expect(r).toMatchObject({ ok: false, status: 409, code: 'old_sequence_active' })
+    expect(r.error).toBe('This follow-up is switched off but its old sequence is still running. Pause that sequence first, then install again.')
+    expect(submitWhatsappTemplate).not.toHaveBeenCalled()
+    expect(tables.email_sequences).toHaveLength(1)
+    expect(tables.pipeline_stage_followups[0].state).toBe('off')
+
+    // A paused old sequence is not running: the reinstall goes ahead.
+    const paused = fakeDb(seed('paused'))
+    const r2 = await installFollowupPack(paused.db, args())
+    expect(r2).toMatchObject({ ok: true, created: true })
+    expect(paused.tables.pipeline_stage_followups[0]).toMatchObject({ id: 'fu-1', state: 'awaiting_approval' })
+  })
+
+  it('a submit that throws is a 500 result, with no sequence', async () => {
+    submitWhatsappTemplate.mockRejectedValue(new Error('client exploded'))
+    const { db, tables } = fakeDb()
+    const r = await installFollowupPack(db, args())
+    expect(r).toMatchObject({ ok: false, status: 500 })
+    expect(tables.email_sequences).toHaveLength(0)
+    expect(tables.pipeline_stage_followups).toHaveLength(0)
+  })
+
+  it('missing fill-ins or duration are a 400 before anything reaches Meta', async () => {
+    submitsOk()
+    for (const render of [
+      { ...args().render, signer: undefined },
+      { ...args().render, studioName: '  ' },
+      { ...args().render, durationDays: undefined },
+    ]) {
+      const { db, tables } = fakeDb()
+      const r = await installFollowupPack(db, args({ render }))
+      expect(r).toMatchObject({ ok: false, status: 400 })
+      expect(tables.email_sequences).toHaveLength(0)
+    }
+    expect(submitWhatsappTemplate).not.toHaveBeenCalled()
+  })
+
   it('does not publish while one of two templates is still pending', async () => {
     submitWhatsappTemplate
       .mockResolvedValueOnce({ ok: true, template: { id: 'wt-1', status: 'APPROVED' } })
       .mockResolvedValueOnce({ ok: true, template: { id: 'wt-2', status: 'PENDING' } })
-    const { db } = fakeDb()
+    const { db, tables } = fakeDb({
+      whatsapp_templates: [{ id: 'wt-1', location_id: LOC, status: 'APPROVED' }, { id: 'wt-2', location_id: LOC, status: 'PENDING' }],
+    })
     const r = await installFollowupPack(db, args({ packKey: 'trial_done' }))
     expect(r.ok).toBe(true)
     expect(publishSequence).not.toHaveBeenCalled()
+    expect(waIdsOf(tables.email_sequences[0].draft_graph).sort()).toEqual(['wt-1', 'wt-2'])
   })
 })

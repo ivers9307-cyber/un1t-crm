@@ -93,4 +93,31 @@ describe('sync approval hook', () => {
     await GET(req())
     expect(onTemplateStatusForFollowups).not.toHaveBeenCalled()
   })
+  it('syncCallsHookOnRejectedOrDisabledTransition', async () => {
+    for (const status of ['REJECTED', 'DISABLED']) {
+      vi.mocked(onTemplateStatusForFollowups).mockClear()
+      vi.mocked(onTemplateApproved).mockClear()
+      getMetaTemplates.mockResolvedValue([{ ...META[0], status }])
+      setup('PENDING')
+      await GET(req())
+      expect(onTemplateStatusForFollowups).toHaveBeenCalledTimes(1)
+      expect(onTemplateStatusForFollowups).toHaveBeenCalledWith(expect.anything(), { id: 'row-1', location_id: 'loc-1' }, status)
+      // Only an approval wakes enrolments.
+      expect(onTemplateApproved).not.toHaveBeenCalled()
+
+      // No transition (already that status), or a failed write: no call.
+      vi.mocked(onTemplateStatusForFollowups).mockClear()
+      setup(status)
+      await GET(req())
+      setup('PENDING', { 'whatsapp_templates:update': { message: 'permission denied' } })
+      await GET(req())
+      expect(onTemplateStatusForFollowups).not.toHaveBeenCalled()
+    }
+    // PAUSED moves no follow-up.
+    vi.mocked(onTemplateStatusForFollowups).mockClear()
+    getMetaTemplates.mockResolvedValue([{ ...META[0], status: 'PAUSED' }])
+    setup('APPROVED')
+    await GET(req())
+    expect(onTemplateStatusForFollowups).not.toHaveBeenCalled()
+  })
 })

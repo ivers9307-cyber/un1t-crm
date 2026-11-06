@@ -1,7 +1,11 @@
 // PIPEBUILD.4a — submit a WhatsApp template to Meta and save the row. Lifted out
 // of POST /api/whatsapp/templates so the recipe installer can submit from a
 // library; the route keeps auth, permission and body validation and maps this
-// result to its responses. Never throws: every failure is a result.
+// result to its responses. Every failure it can name is a result (a bad
+// button, no number, a failed number lookup, a name clash, Meta's refusal, a
+// failed save). It does NOT catch a throw from the supabase client or the
+// button checker, so it can still throw: a library caller wraps it (the
+// recipe installer does).
 import { createTemplate as createMetaTemplate } from '@/lib/whatsapp'
 import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
