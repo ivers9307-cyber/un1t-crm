@@ -22,6 +22,7 @@
 import { logWarn } from './log.js'
 import { selectAll } from './select-all.js'
 import { parseOfferConfig } from '../../shared/pipelines/offer-config.js'
+import { offerClaimLive } from '../../shared/pipelines/offer.js'
 import { paidTrialClaim, DAY_MS } from '../../shared/pipelines/paid-trial.js'
 import {
   PURCHASE_COLS, toProgrammeClaim, pendingRecordedClaims, upsertBoardClaims,
@@ -81,6 +82,11 @@ const failed = (reason, table, locationId, e) => {
   logWarn('pipeline-offer-claims', `${table} read failed`, { locationId, err: bounded(e) })
   return { ok: false, reason, err: bounded(e) }
 }
+
+// Is a stored recorded claim still live on THIS board? The board's own quiet and
+// converted windows, over the claim's { start, end } (offerClaimLive's shape).
+const boardIsLive = (board) => (stored, contact, now) => offerClaimLive(
+  { start: stored.claimedAt, end: stored.claimedAt + board.durationDays * DAY_MS }, contact, now, board.config)
 
 // Who/what a descriptor's signal is, for the three recorded types.
 function matcherFor(board, tagAtByContact) {
@@ -216,7 +222,7 @@ async function loadOffers(db, { locationId, boards, contacts, now, scopeContactI
 
     for (const board of recordedBoards) {
       const have = storedByBoard.get(board.key) || new Map()
-      const rows = pendingRecordedClaims(people, have, matcherFor(board, tagAt), board.key, now)
+      const rows = pendingRecordedClaims(people, have, matcherFor(board, tagAt), board.key, now, boardIsLive(board))
       pending.push(...rows)
       const merged = new Map(have)
       for (const r of rows) merged.set(r.contact_id, { claimedAt: Date.parse(r.claimed_at), source: r.source })

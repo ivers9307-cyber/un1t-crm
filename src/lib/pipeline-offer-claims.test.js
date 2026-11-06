@@ -186,6 +186,32 @@ describe('loadOfferClaimsForLocation', () => {
   })
 })
 
+describe('recorded renewal windows', () => {
+  const stored = (key, at) => [{ contact_id: 'c1', location_id: LOC, board_key: key, claimed_at: iso(at), source: 'lead_source' }]
+  const C = T0
+  const touch = (at) => ({ id: 'c1', last_lead_source: 'meta_x', last_lead_source_at: iso(at) })
+  const run = (extra, touchAt, nowAt) => {
+    const boards = [board('lead', { type: 'lead_source', values: ['meta_x'] }, extra)]
+    const { db } = fakeDb({ pipeline_board_claims: stored('lead', C) })
+    return loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [touch(touchAt)], now: nowAt })
+  }
+  it('lapsedLeadSourceRenewed (default windows)', async () => {
+    // claim +14d end, +60d quiet -> live until C+74d; a touch at C+80d renews.
+    const out = await run({}, C + 80 * DAY, C + 81 * DAY)
+    expect(out.pending).toHaveLength(1)
+    expect(out.offersByContact.get('c1').get('lead').start).toBe(C + 80 * DAY)
+  })
+  it('recordedRenewalUsesBoardWindows', async () => {
+    // quiet_days 30: live until C+44d, so a touch at C+84d (40d after it lapsed) renews.
+    const short = await run({ quiet_days: 30 }, C + 84 * DAY, C + 85 * DAY)
+    expect(short.pending).toHaveLength(1)
+    // quiet_days 90: still live until C+104d, the same touch must NOT renew.
+    const long = await run({ quiet_days: 90 }, C + 84 * DAY, C + 85 * DAY)
+    expect(long.pending).toEqual([])
+    expect(long.offersByContact.get('c1').get('lead').start).toBe(C)
+  })
+})
+
 describe('loadOfferClaimsForContact', () => {
   it('returns this contact\'s offers and records a pending claim when write is true', async () => {
     const boards = [board('lead', { type: 'lead_source', values: ['meta_x'] }), board('reset', { type: 'trial_purchase', match: 'plan_code', values: ['R'] })]
