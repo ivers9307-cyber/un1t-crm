@@ -4,7 +4,7 @@
 // they can be rendered from either a server component (the live
 // public page) or a client component (the in-iframe edit overlay).
 // Interactivity ships as imported client islands (BookingWidget,
-// WaitlistWidget, VideoTestimonials, CountUp, PaidTrialFunnel).
+// WaitlistWidget, VideoTestimonials, CountUp, PaidTrialFunnel, HeaderAutoHide).
 //
 // SOURCE OF TRUTH for "what does each block type look like".
 // Adding a new block type means: register it in
@@ -29,6 +29,7 @@ import WaitlistWidget from '@/components/WaitlistWidget'
 import ClassFunnel from '@/components/ClassFunnel'
 import { classFunnelShownOnLanding } from '@/lib/public-landing'
 import VideoTestimonials from './VideoTestimonials'
+import HeaderAutoHide from './HeaderAutoHide'
 import CountUp from './CountUp'
 import { parseEmbed } from '@/lib/landing-page-embed'
 import { E } from './EditableField'
@@ -626,10 +627,10 @@ export function PillarsBlock({ block, onEdit, locationId, pageId, wordmark = '' 
   const items = Array.isArray(block.items) ? block.items.slice(0, 3) : []
   if (items.length === 0 && !onEdit) return null
   return (
-    <section className="bg-lp-pale text-black py-20 md:py-28">
+    <section className="bg-lp-pale text-black py-14 md:py-28">
       <div className="max-w-6xl mx-auto px-6">
         <Eyebrow dark={false}>{wordmark ? `Why ${wordmark}` : 'Why us'}</Eyebrow>
-        <div className="grid md:grid-cols-3 gap-6 md:gap-6">
+        <div className="grid md:grid-cols-3 gap-3 md:gap-6">
           {items.map((p, i) => (
             <Pillar
               key={i}
@@ -950,14 +951,17 @@ function ReviewCard({ review }) {
   )
 }
 
+// MOBILEFUNNEL.1 — below `md` a pillar is a compact row: a 72px square photo
+// beside the number, title and text (three tall photo cards were ~2,200px on
+// a phone). From `md` the card as before: the 3:4 photo over the words.
 function Pillar({ number, title, body, photoUrl, onEdit, locationId, pageId, itemIndex, delayClass = '' }) {
   // Show the photo region if there IS a photo OR we're in edit mode
   // (so the operator has somewhere to drop one).
   const showPhotoRegion = !!photoUrl || !!onEdit
   return (
-    <div className={`lp-reveal ${delayClass} group bg-white border border-black/10 rounded p-7`}>
+    <div data-pillar="" className={`lp-reveal ${delayClass} group bg-white border border-black/10 rounded p-4 md:p-7 flex items-start gap-4 md:block`}>
       {showPhotoRegion && (
-        <div className="aspect-[3/4] overflow-hidden bg-black/5 relative rounded-xl">
+        <div className="shrink-0 w-[72px] h-[72px] md:w-auto md:h-auto md:aspect-[3/4] overflow-hidden bg-black/5 relative rounded-xl">
           {onEdit ? (
             <EditableImage
               src={photoUrl || ''}
@@ -978,18 +982,20 @@ function Pillar({ number, title, body, photoUrl, onEdit, locationId, pageId, ite
           )}
         </div>
       )}
-      <div className="mt-6 flex items-baseline gap-4">
-        <span className="font-display font-extrabold text-3xl text-black/20 tracking-wide">
-          <E value={number} onEdit={onEdit} path={['items', itemIndex, 'number']} />
-        </span>
-        <span className="h-px flex-1 bg-black/10" aria-hidden="true" />
+      <div className="min-w-0 flex-1">
+        <div className="md:mt-6 flex items-baseline gap-4">
+          <span className="font-display font-extrabold text-xl md:text-3xl text-black/20 tracking-wide">
+            <E value={number} onEdit={onEdit} path={['items', itemIndex, 'number']} />
+          </span>
+          <span className="h-px flex-1 bg-black/10" aria-hidden="true" />
+        </div>
+        <h3 className="mt-1 md:mt-3 font-display font-extrabold uppercase text-base md:text-[1.3rem] leading-snug tracking-wide">
+          <E value={title} onEdit={onEdit} path={['items', itemIndex, 'title']} />
+        </h3>
+        <p className="mt-1 md:mt-3 text-sm md:text-base text-black/65 leading-relaxed">
+          <E value={body} onEdit={onEdit} path={['items', itemIndex, 'body']} multiline />
+        </p>
       </div>
-      <h3 className="mt-3 font-display font-extrabold uppercase text-[1.3rem] leading-snug tracking-wide">
-        <E value={title} onEdit={onEdit} path={['items', itemIndex, 'title']} />
-      </h3>
-      <p className="mt-3 text-black/65 leading-relaxed">
-        <E value={body} onEdit={onEdit} path={['items', itemIndex, 'body']} multiline />
-      </p>
     </div>
   )
 }
@@ -1047,15 +1053,21 @@ export function SiteHeader({
   // horizontal scroll to reveal it. Falls back to the full label, so
   // every page without a short label renders exactly as before.
   const headerCtaLabel = (ctaLabelShort && ctaLabelShort.trim()) || ctaLabel
+  // MOBILEFUNNEL.1 — below `lg` the bar is slim (~56px: py-2 and the logo
+  // capped at 36px tall) and, when sticky, slides away while the visitor
+  // scrolls down and back while they scroll up (HeaderAutoHide sets
+  // data-hidden; the classes act only below `lg`, and a focused link inside
+  // brings it back). From `lg` it is the bar it always was.
   return (
     <header
       className={
         sticky
-          ? 'fixed inset-x-0 top-0 z-40 bg-black/55 backdrop-blur-md border-b border-white/10'
+          ? 'fixed inset-x-0 top-0 z-40 bg-black/55 backdrop-blur-md border-b border-white/10 transition-transform duration-300 motion-reduce:transition-none max-lg:data-[hidden=true]:-translate-y-full max-lg:data-[hidden=true]:focus-within:translate-y-0'
           : 'absolute inset-x-0 top-0 z-20'
       }
     >
-      <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
+      {sticky && <HeaderAutoHide />}
+      <div className="max-w-6xl mx-auto px-6 py-2 lg:py-4 flex items-center justify-between gap-4">
         {onChangeLogo ? (
           <EditableLogo
             logoUrl={logoUrl}
@@ -1070,7 +1082,7 @@ export function SiteHeader({
             src={logoUrl}
             alt={logoAlt}
             style={{ maxWidth: `${Math.min(logoWidthPx, 170)}px`, maxHeight: '48px', width: 'auto', height: 'auto' }}
-            className="object-contain"
+            className="object-contain max-lg:!max-h-9"
           />
         ) : (
           <div className="font-display font-extrabold text-2xl tracking-widest text-white">{wordmark}</div>

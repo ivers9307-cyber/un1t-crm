@@ -130,7 +130,40 @@ describe('CampaignFunnel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Book Mon 11:00' }))
     expect(await screen.findByText('Booked')).toBeTruthy()
     expect(screen.getByText('See you')).toBeTruthy()
-    expect(posts[0]).toMatchObject({ path: 'stillorgan', campaign: '50plus', event_id: 'a', first_name: 'Mary', consent: true, lead_event_id: 'lead-id-123' })
+    // MOBILEFUNNEL.1 — the consent box starts unticked and never blocks the booking.
+    expect(posts[0]).toMatchObject({ path: 'stillorgan', campaign: '50plus', event_id: 'a', first_name: 'Mary', consent: false, lead_event_id: 'lead-id-123' })
+  })
+
+  it('MOBILEFUNNEL.1: day-first, tapping a time goes straight to the details with that class (not the preselected one)', async () => {
+    const BUSY = [
+      { event_id: 'm6', name: 'FORCE.', starts_at: '2099-01-05T06:00:00.000Z', day: '2099-01-05', day_label: 'Mon, 5 Jan', time: '06:00' },
+      { event_id: 'm7', name: 'RECLA1M', starts_at: '2099-01-05T07:00:00.000Z', day: '2099-01-05', day_label: 'Mon, 5 Jan', time: '07:00' },
+      { event_id: 't6', name: 'CONVOY', starts_at: '2099-01-06T06:00:00.000Z', day: '2099-01-06', day_label: 'Tue, 6 Jan', time: '06:00' },
+    ]
+    listResponse = { success: true, data: { classes: BUSY, campaign: { configured: true } } }
+    mount()
+    await screen.findByRole('group', { name: 'Day' })
+    expect(screen.queryByRole('button', { name: /^Book/ })).toBeNull()
+    fireEvent.click(document.querySelector('[data-tile="m7"]'))
+    expect(screen.getByText('Last step')).toBeTruthy()
+    expect(screen.getByText('07:00')).toBeTruthy()
+    expect(steps.find((s) => s.step === 'path_class')?.meta).toEqual({ event_id: 'm7' })
+    await fillDetails()
+    fireEvent.click(screen.getByRole('button', { name: 'Book Mon 07:00' }))
+    expect(await screen.findByText('Booked')).toBeTruthy()
+    expect(posts[0].event_id).toBe('m7')
+  })
+
+  it('MOBILEFUNNEL.1: the consent box starts unticked; ticking it sends consent true', async () => {
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: 'Book Mon 11:00' }))
+    const box = screen.getByRole('checkbox')
+    expect(box.checked).toBe(false)
+    await fillDetails()
+    fireEvent.click(box)
+    fireEvent.click(screen.getByRole('button', { name: 'Book Mon 11:00' }))
+    expect(await screen.findByText('Booked')).toBeTruthy()
+    expect(posts[0].consent).toBe(true)
   })
 
   it('class_unavailable returns to the tiles with details kept', async () => {

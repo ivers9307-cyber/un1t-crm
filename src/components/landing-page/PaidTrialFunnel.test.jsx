@@ -134,6 +134,28 @@ describe('TRIALSTUDIO.10 / CLASSFIRST.1 — PaidTrialFunnel', () => {
     expect(screen.getByRole('button', { name: /Hatch Street/ })).toBeTruthy()
   })
 
+  it('MOBILEFUNNEL.1: day-first, tapping a time goes straight to the form with that class, and the POST carries it', async () => {
+    const BUSY = [
+      { event_id: 'm6', name: 'FORCE.', starts_at: '2099-01-05T06:00:00.000Z', day: '2099-01-05', day_label: 'Mon, 5 Jan', time: '06:00' },
+      { event_id: 'm7', name: 'RECLA1M', starts_at: '2099-01-05T07:00:00.000Z', day: '2099-01-05', day_label: 'Mon, 5 Jan', time: '07:00' },
+      { event_id: 't6', name: 'CONVOY', starts_at: '2099-01-06T06:00:00.000Z', day: '2099-01-06', day_label: 'Tue, 6 Jan', time: '06:00' },
+    ]
+    classList = { success: true, data: { classes: BUSY, terms: { required: false }, campaign: { configured: true, timetable_unavailable: false } } }
+    answers['/api/public/trial-purchases'] = { status: 200, body: { success: false, code: 'trial_used', error: 'Already had one.' } }
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="stillorgan" />)
+    await screen.findByRole('group', { name: 'Day' })
+    expect(screen.queryByRole('button', { name: /^Choose/ })).toBeNull()
+    fireEvent.click(document.querySelector('[data-day="2099-01-06"]'))
+    fireEvent.click(document.querySelector('[data-tile="t6"]'))
+    expect(screen.getByPlaceholderText('First name')).toBeTruthy()
+    expect(screen.getByText('Tue, 6 Jan · CONVOY', { exact: false })).toBeTruthy()
+    expect(trackFunnelStep).toHaveBeenCalledWith('trial_class_chosen', { studio: 'stillorgan' })
+    fillDetails()
+    fireEvent.click(submitButton())
+    expect(await screen.findByText('Already had one.')).toBeTruthy()
+    expect(posts[0].body.event_id).toBe('t6')
+  })
+
   it('Stillorgan trial_used answer shows the message and the help button; pressing it posts to /help and shows help_sent_text', async () => {
     answers['/api/public/trial-purchases'] = { status: 200, body: { success: false, code: 'trial_used', error: "It looks like you've already had a trial with us at Stillorgan.", help: { cta_label: 'I need help' } } }
     answers['/api/public/trial-purchases/help'] = { status: 200, body: { success: true, data: { message: 'Thanks. The team at UN1T Stillorgan will be in touch shortly.', purchaseId: 'p-help' } } }

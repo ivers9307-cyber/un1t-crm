@@ -61,7 +61,8 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
   const [step, setStep] = useState('pick') // pick | form
   const [chosen, setChosen] = useState(null)
   const [reloadKey, setReloadKey] = useState(0)
-  const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: true })
+  // MOBILEFUNNEL.1 — marketing consent starts unticked and is optional.
+  const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: false })
   const [termsAccepted, setTermsAccepted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
@@ -78,8 +79,8 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
   async function submit(e) {
     e.preventDefault()
     setError(null)
-    if (!form.first_name.trim() || !form.last_name.trim() || !form.email.trim() || !form.phone.trim() || !form.consent) {
-      setError('Please complete every field and tick consent.'); return
+    if (!form.first_name.trim() || !form.last_name.trim() || !form.email.trim() || !form.phone.trim()) {
+      setError('Please complete every field.'); return
     }
     if (!isValidMobileNumber(form.phone.trim())) { setError('Enter a valid mobile number.'); return }
     if (terms && !termsAccepted) { setError(terms.required_message || 'Please tick to accept the terms and waiver.'); return }
@@ -95,7 +96,7 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
           promo: promoKey,
           ...(chosen ? { event_id: chosen.event_id } : {}),
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
-          email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
+          email: form.email.trim(), phone: form.phone.trim(), consent: form.consent === true,
           terms_accepted: termsAccepted,
           attribution: utmFromUrl(),
           lead_event_id: leadEventId,
@@ -149,7 +150,12 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
           copy={words}
           chosen={chosen}
           onPick={(cls) => { setChosen(cls); setError(null) }}
-          onContinue={() => { if (chosen) { setError(null); setStep('form') } }}
+          onContinue={(cls) => {
+            // MOBILEFUNNEL.1 — the class comes with the call: a tapped time
+            // continues in the same event, before `chosen` re-renders.
+            const picked = cls || chosen
+            if (picked) { setChosen(picked); setError(null); setStep('form') }
+          }}
           onSkip={() => { setChosen(null); setError(null); setStep('form') }}
           showClassName
           ctaLabel={cta}

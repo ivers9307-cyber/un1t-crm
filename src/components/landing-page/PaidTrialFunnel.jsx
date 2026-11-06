@@ -186,8 +186,12 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
 
   // CLASSFIRST.1 — the class step.
   function pickClass(cls) { setChosen(cls); setError(null) }
-  function toForm() {
-    if (!chosen) return
+  // MOBILEFUNNEL.1 — the class comes with the call (a tapped time continues
+  // in the same event, before `chosen` re-renders); else the one chosen.
+  function toForm(cls) {
+    const picked = cls || chosen
+    if (!picked) return
+    setChosen(picked)
     if (!preview) trackFunnelStep('trial_class_chosen', { studio: studioKey })
     setError(null)
     setStep('form')
