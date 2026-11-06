@@ -13,6 +13,7 @@ import { planTemplateSync } from '@/lib/whatsapp-template-sync'
 import { NO_WHATSAPP_NUMBER_MESSAGE, NO_LOCATION_MESSAGE } from '@/lib/whatsapp-number-missing'
 import { logError } from '@/lib/log'
 import { onTemplateApproved } from '@/lib/sequences/template-wait'
+import { onTemplateStatusForFollowups } from '@/lib/pipeline-followup-approval'
 
 const WaTemplateCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -198,6 +199,8 @@ async function syncTemplatesFromMeta(db, locationId) {
         // PIPEBUILD.1c — newly approved: wake enrolments waiting on it.
         if (u.row.status === 'APPROVED' && storedStatus.get(u.id) !== 'APPROVED') {
           await onTemplateApproved(db, { id: u.id, location_id: u.row.location_id })
+          // PIPEBUILD.4e — and stage follow-ups waiting on it (never throws).
+          await onTemplateStatusForFollowups(db, { id: u.id, location_id: u.row.location_id }, 'APPROVED')
         }
       }
       for (const row of plan.inserts) {

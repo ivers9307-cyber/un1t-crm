@@ -5,6 +5,8 @@ import { templateColumnUpdate, templateNotification, templateEventRow, applyTemp
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/sequences/template-wait', () => ({ onTemplateApproved: vi.fn(async () => ({ woken: 0, resumed: 0, leftPaused: 0 })) }))
 const { onTemplateApproved } = await import('@/lib/sequences/template-wait')
+vi.mock('@/lib/pipeline-followup-approval', () => ({ onTemplateStatusForFollowups: vi.fn(async () => ({ published: 0, rejected: 0 })) }))
+const { onTemplateStatusForFollowups } = await import('@/lib/pipeline-followup-approval')
 
 const status = (event, reason) => ({ field: 'message_template_status_update', value: { event, reason, message_template_id: 1, message_template_name: 'welcome_offer', message_template_language: 'en' } })
 const quality = (next, prev) => ({ field: 'message_template_quality_update', value: { new_quality_score: next, previous_quality_score: prev, message_template_id: 1, message_template_name: 'welcome_offer' } })
@@ -93,7 +95,10 @@ describe('applyTemplateEvent approval hook', () => {
       },
     }
   }
-  beforeEach(() => vi.mocked(onTemplateApproved).mockClear())
+  beforeEach(() => {
+    vi.mocked(onTemplateApproved).mockClear()
+    vi.mocked(onTemplateStatusForFollowups).mockClear()
+  })
   it('approvedTransitionCallsHook', async () => {
     const d = db()
     await applyTemplateEvent(d, 'message_template_status_update', status('APPROVED').value)
@@ -129,5 +134,28 @@ describe('applyTemplateEvent approval hook', () => {
     expect(r).toEqual({ skipped: 'update_failed' })
     expect(d.inserts).toHaveLength(0)
     expect(onTemplateApproved).not.toHaveBeenCalled()
+  })
+
+  // PIPEBUILD.4e — stage follow-ups waiting on the template move on.
+  it('webhookCallsHook', async () => {
+    const d = db()
+    await applyTemplateEvent(d, 'message_template_status_update', status('APPROVED').value)
+    expect(onTemplateStatusForFollowups).toHaveBeenCalledTimes(1)
+    expect(onTemplateStatusForFollowups).toHaveBeenCalledWith(d, row, 'APPROVED')
+
+    for (const ev of ['REJECTED', 'DISABLED']) {
+      vi.mocked(onTemplateStatusForFollowups).mockClear()
+      const d2 = db()
+      await applyTemplateEvent(d2, 'message_template_status_update', status(ev, 'X').value)
+      expect(onTemplateStatusForFollowups).toHaveBeenCalledTimes(1)
+      expect(onTemplateStatusForFollowups).toHaveBeenCalledWith(d2, row, ev)
+    }
+
+    // Not for a pause, not when the write failed, not on an unchanged retry.
+    vi.mocked(onTemplateStatusForFollowups).mockClear()
+    await applyTemplateEvent(db(), 'message_template_status_update', status('PAUSED').value)
+    await applyTemplateEvent(db({ updateError: { message: 'nope' } }), 'message_template_status_update', status('APPROVED').value)
+    await applyTemplateEvent(db(), 'message_template_status_update', status('PENDING').value)
+    expect(onTemplateStatusForFollowups).not.toHaveBeenCalled()
   })
 })
