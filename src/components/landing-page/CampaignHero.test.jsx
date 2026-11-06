@@ -127,3 +127,12 @@ describe('CampaignHero sound', () => {
     expect(screen.getByRole('button', { name: /Tap for sound/ }).getAttribute('aria-pressed')).toBe('false')
   })
 })
+
+describe('CampaignHero layout on phones (MOBILEFUNNEL.1)', () => {
+  it('clamps the single column so a sideways-scrolling day strip cannot widen the page', () => {
+    const { container } = render(<CampaignHero heading="H" offer={<div />} />)
+    const grid = container.querySelector('[data-hero-media]').parentElement
+    expect(grid.className).toContain('grid-cols-[minmax(0,1fr)]')
+    expect(grid.className).toContain('lg:grid-cols-[1.3fr_1fr]')
+  })
+})

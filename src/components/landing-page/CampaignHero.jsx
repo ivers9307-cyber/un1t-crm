@@ -133,7 +133,10 @@ export default function CampaignHero({
       {/* CLASSFIRST.2 — the columns start together and the media box keeps its
           own height (a sticky 4:5 on desktop) instead of stretching to the
           card: a busy studio's class list used to elongate the photo. */}
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 grid gap-5 lg:gap-8 lg:grid-cols-[1.3fr_1fr] lg:items-start">
+      {/* MOBILEFUNNEL.1 — minmax(0,1fr) below lg: the day strip scrolls
+          sideways, and an auto column would grow to its full width (864px
+          on /newstart) and push the page past the screen. */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 grid grid-cols-[minmax(0,1fr)] gap-5 lg:gap-8 lg:grid-cols-[1.3fr_1fr] lg:items-start">
         <div data-hero-media="" className="relative overflow-hidden rounded-3xl bg-black text-white flex flex-col justify-end min-h-[240px] sm:block sm:min-h-0 sm:aspect-[5/4] lg:aspect-[4/5] lg:max-h-[720px] lg:sticky lg:top-24">
           {videoUrl ? (
             <video
