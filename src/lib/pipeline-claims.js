@@ -49,7 +49,7 @@ export function programmeRulesFromSettings(settings) {
 export async function loadBoardsForLocation(db, locationId) {
   const { data, error } = await db
     .from('pipelines')
-    .select('id, key, module, mode, enabled, is_primary')
+    .select('id, key, module, mode, enabled, is_primary, board_type, config, priority')
     .eq('location_id', locationId)
     .eq('enabled', true)
   if (error) {
@@ -73,10 +73,10 @@ export async function loadProgrammeRules(db, locationId) {
   return { ok: true, rules: programmeRulesFromSettings(data?.settings) }
 }
 
-const PURCHASE_COLS = 'id, contact_id, status, payment_status, paid_at, granted_at, duration_days'
+export const PURCHASE_COLS = 'id, contact_id, status, payment_status, paid_at, granted_at, duration_days, plan_code, landing_path, page_id'
 const CLAIM_COLS = 'contact_id, claimed_at, source'
 
-const toProgrammeClaim = (row) => {
+export const toProgrammeClaim = (row) => {
   const ms = Date.parse(row?.claimed_at)
   return Number.isFinite(ms) ? { claimedAt: ms, source: row.source ?? null } : null
 }
@@ -141,35 +141,41 @@ export async function loadClaimsForLocation(db, { locationId, contactIds, now = 
 }
 
 /**
- * The programme claims to record: a contact with no claim who matches, or a
- * LAPSED claim (no longer live for this contact) a newer lead-source touch
- * renews — "a second /50plus signup after the claim went quiet" (spec). A live
- * claim is never reset: a 1st Class Done lead who re-submits the page to book
- * again stays at 1st Class Done. A plan match never renews (a plan carries no
- * date). Pure.
+ * The claims to record for ONE board, whatever its way in. `matcher(contact,
+ * now)` answers `{ claimedAt, source }` or null. A contact with no stored claim
+ * who matches gets a row; a LAPSED stored claim is renewed by a newer
+ * lead-source touch ("a second /50plus signup after the claim went quiet");
+ * a LIVE claim is never reset; a plan or tag match never renews (it carries no
+ * touch date of its own). `isLive(stored, contact, now)` defaults to the
+ * programme rule. Pure.
  *
  * @returns {Array<{ contact_id: string, board_key: string, claimed_at: string, source: string }>}
  */
-export function pendingProgrammeClaims(contacts, programmeByContact, rules, now = Date.now()) {
+export function pendingRecordedClaims(contacts, storedByContact, matcher, boardKey, now = Date.now(), isLive = programmeClaimLive) {
   const out = []
-  const stored = programmeByContact instanceof Map ? programmeByContact : new Map()
+  const stored = storedByContact instanceof Map ? storedByContact : new Map()
   for (const c of contacts || []) {
     if (!c?.id) continue
-    const signal = matchProgrammeSignal(c, rules, now)
+    const signal = matcher(c, now)
     if (!signal) continue
     const existing = stored.get(c.id)
     if (existing) {
       if (signal.source !== 'lead_source') continue
       if (!(signal.claimedAt > existing.claimedAt)) continue
-      if (programmeClaimLive(existing, c, now)) continue
+      if (isLive(existing, c, now)) continue
     }
-    out.push({ contact_id: c.id, board_key: PROGRAMME_BOARD, claimed_at: new Date(signal.claimedAt).toISOString(), source: signal.source })
+    out.push({ contact_id: c.id, board_key: boardKey, claimed_at: new Date(signal.claimedAt).toISOString(), source: signal.source })
   }
   return out
 }
 
-/** Record claims (upsert on the PK). Never throws. */
-export async function upsertProgrammeClaims(db, locationId, rows, now = Date.now()) {
+/** The programme claims to record: pendingRecordedClaims with the programme matcher. Pure. */
+export function pendingProgrammeClaims(contacts, programmeByContact, rules, now = Date.now()) {
+  return pendingRecordedClaims(contacts, programmeByContact, (c, n) => matchProgrammeSignal(c, rules, n), PROGRAMME_BOARD, now)
+}
+
+/** Record claims for any board (upsert on the PK). Never throws. */
+export async function upsertBoardClaims(db, locationId, rows, now = Date.now()) {
   if (!Array.isArray(rows) || rows.length === 0) return { ok: true, written: 0 }
   const stamp = new Date(now).toISOString()
   let written = 0
@@ -198,6 +204,8 @@ export async function upsertProgrammeClaims(db, locationId, rows, now = Date.now
   }
   return { ok: true, written }
 }
+
+export const upsertProgrammeClaims = upsertBoardClaims
 
 /**
  * One contact's claims, for the webhook and Cold paths. Records a pending
