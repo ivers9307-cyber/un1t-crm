@@ -1866,7 +1866,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     pipelines: [ACQ, CORP], pipeline_stages: [...ACQ_STAGES, ...CORP_STAGES],
     contacts: [corpNew('c-new'), corpAttended('c-move')],
     deals: [acqDeal('d-move', 'c-move')],
-    pipeline_board_claims: [], locations: [{ id: STILL, settings: {} }],
+    pipeline_board_claims: [], locations: [{ id: STILL, settings: {}, membership_source: 'glofox' }],
     ...over,
   })
 
@@ -2065,7 +2065,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     const TAGGED = { ...CORP, config: { ...CORP_CONFIG, entry: { type: 'tag', values: ['corp'] } } }
     const rec = recordingDb(corpFixtures({
       pipelines: [ACQ, PROG, TAGGED], contacts: [fifty], deals: [], trial_purchases: [],
-      locations: [{ id: STILL, settings: { pipelines: { programmes: { lead_sources: ['meta_50plus'] } } } }],
+      locations: [{ id: STILL, settings: { pipelines: { programmes: { lead_sources: ['meta_50plus'] } } }, membership_source: 'glofox' }],
     }), { errors: { contact_tags: 'tags down' } })
     const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
     expect(out).toMatchObject({ ok: false, error: 'claims unavailable: tags_unreadable' })
@@ -2121,16 +2121,66 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     expect(rec.writesTo('deals')).toHaveLength(0)
   })
 
-  it('an offer board at a un1t.online studio is refused (mixed_input_sources); the un1t boards run as before', async () => {
+  it('an offer board at a un1t.online studio is refused (un1t_online_studio); the un1t boards run as before', async () => {
     seamWith(vi.fn().mockResolvedValue(hatchInputs({
       contacts: [{ id: 'c-l', name: 'L', email: null, location_id: HATCH }],
       snapshots: [['c-l', leadSnap()]],
     })))
     const offerAtHatch = { ...CORP, location_id: HATCH }
-    const rec = recordingDb({ pipelines: [HATCH_PIPELINES[0], offerAtHatch], pipeline_stages: HATCH_STAGES, deals: [] })
+    const rec = recordingDb({
+      pipelines: [HATCH_PIPELINES[0], offerAtHatch], pipeline_stages: HATCH_STAGES, deals: [],
+      locations: [{ id: HATCH, membership_source: 'un1t_online' }],
+    })
     const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
     expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['corp'], board_histogram: { acquisition: 1 } })
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'un1t_online_studio' }))
+  })
+
+  it('an offer board beside a un1t board at a studio not labelled un1t.online is still refused (mixed_input_sources)', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-l', name: 'L', email: null, location_id: HATCH }],
+      snapshots: [['c-l', leadSnap()]],
+    })))
+    const rec = recordingDb({
+      pipelines: [HATCH_PIPELINES[0], { ...CORP, location_id: HATCH }], pipeline_stages: HATCH_STAGES, deals: [],
+      locations: [{ id: HATCH, membership_source: 'none' }],
+    })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['corp'] })
     expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'mixed_input_sources' }))
+  })
+
+  it('offerBoardRefusedAtUn1tStudioAlone: a un1t.online studio with ONLY an offer board enabled reads no contacts, writes nothing, fires nothing', async () => {
+    const offerAtHatch = { ...CORP, location_id: HATCH }
+    const rec = recordingDb({
+      pipelines: [offerAtHatch], pipeline_stages: CORP_STAGES.map((st) => ({ ...st, location_id: HATCH })),
+      contacts: [corpNew('c-new')], deals: [], pipeline_board_claims: [],
+      locations: [{ id: HATCH, membership_source: 'un1t_online' }],
+    })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, contacts_seen: 0, deals_created: 0, pipelines_skipped: ['corp'] })
+    expect(rec.tables()).not.toContain('contacts')
+    expect(rec.tables()).not.toContain('pipeline_board_claims')
+    expect(rec.writesTo('deals')).toHaveLength(0)
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+    expect(membershipReadsFor).not.toHaveBeenCalled()
+    const locRead = rec.calls.find((e) => e[0] === 'locations')
+    expect(locRead).toEqual(['locations', ['select', 'membership_source'], ['eq', 'id', HATCH], ['maybeSingle']])
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'un1t_online_studio' }))
+  })
+
+  it('membershipSourceReadFailureHoldsOffer: an unreadable membership_source holds the offer board (never guesses contacts); the acquisition board still runs', async () => {
+    const rec = recordingDb(corpFixtures({
+      contacts: [corpNew('c-new'), corpAttended('c-move')],
+      deals: [acqDeal('d-move', 'c-move'), { id: 'd-held', contact_id: 'c-new', stage_id: 's-corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' }],
+    }), { errors: { locations: 'locations down' } })
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(out).toMatchObject({ ok: true, pipelines_skipped: ['corp'], deals_held: 1, deals_created: 0 })
+    // c-move (no deal on the held board) is placed by acquisition alone: the corp claim is not read.
+    expect(rec.tables()).not.toContain('pipeline_board_claims')
+    expect(rec.writesTo('deals').some((e) => JSON.stringify(e).includes('p-corp'))).toBe(false)
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'membership_source_unreadable' }))
   })
 
   it('an active member at another studio leaves the Corp board unless they are in its Converted column', async () => {

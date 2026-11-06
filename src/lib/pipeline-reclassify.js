@@ -58,6 +58,10 @@ const DRY_RUN_SELF_MODULES = Object.freeze([...CLAIM_BOARD_MODULES, 'paid_trial_
 // ride along so an offer board's config and priority reach the router.
 const PIPELINE_COLS = 'id, key, module, mode, enabled, is_primary, board_type, config, priority'
 const OFFER_BOARD_TYPE = 'offer'
+// PIPEBUILD.3d — locations.membership_source values whose members live in
+// un1t.online (mig 726: 'un1t_online'; mig 717's older 'un1t' too). An offer
+// board reads contacts, so it is refused at these studios until PR 3b.
+const UN1T_MEMBERSHIP_SOURCES = Object.freeze(['un1t_online', 'un1t'])
 // TDSEQ.1 — more than this many deals moved into ONE stage in ONE run is a
 // rule change, not people progressing: no sequence starts for that stage.
 const STAGE_TRIGGER_MASS_MOVE = 50
@@ -266,15 +270,47 @@ export async function reclassifyAllContacts(db, args) {
   // with a deal on it is left alone).
   const isUn1t = (p) => p.mod.inputSource === UN1T_INPUT
   const isOffer = (p) => OFFER_MODULES.includes(p.module)
-  if (activePipelines.some(isUn1t) && activePipelines.some(isOffer)
-    && activePipelines.every((p) => isUn1t(p) || isOffer(p))) {
+  const refuseOffers = (reason) => {
     for (const p of activePipelines) {
       if (!isOffer(p)) continue
       pipelinesSkipped.push(p.key)
       heldPipelines.push(p)
-      logWarn('pipeline-reclassify', 'board refused', { key: p.key, module: p.module, locationId, reason: 'mixed_input_sources' })
+      logWarn('pipeline-reclassify', 'board refused', { key: p.key, module: p.module, locationId, reason })
     }
     activePipelines = activePipelines.filter((p) => !isOffer(p))
+  }
+  // The studio's own membership source decides, so an offer board switched on
+  // at a un1t.online studio whose un1t boards are off is refused too (it would
+  // otherwise read contacts columns there, which at a dual-studio contact hold
+  // the Glofox studio's state: HATCHPIPE.2). Read only when an offer board is
+  // enabled, so a night without one makes exactly today's calls. A failed read
+  // holds the offer boards for the run: never a guess of "contacts".
+  if (activePipelines.some(isOffer)) {
+    let membershipSource
+    let sourceUnreadable = false
+    try {
+      const { data: locRow, error: locErr } = await db
+        .from('locations')
+        .select('membership_source')
+        .eq('id', locationId)
+        .maybeSingle()
+      if (locErr || !locRow) {
+        sourceUnreadable = true
+        logWarn('pipeline-reclassify', 'membership source unreadable', { locationId, ...(locErr ? { err: boundedErr(locErr.message) } : { reason: 'no_location_row' }) })
+      } else {
+        membershipSource = locRow.membership_source
+      }
+    } catch (e) {
+      sourceUnreadable = true
+      logWarn('pipeline-reclassify', 'membership source unreadable', { locationId, err: boundedErr(e?.message || e) })
+    }
+    if (sourceUnreadable) refuseOffers('membership_source_unreadable')
+    else if (UN1T_MEMBERSHIP_SOURCES.includes(membershipSource)) refuseOffers('un1t_online_studio')
+  }
+  if (activePipelines.some(isUn1t) && activePipelines.some(isOffer)
+    && activePipelines.every((p) => isUn1t(p) || isOffer(p))) {
+    // A studio running un1t boards whatever its label: the same refusal.
+    refuseOffers('mixed_input_sources')
   }
   if (activePipelines.some((p) => p.mod.inputSource === UN1T_INPUT)) {
     if (activePipelines.some((p) => p.mod.inputSource !== UN1T_INPUT)) {
