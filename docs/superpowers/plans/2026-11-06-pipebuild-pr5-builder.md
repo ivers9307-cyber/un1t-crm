@@ -361,6 +361,29 @@
 
 ## PR 5b: UI (branch off 5a)
 
+### Task 7b: Pre-existing claims never fire on event paths
+
+Found in the 5a final review. The nightly baseline reads only contacts whose home studio is the board's studio. So a contact from a sibling studio who already qualifies is not placed silently. After the stamp, their first Glofox event would place them on the board WITH the stage follow-up. That breaks the switch-on promise.
+
+**Files:**
+- Modify: `src/lib/glofox-sync.js` (`ensureDealForContact`'s fire decision), `src/lib/pipeline-offer-claims.js` (claim time on offer claims)
+- Test: `src/lib/glofox-sync.test.js` and/or the place-now / pipeline-status route tests
+
+**Interfaces:**
+- An offer claim carries `claimedAt` (ISO): the source row's time for `trial_purchase`/`corp_promo`, and `pipeline_board_claims.claimed_at` for recorded kinds.
+- On every event path, placing a person on an offer board fires its follow-up only when `claimedAt >= board.baseline_at`.
+- An older claim places silently: the deal is created or moved, and no sequence trigger fires. This applies to every contact, not only those from sibling studios.
+- A claim whose time is unknown places silently.
+
+- [ ] **Step 1: Write failing tests:**
+  - `siblingContactWithOldClaimPlacesSilently`: the claim is before `baseline_at`; a deal is created; no trigger fires.
+  - `newClaimAfterBaselineFires`.
+  - `unknownClaimTimePlacesSilently`.
+- [ ] **Step 2:** Run. Expected: FAIL.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** Run `npx vitest run src/lib/glofox-sync src/lib/pipeline-offer-claims src/lib/pipeline-place-now 'src/app/api/contacts/[id]/pipeline-status'`. Expected: PASS, with the router golden test unchanged.
+- [ ] **Step 5: Commit** `PIPEBUILD.5m — a claim older than the board's baseline places silently on every event path`.
+
 ### Task 8: Settings row, template preview and the board list
 
 **Files:**
