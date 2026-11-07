@@ -272,6 +272,46 @@ describe('followups: failed sends and distinct contacts', () => {
   })
 })
 
+describe('followups: earlier versions', () => {
+  it('a version-2 follow-up still counts its version-1 sends', async () => {
+    const t0 = ago(3)
+    const b = board({
+      recipe_key: 'paid_trial_offer',
+      followups: [{ id: 'f1', stage_id: S1, pack_key: 'trial_done', state: 'live', version: 2, whatsapp_template_id: 'tpl2' }],
+    })
+    const msg = (id, name) => ({ id, location_id: LOC, direction: 'outbound', template_name: name, contact_id: 'c-d1', conversation_id: 'cv1', status: 'sent', sent_at: t0, delivered_at: null, read_at: null })
+    const r = await run({
+      deals: baseDeals(),
+      activities: [],
+      whatsapp_templates: [{ id: 'tpl2', location_id: LOC, name: 'stu_k_trial_done_main_v2', status: 'APPROVED' }],
+      whatsapp_messages: [
+        msg('m1', 'stu_k_trial_done_main'),
+        msg('m2', 'stu_k_trial_done_followup'),
+        msg('m3', 'stu_k_trial_done_main_v2'),
+        msg('m4', 'stu_k_trial_done_followup_v2'),
+        msg('m5', 'other_k_trial_done_main'),
+        msg('m6', 'stu_k_trial_done_main_v3'),
+      ],
+    }, b)
+    expect(r.followups[0].sent).toBe(4)
+  })
+
+  it('a single-message pack counts every version of its one message', async () => {
+    const b = board({
+      recipe_key: 'paid_trial_offer',
+      followups: [{ id: 'f1', stage_id: S1, pack_key: 'book_first_class', state: 'live', version: 3, whatsapp_template_id: 'tpl3' }],
+    })
+    const msg = (id, name) => ({ id, location_id: LOC, direction: 'outbound', template_name: name, contact_id: 'c-d1', conversation_id: 'cv1', status: 'sent', sent_at: ago(3), delivered_at: null, read_at: null })
+    const r = await run({
+      deals: baseDeals(),
+      activities: [],
+      whatsapp_templates: [{ id: 'tpl3', location_id: LOC, name: 'stu_k_book_first_class_main_v3', status: 'APPROVED' }],
+      whatsapp_messages: [msg('m1', 'stu_k_book_first_class_main'), msg('m2', 'stu_k_book_first_class_main_v2'), msg('m3', 'stu_k_book_first_class_main_v3')],
+    }, b)
+    expect(r.followups[0].sent).toBe(3)
+  })
+})
+
 describe('health', () => {
   it('flags no follow-up, rejected template, paused sequence and an empty week', async () => {
     const b = board({

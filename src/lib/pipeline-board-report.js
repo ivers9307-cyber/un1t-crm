@@ -20,7 +20,7 @@
 //   - a deal CREATED onto the first stage logs no move, so deals created in the
 //     window are added to the board's first stage (this one IS created_at: it
 //     stands in for the move row a creation never writes).
-import { RECIPES } from '@shared/pipelines/recipes.js'
+import { RECIPES, templateNameFor } from '@shared/pipelines/recipes.js'
 import { stageRoleOf, isPileRole } from '@shared/pipelines/stage-roles'
 import { otherPackTemplateNames } from './pipeline-boards'
 import { purchaseMatchesEntry, loadOfferClaimsForLocation } from './pipeline-offer-claims'
@@ -38,12 +38,28 @@ const CANCELLED = new Set(['CANCELLED', 'CANCELED', 'LATE_CANCELLED'])
 // Entry types matched on contact columns: the claims loader needs those columns.
 const RECORDED_ENTRY_TYPES = new Set(['lead_source', 'glofox_plan', 'tag'])
 
+// Change wording installs a new template per version (`_v<n>`), so a
+// follow-up's sends live under every version's names, 1..followup.version:
+// counting only the current one would reset the stats on each rewording.
+const MAX_VERSIONS = 50
+
 function packTemplateNames(board, followup, firstName) {
   const names = new Set([firstName])
   const pack = RECIPES[board.recipe_key]?.packs?.find((p) => p.key === followup.pack_key)
-  if (!pack || pack.templates.length < 2) return names
+  if (!pack || !pack.templates?.length) return names
+  const current = Number.isInteger(followup.version) && followup.version > 1 ? followup.version : 1
   try {
-    for (const n of otherPackTemplateNames({ board, followup, pack, firstName }) || []) names.add(n)
+    // The studio prefix: whatever precedes the current version's first name.
+    const suffix = templateNameFor({ studioSlug: 's', boardKey: board.key, packKey: pack.key, ref: pack.templates[0].ref, version: current }).slice(1)
+    if (!String(firstName ?? '').endsWith(suffix)) return names
+    const studioSlug = firstName.slice(0, -suffix.length)
+    if (!studioSlug) return names
+    for (let version = 1; version <= Math.min(current, MAX_VERSIONS); version += 1) {
+      const first = templateNameFor({ studioSlug, boardKey: board.key, packKey: pack.key, ref: pack.templates[0].ref, version })
+      names.add(first)
+      if (pack.templates.length < 2) continue
+      for (const n of otherPackTemplateNames({ board, followup: { ...followup, version }, pack, firstName: first }) || []) names.add(n)
+    }
   } catch {
     // A name templateNameFor refuses was never installed.
   }
