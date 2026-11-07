@@ -52,8 +52,9 @@ export async function placeContactNow(db, { locationId, contactId, now = Date.no
   // card lands (create or move). configuredBoardsOnly keeps every other board
   // exactly as before: place-now fired no sequence for them and still fires
   // none (the nightly pass and the webhook own those). Best-effort: the
-  // placement is already written.
-  if (deal?.action === 'create' || deal?.action === 'move') {
+  // placement is already written. PIPEBUILD.5m — a placement ensureDealForContact
+  // marked silent (a claim older than the offer board's baseline) fires nothing.
+  if ((deal?.action === 'create' || deal?.action === 'move') && deal?.silent !== true) {
     try {
       const { triggerSequencesForDealPlacement } = await import('./sequences/triggers.js')
       await triggerSequencesForDealPlacement(contactId, deal, {

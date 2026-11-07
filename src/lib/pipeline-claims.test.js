@@ -80,6 +80,26 @@ describe('loadBoardsForLocation', () => {
     const { db } = fakeDb({}, { errors: { pipelines: 'boom' } })
     expect(await loadBoardsForLocation(db, LOC)).toEqual({ ok: false, reason: 'boards_unreadable', err: 'boom' })
   })
+  it('PIPEBUILD.5o: names the switched-off OFFER boards from the same read; a switched-off built-in board is not one', async () => {
+    const { db, reads } = fakeDb({ pipelines: [
+      { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null },
+      { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: false, is_primary: false, board_type: null },
+      { id: 'p3', location_id: LOC, key: 'o_corp', module: 'offer', mode: 'derived', enabled: false, is_primary: false, board_type: 'offer' },
+      { id: 'p4', location_id: 'other', key: 'o_x', module: 'offer', mode: 'derived', enabled: false, is_primary: false, board_type: 'offer' },
+    ] })
+    const out = await loadBoardsForLocation(db, LOC)
+    expect(out.boards.map((b) => b.id)).toEqual(['p1'])
+    expect(out.disabledOfferIds).toEqual(['p3'])
+    expect(reads.filter((t) => t === 'pipelines')).toHaveLength(1)
+  })
+  it('PIPEBUILD.5o: no switched-off offer board, no disabledOfferIds key (exactly today)', async () => {
+    const { db } = fakeDb({ pipelines: [
+      { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null },
+      { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: false, is_primary: false, board_type: null },
+    ] })
+    const out = await loadBoardsForLocation(db, LOC)
+    expect(out).toEqual({ ok: true, boards: [expect.objectContaining({ id: 'p1' })] })
+  })
 })
 
 describe('loadClaimsForLocation', () => {
@@ -232,6 +252,15 @@ describe('loadPlacementClaims', () => {
     expect(out.claimBoards).toBe(true)
     expect(out.claims.paid).toMatchObject({ start: T0 })
     expect(out.claims.programme).toBeNull()
+  })
+  it('PIPEBUILD.5o: the switched-off offer boards ride along, with or without claim boards', async () => {
+    const OFF = { id: 'p9', location_id: LOC, key: 'o_corp', module: 'offer', mode: 'derived', enabled: false, is_primary: false, board_type: 'offer' }
+    expect(await loadPlacementClaims(fakeDb({ pipelines: [ACQ, OFF] }).db, { locationId: LOC, contactId: 'c1', contact, now: T0 }))
+      .toEqual({ ok: true, boards: [ACQ], claimBoards: false, claims: null, disabledOfferIds: ['p9'] })
+    const withPaid = await loadPlacementClaims(fakeDb({ pipelines: [ACQ, PAID, OFF], locations: [{ id: LOC, settings: {} }], trial_purchases: [], pipeline_board_claims: [] }).db,
+      { locationId: LOC, contactId: 'c1', contact, now: T0 })
+    expect(withPaid).toMatchObject({ ok: true, claimBoards: true, disabledOfferIds: ['p9'] })
+    expect(withPaid.boards.map((b) => b.id)).toEqual(['p1', 'p2'])
   })
   it('a failed boards, settings or purchases read is reported with its reason', async () => {
     expect(await loadPlacementClaims(fakeDb({}, { errors: { pipelines: 'x' } }).db, { locationId: LOC, contactId: 'c1', contact, now: T0 })).toEqual({ ok: false, reason: 'boards_unreadable' })

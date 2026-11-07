@@ -1,5 +1,6 @@
 'use client'
 
+import WhatsAppTemplatePreview from '@/components/WhatsAppTemplatePreview'
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -922,34 +923,14 @@ export default function WATemplateEditor({ template, locationId, userId, events 
           <div className="w-80 shrink-0">
             <div className="sticky top-6">
               <h3 className="text-sm font-semibold text-un1t-subtle mb-3">Preview</h3>
-              <div className="bg-[#e5ddd5] rounded-lg p-4">
-                <div className="bg-white rounded-lg p-3 shadow-sm max-w-[260px]">
-                  {headerFormat === 'TEXT' && headerText && (
-                    <p className="text-sm font-bold text-gray-900 mb-1">{headerText}</p>
-                  )}
-                  {['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat) && (
-                    <div className="bg-gray-200 rounded h-32 flex items-center justify-center text-gray-600 text-xs mb-2">
-                      [{headerFormat}]
-                    </div>
-                  )}
-                  <p className="text-sm text-gray-800 whitespace-pre-wrap">
-                    {bodyText || 'Your message body here...'}
-                  </p>
-                  {footerText && (
-                    <p className="text-xs text-gray-600 mt-2">{footerText}</p>
-                  )}
-                  <p className="text-[10px] text-gray-600 text-right mt-1">12:00</p>
-                </div>
-                {buttons.length > 0 && (
-                  <div className="mt-1 space-y-1 max-w-[260px]">
-                    {buttons.map((btn, i) => (
-                      <div key={i} className="bg-white rounded-lg py-2 text-center shadow-sm">
-                        <span className="text-sm text-blue-600">{btn.text || 'Button'}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <WhatsAppTemplatePreview
+                components={[
+                  { type: 'HEADER', format: headerFormat, text: headerText },
+                  { type: 'BODY', text: bodyText },
+                  { type: 'FOOTER', text: footerText },
+                  { type: 'BUTTONS', buttons },
+                ]}
+              />
             </div>
           </div>
         </div>

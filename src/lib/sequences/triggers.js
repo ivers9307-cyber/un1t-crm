@@ -347,6 +347,10 @@ export async function triggerSequencesForPipelineStageChange(contactId, oldStage
  * other board still fires nothing. `configuredBoardsOnly` (placeContactNow,
  * which fired nothing before) fires for configured boards only.
  *
+ * PIPEBUILD.5m — a result carrying `silent: true` (ensureDealForContact's
+ * first offer-board placement on a claim older than the board's baseline_at,
+ * or of unknown age) fires nothing; the skip is logged with its silent_reason.
+ *
  * Best-effort and never throws: every caller has already committed its
  * primary write.
  *
@@ -359,6 +363,13 @@ export async function triggerSequencesForPipelineStageChange(contactId, oldStage
 export async function triggerSequencesForDealPlacement(contactId, dealResult, { dealLocationId, pipelineId, configuredBoardsOnly = false } = {}) {
   const action = dealResult?.action
   if (!contactId || (action !== 'move' && action !== 'create')) return
+  // PIPEBUILD.5m — ensureDealForContact marks a first offer-board placement on
+  // a claim older than the board's baseline (or of unknown age) silent: the
+  // deal is written and no sequence starts, whoever passes the result on.
+  if (dealResult.silent === true) {
+    logWarn('sequences', 'stage_trigger_skipped', { reason: dealResult.silent_reason || 'silent_placement', dealLocationId })
+    return
+  }
   const from = action === 'move' ? (dealResult.from_slug ?? null) : null
   const to = action === 'move' ? (dealResult.to_slug ?? null) : (dealResult.stage_slug ?? null)
   if (from === to) return

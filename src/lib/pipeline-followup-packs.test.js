@@ -22,13 +22,15 @@ const USER = 'user-1'
 let lastTables = null
 // The role the fake stage holds: the pack's role, so a pack installs on its own kind of stage.
 let stageRoleNow = 'new'
+// The fake stage's role_config: a checkpoint at day 7 unless a test moves it.
+let stageDayNow = 7
 const PACK_ROLE = { book_first_class: 'new', after_first_class: 'first_class', halfway: 'checkpoint', trial_done: 'done' }
 function fakeDb(seed = {}, { fail = {}, failWhen, afterOp } = {}) {
   const tables = {
     pipelines: [{ id: PIPE, key: 'o_reset', name: '14 Day Reset', location_id: LOC, board_type: 'offer', recipe_key: 'paid_trial_offer' }],
     // stage_role follows the pack under test (see args()): a getter, because most tests
     // build the db before they build the args.
-    pipeline_stages: [{ id: STAGE, slug: 'o_reset_new', pipeline_id: PIPE, location_id: LOC, get stage_role() { return stageRoleNow } }],
+    pipeline_stages: [{ id: STAGE, slug: 'o_reset_new', pipeline_id: PIPE, location_id: LOC, get stage_role() { return stageRoleNow }, get role_config() { return stageRoleNow === 'checkpoint' ? { day: stageDayNow } : {} } }],
     locations: [{ id: LOC, name: 'UN1T Stillorgan' }, { id: OTHER_LOC, name: 'UN1T Hatch Street' }],
     pipeline_stage_followups: [],
     email_sequences: [],
@@ -128,6 +130,7 @@ const waIdsOf = (graph) => graph.nodes.filter((x) => x.type === 'whatsapp').map(
 beforeEach(() => {
   vi.clearAllMocks()
   tplN = 0
+  stageDayNow = 7
   publishSequence.mockResolvedValue({ ok: true, steps: 5 })
 })
 
@@ -204,6 +207,32 @@ describe('installFollowupPack', () => {
     expect(submitWhatsappTemplate).not.toHaveBeenCalled()
     expect(tables.email_sequences).toHaveLength(0)
     expect(tables.pipeline_stage_followups).toHaveLength(0)
+  })
+
+  it('installerRefusesPackDayMismatch', async () => {
+    submitsOk()
+    const { db, tables } = fakeDb()
+    // halfway is written for day 7; the stage was moved to day 10.
+    const a = args({ packKey: 'halfway' })
+    stageDayNow = 10
+    const r = await installFollowupPack(db, a)
+    expect(r).toEqual({
+      ok: false,
+      status: 409,
+      code: 'pack_day_mismatch',
+      error: 'This check-in message is written for day 7. Set the stage back to day 7 to use it.',
+    })
+    expect(submitWhatsappTemplate).not.toHaveBeenCalled()
+    expect(tables.email_sequences).toHaveLength(0)
+    expect(tables.pipeline_stage_followups).toHaveLength(0)
+  })
+
+  it('installsAPackOnItsOwnDay', async () => {
+    submitsOk()
+    const { db } = fakeDb()
+    const r = await installFollowupPack(db, args({ packKey: 'halfway' }))
+    expect(r.ok).toBe(true)
+    expect(submitWhatsappTemplate).toHaveBeenCalledTimes(2)
   })
 
   it('installerWritesVersion', async () => {

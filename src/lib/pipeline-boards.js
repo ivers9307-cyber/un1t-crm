@@ -23,7 +23,7 @@
 //   - built-in boards (board_type null) are read-only here;
 //   - no offer boards at un1t.online studios yet (offer_un1t is PR 3b).
 
-import { RECIPES } from '@shared/pipelines/recipes.js'
+import { RECIPES, templateNameFor } from '@shared/pipelines/recipes.js'
 import { boardKeyFor, parseOfferConfig, stageSlugFor } from '@shared/pipelines/offer-config.js'
 import { stagesFor } from '@shared/pipelines/offer.js'
 import { readMembershipSource, UN1T_MEMBERSHIP_SOURCES } from './pipeline-offer-claims.js'
@@ -237,12 +237,104 @@ export async function listBoards(db, locationId) {
   return loadBoards(db, locationId)
 }
 
-/** One board at the studio (404 when it is not there). */
+/** One board at the studio (404 when it is not there), with each follow-up's current wording. */
 export async function getBoard(db, locationId, boardId) {
   const res = await loadBoards(db, locationId, boardId)
   if (!res.ok) return res
   if (res.boards.length === 0) return fail(404, 'Board not found')
-  return { ok: true, board: res.boards[0] }
+  return { ok: true, board: await withFollowupWording(db, locationId, res.boards[0]) }
+}
+
+const bodyTextOf = (components) => {
+  const body = Array.isArray(components) ? components.find((c) => c?.type === 'BODY') : null
+  return typeof body?.text === 'string' ? body.text : null
+}
+
+// PIPEBUILD.5k — what each installed follow-up says now, from its WhatsApp
+// template rows (read at THIS studio only), so the settings page can show it
+// and start Change wording from it. Each follow-up gets `body_texts` by
+// message ref and `body_text` (its first message), and `wording_missing`
+// (the refs whose wording was not found) when any is. The row links only its
+// first template (whatsapp_template_id); a pack's other messages share that
+// name's studio prefix (templateNameFor), so they are read by name. Display
+// only: a failed read leaves the wording out and sets `wording_unread`, and
+// never fails the board read.
+async function withFollowupWording(db, locationId, board) {
+  const recipe = RECIPES[board.recipe_key]
+  const linked = (board.followups || []).filter((f) => f.whatsapp_template_id)
+  if (!recipe || board.board_type == null || linked.length === 0) return board
+
+  const { data: firsts, error } = await db
+    .from('whatsapp_templates')
+    .select('id, name, components')
+    .eq('location_id', locationId)
+    .in('id', linked.map((f) => f.whatsapp_template_id))
+  if (error) {
+    logError(MODULE, 'follow-up template read failed', { locationId, boardId: board.id, err: error.message })
+    return { ...board, wording_unread: true }
+  }
+  const byId = new Map((firsts || []).map((t) => [t.id, t]))
+
+  // The other messages' names, per follow-up.
+  const wanted = new Map()        // followup id -> [{ ref, name }]
+  for (const f of linked) {
+    const pack = recipe.packs.find((p) => p.key === f.pack_key)
+    const first = byId.get(f.whatsapp_template_id)
+    if (!pack || !first || pack.templates.length < 2) continue
+    try {
+      const version = Number.isInteger(f.version) ? f.version : undefined
+      const suffix = templateNameFor({ studioSlug: 's', boardKey: board.key, packKey: pack.key, ref: pack.templates[0].ref, version }).slice(1)
+      if (!String(first.name ?? '').endsWith(suffix)) continue
+      const studioSlug = first.name.slice(0, -suffix.length)
+      if (!studioSlug) continue
+      wanted.set(f.id, pack.templates.slice(1).map((t) => ({
+        ref: t.ref,
+        name: templateNameFor({ studioSlug, boardKey: board.key, packKey: pack.key, ref: t.ref, version }),
+      })))
+    } catch {
+      // A name templateNameFor refuses was never installed: nothing to read.
+    }
+  }
+  const names = [...new Set([...wanted.values()].flat().map((w) => w.name))]
+  const byName = new Map()
+  if (names.length) {
+    const { data: others, error: othersError } = await db
+      .from('whatsapp_templates')
+      .select('id, name, components')
+      .eq('location_id', locationId)
+      .in('name', names)
+    if (othersError) {
+      logError(MODULE, 'follow-up template read failed', { locationId, boardId: board.id, err: othersError.message })
+      return { ...board, wording_unread: true }
+    }
+    for (const t of others || []) byName.set(t.name, t)
+  }
+
+  return {
+    ...board,
+    followups: board.followups.map((f) => {
+      const pack = recipe.packs.find((p) => p.key === f.pack_key)
+      if (!pack || !f.whatsapp_template_id) return f
+      const first = byId.get(f.whatsapp_template_id)
+      const firstText = first ? bodyTextOf(first.components) : null
+      const texts = {}
+      if (firstText != null) {
+        texts[pack.templates[0].ref] = firstText
+        for (const w of wanted.get(f.id) || []) {
+          const text = bodyTextOf(byName.get(w.name)?.components)
+          if (text != null) texts[w.ref] = text
+        }
+      }
+      // A message whose wording was not found: the settings page refuses new
+      // wording until it is, so the recipe's never silently replaces it.
+      const missing = pack.templates.map((t) => t.ref).filter((ref) => !(ref in texts))
+      return {
+        ...f,
+        ...(firstText != null ? { body_text: firstText, body_texts: texts } : {}),
+        ...(missing.length ? { wording_missing: missing } : {}),
+      }
+    }),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +528,20 @@ async function applyStageDiff(db, { locationId, row, next }) {
   const nextSlugs = stageSlugs(next)
   const nextRows = stagesFor(next)
 
+  // 0. A final name that an orphan or archived row on the board already holds
+  //    would only fail the UNIQUE (pipeline_id, name) halfway through the
+  //    edit, so it is refused here, before any write. Same comparison as the
+  //    parser's duplicate-name rule: case-insensitive, trimmed.
+  const normName = (n) => String(n ?? '').trim().toLowerCase()
+  const heldByOthers = new Set(
+    (stageRows || [])
+      .filter((s) => !nextSlugs.has(s.slug) && !storedSlugs.has(s.slug))
+      .map((s) => normName(s.name)),
+  )
+  if (nextRows.some((s) => heldByOthers.has(normName(s.name)))) {
+    return fail(409, STAGE_NAME_TAKEN_ERROR, { code: 'stage_name_taken' })
+  }
+
   // 1. Every removal is checked before anything is written, so a refusal
   //    leaves the board exactly as it was.
   const removals = []
@@ -524,21 +630,69 @@ async function applyStageDiff(db, { locationId, row, next }) {
     .map((s) => ({ s, existing: bySlug.get(s.slug) }))
     .filter(({ s, existing }) => existing && existing.name !== s.name)
   const stillParked = new Set()
-  // A failure after parking puts every still-parked stage back on its old
-  // name, best-effort, so a board never shows a __tmp_ column. A restore that
-  // fails is logged (the next save of the board renames it again).
+  // What each renamed stage is called in the database right now.
+  const currentName = new Map(renamed.map(({ existing }) => [existing.id, existing.name]))
+  const rename = async (stageId, name) => {
+    const { error } = await db
+      .from('pipeline_stages')
+      .update({ name })
+      .eq('id', stageId)
+      .eq('location_id', locationId)
+      .eq('pipeline_id', row.id)
+      .select('id')
+    if (error) return error
+    currentName.set(stageId, name)
+    return null
+  }
+  // Rows step 5 inserted, and the final names step 6 landed.
+  const insertedIds = []
+  const landedFinal = new Map()
+  // A write that failed on a unique cannot succeed on a second try.
+  const renameRetry = async (stageId, name) => {
+    let error = await rename(stageId, name)
+    if (error && error.code !== '23505') error = await rename(stageId, name)
+    return error
+  }
+  // A failure after parking rolls the edit back: (a) the rows this call
+  // inserted are deleted (they hold no deals, and one may hold a renamed
+  // stage's original name); (b) step 6 renames that already landed are undone,
+  // in reverse, onto a temporary name; (c) every renamed stage goes back to its
+  // ORIGINAL name. A stage whose original name still cannot be restored is left
+  // on the real name it last held, never a temporary one, and logged.
   const unpark = async () => {
-    for (const { existing } of renamed) {
-      if (!stillParked.has(existing.id)) continue
+    for (const id of insertedIds) {
       const { error } = await db
         .from('pipeline_stages')
-        .update({ name: existing.name })
-        .eq('id', existing.id)
+        .delete()
+        .eq('id', id)
         .eq('location_id', locationId)
         .eq('pipeline_id', row.id)
-        .eq('name', tempStageName(existing.id))
-        .select('id')
-      if (error) logError(MODULE, 'parked stage name not restored', { locationId, stageId: existing.id, err: error.message })
+      if (error) logError(MODULE, 'inserted stage not removed after a failed edit', { locationId, boardId: row.id, stageId: id, err: error.message })
+    }
+    for (const { existing } of [...renamed].reverse()) {
+      const now = currentName.get(existing.id)
+      if (now === existing.name || now === tempStageName(existing.id)) continue
+      const error = await renameRetry(existing.id, tempStageName(existing.id))
+      if (error) logError(MODULE, 'renamed stage not re-parked', { locationId, stageId: existing.id, err: error.message })
+    }
+    for (const { existing } of renamed) {
+      if (currentName.get(existing.id) === existing.name) continue
+      let error = await renameRetry(existing.id, existing.name)
+      const fallback = landedFinal.get(existing.id)
+      if (error && fallback && currentName.get(existing.id) !== fallback) {
+        // Never leave it on a temporary name: take the final name it landed.
+        const fbError = await rename(existing.id, fallback)
+        if (fbError) logError(MODULE, 'stage could not take its landed name back', { locationId, stageId: existing.id, err: fbError.message })
+      }
+      if (error) logError(MODULE, 'parked stage name not restored', { locationId, stageId: existing.id, name: currentName.get(existing.id), originalName: existing.name, err: error.message })
+    }
+    const left = renamed.filter(({ existing }) => currentName.get(existing.id) !== existing.name)
+    if (left.length) {
+      logError(MODULE, 'stage names left changed after a failed edit', {
+        locationId,
+        boardId: row.id,
+        stages: left.map(({ existing }) => ({ stageId: existing.id, name: currentName.get(existing.id), originalName: existing.name })),
+      })
     }
   }
   for (const { existing } of renamed) {
@@ -547,6 +701,7 @@ async function applyStageDiff(db, { locationId, row, next }) {
       await unpark()
       return failed
     }
+    currentName.set(existing.id, tempStageName(existing.id))
     stillParked.add(existing.id)
   }
 
@@ -566,6 +721,7 @@ async function applyStageDiff(db, { locationId, row, next }) {
       await unpark()
       return fail(500, 'Could not add the new stages.')
     }
+    insertedIds.push(...inserted.map((r) => r.id))
   }
 
   // 6. Kept stages take their final name AND column position from the
@@ -584,6 +740,10 @@ async function applyStageDiff(db, { locationId, row, next }) {
     if (failed) {
       await unpark()
       return failed
+    }
+    if (change.name) {
+      currentName.set(existing.id, change.name)
+      landedFinal.set(existing.id, change.name)
     }
     stillParked.delete(existing.id)
   }

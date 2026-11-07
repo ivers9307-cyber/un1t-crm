@@ -252,3 +252,13 @@ describe('INTEGONE.3 — the hub is the only integrations row for health, number
     expect(ids).toEqual(['integrations-hub', 'status-page', 'webhook-dead-letter'])
   })
 })
+
+describe('PIPEBUILD.5h — Pipelines row', () => {
+  it('sits in the workspace group, manager-gated, at /settings/pipelines', () => {
+    const group = SETTINGS_TREE.find((g) => g.id === 'workspace')
+    const row = group.rows.find((r) => r.id === 'pipelines')
+    expect(row).toBeTruthy()
+    expect(row.href).toBe('/settings/pipelines')
+    expect(row.gate).toEqual({ roles: MANAGER_ROLES })
+  })
+})

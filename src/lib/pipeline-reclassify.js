@@ -34,7 +34,7 @@ import { routeContact, CLAIM_BOARD_MODULES, OFFER_MODULES } from '../../shared/p
 import { paidClaimFromSnapshot } from '../../shared/pipelines/paid-trial.js'
 import {
   loadClaimsForLocation, loadProgrammeRules, pendingProgrammeClaims, upsertProgrammeClaims,
-  upsertBoardClaims,
+  upsertBoardClaims, disabledOfferBoardIds,
 } from './pipeline-claims.js'
 // PIPEBUILD.3d — configured offer boards (module `offer`): their config is
 // parsed here and their claims loaded once per run.
@@ -193,15 +193,21 @@ export async function reclassifyAllContacts(db, args) {
   // A derived board whose module is not registered is SKIPPED and REPORTED,
   // never fatal — Stillorgan has a 'returning' pipeline whose module is
   // deliberately unregistered (0 deals, and it cannot fill).
-  const { data: pipelineRows, error: pipelinesErr } = await db
+  //
+  // PIPEBUILD.5o — every board at the location is read, the switched-on ones
+  // run, and a SWITCHED-OFF offer board (board_type set, enabled false) is
+  // held below: its people stay where they are this run. One read, so an
+  // unreadable one fails the run (places nobody) for both.
+  const { data: locationPipelineRows, error: pipelinesErr } = await db
     .from('pipelines')
     .select(PIPELINE_COLS)
     .eq('location_id', locationId)
-    .eq('enabled', true)
   if (pipelinesErr) {
     await markRun(db, runId, { status: 'failed', error_message: `pipeline load: ${pipelinesErr.message}` }, startedAt)
     return { ok: false, error: `pipeline load: ${pipelinesErr.message}`, run_id: runId }
   }
+  const pipelineRows = (locationPipelineRows || []).filter((p) => p && p.enabled !== false)
+  const switchedOffOfferIds = new Set(disabledOfferBoardIds(locationPipelineRows))
 
   // HATCHPIPE.2 — a dry run may preview a board that is still switched off
   // (Hatch's acquisition row before it is re-enabled). Its disabled rows with
@@ -271,6 +277,18 @@ export async function reclassifyAllContacts(db, args) {
       continue
     }
     activePipelines.push({ ...p, mod })
+  }
+  // PIPEBUILD.5o — a switched-off offer board is HELD like an unparseable one:
+  // its open deals are read so its people are left exactly where they are (no
+  // move, no deal on another board, so no other board's follow-up starts),
+  // and no stage of it is a target. Not reported as skipped: it is not
+  // running. A dry run previewing that very board (includeDisabledBoardIds)
+  // runs it instead.
+  if (switchedOffOfferIds.size > 0) {
+    const running = new Set(boardRows.map((p) => p.id))
+    for (const p of locationPipelineRows || []) {
+      if (switchedOffOfferIds.has(p.id) && !running.has(p.id)) heldPipelines.push(p)
+    }
   }
 
   // HATCHPIPE.2 — where this run's inputs come from. One location reads one

@@ -19,7 +19,7 @@ import { PIPELINE_MODES, getBoardModule } from '../../shared/pipelines/index.js'
 // boards, and the trial's own credits are never a Class Pack.
 import { routeContact, CLAIM_BOARD_MODULES, OFFER_MODULES, BOARD_KEYS } from '../../shared/pipelines/router.js'
 import { loadPlacementClaims, loadBoardsForLocation, loadPackGuardForContact, placementPackGuard } from './pipeline-claims.js'
-import { placementDescriptors } from './pipeline-offer-claims.js'
+import { placementDescriptors, offerPlacementSilence } from './pipeline-offer-claims.js'
 import { findGlofoxCrossoverContact, recordGlofoxCrossover } from './glofox-crossover.js'
 import { upsertContactStudio } from './contact-studios.js'
 import { hasBookableMembership } from './person-accounts.js'
@@ -566,16 +566,23 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   const now = Number.isFinite(opts?.now) ? opts.now : Date.now()
   let boards = null
   let claims = null
+  // PIPEBUILD.5o — the location's switched-off offer boards, from the same
+  // read as the boards (loadBoardsForLocation), so an unreadable read places
+  // nobody. Pre-loaded boards bring them as opts.disabledOfferIds (absent =
+  // none, as loadPlacementClaims answers).
+  let disabledOfferIds = []
   if (opts?.claimsError) {
     return { action: 'error', error: `claims unavailable: ${opts.claimsError}` }
   }
   if (opts?.claims !== undefined) {
     if (Array.isArray(opts.boards)) {
       boards = opts.boards
+      disabledOfferIds = Array.isArray(opts.disabledOfferIds) ? opts.disabledOfferIds : []
     } else {
       const boardsRes = await loadBoardsForLocation(db, locationId)
       if (!boardsRes.ok) return { action: 'error', error: `claims unavailable: ${boardsRes.reason}` }
       boards = boardsRes.boards
+      disabledOfferIds = boardsRes.disabledOfferIds || []
     }
     claims = opts.claims
   } else {
@@ -583,7 +590,9 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     if (!placement.ok) return { action: 'error', error: `claims unavailable: ${placement.reason}` }
     boards = placement.boards
     claims = placement.claims
+    disabledOfferIds = placement.disabledOfferIds || []
   }
+  const switchedOff = new Set(disabledOfferIds)
   const derivedBoards = (boards || []).filter((b) => b.mode === PIPELINE_MODES.DERIVED)
   // PIPEBUILD.3e — an offer board is a claim board too (its claims arrive as
   // claims.offers).
@@ -615,18 +624,47 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   }
   const pipelineId = targetBoard.id
 
+  // PIPEBUILD.5m — the FIRST placement onto an offer board (a create, or a
+  // deal arriving from another board) fires the board's stage follow-up only
+  // when the person's claim started at or after the board's baseline_at. An
+  // older claim, or one whose time is unknown, places silently: the deal is
+  // written and the result carries { silent: true, silent_reason }, which
+  // every caller (and triggerSequencesForDealPlacement) honours. Built-in
+  // boards (board_type null) and moves within the offer board are unchanged.
+  // Offers not read (refused, or pre-loaded claims without them) are their own
+  // reason; placementDescriptors holds every offer board then, so it is a
+  // backstop that should not arise.
+  const arrivalSilence = !targetBoard.board_type
+    ? null
+    : (claims?.offers instanceof Map
+        ? offerPlacementSilence(targetBoard, claims.offers.get(targetBoard.key) ?? null)
+        : 'offers_unread')
+  const silentOnArrival = arrivalSilence ? { silent: true, silent_reason: arrivalSilence } : {}
+
   // With claim boards the open deal may sit on ANY enabled board here (it
   // follows the person); without them, on the primary as before. Two open
   // deals (a public form raced a move) is a person on two boards: the deal on
   // the TARGET board is kept, the rest are closed 'lost' (mig 598's own rule
   // for duplicates) and counted. A deal on a DISABLED board is invisible to
   // the nightly pass and is left alone.
+  //
+  // PIPEBUILD.5o — a person with an open deal on a SWITCHED-OFF offer board is
+  // left exactly where they are (no move, no create elsewhere, so nothing
+  // fires), with or without claim boards running: the owner switched the
+  // board off to edit it, and placing its people on another board would start
+  // that board's follow-ups. The nightly pass holds them the same way. They
+  // are placed again once the board is back on (silently, by its baseline).
   let existing = null
   let duplicatesClosed = 0
+  let open = null
+  if (switchedOff.size > 0 || claimBoards.length > 0) {
+    open = await findOpenDealsAtLocation(db, contactId, locationId)
+    if (open === null) return { action: 'error', error: 'open deals unreadable' }
+    const onOff = switchedOff.size > 0 ? open.find((d) => switchedOff.has(d.pipeline_id)) : null
+    if (onOff) return { action: 'leave', deal_id: onOff.id, stage_slug: null, reason: 'board_switched_off' }
+  }
   if (claimBoards.length > 0) {
     const enabledIds = new Set((boards || []).filter((b) => b.enabled !== false).map((b) => b.id))
-    const open = await findOpenDealsAtLocation(db, contactId, locationId)
-    if (open === null) return { action: 'error', error: 'open deals unreadable' }
     const visible = open.filter((d) => enabledIds.has(d.pipeline_id))
     // PIPEBUILD.3e — a person with an open deal on a HELD offer board is left
     // exactly as they are (the nightly pass's rule): no move, no create, no
@@ -684,7 +722,7 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
       .select('id')
       .single()
     if (error) return { action: 'error', error: error.message }
-    return { action: 'create', deal_id: data.id, stage_slug: resolvedSlug, pipeline_id: pipelineId, ...dup }
+    return { action: 'create', deal_id: data.id, stage_slug: resolvedSlug, pipeline_id: pipelineId, ...silentOnArrival, ...dup }
   }
 
   // EXISTING deal — move iff the classifier says we should be in a
@@ -718,6 +756,9 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     pipeline_id: pipelineId,
     location_id: locationId,
     ...(crossBoard ? { from_board: fromBoard, to_board: targetBoard.key } : {}),
+    // Arriving on the offer board (from another board, or a deal that named
+    // none) is its first placement; a move within it fires as before.
+    ...(existing.pipeline_id !== pipelineId ? silentOnArrival : {}),
     ...dup,
   }
 }
@@ -2391,7 +2432,12 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       logWarn('glofox-sync', 'board claims unreadable; no pack stamp, no placement this sync', { locationId, contactId, reason: placement.reason })
     } else if (placement.claimBoards) {
       // The boards ride along so ensureDealForContact reads `pipelines` no more.
-      placementOpts = { claims: placement.claims, boards: placement.boards }
+      placementOpts = {
+        claims: placement.claims,
+        boards: placement.boards,
+        // PIPEBUILD.5o — the switched-off offer boards, from the same read.
+        ...(placement.disabledOfferIds ? { disabledOfferIds: placement.disabledOfferIds } : {}),
+      }
       // PIPEBUILD.3g/3h — the €39 claim over EVERY purchase, or a live
       // trial_purchase offer claim (its own, possibly longer, window): an
       // offer trial's credits are the trial's too, never a Class Pack. The
@@ -2526,6 +2572,8 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
         // PIPE3.7 — what the router's programme match and the €39 rules read.
         // PIPEBUILD.3e — and an offer board's (its lead-source entry dates the
         // claim from last_lead_source_at; the persisted row is the only source).
+        // PIPEBUILD.5m — created_at (above) dates a match on the original
+        // lead_source; the claim loader reads it off the persisted row too.
         lead_source: m.lead_source ?? ex.lead_source ?? null,
         last_lead_source: ex.last_lead_source ?? null,
         last_lead_source_at: ex.last_lead_source_at ?? null,
@@ -2637,7 +2685,11 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
   // landed moves on the un1t.online, €39 and offer boards, and its offer-board
   // creates (TDSEQ.1 / STILL39SEQ.1 / PIPEBUILD.3d).
   let stageChangeTriggerResult = null
-  if (dealResult?.action === 'move') {
+  if (dealResult?.silent === true) {
+    // PIPEBUILD.5m — a first offer-board placement on a claim older than the
+    // board's baseline (or of unknown age): the deal is written, nothing fires.
+    stageChangeTriggerResult = { fired: false, silent_reason: dealResult.silent_reason ?? null }
+  } else if (dealResult?.action === 'move') {
     try {
       const { triggerSequencesForDealPlacement } = await import('./sequences/triggers.js')
       await triggerSequencesForDealPlacement(contactId, dealResult, {

@@ -1078,6 +1078,19 @@ describe('triggerSequencesForDealPlacement — configured boards (PIPEBUILD.3e)'
     })
   })
 
+  // PIPEBUILD.5m — ensureDealForContact marks a first offer-board placement on
+  // a claim older than the board's baseline silent; the adapter starts nothing.
+  it('a silent placement (create or move) enrols nobody and reads nothing', async () => {
+    const db = boardDb()
+    createServerClient.mockReturnValue(db)
+    await triggers.triggerSequencesForDealPlacement('c1', { ...CREATE, silent: true, silent_reason: 'claim_before_baseline' }, OPTS)
+    await triggers.triggerSequencesForDealPlacement('c1', { action: 'move', from_slug: 'new_lead', to_slug: 'corp_new', silent: true, silent_reason: 'claim_time_unknown' }, { ...OPTS, configuredBoardsOnly: true })
+    expect(enrolContacts).not.toHaveBeenCalled()
+    expect(db.from).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', { reason: 'claim_before_baseline', dealLocationId: 'loc-1' })
+    expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', { reason: 'claim_time_unknown', dealLocationId: 'loc-1' })
+  })
+
   describe('configuredBoardsOnly (the place-now path)', () => {
     it('a legacy-board move enrols nobody and never reads the contact', async () => {
       const db = boardDb({ board: { id: 'pl-1', location_id: 'loc-1', board_type: null }, contact: { id: 'c1', location_id: 'loc-1', pipeline_stage_slug: 'converted' } })

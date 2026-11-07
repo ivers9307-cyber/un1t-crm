@@ -3,7 +3,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   splitOfferBoards, loadOfferClaimsForLocation, loadOfferClaimsForContact,
-  offerPurchaseEntries, withoutOfferPurchases, placementDescriptors,
+  offerPurchaseEntries, withoutOfferPurchases, placementDescriptors, offerPlacementSilence,
 } from './pipeline-offer-claims.js'
 import { loadClaimsForLocation, pendingProgrammeClaims } from './pipeline-claims.js'
 
@@ -98,6 +98,28 @@ describe('placementDescriptors — baseline (PIPEBUILD.5c)', () => {
   })
 })
 
+// PIPEBUILD.5m — an event path's first placement onto an offer board fires
+// only on a claim that started at or after the board's baseline.
+describe('offerPlacementSilence (PIPEBUILD.5m)', () => {
+  const board = { baseline_at: iso(T0) }
+  it('a claim at or after the baseline fires (null)', () => {
+    expect(offerPlacementSilence(board, { claimedAt: iso(T0) })).toBeNull()
+    expect(offerPlacementSilence(board, { claimedAt: iso(T0 + DAY) })).toBeNull()
+  })
+  it('a claim before the baseline is silent', () => {
+    expect(offerPlacementSilence(board, { claimedAt: iso(T0 - 1) })).toBe('claim_before_baseline')
+  })
+  it('an unknown claim time is silent: no claim, no claimedAt, or an unreadable one', () => {
+    expect(offerPlacementSilence(board, null)).toBe('claim_time_unknown')
+    expect(offerPlacementSilence(board, { start: T0 + DAY })).toBe('claim_time_unknown')
+    expect(offerPlacementSilence(board, { claimedAt: 'not a date' })).toBe('claim_time_unknown')
+  })
+  it('a board with no readable baseline is silent', () => {
+    expect(offerPlacementSilence({ baseline_at: null }, { claimedAt: iso(T0) })).toBe('no_baseline')
+    expect(offerPlacementSilence({}, { claimedAt: iso(T0) })).toBe('no_baseline')
+  })
+})
+
 describe('offerPurchaseEntries / withoutOfferPurchases', () => {
   it('only enabled, parseable trial_purchase offer boards give an entry', () => {
     const trial = board('o_reset', { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] })
@@ -126,7 +148,7 @@ describe('loadOfferClaimsForLocation', () => {
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }], now: T0 })
     expect(out.ok).toBe(true)
     expect([...out.offersByContact.keys()]).toEqual(['c1'])
-    expect(out.offersByContact.get('c1').get('o_reset')).toEqual({ start: T0, end: T0 + 14 * DAY, source: 'trial_purchase' })
+    expect(out.offersByContact.get('c1').get('o_reset')).toEqual({ start: T0, end: T0 + 14 * DAY, source: 'trial_purchase', claimedAt: iso(T0) })
     expect(out.pending).toEqual([])
   })
   it('trialPurchaseByLandingPath', async () => {
@@ -147,7 +169,7 @@ describe('loadOfferClaimsForLocation', () => {
       purchase('t2', 'c2', { landing_path: '/50plus', duration_days: 14 }),
     ] })
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }, { id: 'c2' }], now: T0 })
-    expect(out.offersByContact.get('c1').get('o_lp')).toEqual({ start: T0, end: T0 + 21 * DAY, source: 'trial_purchase' })
+    expect(out.offersByContact.get('c1').get('o_lp')).toEqual({ start: T0, end: T0 + 21 * DAY, source: 'trial_purchase', claimedAt: iso(T0) })
     expect(out.offersByContact.get('c2').get('o_lp').end).toBe(T0 + 21 * DAY)
   })
   it('trialPurchaseByPageId', async () => {
@@ -159,6 +181,7 @@ describe('loadOfferClaimsForLocation', () => {
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }, { id: 'c2' }], now: T0 })
     expect([...out.offersByContact.keys()]).toEqual(['c1'])
     expect(out.offersByContact.get('c1').get('o_pg').start).toBe(T0 - 1000)   // paid_at when never granted
+    expect(out.offersByContact.get('c1').get('o_pg').claimedAt).toBe(iso(T0 - 1000))   // PIPEBUILD.5m
   })
   it('corpPromoGranted (the claim starts at created_at, never updated_at)', async () => {
     const boards = [board('o_corp', { type: 'corp_promo', values: ['acme'] }, { duration_days: 7 })]
@@ -170,22 +193,35 @@ describe('loadOfferClaimsForLocation', () => {
     ] })
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }], now: T0 })
     expect([...out.offersByContact.keys()]).toEqual(['c1'])
-    expect(out.offersByContact.get('c1').get('o_corp')).toEqual({ start: T0, end: T0 + 7 * DAY, source: 'corp_promo' })
+    expect(out.offersByContact.get('c1').get('o_corp')).toEqual({ start: T0, end: T0 + 7 * DAY, source: 'corp_promo', claimedAt: iso(T0) })
   })
   it('leadSourceRecordedOnce', async () => {
     const boards = [board('o_lead', { type: 'lead_source', values: ['meta_x'] })]
-    const contacts = [{ id: 'c1', last_lead_source: 'META_X', last_lead_source_at: iso(T0 - DAY) }, { id: 'c2', lead_source: 'meta_x' }, { id: 'c3', last_lead_source: 'other' }]
+    // PIPEBUILD.5m — every claim is dated by the contact's own times: a last
+    // touch by last_lead_source_at (else created_at), the original lead_source
+    // by created_at (it is set at creation), and `now` only with neither.
+    const contacts = [
+      { id: 'c1', last_lead_source: 'META_X', last_lead_source_at: iso(T0 - DAY), created_at: iso(T0 - 90 * DAY) },
+      { id: 'c2', lead_source: 'meta_x', created_at: iso(T0 - 30 * DAY) },
+      { id: 'c3', last_lead_source: 'other' },
+      { id: 'c4', last_lead_source: 'meta_x', created_at: iso(T0 - 40 * DAY) },
+      { id: 'c5', lead_source: 'meta_x' },
+    ]
     const first = fakeDb({ pipeline_board_claims: [] })
     const out = await loadOfferClaimsForLocation(first.db, { locationId: LOC, boards, contacts, now: T0 })
     expect(out.pending).toEqual([
       { contact_id: 'c1', board_key: 'o_lead', claimed_at: iso(T0 - DAY), source: 'lead_source' },
-      { contact_id: 'c2', board_key: 'o_lead', claimed_at: iso(T0), source: 'lead_source' },
+      { contact_id: 'c2', board_key: 'o_lead', claimed_at: iso(T0 - 30 * DAY), source: 'lead_source' },
+      { contact_id: 'c4', board_key: 'o_lead', claimed_at: iso(T0 - 40 * DAY), source: 'lead_source' },
+      { contact_id: 'c5', board_key: 'o_lead', claimed_at: iso(T0), source: 'lead_source' },
     ])
-    expect(out.offersByContact.get('c1').get('o_lead')).toEqual({ start: T0 - DAY, end: T0 - DAY + 14 * DAY, source: 'lead_source' })
+    expect(out.offersByContact.get('c1').get('o_lead')).toEqual({ start: T0 - DAY, end: T0 - DAY + 14 * DAY, source: 'lead_source', claimedAt: iso(T0 - DAY) })
     // Second run: stored claims exist, nothing pending, claim unchanged.
     const second = fakeDb({ pipeline_board_claims: [
       { contact_id: 'c1', location_id: LOC, board_key: 'o_lead', claimed_at: iso(T0 - DAY), source: 'lead_source' },
-      { contact_id: 'c2', location_id: LOC, board_key: 'o_lead', claimed_at: iso(T0), source: 'lead_source' },
+      { contact_id: 'c2', location_id: LOC, board_key: 'o_lead', claimed_at: iso(T0 - 30 * DAY), source: 'lead_source' },
+      { contact_id: 'c4', location_id: LOC, board_key: 'o_lead', claimed_at: iso(T0 - 40 * DAY), source: 'lead_source' },
+      { contact_id: 'c5', location_id: LOC, board_key: 'o_lead', claimed_at: iso(T0), source: 'lead_source' },
     ] })
     const again = await loadOfferClaimsForLocation(second.db, { locationId: LOC, boards, contacts, now: T0 + 3 * DAY })
     expect(again.pending).toEqual([])
@@ -197,7 +233,7 @@ describe('loadOfferClaimsForLocation', () => {
     const { db } = fakeDb({ pipeline_board_claims: [] })
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1', glofox_membership_plan: 'The Elites Trial' }, { id: 'c2', glofox_membership_plan: 'Elite Membership' }], now: T0 })
     expect(out.pending).toEqual([{ contact_id: 'c1', board_key: 'o_plan', claimed_at: iso(T0), source: 'glofox_plan' }])
-    expect(out.offersByContact.get('c1').get('o_plan')).toEqual({ start: T0, end: T0 + 14 * DAY, source: 'glofox_plan' })
+    expect(out.offersByContact.get('c1').get('o_plan')).toEqual({ start: T0, end: T0 + 14 * DAY, source: 'glofox_plan', claimedAt: iso(T0) })
     expect(out.offersByContact.has('c2')).toBe(false)
   })
   it('tagRecorded', async () => {

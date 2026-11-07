@@ -163,17 +163,21 @@ export async function POST(request, props) {
   // only when ensureDealForContact reports action 'move' with two different
   // slugs, so a re-click that lands on the same stage enrols nobody
   // (PIPEBUILD.3e: or a 'create' on an offer board, its entry stage).
-  // Best-effort — the dismissal itself is already saved.
-  try {
-    const { triggerSequencesForDealPlacement } = await import('@/lib/sequences/triggers')
-    // PIPEBUILD.3e — a create carries no location_id: it was made on this
-    // studio's board. The adapter fires a create only on an offer board.
-    await triggerSequencesForDealPlacement(id, deal, {
-      dealLocationId: deal?.location_id ?? (deal?.action === 'create' ? boardLocationId : undefined),
-      pipelineId: deal?.pipeline_id,
-    })
-  } catch {
-    // The helper swallows its own errors; this only guards the import.
+  // Best-effort — the dismissal itself is already saved. PIPEBUILD.5m — a
+  // placement ensureDealForContact marked silent (a first offer-board placement
+  // on a claim older than the board's baseline) fires nothing.
+  if (deal?.silent !== true) {
+    try {
+      const { triggerSequencesForDealPlacement } = await import('@/lib/sequences/triggers')
+      // PIPEBUILD.3e — a create carries no location_id: it was made on this
+      // studio's board. The adapter fires a create only on an offer board.
+      await triggerSequencesForDealPlacement(id, deal, {
+        dealLocationId: deal?.location_id ?? (deal?.action === 'create' ? boardLocationId : undefined),
+        pipelineId: deal?.pipeline_id,
+      })
+    } catch {
+      // The helper swallows its own errors; this only guards the import.
+    }
   }
 
   // Actor attribution — the deals trigger logs "Pipeline: moved to Cold"
