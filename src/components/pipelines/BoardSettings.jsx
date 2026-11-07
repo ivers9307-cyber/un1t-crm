@@ -32,6 +32,9 @@ export const TURN_OFF_CONFIRM = 'While the board is off, nobody new is placed an
 export const FILLED_IN_NOTE = 'These messages were filled in when they were sent to Meta. If you change the offer name, sign-off or offer length, change the wording of each message too.'
 // RAILS.1 — installing afresh is owner work; the server refuses it too.
 export const OWNER_ONLY_INSTALL_NOTE = 'Only an owner can install this follow-up. Ask an owner, or change the wording once it is set up.'
+export const OWNER_ONLY_REJECTED_NOTE = 'Meta rejected this wording. Ask an owner to install it again.'
+// RAILS.2 — switching off retires the sequence and a later install goes back to Meta.
+export const FOLLOWUP_OFF_CONFIRM = 'This stops the follow-up for everyone now, including people part-way through it, and retires its sequence. Switching it on again sends the message to WhatsApp for approval again, which can take hours.'
 export const START_FROM_STANDARD = 'Start from the standard wording'
 export const BASELINE_NOTE = 'Switching a board on never messages people who already qualify. They are placed that night without any messages; only people who qualify after that get the follow-ups.'
 
@@ -153,6 +156,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
 
   const [editing, setEditing] = useState(null)        // { packKey, stageId, before }
   const [confirm, setConfirm] = useState(null)        // { stage, pack }
+  const [confirmOffRow, setConfirmOffRow] = useState(null) // { stage, pack }
   const [fuBusy, setFuBusy] = useState(null)          // stage id
   const [fuNotes, setFuNotes] = useState({})          // stage id -> { error?, info? }
   const [stale, setStale] = useState(null)            // { labels, stageIds } after a save changed filled-in values
@@ -359,6 +363,14 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
     if (done) { setEditing(null); clearStale(stage.id) }
   }
 
+  async function confirmFollowupOff() {
+    if (!confirmOffRow) return
+    const { stage, pack } = confirmOffRow
+    const done = await followupAction(stage, pack, 'off')
+    setConfirmOffRow(null)
+    if (done) clearStale(stage.id)
+  }
+
   const staleNames = stale
     ? stale.stageIds.map((id) => (board.stages || []).find((st) => st.id === id)?.name).filter(Boolean)
     : []
@@ -518,7 +530,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                     {installBlocked && <p className="text-sm text-amber-700">{OWNER_ONLY_INSTALL_NOTE}</p>}
                   </div>
                 )}
-                {pack && rejected && <p className="mt-2 text-sm text-red-700">{REJECTED_NOTE}</p>}
+                {pack && rejected && <p className="mt-2 text-sm text-red-700">{canEdit ? REJECTED_NOTE : OWNER_ONLY_REJECTED_NOTE}</p>}
                 {pack && wordingUnknown && canEditWording && <p className="mt-2 text-sm text-amber-700">{WORDING_UNKNOWN_NOTE}</p>}
                 {note.error && <p className="mt-2 text-sm text-red-700" role="alert">{note.error}</p>}
                 {pack && canEditWording && !isEditing && (
@@ -528,7 +540,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                     </Button>
                     {canEdit && row && STOPPABLE.has(rowState) && (
                       <Button type="button" size="sm" variant="secondary" loading={busy} disabled={!!fuBusy && !busy}
-                        onClick={async () => { if (await followupAction(stage, pack, 'off')) clearStale(stage.id) }}>
+                        onClick={() => setConfirmOffRow({ stage, pack })}>
                         Switch off
                       </Button>
                     )}
@@ -565,6 +577,20 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
       >
         <p className="text-sm text-un1t-text">{TURN_OFF_CONFIRM}</p>
         {offError && <p className="mt-2 text-sm text-red-700" role="alert">{offError}</p>}
+      </Modal>
+
+      <Modal
+        open={!!confirmOffRow}
+        onClose={() => { if (!fuBusy) setConfirmOffRow(null) }}
+        title="Switch off this follow-up"
+        footer={(
+          <>
+            <Button type="button" variant="secondary" disabled={!!fuBusy} onClick={() => setConfirmOffRow(null)}>Cancel</Button>
+            <Button type="button" loading={!!fuBusy} onClick={confirmFollowupOff}>Switch off</Button>
+          </>
+        )}
+      >
+        <p className="text-sm text-un1t-text">{FOLLOWUP_OFF_CONFIRM}</p>
       </Modal>
 
       <Modal

@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import BoardSettings, {
   REPLACE_CONFIRM, SWITCH_OFF_NOTE, LEGACY_NOTICE, WORDING_UNKNOWN_NOTE, REJECTED_NOTE, TURN_OFF_CONFIRM,
-  OLD_WORDING_UNKNOWN_NOTE, FILLED_IN_NOTE, START_FROM_STANDARD, OWNER_ONLY_INSTALL_NOTE, staleWordingNotice,
+  OLD_WORDING_UNKNOWN_NOTE, FILLED_IN_NOTE, START_FROM_STANDARD, OWNER_ONLY_INSTALL_NOTE, OWNER_ONLY_REJECTED_NOTE, FOLLOWUP_OFF_CONFIRM, staleWordingNotice,
 } from './BoardSettings.jsx'
 import { LEGACY_BOARD_ERROR } from '@/lib/pipeline-boards'
 import { RECIPES } from '@shared/pipelines/recipes.js'
@@ -193,13 +193,48 @@ describe('BoardSettings', () => {
     expect(screen.queryByText(REPLACE_CONFIRM)).toBeNull()
   })
 
-  it('switch off calls off', async () => {
+  it('switch off asks first, then calls off on Confirm', async () => {
     const fetchMock = stubApi()
     renderPage()
     await screen.findByLabelText(/^Board name/)
     fireEvent.click(screen.getByRole('button', { name: 'Switch off' }))
+    expect(screen.getByText('Switch off this follow-up')).toBeTruthy()
+    expect(screen.getByText(FOLLOWUP_OFF_CONFIRM)).toBeTruthy()
+    expect(FOLLOWUP_OFF_CONFIRM).toBe('This stops the follow-up for everyone now, including people part-way through it, and retires its sequence. Switching it on again sends the message to WhatsApp for approval again, which can take hours.')
+    expect(calls(fetchMock, 'PUT')).toHaveLength(0)
+    fireEvent.click(screen.getAllByRole('button', { name: 'Switch off' }).pop())
     await waitFor(() => expect(calls(fetchMock, 'PUT')).toHaveLength(1))
     expect(JSON.parse(calls(fetchMock, 'PUT')[0][1].body)).toEqual({ action: 'off', pack_key: 'after_first_class' })
+    await waitFor(() => expect(screen.queryByText(FOLLOWUP_OFF_CONFIRM)).toBeNull())
+  })
+
+  it('Cancel on the switch off confirm posts nothing', async () => {
+    const fetchMock = stubApi()
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    fireEvent.click(screen.getByRole('button', { name: 'Switch off' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByText(FOLLOWUP_OFF_CONFIRM)).toBeNull())
+    expect(calls(fetchMock, 'PUT')).toHaveLength(0)
+  })
+
+  it('a 409 on switch off closes the confirm and shows the route error', async () => {
+    stubApi({ put: () => json(409, { success: false, error: 'Switch the board off first.' }) })
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    fireEvent.click(screen.getByRole('button', { name: 'Switch off' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Switch off' }).pop())
+    expect(await screen.findByText('Switch the board off first.')).toBeTruthy()
+    await waitFor(() => expect(screen.queryByText(FOLLOWUP_OFF_CONFIRM)).toBeNull())
+  })
+
+  it('a rejected note tells a non-owner to ask an owner', async () => {
+    const rejected = { id: 'f2', stage_id: 's1', pack_key: 'book_first_class', state: 'rejected', version: 1, whatsapp_template_id: 't2', body_text: 'Hi {{1}}, book now.', body_texts: { main: 'Hi {{1}}, book now.' } }
+    stubApi({ canEdit: false, board: { ...BOARD, followups: [rejected, ...BOARD.followups] } })
+    renderPage()
+    expect(await screen.findByText(OWNER_ONLY_REJECTED_NOTE)).toBeTruthy()
+    expect(OWNER_ONLY_REJECTED_NOTE).toBe('Meta rejected this wording. Ask an owner to install it again.')
+    expect(screen.queryByText(REJECTED_NOTE)).toBeNull()
   })
 
   it('an unreadable wording read blocks Change wording but not Switch off', async () => {
