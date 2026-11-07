@@ -384,6 +384,17 @@ Found in the 5a final review. The nightly baseline reads only contacts whose hom
 - [ ] **Step 4:** Run `npx vitest run src/lib/glofox-sync src/lib/pipeline-offer-claims src/lib/pipeline-place-now 'src/app/api/contacts/[id]/pipeline-status'`. Expected: PASS, with the router golden test unchanged.
 - [ ] **Step 5: Commit** `PIPEBUILD.5m — a claim older than the board's baseline places silently on every event path`.
 
+### Task 7c: Hardening left from the 5a re-review
+
+**Files:** `src/lib/pipeline-boards.js`, `src/app/api/sequences/[id]/graph/agent/route.js`, `src/app/api/sequences/[id]/route.js`, plus their tests.
+
+1. **Name pre-check.** Before any write, `applyStageDiff` checks the final stage names against every row on the board that is not kept, removed or inserted. A clash returns 409 `stage_name_taken` with nothing written.
+2. **No leftover temporary names.** The unpark after a failed final rename never leaves a `__tmp_` name. Restore in the reverse order of the final updates, or retry with a fresh temporary name, and log what is left.
+3. **Agent route lock.** `graph/agent` refuses to rewrite the trigger of a retired follow-up sequence (the same `followup_retired` 409 as PUT).
+4. **Renames from the settings panel.** `PUT /api/sequences/[id]` refuses only a trigger that CHANGES on a retired sequence (compare with the stored values), so a rename from the settings panel works.
+
+- [ ] One failing test per item. Then implement, run the touched tests plus `npm run check:guardrails`, and commit `PIPEBUILD.5n — builder hardening from the 5a review`.
+
 ### Task 8: Settings row, template preview and the board list
 
 **Files:**
