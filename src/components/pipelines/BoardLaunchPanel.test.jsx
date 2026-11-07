@@ -22,6 +22,15 @@ describe('BoardLaunchPanel', () => {
     expect(screen.getByRole('button', { name: 'Turn on' }).disabled).toBe(false)
   })
 
+  it('a live follow-up WhatsApp rejected says so; the Turn on gating is unchanged', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok(DRY)))
+    render(<BoardLaunchPanel board={board} followups={[{ stage_id: 's1', state: 'live', health: 'template_rejected' }]} />)
+    expect(screen.getByText('Rejected by WhatsApp').className).toContain('text-red-700')
+    fireEvent.click(screen.getByRole('button', { name: 'Check who would enter' }))
+    await screen.findByText(/would enter this board/)
+    expect(screen.getByRole('button', { name: 'Turn on' }).disabled).toBe(false)
+  })
+
   it('stays disabled with no live or waiting follow-up, even after a dry run', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok(DRY)))
     render(<BoardLaunchPanel board={board} followups={[{ stage_id: 's1', state: 'rejected' }]} />)

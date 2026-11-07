@@ -138,6 +138,16 @@ describe('BoardSettings', () => {
     expect(screen.queryByText(OWNER_ONLY_INSTALL_NOTE)).toBeNull()
   })
 
+  it('a live row whose template WhatsApp paused says so, and keeps Switch off', async () => {
+    stubApi({ board: { ...BOARD, followups: [{ ...BOARD.followups[0], health: 'template_paused' }] } })
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    const chips = screen.getAllByText('Paused by WhatsApp')
+    expect(chips.length).toBeGreaterThan(0)
+    chips.forEach((c) => expect(c.className).toContain('text-amber-700'))
+    expect(screen.queryByText('Live')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Switch off' })).toBeTruthy()
+  })
   it('an owner sees Switch off and Install', async () => {
     stubApi()
     renderPage()

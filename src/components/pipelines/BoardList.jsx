@@ -14,15 +14,38 @@ const CHIPS = {
   draft: { label: 'Off', tone: 'bg-gray-500/10 text-gray-700' },
   off: { label: 'Off', tone: 'bg-gray-500/10 text-gray-700' },
 }
+// RAILS.3 — a row's health (derived by the server from its template's and
+// sequence's status) overrides the state's chip, so "Live" never hides a
+// template WhatsApp paused or rejected. Any other (state, health) pair keeps
+// the state's own chip: an off row is already truthful.
+const PAUSED_BY_WHATSAPP = { label: 'Paused by WhatsApp', tone: 'bg-amber-500/10 text-amber-700' }
+const REJECTED_BY_WHATSAPP = { label: 'Rejected by WhatsApp', tone: 'bg-red-500/10 text-red-700' }
+const HEALTH_CHIPS = {
+  'live:template_paused': PAUSED_BY_WHATSAPP,
+  'live:template_rejected': REJECTED_BY_WHATSAPP,
+  'live:sequence_paused': { label: 'Paused', tone: 'bg-amber-500/10 text-amber-700' },
+  'awaiting_approval:template_rejected': REJECTED_BY_WHATSAPP,
+}
 const NONE_CHIP = { label: 'None', tone: 'bg-gray-500/10 text-gray-700' }
 const PRECEDENCE = ['live', 'awaiting_approval', 'draft', 'rejected', 'off']
+
+/** The health that changes this row's chip, or null. */
+const shownHealth = (row) => (row.health && HEALTH_CHIPS[`${row.state}:${row.health}`] ? row.health : null)
 
 export function followupChip(followups, stageId) {
   const rows = (followups || []).filter((f) => f.stage_id === stageId)
   if (rows.length === 0) return NONE_CHIP
   // An unknown state ranks last, never first (indexOf gives -1).
-  const rank = (st) => { const i = PRECEDENCE.indexOf(st); return i === -1 ? PRECEDENCE.length : i }
-  const best = [...rows].sort((a, b) => rank(a.state) - rank(b.state))[0]
+  const rankIn = (list, v) => { const i = list.indexOf(v); return i === -1 ? list.length : i }
+  // The worst health shown wins a stage: rejected, then either pause, then the state order.
+  const healthRank = (r) => {
+    const h = shownHealth(r)
+    if (h === 'template_rejected') return 0
+    return h ? 1 : 2
+  }
+  const best = [...rows].sort((a, b) => (healthRank(a) - healthRank(b)) || (rankIn(PRECEDENCE, a.state) - rankIn(PRECEDENCE, b.state)))[0]
+  const health = shownHealth(best)
+  if (health) return HEALTH_CHIPS[`${best.state}:${health}`]
   return CHIPS[best.state] || NONE_CHIP
 }
 

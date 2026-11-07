@@ -66,6 +66,45 @@ describe('BoardList', () => {
     expect(container.querySelector('a button')).toBeNull()
     expect(screen.getByRole('link', { name: 'New board' })).toBeTruthy()
   })
+  // RAILS.3 — Live says when WhatsApp has paused or rejected the template.
+  it('healthTurnsLiveIntoWhatWhatsAppDid', () => {
+    const chip = (rows) => followupChip(rows.map((r) => ({ stage_id: 's', ...r })), 's')
+    const paused = chip([{ state: 'live', health: 'template_paused' }])
+    expect(paused.label).toBe('Paused by WhatsApp')
+    expect(paused.tone).toContain('text-amber-700')
+    const rejected = chip([{ state: 'live', health: 'template_rejected' }])
+    expect(rejected.label).toBe('Rejected by WhatsApp')
+    expect(rejected.tone).toContain('text-red-700')
+    const seq = chip([{ state: 'live', health: 'sequence_paused' }])
+    expect(seq.label).toBe('Paused')
+    expect(seq.tone).toContain('text-amber-700')
+    expect(chip([{ state: 'awaiting_approval', health: 'template_rejected' }]).label).toBe('Rejected by WhatsApp')
+    expect(chip([{ state: 'awaiting_approval', health: 'template_paused' }]).label).toBe('Waiting for Meta')
+    expect(chip([{ state: 'live', health: null }]).label).toBe('Live')
+    expect(chip([{ state: 'off', health: 'template_paused' }]).label).toBe('Off')
+  })
+  it('theWorstHealthWinsAStagesChip', () => {
+    const chip = (rows) => followupChip(rows.map((r) => ({ stage_id: 's', ...r })), 's')
+    expect(chip([{ state: 'live', health: null }, { state: 'live', health: 'template_paused' }]).label).toBe('Paused by WhatsApp')
+    expect(chip([{ state: 'live', health: 'template_paused' }, { state: 'awaiting_approval', health: 'template_rejected' }]).label).toBe('Rejected by WhatsApp')
+    expect(chip([{ state: 'off', health: 'template_rejected' }, { state: 'live', health: null }]).label).toBe('Live')
+  })
+  it('listShowsHealthChips', async () => {
+    const boards = [{ ...BOARDS[0], followups: [
+      { id: 'f1', stage_id: 's1', state: 'live', health: 'template_paused' },
+      { id: 'f2', stage_id: 's2', state: 'live', health: 'template_rejected' },
+      { id: 'f3', stage_id: 's3', state: 'live', health: 'sequence_paused' },
+      { id: 'f4', stage_id: 's4', state: 'off', health: 'template_paused' },
+    ] }]
+    stub({ boards, can_edit: true })
+    render(<BoardList locationId="loc1" />)
+    await screen.findByText('Summer offer')
+    expect(screen.getByText('Paused by WhatsApp').className).toContain('text-amber-700')
+    expect(screen.getByText('Rejected by WhatsApp').className).toContain('text-red-700')
+    expect(screen.getByText('Paused').className).toContain('text-amber-700')
+    expect(screen.getByText('Off')).toBeTruthy()
+    expect(screen.queryByText('Live')).toBeNull()
+  })
   it('an unknown follow-up state ranks below a known one', () => {
     const chip = followupChip([{ stage_id: 's', state: 'mystery' }, { stage_id: 's', state: 'off' }], 's')
     expect(chip.label).toBe('Off')
