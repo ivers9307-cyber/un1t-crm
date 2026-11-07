@@ -272,9 +272,17 @@ function matcherFor(board, tagAtByContact) {
   const { type, values } = board.entry
   if (type === 'lead_source') {
     return (c, now) => {
-      const touch = lower(c.last_lead_source) || (c.last_lead_source == null ? lower(c.lead_source) : '')
+      const last = lower(c.last_lead_source)
+      const touch = last || (c.last_lead_source == null ? lower(c.lead_source) : '')
       if (!touch || !values.includes(touch)) return null
-      return { claimedAt: parseMs(c.last_lead_source_at) ?? now, source: 'lead_source' }
+      // PIPEBUILD.5m — dated by the contact's own times, so a sibling-studio
+      // contact's old qualifier is never "new" on its first event. The original
+      // lead_source is set when the contact is created: created_at. A last
+      // touch is dated by last_lead_source_at, else created_at. `now` only
+      // when the row carries neither.
+      const createdMs = parseMs(c.created_at)
+      const claimedAt = last ? (parseMs(c.last_lead_source_at) ?? createdMs ?? now) : (createdMs ?? now)
+      return { claimedAt, source: 'lead_source' }
     }
   }
   if (type === 'glofox_plan') {

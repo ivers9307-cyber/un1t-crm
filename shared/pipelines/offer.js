@@ -14,6 +14,10 @@ export const requiredFields = Object.freeze([
   'lead_source',
   'last_lead_source',
   'last_lead_source_at',
+  // PIPEBUILD.5m — dates a lead_source claim matched on the original
+  // lead_source (set at creation); named here so the offer board does not
+  // depend on paid-trial's list for it.
+  'created_at',
   'glofox_membership_plan',
 ].filter((f, i, a) => a.indexOf(f) === i))
 

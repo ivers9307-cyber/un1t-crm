@@ -622,9 +622,14 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   // written and the result carries { silent: true, silent_reason }, which
   // every caller (and triggerSequencesForDealPlacement) honours. Built-in
   // boards (board_type null) and moves within the offer board are unchanged.
-  const arrivalSilence = targetBoard.board_type
-    ? offerPlacementSilence(targetBoard, claims?.offers instanceof Map ? (claims.offers.get(targetBoard.key) ?? null) : null)
-    : null
+  // Offers not read (refused, or pre-loaded claims without them) are their own
+  // reason; placementDescriptors holds every offer board then, so it is a
+  // backstop that should not arise.
+  const arrivalSilence = !targetBoard.board_type
+    ? null
+    : (claims?.offers instanceof Map
+        ? offerPlacementSilence(targetBoard, claims.offers.get(targetBoard.key) ?? null)
+        : 'offers_unread')
   const silentOnArrival = arrivalSilence ? { silent: true, silent_reason: arrivalSilence } : {}
 
   // With claim boards the open deal may sit on ANY enabled board here (it
@@ -2541,6 +2546,8 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
         // PIPE3.7 — what the router's programme match and the €39 rules read.
         // PIPEBUILD.3e — and an offer board's (its lead-source entry dates the
         // claim from last_lead_source_at; the persisted row is the only source).
+        // PIPEBUILD.5m — created_at (above) dates a match on the original
+        // lead_source; the claim loader reads it off the persisted row too.
         lead_source: m.lead_source ?? ex.lead_source ?? null,
         last_lead_source: ex.last_lead_source ?? null,
         last_lead_source_at: ex.last_lead_source_at ?? null,
