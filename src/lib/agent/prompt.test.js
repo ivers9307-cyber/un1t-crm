@@ -1139,3 +1139,20 @@ describe('MIAFIX.1 (8): buildOtherStudiosBlock', () => {
     expect(buildCachedSystem({ ...base, otherStudiosBlock: '' })).toEqual(buildCachedSystem(base))
   })
 })
+
+// PIPEBUILD.6-1 — the person's offer-board block (describeContactBoard's output).
+describe('the offer board line', () => {
+  const base = { businessName: 'B', locationName: 'Hatch Street', today: 'Saturday', knowledge: [{ category: 'faq', title: 'Q', content: 'A' }] }
+
+  it('renders in volatile only, under its heading', () => {
+    const parts = buildCustomerSystemPromptParts({ ...base, boardContextLine: 'Board: 69 trial.' })
+    expect(parts.volatile).toContain("## This person's offer board\nBoard: 69 trial.")
+    expect(parts.stable).not.toContain('Board: 69 trial.')
+    expect(parts.stable).toBe(buildCustomerSystemPromptParts(base).stable)
+  })
+
+  it('null or blank adds no heading', () => {
+    expect(buildCustomerSystemPromptParts({ ...base, boardContextLine: null }).volatile).not.toContain("offer board")
+    expect(buildCustomerSystemPromptParts({ ...base, boardContextLine: '  ' }).volatile).not.toContain("offer board")
+  })
+})

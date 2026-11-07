@@ -31,6 +31,7 @@ import { providerFor } from '@/lib/membership/source'
 import { noneSource } from '@/lib/membership/sources/none'
 import { DEFAULTS } from './settings-contract'
 import { trialDoneLineFor } from './trial-done-context'
+import { describeContactBoard } from './board-context'
 import { resolveAgentSettings } from './settings-resolve'
 import {
   shouldAgentReply,
@@ -927,6 +928,13 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       ? await trialDoneLineFor(db, { locationId, contactId: trialDoneContactId, nowMs: Date.now(), settings, studioName: loc?.name || branding.companyName || null, zone })
       : null
 
+    // PIPEBUILD.6-1 — the offer board this person is on (stage, day, entry,
+    // the studio's notes). Uncached suffix; never throws (null on any failure).
+    const boardContextContactId = conv?.contact_id || contactId || null
+    const boardContextLine = boardContextContactId
+      ? await describeContactBoard(db, { locationId, contactId: boardContextContactId, nowMs: Date.now(), zone })
+      : null
+
     // CACHE.2 — content blocks with a cache breakpoint on the location-stable
     // prefix (base prompt + knowledge). Caches cumulatively after the tool
     // block; the volatile suffix (today + identity override) stays uncached.
@@ -962,6 +970,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       multipleAccounts,
       knownContact,
       trialDoneLine,
+      boardContextLine,
     }
 
     // EFFORT.1 — operator-tunable reasoning effort (defaults to `medium`, one

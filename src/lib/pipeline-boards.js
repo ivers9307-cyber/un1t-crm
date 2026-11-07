@@ -255,6 +255,22 @@ const bodyTextOf = (components) => {
   return typeof body?.text === 'string' ? body.text : null
 }
 
+/**
+ * The names of a pack's OTHER messages (templates[1..], in order) for a follow-up,
+ * from its linked first template's stored name: the studio prefix is whatever
+ * precedes the name templateNameFor gives the first message. null when the
+ * first name does not fit the rule (not installed from this pack). Throws on a
+ * name templateNameFor refuses.
+ */
+export function otherPackTemplateNames({ board, followup, pack, firstName }) {
+  const version = Number.isInteger(followup.version) ? followup.version : undefined
+  const suffix = templateNameFor({ studioSlug: 's', boardKey: board.key, packKey: pack.key, ref: pack.templates[0].ref, version }).slice(1)
+  if (!String(firstName ?? '').endsWith(suffix)) return null
+  const studioSlug = firstName.slice(0, -suffix.length)
+  if (!studioSlug) return null
+  return pack.templates.slice(1).map((t) => templateNameFor({ studioSlug, boardKey: board.key, packKey: pack.key, ref: t.ref, version }))
+}
+
 // PIPEBUILD.5k — what each installed follow-up says now, from its WhatsApp
 // template rows (read at THIS studio only), so the settings page can show it
 // and start Change wording from it. Each follow-up gets `body_texts` by
@@ -287,15 +303,9 @@ async function withFollowupWording(db, locationId, board) {
     const first = byId.get(f.whatsapp_template_id)
     if (!pack || !first || pack.templates.length < 2) continue
     try {
-      const version = Number.isInteger(f.version) ? f.version : undefined
-      const suffix = templateNameFor({ studioSlug: 's', boardKey: board.key, packKey: pack.key, ref: pack.templates[0].ref, version }).slice(1)
-      if (!String(first.name ?? '').endsWith(suffix)) continue
-      const studioSlug = first.name.slice(0, -suffix.length)
-      if (!studioSlug) continue
-      wanted.set(f.id, pack.templates.slice(1).map((t) => ({
-        ref: t.ref,
-        name: templateNameFor({ studioSlug, boardKey: board.key, packKey: pack.key, ref: t.ref, version }),
-      })))
+      const names = otherPackTemplateNames({ board, followup: f, pack, firstName: first.name })
+      if (!names) continue
+      wanted.set(f.id, pack.templates.slice(1).map((t, i) => ({ ref: t.ref, name: names[i] })))
     } catch {
       // A name templateNameFor refuses was never installed: nothing to read.
     }

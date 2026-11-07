@@ -7255,6 +7255,19 @@ registry.registerPath({
   },
 })
 registry.registerPath({
+  method: 'get',
+  path: '/api/pipelines/{id}/report',
+  tags: ['Pipelines'],
+  security: [{ CookieAuth: [] }],
+  summary: "An offer board's report: funnel, conversion, revenue, follow-ups, health",
+  request: { params: z.object({ id: uuidLike }) },
+  description: "{ funnel, conversion, revenue, followups, health }; each block is null when its reads failed. Revenue is null without the dashboard_business permission. Needs a manager role or the sequence-builder permission at the board's studio; another studio's board and built-in boards are a 404.",
+  responses: {
+    200: { description: 'The report' },
+    ...boardErrors,
+  },
+})
+registry.registerPath({
   method: 'post',
   path: '/api/pipelines/{id}/dry-run',
   tags: ['Pipelines'],

@@ -1,6 +1,6 @@
 // PIPEBUILD.5d — GET/POST /api/locations/[id]/pipelines: a studio's boards.
 //
-//   GET  → { boards, can_edit }   every board, enabled or not, with its stages
+//   GET  → { boards, can_edit, has_whatsapp }   every board, enabled or not, with its stages
 //          (open-deal counts) and follow-ups (src/lib/pipeline-boards.js)
 //   POST { name, recipe_key, config, priority? } → { board }, created OFF
 //
@@ -14,6 +14,8 @@ import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, guardMast
 import { MANAGER_ROLES, boardCreateSchema, uuidLike } from '@/lib/schemas'
 import { canBuildSequencesAt } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
+import { logError } from '@/lib/log'
+import { locationsWithWhatsApp } from '@/lib/whatsapp-config'
 import { listBoards, createBoard } from '@/lib/pipeline-boards'
 
 export const runtime = 'nodejs'
@@ -40,7 +42,14 @@ export async function GET(request, { params }) {
   const result = await listBoards(db, locationId)
   if (!result.ok) return failure(result)
   const canEdit = guardMasterOrOwner(user, locationId) === null
-  return NextResponse.json({ success: true, data: { boards: result.boards, can_edit: canEdit } })
+  // Decoration for the recipe cards: null on a failed read, never a false "no number".
+  let hasWhatsapp = null
+  try {
+    hasWhatsapp = (await locationsWithWhatsApp(db, [locationId])).has(locationId)
+  } catch (e) {
+    logError('pipelines', 'has_whatsapp read failed', { locationId, err: e?.message })
+  }
+  return NextResponse.json({ success: true, data: { boards: result.boards, can_edit: canEdit, has_whatsapp: hasWhatsapp } })
 }
 
 export async function POST(request, { params }) {

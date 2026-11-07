@@ -14,6 +14,7 @@ import StagesStep from './wizard/StagesStep'
 import FollowupsStep from './wizard/FollowupsStep'
 import MiaNotesStep from './wizard/MiaNotesStep'
 import BoardLaunchPanel from './BoardLaunchPanel'
+import BoardReport from './BoardReport'
 import { boardStatus, followupChip } from './BoardList'
 
 export const SWITCH_OFF_NOTE = 'Switch the board off to change this.'
@@ -384,6 +385,8 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
         </div>
         <p className="mt-2 text-sm text-un1t-subtle">{BASELINE_NOTE}</p>
       </Section>
+
+      {board.board_type === 'offer' && <BoardReport boardId={boardId} stages={board.stages || []} />}
 
       {canEdit && !on && (
         <BoardLaunchPanel board={board} followups={board.followups || []} onEnabled={() => refresh()} />

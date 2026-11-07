@@ -77,6 +77,7 @@ function stubDb(answer = () => undefined) {
         eq: f('eq'), in: f('in'), gte: f('gte'), lt: f('lt'), lte: f('lte'), is: f('is'), not: f('not'), or: f('or'),
         order: (col, o) => { q.order = [col, o]; return b },
         limit: (n) => { q.limit = n; return b },
+        range: () => b,
         maybeSingle: () => b, single: () => b,
         then: (ok, bad) => Promise.resolve(finish()).then(ok, bad),
       }

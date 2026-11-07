@@ -110,6 +110,10 @@ const MANIFEST = Object.freeze({
     kind: 'display',
     reason: "HATCHCARD.1: loadUn1tCardSignals reads the board studio's OWN un1t.online bookings (.eq('source_platform', 'un1t_online'), contact_id + class_name + starts_at + status + attended only) to show classes done, the next booked class, days since the last class and (REBOOK.1) the latest class they booked and never came to on a un1t.online pipeline card. Staff display only: it sends nothing, credits nothing and reminds nobody.",
   },
+  'src/lib/pipeline-board-report.js': {
+    kind: 'display',
+    reason: "PIPEBUILD.6-3: buildBoardReport counts, per offer-board follow-up, the DISTINCT contacts with a class starting within 14 days after the message (both platforms, cancelled rows excluded; contact_id + starts_at + status only). A staff report on the board's settings page: it sends nothing, credits nothing and reminds nobody.",
+  },
   'src/lib/pipeline-rebook-notes.js': {
     kind: 'display',
     reason: "REBOOK.1: writeRebookNotes reads the board studio's OWN un1t.online bookings (.eq('source_platform', 'un1t_online')) for the contacts whose card just landed in Rebook, to write one staff timeline note naming the class they booked and never came to. Staff display only: it sends nothing, credits nothing and reminds nobody.",
