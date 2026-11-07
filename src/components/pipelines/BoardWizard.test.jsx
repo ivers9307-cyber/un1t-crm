@@ -1,0 +1,130 @@
+// @vitest-environment jsdom
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import BoardWizard from './BoardWizard.jsx'
+
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+const OPTIONS = [
+  { value: 'RESET39', label: '14 Day Reset', hint: '3 sales' },
+  { value: 'TRIAL7', label: '7 day trial' },
+]
+function stubOptions(options = OPTIONS) {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true, data: { options } }) })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+const props = { locationId: 'loc1', studioName: 'UN1T Stillorgan', canEdit: true, membershipSource: 'glofox' }
+const next = () => fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+
+describe('BoardWizard', () => {
+  it('un1tStudioShowsNotice', () => {
+    render(<BoardWizard {...props} membershipSource="un1t_online" />)
+    expect(screen.getByText("Offer boards at un1t.online studios aren't available yet.")).toBeTruthy()
+    expect(screen.queryByText('Paid trial')).toBeNull()
+  })
+
+  it('a non-owner sees the owner notice and no wizard', () => {
+    render(<BoardWizard {...props} canEdit={false} />)
+    expect(screen.getByText('Only owners can build boards.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Next' })).toBeNull()
+  })
+
+  it('wizardBlocksNextOnErrors', async () => {
+    stubOptions()
+    render(<BoardWizard {...props} />)
+    next()
+    expect(screen.getByText('Pick a recipe.')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Recipe' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /Paid trial/ }))
+    next()
+    expect(screen.getByRole('heading', { name: 'Name and offer' })).toBeTruthy()
+    next()
+    expect(screen.getByText('Give the board a name.')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText(/Board name/), { target: { value: 'Spring reset' } })
+    next()
+
+    expect(screen.getByRole('heading', { name: 'Who enters' })).toBeTruthy()
+    expect(screen.getByText('People who buy a trial with plan code…')).toBeTruthy()
+    await screen.findByLabelText(/14 Day Reset/)
+    next()
+    expect(screen.getByText('Pick at least one option.')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText(/14 Day Reset/))
+    next()
+    expect(screen.getByRole('heading', { name: 'Stages' })).toBeTruthy()
+  })
+
+  it('fetches entry options for the type and match', async () => {
+    const fetchMock = stubOptions()
+    render(<BoardWizard {...props} />)
+    fireEvent.click(screen.getByRole('button', { name: /Paid trial/ }))
+    next()
+    fireEvent.change(screen.getByLabelText(/Board name/), { target: { value: 'Spring reset' } })
+    next()
+    await screen.findByLabelText(/14 Day Reset/)
+    expect(fetchMock).toHaveBeenCalledWith('/api/locations/loc1/pipeline-entry-options?type=trial_purchase&match=plan_code')
+    fireEvent.change(screen.getByLabelText('Match on'), { target: { value: 'landing_path' } })
+    await screen.findByText('People who buy a trial on landing page path…')
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/locations/loc1/pipeline-entry-options?type=trial_purchase&match=landing_path')
+  })
+
+  async function toStages() {
+    stubOptions()
+    render(<BoardWizard {...props} />)
+    fireEvent.click(screen.getByRole('button', { name: /Paid trial/ }))
+    next()
+    fireEvent.change(screen.getByLabelText(/Board name/), { target: { value: 'Spring reset' } })
+    next()
+    fireEvent.click(await screen.findByLabelText(/14 Day Reset/))
+    next()
+  }
+
+  it('the new stage is locked and the check-in day is editable', async () => {
+    await toStages()
+    const newBox = screen.getByLabelText('Use the New Leads stage')
+    expect(newBox.checked).toBe(true)
+    expect(newBox.disabled).toBe(true)
+    const day = screen.getByLabelText('Check-in day for Day 7')
+    fireEvent.change(day, { target: { value: '9' } })
+    expect(day.value).toBe('9')
+  })
+
+  it('follow-ups default to the recipe wording and preview with Tim', async () => {
+    await toStages()
+    next()
+    expect(screen.getByRole('heading', { name: 'Follow-ups' })).toBeTruthy()
+    const box = screen.getByLabelText('End of trial: follow-up if they don\'t reply')
+    expect(box.value).toContain('Hey {{1}}, just bumping this')
+    expect(screen.getByText(/Hey Tim, just bumping this/)).toBeTruthy()
+    expect(screen.getAllByText(/is the person's first name/).length).toBeGreaterThan(0)
+    fireEvent.change(box, { target: { value: 'Hello there' } })
+    expect(screen.getByText('the message must include {{1}} (the first name)')).toBeTruthy()
+    next()
+    expect(screen.getByRole('heading', { name: 'Follow-ups' })).toBeTruthy()
+  })
+
+  it('reaches review with the create button', async () => {
+    await toStages()
+    next()
+    next()
+    expect(screen.getByRole('heading', { name: 'Notes for Mia' })).toBeTruthy()
+    next()
+    expect(screen.getByRole('heading', { name: 'Review' })).toBeTruthy()
+    expect(screen.getByText('Spring reset')).toBeTruthy()
+    expect(screen.getByText('RESET39')).toBeTruthy()
+    const onCreate = vi.fn()
+    cleanup()
+    stubOptions()
+    render(<BoardWizard {...props} onCreate={onCreate} />)
+    fireEvent.click(screen.getByRole('button', { name: /Paid trial/ }))
+    next()
+    fireEvent.change(screen.getByLabelText(/Board name/), { target: { value: 'Spring reset' } })
+    next()
+    fireEvent.click(await screen.findByLabelText(/14 Day Reset/))
+    for (let i = 0; i < 4; i += 1) next()
+    fireEvent.click(screen.getByRole('button', { name: 'Create board (switched off)' }))
+    expect(onCreate).toHaveBeenCalledTimes(1)
+    expect(onCreate.mock.calls[0][0].name).toBe('Spring reset')
+  })
+})
