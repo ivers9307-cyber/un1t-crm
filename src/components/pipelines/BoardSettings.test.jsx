@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
-import BoardSettings, { REPLACE_CONFIRM, SWITCH_OFF_NOTE, LEGACY_NOTICE } from './BoardSettings.jsx'
+import BoardSettings, {
+  REPLACE_CONFIRM, SWITCH_OFF_NOTE, LEGACY_NOTICE, WORDING_UNKNOWN_NOTE, REJECTED_NOTE, TURN_OFF_CONFIRM,
+} from './BoardSettings.jsx'
 import { LEGACY_BOARD_ERROR } from '@/lib/pipeline-boards'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -35,7 +37,7 @@ const BOARD = {
     { id: 's3', slug: 'o_spring_day_7', name: 'Day 7', stage_role: 'checkpoint', role_config: { day: 7 }, display_order: 902, deal_count: 0 },
   ],
   followups: [
-    { id: 'f1', stage_id: 's2', pack_key: 'after_first_class', state: 'live', version: 1, body_text: 'Hi {{1}}, how was your first class? UN1T Stillorgan', body_texts: { main: 'Hi {{1}}, how was your first class? UN1T Stillorgan' } },
+    { id: 'f1', stage_id: 's2', pack_key: 'after_first_class', state: 'live', version: 1, whatsapp_template_id: 't1', body_text: 'Hi {{1}}, how was your first class? UN1T Stillorgan', body_texts: { main: 'Hi {{1}}, how was your first class? UN1T Stillorgan' } },
   ],
 }
 
@@ -46,6 +48,7 @@ function stubApi({ board = BOARD, canEdit = true, canEditWording = true, patch, 
     if (url === '/api/pipelines/b1' && method === 'GET') return ok({ board, can_edit: canEdit, can_edit_wording: canEditWording })
     if (url === '/api/pipelines/b1' && method === 'PATCH') return patch ? patch(JSON.parse(opts.body)) : ok({ board })
     if (String(url).startsWith('/api/locations/loc1/pipeline-entry-options')) return ok({ options: [{ value: 'RESET39', label: '14 Day Reset' }] })
+    if (url === '/api/pipelines/b1/disable' && method === 'POST') return ok({ board: { ...board, enabled: false } })
     if (String(url).startsWith('/api/pipelines/b1/followups/') && method === 'PUT') return put ? put(JSON.parse(opts.body)) : ok({ followup: {} })
     throw new Error(`unexpected ${method} ${url}`)
   })
@@ -162,6 +165,61 @@ describe('BoardSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Switch off' }))
     await waitFor(() => expect(calls(fetchMock, 'PUT')).toHaveLength(1))
     expect(JSON.parse(calls(fetchMock, 'PUT')[0][1].body)).toEqual({ action: 'off', pack_key: 'after_first_class' })
+  })
+
+  it('an unreadable wording read blocks Change wording but not Switch off', async () => {
+    stubApi({ board: { ...BOARD, wording_unread: true, followups: [{ ...BOARD.followups[0], body_text: undefined, body_texts: undefined }] } })
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    const change = screen.getAllByRole('button', { name: 'Change wording' })
+    expect(change[1].disabled).toBe(true)  // 1st Class: a live follow-up
+    expect(change[0].disabled).toBe(false) // New Leads: nothing installed, nothing to lose
+    expect(screen.getByText(WORDING_UNKNOWN_NOTE)).toBeTruthy()
+    expect(WORDING_UNKNOWN_NOTE).toBe("The current wording couldn't be read. Try again later before changing it.")
+    expect(screen.getByRole('button', { name: 'Switch off' }).disabled).toBe(false)
+  })
+
+  it("one message's wording not found blocks Change wording for that follow-up", async () => {
+    const halfway = { id: 'f3', stage_id: 's3', pack_key: 'halfway', state: 'live', version: 1, whatsapp_template_id: 't3', body_text: 'Hi {{1}}, halfway.', body_texts: { main: 'Hi {{1}}, halfway.' }, wording_missing: ['nudge'] }
+    stubApi({ board: { ...BOARD, followups: [...BOARD.followups, halfway] } })
+    renderPage()
+    await screen.findByText('Hi {{1}}, halfway.')
+    const change = screen.getAllByRole('button', { name: 'Change wording' })
+    expect(change[2].disabled).toBe(true)
+    expect(change[1].disabled).toBe(false)
+    expect(screen.getAllByText(WORDING_UNKNOWN_NOTE)).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Switch off' }).every((b) => !b.disabled)).toBe(true)
+  })
+
+  it('a rejected follow-up offers Change wording and Switch off, never a resend', async () => {
+    const rejected = { id: 'f2', stage_id: 's1', pack_key: 'book_first_class', state: 'rejected', version: 1, whatsapp_template_id: 't2', body_text: 'Hi {{1}}, book now.', body_texts: { main: 'Hi {{1}}, book now.' } }
+    const fetchMock = stubApi({ board: { ...BOARD, followups: [rejected, ...BOARD.followups] } })
+    renderPage()
+    expect(await screen.findByText(REJECTED_NOTE)).toBeTruthy()
+    expect(REJECTED_NOTE).toBe('Meta rejected this wording. Change it to try again.')
+    // Only the Day 7 stage (nothing installed) offers Install.
+    expect(screen.getAllByRole('button', { name: 'Install' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Switch off' })).toHaveLength(2)
+    fireEvent.click(screen.getAllByRole('button', { name: 'Change wording' })[0])
+    expect(screen.getByRole('button', { name: 'Save wording' }).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Book the first class: message'), { target: { value: 'Hi {{1}}, pick a class at {studio}. {signer}' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save wording' }))
+    await waitFor(() => expect(calls(fetchMock, 'PUT')).toHaveLength(1))
+    expect(JSON.parse(calls(fetchMock, 'PUT')[0][1].body)).toEqual({
+      action: 'install', pack_key: 'book_first_class', bodies: { main: 'Hi {{1}}, pick a class at {studio}. {signer}' },
+    })
+  })
+
+  it('turn off asks first, then calls disable', async () => {
+    const fetchMock = stubApi({ board: { ...BOARD, enabled: true, baseline_at: '2026-11-06T00:00:00Z' } })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Turn off' }))
+    expect(screen.getByText(TURN_OFF_CONFIRM)).toBeTruthy()
+    expect(TURN_OFF_CONFIRM).toBe('While the board is off, nobody new is placed. When you turn it back on, people who qualified in the meantime are placed without messages.')
+    expect(calls(fetchMock, 'POST')).toHaveLength(0)
+    fireEvent.click(screen.getAllByRole('button', { name: 'Turn off' }).pop())
+    await waitFor(() => expect(calls(fetchMock, 'POST')).toHaveLength(1))
+    expect(calls(fetchMock, 'POST')[0][0]).toBe('/api/pipelines/b1/disable')
   })
 
   it('patch409MessageShown', async () => {

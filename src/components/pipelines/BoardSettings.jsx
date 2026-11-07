@@ -20,6 +20,9 @@ export const REPLACE_CONFIRM = 'The current message stops now. The new wording s
 // The server's words (src/lib/pipeline-boards.js LEGACY_BOARD_ERROR), copied
 // because a client bundle must not import that server module.
 export const LEGACY_NOTICE = "This board is built in code and can't be changed here."
+export const WORDING_UNKNOWN_NOTE = "The current wording couldn't be read. Try again later before changing it."
+export const REJECTED_NOTE = 'Meta rejected this wording. Change it to try again.'
+export const TURN_OFF_CONFIRM = 'While the board is off, nobody new is placed. When you turn it back on, people who qualified in the meantime are placed without messages.'
 export const BASELINE_NOTE = 'Switching a board on never messages people who already qualify. They are placed that night without any messages; only people who qualify after that get the follow-ups.'
 
 // The board's own sections: their checks decide whether Save may go.
@@ -27,7 +30,10 @@ const BOARD_STEPS = ['Name and offer', 'Who enters', 'Stages', 'Notes for Mia']
 // Follow-up states a message is going out from (or about to): new wording
 // replaces them, after a confirm.
 const SENDING = new Set(['live', 'awaiting_approval'])
-const STOPPABLE = new Set(['live', 'awaiting_approval', 'draft'])
+const STOPPABLE = new Set(['live', 'awaiting_approval', 'draft', 'rejected'])
+// Install (as it stands) only where nothing was refused: a rejected row's
+// wording is changed first, never resent.
+const INSTALLABLE = new Set(['off', 'draft'])
 
 // The wizard's reducer, plus 'reset' to load a board the server returned.
 function settingsReducer(state, action) {
@@ -106,6 +112,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
   const [showErrors, setShowErrors] = useState(false)
   const [offBusy, setOffBusy] = useState(false)
   const [offError, setOffError] = useState(null)
+  const [confirmOff, setConfirmOff] = useState(false)
 
   const [editing, setEditing] = useState(null)        // { packKey, stageId, before }
   const [confirm, setConfirm] = useState(null)        // { stage, pack }
@@ -223,6 +230,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
     try {
       const { ok, json } = await call(`/api/pipelines/${board.id}/disable`, 'POST')
       if (!ok) { setOffError(json.error || 'Could not switch the board off.'); return }
+      setConfirmOff(false)
       await refresh()
     } finally {
       inFlight.current = false
@@ -303,11 +311,10 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
           </span>
           <span className="text-sm text-un1t-subtle">{boardStatus(board)}</span>
           {canEdit && on && (
-            <Button type="button" variant="secondary" size="sm" className="ml-auto" loading={offBusy} onClick={turnOff}>Turn off</Button>
+            <Button type="button" variant="secondary" size="sm" className="ml-auto" onClick={() => { setOffError(null); setConfirmOff(true) }}>Turn off</Button>
           )}
         </div>
         <p className="mt-2 text-sm text-un1t-subtle">{BASELINE_NOTE}</p>
-        {offError && <p className="mt-2 text-sm text-red-700" role="alert">{offError}</p>}
       </Section>
 
       {canEdit && !on && (
@@ -372,7 +379,14 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
             const isEditing = editing?.stageId === stage.id
             const busy = fuBusy === stage.id
             const note = fuNotes[stage.id] || {}
-            const canInstall = !row || ['off', 'rejected', 'draft'].includes(rowState)
+            // Wording a follow-up sends that could not be read is never
+            // replaced by what the editor would show in its place.
+            const wordingUnknown = !!row?.whatsapp_template_id
+              && (!!board.wording_unread || (row.wording_missing || []).length > 0)
+            const canInstall = !row || INSTALLABLE.has(rowState)
+            const rejected = rowState === 'rejected'
+            const unchanged = isEditing && editing && pack
+              && Object.entries(editing.before).every(([ref, body]) => state.bodies[pack.key]?.[ref] === body)
             const wErrors = isEditing && pack ? wordingErrors(pack) : []
             return (
               <li key={stage.id} className="rounded-lg border border-un1t-border p-3">
@@ -390,7 +404,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                         <p key={t.ref} className="whitespace-pre-wrap rounded-md bg-un1t-surface p-2 text-sm text-un1t-text">{text}</p>
                       ) : null
                     })}
-                    {!row?.body_texts && row && !board.wording_unread && (
+                    {row && !row.body_texts && !wordingUnknown && (
                       <p className="text-sm text-un1t-subtle">No wording saved for this follow-up yet.</p>
                     )}
                   </div>
@@ -400,7 +414,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                     <FollowupsStep state={state} dispatch={dispatch} packKeys={[pack.key]} />
                     {dirty && <p className="text-sm text-amber-700">Save the board first: the preview and Meta use the saved offer name and sign-off.</p>}
                     <div className="flex flex-wrap gap-2">
-                      <Button type="button" size="sm" loading={busy} disabled={wErrors.length > 0 || dirty}
+                      <Button type="button" size="sm" loading={busy} disabled={wErrors.length > 0 || dirty || (rejected && unchanged)}
                         onClick={() => saveWording(stage, pack, row)}>
                         Save wording
                       </Button>
@@ -408,10 +422,12 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                     </div>
                   </div>
                 )}
+                {pack && rejected && <p className="mt-2 text-sm text-red-700">{REJECTED_NOTE}</p>}
+                {pack && wordingUnknown && canEditWording && <p className="mt-2 text-sm text-amber-700">{WORDING_UNKNOWN_NOTE}</p>}
                 {note.error && <p className="mt-2 text-sm text-red-700" role="alert">{note.error}</p>}
                 {pack && canEditWording && !isEditing && (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Button type="button" size="sm" variant="secondary" disabled={!!fuBusy || !!editing} onClick={() => startEditing(stage, pack)}>
+                    <Button type="button" size="sm" variant="secondary" disabled={!!fuBusy || !!editing || wordingUnknown} onClick={() => startEditing(stage, pack)}>
                       Change wording
                     </Button>
                     {row && STOPPABLE.has(rowState) && (
@@ -421,7 +437,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                       </Button>
                     )}
                     {canInstall && (
-                      <Button type="button" size="sm" loading={busy} disabled={(!!fuBusy && !busy) || dirty}
+                      <Button type="button" size="sm" loading={busy} disabled={(!!fuBusy && !busy) || dirty || wordingUnknown}
                         onClick={() => followupAction(stage, pack, 'install', packBodies(state, pack.key))}>
                         Install
                       </Button>
@@ -439,6 +455,21 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
           })}
         </ul>
       </Section>
+
+      <Modal
+        open={confirmOff}
+        onClose={() => { if (!offBusy) setConfirmOff(false) }}
+        title="Turn off this board"
+        footer={(
+          <>
+            <Button type="button" variant="secondary" disabled={offBusy} onClick={() => setConfirmOff(false)}>Cancel</Button>
+            <Button type="button" loading={offBusy} onClick={turnOff}>Turn off</Button>
+          </>
+        )}
+      >
+        <p className="text-sm text-un1t-text">{TURN_OFF_CONFIRM}</p>
+        {offError && <p className="mt-2 text-sm text-red-700" role="alert">{offError}</p>}
+      </Modal>
 
       <Modal
         open={!!confirm}

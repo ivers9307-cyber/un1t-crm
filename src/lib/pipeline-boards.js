@@ -253,7 +253,8 @@ const bodyTextOf = (components) => {
 // PIPEBUILD.5k — what each installed follow-up says now, from its WhatsApp
 // template rows (read at THIS studio only), so the settings page can show it
 // and start Change wording from it. Each follow-up gets `body_texts` by
-// message ref and `body_text` (its first message). The row links only its
+// message ref and `body_text` (its first message), and `wording_missing`
+// (the refs whose wording was not found) when any is. The row links only its
 // first template (whatsapp_template_id); a pack's other messages share that
 // name's studio prefix (templateNameFor), so they are read by name. Display
 // only: a failed read leaves the wording out and sets `wording_unread`, and
@@ -312,16 +313,26 @@ async function withFollowupWording(db, locationId, board) {
   return {
     ...board,
     followups: board.followups.map((f) => {
-      const first = f.whatsapp_template_id ? byId.get(f.whatsapp_template_id) : null
       const pack = recipe.packs.find((p) => p.key === f.pack_key)
+      if (!pack || !f.whatsapp_template_id) return f
+      const first = byId.get(f.whatsapp_template_id)
       const firstText = first ? bodyTextOf(first.components) : null
-      if (!pack || firstText == null) return f
-      const texts = { [pack.templates[0].ref]: firstText }
-      for (const w of wanted.get(f.id) || []) {
-        const text = bodyTextOf(byName.get(w.name)?.components)
-        if (text != null) texts[w.ref] = text
+      const texts = {}
+      if (firstText != null) {
+        texts[pack.templates[0].ref] = firstText
+        for (const w of wanted.get(f.id) || []) {
+          const text = bodyTextOf(byName.get(w.name)?.components)
+          if (text != null) texts[w.ref] = text
+        }
       }
-      return { ...f, body_text: firstText, body_texts: texts }
+      // A message whose wording was not found: the settings page refuses new
+      // wording until it is, so the recipe's never silently replaces it.
+      const missing = pack.templates.map((t) => t.ref).filter((ref) => !(ref in texts))
+      return {
+        ...f,
+        ...(firstText != null ? { body_text: firstText, body_texts: texts } : {}),
+        ...(missing.length ? { wording_missing: missing } : {}),
+      }
     }),
   }
 }

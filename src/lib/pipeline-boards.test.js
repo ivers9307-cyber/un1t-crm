@@ -7,6 +7,7 @@ import {
   SWITCH_OFF_FIRST_ERROR, UN1T_STUDIO_ERROR, LEGACY_BOARD_ERROR, STAGE_NAME_TAKEN_ERROR,
 } from './pipeline-boards.js'
 import { fakeDb, uniqueError } from './pipeline-boards.test-helpers.js'
+import { stateFromBoard, settingsConfig, wizardReducer } from './pipeline-wizard.js'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const OTHER = 'a0000000-0000-0000-0000-000000000002'
@@ -198,9 +199,42 @@ describe('listBoards / getBoard', () => {
     const f1 = res.board.followups.find((f) => f.id === 'f1')
     expect(f1.body_text).toBe('Hi {{1}}, halfway. Karl')
     expect(f1.body_texts).toEqual({ main: 'Hi {{1}}, halfway. Karl', nudge: 'Hi {{1}}, book a class. Karl' })
+    expect(f1.wording_missing).toBeUndefined()
     const f2 = res.board.followups.find((f) => f.id === 'f2')
     expect(f2.body_text).toBeUndefined()
+    expect(f2.wording_missing).toEqual(['main'])
     expect(res.board.wording_unread).toBeUndefined()
+  })
+
+  it('aSecondMessageNotFoundIsWordingMissing', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const day7 = stageBySlug(board, 'o_reset_39_day_7')
+    db.tables.whatsapp_templates = [
+      { id: 't1', location_id: LOC, name: 'renamed_template', components: [{ type: 'BODY', text: 'Hi {{1}}, halfway.' }] },
+    ]
+    db.tables.pipeline_stage_followups.push({ id: 'f1', location_id: LOC, pipeline_id: board.id, stage_id: day7.id, pack_key: 'halfway', state: 'live', want_live: true, version: 1, sequence_id: 's1', whatsapp_template_id: 't1' })
+    const res = await getBoard(db, LOC, board.id)
+    const f1 = res.board.followups[0]
+    expect(f1.body_texts).toEqual({ main: 'Hi {{1}}, halfway.' })
+    expect(f1.wording_missing).toEqual(['nudge'])
+  })
+
+  it('aRenameOnALiveBoardSavesWithTheSettingsPagesConfig', async () => {
+    const db = seedDb()
+    await createdBoard(db)
+    const created = (await listBoards(db, LOC)).boards.find((b) => b.key === 'o_reset_39')
+    await setBoardEnabled(db, { locationId: LOC, boardId: created.id, enabled: true })
+    const board = (await getBoard(db, LOC, created.id)).board
+    expect(board.enabled).toBe(true)
+    let state = stateFromBoard(board, board.recipe_key, { studioName: 'UN1T Stillorgan' })
+    const i = state.stages.findIndex((st) => st.role === 'first_class' && st.enabled)
+    state = wizardReducer(state, { type: 'renameStage', index: i, name: 'First session' })
+    const config = settingsConfig(state, board.config)
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res.ok).toBe(true)
+    expect(res.board.stages.find((st) => st.stage_role === 'first_class').name).toBe('First session')
+    expect(res.board.config).toEqual({ ...board.config, stages: board.config.stages.map((st) => (st.role === 'first_class' ? { ...st, name: 'First session' } : st)) })
   })
 
   it('anUnreadableTemplateLeavesTheWordingOutAndNeverFailsTheRead', async () => {
