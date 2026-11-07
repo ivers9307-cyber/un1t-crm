@@ -47,7 +47,7 @@ export async function GET(request, { params }) {
   try {
     hasWhatsapp = (await locationsWithWhatsApp(db, [locationId])).has(locationId)
   } catch (e) {
-    logError('pipelines', `has_whatsapp read failed: ${e.message}`)
+    logError('pipelines', 'has_whatsapp read failed', { locationId, err: e?.message })
   }
   return NextResponse.json({ success: true, data: { boards: result.boards, can_edit: canEdit, has_whatsapp: hasWhatsapp } })
 }

@@ -15,6 +15,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { listBoards, createBoard } from '@/lib/pipeline-boards'
 import { locationsWithWhatsApp } from '@/lib/whatsapp-config'
 import { canBuildSequencesAt } from '@/lib/sequence-access'
+import { logError } from '@/lib/log'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const props = { params: Promise.resolve({ id: LOC }) }
@@ -45,6 +46,7 @@ describe('GET /api/locations/[id]/pipelines', () => {
     const res = await GET(getReq(), props)
     expect(res.status).toBe(200)
     expect((await res.json()).data.has_whatsapp).toBeNull()
+    expect(logError).toHaveBeenCalledWith('pipelines', 'has_whatsapp read failed', { locationId: LOC, err: 'boom' })
   })
 
   it('otherStudioIs404', async () => {
