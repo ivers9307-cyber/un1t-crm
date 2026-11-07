@@ -23,7 +23,12 @@ export const LEGACY_NOTICE = "This board is built in code and can't be changed h
 export const WORDING_UNKNOWN_NOTE = "The current wording couldn't be read. Try again later before changing it."
 export const OLD_WORDING_UNKNOWN_NOTE = "The old wording couldn't be read, so this starts from the standard wording."
 export const REJECTED_NOTE = 'Meta rejected this wording. Change it to try again.'
-export const TURN_OFF_CONFIRM = 'While the board is off, nobody new is placed. When you turn it back on, people who qualified in the meantime are placed without messages.'
+export const TURN_OFF_CONFIRM = 'While the board is off, nobody new is placed and people already on it stay where they are, with no messages. When you turn it back on, people who qualified in the meantime are placed without messages.'
+// PIPEBUILD.5o — a follow-up's template text is filled in when it is sent to
+// Meta, so a later change to the offer name, sign-off or offer length does not
+// reach it on its own.
+export const FILLED_IN_NOTE = 'These messages were filled in when they were sent to Meta. If you change the offer name, sign-off or offer length, change the wording of each message too.'
+export const START_FROM_STANDARD = 'Start from the standard wording'
 export const BASELINE_NOTE = 'Switching a board on never messages people who already qualify. They are placed that night without any messages; only people who qualify after that get the follow-ups.'
 
 // The board's own sections: their checks decide whether Save may go.
@@ -78,6 +83,30 @@ function Section({ title, children, note }) {
   )
 }
 
+/** "a", "a and b", "a, b and c". */
+function listJoin(items) {
+  if (items.length <= 1) return items.join('')
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+/**
+ * PIPEBUILD.5o — what a saved change did to the values filled into sent
+ * follow-ups: the offer name (else the board name), the sign-off, the length.
+ */
+function filledInChanges(before, after) {
+  const offer = (st) => st.offerName.trim() || st.name.trim()
+  const out = []
+  if (offer(before) !== offer(after)) out.push('offer name')
+  if (before.signer.trim() !== after.signer.trim()) out.push('sign-off')
+  if (before.durationDays !== after.durationDays) out.push('offer length')
+  return out
+}
+
+/** The notice after such a save, naming the stages whose follow-up is sending. */
+export function staleWordingNotice(labels, stageNames) {
+  return `These follow-ups still use the old ${listJoin(labels)}: ${stageNames.join(', ')}. Change their wording to update them.`
+}
+
 /** The current row for a stage's pack (UNIQUE (stage_id, pack_key): at most one). */
 function rowFor(board, stageId, packKey) {
   return (board.followups || []).find((f) => f.stage_id === stageId && f.pack_key === packKey) || null
@@ -119,6 +148,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
   const [confirm, setConfirm] = useState(null)        // { stage, pack }
   const [fuBusy, setFuBusy] = useState(null)          // stage id
   const [fuNotes, setFuNotes] = useState({})          // stage id -> { error?, info? }
+  const [stale, setStale] = useState(null)            // { labels, stageIds } after a save changed filled-in values
   const inFlight = useRef(false)
 
   const recipe = board ? RECIPES[board.recipe_key] : null
@@ -210,14 +240,26 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
     if (inFlight.current || !dirty) return
     if (errors.length) { setShowErrors(true); return }
     inFlight.current = true
-    setSaving(true); setSaveError(null); setSaved(false)
+    setSaving(true); setSaveError(null); setSaved(false); setStale(null)
+    const changed = filledInChanges(baseline, state)
     try {
       const { ok, json } = await call(`/api/pipelines/${board.id}`, 'PATCH', patch)
       if (!ok) { setSaveError(errorText(json, 'Could not save the board.')); return }
       // The PATCH answers without the follow-ups' wording: read the board again.
       const r = await fetchBoard()
-      applyBoard(r.data || { board: json.data.board, can_edit: canEdit, can_edit_wording: canEditWording })
+      const fresh = r.data || { board: json.data.board, can_edit: canEdit, can_edit_wording: canEditWording }
+      applyBoard(fresh)
       setShowErrors(false); setSaved(true)
+      // PIPEBUILD.5o — follow-ups already sent to Meta keep the old values:
+      // name every stage whose follow-up is sending (or about to).
+      if (changed.length) {
+        const freshFollowups = fresh.board?.followups || board.followups || []
+        const stageIds = [...(fresh.board?.stages || board.stages || [])]
+          .sort((a, b) => a.display_order - b.display_order)
+          .filter((st) => freshFollowups.some((f) => f.stage_id === st.id && SENDING.has(f.state)))
+          .map((st) => st.id)
+        if (stageIds.length) setStale({ labels: changed, stageIds })
+      }
     } finally {
       inFlight.current = false
       setSaving(false)
@@ -237,6 +279,15 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
       inFlight.current = false
       setOffBusy(false)
     }
+  }
+
+  // A stage whose wording was changed (or switched off) no longer carries old values.
+  function clearStale(stageId) {
+    setStale((cur) => {
+      if (!cur) return cur
+      const stageIds = cur.stageIds.filter((id) => id !== stageId)
+      return stageIds.length ? { ...cur, stageIds } : null
+    })
   }
 
   async function followupAction(stage, pack, action, bodies) {
@@ -280,10 +331,16 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
     setEditing(null)
   }
 
+  // PIPEBUILD.5o — the recipe's own wording, which the preview (and Meta)
+  // fills in with the board's current offer name, sign-off and length.
+  function startFromStandard(pack) {
+    for (const t of pack.templates) dispatch({ type: 'setBody', packKey: pack.key, ref: t.ref, body: t.body })
+  }
+
   async function saveWording(stage, pack, row) {
     if (row && SENDING.has(row.state)) { setConfirm({ stage, pack }); return }
     const done = await followupAction(stage, pack, 'install', packBodies(state, pack.key))
-    if (done) setEditing(null)
+    if (done) { setEditing(null); clearStale(stage.id) }
   }
 
   async function confirmReplace() {
@@ -291,8 +348,12 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
     const { stage, pack } = confirm
     const done = await followupAction(stage, pack, 'replace', packBodies(state, pack.key))
     setConfirm(null)
-    if (done) setEditing(null)
+    if (done) { setEditing(null); clearStale(stage.id) }
   }
+
+  const staleNames = stale
+    ? stale.stageIds.map((id) => (board.stages || []).find((st) => st.id === id)?.name).filter(Boolean)
+    : []
 
   const wordingErrors = (pack) => pack.templates
     .map((t) => previewTemplate(state, pack.key, t.ref).error)
@@ -331,7 +392,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
         <NameOfferStep state={state} dispatch={dispatch} fields={['name', 'offer', 'signer']} disabled={!canEdit} />
         {canEdit && (
           <p className="mt-2 text-xs text-un1t-subtle">
-            A new offer name or sign-off is used by follow-ups installed from now on. Use Change wording to update a message already sent to Meta.
+            {FILLED_IN_NOTE}
           </p>
         )}
       </Section>
@@ -369,6 +430,9 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
             {!dirty && saved && <span className="text-sm text-un1t-subtle">Saved.</span>}
             {dirty && <span className="text-sm text-un1t-subtle">You have unsaved changes.</span>}
           </div>
+          {staleNames.length > 0 && (
+            <p className="mt-3 text-sm text-amber-700" role="status">{staleWordingNotice(stale.labels, staleNames)}</p>
+          )}
         </Card>
       )}
 
@@ -392,6 +456,9 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
             const unreadable = !!row?.whatsapp_template_id
               && (!!board.wording_unread || (row.wording_missing || []).length > 0)
             const wordingUnknown = unreadable && rowState !== 'off'
+            // Install would send standard (or half-standard) wording unseen,
+            // so a switched-off row whose wording could not be read goes in
+            // only through Change wording, which says it starts from standard.
             const offUnreadable = unreadable && rowState === 'off'
             const canInstall = !row || INSTALLABLE.has(rowState)
             const rejected = rowState === 'rejected'
@@ -422,6 +489,11 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                 {pack && isEditing && (
                   <div className="mt-3 space-y-3">
                     {editing?.fromStandard && <p className="text-sm text-amber-700">{OLD_WORDING_UNKNOWN_NOTE}</p>}
+                    <div>
+                      <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => startFromStandard(pack)}>
+                        {START_FROM_STANDARD}
+                      </Button>
+                    </div>
                     <FollowupsStep state={state} dispatch={dispatch} packKeys={[pack.key]} />
                     {dirty && <p className="text-sm text-amber-700">Save the board first: the preview and Meta use the saved offer name and sign-off.</p>}
                     <div className="flex flex-wrap gap-2">
@@ -443,12 +515,12 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                     </Button>
                     {row && STOPPABLE.has(rowState) && (
                       <Button type="button" size="sm" variant="secondary" loading={busy} disabled={!!fuBusy && !busy}
-                        onClick={() => followupAction(stage, pack, 'off')}>
+                        onClick={async () => { if (await followupAction(stage, pack, 'off')) clearStale(stage.id) }}>
                         Switch off
                       </Button>
                     )}
                     {canInstall && (
-                      <Button type="button" size="sm" loading={busy} disabled={(!!fuBusy && !busy) || dirty || wordingUnknown}
+                      <Button type="button" size="sm" loading={busy} disabled={(!!fuBusy && !busy) || dirty || wordingUnknown || offUnreadable}
                         onClick={() => followupAction(stage, pack, 'install', packBodies(state, pack.key))}>
                         Install
                       </Button>

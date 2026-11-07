@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import BoardSettings, {
   REPLACE_CONFIRM, SWITCH_OFF_NOTE, LEGACY_NOTICE, WORDING_UNKNOWN_NOTE, REJECTED_NOTE, TURN_OFF_CONFIRM,
-  OLD_WORDING_UNKNOWN_NOTE,
+  OLD_WORDING_UNKNOWN_NOTE, FILLED_IN_NOTE, START_FROM_STANDARD, staleWordingNotice,
 } from './BoardSettings.jsx'
 import { LEGACY_BOARD_ERROR } from '@/lib/pipeline-boards'
 import { RECIPES } from '@shared/pipelines/recipes.js'
@@ -193,7 +193,7 @@ describe('BoardSettings', () => {
     expect(screen.getAllByRole('button', { name: 'Switch off' }).every((b) => !b.disabled)).toBe(true)
   })
 
-  it('a switched-off follow-up with unreadable wording starts from the standard wording and installs', async () => {
+  it('a switched-off follow-up with unreadable wording: Install is locked, Change wording starts from the standard wording and installs', async () => {
     const off = { id: 'f3', stage_id: 's3', pack_key: 'halfway', state: 'off', version: 2, whatsapp_template_id: 't3', body_text: 'Hi {{1}}, halfway.', body_texts: { main: 'Hi {{1}}, halfway.' }, wording_missing: ['nudge'] }
     const fetchMock = stubApi({ board: { ...BOARD, followups: [...BOARD.followups, off] } })
     renderPage()
@@ -201,7 +201,12 @@ describe('BoardSettings', () => {
     expect(screen.queryByText(WORDING_UNKNOWN_NOTE)).toBeNull()
     const change = screen.getAllByRole('button', { name: 'Change wording' })[2]
     expect(change.disabled).toBe(false)
-    expect(screen.getAllByRole('button', { name: 'Install' }).every((b) => !b.disabled)).toBe(true)
+    // Install would send standard or half-standard wording unseen: only
+    // Change wording (with its note) goes in. New Leads (nothing installed) still installs.
+    const install = screen.getAllByRole('button', { name: 'Install' })
+    expect(install).toHaveLength(2)
+    expect(install[0].disabled).toBe(false)
+    expect(install[1].disabled).toBe(true)
     fireEvent.click(change)
     expect(screen.getByText(OLD_WORDING_UNKNOWN_NOTE)).toBeTruthy()
     expect(OLD_WORDING_UNKNOWN_NOTE).toBe("The old wording couldn't be read, so this starts from the standard wording.")
@@ -214,6 +219,86 @@ describe('BoardSettings', () => {
     expect(JSON.parse(calls(fetchMock, 'PUT')[0][1].body)).toEqual({
       action: 'install', pack_key: 'halfway', bodies: { main: 'Hi {{1}}, halfway at {studio}. {signer}' },
     })
+  })
+
+  it('a switched-off follow-up when the whole wording read failed: Install is locked too', async () => {
+    const off = { ...BOARD.followups[0], state: 'off', body_text: undefined, body_texts: undefined }
+    stubApi({ board: { ...BOARD, wording_unread: true, followups: [off] } })
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    const install = screen.getAllByRole('button', { name: 'Install' })
+    expect(install).toHaveLength(3)
+    expect(install.map((b) => b.disabled)).toEqual([false, true, false])
+    expect(screen.getAllByRole('button', { name: 'Change wording' })[1].disabled).toBe(false)
+  })
+
+  it('the name section says sent messages keep the values they were filled in with', async () => {
+    stubApi()
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    expect(screen.getByText(FILLED_IN_NOTE)).toBeTruthy()
+    expect(FILLED_IN_NOTE).toBe('These messages were filled in when they were sent to Meta. If you change the offer name, sign-off or offer length, change the wording of each message too.')
+  })
+
+  it('Start from the standard wording resets the boxes, previewed with the current offer name and length, and sends no override', async () => {
+    const board = { ...BOARD, config: { ...BOARD.config, offer_name: 'Spring Reset', duration_days: 21 } }
+    const fetchMock = stubApi({ board, put: () => ok({ followup: { id: 'f1', state: 'awaiting_approval' } }) })
+    const { container } = renderPage()
+    await screen.findByText('Hi {{1}}, how was your first class? UN1T Stillorgan')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Change wording' })[1]) // the 1st Class stage
+    const box = screen.getByLabelText('After the first class: message')
+    expect(box.value).toBe('Hi {{1}}, how was your first class? UN1T Stillorgan')
+    const reset = screen.getByRole('button', { name: START_FROM_STANDARD })
+    expect(reset.getAttribute('type')).toBe('button')
+    fireEvent.click(reset)
+    const standard = RECIPES.paid_trial_offer.packs.find((p) => p.key === 'after_first_class').templates[0].body
+    expect(screen.getByLabelText('After the first class: message').value).toBe(standard)
+    expect(container.textContent).toContain('first class of the Spring Reset at UN1T Stillorgan')
+    expect(container.textContent).toContain('over the 21 days')
+    fireEvent.click(screen.getByRole('button', { name: 'Save wording' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Change wording' }).pop()) // the live row: confirm the replace
+    await waitFor(() => expect(calls(fetchMock, 'PUT')).toHaveLength(1))
+    // The recipe's own wording: no override, so the server fills in today's values.
+    expect(JSON.parse(calls(fetchMock, 'PUT')[0][1].body)).toEqual({ action: 'replace', pack_key: 'after_first_class' })
+  })
+
+  it('a save that changes the offer name, sign-off and length names the sending follow-ups that keep the old values', async () => {
+    const awaiting = { id: 'f3', stage_id: 's3', pack_key: 'halfway', state: 'awaiting_approval', version: 1, whatsapp_template_id: 't3', body_text: 'Hi {{1}}, halfway.', body_texts: { main: 'Hi {{1}}, halfway.' } }
+    const offRow = { id: 'f2', stage_id: 's1', pack_key: 'book_first_class', state: 'off', version: 1, whatsapp_template_id: 't2', body_text: 'Hi {{1}}, book.', body_texts: { main: 'Hi {{1}}, book.' } }
+    let sent = null
+    stubApi({
+      board: { ...BOARD, followups: [offRow, ...BOARD.followups, awaiting] },
+      patch: (body) => { sent = body; return ok({ board: BOARD }) },
+    })
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    fireEvent.change(screen.getByLabelText('Offer name'), { target: { value: 'Autumn Reset' } })
+    fireEvent.change(screen.getByLabelText('Sign-off'), { target: { value: 'Tim' } })
+    fireEvent.change(screen.getByLabelText('Offer length in days'), { target: { value: '21' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const expected = 'These follow-ups still use the old offer name, sign-off and offer length: 1st Class, Day 7. Change their wording to update them.'
+    expect(await screen.findByText(expected)).toBeTruthy()
+    expect(staleWordingNotice(['offer name', 'sign-off', 'offer length'], ['1st Class', 'Day 7'])).toBe(expected)
+    expect(sent.config).toMatchObject({ offer_name: 'Autumn Reset', signer: 'Tim', duration_days: 21 })
+  })
+
+  it('one changed value is named alone; a save that changes none of them shows no notice', async () => {
+    stubApi({ patch: () => ok({ board: BOARD }) })
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    fireEvent.change(screen.getByLabelText('Sign-off'), { target: { value: 'Tim' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('These follow-ups still use the old sign-off: 1st Class. Change their wording to update them.')).toBeTruthy()
+
+    cleanup()
+    const board = { ...BOARD, config: { ...BOARD.config, offer_name: 'Spring Reset' } }
+    stubApi({ board, patch: () => ok({ board }) })
+    renderPage()
+    // With an offer name set, the board name is not filled into any message.
+    fireEvent.change(await screen.findByLabelText(/^Board name/), { target: { value: 'Spring board' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('Saved.')).toBeTruthy()
+    expect(screen.queryByText(/still use the old/)).toBeNull()
   })
 
   it('a rejected follow-up offers Change wording and Switch off, never a resend', async () => {
@@ -240,7 +325,7 @@ describe('BoardSettings', () => {
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Turn off' }))
     expect(screen.getByText(TURN_OFF_CONFIRM)).toBeTruthy()
-    expect(TURN_OFF_CONFIRM).toBe('While the board is off, nobody new is placed. When you turn it back on, people who qualified in the meantime are placed without messages.')
+    expect(TURN_OFF_CONFIRM).toBe('While the board is off, nobody new is placed and people already on it stay where they are, with no messages. When you turn it back on, people who qualified in the meantime are placed without messages.')
     expect(calls(fetchMock, 'POST')).toHaveLength(0)
     fireEvent.click(screen.getAllByRole('button', { name: 'Turn off' }).pop())
     await waitFor(() => expect(calls(fetchMock, 'POST')).toHaveLength(1))
