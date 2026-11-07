@@ -7,6 +7,7 @@ import { RECIPES } from '@shared/pipelines/recipes.js'
 import { parseOfferConfig, MIA_NOTES_MAX } from '@shared/pipelines/offer-config.js'
 import { UN1T_STUDIO_ERROR } from './pipeline-boards.js'
 import { UN1T_MEMBERSHIP_SOURCES } from './pipeline-offer-claims.js'
+import { boardCreateSchema } from './schemas.js'
 
 const run = (state, ...actions) => actions.reduce(wizardReducer, state)
 const base = () => initialWizardState({ studioName: 'UN1T Stillorgan' })
@@ -52,11 +53,22 @@ describe('pipeline wizard', () => {
   })
 
   it('checkpointDayEditable', () => {
-    const s = run(filled(), { type: 'setStageDay', index: 2, day: '10' })
-    expect(s.stages[2].day).toBe(10)
-    expect(wizardConfig(s).stages[2]).toEqual({ role: 'checkpoint', name: 'Day 7', day: 10 })
-    const bad = run(filled(), { type: 'setStageDay', index: 2, day: '' })
+    // A checkpoint with no follow-up pack (no recipe has one today, so add one).
+    const promo = run(picked('promo_claim'), { type: 'setName', name: 'Promo' }, { type: 'setEntryValues', values: ['corp1'] })
+    const s0 = { ...promo, stages: [...promo.stages, { role: 'checkpoint', name: 'Day 3', defaultName: 'Day 3', day: 3, enabled: true, locked: false }] }
+    const s = wizardReducer(s0, { type: 'setStageDay', index: 4, day: '5' })
+    expect(s.stages[4].day).toBe(5)
+    expect(wizardConfig(s).stages[4]).toEqual({ role: 'checkpoint', name: 'Day 3', day: 5 })
+    const bad = wizardReducer(s0, { type: 'setStageDay', index: 4, day: '' })
     expect(stepErrors(bad, 'Stages')).toEqual(['The check-in day must be a whole number, 1 or more.'])
+  })
+
+  it('a checkpoint with a follow-up pack keeps the pack day', () => {
+    const s = picked()
+    expect(s.stages[2]).toMatchObject({ role: 'checkpoint', day: 7, fixedDay: 7 })
+    const moved = wizardReducer(s, { type: 'setStageDay', index: 2, day: '10' })
+    expect(moved).toBe(s)
+    expect(moved.stages[2].day).toBe(7)
   })
 
   it('edits a class count', () => {
@@ -163,6 +175,26 @@ describe('pipeline wizard', () => {
     const other = run(s, { type: 'pickRecipe', recipeKey: 'promo_claim' })
     expect(other.entry).toEqual({ type: 'corp_promo', values: [] })
     expect(other.stages.map((st) => st.name)).toEqual(['New', '1st Class', 'Done', 'Converted'])
+  })
+
+  it('keeps the board name and priority bounds in step with boardCreateSchema', () => {
+    const body = (over) => ({ name: 'Board', recipe_key: 'paid_trial_offer', config: {}, ...over })
+    const nameErrors = (st) => stepErrors(st, 'Name and offer').filter((e) => e.startsWith('The board name') || e.startsWith('Give the board'))
+    for (const len of [80, 81]) {
+      const name = 'x'.repeat(len)
+      const schemaOk = boardCreateSchema.safeParse(body({ name })).success
+      expect(nameErrors(run(filled(), { type: 'setName', name })).length === 0).toBe(schemaOk)
+    }
+    expect(boardCreateSchema.safeParse(body({ name: 'x'.repeat(80) })).success).toBe(true)
+    expect(boardCreateSchema.safeParse(body({ name: 'x'.repeat(81) })).success).toBe(false)
+    for (const priority of [0, 1, 1000, 1001]) {
+      const schemaOk = boardCreateSchema.safeParse(body({ priority })).success
+      const wizardOk = !stepErrors(run(filled(), { type: 'setPriority', priority }), 'Name and offer')
+        .some((e) => e.startsWith('Priority'))
+      expect([priority, wizardOk]).toEqual([priority, schemaOk])
+    }
+    expect([0, 1, 1000, 1001].map((priority) => boardCreateSchema.safeParse(body({ priority })).success))
+      .toEqual([false, true, true, false])
   })
 
   it('keeps the un1t.online notice and sources in step with the server', () => {

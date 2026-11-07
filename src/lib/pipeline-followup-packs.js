@@ -96,7 +96,7 @@ export async function installFollowupPack(db, {
   // The stage must be on this board. Its stored slug is the one the graph and
   // the enrolment trigger key on, not whatever the caller passed.
   const { data: stageRow, error: stageErr } = await db.from('pipeline_stages')
-    .select('id, slug, stage_role')
+    .select('id, slug, stage_role, role_config')
     .eq('id', stage.id)
     .eq('pipeline_id', pipelineId)
     .eq('location_id', locationId)
@@ -109,9 +109,16 @@ export async function installFollowupPack(db, {
   if (board.recipe_key !== recipeKey) {
     return fail(409, 'This pack does not belong to this board\'s recipe.', 'recipe_mismatch')
   }
-  const packRole = RECIPES[recipeKey]?.packs.find((p) => p.key === packKey)?.role
+  const packDef = RECIPES[recipeKey]?.packs.find((p) => p.key === packKey)
+  const packRole = packDef?.role
   if (packRole && packRole !== stageRow.stage_role) {
     return fail(409, 'This pack does not fit this stage.', 'stage_role_mismatch')
+  }
+  // A check-in message is written for its own day ({days_left} counts from
+  // it): on a stage moved to another day it would tell people the wrong
+  // number of days left. Refused before anything reaches Meta.
+  if (packDef?.day != null && stageRow.role_config?.day !== packDef.day) {
+    return fail(409, `This check-in message is written for day ${packDef.day}. Set the stage back to day ${packDef.day} to use it.`, 'pack_day_mismatch')
   }
 
   const { data: location, error: locErr } = await db.from('locations')

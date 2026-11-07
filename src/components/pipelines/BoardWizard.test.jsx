@@ -2,6 +2,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import BoardWizard from './BoardWizard.jsx'
+import StagesStep from './wizard/StagesStep.jsx'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -80,14 +81,28 @@ describe('BoardWizard', () => {
     next()
   }
 
-  it('the new stage is locked and the check-in day is editable', async () => {
+  it('the new stage is locked and the recipe check-in day is fixed', async () => {
     await toStages()
     const newBox = screen.getByLabelText('Use the New Leads stage')
     expect(newBox.checked).toBe(true)
     expect(newBox.disabled).toBe(true)
-    const day = screen.getByLabelText('Check-in day for Day 7')
+    expect(screen.queryByLabelText('Check-in day for Day 7')).toBeNull()
+    expect(screen.getByText("Fixed at day 7 for this recipe's check-in message.")).toBeTruthy()
+  })
+
+  it('a check-in without a follow-up pack keeps an editable day', () => {
+    const dispatch = vi.fn()
+    const state = {
+      stages: [
+        { role: 'new', name: 'New', defaultName: 'New', enabled: true, locked: true },
+        { role: 'checkpoint', name: 'Day 3', defaultName: 'Day 3', day: 3, enabled: true, locked: false },
+      ],
+    }
+    render(<StagesStep state={state} dispatch={dispatch} />)
+    const day = screen.getByLabelText('Check-in day for Day 3')
     fireEvent.change(day, { target: { value: '9' } })
-    expect(day.value).toBe('9')
+    expect(dispatch).toHaveBeenCalledWith({ type: 'setStageDay', index: 1, day: '9' })
+    expect(screen.queryByText(/Fixed at day/)).toBeNull()
   })
 
   it('follow-ups default to the recipe wording and preview with Tim', async () => {

@@ -3,7 +3,8 @@
 import { INPUT, NUMBER_INPUT } from './styles'
 
 // Step 4: the recipe's stages. The first stage is always on; the rest can be
-// switched off and renamed, and a check-in day or class count changed.
+// switched off and renamed, and a check-in day or class count changed (a
+// check-in day the recipe's message is written for stays fixed).
 export default function StagesStep({ state, dispatch }) {
   return (
     <ul className="space-y-3">
@@ -23,7 +24,13 @@ export default function StagesStep({ state, dispatch }) {
             disabled={!s.enabled}
             onChange={(e) => dispatch({ type: 'renameStage', index, name: e.target.value })}
           />
-          {s.role === 'checkpoint' && (
+          {s.role === 'checkpoint' && s.fixedDay != null && (
+            <span className="text-sm text-un1t-subtle">
+              Day {s.fixedDay}
+              <span className="block text-xs">{`Fixed at day ${s.fixedDay} for this recipe's check-in message.`}</span>
+            </span>
+          )}
+          {s.role === 'checkpoint' && s.fixedDay == null && (
             <label className="flex items-center gap-2 text-sm text-un1t-subtle">
               Day
               <input

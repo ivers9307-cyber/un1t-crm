@@ -28,10 +28,12 @@ export const isUn1tStudio = (source) => UN1T_SOURCES.includes(source)
 
 export const OWNER_ONLY_NOTICE = 'Only owners can build boards.'
 export const DEFAULT_PRIORITY = 100
-export const BOARD_NAME_MAX = 80 // boardCreateSchema's BOARD_NAME_MAX
+// boardCreateSchema's bounds (src/lib/schemas.js), copied for the client
+// bundle; pipeline-wizard.test.js parses the same values with the schema.
+export const BOARD_NAME_MAX = 80
+export const PRIORITY_MIN = 1
+export const PRIORITY_MAX = 1000
 const PREVIEW_KEY = 'o_preview'
-const PRIORITY_MIN = 1
-const PRIORITY_MAX = 1000
 
 // The entry rule in words. A trial purchase's words follow its match.
 export const TRIAL_MATCH_LABELS = Object.freeze({
@@ -104,6 +106,10 @@ function fromRecipe(recipe) {
   for (const pack of recipe.packs) {
     bodies[pack.key] = Object.fromEntries(pack.templates.map((t) => [t.ref, t.body]))
   }
+  // A checkpoint whose follow-up is written for a set day keeps that day: the
+  // message counts {days_left} from it, and the server refuses the pack on a
+  // stage moved to another day (installFollowupPack, pack_day_mismatch).
+  const packDayByRole = Object.fromEntries(recipe.packs.filter((p) => p.day != null).map((p) => [p.role, p.day]))
   return {
     recipeKey: recipe.key,
     durationDays: defaults.duration_days,
@@ -114,6 +120,9 @@ function fromRecipe(recipe) {
       defaultName: s.name,
       ...(s.day != null ? { day: s.day } : {}),
       ...(s.count != null ? { count: s.count } : {}),
+      ...(s.role === 'checkpoint' && packDayByRole.checkpoint != null
+        ? { day: packDayByRole.checkpoint, fixedDay: packDayByRole.checkpoint }
+        : {}),
       enabled: true,
       locked: s.role === 'new',
     })),
@@ -154,6 +163,7 @@ export function wizardReducer(state, action) {
     case 'renameStage': return patchStage(state, action.index, { name: String(action.name ?? '') })
     case 'setStageDay':
       if (state.stages[action.index]?.role !== 'checkpoint') return state
+      if (state.stages[action.index].fixedDay != null) return state
       return patchStage(state, action.index, { day: wholeOrRaw(action.day) })
     case 'setStageCount':
       if (state.stages[action.index]?.role !== 'class_n') return state
