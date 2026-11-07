@@ -26,6 +26,11 @@ function fakeDb(tables, { errors = {}, pageLog = [] } = {}) {
         gte(c, v) { filters.push((r) => r[c] >= v); return q },
         order() { return q },
         range(a, b) { range = [a, b]; return q },
+        maybeSingle() {
+          if (errors[table]) return Promise.resolve({ data: null, error: { message: 'boom' } })
+          const rows = (tables[table] || []).filter((r) => filters.every((f) => f(r)))
+          return Promise.resolve({ data: rows[0] ?? null, error: null })
+        },
         then(res, rej) {
           if (errors[table]) return Promise.resolve({ data: null, error: { message: 'boom' } }).then(res, rej)
           let rows = (tables[table] || []).filter((r) => filters.every((f) => f(r)))
@@ -334,6 +339,22 @@ describe('health', () => {
     const codes = r.health.map((h) => h.code).sort()
     expect(codes).toEqual(['no_followup', 'nobody_entered_7d', 'sequence_paused', 'template_rejected'])
     expect(r.health.find((h) => h.code === 'no_followup').stageId).toBe('s-done')
+  })
+
+  // RAILS.4 — a held first placement, dated on the studio's own calendar.
+  it('a held first placement is baseline_held, dated on the studio calendar; not held is quiet', async () => {
+    const lastRun = { status: 'partial', errors: 3, started_at: '2026-11-07T03:30:00Z', finished_at: '2026-11-07T03:31:00Z' }
+    const pendingBoard = (held) => board({ baseline_at: null, baseline_pending: { cadence: 'nightly', last_run: lastRun, held } })
+    const tables = { deals: baseDeals(), activities: [], locations: [{ id: LOC, timezone: 'America/New_York' }] }
+    const held = await run(tables, pendingBoard(true))
+    expect(held.health.filter((h) => h.code === 'baseline_held')).toEqual([{
+      code: 'baseline_held',
+      message: "First placement is held: 3 people could not be checked on the last run (6 Nov). Follow-ups won't start until a run completes cleanly.",
+    }])
+    const quiet = await run(tables, pendingBoard(false))
+    expect(quiet.health.map((h) => h.code)).not.toContain('baseline_held')
+    const unread = await run(tables, board({ baseline_at: null, baseline_pending: { cadence: 'nightly', last_run: null, held: false, unread: true } }))
+    expect(unread.health.map((h) => h.code)).not.toContain('baseline_held')
   })
 
   it("a paid_trial_offer board's Converted stage gives no warning (the recipe has no converted pack)", async () => {

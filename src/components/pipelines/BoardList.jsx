@@ -49,13 +49,38 @@ export function followupChip(followups, stageId) {
   return CHIPS[best.state] || NONE_CHIP
 }
 
+// RAILS.4 — a board's first placement runs on its studio's clock: nightly
+// (03:30 UTC) at a Glofox/contacts studio, hourly at a un1t.online studio.
+export const placementCadence = (board) => board?.baseline_pending?.cadence
+  || (board?.module === 'offer_un1t' ? 'hourly' : 'nightly')
+
+// A run's day as a short date, in the browser's own zone (staff UI; the server
+// does not send the studio's zone with the board).
+export function runDateLabel(iso) {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })
+}
+
+export const HEALTH_UNREAD_NOTICE = 'Could not check whether WhatsApp has paused or rejected a follow-up just now. Reload the page to try again.'
+
 export function boardStatus(board) {
   if (!board.enabled) return 'Off'
   // A built-in board has no baseline_at (it never went through the builder's
   // silent switch-on) and has been placing people and sending all along.
   if (!board.board_type) return 'On'
-  if (!board.baseline_at) return 'On — first placement tonight, no messages'
-  return 'On'
+  if (board.baseline_at) return 'On'
+  const pending = board.baseline_pending
+  if (pending?.held && pending.last_run && !pending.unread) {
+    const n = Number(pending.last_run.errors) || 0
+    const date = runDateLabel(pending.last_run.started_at)
+    const when = date ? ` (${date})` : ''
+    if (n > 0) return `On — first placement held: ${n} ${n === 1 ? 'person' : 'people'} could not be checked${when}`
+    // A run that failed outright skipped nobody by count: never "0 people".
+    return `On — first placement held: the last run did not complete${when}`
+  }
+  return placementCadence(board) === 'hourly'
+    ? 'On — first placement within the hour, no messages'
+    : 'On — first placement tonight, no messages'
 }
 
 function Chip({ chip }) {
@@ -95,6 +120,7 @@ function BoardCard({ board, coverageStages }) {
         )}
       </div>
       {builtIn && <p className="text-xs text-un1t-subtle mt-1">Built in code — read only</p>}
+      {board.health_unread && <p className="text-xs text-amber-700 mt-1">{HEALTH_UNREAD_NOTICE}</p>}
       <ul className="mt-3 space-y-1">
         {stages.map((st) => (
           <li key={st.id} className="flex items-center gap-2 text-sm text-un1t-text">

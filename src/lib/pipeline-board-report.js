@@ -28,6 +28,7 @@ import { requiredFields as OFFER_CONTACT_FIELDS } from '@shared/pipelines/offer'
 import { loadStageCoverage } from './pipeline-stage-coverage'
 import { selectAll, selectAllByKeys } from './select-all'
 import { logError } from './log'
+import { getLocationZone, formatInZone } from './location-time'
 
 const MODULE = 'pipeline-board-report'
 const DAY_MS = 86400000
@@ -374,10 +375,35 @@ async function buildHealth(db, board, locationId, entered7) {
     }
   }
 
+  // RAILS.4 — getBoard derived baseline_pending from the studio's latest real
+  // placement run; a held first placement starts no follow-ups.
+  const pending = board.baseline_pending
+  if (board.enabled && !board.baseline_at && pending?.held && pending.last_run && !pending.unread) {
+    items.push({ code: 'baseline_held', message: await baselineHeldMessage(db, locationId, pending.last_run) })
+  }
+
   if (board.enabled && board.baseline_at && entered7 === 0) {
     items.push({ code: 'nobody_entered_7d', message: 'Nobody has entered this board in the last 7 days.' })
   }
   return items
+}
+
+const HELD_TAIL = "Follow-ups won't start until a run completes cleanly."
+
+/** The held message, with the run's day on the studio's calendar (no date when the zone can't be read). */
+async function baselineHeldMessage(db, locationId, run) {
+  let date = null
+  try {
+    const zone = await getLocationZone(db, locationId)
+    date = formatInZone(run.started_at, zone, { day: 'numeric', month: 'short' })
+  } catch (e) {
+    logError(MODULE, 'studio zone read failed', { locationId, err: e?.message || String(e) })
+  }
+  const when = date ? ` (${date})` : ''
+  const n = Number(run.errors) || 0
+  // A run that failed outright skipped nobody by count: never "0 people".
+  if (n === 0) return `First placement is held: the last run${when} did not complete. ${HELD_TAIL}`
+  return `First placement is held: ${n} ${n === 1 ? 'person' : 'people'} could not be checked on the last run${when}. ${HELD_TAIL}`
 }
 
 /**

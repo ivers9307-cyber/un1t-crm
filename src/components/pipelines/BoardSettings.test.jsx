@@ -259,6 +259,14 @@ describe('BoardSettings', () => {
     expect(screen.getByRole('button', { name: 'Switch off' }).disabled).toBe(false)
   })
 
+  it('an unreadable health read says so beside the follow-ups', async () => {
+    stubApi({ board: { ...BOARD, health_unread: true } })
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    const line = screen.getByText('Could not check whether WhatsApp has paused or rejected a follow-up just now. Reload the page to try again.')
+    expect(line.className).toContain('text-amber-700')
+  })
+
   it("one message's wording not found blocks Change wording for that follow-up", async () => {
     const halfway = { id: 'f3', stage_id: 's3', pack_key: 'halfway', state: 'live', version: 1, whatsapp_template_id: 't3', body_text: 'Hi {{1}}, halfway.', body_texts: { main: 'Hi {{1}}, halfway.' }, wording_missing: ['nudge'] }
     stubApi({ board: { ...BOARD, followups: [...BOARD.followups, halfway] } })

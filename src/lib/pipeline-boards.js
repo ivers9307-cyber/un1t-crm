@@ -236,7 +236,59 @@ async function loadBoards(db, locationId, boardId = null) {
   if (!counts.ok) return unreadable('the deal counts')
 
   const shaped = rows.map((b) => shapeBoard(b, stageRows, followups || [], counts.counts))
-  return { ok: true, boards: await withBoardsHealth(db, locationId, shaped) }
+  const pending = await withBaselinePending(db, locationId, rows, shaped)
+  return { ok: true, boards: await withBoardsHealth(db, locationId, pending) }
+}
+
+// ---------------------------------------------------------------------------
+// RAILS.4 — a held first placement
+// ---------------------------------------------------------------------------
+//
+// A board switched on and not yet baselined is waiting for its first silent
+// placement: tonight (03:30 UTC) at a Glofox/contacts studio, within the hour
+// at a un1t.online studio (module offer_un1t). The placement pass stamps
+// baseline_at only after a real run that ended with no errors, so a run since
+// switch-on that failed or skipped people HOLDS the board: no follow-ups
+// start. baseline_pending says which, from the studio's latest real run.
+// Derived at read time, never stored. A failed runs read is `unread` (and
+// never "held"); it never fails the board read.
+
+const RUN_COLUMNS = 'status, errors, error_message, started_at, finished_at'
+
+export const placementCadence = (board) => (board?.module === 'offer_un1t' ? 'hourly' : 'nightly')
+
+const isPendingBaseline = (b) => !!(b.enabled && b.board_type && !b.baseline_at)
+
+/** Is this board's first placement held by this run? Only a run that started after switch-on counts. */
+export function baselineHeld(lastRun, boardUpdatedAt) {
+  if (!lastRun) return false
+  const started = Date.parse(lastRun.started_at)
+  const switched = Date.parse(boardUpdatedAt)
+  if (!Number.isFinite(started) || !Number.isFinite(switched) || started <= switched) return false
+  return lastRun.status !== 'success' || (Number(lastRun.errors) || 0) > 0
+}
+
+async function withBaselinePending(db, locationId, rawRows, boards) {
+  const updatedAt = new Map(rawRows.map((r) => [r.id, r.updated_at]))
+  if (!boards.some(isPendingBaseline)) return boards
+  const { data, error } = await db
+    .from('pipeline_classification_runs')
+    .select(RUN_COLUMNS)
+    .eq('location_id', locationId)
+    .eq('dry_run', false)
+    .order('started_at', { ascending: false })
+    .limit(1)
+  if (error) logError(MODULE, 'classification runs read failed', { locationId, err: error.message })
+  const row = !error && Array.isArray(data) ? data[0] ?? null : null
+  const lastRun = row
+    ? { status: row.status, errors: Number(row.errors) || 0, started_at: row.started_at, finished_at: row.finished_at }
+    : null
+  return boards.map((b) => {
+    if (!isPendingBaseline(b)) return b
+    const cadence = placementCadence(b)
+    if (error) return { ...b, baseline_pending: { cadence, last_run: null, held: false, unread: true } }
+    return { ...b, baseline_pending: { cadence, last_run: lastRun, held: baselineHeld(lastRun, updatedAt.get(b.id)) } }
+  })
 }
 
 /** Every board at the studio, enabled or not, with its stages and follow-ups (each with its health). */
@@ -323,12 +375,6 @@ async function withBoardsHealth(db, locationId, boards) {
       ),
     })),
   }))
-}
-
-/** One board's follow-ups with their health (see withBoardsHealth). */
-export async function withFollowupHealth(db, locationId, board) {
-  const [out] = await withBoardsHealth(db, locationId, [board])
-  return out
 }
 
 const bodyTextOf = (components) => {

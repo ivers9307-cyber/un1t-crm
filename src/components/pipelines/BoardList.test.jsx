@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import { RECIPES } from '@shared/pipelines/recipes.js'
-import BoardList, { followupChip } from './BoardList.jsx'
+import BoardList, { followupChip, boardStatus } from './BoardList.jsx'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -126,6 +126,32 @@ describe('BoardList', () => {
     id: 'b9', key: 'acquisition', name: 'Acquisition', board_type: null, enabled: true, baseline_at: null, priority: 0,
     stages: [stage('k1', 'New Leads', 1), stage('k2', '1st Class', 2), stage('k3', 'Converted', 3)], followups: [],
   }
+  // RAILS.4 — a held first placement says so, on the studio's own clock.
+  it('pendingBoardsSayWhenTheirFirstPlacementIsAndWhenItIsHeld', () => {
+    const offer = { board_type: 'offer', enabled: true, baseline_at: null }
+    const run = { status: 'partial', errors: 3, started_at: '2026-11-06T12:00:00Z', finished_at: null }
+    expect(boardStatus({ ...offer, baseline_pending: { cadence: 'nightly', last_run: null, held: false } }))
+      .toBe('On — first placement tonight, no messages')
+    expect(boardStatus({ ...offer, module: 'offer_un1t', baseline_pending: { cadence: 'hourly', last_run: null, held: false } }))
+      .toBe('On — first placement within the hour, no messages')
+    expect(boardStatus({ ...offer, baseline_pending: { cadence: 'nightly', last_run: run, held: true } }))
+      .toBe('On — first placement held: 3 people could not be checked (6 Nov)')
+    // An unreadable runs read is never "held".
+    expect(boardStatus({ ...offer, baseline_pending: { cadence: 'hourly', last_run: null, held: false, unread: true } }))
+      .toBe('On — first placement within the hour, no messages')
+    // A run with no count that failed outright never reads "0 people".
+    expect(boardStatus({ ...offer, baseline_pending: { cadence: 'nightly', last_run: { ...run, status: 'failed', errors: 0 }, held: true } }))
+      .toBe('On — first placement held: the last run did not complete (6 Nov)')
+    // A board from before RAILS.4's field: by its module.
+    expect(boardStatus({ ...offer, module: 'offer_un1t' })).toBe('On — first placement within the hour, no messages')
+  })
+  it('anUnreadableHealthReadSaysSoOnTheBoardCard', async () => {
+    stub({ boards: [{ ...BOARDS[0], health_unread: true }], can_edit: true })
+    render(<BoardList locationId="loc1" />)
+    await screen.findByText('Summer offer')
+    const line = screen.getByText('Could not check whether WhatsApp has paused or rejected a follow-up just now. Reload the page to try again.')
+    expect(line.className).toContain('text-amber-700')
+  })
   it('a built-in board with no baseline reads On, never "first placement tonight"', async () => {
     stubBoth({ boards: [BUILT], can_edit: false }, [])
     render(<BoardList locationId="loc1" />)

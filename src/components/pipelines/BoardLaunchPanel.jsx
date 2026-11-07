@@ -3,9 +3,14 @@
 import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button, Card, Modal } from '@/components/ui'
-import { followupChip } from './BoardList'
+import { followupChip, placementCadence } from './BoardList'
 
-export const TURN_ON_CONFIRM = 'People who already qualify are placed tonight without any messages. From tomorrow, new people get the follow-ups.'
+// RAILS.4 — keyed by the board's placement cadence (placementCadence).
+export const TURN_ON_CONFIRM = {
+  nightly: 'People who already qualify are placed tonight without any messages. From tomorrow, new people get the follow-ups.',
+  hourly: 'People who already qualify are placed within the hour without any messages. After that, new people get the follow-ups.',
+}
+export const DRY_RUN_ERRORS_NOTE = (n) => `Some people could not be checked (${n}). The first placement is held until this is clear.`
 
 /** "3 people now on the €39 Trial board would move here". */
 export function overlapLine(row) {
@@ -53,6 +58,8 @@ export default function BoardLaunchPanel({ board, followups, issues = [], onRetr
   const settled = !installing && (expectedKeys == null
     || expectedKeys.every((k) => (followups || []).some((f) => f.pack_key === k) || issues.some((i) => i.key === k)))
   const canTurnOn = !!dry && hasFollowup && settled && !enabled
+  // The dry run answers a count, or (older shape) the list of errors.
+  const dryErrors = dry ? (Array.isArray(dry.errors) ? dry.errors.length : Number(dry.errors) || 0) : 0
 
   async function runDry() {
     if (inFlight.current) return
@@ -129,7 +136,7 @@ export default function BoardLaunchPanel({ board, followups, issues = [], onRetr
                 {dry.overlap.map((o) => <li key={o.boardKey}>{overlapLine(o)}</li>)}
               </ul>
             )}
-            {dry.errors > 0 && <p className="text-amber-700">Some people could not be checked ({Array.isArray(dry.errors) ? dry.errors.length : dry.errors}).</p>}
+            {dryErrors > 0 && <p className="text-amber-700">{DRY_RUN_ERRORS_NOTE(dryErrors)}</p>}
           </div>
         )}
       </Card>
@@ -154,7 +161,7 @@ export default function BoardLaunchPanel({ board, followups, issues = [], onRetr
           </>
         )}
       >
-        <p className="text-sm text-un1t-text">{TURN_ON_CONFIRM}</p>
+        <p className="text-sm text-un1t-text">{TURN_ON_CONFIRM[placementCadence(board)]}</p>
         {onError && <p className="mt-2 text-sm text-red-700" role="alert">{onError}</p>}
       </Modal>
     </div>

@@ -15,7 +15,7 @@ import FollowupsStep from './wizard/FollowupsStep'
 import MiaNotesStep from './wizard/MiaNotesStep'
 import BoardLaunchPanel from './BoardLaunchPanel'
 import BoardReport from './BoardReport'
-import { boardStatus, followupChip } from './BoardList'
+import { boardStatus, followupChip, placementCadence, HEALTH_UNREAD_NOTICE } from './BoardList'
 
 export const SWITCH_OFF_NOTE = 'Switch the board off to change this.'
 export const REPLACE_CONFIRM = 'The current message stops now. The new wording starts once Meta approves it, usually within a few hours.'
@@ -36,7 +36,11 @@ export const OWNER_ONLY_REJECTED_NOTE = 'Meta rejected this wording. Ask an owne
 // RAILS.2 — switching off retires the sequence and a later install goes back to Meta.
 export const FOLLOWUP_OFF_CONFIRM = 'This stops the follow-up for everyone now, including people part-way through it, and retires its sequence. Switching it on again sends the message to WhatsApp for approval again, which can take hours.'
 export const START_FROM_STANDARD = 'Start from the standard wording'
-export const BASELINE_NOTE = 'Switching a board on never messages people who already qualify. They are placed that night without any messages; only people who qualify after that get the follow-ups.'
+// RAILS.4 — keyed by the board's placement cadence (placementCadence).
+export const BASELINE_NOTE = {
+  nightly: 'Switching a board on never messages people who already qualify. They are placed that night without any messages; only people who qualify after that get the follow-ups.',
+  hourly: 'Switching a board on never messages people who already qualify. They are placed within the hour without any messages; only people who qualify after that get the follow-ups.',
+}
 
 // The board's own sections: their checks decide whether Save may go.
 const BOARD_STEPS = ['Name and offer', 'Who enters', 'Stages', 'Notes for Mia']
@@ -401,7 +405,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
             <Button type="button" variant="secondary" size="sm" className="ml-auto" onClick={() => { setOffError(null); setConfirmOff(true) }}>Turn off</Button>
           )}
         </div>
-        <p className="mt-2 text-sm text-un1t-subtle">{BASELINE_NOTE}</p>
+        <p className="mt-2 text-sm text-un1t-subtle">{BASELINE_NOTE[placementCadence(board)]}</p>
       </Section>
 
       {board.board_type === 'offer' && <BoardReport boardId={boardId} stages={board.stages || []} />}
@@ -461,6 +465,9 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
       <Section title="Follow-ups">
         {board.wording_unread && (
           <p className="mb-3 text-sm text-amber-700">Could not read the current wording just now. Reload the page to try again.</p>
+        )}
+        {board.health_unread && (
+          <p className="mb-3 text-sm text-amber-700">{HEALTH_UNREAD_NOTICE}</p>
         )}
         <ul className="space-y-4">
           {stages.map((stage) => {

@@ -408,6 +408,82 @@ describe('listBoards / getBoard', () => {
     })
   })
 
+  // RAILS.4 — a held first placement says so.
+  describe('baseline pending', () => {
+    const SWITCHED = '2026-11-06T12:00:00.000Z'
+    async function pendingBoard(runs = []) {
+      const db = seedDb()
+      const created = await createdBoard(db)
+      const row = db.tables.pipelines.find((p) => p.id === created.id)
+      Object.assign(row, { enabled: true, baseline_at: null, updated_at: SWITCHED })
+      db.tables.pipeline_classification_runs = runs.map((r) => ({
+        location_id: LOC, dry_run: false, status: 'success', errors: 0, error_message: null, finished_at: null, ...r,
+      }))
+      return { db, id: created.id }
+    }
+    const pendingOf = async (db, id) => (await getBoard(db, LOC, id)).board.baseline_pending
+
+    it('aFailedRunAfterSwitchOnHoldsTheBoardWithItsCounts', async () => {
+      const { db, id } = await pendingBoard([
+        { started_at: '2026-11-07T03:30:00.000Z', finished_at: '2026-11-07T03:31:00.000Z', status: 'partial', errors: 3 },
+        { started_at: '2026-11-05T03:30:00.000Z', status: 'success', errors: 0 },
+        { started_at: '2026-11-07T09:00:00.000Z', status: 'success', errors: 0, dry_run: true },   // a dry run never counts
+        { started_at: '2026-11-07T10:00:00.000Z', status: 'success', errors: 0, location_id: OTHER },
+      ])
+      expect(await pendingOf(db, id)).toEqual({
+        cadence: 'nightly',
+        last_run: { status: 'partial', errors: 3, started_at: '2026-11-07T03:30:00.000Z', finished_at: '2026-11-07T03:31:00.000Z' },
+        held: true,
+      })
+      const listed = (await listBoards(db, LOC)).boards
+      expect(listed.find((b) => b.id === id).baseline_pending.held).toBe(true)
+      expect(listed.find((b) => b.key === 'acquisition').baseline_pending).toBeUndefined()
+    })
+
+    it('aCleanRunIsNotHeld', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-07T03:30:00.000Z', status: 'success', errors: 0 }])
+      expect((await pendingOf(db, id)).held).toBe(false)
+    })
+
+    it('aFailedRunFromBeforeSwitchOnIsNotHeld', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-06T03:30:00.000Z', status: 'failed', errors: 9 }])
+      const pending = await pendingOf(db, id)
+      expect(pending.held).toBe(false)
+      expect(pending.last_run.status).toBe('failed')
+    })
+
+    it('noRunIsLastRunNull', async () => {
+      const { db, id } = await pendingBoard([])
+      expect(await pendingOf(db, id)).toEqual({ cadence: 'nightly', last_run: null, held: false })
+    })
+
+    it('aUn1tOnlineBoardIsPlacedHourly', async () => {
+      const { db, id } = await pendingBoard([])
+      db.tables.pipelines.find((p) => p.id === id).module = 'offer_un1t'
+      expect((await pendingOf(db, id)).cadence).toBe('hourly')
+    })
+
+    it('aFailedRunsReadIsUnreadAndKeepsTheBoard', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-07T03:30:00.000Z', status: 'failed', errors: 2 }])
+      db.failures['pipeline_classification_runs:select'] = { message: 'down' }
+      const res = await getBoard(db, LOC, id)
+      expect(res.ok).toBe(true)
+      expect(res.board.baseline_pending).toEqual({ cadence: 'nightly', last_run: null, held: false, unread: true })
+    })
+
+    it('aBaselinedOrOffBoardCarriesNoBaselinePendingAndReadsNoRuns', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-07T03:30:00.000Z', status: 'failed', errors: 2 }])
+      const row = db.tables.pipelines.find((p) => p.id === id)
+      row.baseline_at = '2026-11-07T03:31:00.000Z'
+      expect((await getBoard(db, LOC, id)).board.baseline_pending).toBeUndefined()
+      row.baseline_at = null
+      row.enabled = false
+      db.failures['pipeline_classification_runs:select'] = { message: 'down' }
+      const res = await getBoard(db, LOC, id)
+      expect(res.board.baseline_pending).toBeUndefined()
+    })
+  })
+
   it('unreadableDealsIs503NotZero', async () => {
     const db = seedDb()
     await createdBoard(db)
