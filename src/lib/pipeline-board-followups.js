@@ -362,7 +362,7 @@ export async function applyFollowupAction(db, {
     if (!stopped.ok) return stopped
   }
 
-  const installed = await installFollowupPack(db, {
+  const installArgs = {
     locationId,
     pipelineId: board.id,
     stage: { id: stage.id, slug: stage.slug },
@@ -373,7 +373,13 @@ export async function applyFollowupAction(db, {
     wantLive: true,
     version,
     ...(bodies != null ? { bodies } : {}),
-  })
+  }
+  let installed = await installFollowupPack(db, installArgs)
+  // Old wording under the same template names (a failed run submitted them):
+  // retry ONCE at the next version, so every template of the pack is fresh.
+  if (!installed.ok && installed.code === 'template_wording_differs') {
+    installed = await installFollowupPack(db, { ...installArgs, version: version + 1 })
+  }
   if (!installed.ok && action === 'replace') {
     // The old sequence is stopped and the row is off: nothing sends. Say so,
     // so "install again" is the obvious next step (it converges: templates a

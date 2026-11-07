@@ -119,9 +119,10 @@ export default function BoardWizard({
       const created = await send(`/api/locations/${locationId}/pipelines`, 'POST', body)
       if (!created.ok) { setCreateError(created.json?.error || 'The board could not be created.'); return }
       const board = created.json.data.board
-      setLaunch({ board, followups: [], issues: [], wording })
+      const packs = followupPacks(wizardState)
+      setLaunch({ board, followups: [], issues: [], wording, expectedKeys: packs.map((p) => p.key) })
       setBusy(true)
-      for (const pack of followupPacks(wizardState)) {
+      for (const pack of packs) {
         const r = await installOne(board, pack.key, wording)
         setLaunch((prev) => applyResult(prev, r))
       }
@@ -159,7 +160,7 @@ export default function BoardWizard({
             <Link href={`/settings/pipelines/${launch.board.id}`} className="text-un1t-accent">Open the board</Link>
           </p>
         </Card>
-        <BoardLaunchPanel board={launch.board} followups={launch.followups} issues={launch.issues} onRetry={retry} retryDisabled={busy} />
+        <BoardLaunchPanel board={launch.board} followups={launch.followups} issues={launch.issues} onRetry={retry} retryDisabled={busy} installing={busy} expectedKeys={launch.expectedKeys} />
       </div>
     )
   }

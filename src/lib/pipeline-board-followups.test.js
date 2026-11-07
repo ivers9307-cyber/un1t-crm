@@ -180,6 +180,26 @@ describe('applyFollowupAction: install', () => {
     expect(followupRead.filters).toEqual({ location_id: LOC, stage_id: STAGE_ID, pack_key: 'book_first_class' })
   })
 
+  it('retries once at version + 1 when the install finds old wording', async () => {
+    db = makeDb(responder({ row: liveRow({ state: 'draft', version: 2 }), overrides: draftSequence }))
+    installFollowupPack
+      .mockResolvedValueOnce({ ok: false, status: 409, code: 'template_wording_differs', error: 'differs' })
+      .mockResolvedValueOnce({ ok: true, followup: { id: 'f1', state: 'awaiting_approval', version: 3 }, created: false })
+    const res = await run()
+    expect(res).toMatchObject({ ok: true, followup: { version: 3 } })
+    expect(installFollowupPack).toHaveBeenCalledTimes(2)
+    expect(installFollowupPack.mock.calls[0][1].version).toBe(2)
+    expect(installFollowupPack.mock.calls[1][1].version).toBe(3)
+  })
+
+  it('returns template_wording_differs when the retry differs too', async () => {
+    db = makeDb(responder({ row: liveRow({ state: 'draft', version: 2 }), overrides: draftSequence }))
+    installFollowupPack.mockResolvedValue({ ok: false, status: 409, code: 'template_wording_differs', error: 'differs' })
+    const res = await run()
+    expect(res).toMatchObject({ ok: false, code: 'template_wording_differs' })
+    expect(installFollowupPack).toHaveBeenCalledTimes(2)
+  })
+
   it('installTwiceReturnsSameRow', async () => {
     const row = liveRow({ version: 2 })
     db = makeDb(responder({ row }))
