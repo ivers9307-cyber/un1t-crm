@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
-import BoardList from './BoardList.jsx'
+import BoardList, { followupChip } from './BoardList.jsx'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -57,5 +57,17 @@ describe('BoardList', () => {
     stub({ boards: [], can_edit: false })
     render(<BoardList locationId="loc1" />)
     await waitFor(() => expect(screen.getByText('No offer boards yet.')).toBeTruthy())
+  })
+  it('New board is a real link, not a button inside a link', async () => {
+    stub({ boards: [], can_edit: true })
+    const { container } = render(<BoardList locationId="loc1" />)
+    await screen.findByText('No offer boards yet.')
+    expect(container.querySelector('a button')).toBeNull()
+    expect(screen.getByRole('link', { name: 'New board' })).toBeTruthy()
+  })
+  it('an unknown follow-up state ranks below a known one', () => {
+    const chip = followupChip([{ stage_id: 's', state: 'mystery' }, { stage_id: 's', state: 'off' }], 's')
+    expect(chip.label).toBe('Off')
+    expect(followupChip([{ stage_id: 's', state: 'mystery' }], 's').label).toBe('None')
   })
 })

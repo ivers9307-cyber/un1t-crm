@@ -19,7 +19,9 @@ const PRECEDENCE = ['live', 'awaiting_approval', 'draft', 'rejected', 'off']
 export function followupChip(followups, stageId) {
   const rows = (followups || []).filter((f) => f.stage_id === stageId)
   if (rows.length === 0) return NONE_CHIP
-  const best = [...rows].sort((a, b) => PRECEDENCE.indexOf(a.state) - PRECEDENCE.indexOf(b.state))[0]
+  // An unknown state ranks last, never first (indexOf gives -1).
+  const rank = (st) => { const i = PRECEDENCE.indexOf(st); return i === -1 ? PRECEDENCE.length : i }
+  const best = [...rows].sort((a, b) => rank(a.state) - rank(b.state))[0]
   return CHIPS[best.state] || NONE_CHIP
 }
 
@@ -93,9 +95,7 @@ export default function BoardList({ locationId }) {
     <div className="space-y-4">
       {state.canEdit && (
         <div>
-          <Link href="/settings/pipelines/new">
-            <Button type="button">New board</Button>
-          </Link>
+          <Button as={Link} href="/settings/pipelines/new">New board</Button>
         </div>
       )}
       {offers.length === 0 && <p className="text-sm text-un1t-subtle">No offer boards yet.</p>}
