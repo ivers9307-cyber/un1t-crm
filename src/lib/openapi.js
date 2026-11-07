@@ -7260,7 +7260,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Dry-run one offer board: who would enter, per stage, and from which boards (owner / master at the studio)',
   request: { params: z.object({ id: uuidLike }) },
-  description: 'Runs the placement pass with dryRun true (nothing is written); a board that is off is included for this run only. Returns { entering, byStage: [{ slug, name, count }], overlap: [{ boardKey, boardName?, count }], contactsSeen, errors }. Built-in boards are 409; a failed run is 503.',
+  description: 'Runs the placement pass with dryRun true (nothing is written); a board that is off is included for this run only. Returns { entering, byStage: [{ slug, name, count }], overlap: [{ boardKey, boardName?, count }], contactsSeen, errors } where errors is the count of contacts that failed to classify. Built-in boards are 409; a failed run is 503.',
   responses: {
     200: { description: 'The dry-run summary' },
     ...boardErrors,

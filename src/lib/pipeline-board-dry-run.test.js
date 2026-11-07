@@ -13,7 +13,7 @@ const board = {
 describe('summariseBoardDryRun', () => {
   it('summarisesStagesInOrderWithZeros', () => {
     const s = summariseBoardDryRun({
-      board_histogram: { o_sale: 7 }, stage_histogram: { a: 5, b: 2 }, contacts_seen: 100, errors: [],
+      board_histogram: { o_sale: 7 }, stage_histogram: { a: 5, b: 2 }, contacts_seen: 100, errors: 0,
     }, board)
     expect(s.entering).toBe(7)
     expect(s.byStage).toEqual([
@@ -22,7 +22,10 @@ describe('summariseBoardDryRun', () => {
       { slug: 'c', name: 'Third', count: 0 },
     ])
     expect(s.contactsSeen).toBe(100)
+    expect(s.errors).toBe(0)
     expect(summariseBoardDryRun({}, board).entering).toBe(0)
+    expect(summariseBoardDryRun({}, board).errors).toBe(0)
+    expect(summariseBoardDryRun({ errors: 2 }, board).errors).toBe(2)
   })
 
   it('summarisesOverlapByBoard', () => {

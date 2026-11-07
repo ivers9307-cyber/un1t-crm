@@ -33,7 +33,7 @@ beforeEach(() => {
   getBoard.mockResolvedValue({ ok: true, board: board() })
   listBoards.mockResolvedValue({ ok: true, boards: [board()] })
   reclassifyAllContacts.mockResolvedValue({
-    ok: true, board_histogram: { o_sale: 2 }, stage_histogram: { a: 2 }, board_overlap: {}, contacts_seen: 10, errors: [],
+    ok: true, board_histogram: { o_sale: 2 }, stage_histogram: { a: 2 }, board_overlap: {}, contacts_seen: 10, errors: 0,
   })
 })
 

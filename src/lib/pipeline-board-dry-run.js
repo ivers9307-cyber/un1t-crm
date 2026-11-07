@@ -27,6 +27,6 @@ export function summariseBoardDryRun(result, board, boardNames = {}) {
     byStage,
     overlap,
     contactsSeen: result?.contacts_seen ?? 0,
-    errors: result?.errors ?? [],
+    errors: result?.errors ?? 0,
   }
 }
