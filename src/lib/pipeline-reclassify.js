@@ -38,7 +38,8 @@ import {
 } from './pipeline-claims.js'
 // PIPEBUILD.3d — configured offer boards (module `offer`): their config is
 // parsed here and their claims loaded once per run.
-import { splitOfferBoards, loadOfferClaimsForLocation, UN1T_MEMBERSHIP_SOURCES } from './pipeline-offer-claims.js'
+import { loadOfferClaimsForLocation, loadUn1tOfferClaims, UN1T_MEMBERSHIP_SOURCES } from './pipeline-offer-claims.js'
+import { parseOfferConfig } from '../../shared/pipelines/offer-config.js'
 
 // HATCHPIPE.2 — a board whose module declares this inputSource is classified
 // from the location's membership read adapter (un1tOnlineReads.pipelineInputs:
@@ -61,9 +62,14 @@ const DRY_RUN_SELF_MODULES = Object.freeze([...CLAIM_BOARD_MODULES, 'paid_trial_
 // (mig 814) guards that stamp: a board changed mid-run is not stamped.
 const PIPELINE_COLS = 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at, updated_at'
 const OFFER_BOARD_TYPE = 'offer'
+// PIPEBUILD.3b — the offer module whose people come from the un1t.online read
+// (shared/pipelines/offer-un1t.js, inputSource 'un1t_online'). It runs only at
+// a un1t.online studio, on the hourly un1t pass; `offer` runs only elsewhere.
+const OFFER_UN1T_MODULE = 'offer_un1t'
 // PIPEBUILD.3d — UN1T_MEMBERSHIP_SOURCES (pipeline-offer-claims.js): the
 // locations.membership_source values whose members live in un1t.online. An
-// offer board reads contacts, so it is refused at these studios until PR 3b.
+// `offer` board reads contacts, so it is refused at these studios; PR 3b runs
+// `offer_un1t` boards there instead.
 // TDSEQ.1 — more than this many deals moved into ONE stage in ONE run is a
 // rule change, not people progressing: no sequence starts for that stage.
 const STAGE_TRIGGER_MASS_MOVE = 50
@@ -266,11 +272,17 @@ export async function reclassifyAllContacts(db, args) {
     }
     if (OFFER_MODULES.includes(p.module)) {
       // Treated as running (a dry-run preview of a disabled row included).
-      const parsed = p.board_type === OFFER_BOARD_TYPE ? splitOfferBoards([{ ...p, enabled: true }]).descriptors[0] : null
-      if (!parsed) {
+      // PIPEBUILD.3b — parsed for ITS module, so a way in that does not work
+      // on it (un1t_product on `offer`, lead_source on `offer_un1t`) holds it.
+      const parsed = p.board_type === OFFER_BOARD_TYPE ? parseOfferConfig(p.config, { boardKey: p.key, module: p.module }) : null
+      if (!parsed?.ok) {
         pipelinesSkipped.push(p.key)
         heldPipelines.push(p)
-        logWarn('pipeline-reclassify', 'offer board held', { key: p.key, locationId, reason: p.board_type === OFFER_BOARD_TYPE ? 'config_unparseable' : 'not_an_offer_board' })
+        logWarn('pipeline-reclassify', 'offer board held', {
+          key: p.key, locationId,
+          reason: p.board_type === OFFER_BOARD_TYPE ? 'config_unparseable' : 'not_an_offer_board',
+          ...(parsed?.errors ? { errors: parsed.errors.slice(0, 5) } : {}),
+        })
         continue
       }
       activePipelines.push({ ...p, mod, offerConfig: parsed.config })
@@ -296,29 +308,37 @@ export async function reclassifyAllContacts(db, args) {
   // boards (no such location exists or is planned), so the contacts path is
   // exactly the one that ran before.
   let inputSource = 'contacts'
-  // PIPEBUILD.3d — an offer board reads contacts, so it cannot run at a
-  // un1t.online studio yet (PR 3b). There it is the offer board that is refused,
-  // never the studio's un1t boards: switching an offer board on must not move
-  // the whole studio onto the contacts path. Refused, it is also held (a person
-  // with a deal on it is left alone).
+  // PIPEBUILD.3d — an `offer` board reads contacts, so it cannot run at a
+  // un1t.online studio. There it is the offer board that is refused, never the
+  // studio's un1t boards: switching an offer board on must not move the whole
+  // studio onto the contacts path. Refused, it is also held (a person with a
+  // deal on it is left alone).
+  // PIPEBUILD.3b — an `offer_un1t` board is the mirror: un1t input, so it runs
+  // only at a un1t.online studio beside the studio's un1t boards (never
+  // mixed_input_sources), and is refused and held anywhere else.
   const isUn1t = (p) => p.mod.inputSource === UN1T_INPUT
-  const isOffer = (p) => OFFER_MODULES.includes(p.module)
-  const refuseOffers = (reason) => {
+  const isOffer = (p) => OFFER_MODULES.includes(p.module) && p.module !== OFFER_UN1T_MODULE
+  const isUn1tOffer = (p) => p.module === OFFER_UN1T_MODULE
+  const refuseWhere = (test, reason) => {
     for (const p of activePipelines) {
-      if (!isOffer(p)) continue
+      if (!test(p)) continue
       pipelinesSkipped.push(p.key)
       heldPipelines.push(p)
       logWarn('pipeline-reclassify', 'board refused', { key: p.key, module: p.module, locationId, reason })
     }
-    activePipelines = activePipelines.filter((p) => !isOffer(p))
+    activePipelines = activePipelines.filter((p) => !test(p))
   }
+  const refuseOffers = (reason) => refuseWhere(isOffer, reason)
+  const refuseUn1tOffers = (reason) => refuseWhere(isUn1tOffer, reason)
   // The studio's own membership source decides, so an offer board switched on
   // at a un1t.online studio whose un1t boards are off is refused too (it would
   // otherwise read contacts columns there, which at a dual-studio contact hold
   // the Glofox studio's state: HATCHPIPE.2). Read only when an offer board is
   // enabled, so a night without one makes exactly today's calls. A failed read
   // holds the offer boards for the run: never a guess of "contacts".
-  if (activePipelines.some(isOffer)) {
+  // PIPEBUILD.3b — read for an offer_un1t board too: it runs only where the
+  // studio says un1t.online, so an unreadable source holds it as well.
+  if (activePipelines.some((p) => isOffer(p) || isUn1tOffer(p))) {
     let membershipSource
     let sourceUnreadable = false
     try {
@@ -353,8 +373,14 @@ export async function reclassifyAllContacts(db, args) {
       await markRun(db, runId, { status: 'failed', error_message: errorMessage }, startedAt)
       return { ok: false, error: errorMessage, run_id: runId, input_source: inputSource, pipelines_skipped: pipelinesSkipped }
     }
-    if (sourceUnreadable) refuseOffers('membership_source_unreadable')
-    else if (UN1T_MEMBERSHIP_SOURCES.includes(membershipSource)) refuseOffers('un1t_online_studio')
+    if (sourceUnreadable) {
+      refuseOffers('membership_source_unreadable')
+      refuseUn1tOffers('membership_source_unreadable')
+    } else if (UN1T_MEMBERSHIP_SOURCES.includes(membershipSource)) {
+      refuseOffers('un1t_online_studio')
+    } else {
+      refuseUn1tOffers('contacts_input_studio')
+    }
   }
   if (activePipelines.some(isUn1t) && activePipelines.some(isOffer)
     && activePipelines.every((p) => isUn1t(p) || isOffer(p))) {
@@ -366,9 +392,16 @@ export async function reclassifyAllContacts(db, args) {
       for (const p of activePipelines) {
         if (p.mod.inputSource !== UN1T_INPUT) continue
         pipelinesSkipped.push(p.key)
+        // PIPEBUILD.3b — a refused offer board is held, as everywhere above.
+        if (isUn1tOffer(p)) heldPipelines.push(p)
         logWarn('pipeline-reclassify', 'board refused', { key: p.key, module: p.module, locationId, reason: 'mixed_input_sources' })
       }
       activePipelines = activePipelines.filter((p) => p.mod.inputSource !== UN1T_INPUT)
+    } else if (activePipelines.every(isUn1tOffer)) {
+      // PIPEBUILD.3b — an offer_un1t board needs a un1t board beside it: the
+      // router's fallback (and the Cold/Gympass check) is that board's
+      // classify, and the offer classify answers only a live claim.
+      refuseUn1tOffers('no_un1t_board')
     } else {
       inputSource = UN1T_INPUT
     }
@@ -395,6 +428,7 @@ export async function reclassifyAllContacts(db, args) {
   const nowMs = startedAt.getTime()
   let un1tInputs = null
   let un1tClassify = null
+  let un1tOffersByContact = new Map() // PIPEBUILD.3b: Map<contactId, Map<boardKey, claim>>
   if (inputSource === UN1T_INPUT) {
     const loaded = await loadUn1tInputs(db, locationId, nowMs)
     if (!loaded.ok) {
@@ -411,11 +445,37 @@ export async function reclassifyAllContacts(db, args) {
       }
     }
     un1tInputs = loaded.data
+    // PIPEBUILD.3b — the offer_un1t boards' claims, read once per pass from
+    // this studio's un1t rows (and the trial / promo tables). A failed read is
+    // "cannot tell" for those boards only: they are HELD this run (nobody
+    // placed or moved on them, their deals untouched, no baseline stamp) and
+    // the studio's un1t boards place exactly as they would without them.
+    const un1tOfferRows = activePipelines.filter(isUn1tOffer)
+    if (un1tOfferRows.length > 0) {
+      let res
+      try {
+        res = await loadUn1tOfferClaims(db, {
+          locationId,
+          boards: un1tOfferRows.map((p) => ({ id: p.id, key: p.key, module: p.module, priority: p.priority, board_type: p.board_type, config: p.config, enabled: true })),
+          contactIds: [...un1tInputs.snapshots.keys()],
+          now: nowMs,
+        })
+      } catch (e) {
+        res = { ok: false, reason: 'offer_claims_threw', err: boundedErr(e?.message || e) }
+      }
+      if (res?.ok) {
+        un1tOffersByContact = res.offersByContact instanceof Map ? res.offersByContact : new Map()
+      } else {
+        logWarn('pipeline-reclassify', 'offer claims unavailable', { locationId, reason: res?.reason || 'unknown', ...(res?.err ? { err: res.err } : {}) })
+        refuseUn1tOffers(`offer_claims_unavailable: ${res?.reason || 'unknown'}`)
+      }
+    }
     // HATCH39 — the router places each person: the acquisition board's own
     // classify (acquisition_un1t, TRIALDONE.2) answers Cold/Gympass and the
     // fallback; a live paid claim (the snapshot's paid_trial_at) goes to the
     // €39 board. With the acquisition board alone this IS today's placement.
-    un1tClassify = (activePipelines.find((p) => p.key === 'acquisition') ?? activePipelines[0]).mod.classify
+    // PIPEBUILD.3b — never an offer board's classify (it needs a live claim).
+    un1tClassify = (activePipelines.find((p) => p.key === 'acquisition') ?? activePipelines.find((p) => !isUn1tOffer(p))).mod.classify
   }
 
   const activePipelineIds = activePipelines.map((p) => p.id)
@@ -445,10 +505,16 @@ export async function reclassifyAllContacts(db, args) {
   const needsOfferClaims = inputSource !== UN1T_INPUT && offerPipelines.length > 0
   const needsClaims = needsLegacyClaims || needsOfferClaims
   // STILL39SEQ.1 / PIPEBUILD.3d — the contacts-input boards here whose landed
-  // moves (and, on an offer board, creates) fire.
-  const triggerPipelineIds = new Set(inputSource === UN1T_INPUT ? [] : activePipelines
-    .filter((p) => CONTACTS_STAGE_TRIGGER_MODULES.includes(p.module))
-    .map((p) => p.id))
+  // moves (and, on an offer board, creates) fire. PIPEBUILD.3b — on the un1t
+  // path every landed move fires already (groupFires); the offer_un1t boards
+  // are listed so their landed creates fire too (null → slug), under the same
+  // silent-board and 50-per-stage rules. No offer_un1t board = an empty set,
+  // so Hatch's own boards keep "creates do not fire".
+  const triggerPipelineIds = new Set(inputSource === UN1T_INPUT
+    ? activePipelines.filter(isUn1tOffer).map((p) => p.id)
+    : activePipelines
+      .filter((p) => CONTACTS_STAGE_TRIGGER_MODULES.includes(p.module))
+      .map((p) => p.id))
   // PIPEBUILD.3d — boards placed this run without starting any follow-up.
   // PIPEBUILD.5c — every running offer board not yet baselined is one of them
   // (the option's ids are kept beside it). A dry run builds the same set so its
@@ -747,7 +813,8 @@ export async function reclassifyAllContacts(db, args) {
     if (!snapshot) return null
     return routeContact(
       snapshot,
-      { paid: paidClaimFromSnapshot(snapshot), programme: null },
+      // PIPEBUILD.3b — the person's offer_un1t claims (empty without a board).
+      { paid: paidClaimFromSnapshot(snapshot), programme: null, offers: un1tOffersByContact.get(contactId) ?? new Map() },
       nowMs,
       boardDescriptors,
       { classifyAcquisition: un1tClassify },

@@ -116,9 +116,9 @@ describe('POST /api/locations/[id]/pipelines', () => {
 
   it('passesTheLibraryRefusalThrough', async () => {
     getCurrentUser.mockResolvedValue(userWith('owner'))
-    createBoard.mockResolvedValue({ ok: false, status: 409, error: "Offer boards at un1t.online studios aren't available yet.", code: 'un1t_studio' })
+    createBoard.mockResolvedValue({ ok: false, status: 409, error: 'This board was built for a different kind of studio.', code: 'module_mismatch' })
     const res = await POST(postReq(), props)
     expect(res.status).toBe(409)
-    expect(await res.json()).toEqual({ success: false, error: "Offer boards at un1t.online studios aren't available yet.", code: 'un1t_studio' })
+    expect(await res.json()).toEqual({ success: false, error: 'This board was built for a different kind of studio.', code: 'module_mismatch' })
   })
 })

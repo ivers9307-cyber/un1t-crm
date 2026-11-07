@@ -5,8 +5,17 @@
 
 import { STAGE_ROLES, roleConfigError } from './stage-roles.js'
 
-// `un1t_product` is reserved for PR 3b and refused here.
-export const ENTRY_TYPES = Object.freeze(['trial_purchase', 'corp_promo', 'lead_source', 'glofox_plan', 'tag'])
+export const ENTRY_TYPES = Object.freeze(['trial_purchase', 'corp_promo', 'lead_source', 'glofox_plan', 'tag', 'un1t_product'])
+// PIPEBUILD.3b — which ways in work on which board module.
+export const ENTRY_TYPES_BY_MODULE = Object.freeze({
+  offer: Object.freeze(['trial_purchase', 'corp_promo', 'lead_source', 'glofox_plan', 'tag']),
+  offer_un1t: Object.freeze(['un1t_product', 'trial_purchase', 'corp_promo']),
+})
+
+/** The offer module a studio's membership source uses. */
+export function moduleForMembershipSource(source) {
+  return source === 'un1t_online' || source === 'un1t' ? 'offer_un1t' : 'offer'
+}
 export const TRIAL_MATCHES = Object.freeze(['plan_code', 'landing_path', 'page_id'])
 export const DEFAULT_DURATION_DAYS = 14
 export const DEFAULT_QUIET_DAYS = 60
@@ -65,13 +74,18 @@ function optionalText(raw, name, max, errors) {
   return v
 }
 
-function parseEntry(raw, errors) {
+function parseEntry(raw, errors, module) {
   if (!isObj(raw)) { errors.push('entry is required'); return null }
   if (!ENTRY_TYPES.includes(raw.type)) {
     errors.push(`entry.type must be one of ${ENTRY_TYPES.join(', ')}`)
     return null
   }
-  const keepCase = raw.type === 'trial_purchase'
+  const allowed = module ? ENTRY_TYPES_BY_MODULE[module] : null
+  if (module && (!allowed || !allowed.includes(raw.type))) {
+    errors.push(`entry.type ${raw.type} does not work at this studio`)
+    return null
+  }
+  const keepCase = raw.type === 'trial_purchase' || raw.type === 'un1t_product'
   const values = Array.isArray(raw.values)
     ? [...new Set(raw.values
       .filter((v) => typeof v === 'string')
@@ -81,7 +95,7 @@ function parseEntry(raw, errors) {
     : []
   if (values.length === 0) errors.push('entry.values needs at least one value')
   const entry = { type: raw.type, values }
-  if (keepCase) {
+  if (raw.type === 'trial_purchase') {
     if (!TRIAL_MATCHES.includes(raw.match)) errors.push(`entry.match must be one of ${TRIAL_MATCHES.join(', ')} for trial_purchase`)
     else entry.match = raw.match
   }
@@ -134,15 +148,15 @@ function parseStages(raw, boardKey, errors) {
 
 /**
  * @param {unknown} raw  the pipelines.config jsonb
- * @param {{ boardKey: string }} opts
+ * @param {{ boardKey: string, module?: string }} opts
  * @returns {{ ok: true, config: object } | { ok: false, errors: string[] }}
  */
-export function parseOfferConfig(raw, { boardKey } = {}) {
+export function parseOfferConfig(raw, { boardKey, module } = {}) {
   const errors = []
   if (typeof boardKey !== 'string' || !boardKey) return { ok: false, errors: ['boardKey is required'] }
   if (!BOARD_KEY_RE.test(boardKey)) return { ok: false, errors: ['boardKey must look like o_name'] }
   if (!isObj(raw)) return { ok: false, errors: ['config must be an object'] }
-  const entry = parseEntry(raw.entry, errors)
+  const entry = parseEntry(raw.entry, errors, module)
   const stages = parseStages(raw.stages, boardKey, errors)
   const duration_days = intInRange(raw.duration_days, 'duration_days', 1, 365, DEFAULT_DURATION_DAYS, errors)
   const quiet_days = intInRange(raw.quiet_days, 'quiet_days', 1, 3650, DEFAULT_QUIET_DAYS, errors)

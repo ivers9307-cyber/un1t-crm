@@ -2485,3 +2485,503 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     })
   })
 })
+
+// PIPEBUILD.3b — offer_un1t boards ride the hourly un1t pass at a un1t.online
+// studio (their claims come from un1t_transactions / the trial and promo
+// tables via loadUn1tOfferClaims), are refused at any other studio, and leave
+// Hatch's existing boards exactly as they were.
+describe('offer_un1t on the un1t path (PIPEBUILD.3b)', () => {
+  beforeEach(() => {
+    vi.mocked(membershipReadsFor).mockReset()
+    vi.mocked(logWarn).mockClear()
+    vi.mocked(triggerSequencesForPipelineStageChange).mockReset()
+    vi.mocked(triggerSequencesForPipelineStageChange).mockResolvedValue(undefined)
+  })
+
+  const NOW = Date.now()
+  const ago = (d) => new Date(NOW - d * 86_400_000).toISOString()
+  const ACQ_U = { id: 'p-h-acq', location_id: HATCH, key: 'acquisition', module: 'acquisition_un1t', mode: 'derived', enabled: true, is_primary: true }
+  const PAID_U = { id: 'p-h-paid', location_id: HATCH, key: 'paid_trial', module: 'paid_trial_un1t', mode: 'derived', enabled: true, is_primary: false }
+  const U_STAGES = [
+    ...HATCH_STAGES.filter((s) => s.pipeline_id === 'p-h-acq'),
+    { id: 'h-cold', slug: 'cold_lead', pipeline_id: 'p-h-acq', location_id: HATCH },
+    { id: 'h-second', slug: 'second_class', pipeline_id: 'p-h-acq', location_id: HATCH },
+    { id: 'h-td', slug: 'trial_done', pipeline_id: 'p-h-acq', location_id: HATCH },
+    ...['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted']
+      .map((slug) => ({ id: `h-${slug}`, slug, pipeline_id: 'p-h-paid', location_id: HATCH })),
+  ]
+  const paidSnap = (over = {}) => ({ ...leadSnap(), paid_trial_at: ago(2), paid_trial_expires_at: ago(-12), ...over })
+  const trialDoneSnap = () => ({
+    glofox_membership_status: 'lead', recent_bookings: [attendedBooking(9), attendedBooking(4)],
+    last_attended_at: ago(4), joined_at: ago(30), trial_expires_at: ago(1),
+  })
+
+  // The Hatch-like fixture with NO offer_un1t board: a €39 buyer moving off
+  // acquisition, a member staying, a trial-done move, a fresh lead created.
+  const hatchFixture = () => ({
+    inputs: hatchInputs({
+      contacts: [
+        { id: 'c-buy', name: 'Buyer', email: null, location_id: HATCH },
+        { id: 'c-mem', name: 'Mem', email: null, location_id: HATCH },
+        { id: 'c-td', name: 'Td', email: null, location_id: HATCH },
+        { id: 'c-fresh', name: 'Fresh', email: null, location_id: HATCH },
+      ],
+      snapshots: [['c-buy', paidSnap()], ['c-mem', memberSnap()], ['c-td', trialDoneSnap()], ['c-fresh', leadSnap()]],
+    }),
+    deals: [
+      { id: 'd-buy', contact_id: 'c-buy', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' },
+      { id: 'd-mem', contact_id: 'c-mem', stage_id: 'h-member', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' },
+      { id: 'd-td', contact_id: 'c-td', stage_id: 'h-first', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' },
+    ],
+  })
+
+  it('existingUn1tBoardsUnchanged: the Hatch fixture with no offer_un1t board gives the result, calls and fires captured before PIPEBUILD.3b', async () => {
+    const fx = hatchFixture()
+    seamWith(vi.fn().mockResolvedValue(fx.inputs))
+    const rec = recordingDb({ pipelines: [ACQ_U, PAID_U], pipeline_stages: U_STAGES, deals: fx.deals })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect({ out, calls: rec.calls, fired: vi.mocked(triggerSequencesForPipelineStageChange).mock.calls }).toMatchInlineSnapshot(`
+      {
+        "calls": [
+          [
+            "pipeline_classification_runs",
+            [
+              "insert",
+              {
+                "created_by": null,
+                "dry_run": false,
+                "location_id": "loc-hatch",
+                "source": "cron",
+                "status": "running",
+              },
+            ],
+            [
+              "select",
+              "id",
+            ],
+            [
+              "single",
+            ],
+          ],
+          [
+            "pipelines",
+            [
+              "select",
+              "id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at, updated_at",
+            ],
+            [
+              "eq",
+              "location_id",
+              "loc-hatch",
+            ],
+          ],
+          [
+            "pipeline_stages",
+            [
+              "select",
+              "id, slug, pipeline_id",
+            ],
+            [
+              "eq",
+              "location_id",
+              "loc-hatch",
+            ],
+            [
+              "in",
+              "pipeline_id",
+              [
+                "p-h-acq",
+                "p-h-paid",
+              ],
+            ],
+          ],
+          [
+            "deals",
+            [
+              "select",
+              "id, contact_id, stage_id, pipeline_id",
+            ],
+            [
+              "eq",
+              "location_id",
+              "loc-hatch",
+            ],
+            [
+              "eq",
+              "status",
+              "open",
+            ],
+            [
+              "in",
+              "pipeline_id",
+              [
+                "p-h-acq",
+                "p-h-paid",
+              ],
+            ],
+            [
+              "order",
+              "id",
+              {
+                "ascending": true,
+              },
+            ],
+            [
+              "range",
+              0,
+              999,
+            ],
+          ],
+          [
+            "deals",
+            [
+              "update",
+              {
+                "pipeline_id": "p-h-paid",
+                "stage_id": "h-paid_trial_new_lead",
+              },
+            ],
+            [
+              "in",
+              "id",
+              [
+                "d-buy",
+              ],
+            ],
+            [
+              "eq",
+              "status",
+              "open",
+            ],
+            [
+              "select",
+              "id",
+            ],
+          ],
+          [
+            "deals",
+            [
+              "update",
+              {
+                "stage_id": "h-td",
+              },
+            ],
+            [
+              "in",
+              "id",
+              [
+                "d-td",
+              ],
+            ],
+            [
+              "eq",
+              "status",
+              "open",
+            ],
+            [
+              "select",
+              "id",
+            ],
+          ],
+          [
+            "deals",
+            [
+              "insert",
+              {
+                "contact_id": "c-fresh",
+                "location_id": "loc-hatch",
+                "pipeline_id": "p-h-acq",
+                "stage_id": "h-new",
+                "status": "open",
+                "title": "Fresh",
+              },
+            ],
+          ],
+          [
+            "pipeline_classification_runs",
+            [
+              "update",
+              {
+                "contacts_seen": 4,
+                "deals_created": 1,
+                "deals_moved": 2,
+                "deals_unchanged": 1,
+                "duration_ms": "<ms>",
+                "errors": 0,
+                "finished_at": "<iso>",
+                "movement_matrix": {
+                  "": {
+                    "new_lead": 1,
+                  },
+                  "first_class": {
+                    "trial_done": 1,
+                  },
+                  "new_lead": {
+                    "paid_trial_new_lead": 1,
+                  },
+                },
+                "samples": [
+                  {
+                    "contact_id": "c-buy",
+                    "contact_name": "Buyer",
+                    "from_slug": "new_lead",
+                    "to_slug": "paid_trial_new_lead",
+                  },
+                  {
+                    "contact_id": "c-td",
+                    "contact_name": "Td",
+                    "from_slug": "first_class",
+                    "to_slug": "trial_done",
+                  },
+                ],
+                "status": "success",
+              },
+            ],
+            [
+              "eq",
+              "id",
+              "run-1",
+            ],
+          ],
+        ],
+        "fired": [
+          [
+            "c-buy",
+            "new_lead",
+            "paid_trial_new_lead",
+            {
+              "locationId": "loc-hatch",
+            },
+          ],
+          [
+            "c-td",
+            "first_class",
+            "trial_done",
+            {
+              "locationId": "loc-hatch",
+            },
+          ],
+        ],
+        "out": {
+          "boards_moved": 1,
+          "contacts_seen": 4,
+          "creates_withheld": 0,
+          "deals_created": 1,
+          "deals_left_board": 0,
+          "deals_moved": 2,
+          "deals_unchanged": 1,
+          "duplicate_deals_closed": 0,
+          "errors": 0,
+          "input_source": "un1t_online",
+          "movement_matrix": {
+            "": {
+              "new_lead": 1,
+            },
+            "first_class": {
+              "trial_done": 1,
+            },
+            "new_lead": {
+              "paid_trial_new_lead": 1,
+            },
+          },
+          "ok": true,
+          "other_studio_check": "ok",
+          "pipelines_skipped": [],
+          "run_id": "run-1",
+          "samples": [
+            {
+              "contact_id": "c-buy",
+              "contact_name": "Buyer",
+              "from_slug": "new_lead",
+              "to_slug": "paid_trial_new_lead",
+            },
+            {
+              "contact_id": "c-td",
+              "contact_name": "Td",
+              "from_slug": "first_class",
+              "to_slug": "trial_done",
+            },
+          ],
+          "skipped_no_contact": 1,
+          "unlinked": 2,
+        },
+      }
+    `)
+  })
+  // An offer_un1t board whose way in is a un1t.online product (case kept).
+  const OX_CONFIG = {
+    entry: { type: 'un1t_product', values: ['ProdX'] },
+    stages: [
+      { role: 'new', slug: 'o_x_new', name: 'New' },
+      { role: 'first_class', slug: 'o_x_first_class', name: 'First class' },
+      { role: 'done', slug: 'o_x_done', name: 'Done' },
+      { role: 'converted', slug: 'o_x_converted', name: 'Converted' },
+    ],
+    duration_days: 14,
+  }
+  const OX = {
+    id: 'p-ox', location_id: HATCH, key: 'o_x', module: 'offer_un1t', mode: 'derived', enabled: true, is_primary: false,
+    board_type: 'offer', config: OX_CONFIG, priority: 10, baseline_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00.123456+00:00',
+  }
+  const OX_STAGES = ['o_x_new', 'o_x_first_class', 'o_x_done', 'o_x_converted']
+    .map((slug) => ({ id: `h-${slug}`, slug, pipeline_id: 'p-ox', location_id: HATCH }))
+  const txn = (id, userId, over = {}) => ({
+    un1t_id: id, location_id: HATCH, un1t_user_id: userId, contact_id: null, product_id: 'ProdX', refunded: false, remote_created_at: ago(2), ...over,
+  })
+  const client = (userId, contactId) => ({ id: `cl-${userId}`, location_id: HATCH, un1t_user_id: userId, contact_id: contactId })
+  const twoLeads = () => hatchInputs({
+    contacts: [
+      { id: 'c-buy', name: 'Buyer', email: null, location_id: HATCH },
+      { id: 'c-ref', name: 'Refunded', email: null, location_id: HATCH },
+    ],
+    snapshots: [['c-buy', leadSnap()], ['c-ref', leadSnap()]],
+  })
+  const oxFixtures = (over = {}) => ({
+    pipelines: [ACQ_U, OX], pipeline_stages: [...U_STAGES.filter((s) => s.pipeline_id === 'p-h-acq'), ...OX_STAGES], deals: [],
+    locations: [{ id: HATCH, membership_source: 'un1t_online' }],
+    un1t_transactions: [txn('t-1', 'u-buy'), txn('t-2', 'u-ref', { refunded: true })],
+    un1t_clients: [client('u-buy', 'c-buy'), client('u-ref', 'c-ref')],
+    ...over,
+  })
+
+  it('admitsOfferUn1tBesideUn1tBoards: acquisition_un1t + offer_un1t at a un1t.online studio, no mixed_input_sources, the offer board runs', async () => {
+    seamWith(vi.fn().mockResolvedValue(twoLeads()))
+    const rec = recordingDb(oxFixtures())
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: [] })
+    expect(out.board_histogram).toEqual({ acquisition: 1, o_x: 1 })
+    expect(logWarn).not.toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.anything())
+    expect(rec.tables()).not.toContain('contacts')
+  })
+
+  it('placesFromUn1tProductClaim: a matching transaction lands on o_x_new (dry run reports the create); a refunded-only one stays where the router put it', async () => {
+    seamWith(vi.fn().mockResolvedValue(twoLeads()))
+    const out = await reclassifyAllContacts(recordingDb(oxFixtures()).db, { locationId: HATCH, dryRun: true })
+    expect(out).toMatchObject({ ok: true, deals_created: 2, errors: 0, stage_histogram: { o_x_new: 1, new_lead: 1 } })
+    // Without the offer board the refunded buyer is a new lead exactly as here.
+    seamWith(vi.fn().mockResolvedValue(twoLeads()))
+    const before = await reclassifyAllContacts(recordingDb(oxFixtures({ pipelines: [ACQ_U] })).db, { locationId: HATCH, dryRun: true })
+    expect(before.stage_histogram).toEqual({ new_lead: 2 })
+    // A real run writes the create on the offer board.
+    seamWith(vi.fn().mockResolvedValue(twoLeads()))
+    const rec = recordingDb(oxFixtures())
+    await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    const inserts = rec.writesTo('deals').filter((e) => rec.argOf(e, 'insert')).map((e) => rec.argOf(e, 'insert')[1])
+    expect(inserts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ contact_id: 'c-buy', pipeline_id: 'p-ox', stage_id: 'h-o_x_new' }),
+      expect.objectContaining({ contact_id: 'c-ref', pipeline_id: 'p-h-acq', stage_id: 'h-new' }),
+    ]))
+  })
+
+  it('unbaselinedOfferUn1tIsSilentThenStamped: the first real pass creates silently and stamps baseline_at; the next pass fires a new claimant', async () => {
+    seamWith(vi.fn().mockResolvedValue(twoLeads()))
+    const unbased = { ...OX, baseline_at: null }
+    const rec = recordingDb(oxFixtures({ pipelines: [ACQ_U, unbased] }), { matchUpdates: ['pipelines'] })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, errors: 0, deals_created: 2, boards_baselined: ['o_x'] })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+    const stamps = rec.writesTo('pipelines')
+    expect(stamps).toHaveLength(1)
+    expect(stamps[0]).toContainEqual(['eq', 'id', 'p-ox'])
+    expect(stamps[0]).toContainEqual(['is', 'baseline_at', null])
+
+    // Second pass: baselined, a new claimant's create fires null → o_x_new.
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-late', name: 'Late', email: null, location_id: HATCH }],
+      snapshots: [['c-late', leadSnap()]],
+    })))
+    const second = recordingDb(oxFixtures({
+      pipelines: [ACQ_U, { ...OX, baseline_at: ago(1) }],
+      un1t_transactions: [txn('t-9', 'u-late')], un1t_clients: [client('u-late', 'c-late')],
+    }))
+    const out2 = await reclassifyAllContacts(second.db, { locationId: HATCH })
+    expect(out2).toMatchObject({ ok: true, deals_created: 1 })
+    expect(out2).not.toHaveProperty('boards_baselined')
+    expect(vi.mocked(triggerSequencesForPipelineStageChange).mock.calls).toEqual([
+      ['c-late', null, 'o_x_new', { locationId: HATCH }],
+    ])
+    expect(second.writesTo('pipelines')).toHaveLength(0)
+  })
+
+  it('claimsReadFailureHoldsOnlyOfferUn1t: a failed un1t_transactions read holds the offer board; its deals are untouched and the un1t boards place exactly as without it', async () => {
+    const fx = hatchFixture()
+    const withHeld = hatchInputs({
+      contacts: [...fx.inputs.data.contacts, { id: 'c-held', name: 'Held', email: null, location_id: HATCH }],
+      snapshots: [...fx.inputs.data.snapshots, ['c-held', leadSnap()]],
+    })
+    const heldDeal = { id: 'd-held', contact_id: 'c-held', stage_id: 'h-o_x_new', pipeline_id: 'p-ox', location_id: HATCH, status: 'open' }
+    seamWith(vi.fn().mockResolvedValue(withHeld))
+    const rec = recordingDb({
+      pipelines: [ACQ_U, PAID_U, { ...OX, baseline_at: null }], pipeline_stages: [...U_STAGES, ...OX_STAGES],
+      deals: [...fx.deals, heldDeal], locations: [{ id: HATCH, membership_source: 'un1t_online' }],
+      un1t_transactions: [txn('t-1', 'u-buy')], un1t_clients: [client('u-buy', 'c-buy')],
+    }, { errors: { un1t_transactions: 'transactions down' }, matchUpdates: ['pipelines'] })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, errors: 0, deals_held: 1 })
+    expect(out.pipelines_skipped).toContain('o_x')
+    expect(out).not.toHaveProperty('boards_baselined')
+    expect(rec.writesTo('pipelines')).toHaveLength(0)
+    const dealWrites = rec.writesTo('deals')
+    expect(dealWrites.some((e) => JSON.stringify(e).includes('d-held') || JSON.stringify(e).includes('c-held') || JSON.stringify(e).includes('p-ox'))).toBe(false)
+
+    // The same studio without the offer board (and without the held person).
+    vi.mocked(triggerSequencesForPipelineStageChange).mockClear()
+    const firedWith = []
+    seamWith(vi.fn().mockResolvedValue(fx.inputs))
+    const plain = recordingDb({ pipelines: [ACQ_U, PAID_U], pipeline_stages: U_STAGES, deals: fx.deals })
+    const outPlain = await reclassifyAllContacts(plain.db, { locationId: HATCH })
+    firedWith.push(...vi.mocked(triggerSequencesForPipelineStageChange).mock.calls)
+    expect(dealWrites).toEqual(plain.writesTo('deals'))
+    for (const k of ['deals_moved', 'deals_created', 'deals_unchanged', 'movement_matrix', 'boards_moved']) expect(out[k]).toEqual(outPlain[k])
+    expect(firedWith.map((c) => c[0]).sort()).toEqual(['c-buy', 'c-td'])
+  })
+
+  it('offerUn1tRefusedAtGlofoxStudio: an offer_un1t board at a Glofox studio is refused (contacts_input_studio) and held; the contacts board runs', async () => {
+    const STILL = 'loc-st'
+    const ACQ = { id: 'p-acq', location_id: STILL, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true }
+    const oxAtStill = { ...OX, location_id: STILL }
+    const rec = recordingDb({
+      pipelines: [ACQ, oxAtStill], pipeline_stages: STAGES,
+      contacts: [{ id: 'c1', name: 'L', email: null, glofox_membership_status: null, joined_at: isoDaysAgo(2), created_at: isoDaysAgo(2), recent_bookings: [] }],
+      deals: [], locations: [{ id: STILL, membership_source: 'glofox' }],
+    })
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true })
+    expect(out).toMatchObject({ ok: true, input_source: 'contacts', pipelines_skipped: ['o_x'], deals_created: 1 })
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'o_x', locationId: STILL, reason: 'contacts_input_studio' }))
+    expect(membershipReadsFor).not.toHaveBeenCalled()
+    expect(rec.tables()).not.toContain('un1t_transactions')
+    // Held: the board's open deals are read so its people stay put.
+    const dealRead = rec.calls.find((e) => e[0] === 'deals')
+    expect(dealRead).toContainEqual(['in', 'pipeline_id', ['p-acq', 'p-ox']])
+  })
+
+  it('an offer_un1t board at a un1t.online studio whose source cannot be read is held (membership_source_unreadable); the un1t boards run', async () => {
+    seamWith(vi.fn().mockResolvedValue(twoLeads()))
+    const rec = recordingDb(oxFixtures(), { errors: { locations: 'locations down' } })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['o_x'], stage_histogram: { new_lead: 2 } })
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'o_x', reason: 'membership_source_unreadable' }))
+    expect(rec.tables()).not.toContain('un1t_transactions')
+  })
+
+  it('an offer_un1t board with no un1t board beside it is held (no_un1t_board), never classified with the offer classify', async () => {
+    seamWith(vi.fn().mockResolvedValue(twoLeads()))
+    const rec = recordingDb(oxFixtures({ pipelines: [OX] }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, contacts_seen: 0, pipelines_skipped: ['o_x'] })
+    expect(rec.writesTo('deals')).toHaveLength(0)
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'o_x', reason: 'no_un1t_board' }))
+  })
+
+  it('an offer board (module offer) beside an offer_un1t board at a un1t.online studio: the offer board is refused, the offer_un1t board runs', async () => {
+    seamWith(vi.fn().mockResolvedValue(twoLeads()))
+    const contactsOffer = {
+      ...OX, id: 'p-oc', key: 'o_c', module: 'offer',
+      config: { ...OX_CONFIG, entry: { type: 'corp_promo', values: ['acme'] }, stages: OX_CONFIG.stages.map((st) => ({ ...st, slug: st.slug.replace('o_x_', 'o_c_') })) },
+    }
+    const rec = recordingDb(oxFixtures({ pipelines: [ACQ_U, OX, contactsOffer] }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['o_c'], board_histogram: { acquisition: 1, o_x: 1 } })
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'o_c', reason: 'un1t_online_studio' }))
+  })
+})

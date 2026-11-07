@@ -6,7 +6,7 @@ import { Button, Card } from '@/components/ui'
 import { RECIPES } from '@shared/pipelines/recipes.js'
 import {
   initialWizardState, wizardReducer, stepErrors, wizardCreateBody, wizardBodies,
-  followupPacks, WIZARD_STEPS, UN1T_STUDIO_NOTICE, OWNER_ONLY_NOTICE, isUn1tStudio,
+  followupPacks, WIZARD_STEPS, OWNER_ONLY_NOTICE, entryTypesFor,
 } from '@/lib/pipeline-wizard'
 import RecipeStep from './wizard/RecipeStep'
 import NameOfferStep from './wizard/NameOfferStep'
@@ -70,7 +70,7 @@ export default function BoardWizard({
 }) {
   const [state, dispatch] = useReducer(
     wizardReducer,
-    { studioName, bookingFlowId, appLinks },
+    { studioName, bookingFlowId, appLinks, entryTypes: entryTypesFor(membershipSource) },
     initialWizardState,
   )
 
@@ -142,7 +142,6 @@ export default function BoardWizard({
   }
 
   if (!canEdit) return <Card><p className="text-sm text-un1t-text">{OWNER_ONLY_NOTICE}</p></Card>
-  if (isUn1tStudio(membershipSource)) return <Card><p className="text-sm text-un1t-text">{UN1T_STUDIO_NOTICE}</p></Card>
 
   if (launch) {
     return (

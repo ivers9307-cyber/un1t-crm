@@ -1,13 +1,17 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+const paidTrialIds = vi.hoisted(() => vi.fn())
+vi.mock('./paid-trial-products.js', () => ({ paidTrialProductIdsFor: paidTrialIds }))
 
 import {
   listBoards, getBoard, createBoard, updateBoard, setBoardEnabled, boardLocationId,
-  SWITCH_OFF_FIRST_ERROR, UN1T_STUDIO_ERROR, LEGACY_BOARD_ERROR, STAGE_NAME_TAKEN_ERROR,
+  SWITCH_OFF_FIRST_ERROR, LEGACY_BOARD_ERROR, STAGE_NAME_TAKEN_ERROR,
 } from './pipeline-boards.js'
 import { fakeDb, uniqueError } from './pipeline-boards.test-helpers.js'
 import { stateFromBoard, settingsConfig, wizardReducer } from './pipeline-wizard.js'
+
+beforeEach(() => { paidTrialIds.mockReset(); paidTrialIds.mockResolvedValue(new Set(['paid-trial'])) })
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const OTHER = 'a0000000-0000-0000-0000-000000000002'
@@ -40,6 +44,30 @@ async function createdBoard(db, over = {}) {
 const stageBySlug = (board, slug) => board.stages.find((s) => s.slug === slug)
 
 describe('createBoard', () => {
+  it('refusesThePaidTrialProduct', async () => {
+    const db = seedDb('un1t_online')
+    const config = clientConfig({ entry: { type: 'un1t_product', values: ['other', 'paid-trial'] } })
+    const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config })
+    expect(res).toMatchObject({ ok: false, status: 400, code: 'paid_trial_product' })
+    expect(db.calls.rpc).toHaveLength(0)
+  })
+
+  it('aFailedPaidTrialReadIs503', async () => {
+    paidTrialIds.mockRejectedValue(new Error('down'))
+    const db = seedDb('un1t_online')
+    const config = clientConfig({ entry: { type: 'un1t_product', values: ['prod-1'] } })
+    const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config })
+    expect(res).toMatchObject({ ok: false, status: 503, code: 'paid_trial_products_unreadable' })
+    expect(db.calls.rpc).toHaveLength(0)
+  })
+
+  it('aNormalProductPasses', async () => {
+    const db = seedDb('un1t_online')
+    const config = clientConfig({ entry: { type: 'un1t_product', values: ['prod-1'] } })
+    await createdBoard(db, { config })
+    expect(db.calls.rpc).toHaveLength(1)
+  })
+
   it('createsOffBoardWithStages', async () => {
     const db = seedDb()
     const board = await createdBoard(db)
@@ -117,10 +145,29 @@ describe('createBoard', () => {
     expect(db.calls.rpc).toHaveLength(0)
   })
 
-  it('refusesUn1tStudio', async () => {
+  it('createsOfferUn1tAtUn1tStudio', async () => {
     const db = seedDb('un1t_online')
-    const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config: clientConfig() })
-    expect(res).toMatchObject({ ok: false, status: 409, error: UN1T_STUDIO_ERROR })
+    const config = clientConfig({ entry: { type: 'un1t_product', values: ['prod-39'] } })
+    const board = await createdBoard(db, { config })
+    expect(db.calls.rpc).toHaveLength(1)
+    expect(db.calls.rpc[0].args).toMatchObject({ p_board_type: 'offer', p_module: 'offer_un1t' })
+    expect(board).toMatchObject({ enabled: false })
+  })
+
+  it('refusesLeadSourceAtUn1tStudio', async () => {
+    const db = seedDb('un1t_online')
+    const config = clientConfig({ entry: { type: 'lead_source', values: ['meta'] } })
+    const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config })
+    expect(res).toMatchObject({ ok: false, status: 400, code: 'invalid_config' })
+    expect(res.issues[0].message).toMatch(/does not work at this studio/)
+    expect(db.calls.rpc).toHaveLength(0)
+  })
+
+  it('refusesUn1tProductAtGlofoxStudio', async () => {
+    const db = seedDb('glofox')
+    const config = clientConfig({ entry: { type: 'un1t_product', values: ['prod-39'] } })
+    const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config })
+    expect(res).toMatchObject({ ok: false, status: 400, code: 'invalid_config' })
     expect(db.calls.rpc).toHaveLength(0)
   })
 
@@ -128,7 +175,7 @@ describe('createBoard', () => {
     const db = seedDb()
     db.failures['locations:select'] = { message: 'down' }
     const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config: clientConfig() })
-    expect(res).toMatchObject({ ok: false, status: 503 })
+    expect(res).toMatchObject({ ok: false, status: 503, code: 'membership_source_unreadable' })
     expect(db.calls.rpc).toHaveLength(0)
   })
 
@@ -258,6 +305,23 @@ describe('listBoards / getBoard', () => {
 })
 
 describe('updateBoard', () => {
+  it('refusesThePaidTrialProductAndUnreadableCheck', async () => {
+    const db = seedDb('un1t_online')
+    const board = await createdBoard(db, { config: clientConfig({ entry: { type: 'un1t_product', values: ['prod-1'] } }) })
+    const cfg = structuredClone(board.config)
+    cfg.entry.values = ['paid-trial']
+    const before = db.calls.updates.length
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config: cfg } })
+    expect(res).toMatchObject({ ok: false, status: 400, code: 'paid_trial_product' })
+    paidTrialIds.mockRejectedValue(new Error('down'))
+    const res2 = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config: cfg } })
+    expect(res2).toMatchObject({ ok: false, status: 503, code: 'paid_trial_products_unreadable' })
+    expect(db.calls.updates).toHaveLength(before)
+    paidTrialIds.mockResolvedValue(new Set(['paid-trial']))
+    cfg.entry.values = ['prod-2']
+    expect((await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config: cfg } })).ok).toBe(true)
+  })
+
   const editableConfig = (board, mutate) => {
     const c = structuredClone(board.config)
     mutate(c)
@@ -632,14 +696,35 @@ describe('setBoardEnabled', () => {
     expect(db.calls.updates.at(-1).patch).toEqual({ enabled: false, updated_at: expect.any(String) })
   })
 
-  it('enableRefusesUn1tStudioAndBadConfig', async () => {
+  it('enableRefusesModuleMismatch', async () => {
     const db = seedDb()
     const board = await createdBoard(db)
     db.tables.locations.find((l) => l.id === LOC).membership_source = 'un1t_online'
     expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
-      .toMatchObject({ ok: false, status: 409, code: 'un1t_studio' })
+      .toMatchObject({ ok: false, status: 409, code: 'module_mismatch' })
+  })
 
-    db.tables.locations.find((l) => l.id === LOC).membership_source = 'glofox'
+  it('enablesOfferUn1tAtUn1tStudio', async () => {
+    const db = seedDb('un1t_online')
+    const board = await createdBoard(db, { config: clientConfig({ entry: { type: 'un1t_product', values: ['prod-39'] } }) })
+    expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
+      .toMatchObject({ ok: true, board: { enabled: true } })
+  })
+
+  it('enableRefusesOfferUn1tAtGlofoxStudio', async () => {
+    const db = seedDb('glofox')
+    const board = await createdBoard(db)
+    db.tables.pipelines.find((p) => p.id === board.id).module = 'offer_un1t'
+    db.tables.pipelines.find((p) => p.id === board.id).config = { ...clientConfig(), entry: { type: 'un1t_product', values: ['prod-39'] }, stages: db.tables.pipelines.find((p) => p.id === board.id).config.stages }
+    const before = db.calls.updates.length
+    expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
+      .toMatchObject({ ok: false, status: 409, code: 'module_mismatch' })
+    expect(db.calls.updates).toHaveLength(before)
+  })
+
+  it('enableRefusesBadConfig', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
     db.tables.pipelines.find((p) => p.id === board.id).config = { entry: null }
     expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
       .toMatchObject({ ok: false, status: 409, code: 'invalid_config' })
