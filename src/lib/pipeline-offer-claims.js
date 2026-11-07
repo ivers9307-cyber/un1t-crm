@@ -55,7 +55,7 @@ export function splitOfferBoards(boards) {
   const skipped = []
   for (const b of Array.isArray(boards) ? boards : []) {
     if (!b || b.enabled !== true || b.board_type !== 'offer') continue
-    const parsed = parseOfferConfig(b.config, { boardKey: b.key })
+    const parsed = parseOfferConfig(b.config, { boardKey: b.key, module: b.module })
     if (!parsed.ok) {
       skipped.push({ key: b.key, errors: parsed.errors })
       logWarn('pipeline-offer-claims', 'offer board config skipped', { boardKey: b.key, errors: parsed.errors.slice(0, 5) })
@@ -167,7 +167,7 @@ export function trialPurchaseOfferConfigs(boards) {
   const out = []
   for (const b of Array.isArray(boards) ? boards : []) {
     if (!b || b.enabled !== true || b.board_type !== 'offer') continue
-    const parsed = parseOfferConfig(b.config, { boardKey: b.key })
+    const parsed = parseOfferConfig(b.config, { boardKey: b.key, module: b.module })
     if (parsed.ok && parsed.config.entry.type === 'trial_purchase') out.push({ key: b.key, config: parsed.config })
   }
   return out

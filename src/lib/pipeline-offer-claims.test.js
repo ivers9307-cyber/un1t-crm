@@ -3,7 +3,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   splitOfferBoards, loadOfferClaimsForLocation, loadOfferClaimsForContact,
-  offerPurchaseEntries, withoutOfferPurchases, placementDescriptors, offerPlacementSilence,
+  trialPurchaseOfferConfigs, offerPurchaseEntries, withoutOfferPurchases, placementDescriptors, offerPlacementSilence,
   un1tProductOfferClaim, loadUn1tOfferClaims,
 } from './pipeline-offer-claims.js'
 import { loadClaimsForLocation, pendingProgrammeClaims } from './pipeline-claims.js'
@@ -70,6 +70,23 @@ describe('splitOfferBoards', () => {
     expect(descriptors.map((b) => b.key)).toEqual(['o_reset'])
     expect(descriptors[0].entry).toEqual({ type: 'tag', values: ['vip'] })
     expect(skipped.map((s) => s.key)).toEqual(['o_broken'])
+  })
+
+  it('judges each board against its own module (un1t_product on offer, lead_source on offer_un1t)', () => {
+    const un1tOnOffer = board('o_a', { type: 'un1t_product', values: ['p1'] })
+    const leadOnUn1t = { ...board('o_b', { type: 'lead_source', values: ['meta'] }), module: 'offer_un1t' }
+    const { descriptors, skipped } = splitOfferBoards([un1tOnOffer, leadOnUn1t])
+    expect(descriptors).toEqual([])
+    expect(skipped.map((s) => s.key)).toEqual(['o_a', 'o_b'])
+  })
+})
+
+describe('trialPurchaseOfferConfigs module check', () => {
+  it('drops a trial_purchase board whose module the entry does not suit', () => {
+    const entry = { type: 'trial_purchase', match: 'plan_code', values: ['T39'] }
+    const ok = board('o_ok', entry)
+    const wrong = { ...board('o_wrong', entry), module: 'bogus_module' }
+    expect(trialPurchaseOfferConfigs([ok, wrong]).map((b) => b.key)).toEqual(['o_ok'])
   })
 })
 

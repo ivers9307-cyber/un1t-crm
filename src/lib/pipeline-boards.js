@@ -21,12 +21,14 @@
 //     repeat, the stage diff moves names through a temporary name, and any
 //     23505 is a 409 with the real reason;
 //   - built-in boards (board_type null) are read-only here;
-//   - no offer boards at un1t.online studios yet (offer_un1t is PR 3b).
+//   - a board's module is its studio's (offer, or offer_un1t at a un1t.online
+//     studio) and is parsed against that module's ways in; it only switches on
+//     at a studio of the same kind.
 
 import { RECIPES, templateNameFor } from '@shared/pipelines/recipes.js'
-import { boardKeyFor, parseOfferConfig, stageSlugFor } from '@shared/pipelines/offer-config.js'
+import { boardKeyFor, moduleForMembershipSource, parseOfferConfig, stageSlugFor } from '@shared/pipelines/offer-config.js'
 import { stagesFor } from '@shared/pipelines/offer.js'
-import { readMembershipSource, UN1T_MEMBERSHIP_SOURCES } from './pipeline-offer-claims.js'
+import { readMembershipSource } from './pipeline-offer-claims.js'
 import { assertNotLegacyBoard } from './pipeline-board-guard.js'
 import { archiveSupersededSequence } from './followup-owned-sequences.js'
 import { logError } from './log.js'
@@ -36,6 +38,7 @@ const PAGE = 1000
 // A runaway guard on the open-deal read (100k open deals at one studio).
 const MAX_DEAL_PAGES = 100
 
+// Task 5 deletes this together with the wizard's copy.
 export const UN1T_STUDIO_ERROR = "Offer boards at un1t.online studios aren't available yet."
 export const SWITCH_OFF_FIRST_ERROR = 'Switch the board off before changing its entry rule, stages or timings.'
 // assertNotLegacyBoard's own words (it answers a NextResponse; this file answers data).
@@ -62,7 +65,7 @@ function stageConflict(error) {
   return fail(409, STAGE_NAME_TAKEN_ERROR, { code: 'stage_name_taken' })
 }
 
-const BOARD_COLUMNS = 'id, location_id, key, name, board_type, recipe_key, enabled, baseline_at, priority, config, is_primary, display_order, updated_at'
+const BOARD_COLUMNS = 'id, location_id, key, name, board_type, recipe_key, enabled, baseline_at, priority, config, is_primary, display_order, updated_at, module'
 const STAGE_COLUMNS = 'id, pipeline_id, slug, name, stage_role, role_config, display_order'
 const FOLLOWUP_COLUMNS = 'id, pipeline_id, stage_id, pack_key, state, want_live, version, sequence_id, whatsapp_template_id'
 
@@ -94,11 +97,13 @@ function parseIssues(errors) {
   return errors.map((message) => ({ path: 'config', message }))
 }
 
-async function refuseUn1tStudio(db, locationId) {
+/** The offer module this studio's boards belong to, or a 503 when its membership source can't be read. */
+async function studioModule(db, locationId) {
   const source = await readMembershipSource(db, locationId)
-  if (!source.ok) return unreadable("the studio's membership source")
-  if (UN1T_MEMBERSHIP_SOURCES.includes(source.source)) return fail(409, UN1T_STUDIO_ERROR, { code: 'un1t_studio' })
-  return null
+  if (!source.ok) {
+    return fail(503, "Could not read this studio's membership source.", { code: 'membership_source_unreadable' })
+  }
+  return { ok: true, module: moduleForMembershipSource(source.source) }
 }
 
 function legacyRefusal(board) {
@@ -347,8 +352,8 @@ async function withFollowupWording(db, locationId, board) {
  * @param {{ locationId: string, name: string, recipeKey: string, config: object, priority?: number, createdBy?: string|null }} input
  */
 export async function createBoard(db, { locationId, name, recipeKey, config, priority, createdBy } = {}) {
-  const refused = await refuseUn1tStudio(db, locationId)
-  if (refused) return refused
+  const studio = await studioModule(db, locationId)
+  if (!studio.ok) return studio
 
   if (!Object.prototype.hasOwnProperty.call(RECIPES, recipeKey)) {
     return fail(400, 'Unknown recipe.', { code: 'unknown_recipe' })
@@ -368,7 +373,7 @@ export async function createBoard(db, { locationId, name, recipeKey, config, pri
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const key = boardKeyFor(boardName, taken)
-    const parsed = parseOfferConfig(withServerSlugs(config, key), { boardKey: key })
+    const parsed = parseOfferConfig(withServerSlugs(config, key), { boardKey: key, module: studio.module })
     if (!parsed.ok) {
       return fail(400, 'The board setup has problems.', { code: 'invalid_config', issues: parseIssues(parsed.errors) })
     }
@@ -377,7 +382,7 @@ export async function createBoard(db, { locationId, name, recipeKey, config, pri
       p_key: key,
       p_name: boardName,
       p_board_type: 'offer',
-      p_module: 'offer',
+      p_module: studio.module,
       p_recipe_key: recipeKey,
       p_config: parsed.config,
       p_priority: priority ?? 100,
@@ -456,7 +461,7 @@ export async function updateBoard(db, { locationId, boardId, patch = {} } = {}) 
 
   let next = null
   if (patch.config !== undefined) {
-    const parsed = parseOfferConfig(withServerSlugs(patch.config, row.key), { boardKey: row.key })
+    const parsed = parseOfferConfig(withServerSlugs(patch.config, row.key), { boardKey: row.key, module: row.module })
     if (!parsed.ok) {
       return fail(400, 'The board setup has problems.', { code: 'invalid_config', issues: parseIssues(parsed.errors) })
     }
@@ -776,12 +781,15 @@ export async function setBoardEnabled(db, { locationId, boardId, enabled } = {})
 
   let update
   if (target) {
-    const parsed = parseOfferConfig(row.config, { boardKey: row.key })
+    const parsed = parseOfferConfig(row.config, { boardKey: row.key, module: row.module })
     if (!parsed.ok) {
       return fail(409, 'The board setup has problems. Fix them before switching it on.', { code: 'invalid_config', issues: parseIssues(parsed.errors) })
     }
-    const refused = await refuseUn1tStudio(db, locationId)
-    if (refused) return refused
+    const studio = await studioModule(db, locationId)
+    if (!studio.ok) return studio
+    if (row.module !== studio.module) {
+      return fail(409, 'This board was built for a different kind of studio.', { code: 'module_mismatch' })
+    }
     update = { enabled: true, baseline_at: null, updated_at: nowIso() }
   } else {
     update = { enabled: false, updated_at: nowIso() }

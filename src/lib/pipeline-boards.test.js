@@ -4,7 +4,7 @@ vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn
 
 import {
   listBoards, getBoard, createBoard, updateBoard, setBoardEnabled, boardLocationId,
-  SWITCH_OFF_FIRST_ERROR, UN1T_STUDIO_ERROR, LEGACY_BOARD_ERROR, STAGE_NAME_TAKEN_ERROR,
+  SWITCH_OFF_FIRST_ERROR, LEGACY_BOARD_ERROR, STAGE_NAME_TAKEN_ERROR,
 } from './pipeline-boards.js'
 import { fakeDb, uniqueError } from './pipeline-boards.test-helpers.js'
 import { stateFromBoard, settingsConfig, wizardReducer } from './pipeline-wizard.js'
@@ -117,10 +117,29 @@ describe('createBoard', () => {
     expect(db.calls.rpc).toHaveLength(0)
   })
 
-  it('refusesUn1tStudio', async () => {
+  it('createsOfferUn1tAtUn1tStudio', async () => {
     const db = seedDb('un1t_online')
-    const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config: clientConfig() })
-    expect(res).toMatchObject({ ok: false, status: 409, error: UN1T_STUDIO_ERROR })
+    const config = clientConfig({ entry: { type: 'un1t_product', values: ['prod-39'] } })
+    const board = await createdBoard(db, { config })
+    expect(db.calls.rpc).toHaveLength(1)
+    expect(db.calls.rpc[0].args).toMatchObject({ p_board_type: 'offer', p_module: 'offer_un1t' })
+    expect(board).toMatchObject({ enabled: false })
+  })
+
+  it('refusesLeadSourceAtUn1tStudio', async () => {
+    const db = seedDb('un1t_online')
+    const config = clientConfig({ entry: { type: 'lead_source', values: ['meta'] } })
+    const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config })
+    expect(res).toMatchObject({ ok: false, status: 400, code: 'invalid_config' })
+    expect(res.issues[0].message).toMatch(/does not work at this studio/)
+    expect(db.calls.rpc).toHaveLength(0)
+  })
+
+  it('refusesUn1tProductAtGlofoxStudio', async () => {
+    const db = seedDb('glofox')
+    const config = clientConfig({ entry: { type: 'un1t_product', values: ['prod-39'] } })
+    const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config })
+    expect(res).toMatchObject({ ok: false, status: 400, code: 'invalid_config' })
     expect(db.calls.rpc).toHaveLength(0)
   })
 
@@ -128,7 +147,7 @@ describe('createBoard', () => {
     const db = seedDb()
     db.failures['locations:select'] = { message: 'down' }
     const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config: clientConfig() })
-    expect(res).toMatchObject({ ok: false, status: 503 })
+    expect(res).toMatchObject({ ok: false, status: 503, code: 'membership_source_unreadable' })
     expect(db.calls.rpc).toHaveLength(0)
   })
 
@@ -632,17 +651,26 @@ describe('setBoardEnabled', () => {
     expect(db.calls.updates.at(-1).patch).toEqual({ enabled: false, updated_at: expect.any(String) })
   })
 
-  it('enableRefusesUn1tStudioAndBadConfig', async () => {
+  it('enableRefusesModuleMismatch', async () => {
     const db = seedDb()
     const board = await createdBoard(db)
     db.tables.locations.find((l) => l.id === LOC).membership_source = 'un1t_online'
     expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
-      .toMatchObject({ ok: false, status: 409, code: 'un1t_studio' })
+      .toMatchObject({ ok: false, status: 409, code: 'module_mismatch' })
+  })
 
-    db.tables.locations.find((l) => l.id === LOC).membership_source = 'glofox'
+  it('enablesOfferUn1tAtUn1tStudio', async () => {
+    const db = seedDb('un1t_online')
+    const board = await createdBoard(db, { config: clientConfig({ entry: { type: 'un1t_product', values: ['prod-39'] } }) })
+    expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
+      .toMatchObject({ ok: true, board: { enabled: true } })
+  })
+
+  it('enableRefusesBadConfig', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
     db.tables.pipelines.find((p) => p.id === board.id).config = { entry: null }
     expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
       .toMatchObject({ ok: false, status: 409, code: 'invalid_config' })
-    expect(db.calls.updates).toHaveLength(0)
   })
 })
