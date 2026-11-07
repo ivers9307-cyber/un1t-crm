@@ -21,6 +21,7 @@ export const REPLACE_CONFIRM = 'The current message stops now. The new wording s
 // because a client bundle must not import that server module.
 export const LEGACY_NOTICE = "This board is built in code and can't be changed here."
 export const WORDING_UNKNOWN_NOTE = "The current wording couldn't be read. Try again later before changing it."
+export const OLD_WORDING_UNKNOWN_NOTE = "The old wording couldn't be read, so this starts from the standard wording."
 export const REJECTED_NOTE = 'Meta rejected this wording. Change it to try again.'
 export const TURN_OFF_CONFIRM = 'While the board is off, nobody new is placed. When you turn it back on, people who qualified in the meantime are placed without messages.'
 export const BASELINE_NOTE = 'Switching a board on never messages people who already qualify. They are placed that night without any messages; only people who qualify after that get the follow-ups.'
@@ -262,8 +263,13 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
     }
   }
 
-  function startEditing(stage, pack) {
-    setEditing({ stageId: stage.id, packKey: pack.key, before: { ...(state.bodies[pack.key] || {}) } })
+  // `fromStandard`: a switched-off follow-up whose wording could not be read
+  // starts from the recipe's wording, so nothing half-known is edited.
+  function startEditing(stage, pack, fromStandard = false) {
+    setEditing({ stageId: stage.id, packKey: pack.key, fromStandard, before: { ...(state.bodies[pack.key] || {}) } })
+    if (fromStandard) {
+      for (const t of pack.templates) dispatch({ type: 'setBody', packKey: pack.key, ref: t.ref, body: t.body })
+    }
   }
 
   function cancelEditing() {
@@ -381,8 +387,12 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
             const note = fuNotes[stage.id] || {}
             // Wording a follow-up sends that could not be read is never
             // replaced by what the editor would show in its place.
-            const wordingUnknown = !!row?.whatsapp_template_id
+            // A switched-off row sends nothing, so it may always take new
+            // wording: there it starts from the recipe's instead.
+            const unreadable = !!row?.whatsapp_template_id
               && (!!board.wording_unread || (row.wording_missing || []).length > 0)
+            const wordingUnknown = unreadable && rowState !== 'off'
+            const offUnreadable = unreadable && rowState === 'off'
             const canInstall = !row || INSTALLABLE.has(rowState)
             const rejected = rowState === 'rejected'
             const unchanged = isEditing && editing && pack
@@ -404,13 +414,14 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                         <p key={t.ref} className="whitespace-pre-wrap rounded-md bg-un1t-surface p-2 text-sm text-un1t-text">{text}</p>
                       ) : null
                     })}
-                    {row && !row.body_texts && !wordingUnknown && (
+                    {row && !row.body_texts && !unreadable && (
                       <p className="text-sm text-un1t-subtle">No wording saved for this follow-up yet.</p>
                     )}
                   </div>
                 )}
                 {pack && isEditing && (
                   <div className="mt-3 space-y-3">
+                    {editing?.fromStandard && <p className="text-sm text-amber-700">{OLD_WORDING_UNKNOWN_NOTE}</p>}
                     <FollowupsStep state={state} dispatch={dispatch} packKeys={[pack.key]} />
                     {dirty && <p className="text-sm text-amber-700">Save the board first: the preview and Meta use the saved offer name and sign-off.</p>}
                     <div className="flex flex-wrap gap-2">
@@ -427,7 +438,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                 {note.error && <p className="mt-2 text-sm text-red-700" role="alert">{note.error}</p>}
                 {pack && canEditWording && !isEditing && (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Button type="button" size="sm" variant="secondary" disabled={!!fuBusy || !!editing || wordingUnknown} onClick={() => startEditing(stage, pack)}>
+                    <Button type="button" size="sm" variant="secondary" disabled={!!fuBusy || !!editing || wordingUnknown} onClick={() => startEditing(stage, pack, offUnreadable)}>
                       Change wording
                     </Button>
                     {row && STOPPABLE.has(rowState) && (

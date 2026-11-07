@@ -3,8 +3,10 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import BoardSettings, {
   REPLACE_CONFIRM, SWITCH_OFF_NOTE, LEGACY_NOTICE, WORDING_UNKNOWN_NOTE, REJECTED_NOTE, TURN_OFF_CONFIRM,
+  OLD_WORDING_UNKNOWN_NOTE,
 } from './BoardSettings.jsx'
 import { LEGACY_BOARD_ERROR } from '@/lib/pipeline-boards'
+import { RECIPES } from '@shared/pipelines/recipes.js'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -189,6 +191,29 @@ describe('BoardSettings', () => {
     expect(change[1].disabled).toBe(false)
     expect(screen.getAllByText(WORDING_UNKNOWN_NOTE)).toHaveLength(1)
     expect(screen.getAllByRole('button', { name: 'Switch off' }).every((b) => !b.disabled)).toBe(true)
+  })
+
+  it('a switched-off follow-up with unreadable wording starts from the standard wording and installs', async () => {
+    const off = { id: 'f3', stage_id: 's3', pack_key: 'halfway', state: 'off', version: 2, whatsapp_template_id: 't3', body_text: 'Hi {{1}}, halfway.', body_texts: { main: 'Hi {{1}}, halfway.' }, wording_missing: ['nudge'] }
+    const fetchMock = stubApi({ board: { ...BOARD, followups: [...BOARD.followups, off] } })
+    renderPage()
+    await screen.findByText('Hi {{1}}, halfway.')
+    expect(screen.queryByText(WORDING_UNKNOWN_NOTE)).toBeNull()
+    const change = screen.getAllByRole('button', { name: 'Change wording' })[2]
+    expect(change.disabled).toBe(false)
+    expect(screen.getAllByRole('button', { name: 'Install' }).every((b) => !b.disabled)).toBe(true)
+    fireEvent.click(change)
+    expect(screen.getByText(OLD_WORDING_UNKNOWN_NOTE)).toBeTruthy()
+    expect(OLD_WORDING_UNKNOWN_NOTE).toBe("The old wording couldn't be read, so this starts from the standard wording.")
+    const halfway = RECIPES.paid_trial_offer.packs.find((p) => p.key === 'halfway')
+    expect(screen.getByLabelText('Halfway check-in: message').value).toBe(halfway.templates[0].body)
+    fireEvent.change(screen.getByLabelText('Halfway check-in: message'), { target: { value: 'Hi {{1}}, halfway at {studio}. {signer}' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save wording' }))
+    expect(screen.queryByText(REPLACE_CONFIRM)).toBeNull()
+    await waitFor(() => expect(calls(fetchMock, 'PUT')).toHaveLength(1))
+    expect(JSON.parse(calls(fetchMock, 'PUT')[0][1].body)).toEqual({
+      action: 'install', pack_key: 'halfway', bodies: { main: 'Hi {{1}}, halfway at {studio}. {signer}' },
+    })
   })
 
   it('a rejected follow-up offers Change wording and Switch off, never a resend', async () => {
