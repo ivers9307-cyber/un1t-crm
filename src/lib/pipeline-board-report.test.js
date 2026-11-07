@@ -158,13 +158,45 @@ describe('followups', () => {
         { id: 'in2', location_id: LOC, direction: 'inbound', conversation_id: 'cv2', sent_at: new Date(t0ms + 80 * 3600000).toISOString() },
       ],
       class_bookings: [
-        { id: 'cb1', location_id: LOC, contact_id: 'c-d1', created_at: new Date(t0ms + 86400000).toISOString() },
-        { id: 'cb2', location_id: LOC, contact_id: 'c-d2', created_at: new Date(t0ms + 8 * 86400000).toISOString() },
-        { id: 'cb3', location_id: LOC, contact_id: 'c-d3', created_at: new Date(t0ms - 86400000).toISOString() },
+        { id: 'cb1', location_id: LOC, contact_id: 'c-d1', starts_at: new Date(t0ms + 86400000).toISOString(), created_at: ago(0), status: 'BOOKED' },
+        { id: 'cb2', location_id: LOC, contact_id: 'c-d2', starts_at: new Date(t0ms + 15 * 86400000).toISOString(), status: 'BOOKED' },
+        { id: 'cb3', location_id: LOC, contact_id: 'c-d3', starts_at: new Date(t0ms - 86400000).toISOString(), created_at: ago(0), status: 'BOOKED' },
+        { id: 'cb4', location_id: LOC, contact_id: 'c-d2', starts_at: new Date(t0ms + 2 * 86400000).toISOString(), status: 'CANCELLED' },
       ],
     }
     const r = await run(tables, b)
-    expect(r.followups).toEqual([{ stageId: S1, packKey: 'p', state: 'live', sent: 3, delivered: 2, read: 1, replied: 1, bookedAfter: 1 }])
+    expect(r.followups).toEqual([{ stageId: S1, packKey: 'p', state: 'live', sent: 3, failed: 0, delivered: 2, read: 1, replied: 1, bookedAfter: 1 }])
+  })
+})
+
+describe('followups: failed sends and distinct contacts', () => {
+  const t0 = ago(3)
+  const t0ms = Date.parse(t0)
+  const b = () => board({ followups: [{ id: 'f1', stage_id: S1, pack_key: 'p', state: 'live', whatsapp_template_id: 'tpl1' }] })
+  const msg = (id, over = {}) => ({ id, location_id: LOC, direction: 'outbound', template_name: 'tmpl_a', contact_id: 'c-d1', conversation_id: 'cv1', status: 'sent', sent_at: t0, delivered_at: t0, read_at: null, ...over })
+  const base = { deals: baseDeals(), activities: [], whatsapp_templates: [{ id: 'tpl1', location_id: LOC, name: 'tmpl_a', status: 'APPROVED' }] }
+  it('a failed row counts in failed, not sent/delivered/read', async () => {
+    const r = await run({ ...base, whatsapp_messages: [msg('m1'), msg('m2', { status: 'failed', delivered_at: t0, read_at: t0 })] }, b())
+    expect(r.followups[0]).toMatchObject({ sent: 1, failed: 1, delivered: 1, read: 0 })
+  })
+  it('three messages to one contact who replies and books once count once', async () => {
+    const r = await run({
+      ...base,
+      whatsapp_messages: [msg('m1'), msg('m2'), msg('m3'), { id: 'in', location_id: LOC, direction: 'inbound', conversation_id: 'cv1', sent_at: new Date(t0ms + 3600000).toISOString() }],
+      class_bookings: [{ id: 'cb', location_id: LOC, contact_id: 'c-d1', starts_at: new Date(t0ms + 86400000).toISOString(), status: 'BOOKED' }],
+    }, b())
+    expect(r.followups[0]).toMatchObject({ sent: 3, replied: 1, bookedAfter: 1 })
+  })
+  it('a class before the send (synced later) and a cancelled class do not count', async () => {
+    const r = await run({
+      ...base,
+      whatsapp_messages: [msg('m1')],
+      class_bookings: [
+        { id: 'a', location_id: LOC, contact_id: 'c-d1', starts_at: new Date(t0ms - 86400000).toISOString(), created_at: new Date(t0ms + 86400000).toISOString(), status: 'ATTENDED' },
+        { id: 'b', location_id: LOC, contact_id: 'c-d1', starts_at: new Date(t0ms + 86400000).toISOString(), status: 'CANCELLED' },
+      ],
+    }, b())
+    expect(r.followups[0].bookedAfter).toBe(0)
   })
 })
 

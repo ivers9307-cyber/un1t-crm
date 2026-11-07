@@ -11,8 +11,9 @@
 //     history before a stage rename is not counted (historyNote);
 //   - a deal CREATED onto the first stage logs no move, so deals created in the
 //     window are added to the board's first stage.
-import { RECIPES, templateNameFor } from '@shared/pipelines/recipes.js'
+import { RECIPES } from '@shared/pipelines/recipes.js'
 import { stageRoleOf, isPileRole } from '@shared/pipelines/stage-roles'
+import { otherPackTemplateNames } from './pipeline-boards'
 import { purchaseMatchesEntry } from './pipeline-offer-claims'
 import { loadStageCoverage } from './pipeline-stage-coverage'
 import { selectAll, selectAllByKeys } from './select-all'
@@ -22,34 +23,25 @@ const MODULE = 'pipeline-board-report'
 const DAY_MS = 86400000
 const CHUNK = 200
 const REPLY_WINDOW_MS = 72 * 3600000
-const BOOKING_WINDOW_MS = 7 * DAY_MS
+const BOOKING_WINDOW_MS = 14 * DAY_MS
+const CANCELLED = new Set(['CANCELLED', 'CANCELED', 'LATE_CANCELLED'])
+
+function packTemplateNames(board, followup, firstName) {
+  const names = new Set([firstName])
+  const pack = RECIPES[board.recipe_key]?.packs?.find((p) => p.key === followup.pack_key)
+  if (!pack || pack.templates.length < 2) return names
+  try {
+    for (const n of otherPackTemplateNames({ board, followup, pack, firstName }) || []) names.add(n)
+  } catch {
+    // A name templateNameFor refuses was never installed.
+  }
+  return names
+}
 export const HISTORY_NOTE = 'History before a stage rename is not counted.'
 
 const ms = (v) => {
   const t = v ? Date.parse(v) : NaN
   return Number.isFinite(t) ? t : null
-}
-
-// The studio prefix and the pack's other message names, from the first
-// template's stored name (the same rule pipeline-boards.js withFollowupWording uses).
-function packTemplateNames(board, followup, firstName) {
-  const names = new Set([firstName])
-  const recipe = RECIPES[board.recipe_key]
-  const pack = recipe?.packs?.find((p) => p.key === followup.pack_key)
-  if (!pack || pack.templates.length < 2) return names
-  try {
-    const version = Number.isInteger(followup.version) ? followup.version : undefined
-    const suffix = templateNameFor({ studioSlug: 's', boardKey: board.key, packKey: pack.key, ref: pack.templates[0].ref, version }).slice(1)
-    if (!String(firstName).endsWith(suffix)) return names
-    const studioSlug = firstName.slice(0, -suffix.length)
-    if (!studioSlug) return names
-    for (const t of pack.templates) {
-      names.add(templateNameFor({ studioSlug, boardKey: board.key, packKey: pack.key, ref: t.ref, version }))
-    }
-  } catch {
-    // A name templateNameFor refuses was never installed.
-  }
-  return names
 }
 
 async function block(label, ids, fn) {
@@ -165,6 +157,7 @@ async function buildRevenue(db, board, locationId, deals) {
   return { currency: 'EUR', offerCents, purchases }
 }
 
+/** Per follow-up: sent/failed/delivered/read are messages; replied and bookedAfter are DISTINCT contacts (bookedAfter = has a class starting after the message within 14 days, not cancelled). */
 async function buildFollowups(db, board, locationId, deals) {
   const followups = board.followups || []
   const linked = followups.filter((f) => f.whatsapp_template_id)
@@ -190,7 +183,7 @@ async function buildFollowups(db, board, locationId, deals) {
 
   const messages = allNames.length === 0 ? [] : (await selectAllByKeys(allNames, (keys, from, to) => db
     .from('whatsapp_messages')
-    .select('id, contact_id, conversation_id, template_name, sent_at, delivered_at, read_at')
+    .select('id, contact_id, conversation_id, template_name, status, sent_at, delivered_at, read_at')
     .eq('location_id', locationId)
     .eq('direction', 'outbound')
     .in('template_name', keys)
@@ -217,32 +210,36 @@ async function buildFollowups(db, board, locationId, deals) {
   const msgContacts = [...new Set(messages.map((m) => m.contact_id))]
   const bookings = msgContacts.length === 0 ? [] : await selectAllByKeys(msgContacts, (keys, from, to) => db
     .from('class_bookings')
-    .select('id, contact_id, created_at')
+    .select('id, contact_id, starts_at, status')
     .eq('location_id', locationId)
     .in('contact_id', keys)
     .order('id', { ascending: true })
     .range(from, to), { chunkSize: CHUNK })
   const bookingsBy = new Map()
   for (const b of bookings) {
-    const t = ms(b.created_at)
-    if (t == null) continue
+    const t = ms(b.starts_at)
+    if (t == null || CANCELLED.has(String(b.status || '').toUpperCase())) continue
     if (!bookingsBy.has(b.contact_id)) bookingsBy.set(b.contact_id, [])
     bookingsBy.get(b.contact_id).push(t)
   }
 
   return followups.map((f) => {
     const names = namesOf.get(f.id ?? `${f.stage_id}:${f.pack_key}`)
-    const out = { stageId: f.stage_id, packKey: f.pack_key, state: f.state, sent: 0, delivered: 0, read: 0, replied: 0, bookedAfter: 0 }
+    const out = { stageId: f.stage_id, packKey: f.pack_key, state: f.state, sent: 0, failed: 0, delivered: 0, read: 0, replied: 0, bookedAfter: 0 }
+    const replied = new Set()
+    const booked = new Set()
     for (const m of messages) {
       if (!names.has(m.template_name)) continue
       const sent = ms(m.sent_at)
+      if (m.status === 'failed' || sent == null) { out.failed += 1; continue }
       out.sent += 1
       if (m.delivered_at) out.delivered += 1
       if (m.read_at) out.read += 1
-      if (sent == null) continue
-      if ((inboundBy.get(m.conversation_id) || []).some((t) => t > sent && t <= sent + REPLY_WINDOW_MS)) out.replied += 1
-      if ((bookingsBy.get(m.contact_id) || []).some((t) => t > sent && t <= sent + BOOKING_WINDOW_MS)) out.bookedAfter += 1
+      if ((inboundBy.get(m.conversation_id) || []).some((t) => t > sent && t <= sent + REPLY_WINDOW_MS)) replied.add(m.contact_id)
+      if ((bookingsBy.get(m.contact_id) || []).some((t) => t > sent && t <= sent + BOOKING_WINDOW_MS)) booked.add(m.contact_id)
     }
+    out.replied = replied.size
+    out.bookedAfter = booked.size
     return out
   })
 }
