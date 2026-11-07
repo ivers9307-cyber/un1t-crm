@@ -552,24 +552,46 @@ async function applyStageDiff(db, { locationId, row, next }) {
     currentName.set(stageId, name)
     return null
   }
-  // A failure after parking puts every renamed stage back on its ORIGINAL
-  // name, so a board never shows a __tmp_ column. Step 6 renames that already
-  // landed are first undone (in reverse order) back onto a temporary name, so
-  // an original name is never wanted while another stage still holds it; then
-  // every parked stage goes home. Each write is retried once (the undo on a
-  // fresh temporary name); what is still wrong is logged exactly.
+  // Rows step 5 inserted, and the final names step 6 landed.
+  const insertedIds = []
+  const landedFinal = new Map()
+  // A write that failed on a unique cannot succeed on a second try.
+  const renameRetry = async (stageId, name) => {
+    let error = await rename(stageId, name)
+    if (error && error.code !== '23505') error = await rename(stageId, name)
+    return error
+  }
+  // A failure after parking rolls the edit back: (a) the rows this call
+  // inserted are deleted (they hold no deals, and one may hold a renamed
+  // stage's original name); (b) step 6 renames that already landed are undone,
+  // in reverse, onto a temporary name; (c) every renamed stage goes back to its
+  // ORIGINAL name. A stage whose original name still cannot be restored is left
+  // on the real name it last held, never a temporary one, and logged.
   const unpark = async () => {
+    for (const id of insertedIds) {
+      const { error } = await db
+        .from('pipeline_stages')
+        .delete()
+        .eq('id', id)
+        .eq('location_id', locationId)
+        .eq('pipeline_id', row.id)
+      if (error) logError(MODULE, 'inserted stage not removed after a failed edit', { locationId, boardId: row.id, stageId: id, err: error.message })
+    }
     for (const { existing } of [...renamed].reverse()) {
       const now = currentName.get(existing.id)
       if (now === existing.name || now === tempStageName(existing.id)) continue
-      let error = await rename(existing.id, tempStageName(existing.id))
-      if (error) error = await rename(existing.id, `${tempStageName(existing.id)}_${Date.now().toString(36)}`)
+      const error = await renameRetry(existing.id, tempStageName(existing.id))
       if (error) logError(MODULE, 'renamed stage not re-parked', { locationId, stageId: existing.id, err: error.message })
     }
     for (const { existing } of renamed) {
       if (currentName.get(existing.id) === existing.name) continue
-      let error = await rename(existing.id, existing.name)
-      if (error) error = await rename(existing.id, existing.name)
+      let error = await renameRetry(existing.id, existing.name)
+      const fallback = landedFinal.get(existing.id)
+      if (error && fallback && currentName.get(existing.id) !== fallback) {
+        // Never leave it on a temporary name: take the final name it landed.
+        const fbError = await rename(existing.id, fallback)
+        if (fbError) logError(MODULE, 'stage could not take its landed name back', { locationId, stageId: existing.id, err: fbError.message })
+      }
       if (error) logError(MODULE, 'parked stage name not restored', { locationId, stageId: existing.id, name: currentName.get(existing.id), originalName: existing.name, err: error.message })
     }
     const left = renamed.filter(({ existing }) => currentName.get(existing.id) !== existing.name)
@@ -607,6 +629,7 @@ async function applyStageDiff(db, { locationId, row, next }) {
       await unpark()
       return fail(500, 'Could not add the new stages.')
     }
+    insertedIds.push(...inserted.map((r) => r.id))
   }
 
   // 6. Kept stages take their final name AND column position from the
@@ -626,7 +649,10 @@ async function applyStageDiff(db, { locationId, row, next }) {
       await unpark()
       return failed
     }
-    if (change.name) currentName.set(existing.id, change.name)
+    if (change.name) {
+      currentName.set(existing.id, change.name)
+      landedFinal.set(existing.id, change.name)
+    }
     stillParked.delete(existing.id)
   }
   return { ok: true }

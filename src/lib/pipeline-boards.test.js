@@ -427,6 +427,37 @@ describe('updateBoard', () => {
     expect(db.tables.pipeline_stages.find((s) => s.slug === 'o_reset_39_done').name).toBe('Done')
   })
 
+  it('aFailedFinalWriteDeletesTheInsertedRowSoARenamedStageGoesHome', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const done = stageBySlug(board, 'o_reset_39_done')
+    const config = editableConfig(board, (c) => {
+      c.stages.find((s) => s.role === 'done').name = 'Trial over'
+      c.stages.push({ role: 'converted', name: 'Done' })
+    })
+    // Fail the step-6 write of the renamed stage ('Trial over').
+    const realFrom = db.from.bind(db)
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table !== 'pipeline_stages') return b
+      const realUpdate = b.update
+      b.update = (patch) => {
+        if (patch.name === 'Trial over') {
+          const failing = realUpdate({})
+          failing.then = (resolve) => Promise.resolve({ data: null, error: { code: 'XX000', message: 'boom' } }).then(resolve)
+          return failing
+        }
+        return realUpdate(patch)
+      }
+      return b
+    }
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res.ok).toBe(false)
+    expect(db.tables.pipeline_stages.some((s) => String(s.name).startsWith('__tmp_'))).toBe(false)
+    expect(db.tables.pipeline_stages.find((s) => s.id === done.id).name).toBe('Done')
+    expect(db.tables.pipeline_stages.some((s) => s.slug === 'o_reset_39_converted')).toBe(false)
+  })
+
   it('removingAStageArchivesItsFollowupSequencesFirst', async () => {
     const db = seedDb()
     const board = await createdBoard(db)

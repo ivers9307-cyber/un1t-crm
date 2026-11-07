@@ -105,9 +105,11 @@ export async function GET(request, props) {
 // equal to the one the settings panel posts.
 function stableJson(v) {
   if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`
-  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(',')}}`
+  // A missing key and a null value are the same trigger; so are null and {}.
+  if (v && typeof v === 'object') return `{${Object.keys(v).filter((k) => v[k] != null).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(',')}}`
   return JSON.stringify(v ?? null)
 }
+const sameTriggerConfig = (a, b) => stableJson(a ?? {}) === stableJson(b ?? {})
 
 // PUT /api/sequences/[id]
 export async function PUT(request, props) {
@@ -158,7 +160,7 @@ export async function PUT(request, props) {
     // both fields, so a rename carries the stored trigger back unchanged.
     const touchesTrigger =
       (updates.trigger_type !== undefined && updates.trigger_type !== existing.trigger_type) ||
-      (updates.trigger_config !== undefined && stableJson(updates.trigger_config) !== stableJson(existing.trigger_config))
+      (updates.trigger_config !== undefined && !sameTriggerConfig(updates.trigger_config, existing.trigger_config))
     if (leavesArchived || touchesTrigger) return retiredFollowupResponse()
   }
   // SEQPAGEGATE.1: '' and null both mean "no secret" (the inbound webhook

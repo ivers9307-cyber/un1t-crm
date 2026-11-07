@@ -412,4 +412,11 @@ describe('PUT /api/sequences/[id] — a retired follow-up sequence (PIPEBUILD.5n
     const res = await PUT(putReq({ status: 'paused' }), props)
     expect(res.status).toBe(409)
   })
+
+  it('treats a missing key, a null value, and null vs {} as the same trigger', async () => {
+    const { db } = mockDb({ row: { ...retired, trigger_config: { to_status: 'o_reset_39_done', from_status: null } } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq({ name: 'R', trigger_type: 'pipeline_stage_change', trigger_config: { to_status: 'o_reset_39_done' } }), props)
+    expect(res.status).toBe(200)
+  })
 })
