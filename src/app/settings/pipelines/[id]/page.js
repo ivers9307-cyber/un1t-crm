@@ -4,6 +4,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { createServerClient } from '@/lib/supabase'
 import { boardLocationId } from '@/lib/pipeline-boards'
+import { locationsWithWhatsApp } from '@/lib/whatsapp-config'
 import { renderInputsFor } from '@/lib/pipeline-board-followups'
 import BoardSettings from '@/components/pipelines/BoardSettings'
 
@@ -39,6 +40,11 @@ export default async function BoardSettingsPage({ params }) {
     appLinks = inputs.render.appLinks
   }
 
+  let hasWhatsapp = null // unknown: a failed read behaves as before
+  try {
+    hasWhatsapp = (await locationsWithWhatsApp(db, [locationId])).has(locationId)
+  } catch { /* unknown */ }
+
   return (
     <div className="p-8 max-w-4xl">
       <Link href="/settings/pipelines" className="text-sm text-un1t-accent">Pipelines</Link>
@@ -49,6 +55,7 @@ export default async function BoardSettingsPage({ params }) {
         studioName={studioName}
         bookingFlowId={bookingFlowId}
         appLinks={appLinks}
+        hasWhatsapp={hasWhatsapp}
       />
     </div>
   )

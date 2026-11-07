@@ -232,4 +232,13 @@ describe('BoardWizard finish', () => {
     const last = fetchMock.mock.calls.filter(([u]) => u.includes('/followups/')).pop()
     expect(JSON.parse(last[1].body).action).toBe('install')
   })
+
+  it('the no-follow-up note names WhatsApp only when the studio has no number on', () => {
+    render(<BoardLaunchPanel board={board} followups={[]} hasWhatsapp={false} />)
+    expect(screen.getByText(/no WhatsApp number switched on/)).toBeTruthy()
+    cleanup()
+    render(<BoardLaunchPanel board={board} followups={[]} />)
+    expect(screen.queryByText(/no WhatsApp number switched on/)).toBeNull()
+    expect(screen.getByText(/needs at least one live follow-up/)).toBeTruthy()
+  })
 })

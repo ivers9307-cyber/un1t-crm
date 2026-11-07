@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import { RECIPES } from '@shared/pipelines/recipes.js'
 import BoardList, { followupChip, boardStatus } from './BoardList.jsx'
+import { NO_WHATSAPP_NOTICE } from './NoWhatsappNotice'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -212,6 +213,6 @@ describe('BoardList', () => {
     stub({ boards: [], can_edit: true, has_whatsapp: false })
     render(<BoardList locationId="loc1" />)
     await screen.findByText('Start from a recipe')
-    expect(screen.getAllByText("This studio has no WhatsApp number switched on yet. You can build the board now; its follow-ups can't be submitted until a number is on.")).toHaveLength(Object.keys(RECIPES).length)
+    expect(screen.getAllByText(NO_WHATSAPP_NOTICE)).toHaveLength(Object.keys(RECIPES).length)
   })
 })

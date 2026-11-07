@@ -16,6 +16,7 @@ import FollowupsStep from './wizard/FollowupsStep'
 import MiaNotesStep from './wizard/MiaNotesStep'
 import ReviewStep from './wizard/ReviewStep'
 import BoardLaunchPanel from './BoardLaunchPanel'
+import NoWhatsappNotice from './NoWhatsappNotice'
 
 const STEP_COMPONENTS = {
   Recipe: RecipeStep,
@@ -66,7 +67,7 @@ function stageForPack(board, pack) {
  * (off), install each ticked follow-up one at a time, then show the launch panel.
  */
 export default function BoardWizard({
-  locationId, studioName, canEdit, membershipSource, bookingFlowId, appLinks, initialRecipe,
+  locationId, studioName, canEdit, membershipSource, bookingFlowId, appLinks, initialRecipe, hasWhatsapp = null,
   onCreate, creating: creatingProp = false, createError: createErrorProp = null,
 }) {
   const [state, dispatch] = useReducer(
@@ -120,6 +121,13 @@ export default function BoardWizard({
       if (!created.ok) { setCreateError(created.json?.error || 'The board could not be created.'); return }
       const board = created.json.data.board
       const packs = followupPacks(wizardState)
+      // RAILS.5: no WhatsApp number on at this studio — the board is built and
+      // saved, the installs are skipped (they would only be refused), and the
+      // panel says why.
+      if (hasWhatsapp === false) {
+        setLaunch({ board, followups: [], issues: [], wording, expectedKeys: [] })
+        return
+      }
       setLaunch({ board, followups: [], issues: [], wording, expectedKeys: packs.map((p) => p.key) })
       setBusy(true)
       for (const pack of packs) {
@@ -160,7 +168,8 @@ export default function BoardWizard({
             <Link href={`/settings/pipelines/${launch.board.id}`} className="text-un1t-accent">Open the board</Link>
           </p>
         </Card>
-        <BoardLaunchPanel board={launch.board} followups={launch.followups} issues={launch.issues} onRetry={retry} retryDisabled={busy} installing={busy} expectedKeys={launch.expectedKeys} />
+        {hasWhatsapp === false && <Card><NoWhatsappNotice /></Card>}
+        <BoardLaunchPanel board={launch.board} followups={launch.followups} issues={launch.issues} onRetry={retry} retryDisabled={busy || hasWhatsapp === false} installing={busy} expectedKeys={launch.expectedKeys} hasWhatsapp={hasWhatsapp} />
       </div>
     )
   }

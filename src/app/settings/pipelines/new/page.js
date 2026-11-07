@@ -3,11 +3,21 @@ import Link from 'next/link'
 import { getCurrentUser, guardMasterOrOwner } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { createServerClient } from '@/lib/supabase'
+import { locationsWithWhatsApp } from '@/lib/whatsapp-config'
 import { renderInputsFor } from '@/lib/pipeline-board-followups'
 import { RECIPES } from '@shared/pipelines/recipes.js'
 import BoardWizard from '@/components/pipelines/BoardWizard'
 
 export const dynamic = 'force-dynamic'
+
+// RAILS.5 — true / false / null (unknown: a failed read behaves as before).
+async function hasWhatsappAt(db, locationId) {
+  try {
+    return (await locationsWithWhatsApp(db, [locationId])).has(locationId)
+  } catch {
+    return null
+  }
+}
 
 // PIPEBUILD.5i — /settings/pipelines/new: the board wizard. Owners, org admins
 // and masters at the active studio build boards (guardMasterOrOwner, the
@@ -36,6 +46,8 @@ export default async function NewBoardPage(props) {
     }
   }
 
+  const hasWhatsapp = await hasWhatsappAt(createServerClient(), location.id)
+
   return (
     <div className="p-8 max-w-4xl">
       <Link href="/settings/pipelines" className="text-sm text-un1t-accent">Pipelines</Link>
@@ -48,6 +60,7 @@ export default async function NewBoardPage(props) {
         bookingFlowId={bookingFlowId}
         appLinks={appLinks}
         initialRecipe={initialRecipe}
+        hasWhatsapp={hasWhatsapp}
       />
     </div>
   )

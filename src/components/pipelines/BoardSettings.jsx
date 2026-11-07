@@ -15,6 +15,7 @@ import FollowupsStep from './wizard/FollowupsStep'
 import MiaNotesStep from './wizard/MiaNotesStep'
 import BoardLaunchPanel from './BoardLaunchPanel'
 import BoardReport from './BoardReport'
+import NoWhatsappNotice from './NoWhatsappNotice'
 import { boardStatus, followupChip, placementCadence, HEALTH_UNREAD_NOTICE } from './BoardList'
 
 export const SWITCH_OFF_NOTE = 'Switch the board off to change this.'
@@ -142,8 +143,9 @@ function rowFor(board, stageId, packKey) {
  * @param {string} [props.studioName]
  * @param {string} [props.bookingFlowId]
  * @param {{ iosUrl: string, androidUrl: string }} [props.appLinks]
+ * @param {boolean|null} [props.hasWhatsapp]  false: no number is on at this studio (RAILS.5), so no follow-up can be installed or reworded
  */
-export default function BoardSettings({ boardId, locationId, studioName = '', bookingFlowId, appLinks }) {
+export default function BoardSettings({ boardId, locationId, studioName = '', bookingFlowId, appLinks, hasWhatsapp = null }) {
   const studio = useMemo(() => ({ studioName, bookingFlowId, appLinks }), [studioName, bookingFlowId, appLinks])
   const [load, setLoad] = useState({ loading: true, error: null })
   const [board, setBoard] = useState(null)
@@ -246,6 +248,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
   }
 
   const { canEdit, canEditWording } = flags
+  const noWa = hasWhatsapp === false
   const on = !!board.enabled
   const structureLocked = !canEdit || on
   const lockNote = canEdit && on ? SWITCH_OFF_NOTE : null
@@ -411,7 +414,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
       {board.board_type === 'offer' && <BoardReport boardId={boardId} stages={board.stages || []} />}
 
       {canEdit && !on && (
-        <BoardLaunchPanel board={board} followups={board.followups || []} onEnabled={() => refresh()} />
+        <BoardLaunchPanel board={board} followups={board.followups || []} hasWhatsapp={hasWhatsapp} onEnabled={() => refresh()} />
       )}
 
       <Section title="Name, offer and signer">
@@ -463,6 +466,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
       )}
 
       <Section title="Follow-ups">
+        {noWa && <div className="mb-3"><NoWhatsappNotice /></div>}
         {board.wording_unread && (
           <p className="mb-3 text-sm text-amber-700">Could not read the current wording just now. Reload the page to try again.</p>
         )}
@@ -542,22 +546,24 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                 {note.error && <p className="mt-2 text-sm text-red-700" role="alert">{note.error}</p>}
                 {pack && canEditWording && !isEditing && (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Button type="button" size="sm" variant="secondary" disabled={!!fuBusy || !!editing || wordingUnknown} onClick={() => startEditing(stage, pack, offUnreadable)}>
-                      Change wording
-                    </Button>
+                    {!noWa && (
+                      <Button type="button" size="sm" variant="secondary" disabled={!!fuBusy || !!editing || wordingUnknown} onClick={() => startEditing(stage, pack, offUnreadable)}>
+                        Change wording
+                      </Button>
+                    )}
                     {canEdit && row && STOPPABLE.has(rowState) && (
                       <Button type="button" size="sm" variant="secondary" loading={busy} disabled={!!fuBusy && !busy}
                         onClick={() => setConfirmOffRow({ stage, pack })}>
                         Switch off
                       </Button>
                     )}
-                    {canInstall && (canEdit || !ownerOnlyInstall) && (
+                    {!noWa && canInstall && (canEdit || !ownerOnlyInstall) && (
                       <Button type="button" size="sm" loading={busy} disabled={(!!fuBusy && !busy) || dirty || wordingUnknown || offUnreadable}
                         onClick={() => followupAction(stage, pack, 'install', packBodies(state, pack.key))}>
                         Install
                       </Button>
                     )}
-                    {rowState === 'awaiting_approval' && (
+                    {!noWa && rowState === 'awaiting_approval' && (
                       <Button type="button" size="sm" variant="ghost" loading={busy} disabled={!!fuBusy && !busy}
                         onClick={() => followupAction(stage, pack, 'install')}>
                         Publish now if Meta has approved it

@@ -1,5 +1,6 @@
 'use client'
 
+import { NO_WHATSAPP_NOTICE } from './NoWhatsappNotice'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Button, Card } from '@/components/ui'
@@ -135,8 +136,6 @@ function BoardCard({ board, coverageStages }) {
     </Card>
   )
 }
-
-const NO_WHATSAPP_NOTICE = "This studio has no WhatsApp number switched on yet. You can build the board now; its follow-ups can't be submitted until a number is on."
 
 // PIPEBUILD.6-5 — a studio with no offer boards starts from a recipe.
 function RecipeCards({ hasWhatsapp }) {

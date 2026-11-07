@@ -7,6 +7,7 @@ import BoardSettings, {
 } from './BoardSettings.jsx'
 import { LEGACY_BOARD_ERROR } from '@/lib/pipeline-boards'
 import { RECIPES } from '@shared/pipelines/recipes.js'
+import { NO_WHATSAPP_NOTICE } from './NoWhatsappNotice'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -458,5 +459,23 @@ describe('BoardSettings', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(404, { success: false, error: 'Not found' })))
     renderPage()
     expect(await screen.findByText("This board doesn't exist, or it isn't at your studio.")).toBeTruthy()
+  })
+
+  it('noWhatsappHidesInstallWordingAndPublishAndSaysWhy', async () => {
+    stubApi({ board: { ...BOARD, followups: [{ ...BOARD.followups[0], state: 'awaiting_approval' }] } })
+    render(<BoardSettings boardId="b1" locationId="loc1" studioName="UN1T Stillorgan" hasWhatsapp={false} />)
+    await screen.findByLabelText(/^Board name/)
+    expect(screen.getByText(new RegExp(NO_WHATSAPP_NOTICE.slice(0, 40)))).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Change wording' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Publish now/ })).toBeNull()
+  })
+
+  it('withoutTheWhatsappPropTheFollowupButtonsStay', async () => {
+    stubApi()
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    expect(screen.queryByText(new RegExp(NO_WHATSAPP_NOTICE.slice(0, 40)))).toBeNull()
+    expect(screen.getAllByRole('button', { name: 'Change wording' }).length).toBeGreaterThan(0)
   })
 })

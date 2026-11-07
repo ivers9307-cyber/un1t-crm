@@ -40,10 +40,11 @@ async function postJson(url) {
  * @param {(key: string) => void} [props.onRetry]
  * @param {boolean} [props.installing]  an install is still running: Turn on waits
  * @param {string[]|null} [props.expectedKeys]  pack keys that must each have a row or an issue first
+ * @param {boolean|null} [props.hasWhatsapp]  false: the studio has no WhatsApp number on, and the note says so
  * @param {(board: object) => void} [props.onEnabled]
  * @param {boolean} [props.showBoardLink]
  */
-export default function BoardLaunchPanel({ board, followups, issues = [], onRetry, retryDisabled = false, installing = false, expectedKeys = null, onEnabled, showBoardLink = false }) {
+export default function BoardLaunchPanel({ board, followups, issues = [], onRetry, retryDisabled = false, installing = false, expectedKeys = null, hasWhatsapp = null, onEnabled, showBoardLink = false }) {
   const [dry, setDry] = useState(null)
   const [dryBusy, setDryBusy] = useState(false)
   const [dryError, setDryError] = useState(null)
@@ -117,7 +118,7 @@ export default function BoardLaunchPanel({ board, followups, issues = [], onRetr
           </ul>
         )}
         {!hasFollowup && (
-          <p className="mt-3 text-sm text-un1t-subtle">The board needs at least one live follow-up, or one waiting for Meta, before it can be turned on.</p>
+          <p className="mt-3 text-sm text-un1t-subtle">The board needs at least one live follow-up, or one waiting for Meta, before it can be turned on.{hasWhatsapp === false && ' This studio has no WhatsApp number switched on, so a follow-up cannot be submitted yet.'}</p>
         )}
       </Card>
 
