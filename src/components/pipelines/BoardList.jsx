@@ -27,6 +27,9 @@ export function followupChip(followups, stageId) {
 
 export function boardStatus(board) {
   if (!board.enabled) return 'Off'
+  // A built-in board has no baseline_at (it never went through the builder's
+  // silent switch-on) and has been placing people and sending all along.
+  if (!board.board_type) return 'On'
   if (!board.baseline_at) return 'On — first placement tonight, no messages'
   return 'On'
 }
@@ -35,7 +38,21 @@ function Chip({ chip }) {
   return <span className={`text-xs px-2 py-0.5 rounded-full ${chip.tone}`}>{chip.label}</span>
 }
 
-function BoardCard({ board }) {
+// PIPEBUILD.5p — a built-in board's follow-ups are hand-built sequences, which
+// pipeline_stage_followups never holds, so its chips come from the
+// stage-coverage read (the strip on the board). No coverage for the board (a
+// failed read, or a board that is off) shows no chip: never a false "None".
+const SEQ_CHIP = { tone: 'bg-green-500/10 text-green-700' }
+export function builtInChip(coverageStages, stageId) {
+  if (!coverageStages) return null
+  const st = coverageStages.find((s) => s.id === stageId)
+  if (!st) return null
+  const n = (st.followups || []).length
+  if (n === 0) return NONE_CHIP
+  return { ...SEQ_CHIP, label: `${n} sequence${n === 1 ? '' : 's'}` }
+}
+
+function BoardCard({ board, coverageStages }) {
   const builtIn = !board.board_type
   const stages = [...(board.stages || [])].sort((a, b) => a.display_order - b.display_order)
   return (
@@ -58,7 +75,9 @@ function BoardCard({ board }) {
         {stages.map((st) => (
           <li key={st.id} className="flex items-center gap-2 text-sm text-un1t-text">
             <span>{st.name}</span>
-            <Chip chip={followupChip(board.followups, st.id)} />
+            {builtIn
+              ? (builtInChip(coverageStages, st.id) && <Chip chip={builtInChip(coverageStages, st.id)} />)
+              : <Chip chip={followupChip(board.followups, st.id)} />}
           </li>
         ))}
       </ul>
@@ -68,6 +87,7 @@ function BoardCard({ board }) {
 
 export default function BoardList({ locationId }) {
   const [state, setState] = useState({ loading: true, error: null, boards: [], canEdit: false })
+  const [coverage, setCoverage] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -81,7 +101,19 @@ export default function BoardList({ locationId }) {
         if (!cancelled) setState({ loading: false, error: e.message, boards: [], canEdit: false })
       }
     }
+    async function loadCoverage() {
+      try {
+        const res = await fetch(`/api/locations/${locationId}/stage-coverage`, { cache: 'no-store' })
+        const json = await res.json()
+        if (!res.ok || !json.success) return
+        const byBoard = Object.fromEntries((json.data?.boards || []).map((b) => [b.id, b.stages || []]))
+        if (!cancelled) setCoverage(byBoard)
+      } catch {
+        // Decoration: built-in boards then show no chips.
+      }
+    }
     load()
+    loadCoverage()
     return () => { cancelled = true }
   }, [locationId])
 
@@ -100,7 +132,7 @@ export default function BoardList({ locationId }) {
       )}
       {offers.length === 0 && <p className="text-sm text-un1t-subtle">No offer boards yet.</p>}
       {offers.map((b) => <BoardCard key={b.id} board={b} />)}
-      {builtIn.map((b) => <BoardCard key={b.id} board={b} />)}
+      {builtIn.map((b) => <BoardCard key={b.id} board={b} coverageStages={coverage?.[b.id] || null} />)}
     </div>
   )
 }
