@@ -4,8 +4,9 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   splitOfferBoards, loadOfferClaimsForLocation, loadOfferClaimsForContact,
   trialPurchaseOfferConfigs, offerPurchaseEntries, withoutOfferPurchases, placementDescriptors, offerPlacementSilence,
-  un1tProductOfferClaim, loadUn1tOfferClaims,
+  un1tProductOfferClaim, loadUn1tOfferClaims, UN1T_MEMBERSHIP_SOURCES,
 } from './pipeline-offer-claims.js'
+import { moduleForMembershipSource } from '@shared/pipelines/offer-config.js'
 import { loadClaimsForLocation, pendingProgrammeClaims } from './pipeline-claims.js'
 
 vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
@@ -376,6 +377,10 @@ describe('programmeClaimsUnchanged', () => {
 })
 
 describe('un1t offer claims (PIPEBUILD.3b)', () => {
+  it('the two un1t source lists agree', () => {
+    for (const s of UN1T_MEMBERSHIP_SOURCES) expect(moduleForMembershipSource(s)).toBe('offer_un1t')
+    for (const s of ['glofox', 'none', null]) expect(moduleForMembershipSource(s)).toBe('offer')
+  })
   const cfg = { duration_days: 14, entry: { type: 'un1t_product', values: ['AbC123'] } }
   const tx = (product_id, at, over = {}) => ({ product_id, refunded: false, remote_created_at: at, ...over })
 
