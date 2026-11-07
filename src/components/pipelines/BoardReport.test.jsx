@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, within } from '@testing-library/react'
 import BoardReport from './BoardReport.jsx'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -41,5 +41,37 @@ describe('BoardReport', () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ success: false, error: 'Nope.' }) })))
     render(<BoardReport boardId="b1" />)
     expect((await screen.findByRole('alert')).textContent).toBe('Nope.')
+  })
+
+  const rowCells = (name) => within(screen.getAllByText(name).map((e) => e.closest('tr')).find(Boolean)).getAllByRole('cell').map((c) => c.textContent)
+
+  it('shows real numbers in the funnel and follow-up rows', async () => {
+    stub(DATA)
+    render(<BoardReport boardId="b1" />)
+    await screen.findAllByText('New Leads')
+    const rows = screen.getAllByText('New Leads').map((e) => e.closest('tr'))
+    expect(within(rows[0]).getAllByRole('cell').map((c) => c.textContent)).toEqual(['New Leads', '4', '3', '9'])
+    expect(within(rows[1]).getAllByRole('cell').map((c) => c.textContent)).toEqual(['New Leads', '5', '1', '4', '3', '2', '1'])
+  })
+  it('names a follow-up stage from the board stages, else Unknown stage', async () => {
+    stub({ ...DATA, followups: [
+      { ...DATA.followups[0], stageId: 'sB' },
+      { ...DATA.followups[0], stageId: 'sZ', packKey: 'q' },
+    ] })
+    render(<BoardReport boardId="b1" stages={[{ id: 'sB', name: 'Board Stage' }]} />)
+    await screen.findByText('Board Stage')
+    expect(rowCells('Board Stage')[1]).toBe('5')
+    expect(screen.getByText('Unknown stage')).toBeTruthy()
+  })
+  it('says purchases without a figure when offerCents is null, and a dash for a null rate', async () => {
+    stub({ ...DATA, revenue: { currency: 'EUR', offerCents: null, purchases: 3 }, conversion: { entered30: 0, converted30: 0, rate: null } })
+    render(<BoardReport boardId="b1" />)
+    expect(await screen.findByText('3 purchases')).toBeTruthy()
+    expect(screen.getByText('—')).toBeTruthy()
+  })
+  it('treats success with null data as every block failing, without throwing', async () => {
+    stub(null)
+    render(<BoardReport boardId="b1" />)
+    expect((await screen.findAllByText("Couldn't load this part.")).length).toBeGreaterThanOrEqual(3)
   })
 })

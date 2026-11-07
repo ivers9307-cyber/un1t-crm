@@ -34,7 +34,7 @@ export default function BoardReport({ boardId, stages: boardStages = [] }) {
       }
       if (cancelled) return
       if (!res.ok || !json?.success) setState({ loading: false, error: json?.error || 'Could not load the report.', report: null })
-      else setState({ loading: false, error: null, report: json.data })
+      else setState({ loading: false, error: null, report: json.data && typeof json.data === 'object' ? json.data : {} })
     })()
     return () => { cancelled = true }
   }, [boardId])
