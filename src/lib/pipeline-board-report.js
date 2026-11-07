@@ -310,8 +310,14 @@ async function buildHealth(db, board, locationId, entered7) {
     for (const s of b.stages) covered.set(s.id, (s.followups || []).length > 0)
   }
   const followups = board.followups || []
+  // A missing follow-up is only news where the recipe HAS one to install (or
+  // on a custom stage the operator added): a recipe with no converted pack
+  // leaves its Converted stage quiet on purpose.
+  const packRoles = new Set((RECIPES[board.recipe_key]?.packs || []).map((p) => p.role))
   for (const s of board.stages || []) {
-    if (isPileRole(stageRoleOf(s))) continue
+    const role = stageRoleOf(s)
+    if (isPileRole(role)) continue
+    if (role !== 'custom' && !packRoles.has(role)) continue
     const live = followups.some((f) => f.stage_id === s.id && f.state === 'live')
     if (!live && !covered.get(s.id)) {
       items.push({ code: 'no_followup', message: `${s.name} has no follow-up.`, stageId: s.id })

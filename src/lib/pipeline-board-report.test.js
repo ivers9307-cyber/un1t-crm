@@ -275,10 +275,12 @@ describe('followups: failed sends and distinct contacts', () => {
 describe('health', () => {
   it('flags no follow-up, rejected template, paused sequence and an empty week', async () => {
     const b = board({
+      recipe_key: 'paid_trial_offer',
       stages: [
         { id: S1, name: 'New', stage_role: 'new', display_order: 1 },
-        { id: S2, name: 'Converted', stage_role: 'converted', display_order: 2 },
-        { id: 's-pile', name: 'Pile', stage_role: 'pile', display_order: 3 },
+        { id: 's-done', name: 'Trial Done', stage_role: 'done', display_order: 2 },
+        { id: S2, name: 'Converted', stage_role: 'converted', display_order: 3 },
+        { id: 's-pile', name: 'Pile', stage_role: 'pile', display_order: 4 },
       ],
       followups: [{ id: 'f1', stage_id: S1, pack_key: 'p', state: 'live', whatsapp_template_id: 'tpl1', sequence_id: 'seq1' }],
     })
@@ -291,7 +293,19 @@ describe('health', () => {
     const r = await run(tables, b)
     const codes = r.health.map((h) => h.code).sort()
     expect(codes).toEqual(['no_followup', 'nobody_entered_7d', 'sequence_paused', 'template_rejected'])
-    expect(r.health.find((h) => h.code === 'no_followup').stageId).toBe(S2)
+    expect(r.health.find((h) => h.code === 'no_followup').stageId).toBe('s-done')
+  })
+
+  it("a paid_trial_offer board's Converted stage gives no warning (the recipe has no converted pack)", async () => {
+    loadStageCoverage.mockResolvedValue({ ok: true, boards: [{ id: 'b1', stages: [{ id: S1, followups: [{ id: 'x' }] }, { id: S2, followups: [] }] }] })
+    const r = await run({ deals: baseDeals(), activities: [] }, board({ recipe_key: 'paid_trial_offer' }))
+    expect(r.health.filter((h) => h.code === 'no_followup')).toEqual([])
+  })
+
+  it('a custom stage without a follow-up is flagged on any board', async () => {
+    const b = board({ stages: [...board().stages, { id: 's-custom', name: 'Called', stage_role: 'custom', display_order: 3 }] })
+    const r = await run({ deals: baseDeals(), activities: [] }, b)
+    expect(r.health.filter((h) => h.code === 'no_followup').map((h) => h.stageId)).toEqual(['s-custom'])
   })
 
   it('a sequence aimed at the stage counts as coverage', async () => {
