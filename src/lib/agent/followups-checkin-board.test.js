@@ -52,7 +52,7 @@ function makeDb({ deals = [], pipelines = [], stages = [], followups = [], fail 
 
 const board = (state, over = {}) => ({
   deals: [{ id: 'd1', contact_id: 'c1', location_id: 'loc1', pipeline_id: 'p1', stage_id: 's1', status: 'open' }],
-  pipelines: [{ id: 'p1', enabled: true, board_type: 'offer' }],
+  pipelines: [{ id: 'p1', location_id: 'loc1', enabled: true, board_type: 'offer' }],
   stages: [{ id: 's1', stage_role: 'first_class' }],
   followups: [{ id: 'f1', stage_id: 's1', state }],
   ...over,
@@ -71,15 +71,29 @@ describe('contactsCoveredByBoardFollowup', () => {
     expect(r).toEqual({ ok: true, ids: new Set() })
   })
   it('does not cover a built-in (non-offer) board deal', async () => {
-    const db = makeDb(board('live', { pipelines: [{ id: 'p1', enabled: true, board_type: 'builtin' }] }))
+    const db = makeDb(board('live', { pipelines: [{ id: 'p1', location_id: 'loc1', enabled: true, board_type: 'builtin' }] }))
     const r = await contactsCoveredByBoardFollowup(db, { locationId: 'loc1', contactIds: ['c1'], role: 'first_class' })
     expect(r).toEqual({ ok: true, ids: new Set() })
   })
   it('does not cover a disabled board or a closed deal', async () => {
-    const off = makeDb(board('live', { pipelines: [{ id: 'p1', enabled: false, board_type: 'offer' }] }))
+    const off = makeDb(board('live', { pipelines: [{ id: 'p1', location_id: 'loc1', enabled: false, board_type: 'offer' }] }))
     expect((await contactsCoveredByBoardFollowup(off, { locationId: 'loc1', contactIds: ['c1'] })).ids.size).toBe(0)
     const closed = makeDb(board('live', { deals: [{ id: 'd1', contact_id: 'c1', location_id: 'loc1', pipeline_id: 'p1', stage_id: 's1', status: 'won' }] }))
     expect((await contactsCoveredByBoardFollowup(closed, { locationId: 'loc1', contactIds: ['c1'] })).ids.size).toBe(0)
+  })
+  it('a studio with no offer boards makes exactly one read (pipelines) and covers nobody', async () => {
+    const db = makeDb(board('live', { pipelines: [] }))
+    const r = await contactsCoveredByBoardFollowup(db, { locationId: 'loc1', contactIds: ['c1'] })
+    expect(r).toEqual({ ok: true, ids: new Set() })
+    expect(db.log).toEqual(['pipelines'])
+  })
+  it('a failing pipelines read is ok:false', async () => {
+    const r = await contactsCoveredByBoardFollowup(makeDb({ ...board('live'), fail: 'pipelines' }), { locationId: 'loc1', contactIds: ['c1'] })
+    expect(r).toEqual({ ok: false })
+  })
+  it('a failing pipeline_stages read is ok:false', async () => {
+    const r = await contactsCoveredByBoardFollowup(makeDb({ ...board('live'), fail: 'pipeline_stages' }), { locationId: 'loc1', contactIds: ['c1'] })
+    expect(r).toEqual({ ok: false })
   })
   it('returns ok:false on a read error', async () => {
     const r = await contactsCoveredByBoardFollowup(makeDb({ ...board('live'), fail: 'pipeline_stage_followups' }), { locationId: 'loc1', contactIds: ['c1'] })
@@ -98,9 +112,16 @@ describe('runFirstClassCheckins — board follow-up coverage', () => {
     expect(res.reasons.board_followup).toBeUndefined()
   })
   it('does not skip a built-in board deal', async () => {
-    const db = makeDb(board('live', { pipelines: [{ id: 'p1', enabled: true, board_type: 'builtin' }] }))
+    const db = makeDb(board('live', { pipelines: [{ id: 'p1', location_id: 'loc1', enabled: true, board_type: 'builtin' }] }))
     const res = await runFirstClassCheckins(db, { nowMs: NOW })
     expect(res.reasons.board_followup).toBeUndefined()
+  })
+  it('a studio with no offer boards still checks in even if deals would error', async () => {
+    const db = makeDb({ ...board('live', { pipelines: [] }), fail: 'deals' })
+    const res = await runFirstClassCheckins(db, { nowMs: NOW })
+    expect(res.reasons.board_followup_read_failed).toBeUndefined()
+    expect(db.log).not.toContain('deals')
+    expect(db.log).toContain('whatsapp_conversations')
   })
   it('a coverage read error skips the studio: no candidate is classified', async () => {
     const db = makeDb({ ...board('live'), fail: 'deals' })

@@ -35,7 +35,7 @@ import { logError, logWarn } from '@/lib/log'
 import { countCheckinSends, readCheckinSendsToday, checkinDayStartIso } from './checkin-counts'
 import { isWhatsAppStaffOutbound } from '@/lib/whatsapp-staff-sources'
 import { resolveAgentSettingsForLocation } from './settings-resolve'
-import { selectAllByKeys } from '@/lib/select-all'
+import { selectAll, selectAllByKeys } from '@/lib/select-all'
 
 // MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
 // like the same person who answers the thread.
@@ -893,18 +893,21 @@ export async function contactsCoveredByBoardFollowup(db, { locationId, contactId
   if (ids.length === 0) return { ok: true, ids: covered }
   const opts = { chunkSize: 200 }
   try {
+    // A studio with no enabled offer board has nothing to cover: one read,
+    // and the deals table is never touched.
+    const pipelines = await selectAll((from, to) => db.from('pipelines')
+      .select('id').eq('location_id', locationId).eq('enabled', true).eq('board_type', 'offer')
+      .order('id').range(from, to))
+    if (pipelines.length === 0) return { ok: true, ids: covered }
+    const offerIds = pipelines.map((p) => p.id)
+    const offerBoards = new Set(offerIds)
+
     const deals = await selectAllByKeys(ids, (chunk, from, to) => db.from('deals')
       .select('id, contact_id, pipeline_id, stage_id')
-      .eq('status', 'open').eq('location_id', locationId).in('contact_id', chunk)
+      .eq('status', 'open').eq('location_id', locationId).in('pipeline_id', offerIds).in('contact_id', chunk)
       .order('id').range(from, to), opts)
-    const withBoard = deals.filter((d) => d.pipeline_id && d.stage_id)
+    const withBoard = deals.filter((d) => d.pipeline_id && d.stage_id && offerBoards.has(d.pipeline_id))
     if (withBoard.length === 0) return { ok: true, ids: covered }
-
-    const pipelineIds = [...new Set(withBoard.map((d) => d.pipeline_id))]
-    const pipelines = await selectAllByKeys(pipelineIds, (chunk, from, to) => db.from('pipelines')
-      .select('id').in('id', chunk).eq('enabled', true).eq('board_type', 'offer')
-      .order('id').range(from, to), opts)
-    const offerBoards = new Set(pipelines.map((p) => p.id))
 
     const stageIds = [...new Set(withBoard.filter((d) => offerBoards.has(d.pipeline_id)).map((d) => d.stage_id))]
     if (stageIds.length === 0) return { ok: true, ids: covered }
