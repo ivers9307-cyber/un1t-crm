@@ -49,7 +49,7 @@
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { isActiveOrgAdmin } from '@/lib/org-admin'
 import {
-  CalendarDays, Tag, Store, Trophy, Cable, KanbanSquare,
+  CalendarDays, Tag, Store, Trophy, Cable, KanbanSquare, Gift,
   Users, UserPlus, UserCog,
   AtSign, Bell, Bot,
   Plug, Globe,
@@ -88,6 +88,15 @@ export const SETTINGS_TREE = [
         href: '/settings/pipelines',
         description: 'Build offer boards and their follow-ups',
         icon: KanbanSquare,
+        // Mirrors the page's own gate exactly (MANAGER_ROLES).
+        gate: { roles: MANAGER_ROLES },
+      },
+      {
+        id: 'promos',
+        label: 'Promos',
+        href: '/settings/promos',
+        description: 'Corporate and partner promos: free classes with a claim link.',
+        icon: Gift,
         // Mirrors the page's own gate exactly (MANAGER_ROLES).
         gate: { roles: MANAGER_ROLES },
       },

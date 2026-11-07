@@ -32,6 +32,7 @@ import {
   usageEventsSchema,
   boardCreateSchema, boardPatchSchema,
   followupActionSchema, entryOptionsQuerySchema,
+  corpPromoCreateSchema, corpPromoPatchSchema,
 } from './schemas.js'
 import {
   landingPageCreateSchema, landingPageUpdateSchema, landingPageStudioSchema, landingPagePublishSchema,
@@ -7153,6 +7154,68 @@ registry.registerPath({
     400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAYSIN.4 — the studio's corporate and partner promos (public.corp_promos, mig 816).
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/corp-promos',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "A studio's corporate and partner promos (manager+ at the studio)",
+  request: { params: z.object({ id: z.string().uuid() }), query: z.object({ live: z.enum(['1']).optional().describe('1 = only the live promos (the landing editor picker)') }) },
+  description: '{ promos: [{ id, locationId, key, name, platform, credits, expiresInDays, live, tag, leadSource, glofox }], can_edit, platform, public_path }. Membership first (another studio is a 404), then manager+ at the studio. can_edit = owner or master at the studio. A failed read is a 500, never an empty list.',
+  responses: {
+    200: { description: 'The promos' },
+    403: { description: 'Not a manager at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or another studio)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/corp-promos',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a promo (owner / master at the studio)',
+  request: { params: z.object({ id: z.string().uuid() }), body: { content: { 'application/json': { schema: corpPromoCreateSchema } } } },
+  description: "The platform is the studio's membership_source. A Glofox studio's promo needs its three plan fields (400 glofox_plan_missing); a un1t.online studio's carries none (400 glofox_not_applicable); a studio on neither is 409 no_platform. The key is unique per studio (409 key_taken) and immutable after create. Tag and lead source are stored trimmed and lowercased.",
+  responses: {
+    201: { description: 'The created promo' },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or another studio)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'key_taken or no_platform', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'patch',
+  path: '/api/locations/{id}/corp-promos/{promoId}',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Change a promo (owner / master at the studio)',
+  request: { params: z.object({ id: z.string().uuid(), promoId: z.string().uuid() }), body: { content: { 'application/json': { schema: corpPromoPatchSchema } } } },
+  description: 'name, credits, expires_in_days, live, tag, lead_source and (Glofox promos) the plan fields. A key in the body is a 400: the key is the claim link. Another studio\'s promo is a 404.',
+  responses: {
+    200: { description: 'The promo after the write' },
+    400: { description: 'Validation error (incl. key, glofox_plan_missing)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or another studio)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'delete',
+  path: '/api/locations/{id}/corp-promos/{promoId}',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a promo that has no claims (owner / master at the studio)',
+  request: { params: z.object({ id: z.string().uuid(), promoId: z.string().uuid() }) },
+  description: 'A promo with any corp_promo_claims row for its location and key can only be switched off: 409 has_claims. A failed claims count refuses the delete (500).',
+  responses: {
+    200: { description: '{ deleted: true }' },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or another studio)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'has_claims', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

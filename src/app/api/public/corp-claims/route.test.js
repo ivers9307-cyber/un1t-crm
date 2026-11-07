@@ -378,6 +378,21 @@ describe('POST /api/public/corp-claims — Glofox promo (NEWSTART.1)', () => {
     expect(m.inserted).not.toHaveBeenCalled()
   })
 
+  it('end to end: a row with glofox null and the REAL glofoxPlanForPromo is 409 glofox_plan_missing, no Glofox call, nothing written', async () => {
+    const { glofoxPlanForPromo: realPlan } = await vi.importActual('@/lib/corp-promo-glofox-plans')
+    m.gPlan.mockImplementation(realPlan)
+    m.promoRows = [HATCH_PROMO, { ...STILL_PROMO, glofox: null }]
+    const { status, json } = await call(GBODY)
+    expect([status, json.code]).toEqual([409, 'glofox_plan_missing'])
+    expect(m.gPlan).toHaveReturnedWith(null)
+    expect(m.gCreds).not.toHaveBeenCalled()
+    expect(m.gElig).not.toHaveBeenCalled()
+    expect(m.gFulfil).not.toHaveBeenCalled()
+    expect(m.contact).not.toHaveBeenCalled()
+    expect(m.inserted).not.toHaveBeenCalled()
+    expect(m.updates).toEqual([])
+  })
+
   it('the claim row records platform glofox', async () => {
     expect((await call(GBODY)).status).toBe(200)
     expect(m.inserted).toHaveBeenCalledWith('corp_promo_claims', expect.objectContaining({ promo_key: 'stillorgan-newstart', platform: 'glofox', location_id: GLOC }))

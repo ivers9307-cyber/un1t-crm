@@ -4,13 +4,14 @@
 // one small field group per block type over a flat `fields` map (every value
 // a string while it is edited; offerFromFields turns it into the row's
 // `offer`). The Glofox plan list and the un1t.online products are loaded per
-// studio from the studio's own endpoints (glofox-memberships, un1t-online).
+// studio from the studio's own endpoints (glofox-memberships, un1t-online),
+// and since WAYSIN.4 the corp promos too (corp-promos?live=1: the studio's
+// own rows of public.corp_promos, never the code seed).
 
 import { useEffect, useState } from 'react'
 import { STUDIO_OFFER_KEYS } from '@/lib/landing-page-offers'
 import { buildTrialOptions } from '@/lib/glofox-trial-options'
 import { centsToEuros, eurosToCents } from '@/lib/price-format'
-import { liveSeededCorpPromos, seededCorpPromosForStudio } from '@/lib/corp-promos'
 import { DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
 import { Field, Input, Textarea } from '@/components/landing-pages/fields'
 import { TimetableReadBack } from '@/components/landing-pages/timetable-read-back'
@@ -176,17 +177,50 @@ function CampaignFunnelFields({ row, load, fields, set }) {
   )
 }
 
-function CorpPromoFields({ row, fields, set }) {
-  // The page studio's own promos (row.public_path); a row that does not know its path lists every live promo.
-  // WAYSIN.2: still the SEED of mig 816 (synchronous, client side; no Glofox plan ids); WAYSIN.4 fetches the studio's rows.
-  const promos = row?.public_path ? seededCorpPromosForStudio(row.public_path) : liveSeededCorpPromos()
+/**
+ * The studio's live promos (GET /api/locations/<id>/corp-promos?live=1).
+ * `load` false fetches nothing (a read-only row). A failed read is an error,
+ * never an empty list that would read as "this studio has no promos".
+ * @returns {{ promos: object[] | null, loading: boolean, error: string | null }}
+ */
+export function useStudioCorpPromos(locationId, load) {
+  const url = load && locationId ? `/api/locations/${locationId}/corp-promos?live=1` : null
+  const [state, setState] = useState({ promos: null, loading: Boolean(url), error: null })
+  useEffect(() => {
+    if (!url) { setState({ promos: null, loading: false, error: null }); return undefined }
+    let alive = true
+    setState({ promos: null, loading: true, error: null })
+    fetch(url, { cache: 'no-store' })
+      .then(async (r) => ({ r, j: await r.json().catch(() => null) }))
+      .then(({ r, j }) => {
+        if (!alive) return
+        if (!r.ok || !j || j.success === false || !Array.isArray(j.data?.promos)) {
+          setState({ promos: null, loading: false, error: "Could not load this studio's promos." })
+          return
+        }
+        setState({ promos: j.data.promos, loading: false, error: null })
+      })
+      .catch(() => { if (alive) setState({ promos: null, loading: false, error: "Could not load this studio's promos." }) })
+    return () => { alive = false }
+  }, [url])
+  return state
+}
+
+function CorpPromoFields({ row, load, fields, set, corpPromos }) {
+  // The page studio's own live promos. StudioOfferRow loads them once (its
+  // readiness hint needs them too) and passes them down; on its own this
+  // group loads them itself.
+  const own = useStudioCorpPromos(row?.location_id, corpPromos ? false : load)
+  const { promos, loading, error } = corpPromos || own
   const key = fields.promo_key || ''
+  const list = Array.isArray(promos) ? promos : []
+  const hint = loading ? 'Loading…' : error || 'The credits and their expiry are set per promo in Settings → Promos.'
   return (
-    <Field label="Promo" hint="The credits and their expiry are fixed per promo.">
-      <select aria-label="Promo" value={key} onChange={(e) => set({ promo_key: e.target.value })} className={selectCls}>
-        <option value="">Not set</option>
-        {key && !promos.some((p) => p.key === key) && <option value={key}>{key}</option>}
-        {promos.map((p) => <option key={p.key} value={p.key}>{`${p.name || p.key} · ${p.credits} credits`}</option>)}
+    <Field label="Promo" hint={hint}>
+      <select aria-label="Promo" value={key} onChange={(e) => set({ promo_key: e.target.value })} className={selectCls} disabled={loading}>
+        {loading ? <option value={key}>Loading…</option> : <option value="">Not set</option>}
+        {!loading && key && !list.some((p) => p.key === key) && <option value={key}>{key}</option>}
+        {!loading && list.map((p) => <option key={p.key} value={p.key}>{`${p.name || p.key} · ${p.credits} credits`}</option>)}
       </select>
     </Field>
   )
@@ -200,7 +234,7 @@ const FIELD_GROUPS = {
 }
 
 /** The block type's studio field group; `load` false fetches no catalogue. */
-export function StudioOfferFields({ blockType, row, load, fields, set }) {
+export function StudioOfferFields({ blockType, row, load, fields, set, corpPromos }) {
   const Group = FIELD_GROUPS[blockType]
-  return Group ? <Group row={row} load={load} fields={fields} set={set} /> : null
+  return Group ? <Group row={row} load={load} fields={fields} set={set} corpPromos={corpPromos} /> : null
 }
