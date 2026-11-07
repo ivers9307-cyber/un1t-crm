@@ -176,30 +176,30 @@ describe('routeContact — board descriptors and offer boards', () => {
     expect([...OFFER_MODULES]).toEqual(['offer'])
   })
   it('offerBeatsPaid', () => {
-    const offers = new Map([['b_one', offerClaim]])
-    expect(routeContact(trialer, { paid, programme: null, offers }, T0 + DAY_MS, [acqD, paidD, offerBoard('b_one', 5)]))
-      .toEqual({ boardKey: 'b_one', slug: 'b_one_new' })
+    const offers = new Map([['o_b_one', offerClaim]])
+    expect(routeContact(trialer, { paid, programme: null, offers }, T0 + DAY_MS, [acqD, paidD, offerBoard('o_b_one', 5)]))
+      .toEqual({ boardKey: 'o_b_one', slug: 'o_b_one_new' })
   })
   it('offerPriorityThenKey', () => {
-    const offers = new Map([['b_a', offerClaim], ['b_b', offerClaim], ['b_c', offerClaim]])
-    const boards = [acqD, offerBoard('b_b', 2), offerBoard('b_c', 1), offerBoard('b_a', 2)]
-    expect(routeContact(trialC, { offers }, T0 + DAY_MS, boards).boardKey).toBe('b_c')
-    const tie = [acqD, offerBoard('b_b', 2), offerBoard('b_a', 2)]
-    expect(routeContact(trialC, { offers }, T0 + DAY_MS, tie).boardKey).toBe('b_a')
+    const offers = new Map([['o_b_a', offerClaim], ['o_b_b', offerClaim], ['o_b_c', offerClaim]])
+    const boards = [acqD, offerBoard('o_b_b', 2), offerBoard('o_b_c', 1), offerBoard('o_b_a', 2)]
+    expect(routeContact(trialC, { offers }, T0 + DAY_MS, boards).boardKey).toBe('o_b_c')
+    const tie = [acqD, offerBoard('o_b_b', 2), offerBoard('o_b_a', 2)]
+    expect(routeContact(trialC, { offers }, T0 + DAY_MS, tie).boardKey).toBe('o_b_a')
   })
   it('deadOfferFallsThrough', () => {
-    const dead = new Map([['b_one', offerClaim]])
+    const dead = new Map([['o_b_one', offerClaim]])
     const late = T0 + 200 * DAY_MS
-    expect(routeContact(trialC, { paid: null, programme, offers: dead }, T0 + DAY_MS, [acqD, offerBoard('b_two', 1), offerBoard('b_one', 2), { key: 'programmes', module: 'programmes', board_type: 'claim', priority: 0, config: null }]).boardKey).toBe('b_one')
-    expect(routeContact(trialC, { offers: dead }, late, [acqD, offerBoard('b_one', 1)]).boardKey).toBe('acquisition')
+    expect(routeContact(trialC, { paid: null, programme, offers: dead }, T0 + DAY_MS, [acqD, offerBoard('o_b_two', 1), offerBoard('o_b_one', 2), { key: 'programmes', module: 'programmes', board_type: 'claim', priority: 0, config: null }]).boardKey).toBe('o_b_one')
+    expect(routeContact(trialC, { offers: dead }, late, [acqD, offerBoard('o_b_one', 1)]).boardKey).toBe('acquisition')
     // no claim for a board, or an unparsed config, skips it without throwing
-    expect(routeContact(trialC, { paid: null, programme, offers: new Map() }, T0 + DAY_MS, [acqD, offerBoard('b_one', 1), { key: 'programmes', module: 'programmes', board_type: 'claim', priority: 0, config: null }]).boardKey).toBe('programmes')
-    const bad = { ...offerBoard('b_one', 1), config: null }
+    expect(routeContact(trialC, { paid: null, programme, offers: new Map() }, T0 + DAY_MS, [acqD, offerBoard('o_b_one', 1), { key: 'programmes', module: 'programmes', board_type: 'claim', priority: 0, config: null }]).boardKey).toBe('programmes')
+    const bad = { ...offerBoard('o_b_one', 1), config: null }
     expect(routeContact(trialC, { offers: dead }, T0 + DAY_MS, [acqD, bad]).boardKey).toBe('acquisition')
   })
   it('coldBeatsOffer', () => {
-    const offers = new Map([['b_one', offerClaim]])
-    expect(routeContact(cold, { offers }, T0 + 3 * DAY_MS, [acqD, offerBoard('b_one', 1)])).toEqual({ boardKey: 'acquisition', slug: 'cold_lead' })
+    const offers = new Map([['o_b_one', offerClaim]])
+    expect(routeContact(cold, { offers }, T0 + 3 * DAY_MS, [acqD, offerBoard('o_b_one', 1)])).toEqual({ boardKey: 'acquisition', slug: 'cold_lead' })
   })
 })
 
@@ -208,41 +208,41 @@ describe('routeContact — board descriptors and offer boards', () => {
 // (300) boards by priority; null or invalid priority is 100.
 describe('routeContact — offer priority against the €39 and Programmes boards', () => {
   const progD = { key: 'programmes', module: 'programmes', board_type: null, priority: null, config: null }
-  const live = new Map([['b_one', offerClaim]])
+  const live = new Map([['o_b_one', offerClaim]])
   it('exports the fixed places', () => {
     expect([OFFER_DEFAULT_PRIORITY, PAID_TRIAL_PRIORITY, PROGRAMMES_PRIORITY]).toEqual([100, 200, 300])
   })
   it('offerAt250LosesToPaid', () => {
-    expect(routeContact(trialer, { paid, programme: null, offers: live }, T0 + DAY_MS, [acqD, paidD, offerBoard('b_one', 250)]).boardKey)
+    expect(routeContact(trialer, { paid, programme: null, offers: live }, T0 + DAY_MS, [acqD, paidD, offerBoard('o_b_one', 250)]).boardKey)
       .toBe('paid_trial')
   })
   it('offerAt150BeatsPaid', () => {
-    expect(routeContact(trialer, { paid, programme: null, offers: live }, T0 + DAY_MS, [acqD, paidD, offerBoard('b_one', 150)]))
-      .toEqual({ boardKey: 'b_one', slug: 'b_one_new' })
+    expect(routeContact(trialer, { paid, programme: null, offers: live }, T0 + DAY_MS, [acqD, paidD, offerBoard('o_b_one', 150)]))
+      .toEqual({ boardKey: 'o_b_one', slug: 'o_b_one_new' })
   })
   it('offerAt250BeatsProgrammes', () => {
-    expect(routeContact(trialC, { paid: null, programme, offers: live }, T0 + DAY_MS, [acqD, progD, offerBoard('b_one', 250)]).boardKey)
-      .toBe('b_one')
+    expect(routeContact(trialC, { paid: null, programme, offers: live }, T0 + DAY_MS, [acqD, progD, offerBoard('o_b_one', 250)]).boardKey)
+      .toBe('o_b_one')
     // …and at 350 it loses to Programmes
-    expect(routeContact(trialC, { paid: null, programme, offers: live }, T0 + DAY_MS, [acqD, progD, offerBoard('b_one', 350)]).boardKey)
+    expect(routeContact(trialC, { paid: null, programme, offers: live }, T0 + DAY_MS, [acqD, progD, offerBoard('o_b_one', 350)]).boardKey)
       .toBe('programmes')
   })
   it('an offer board at exactly 200 goes before the €39 board', () => {
-    expect(routeContact(trialer, { paid, programme: null, offers: live }, T0 + DAY_MS, [acqD, paidD, offerBoard('b_one', 200)]).boardKey)
-      .toBe('b_one')
+    expect(routeContact(trialer, { paid, programme: null, offers: live }, T0 + DAY_MS, [acqD, paidD, offerBoard('o_b_one', 200)]).boardKey)
+      .toBe('o_b_one')
   })
   it('nullPriorityIs100', () => {
-    const offers = new Map([['b_null', offerClaim], ['b_hundred_one', offerClaim], ['b_ninety_nine', offerClaim]])
+    const offers = new Map([['o_b_null', offerClaim], ['o_b_hundred_one', offerClaim], ['o_b_ninety_nine', offerClaim]])
     // null sorts as 100: after 99, before 101
-    const boards = [acqD, paidD, offerBoard('b_null', null), offerBoard('b_hundred_one', 101)]
-    expect(routeContact(trialC, { offers }, T0 + DAY_MS, boards).boardKey).toBe('b_null')
-    expect(routeContact(trialC, { offers }, T0 + DAY_MS, [...boards, offerBoard('b_ninety_nine', 99)]).boardKey).toBe('b_ninety_nine')
+    const boards = [acqD, paidD, offerBoard('o_b_null', null), offerBoard('o_b_hundred_one', 101)]
+    expect(routeContact(trialC, { offers }, T0 + DAY_MS, boards).boardKey).toBe('o_b_null')
+    expect(routeContact(trialC, { offers }, T0 + DAY_MS, [...boards, offerBoard('o_b_ninety_nine', 99)]).boardKey).toBe('o_b_ninety_nine')
     // an invalid priority is 100 too, and so still beats the €39 board
     for (const bad of [undefined, 'soon', Number.NaN, '']) {
-      expect(routeContact(trialer, { paid, programme: null, offers: new Map([['b_x', offerClaim]]) }, T0 + DAY_MS, [acqD, paidD, offerBoard('b_x', bad)]).boardKey).toBe('b_x')
+      expect(routeContact(trialer, { paid, programme: null, offers: new Map([['o_b_x', offerClaim]]) }, T0 + DAY_MS, [acqD, paidD, offerBoard('o_b_x', bad)]).boardKey).toBe('o_b_x')
     }
     // null and 100 tie: then by key
-    const tie = new Map([['b_a', offerClaim], ['b_b', offerClaim]])
-    expect(routeContact(trialC, { offers: tie }, T0 + DAY_MS, [acqD, offerBoard('b_b', null), offerBoard('b_a', 100)]).boardKey).toBe('b_a')
+    const tie = new Map([['o_b_a', offerClaim], ['o_b_b', offerClaim]])
+    expect(routeContact(trialC, { offers: tie }, T0 + DAY_MS, [acqD, offerBoard('o_b_b', null), offerBoard('o_b_a', 100)]).boardKey).toBe('o_b_a')
   })
 })

@@ -183,6 +183,12 @@ function routeDb() {
         const [row] = await q('SELECT location_id, graph FROM public.email_sequences WHERE id = $1', [SEQ])
         return { data: { ...row, draft_graph: null }, error: null }
       }
+      // PIPEBUILD.5g — the route's follow-up ownership read (refuseIfFollowupOwned):
+      // a plain read answers "no board owns it". Any write there still throws.
+      if (table === 'pipeline_stage_followups'
+        && !['update', 'insert', 'upsert', 'delete'].some((m) => has(state, m))) {
+        return { data: [], error: null }
+      }
       throw new Error(`publish touched ${table}`)
     }),
   }

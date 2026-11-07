@@ -6,6 +6,7 @@ import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequ
 import { resolveSequenceGraph } from '@/lib/sequences/graph/persist'
 import { parseGraphShape } from '@/lib/sequences/graph/schema'
 import { validateBody } from '@/lib/validate'
+import { refuseIfFollowupOwned } from '@/lib/followup-owned-sequences'
 
 // Permissive — graph is a free-form object validated by parseGraphShape.
 const GraphDraftSchema = z.object({
@@ -72,6 +73,8 @@ export async function PUT(request, props) {
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
   if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
+  const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: existing.location_id })
+  if (owned) return owned
 
   const validation = await validateBody(request, GraphDraftSchema, { allowEmpty: true })
   if (!validation.ok) return validation.response
@@ -111,6 +114,8 @@ export async function DELETE(request, props) {
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
   if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
+  const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: existing.location_id })
+  if (owned) return owned
 
   const { error } = await db.from('email_sequences').update({ draft_graph: null }).eq('id', params.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })

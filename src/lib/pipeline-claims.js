@@ -49,11 +49,15 @@ export function programmeRulesFromSettings(settings) {
   return { lead_sources: cleanList(slice.lead_sources), glofox_plan_patterns: cleanList(slice.glofox_plan_patterns) }
 }
 
-/** A location's ENABLED boards. */
+/**
+ * A location's ENABLED boards. PIPEBUILD.5c — with baseline_at (mig 815): an
+ * offer board not yet baselined is held on the event paths
+ * (placementDescriptors), so every caller handing these rows on must read it.
+ */
 export async function loadBoardsForLocation(db, locationId) {
   const { data, error } = await db
     .from('pipelines')
-    .select('id, key, module, mode, enabled, is_primary, board_type, config, priority')
+    .select('id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at')
     .eq('location_id', locationId)
     .eq('enabled', true)
   if (error) {

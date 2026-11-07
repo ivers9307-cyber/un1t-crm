@@ -30,6 +30,8 @@ import {
   studioConsentCopySchema,
   studioBlastSignoffSchema,
   usageEventsSchema,
+  boardCreateSchema, boardPatchSchema,
+  followupActionSchema, entryOptionsQuerySchema,
 } from './schemas.js'
 import {
   landingPageCreateSchema, landingPageUpdateSchema, landingPageStudioSchema, landingPagePublishSchema,
@@ -7184,6 +7186,141 @@ registry.registerPath({
     401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not a member of the studio', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'Could not read the stages', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// PIPEBUILD.5d — the board builder: list, create (switched off), edit, switch on and off.
+const boardErrors = {
+  401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+  403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+  404: { description: 'Not a member of the studio, or no such board', content: { 'application/json': { schema: ErrorResponse } } },
+}
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/pipelines',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "A studio's pipeline boards with their stages and follow-ups",
+  request: { params: z.object({ id: uuidLike }) },
+  description: '{ boards: [{ id, key, name, board_type, recipe_key, enabled, baseline_at, priority, config, is_primary, stages: [{ id, slug, name, stage_role, role_config, display_order, deal_count }], followups: [{ id, stage_id, pack_key, state, want_live, version, sequence_id, whatsapp_template_id }] }], can_edit }. Every board, enabled or not; config only for builder boards (board_type set); deal_count counts open deals. Needs a manager role or the sequence-builder permission at the studio.',
+  responses: {
+    200: { description: 'The boards' },
+    ...boardErrors,
+    503: { description: 'Could not read the boards', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/pipelines',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create an offer board, switched off (owner / master at the studio)',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: boardCreateSchema } } } },
+  description: 'The key (o_…) is generated from the name; every stage slug is set from it; config is validated by parseOfferConfig (400 with issues). Created with enabled=false in one transaction (create_configured_pipeline, mig 815). 409 at un1t.online studios, or key_taken when a second attempt also collides.',
+  responses: {
+    201: { description: '{ board }' },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    ...boardErrors,
+    409: { description: 'un1t.online studio, or key taken', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: "Could not read the studio's membership source or boards", content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'get',
+  path: '/api/pipelines/{id}',
+  tags: ['Pipelines'],
+  security: [{ CookieAuth: [] }],
+  summary: 'One pipeline board',
+  request: { params: z.object({ id: uuidLike }) },
+  description: "{ board, can_edit, can_edit_wording }. Another studio's board is a 404. Needs a manager role or the sequence-builder permission at the board's studio; can_edit_wording is owner/master, or sequence-builder plus WhatsApp-template management.",
+  responses: {
+    200: { description: 'The board' },
+    ...boardErrors,
+    503: { description: 'Could not read the board', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'patch',
+  path: '/api/pipelines/{id}',
+  tags: ['Pipelines'],
+  security: [{ CookieAuth: [] }],
+  summary: "Change a board's name, priority or config (owner / master at the studio)",
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: boardPatchSchema } } } },
+  description: 'Name, stage names, mia_notes and wording change any time. The entry rule, the set of stages, duration/quiet/converted days and priority change only while the board is off (409 switch_off_first). A removed stage must hold no deals (409 stage_not_empty) and no draft, awaiting-approval or live follow-up (409 followup_active). Built-in boards are read-only (409).',
+  responses: {
+    200: { description: '{ board }' },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    ...boardErrors,
+    409: { description: 'Refused (see description)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/pipelines/{id}/dry-run',
+  tags: ['Pipelines'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Dry-run one offer board: who would enter, per stage, and from which boards (owner / master at the studio)',
+  request: { params: z.object({ id: uuidLike }) },
+  description: 'Runs the placement pass with dryRun true (nothing is written); a board that is off is included for this run only. Returns { entering, byStage: [{ slug, name, count }], overlap: [{ boardKey, boardName?, count }], contactsSeen, errors } where errors is the count of contacts that failed to classify. Built-in boards are 409; a failed run is 503.',
+  responses: {
+    200: { description: 'The dry-run summary' },
+    ...boardErrors,
+    409: { description: 'Built-in board', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The run could not be completed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+for (const [mode, verb] of [['enable', 'on'], ['disable', 'off']]) {
+  registry.registerPath({
+    method: 'post',
+    path: `/api/pipelines/{id}/${mode}`,
+    tags: ['Pipelines'],
+    security: [{ CookieAuth: [] }],
+    summary: `Switch a board ${verb} (owner / master at the studio)`,
+    request: { params: z.object({ id: uuidLike }) },
+    description: mode === 'enable'
+      ? 'Compare-and-set enabled false to true, with baseline_at reset and updated_at stamped in the same write, so the first placement pass after it is silent. The config must parse and the studio must not be un1t.online (409). Already on: { board, unchanged: true }.'
+      : 'Compare-and-set enabled true to false. Already off: { board, unchanged: true }.',
+    responses: {
+      200: { description: '{ board, unchanged? }' },
+      ...boardErrors,
+      409: { description: 'Built-in board, bad config, un1t.online studio, or a concurrent change', content: { 'application/json': { schema: ErrorResponse } } },
+    },
+  })
+}
+
+// PIPEBUILD.5f — one stage's follow-up, and the entry-rule pickers.
+registry.registerPath({
+  method: 'put',
+  path: '/api/pipelines/{id}/followups/{stageId}',
+  tags: ['Pipelines'],
+  security: [{ CookieAuth: [] }],
+  summary: "Install, replace the wording of, or switch off one stage's follow-up",
+  request: {
+    params: z.object({ id: uuidLike, stageId: uuidLike }),
+    body: { content: { 'application/json': { schema: followupActionSchema } } },
+  },
+  description: "Owner or master at the board's studio, or sequence-builder plus WhatsApp-template management there. pack_key must be a pack of the board's recipe whose role matches the stage (400 pack_not_for_stage). install: version 1 with no row; an awaiting-approval or live row is returned (a stranded one is republished), and bodies there are refused (409 use_replace); a draft row is reinstalled at its version (bodies allowed); a rejected or off row is reinstalled at version + 1. Over a draft, rejected or off row the old sequence is stopped first (deleted while a draft, paused if active). replace: the wording is checked first (400), then the old sequence is paused (or deleted while a draft), the row is set off, and the new wording installs at version + 1; if the pause or the switch-off fails nothing is installed. off: the sequence is stopped the same way and the row is set off (already off: unchanged true). 409: built-in board, no_followup, use_replace, followup_changed, sequence_changed, or the installer's recipe_mismatch / stage_role_mismatch / old_sequence_active / install_raced. Returns { followup, created?, unchanged?, publish_error?, code? }.",
+  responses: {
+    200: { description: '{ followup, created?, unchanged?, publish_error?, code? }' },
+    400: { description: 'Validation error, bad wording, or a pack that does not fit the stage', content: { 'application/json': { schema: ErrorResponse } } },
+    ...boardErrors,
+    409: { description: 'Refused (see description)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read or write failed; nothing new was installed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/pipeline-entry-options',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "Values to offer for an offer board's entry rule at a studio",
+  request: { params: z.object({ id: uuidLike }), query: entryOptionsQuerySchema },
+  description: "{ options: [{ value, label, hint? }] }. type: trial_purchase (with match plan_code: the studio's trial purchase plan codes plus its landing page offers'; landing_path: the studio's trial purchase landing paths; page_id: the organisation's landing pages with a row for this studio), corp_promo (the promo registry), lead_source (the lead source values), glofox_plan (active Glofox membership names at the studio) or tag (the studio's tag vocabulary, as /api/segments). Needs a manager role or the sequence-builder permission at the studio. Unknown type or match is 400.",
+  responses: {
+    200: { description: 'The options' },
+    400: { description: 'Unknown type or match', content: { 'application/json': { schema: ErrorResponse } } },
+    ...boardErrors,
+    503: { description: 'Could not read the options', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

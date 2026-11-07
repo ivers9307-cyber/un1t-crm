@@ -1,0 +1,146 @@
+// PIPEBUILD.5d — a small in-memory supabase double for the board builder
+// tests: from(t).select/insert/update/delete with eq/in/order/range,
+// maybeSingle, head counts, and the create_configured_pipeline rpc (mig 815:
+// a duplicate (location_id, key) or stage (location_id, slug) is a 23505).
+// pipeline_stages also enforces UNIQUE (pipeline_id, name) (mig 597) on insert,
+// update and the rpc, answering the error PostgREST would (constraint named in
+// the message).
+
+let seq = 0
+const newId = () => `00000000-0000-4000-8000-${String(++seq).padStart(12, '0')}`
+
+export const uniqueError = (constraint) => ({
+  code: '23505',
+  message: `duplicate key value violates unique constraint "${constraint}"`,
+  details: 'Key already exists.',
+})
+
+// The first stage-unique a set of rows breaks, or null.
+function stageUniqueBroken(rows) {
+  const names = new Set()
+  const slugs = new Set()
+  for (const r of rows) {
+    const n = `${r.pipeline_id}|${r.name}`
+    const sl = `${r.location_id}|${r.slug}`
+    if (names.has(n)) return 'pipeline_stages_pipeline_name_unique'
+    if (slugs.has(sl)) return 'pipeline_stages_location_slug_unique'
+    names.add(n); slugs.add(sl)
+  }
+  return null
+}
+
+export function fakeDb(seed = {}) {
+  const tables = {
+    locations: [], pipelines: [], pipeline_stages: [], pipeline_stage_followups: [], deals: [],
+    ...Object.fromEntries(Object.entries(seed).map(([k, v]) => [k, v.map((r) => ({ ...r }))])),
+  }
+  const calls = { rpc: [], updates: [], inserts: [], deletes: [] }
+  const failures = {}       // `${table}:${op}` -> error, or rpc name -> [errors…]
+
+  function builder(table) {
+    const filters = []
+    let op = 'select'
+    let payload = null
+    let head = false
+    let single = false
+    let range = null
+    const orders = []
+    const b = {
+      select(_cols, opts = {}) { if (op === 'select') head = !!opts.head; return b },
+      insert(rows) { op = 'insert'; payload = Array.isArray(rows) ? rows : [rows]; return b },
+      update(patch) { op = 'update'; payload = patch; return b },
+      delete() { op = 'delete'; return b },
+      eq(col, v) { filters.push((r) => r[col] === v); return b },
+      in(col, vs) { filters.push((r) => vs.includes(r[col])); return b },
+      order(col, { ascending = true } = {}) { orders.push([col, ascending]); return b },
+      range(from, to) { range = [from, to]; return b },
+      limit() { return b },
+      maybeSingle() { single = true; return b },
+      then(resolve, reject) { return Promise.resolve().then(run).then(resolve, reject) },
+    }
+    function run() {
+      const failure = failures[`${table}:${op}`]
+      if (failure) return { data: null, error: failure }
+      const rows = tables[table] || (tables[table] = [])
+      const match = (r) => filters.every((f) => f(r))
+      if (op === 'insert') {
+        const added = payload.map((r) => ({ id: newId(), archived: false, ...r }))
+        if (table === 'pipeline_stages') {
+          const broken = stageUniqueBroken([...rows, ...added])
+          if (broken) return { data: null, error: uniqueError(broken) }
+        }
+        rows.push(...added)
+        calls.inserts.push({ table, rows: added })
+        return { data: added.map((r) => ({ id: r.id })), error: null }
+      }
+      if (op === 'update') {
+        const hit = rows.filter(match)
+        if (table === 'pipeline_stages') {
+          const after = rows.map((r) => (hit.includes(r) ? { ...r, ...payload } : r))
+          const broken = stageUniqueBroken(after)
+          if (broken) return { data: null, error: uniqueError(broken) }
+        }
+        hit.forEach((r) => Object.assign(r, payload))
+        calls.updates.push({ table, patch: payload, ids: hit.map((r) => r.id) })
+        return { data: hit.map((r) => ({ id: r.id })), error: null }
+      }
+      if (op === 'delete') {
+        const hit = rows.filter(match)
+        tables[table] = rows.filter((r) => !match(r))
+        calls.deletes.push({ table, ids: hit.map((r) => r.id) })
+        return { data: hit.map((r) => ({ id: r.id })), error: null }
+      }
+      let out = rows.filter(match)
+      for (const [col, asc] of [...orders].reverse()) {
+        out = [...out].sort((x, y) => {
+          if (x[col] === y[col]) return 0
+          if (x[col] == null) return 1
+          if (y[col] == null) return -1
+          return (x[col] < y[col] ? -1 : 1) * (asc ? 1 : -1)
+        })
+      }
+      if (head) return { data: null, count: out.length, error: null }
+      if (range) out = out.slice(range[0], range[1] + 1)
+      if (single) return { data: out[0] ? { ...out[0] } : null, error: null }
+      return { data: out.map((r) => ({ ...r })), error: null }
+    }
+    return b
+  }
+
+  const db = {
+    tables,
+    calls,
+    failures,
+    from: (t) => builder(t),
+    async rpc(name, args) {
+      calls.rpc.push({ name, args })
+      const queued = failures[name]
+      if (Array.isArray(queued) && queued.length) return { data: null, error: queued.shift() }
+      if (name !== 'create_configured_pipeline') return { data: null, error: { code: 'PGRST202', message: 'no such function' } }
+      const loc = args.p_location_id
+      if (tables.pipelines.some((p) => p.location_id === loc && p.key === args.p_key)) {
+        return { data: null, error: uniqueError('pipelines_location_key_unique') }
+      }
+      for (const s of args.p_stages) {
+        if (tables.pipeline_stages.some((r) => r.location_id === loc && r.slug === s.slug)) {
+          return { data: null, error: uniqueError('pipeline_stages_location_slug_unique') }
+        }
+      }
+      if (new Set(args.p_stages.map((s) => s.name)).size !== args.p_stages.length) {
+        return { data: null, error: uniqueError('pipeline_stages_pipeline_name_unique') }
+      }
+      const id = newId()
+      tables.pipelines.push({
+        id, location_id: loc, key: args.p_key, name: args.p_name, module: args.p_module, mode: 'derived',
+        is_primary: false, display_order: 99, enabled: false, board_type: args.p_board_type,
+        recipe_key: args.p_recipe_key, config: args.p_config, priority: args.p_priority,
+        created_by: args.p_created_by, baseline_at: null, updated_at: 'created',
+      })
+      for (const s of args.p_stages) {
+        tables.pipeline_stages.push({ id: newId(), pipeline_id: id, location_id: loc, archived: false, ...s })
+      }
+      return { data: id, error: null }
+    },
+  }
+  return db
+}

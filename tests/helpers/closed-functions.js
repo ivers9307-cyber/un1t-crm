@@ -135,6 +135,8 @@ export const CLOSED_FUNCTIONS = [
     why: 'the send-path audience view scoped to an include/exclude contact-id set carried in the rpc body; called only by service-role audience code (AUDIENCEIDS.1)' },
   { fn: 'public.studio_contacts_scoped', args: '(uuid, uuid[], uuid[])', closedBy: 795,
     why: 'studio_contacts scoped to an include/exclude contact-id set carried in the rpc body; called only by service-role audience code (AUDIENCEIDS.1)' },
+  { fn: 'public.create_configured_pipeline', args: '(uuid, text, text, text, text, text, jsonb, integer, uuid, jsonb)', closedBy: 815,
+    why: 'PIPEBUILD.5a: INVOKER create of one offer board and its stages in one transaction, over a bare location id; only the service-role board builder calls it, after its own access check' },
 ]
 
 /** The client roles a closed function is closed to. */

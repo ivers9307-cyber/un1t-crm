@@ -20,10 +20,15 @@ const USER = 'user-1'
 // `failWhen(q)` returns an error for one specific query; `afterOp(q, tables)`
 // runs after a query (to simulate a webhook landing mid-install).
 let lastTables = null
+// The role the fake stage holds: the pack's role, so a pack installs on its own kind of stage.
+let stageRoleNow = 'new'
+const PACK_ROLE = { book_first_class: 'new', after_first_class: 'first_class', halfway: 'checkpoint', trial_done: 'done' }
 function fakeDb(seed = {}, { fail = {}, failWhen, afterOp } = {}) {
   const tables = {
-    pipelines: [{ id: PIPE, key: 'reset', name: '14 Day Reset', location_id: LOC, board_type: 'offer' }],
-    pipeline_stages: [{ id: STAGE, slug: 'reset_new', pipeline_id: PIPE, location_id: LOC }],
+    pipelines: [{ id: PIPE, key: 'o_reset', name: '14 Day Reset', location_id: LOC, board_type: 'offer', recipe_key: 'paid_trial_offer' }],
+    // stage_role follows the pack under test (see args()): a getter, because most tests
+    // build the db before they build the args.
+    pipeline_stages: [{ id: STAGE, slug: 'o_reset_new', pipeline_id: PIPE, location_id: LOC, get stage_role() { return stageRoleNow } }],
     locations: [{ id: LOC, name: 'UN1T Stillorgan' }, { id: OTHER_LOC, name: 'UN1T Hatch Street' }],
     pipeline_stage_followups: [],
     email_sequences: [],
@@ -94,10 +99,14 @@ function fakeDb(seed = {}, { fail = {}, failWhen, afterOp } = {}) {
 
 // One-template pack (paid_trial_offer / book_first_class) and a two-template
 // pack (paid_trial_offer / trial_done).
-const args = (over = {}) => ({
+const args = (over = {}) => {
+  stageRoleNow = PACK_ROLE[over.packKey ?? 'book_first_class']
+  return argsFor(over)
+}
+const argsFor = (over = {}) => ({
   locationId: LOC,
   pipelineId: PIPE,
-  stage: { id: STAGE, slug: 'reset_new' },
+  stage: { id: STAGE, slug: 'o_reset_new' },
   recipeKey: 'paid_trial_offer',
   packKey: 'book_first_class',
   render: { studioName: 'UN1T Stillorgan', offerName: '14 Day Reset', durationDays: 14, signer: 'Garrett', bookingFlowId: 'flow-1' },
@@ -134,7 +143,7 @@ describe('installFollowupPack', () => {
     // Both templates submitted on THIS studio, named per the recipe rule.
     expect(submitWhatsappTemplate).toHaveBeenCalledTimes(2)
     const names = submitWhatsappTemplate.mock.calls.map(([, t]) => t.name)
-    expect(names).toEqual(['un1t_stillorgan_reset_trial_done_main', 'un1t_stillorgan_reset_trial_done_followup'])
+    expect(names).toEqual(['un1t_stillorgan_o_reset_trial_done_main', 'un1t_stillorgan_o_reset_trial_done_followup'])
     for (const [, t] of submitWhatsappTemplate.mock.calls) {
       expect(t).toMatchObject({ locationId: LOC, category: 'MARKETING', language: 'en', createdBy: USER })
     }
@@ -146,11 +155,11 @@ describe('installFollowupPack', () => {
       location_id: LOC,
       name: '14 Day Reset · End of trial',
       trigger_type: 'pipeline_stage_change',
-      trigger_config: { to_status: 'reset_new' },
+      trigger_config: { to_status: 'o_reset_new' },
       status: 'draft',
       created_by: USER,
     })
-    expect(seq.draft_graph.trigger).toEqual({ type: 'pipeline_stage_change', config: { to_status: 'reset_new' } })
+    expect(seq.draft_graph.trigger).toEqual({ type: 'pipeline_stage_change', config: { to_status: 'o_reset_new' } })
     const waIds = seq.draft_graph.nodes.filter((x) => x.type === 'whatsapp').map((x) => x.config.template_id)
     expect(new Set(waIds)).toEqual(new Set(['wt-1', 'wt-2']))
 
@@ -175,6 +184,54 @@ describe('installFollowupPack', () => {
     expect(publishSequence).not.toHaveBeenCalled()
   })
 
+  it('installerRefusesRecipeMismatch', async () => {
+    submitsOk()
+    const { db, tables } = fakeDb()
+    const r = await installFollowupPack(db, args({ recipeKey: 'promo_claim', packKey: 'welcome' }))
+    expect(r).toMatchObject({ ok: false, status: 409, code: 'recipe_mismatch' })
+    expect(submitWhatsappTemplate).not.toHaveBeenCalled()
+    expect(tables.email_sequences).toHaveLength(0)
+    expect(tables.pipeline_stage_followups).toHaveLength(0)
+  })
+
+  it('installerRefusesStageRoleMismatch', async () => {
+    submitsOk()
+    const { db, tables } = fakeDb()
+    // The stage is a "new" stage; trial_done belongs on a "done" stage.
+    stageRoleNow = 'new'
+    const r = await installFollowupPack(db, argsFor({ packKey: 'trial_done' }))
+    expect(r).toMatchObject({ ok: false, status: 409, code: 'stage_role_mismatch' })
+    expect(submitWhatsappTemplate).not.toHaveBeenCalled()
+    expect(tables.email_sequences).toHaveLength(0)
+    expect(tables.pipeline_stage_followups).toHaveLength(0)
+  })
+
+  it('installerWritesVersion', async () => {
+    submitsOk()
+    const { db, tables } = fakeDb()
+    const r = await installFollowupPack(db, args({ version: 2 }))
+    expect(r.ok).toBe(true)
+    expect(tables.pipeline_stage_followups[0].version).toBe(2)
+    // The template name carries the version, so a replaced template is a new one.
+    expect(submitWhatsappTemplate.mock.calls[0][1].name).toBe('un1t_stillorgan_o_reset_book_first_class_main_v2')
+  })
+
+  it('installerPassesOperatorWordingThrough, and a bad wording is a 400 before Meta', async () => {
+    submitsOk()
+    const { db } = fakeDb()
+    const ok = await installFollowupPack(db, args({ bodies: { main: 'Hi {{1}}, {offer} at {studio}! {signer}' } }))
+    expect(ok.ok).toBe(true)
+    const body = submitWhatsappTemplate.mock.calls[0][1].components.find((c) => c.type === 'BODY').text
+    expect(body).toBe('Hi {{1}}, 14 Day Reset at UN1T Stillorgan! Garrett')
+
+    vi.clearAllMocks()
+    const bad = fakeDb()
+    const r = await installFollowupPack(bad.db, args({ bodies: { main: 'no first name' } }))
+    expect(r).toMatchObject({ ok: false, status: 400 })
+    expect(r.error).toMatch(/wording/)
+    expect(submitWhatsappTemplate).not.toHaveBeenCalled()
+  })
+
   it('refusesLegacyBoard', async () => {
     submitsOk()
     const { db, tables } = fakeDb({
@@ -191,7 +248,7 @@ describe('installFollowupPack', () => {
   it('refusesOtherStudioBoard', async () => {
     submitsOk()
     const { db, tables } = fakeDb({
-      pipelines: [{ id: PIPE, key: 'reset', name: '14 Day Reset', location_id: OTHER_LOC, board_type: 'offer' }],
+      pipelines: [{ id: PIPE, key: 'o_reset', name: '14 Day Reset', location_id: OTHER_LOC, board_type: 'offer', recipe_key: 'paid_trial_offer' }],
     })
     const r = await installFollowupPack(db, args())
     expect(r).toMatchObject({ ok: false, status: 404 })
@@ -203,7 +260,7 @@ describe('installFollowupPack', () => {
   it('refuses a stage that is not on this board', async () => {
     submitsOk()
     const { db, tables } = fakeDb({
-      pipeline_stages: [{ id: STAGE, slug: 'reset_new', pipeline_id: 'pipe-other', location_id: LOC }],
+      pipeline_stages: [{ id: STAGE, slug: 'o_reset_new', pipeline_id: 'pipe-other', location_id: LOC }],
     })
     const r = await installFollowupPack(db, args())
     expect(r).toMatchObject({ ok: false, status: 404 })
@@ -268,7 +325,7 @@ describe('installFollowupPack', () => {
     const r = await installFollowupPack(db, args())
     expect(r).toMatchObject({ ok: false, status: 409, code: 'template_rejected' })
     // No promise that new wording would help: the name is fixed.
-    expect(r.error).toBe("This step's WhatsApp template (un1t_stillorgan_reset_book_first_class_main) was rejected by Meta. Ask an admin to replace it before installing again.")
+    expect(r.error).toBe("This step's WhatsApp template (un1t_stillorgan_o_reset_book_first_class_main) was rejected by Meta. Ask an admin to replace it before installing again.")
     expect(tables.email_sequences).toHaveLength(0)
     expect(tables.pipeline_stage_followups).toHaveLength(0)
   })

@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { liveSequenceTemplateRefusal } from '@/lib/sequences/template-approval'
 import { logError } from '@/lib/log'
+import { refuseIfFollowupOwned } from '@/lib/followup-owned-sequences'
 
 const StepUpdateSchema = z.object({
   step_order: z.number().int().min(0).max(1000).optional(),
@@ -58,6 +59,8 @@ export async function PUT(request, props) {
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
   if (!canBuildSequencesAt(user, seqLocation)) return sequencePermissionRequired()
+  const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: seqLocation })
+  if (owned) return owned
 
   const validation = await validateBody(request, StepUpdateSchema)
   if (!validation.ok) return validation.response
@@ -103,6 +106,8 @@ export async function DELETE(request, props) {
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
   if (!canBuildSequencesAt(user, seqLocation)) return sequencePermissionRequired()
+  const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: seqLocation })
+  if (owned) return owned
 
   const { error } = await db.from('sequence_steps')
     .delete()

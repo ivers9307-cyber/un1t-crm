@@ -4,7 +4,7 @@ import { parseOfferConfig, stageSlugFor } from './offer-config.js'
 import { validateGraph } from '../../src/lib/sequences/graph/validate.js'
 
 const BASE = {
-  boardKey: 'reset', studioSlug: 'un1t_stillorgan', studioName: 'UN1T Stillorgan', offerName: '14 Day Reset',
+  boardKey: 'o_reset', studioSlug: 'un1t_stillorgan', studioName: 'UN1T Stillorgan', offerName: '14 Day Reset',
   durationDays: 14, signer: 'Garrett', bookingFlowId: '1343015528022374',
   appLinks: { iosUrl: 'https://apps.apple.com/ie/app/un1t-class-booking/id1532075895', androidUrl: 'https://play.google.com/store/apps/details?id=ie.zappy.fennec.untholborn' },
 }
@@ -49,30 +49,30 @@ describe('expectGuarded', () => {
 describe('recipes', () => {
   it('everyRecipeConfigParses', () => {
     for (const r of Object.values(RECIPES)) {
-      const cfg = r.defaultConfig('b')
+      const cfg = r.defaultConfig('o_b')
       expect(cfg.entry.values).toEqual([])
       // The parser refuses an empty value list; the builder completes it.
-      expect(parseOfferConfig(cfg, { boardKey: 'b' }).ok).toBe(false)
+      expect(parseOfferConfig(cfg, { boardKey: 'o_b' }).ok).toBe(false)
       const filled = { ...cfg, entry: { ...cfg.entry, values: ['x'] } }
-      const res = parseOfferConfig(filled, { boardKey: 'b' })
+      const res = parseOfferConfig(filled, { boardKey: 'o_b' })
       expect(res.errors).toBeUndefined()
       expect(res.ok).toBe(true)
     }
-    expect(RECIPES.paid_trial_offer.defaultConfig('b').stages.map((s) => s.slug))
-      .toEqual(['new', 'first_class', 'checkpoint', 'done', 'converted'].map((r) => stageSlugFor('b', r, { day: 7 })))
+    expect(RECIPES.paid_trial_offer.defaultConfig('o_b').stages.map((s) => s.slug))
+      .toEqual(['new', 'first_class', 'checkpoint', 'done', 'converted'].map((r) => stageSlugFor('o_b', r, { day: 7 })))
   })
 
   it('everyPackGraphValidates', () => {
     for (const [rk, pk] of allPacks()) {
       const { templates, buildGraph } = renderPack(rk, pk, BASE)
       const ids = Object.fromEntries(templates.map((t) => [t.ref, `id-${t.ref}`]))
-      const g = buildGraph(ids, 'reset_stage')
+      const g = buildGraph(ids, 'o_reset_stage')
       const v = validateGraph(g)
       expect(v.errors, `${rk}/${pk}`).toEqual([])
-      expect(g.trigger).toEqual({ type: 'pipeline_stage_change', config: { to_status: 'reset_stage' } })
+      expect(g.trigger).toEqual({ type: 'pipeline_stage_change', config: { to_status: 'o_reset_stage' } })
       for (const n of g.nodes.filter((x) => x.type === 'whatsapp')) expect(Object.values(ids)).toContain(n.config.template_id)
       for (const n of g.nodes.filter((x) => x.type === 'apply_tag')) {
-        expect(n.config.tag.startsWith(`reset_${pk}_`)).toBe(true)
+        expect(n.config.tag.startsWith(`o_reset_${pk}_`)).toBe(true)
         expect(n.config.tag.length).toBeLessThanOrEqual(60)
       }
       expectGuarded(g, `${rk}/${pk}`)
@@ -203,9 +203,9 @@ describe('recipes', () => {
 
   it('templateNameForRefusesEmptyPartsAndOverlongNames', () => {
     for (const bad of [undefined, null, '', '  ']) {
-      expect(() => templateNameFor({ studioSlug: bad, boardKey: 'b', packKey: 'p', ref: 'main' })).toThrow(/studioSlug/)
+      expect(() => templateNameFor({ studioSlug: bad, boardKey: 'o_b', packKey: 'p', ref: 'main' })).toThrow(/studioSlug/)
       expect(() => templateNameFor({ studioSlug: 's', boardKey: bad, packKey: 'p', ref: 'main' })).toThrow(/boardKey/)
-      expect(() => templateNameFor({ studioSlug: 's', boardKey: 'b', packKey: bad, ref: 'main' })).toThrow(/packKey/)
+      expect(() => templateNameFor({ studioSlug: 's', boardKey: 'o_b', packKey: bad, ref: 'main' })).toThrow(/packKey/)
     }
     // A name over 512 throws instead of being cut into a possible collision.
     const long = 'b'.repeat(505)
@@ -231,5 +231,53 @@ describe('recipes', () => {
     const t = renderPack('paid_trial_offer', 'book_first_class', { ...BASE, signer: '  Garrett\n\nat   UN1T\r\n' }).templates[0]
     expect(bodyOf(t).endsWith('book it for you. Garrett at UN1T')).toBe(true)
     expect(bodyOf(t)).not.toContain('\n')
+  })
+
+  it('versionedTemplateNames', () => {
+    const v2 = renderPack('paid_trial_offer', 'book_first_class', { ...BASE, boardKey: 'o_reset', version: 2 })
+    expect(v2.templates[0].name.endsWith('_v2')).toBe(true)
+    const v1 = renderPack('paid_trial_offer', 'book_first_class', { ...BASE, boardKey: 'o_reset', version: 1 })
+    const none = renderPack('paid_trial_offer', 'book_first_class', { ...BASE, boardKey: 'o_reset' })
+    expect(v1.templates[0].name).toBe(none.templates[0].name)
+    expect(v1.templates[0].name.endsWith('_v1')).toBe(false)
+    expect(() => renderPack('paid_trial_offer', 'book_first_class', { ...BASE, version: 0 })).toThrow(/version/)
+  })
+
+  it('bodyOverrideRequiresFirstName', () => {
+    const run = (main) => renderPack('paid_trial_offer', 'book_first_class', { ...BASE, bodies: { main } })
+    expect(() => run('Hello there')).toThrow(/wording/)
+    expect(() => run('Hi {{1}} and {{2}}')).toThrow(/wording/)
+    expect(() => run('Hi {{1}} {nope}')).toThrow(/wording/)
+    expect(() => run('Hi {{{1}}}')).toThrow(/wording/)
+    expect(() => run('Hi {{1}}}')).toThrow(/wording/)
+    expect(() => run('Hi {{1}} ' + 'x'.repeat(1100))).toThrow(/wording/)
+    expect(() => renderPack('paid_trial_offer', 'book_first_class', { ...BASE, bodies: { other: 'Hi {{1}}' } })).toThrow(/wording/)
+    const t = run('Hi {{1}}, {offer} at {studio} for {days} days. {signer}').templates[0]
+    expect(bodyOf(t)).toBe('Hi {{1}}, 14 Day Reset at UN1T Stillorgan for 14 days. Garrett')
+  })
+
+  it('operatorWordingIsNeverEditedForButtons', () => {
+    const body = 'Hi {{1}}. Tap below to book.'
+    const t = renderPack('paid_trial_offer', 'book_first_class', { ...BASE, bookingFlowId: undefined, bodies: { main: body } }).templates[0]
+    expect(bodyOf(t)).toBe(body)
+  })
+
+  it('dropsTapBelowWithoutButtons', () => {
+    for (const [rk, pk] of allPacks()) {
+      for (const t of renderPack(rk, pk, { ...BASE, bookingFlowId: undefined, appLinks: undefined }).templates) {
+        expect(bodyOf(t), `${rk}/${pk}/${t.ref}`).not.toContain('Tap below')
+        expect(bodyOf(t)).not.toMatch(/ {2}|\{signer\}/)
+      }
+    }
+    const t = renderPack('programme_lead', 'welcome', { ...BASE, bookingFlowId: undefined }).templates[0]
+    expect(bodyOf(t)).toBe("Hi {{1}}, welcome to the 14 Day Reset at UN1T Stillorgan 💪 We haven't seen you book your first class yet. Reply here and we'll book it for you. Garrett")
+    for (const [rk, pk] of [['paid_trial_offer', 'book_first_class'], ['programme_lead', 'welcome'], ['promo_claim', 'welcome']]) {
+      const b = bodyOf(renderPack(rk, pk, { ...BASE, bookingFlowId: undefined }).templates[0])
+      expect(b, pk).toContain("yet. Reply here and we'll book it for you. Garrett")
+      expect(b).not.toContain('Tap below')
+    }
+    // With a button the sentence stays.
+    const withFlow = renderPack('programme_lead', 'welcome', BASE).templates[0]
+    expect(bodyOf(withFlow)).toContain('Tap below')
   })
 })

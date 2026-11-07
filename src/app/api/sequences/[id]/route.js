@@ -10,6 +10,7 @@ import { whatsappApprovalIssues, loadTemplatesForApproval } from '@/lib/sequence
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { SEQUENCE_BUILDER_ROW_SELECT, toBuilderSequence } from '@/lib/sequences/builder-shape'
 import { uuidLike } from '@/lib/schemas'
+import { refuseIfFollowupOwned, isRetiredFollowupSequence, retiredFollowupResponse } from '@/lib/followup-owned-sequences'
 
 const SequenceUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -131,10 +132,23 @@ export async function PUT(request, props) {
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
   if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
+  const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: existing.location_id })
+  if (owned) return owned
 
   const validation = await validateBody(request, SequenceUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
+  // PIPEBUILD.5l — a follow-up sequence a board retired (archived when its
+  // row moved to a new sequence, or its stage was removed) never comes back:
+  // switching it on would run a second follow-up on that stage. Refuse any
+  // move off 'archived' (paused too, the step before active) and any trigger
+  // edit (which would take it out of this rule and then let it back on).
+  // Every other archived sequence keeps archive / unarchive as before.
+  if (isRetiredFollowupSequence(existing)) {
+    const leavesArchived = updates.status !== undefined && updates.status !== 'archived'
+    const touchesTrigger = updates.trigger_type !== undefined || updates.trigger_config !== undefined
+    if (leavesArchived || touchesTrigger) return retiredFollowupResponse()
+  }
   // SEQPAGEGATE.1: '' and null both mean "no secret" (the inbound webhook
   // and has_webhook_secret agree); store the one spelling, null.
   if (updates.webhook_secret === '') updates.webhook_secret = null
@@ -294,6 +308,8 @@ export async function DELETE(request, props) {
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
   if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
+  const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: existing.location_id })
+  if (owned) return owned
 
   // Delete steps first
   await db.from('sequence_steps').delete().eq('sequence_id', params.id)

@@ -37,7 +37,7 @@ import { RECIPES, renderPack, studioSlugFor } from '../../shared/pipelines/recip
 const MODULE = 'pipeline-followups'
 
 // Same-file literal so check:select-columns resolves it.
-const FOLLOWUP_COLUMNS = 'id, location_id, pipeline_id, stage_id, sequence_id, whatsapp_template_id, pack_key, state, want_live, created_by, created_at, updated_at'
+const FOLLOWUP_COLUMNS = 'id, location_id, pipeline_id, stage_id, sequence_id, whatsapp_template_id, pack_key, version, state, want_live, created_by, created_at, updated_at'
 
 // A row in one of these states is already installed; it is returned (after
 // the recovery re-checks in step 2), never reinstalled over.
@@ -58,6 +58,7 @@ const fail = (status, error, code) => (code ? { ok: false, status, error, code }
  *   recipeKey: string, packKey: string,
  *   render?: { studioName?, offerName?, durationDays?, signer?, bookingFlowId?, appLinks? },
  *   createdBy?: string|null, wantLive?: boolean,
+ *   version?: number, bodies?: { [ref: string]: string },
  * }} opts
  * @returns {Promise<{ ok: true, followup: object, created: boolean, publishError?: string,
  *     code?: 'publish_failed_state_stuck' }
@@ -75,6 +76,8 @@ export async function installFollowupPack(db, {
   render = {},
   createdBy = null,
   wantLive = true,
+  version,
+  bodies,
 } = {}) {
   if (!locationId || !pipelineId || !stage?.id || !recipeKey || !packKey) {
     return fail(400, 'A studio, board, stage, recipe and pack are all required.')
@@ -82,7 +85,7 @@ export async function installFollowupPack(db, {
 
   // 1. The board, at this studio, built by the builder (board_type set).
   const { data: board, error: boardErr } = await db.from('pipelines')
-    .select('id, key, name, location_id, board_type')
+    .select('id, key, name, location_id, board_type, recipe_key')
     .eq('id', pipelineId)
     .eq('location_id', locationId)
     .maybeSingle()
@@ -93,13 +96,23 @@ export async function installFollowupPack(db, {
   // The stage must be on this board. Its stored slug is the one the graph and
   // the enrolment trigger key on, not whatever the caller passed.
   const { data: stageRow, error: stageErr } = await db.from('pipeline_stages')
-    .select('id, slug')
+    .select('id, slug, stage_role')
     .eq('id', stage.id)
     .eq('pipeline_id', pipelineId)
     .eq('location_id', locationId)
     .maybeSingle()
   if (stageErr) return fail(500, 'Could not read the stage just now. Try again.')
   if (!stageRow) return fail(404, 'Stage not found on this board')
+
+  // The pack must belong to the board's recipe and to this kind of stage: a
+  // book-the-first-class nudge on a Done stage would text the wrong people.
+  if (board.recipe_key !== recipeKey) {
+    return fail(409, 'This pack does not belong to this board\'s recipe.', 'recipe_mismatch')
+  }
+  const packRole = RECIPES[recipeKey]?.packs.find((p) => p.key === packKey)?.role
+  if (packRole && packRole !== stageRow.stage_role) {
+    return fail(409, 'This pack does not fit this stage.', 'stage_role_mismatch')
+  }
 
   const { data: location, error: locErr } = await db.from('locations')
     .select('name')
@@ -145,6 +158,8 @@ export async function installFollowupPack(db, {
       ...render,
       boardKey: board.key,
       studioSlug: studioSlugFor(location.name),
+      ...(version != null ? { version } : {}),
+      ...(bodies != null ? { bodies } : {}),
     })
     packName = RECIPES[recipeKey].packs.find((p) => p.key === packKey).name
     const placeholders = Object.fromEntries(rendered.templates.map((t) => [t.ref, `pending_${t.ref}`]))
@@ -214,6 +229,7 @@ export async function installFollowupPack(db, {
     sequence_id: sequence.id,
     whatsapp_template_id: templateIds[rendered.templates[0].ref] ?? null,
     pack_key: packKey,
+    ...(version != null ? { version } : {}),
     state: 'awaiting_approval',
     want_live: Boolean(wantLive),
     created_by: createdBy,
