@@ -666,11 +666,23 @@ describe('setBoardEnabled', () => {
       .toMatchObject({ ok: true, board: { enabled: true } })
   })
 
+  it('enableRefusesOfferUn1tAtGlofoxStudio', async () => {
+    const db = seedDb('glofox')
+    const board = await createdBoard(db)
+    db.tables.pipelines.find((p) => p.id === board.id).module = 'offer_un1t'
+    db.tables.pipelines.find((p) => p.id === board.id).config = { ...clientConfig(), entry: { type: 'un1t_product', values: ['prod-39'] }, stages: db.tables.pipelines.find((p) => p.id === board.id).config.stages }
+    const before = db.calls.updates.length
+    expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
+      .toMatchObject({ ok: false, status: 409, code: 'module_mismatch' })
+    expect(db.calls.updates).toHaveLength(before)
+  })
+
   it('enableRefusesBadConfig', async () => {
     const db = seedDb()
     const board = await createdBoard(db)
     db.tables.pipelines.find((p) => p.id === board.id).config = { entry: null }
     expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
       .toMatchObject({ ok: false, status: 409, code: 'invalid_config' })
+    expect(db.calls.updates).toHaveLength(0)
   })
 })

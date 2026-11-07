@@ -88,6 +88,12 @@ describe('trialPurchaseOfferConfigs module check', () => {
     const wrong = { ...board('o_wrong', entry), module: 'bogus_module' }
     expect(trialPurchaseOfferConfigs([ok, wrong]).map((b) => b.key)).toEqual(['o_ok'])
   })
+
+  it('keeps a trial_purchase board of module offer_un1t', () => {
+    const entry = { type: 'trial_purchase', match: 'plan_code', values: ['T39'] }
+    const un1t = { ...board('o_un1t', entry), module: 'offer_un1t' }
+    expect(trialPurchaseOfferConfigs([un1t]).map((b) => b.key)).toEqual(['o_un1t'])
+  })
 })
 
 // PIPEBUILD.3g — the trial_purchase entries the €39 claim loaders leave out.
