@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
+import { sqlCode } from './helpers/sql-code.js'
 
 const MIGRATIONS = path.join(__dirname, '..', 'supabase', 'migrations')
 const sql = readFileSync(path.join(MIGRATIONS, '815_pipeline_builder.sql'), 'utf8')
-const code = sql.replace(/--.*$/gm, '')
+const code = sqlCode(sql)
 
 describe('mig 815 — PIPEBUILD.5a', () => {
   it('adds baseline_at and version', () => {
@@ -33,7 +34,7 @@ describe('mig 815 — PIPEBUILD.5a', () => {
   it('no later migration reopens pipeline_stages writes', () => {
     const later = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql') && parseInt(f, 10) > 815)
     for (const f of later) {
-      const t = readFileSync(path.join(MIGRATIONS, f), 'utf8').replace(/--.*$/gm, '')
+      const t = sqlCode(readFileSync(path.join(MIGRATIONS, f), 'utf8'))
       expect(t, f).not.toMatch(/CREATE POLICY\s+\S+\s+ON\s+(public\.)?pipeline_stages\s+(AS\s+\w+\s+)?FOR\s+(INSERT|UPDATE|DELETE|ALL)/i)
       expect(t, f).not.toMatch(/GRANT[^;]*\b(INSERT|UPDATE|DELETE|ALL)\b[^;]*ON\s+(TABLE\s+)?(public\.)?pipeline_stages\s+TO[^;]*authenticated/i)
     }

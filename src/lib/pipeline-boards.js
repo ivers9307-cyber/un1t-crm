@@ -15,7 +15,11 @@
 //     change only while the board is off; its name, stage names, mia_notes
 //     and the offer wording (offer_name, signer) change any time;
 //   - a stage is removed only when no deal (any status) is in it and its
-//     follow-up is off, rejected or absent;
+//     follow-up is off, rejected or absent; its follow-up sequences are
+//     archived first (the rows cascade away, which would leave them unowned);
+//   - stage names are unique per board (mig 597): the parser refuses a
+//     repeat, the stage diff moves names through a temporary name, and any
+//     23505 is a 409 with the real reason;
 //   - built-in boards (board_type null) are read-only here;
 //   - no offer boards at un1t.online studios yet (offer_un1t is PR 3b).
 
@@ -24,6 +28,7 @@ import { boardKeyFor, parseOfferConfig, stageSlugFor } from '@shared/pipelines/o
 import { stagesFor } from '@shared/pipelines/offer.js'
 import { readMembershipSource, UN1T_MEMBERSHIP_SOURCES } from './pipeline-offer-claims.js'
 import { assertNotLegacyBoard } from './pipeline-board-guard.js'
+import { archiveSupersededSequence } from './followup-owned-sequences.js'
 import { logError } from './log.js'
 
 const MODULE = 'pipeline-boards'
@@ -36,6 +41,26 @@ export const SWITCH_OFF_FIRST_ERROR = 'Switch the board off before changing its 
 // assertNotLegacyBoard's own words (it answers a NextResponse; this file answers data).
 export const LEGACY_BOARD_ERROR = "This board is built in code and can't be changed here."
 const ACTIVE_FOLLOWUP_STATES = new Set(['draft', 'awaiting_approval', 'live'])
+
+// The three unique constraints a board write can hit (migs 594, 150, 597).
+const KEY_UNIQUE = 'pipelines_location_key_unique'
+const SLUG_UNIQUE = 'pipeline_stages_location_slug_unique'
+const STAGE_NAME_UNIQUE = 'pipeline_stages_pipeline_name_unique'
+export const STAGE_NAME_TAKEN_ERROR = "Two stages on this board can't share a name. Give each stage its own name."
+const STAGE_SLUG_TAKEN_ERROR = 'A stage with that role and timing already exists at this studio. Change the stage or try again.'
+
+/** The unique constraint a 23505 names (PostgREST puts it in message; details names the key). */
+function uniqueConstraintOf(error) {
+  const text = `${error?.message ?? ''} ${error?.details ?? ''}`
+  for (const name of [KEY_UNIQUE, SLUG_UNIQUE, STAGE_NAME_UNIQUE]) if (text.includes(name)) return name
+  return null
+}
+
+/** A 23505 on a stage write: 409 with the real reason. */
+function stageConflict(error) {
+  if (uniqueConstraintOf(error) === SLUG_UNIQUE) return fail(409, STAGE_SLUG_TAKEN_ERROR, { code: 'stage_slug_taken' })
+  return fail(409, STAGE_NAME_TAKEN_ERROR, { code: 'stage_name_taken' })
+}
 
 const BOARD_COLUMNS = 'id, location_id, key, name, board_type, recipe_key, enabled, baseline_at, priority, config, is_primary, display_order, updated_at'
 const STAGE_COLUMNS = 'id, pipeline_id, slug, name, stage_role, role_config, display_order'
@@ -268,10 +293,19 @@ export async function createBoard(db, { locationId, name, recipeKey, config, pri
       p_stages: stagesFor(parsed.config),
     })
     if (error?.code === '23505') {
-      // Another board took this key (or one of its stage slugs) since we read
-      // the keys: try once more with a fresh one.
-      taken.add(key)
-      continue
+      const constraint = uniqueConstraintOf(error)
+      if (constraint === KEY_UNIQUE || constraint === SLUG_UNIQUE) {
+        // Another board took this key (or one of its stage slugs) since we
+        // read the keys: try once more with a fresh one.
+        taken.add(key)
+        continue
+      }
+      // Two stages share a name (parseOfferConfig refuses that, so this is
+      // the database's own word), or a unique this file does not know: a
+      // fresh key would clash the same way, so never retry it.
+      logError(MODULE, 'create_configured_pipeline unique violation', { locationId, key, constraint, err: error.message })
+      if (constraint === STAGE_NAME_UNIQUE) return fail(409, STAGE_NAME_TAKEN_ERROR, { code: 'stage_name_taken' })
+      return fail(409, 'The board clashes with one that already exists. Change its name or stages and try again.', { code: 'conflict' })
     }
     if (error || !newId) {
       logError(MODULE, 'create_configured_pipeline failed', { locationId, key, err: error?.message || 'no id returned' })
@@ -370,6 +404,22 @@ export async function updateBoard(db, { locationId, boardId, patch = {} } = {}) 
   return getBoard(db, locationId, row.id)
 }
 
+// A temporary stage name no real stage can hold: a kept stage parks here
+// while names move, so (pipeline_id, name) never holds two rows at once.
+const tempStageName = (stageId) => `__tmp_${stageId}`
+
+// The order matters because pipeline_stages carries UNIQUE (pipeline_id, name)
+// (mig 597) as well as UNIQUE (location_id, slug):
+//   1. check every removal (nothing written yet, so a refusal changes nothing);
+//   2. retire the removed stages' follow-up sequences (their rows cascade away
+//      with the stage, which would leave the sequences unowned);
+//   3. delete the removed stages, so a new stage may take a removed one's name
+//      (Day 7 → Day 10 keeps the name "Day 7" under a new slug);
+//   4. park every kept stage whose name changes on a temporary unique name,
+//      so a swap (A↔B) or a new stage taking a kept stage's old name works;
+//   5. insert the added stages;
+//   6. set the kept stages' final names and display_order.
+// A 23505 anywhere is a 409 with the real reason, never a 500.
 async function applyStageDiff(db, { locationId, row, next }) {
   const { data: stageRows, error: stagesError } = await db
     .from('pipeline_stages')
@@ -407,7 +457,7 @@ async function applyStageDiff(db, { locationId, row, next }) {
     }
     const { data: followups, error: followupsError } = await db
       .from('pipeline_stage_followups')
-      .select('id, state')
+      .select('id, state, sequence_id')
       .eq('location_id', locationId)
       .eq('stage_id', stage.id)
       .range(0, PAGE - 1)
@@ -418,47 +468,22 @@ async function applyStageDiff(db, { locationId, row, next }) {
     if ((followups || []).some((f) => ACTIVE_FOLLOWUP_STATES.has(f.state))) {
       return fail(409, `Turn off the follow-up on "${stage.name}" before removing the stage.`, { code: 'followup_active' })
     }
-    removals.push(stage)
+    removals.push({ stage, followups: followups || [] })
   }
 
-  // 2. Added stages (no row yet) are inserted with their stagesFor fields.
-  const inserts = nextRows
-    .filter((s) => !bySlug.has(s.slug))
-    .map((s) => ({ ...s, pipeline_id: row.id, location_id: locationId }))
-  if (inserts.length) {
-    const { data: inserted, error } = await db.from('pipeline_stages').insert(inserts).select('id')
-    if (error || !inserted || inserted.length !== inserts.length) {
-      logError(MODULE, 'stage insert failed', { locationId, boardId: row.id, err: error?.message || 'row count' })
-      return fail(500, 'Could not add the new stages.')
+  // 2. The removed stages' follow-up sequences (off or rejected rows, so
+  //    paused or draft) are retired before the rows cascade away. Best-effort:
+  //    they are already stopped; a failure is logged by the helper.
+  for (const { stage, followups } of removals) {
+    for (const f of followups) {
+      if (!f.sequence_id) continue
+      await archiveSupersededSequence(db, locationId, f.sequence_id, { followupId: f.id, stageId: stage.id, action: 'stage_removed' })
     }
   }
 
-  // 3. Kept stages take their name AND column position from the stagesFor
-  //    row for their slug (900 + index in the new order), so an inserted or
-  //    reordered stage never leaves two columns on one display_order.
-  for (const s of nextRows) {
-    const existing = bySlug.get(s.slug)
-    if (!existing) continue
-    const change = {}
-    if (existing.name !== s.name) change.name = s.name
-    if (existing.display_order !== s.display_order) change.display_order = s.display_order
-    if (Object.keys(change).length === 0) continue
-    const { data: changed, error } = await db
-      .from('pipeline_stages')
-      .update(change)
-      .eq('id', existing.id)
-      .eq('location_id', locationId)
-      .eq('pipeline_id', row.id)
-      .select('id')
-    if (error || !changed || changed.length !== 1) {
-      logError(MODULE, 'stage update failed', { locationId, stageId: existing.id, err: error?.message || 'row count' })
-      return fail(500, 'Could not update a stage.')
-    }
-  }
-
-  // 4. Removed stages. A deal that landed since the check makes the delete
+  // 3. Removed stages. A deal that landed since the check makes the delete
   //    fail on deals.stage_id (23503), which is the same refusal.
-  for (const stage of removals) {
+  for (const { stage } of removals) {
     const { data: removed, error } = await db
       .from('pipeline_stages')
       .delete()
@@ -473,6 +498,94 @@ async function applyStageDiff(db, { locationId, row, next }) {
       logError(MODULE, 'stage delete failed', { locationId, stageId: stage.id, err: error?.message || 'row count' })
       return fail(500, 'Could not remove a stage.')
     }
+  }
+
+  const updateStage = async (stageId, change, what) => {
+    const { data: changed, error } = await db
+      .from('pipeline_stages')
+      .update(change)
+      .eq('id', stageId)
+      .eq('location_id', locationId)
+      .eq('pipeline_id', row.id)
+      .select('id')
+    if (error?.code === '23505') {
+      logError(MODULE, `stage ${what} hit a unique`, { locationId, stageId, err: error.message })
+      return stageConflict(error)
+    }
+    if (error || !changed || changed.length !== 1) {
+      logError(MODULE, `stage ${what} failed`, { locationId, stageId, err: error?.message || 'row count' })
+      return fail(500, 'Could not update a stage.')
+    }
+    return null
+  }
+
+  // 4. Kept stages whose name changes park on a temporary name first.
+  const renamed = nextRows
+    .map((s) => ({ s, existing: bySlug.get(s.slug) }))
+    .filter(({ s, existing }) => existing && existing.name !== s.name)
+  const stillParked = new Set()
+  // A failure after parking puts every still-parked stage back on its old
+  // name, best-effort, so a board never shows a __tmp_ column. A restore that
+  // fails is logged (the next save of the board renames it again).
+  const unpark = async () => {
+    for (const { existing } of renamed) {
+      if (!stillParked.has(existing.id)) continue
+      const { error } = await db
+        .from('pipeline_stages')
+        .update({ name: existing.name })
+        .eq('id', existing.id)
+        .eq('location_id', locationId)
+        .eq('pipeline_id', row.id)
+        .eq('name', tempStageName(existing.id))
+        .select('id')
+      if (error) logError(MODULE, 'parked stage name not restored', { locationId, stageId: existing.id, err: error.message })
+    }
+  }
+  for (const { existing } of renamed) {
+    const failed = await updateStage(existing.id, { name: tempStageName(existing.id) }, 'park')
+    if (failed) {
+      await unpark()
+      return failed
+    }
+    stillParked.add(existing.id)
+  }
+
+  // 5. Added stages (no row yet) are inserted with their stagesFor fields.
+  const inserts = nextRows
+    .filter((s) => !bySlug.has(s.slug))
+    .map((s) => ({ ...s, pipeline_id: row.id, location_id: locationId }))
+  if (inserts.length) {
+    const { data: inserted, error } = await db.from('pipeline_stages').insert(inserts).select('id')
+    if (error?.code === '23505') {
+      logError(MODULE, 'stage insert hit a unique', { locationId, boardId: row.id, err: error.message })
+      await unpark()
+      return stageConflict(error)
+    }
+    if (error || !inserted || inserted.length !== inserts.length) {
+      logError(MODULE, 'stage insert failed', { locationId, boardId: row.id, err: error?.message || 'row count' })
+      await unpark()
+      return fail(500, 'Could not add the new stages.')
+    }
+  }
+
+  // 6. Kept stages take their final name AND column position from the
+  //    stagesFor row for their slug (900 + index in the new order), so an
+  //    inserted or reordered stage never leaves two columns on one
+  //    display_order.
+  const parked = new Set(stillParked)
+  for (const s of nextRows) {
+    const existing = bySlug.get(s.slug)
+    if (!existing) continue
+    const change = {}
+    if (parked.has(existing.id)) change.name = s.name
+    if (existing.display_order !== s.display_order) change.display_order = s.display_order
+    if (Object.keys(change).length === 0) continue
+    const failed = await updateStage(existing.id, change, 'update')
+    if (failed) {
+      await unpark()
+      return failed
+    }
+    stillParked.delete(existing.id)
   }
   return { ok: true }
 }

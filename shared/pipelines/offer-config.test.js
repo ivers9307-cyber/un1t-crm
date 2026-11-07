@@ -56,6 +56,17 @@ describe('parseOfferConfig', () => {
     expect(parseOfferConfig(null, { boardKey: KEY }).ok).toBe(false)
   })
 
+  it('refusesRepeatedStageNamesTrimmedAnyCase', () => {
+    // pipeline_stages_pipeline_name_unique (mig 597): one name per board.
+    const c = full()
+    c.stages[4].name = '  day 7 '
+    const r = parseOfferConfig(c, { boardKey: KEY })
+    expect(r.ok).toBe(false)
+    expect(r.errors).toContain('stages[4] repeats the name day 7')
+    // Distinct names pass.
+    expect(parseOfferConfig(full(), { boardKey: KEY }).ok).toBe(true)
+  })
+
   it('exposes the entry types without un1t_product', () => {
     expect(ENTRY_TYPES).toEqual(['trial_purchase', 'corp_promo', 'lead_source', 'glofox_plan', 'tag'])
   })

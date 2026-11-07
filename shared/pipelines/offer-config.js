@@ -92,6 +92,9 @@ function parseStages(raw, boardKey, errors) {
   if (!Array.isArray(raw) || raw.length === 0) { errors.push('stages is required'); return [] }
   const out = []
   const seenSlugs = new Set()
+  // pipeline_stages carries UNIQUE (pipeline_id, name) (mig 597), so two
+  // stages on one board may not share a name (compared trimmed, any case).
+  const seenNames = new Set()
   const roleCounts = {}
   raw.forEach((s, i) => {
     const at = `stages[${i}]`
@@ -102,6 +105,8 @@ function parseStages(raw, boardKey, errors) {
     }
     const name = typeof s.name === 'string' ? s.name.trim() : ''
     if (!name) errors.push(`${at}.name is required`)
+    else if (seenNames.has(name.toLowerCase())) errors.push(`${at} repeats the name ${name}`)
+    else seenNames.add(name.toLowerCase())
     const rc = {}
     if (s.role === 'checkpoint') rc.day = s.day
     if (s.role === 'class_n') rc.count = s.count

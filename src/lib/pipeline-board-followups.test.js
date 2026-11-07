@@ -5,6 +5,7 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
 
 import { applyFollowupAction, renderInputsFor, packForStage } from './pipeline-board-followups'
 import { installFollowupPack } from '@/lib/pipeline-followup-packs'
+import { logError } from '@/lib/log'
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
 const BOARD_ID = 'b0000000-0000-4000-8000-000000000001'
@@ -16,7 +17,7 @@ const board = (over = {}) => ({
   name: 'Reset',
   board_type: 'offer',
   recipe_key: 'paid_trial_offer',
-  config: { offer_name: '14 Day Reset', signer: 'Dean', duration_days: 14 },
+  config: { offer_name: '14 Day Reset', signer: 'Alex Example', duration_days: 14 },
   stages: [{ id: STAGE_ID, slug: 'o_reset_new', name: 'New Leads', stage_role: 'new' }],
   ...over,
 })
@@ -114,7 +115,7 @@ describe('renderInputsFor', () => {
         studioName: 'UN1T Hatch Street',
         offerName: '14 Day Reset',
         durationDays: 14,
-        signer: 'Dean',
+        signer: 'Alex Example',
         bookingFlowId: 'flow-123',
         appLinks: { iosUrl: 'https://apps.apple.com/x', androidUrl: 'https://play.google.com/y' },
       },
@@ -166,7 +167,7 @@ describe('applyFollowupAction: install', () => {
         studioName: 'UN1T Hatch Street',
         offerName: '14 Day Reset',
         durationDays: 14,
-        signer: 'Dean',
+        signer: 'Alex Example',
         bookingFlowId: 'flow-123',
         appLinks: { iosUrl: 'https://apps.apple.com/x', androidUrl: 'https://play.google.com/y' },
       },
@@ -429,6 +430,45 @@ describe('applyFollowupAction: replace', () => {
     expect(installFollowupPack).not.toHaveBeenCalled()
   })
 
+  it('replaceArchivesTheOldSequenceAfterTheRowIsRepointed', async () => {
+    db = makeDb(responder({ row: liveRow({ version: 1 }) }))
+    installFollowupPack.mockImplementationOnce(async (_db, opts) => {
+      db.log.push({ table: 'installFollowupPack', op: 'call', values: opts })
+      return { ok: true, followup: { id: 'f1', state: 'awaiting_approval', version: opts.version, sequence_id: 's-new' }, created: true }
+    })
+    const res = await run({ action: 'replace', bodies })
+    expect(res.ok).toBe(true)
+    // Pause, off, install (re-points the row), THEN archive the old one.
+    expect(writes()).toEqual(['email_sequences:update', 'pipeline_stage_followups:update', 'installFollowupPack:call', 'email_sequences:update'])
+    const archive = db.log.at(-1)
+    expect(archive.values).toMatchObject({ status: 'archived', updated_at: expect.any(String) })
+    expect(archive.filters).toEqual({ id: 's1', location_id: LOC, status: ['paused', 'draft'] })
+    expect(archive.select).toBe('id')
+  })
+
+  it('aFailedInstallLeavesTheOldSequenceUnarchived', async () => {
+    db = makeDb(responder({ row: liveRow() }))
+    installFollowupPack.mockResolvedValueOnce({ ok: false, status: 500, error: 'Could not submit the WhatsApp templates just now.' })
+    await run({ action: 'replace', bodies })
+    // The row still points at the old (paused) sequence, so it is still owned.
+    expect(db.log.filter((e) => e.table === 'email_sequences' && e.op === 'update' && e.values?.status === 'archived')).toEqual([])
+  })
+
+  it('installOverAnOffRowArchivesTheOldSequenceOnceRepointed', async () => {
+    db = makeDb(responder({
+      row: liveRow({ state: 'off', version: 2 }),
+      overrides: {
+        'email_sequences:update': (e) => (e.values.status === 'paused' ? { data: [], error: null } : undefined),
+        'email_sequences:select': () => ({ data: { id: 's1', status: 'paused' }, error: null }),
+      },
+    }))
+    installFollowupPack.mockResolvedValueOnce({ ok: true, followup: { id: 'f1', state: 'awaiting_approval', version: 3, sequence_id: 's-new' }, created: true })
+    expect((await run()).ok).toBe(true)
+    const archive = db.log.filter((e) => e.table === 'email_sequences' && e.op === 'update').at(-1)
+    expect(archive.values).toMatchObject({ status: 'archived' })
+    expect(archive.filters.id).toBe('s1')
+  })
+
   it('aFailedInstallAfterReplaceSaysTheFollowupIsOff', async () => {
     db = makeDb(responder({ row: liveRow() }))
     installFollowupPack.mockResolvedValueOnce({ ok: false, status: 500, error: 'Could not submit the WhatsApp templates just now.' })
@@ -443,8 +483,28 @@ describe('applyFollowupAction: off', () => {
     db = makeDb(responder({ row: liveRow() }))
     const res = await run({ action: 'off' })
     expect(res).toMatchObject({ ok: true, followup: { id: 'f1', state: 'off' } })
-    expect(writes()).toEqual(['email_sequences:update', 'pipeline_stage_followups:update'])
+    // Pause, switch the row off, then retire the paused sequence (PIPEBUILD.5l).
+    expect(writes()).toEqual(['email_sequences:update', 'pipeline_stage_followups:update', 'email_sequences:update'])
+    const archive = db.log.filter((e) => e.table === 'email_sequences' && e.op === 'update').at(-1)
+    expect(archive.values).toMatchObject({ status: 'archived' })
+    expect(archive.filters).toEqual({ id: 's1', location_id: LOC, status: ['paused', 'draft'] })
     expect(installFollowupPack).not.toHaveBeenCalled()
+  })
+
+  it('aFailedArchiveOnOffIsLoggedAndTheActionStillSucceeds', async () => {
+    let seqUpdates = 0
+    db = makeDb(responder({
+      row: liveRow(),
+      overrides: {
+        'email_sequences:update': () => {
+          seqUpdates += 1
+          return seqUpdates === 1 ? undefined : { data: null, error: { message: 'boom' } }
+        },
+      },
+    }))
+    const res = await run({ action: 'off' })
+    expect(res).toMatchObject({ ok: true, followup: { state: 'off' } })
+    expect(logError).toHaveBeenCalledWith('followup-owned-sequences', 'superseded follow-up sequence not archived', expect.objectContaining({ sequenceId: 's1' }))
   })
 
   it('offWithNoRowIs409', async () => {

@@ -10,7 +10,7 @@ import { whatsappApprovalIssues, loadTemplatesForApproval } from '@/lib/sequence
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { SEQUENCE_BUILDER_ROW_SELECT, toBuilderSequence } from '@/lib/sequences/builder-shape'
 import { uuidLike } from '@/lib/schemas'
-import { refuseIfFollowupOwned } from '@/lib/followup-owned-sequences'
+import { refuseIfFollowupOwned, isRetiredFollowupSequence, retiredFollowupResponse } from '@/lib/followup-owned-sequences'
 
 const SequenceUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -138,6 +138,17 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, SequenceUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
+  // PIPEBUILD.5l — a follow-up sequence a board retired (archived when its
+  // row moved to a new sequence, or its stage was removed) never comes back:
+  // switching it on would run a second follow-up on that stage. Refuse any
+  // move off 'archived' (paused too, the step before active) and any trigger
+  // edit (which would take it out of this rule and then let it back on).
+  // Every other archived sequence keeps archive / unarchive as before.
+  if (isRetiredFollowupSequence(existing)) {
+    const leavesArchived = updates.status !== undefined && updates.status !== 'archived'
+    const touchesTrigger = updates.trigger_type !== undefined || updates.trigger_config !== undefined
+    if (leavesArchived || touchesTrigger) return retiredFollowupResponse()
+  }
   // SEQPAGEGATE.1: '' and null both mean "no secret" (the inbound webhook
   // and has_webhook_secret agree); store the one spelling, null.
   if (updates.webhook_secret === '') updates.webhook_secret = null

@@ -71,3 +71,68 @@ export async function refuseIfFollowupOwned(db, sequence) {
   }
   return null
 }
+
+// ---------------------------------------------------------------------------
+// PIPEBUILD.5l — retired follow-up sequences
+//
+// Ownership is read from a follow-up row's CURRENT sequence_id only. When a
+// replace or reinstall re-points the row at a new sequence, or a stage is
+// removed (its follow-up rows cascade away), the old sequence is no longer
+// owned, yet it still carries the stage trigger. Left paused, it reappeared in
+// Automations, unlocked, and switching it back on would have run a second
+// follow-up on that stage: everyone entering it messaged twice.
+//
+// So the board's code archives it (archiveSupersededSequence), and the
+// sequence routes refuse to bring an archived one back (isRetiredFollowupSequence).
+// The refusal is deliberately narrow: an archived sequence whose trigger is a
+// pipeline stage change to an offer-board stage (an `o_` slug, the only stages
+// a follow-up is ever installed on). Every other archived sequence keeps the
+// builder's archive / unarchive exactly as before.
+// ---------------------------------------------------------------------------
+
+export const RETIRED_FOLLOWUP_MESSAGE = 'This sequence was retired. Build a new one instead.'
+
+/** True for an archived sequence that fired on entering an offer-board stage. */
+export function isRetiredFollowupSequence(sequence) {
+  if (!sequence || sequence.status !== 'archived') return false
+  if (sequence.trigger_type !== 'pipeline_stage_change') return false
+  const cfg = sequence.trigger_config
+  const toStatus = cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg.to_status : null
+  return typeof toStatus === 'string' && toStatus.startsWith('o_')
+}
+
+/** The 409 the sequence routes answer for a retired follow-up sequence. */
+export function retiredFollowupResponse() {
+  return NextResponse.json(
+    { success: false, error: RETIRED_FOLLOWUP_MESSAGE, code: 'followup_retired' },
+    { status: 409 },
+  )
+}
+
+/**
+ * Archive a follow-up's superseded sequence, at this studio, only while it is
+ * paused or a draft (an active one is never touched here: the callers stop it
+ * first). Best-effort: the sequence is already stopped, so a failure is
+ * logged and reported, never thrown, and never fails the caller's action.
+ * 0 rows is fine (already archived, deleted as a draft, or gone).
+ * @returns {Promise<{ ok: boolean, archived: number }>}
+ */
+export async function archiveSupersededSequence(db, locationId, sequenceId, context = {}) {
+  if (!locationId || !sequenceId) return { ok: true, archived: 0 }
+  try {
+    const { data, error } = await db.from('email_sequences')
+      .update({ status: 'archived', updated_at: new Date().toISOString() })
+      .eq('id', sequenceId)
+      .eq('location_id', locationId)
+      .in('status', ['paused', 'draft'])
+      .select('id')
+    if (error) {
+      logError(MODULE, 'superseded follow-up sequence not archived', { locationId, sequenceId, ...context, code: error.code || null, err: error.message })
+      return { ok: false, archived: 0 }
+    }
+    return { ok: true, archived: (data || []).length }
+  } catch (err) {
+    logError(MODULE, 'superseded follow-up sequence archive threw', { locationId, sequenceId, ...context, err: err?.message || String(err) })
+    return { ok: false, archived: 0 }
+  }
+}

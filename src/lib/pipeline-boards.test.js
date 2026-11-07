@@ -4,9 +4,9 @@ vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn
 
 import {
   listBoards, getBoard, createBoard, updateBoard, setBoardEnabled, boardLocationId,
-  SWITCH_OFF_FIRST_ERROR, UN1T_STUDIO_ERROR, LEGACY_BOARD_ERROR,
+  SWITCH_OFF_FIRST_ERROR, UN1T_STUDIO_ERROR, LEGACY_BOARD_ERROR, STAGE_NAME_TAKEN_ERROR,
 } from './pipeline-boards.js'
-import { fakeDb } from './pipeline-boards.test-helpers.js'
+import { fakeDb, uniqueError } from './pipeline-boards.test-helpers.js'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const OTHER = 'a0000000-0000-0000-0000-000000000002'
@@ -69,16 +69,51 @@ describe('createBoard', () => {
 
   it('retriesOnceOnA23505ThenGivesKeyTaken', async () => {
     const db = seedDb()
-    db.failures.create_configured_pipeline = [{ code: '23505' }]
+    db.failures.create_configured_pipeline = [uniqueError('pipelines_location_key_unique')]
     const ok = await createdBoard(db)
     expect(db.calls.rpc.map((c) => c.args.p_key)).toEqual(['o_reset_39', 'o_reset_39_2'])
     expect(ok.key).toBe('o_reset_39_2')
 
     const db2 = seedDb()
-    db2.failures.create_configured_pipeline = [{ code: '23505' }, { code: '23505' }]
+    db2.failures.create_configured_pipeline = [uniqueError('pipelines_location_key_unique'), uniqueError('pipelines_location_key_unique')]
     const res = await createBoard(db2, { locationId: LOC, name: 'Reset 39', recipeKey: 'paid_trial_offer', config: clientConfig() })
     expect(res).toMatchObject({ ok: false, status: 409, code: 'key_taken' })
     expect(db2.calls.rpc).toHaveLength(2)
+  })
+
+  it('aStageSlugClashStillRetriesWithAFreshKey', async () => {
+    const db = seedDb()
+    // The constraint is named in details only: still recognised.
+    db.failures.create_configured_pipeline = [{ code: '23505', message: 'duplicate key value', details: 'pipeline_stages_location_slug_unique' }]
+    const ok = await createdBoard(db)
+    expect(db.calls.rpc.map((c) => c.args.p_key)).toEqual(['o_reset_39', 'o_reset_39_2'])
+    expect(ok.key).toBe('o_reset_39_2')
+  })
+
+  it('aStageNameClashIsStageNameTakenWithNoRetry', async () => {
+    const db = seedDb()
+    db.failures.create_configured_pipeline = [uniqueError('pipeline_stages_pipeline_name_unique')]
+    const res = await createBoard(db, { locationId: LOC, name: 'Reset 39', recipeKey: 'paid_trial_offer', config: clientConfig() })
+    expect(res).toMatchObject({ ok: false, status: 409, code: 'stage_name_taken', error: STAGE_NAME_TAKEN_ERROR })
+    expect(db.calls.rpc).toHaveLength(1)
+  })
+
+  it('anUnknown23505IsAConflictWithNoRetry', async () => {
+    const db = seedDb()
+    db.failures.create_configured_pipeline = [{ code: '23505', message: 'duplicate key value violates unique constraint "something_else"' }]
+    const res = await createBoard(db, { locationId: LOC, name: 'Reset 39', recipeKey: 'paid_trial_offer', config: clientConfig() })
+    expect(res).toMatchObject({ ok: false, status: 409, code: 'conflict' })
+    expect(db.calls.rpc).toHaveLength(1)
+  })
+
+  it('repeatedStageNamesAre400BeforeTheRpc', async () => {
+    const db = seedDb()
+    const config = clientConfig()
+    config.stages[3].name = 'day 7'
+    const res = await createBoard(db, { locationId: LOC, name: 'Reset 39', recipeKey: 'paid_trial_offer', config })
+    expect(res).toMatchObject({ ok: false, status: 400, code: 'invalid_config' })
+    expect(res.issues).toContainEqual({ path: 'config', message: 'stages[3] repeats the name day 7' })
+    expect(db.calls.rpc).toHaveLength(0)
   })
 
   it('refusesUn1tStudio', async () => {
@@ -272,6 +307,106 @@ describe('updateBoard', () => {
     expect(db.calls.deletes).toEqual([{ table: 'pipeline_stages', ids: [done.id] }])
     expect(stageBySlug(res.board, 'o_reset_39_done')).toBeUndefined()
     expect(res.board.config.stages.map((s) => s.role)).not.toContain('done')
+  })
+
+  it('changingACheckpointDayKeepsItsNameAndWorks', async () => {
+    // Day 7 → Day 10 under the same name: a new slug, the old stage removed.
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const oldDay = stageBySlug(board, 'o_reset_39_day_7')
+    const config = editableConfig(board, (c) => {
+      const cp = c.stages.find((s) => s.role === 'checkpoint')
+      cp.day = 10
+    })
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res.ok).toBe(true)
+    expect(stageBySlug(res.board, 'o_reset_39_day_7')).toBeUndefined()
+    expect(stageBySlug(res.board, 'o_reset_39_day_10')).toMatchObject({ name: 'Day 7', role_config: { day: 10 }, display_order: 902 })
+    expect(db.tables.pipeline_stages.some((s) => s.id === oldDay.id)).toBe(false)
+    // The fake enforces UNIQUE (pipeline_id, name), so the insert of a second
+    // "Day 7" could only land because the old one was deleted first.
+    expect(db.calls.deletes).toEqual([{ table: 'pipeline_stages', ids: [oldDay.id] }])
+  })
+
+  it('swappingTwoStageNamesWorks', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const config = editableConfig(board, (c) => {
+      c.stages.find((s) => s.role === 'new').name = 'Done'
+      c.stages.find((s) => s.role === 'done').name = 'New'
+    })
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res.ok).toBe(true)
+    expect(stageBySlug(res.board, 'o_reset_39_new').name).toBe('Done')
+    expect(stageBySlug(res.board, 'o_reset_39_done').name).toBe('New')
+    expect(db.tables.pipeline_stages.some((s) => String(s.name).startsWith('__tmp_'))).toBe(false)
+    // Each renamed stage parked on its temporary name first.
+    const parks = db.calls.updates.filter((u) => u.table === 'pipeline_stages' && String(u.patch.name || '').startsWith('__tmp_'))
+    expect(parks).toHaveLength(2)
+  })
+
+  it('aNewStageMayTakeARenamedStagesOldName', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const config = editableConfig(board, (c) => {
+      c.stages.find((s) => s.role === 'done').name = 'Trial over'
+      c.stages.push({ role: 'converted', name: 'Done' })
+    })
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res.ok).toBe(true)
+    expect(stageBySlug(res.board, 'o_reset_39_done').name).toBe('Trial over')
+    expect(stageBySlug(res.board, 'o_reset_39_converted').name).toBe('Done')
+  })
+
+  it('aStageNameClashFromTheDatabaseIs409StageNameTakenAndUnparks', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    // An archived stage row on this board still holds a name (not in the config).
+    db.tables.pipeline_stages.push({ id: 'arch1', pipeline_id: board.id, location_id: LOC, slug: 'o_reset_39_old', name: 'Kept name', archived: true })
+    const config = editableConfig(board, (c) => {
+      c.stages.find((s) => s.role === 'done').name = 'Trial over'
+      c.stages.push({ role: 'converted', name: 'Kept name' })
+    })
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res).toMatchObject({ ok: false, status: 409, code: 'stage_name_taken', error: STAGE_NAME_TAKEN_ERROR })
+    // The parked stage went back to its old name.
+    expect(db.tables.pipeline_stages.find((s) => s.slug === 'o_reset_39_done').name).toBe('Done')
+  })
+
+  it('removingAStageArchivesItsFollowupSequencesFirst', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const done = stageBySlug(board, 'o_reset_39_done')
+    db.tables.pipeline_stage_followups.push(
+      { id: 'f1', location_id: LOC, pipeline_id: board.id, stage_id: done.id, pack_key: 'trial_done', state: 'off', version: 2, sequence_id: 'seq-old' },
+      { id: 'f2', location_id: LOC, pipeline_id: board.id, stage_id: done.id, pack_key: 'trial_done_2', state: 'rejected', version: 1, sequence_id: 'seq-draft' },
+    )
+    db.tables.email_sequences = [
+      { id: 'seq-old', location_id: LOC, status: 'paused' },
+      { id: 'seq-draft', location_id: LOC, status: 'draft' },
+      { id: 'seq-live-elsewhere', location_id: LOC, status: 'active' },
+    ]
+    const config = editableConfig(board, (c) => { c.stages = c.stages.filter((s) => s.role !== 'done') })
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res.ok).toBe(true)
+    expect(db.tables.email_sequences.map((q) => [q.id, q.status])).toEqual([
+      ['seq-old', 'archived'], ['seq-draft', 'archived'], ['seq-live-elsewhere', 'active'],
+    ])
+    const archives = db.calls.updates.filter((u) => u.table === 'email_sequences')
+    expect(archives.every((u) => u.patch.status === 'archived')).toBe(true)
+    expect(db.calls.deletes).toEqual([{ table: 'pipeline_stages', ids: [done.id] }])
+  })
+
+  it('aFailedFollowupArchiveDoesNotStopTheStageRemoval', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const done = stageBySlug(board, 'o_reset_39_done')
+    db.tables.pipeline_stage_followups.push({ id: 'f1', location_id: LOC, pipeline_id: board.id, stage_id: done.id, pack_key: 'trial_done', state: 'off', version: 1, sequence_id: 'seq-old' })
+    db.failures['email_sequences:update'] = { message: 'down' }
+    const config = editableConfig(board, (c) => { c.stages = c.stages.filter((s) => s.role !== 'done') })
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res.ok).toBe(true)
+    expect(stageBySlug(res.board, 'o_reset_39_done')).toBeUndefined()
   })
 
   it('badPatchConfigIs400WithIssues', async () => {

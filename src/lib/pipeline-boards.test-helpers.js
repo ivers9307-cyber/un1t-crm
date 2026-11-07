@@ -2,9 +2,32 @@
 // tests: from(t).select/insert/update/delete with eq/in/order/range,
 // maybeSingle, head counts, and the create_configured_pipeline rpc (mig 815:
 // a duplicate (location_id, key) or stage (location_id, slug) is a 23505).
+// pipeline_stages also enforces UNIQUE (pipeline_id, name) (mig 597) on insert,
+// update and the rpc, answering the error PostgREST would (constraint named in
+// the message).
 
 let seq = 0
 const newId = () => `00000000-0000-4000-8000-${String(++seq).padStart(12, '0')}`
+
+export const uniqueError = (constraint) => ({
+  code: '23505',
+  message: `duplicate key value violates unique constraint "${constraint}"`,
+  details: 'Key already exists.',
+})
+
+// The first stage-unique a set of rows breaks, or null.
+function stageUniqueBroken(rows) {
+  const names = new Set()
+  const slugs = new Set()
+  for (const r of rows) {
+    const n = `${r.pipeline_id}|${r.name}`
+    const sl = `${r.location_id}|${r.slug}`
+    if (names.has(n)) return 'pipeline_stages_pipeline_name_unique'
+    if (slugs.has(sl)) return 'pipeline_stages_location_slug_unique'
+    names.add(n); slugs.add(sl)
+  }
+  return null
+}
 
 export function fakeDb(seed = {}) {
   const tables = {
@@ -42,12 +65,21 @@ export function fakeDb(seed = {}) {
       const match = (r) => filters.every((f) => f(r))
       if (op === 'insert') {
         const added = payload.map((r) => ({ id: newId(), archived: false, ...r }))
+        if (table === 'pipeline_stages') {
+          const broken = stageUniqueBroken([...rows, ...added])
+          if (broken) return { data: null, error: uniqueError(broken) }
+        }
         rows.push(...added)
         calls.inserts.push({ table, rows: added })
         return { data: added.map((r) => ({ id: r.id })), error: null }
       }
       if (op === 'update') {
         const hit = rows.filter(match)
+        if (table === 'pipeline_stages') {
+          const after = rows.map((r) => (hit.includes(r) ? { ...r, ...payload } : r))
+          const broken = stageUniqueBroken(after)
+          if (broken) return { data: null, error: uniqueError(broken) }
+        }
         hit.forEach((r) => Object.assign(r, payload))
         calls.updates.push({ table, patch: payload, ids: hit.map((r) => r.id) })
         return { data: hit.map((r) => ({ id: r.id })), error: null }
@@ -87,12 +119,15 @@ export function fakeDb(seed = {}) {
       if (name !== 'create_configured_pipeline') return { data: null, error: { code: 'PGRST202', message: 'no such function' } }
       const loc = args.p_location_id
       if (tables.pipelines.some((p) => p.location_id === loc && p.key === args.p_key)) {
-        return { data: null, error: { code: '23505', message: 'pipelines_location_key_unique' } }
+        return { data: null, error: uniqueError('pipelines_location_key_unique') }
       }
       for (const s of args.p_stages) {
         if (tables.pipeline_stages.some((r) => r.location_id === loc && r.slug === s.slug)) {
-          return { data: null, error: { code: '23505', message: 'pipeline_stages_location_slug_unique' } }
+          return { data: null, error: uniqueError('pipeline_stages_location_slug_unique') }
         }
+      }
+      if (new Set(args.p_stages.map((s) => s.name)).size !== args.p_stages.length) {
+        return { data: null, error: uniqueError('pipeline_stages_pipeline_name_unique') }
       }
       const id = newId()
       tables.pipelines.push({

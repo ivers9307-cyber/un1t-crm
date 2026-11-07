@@ -5,7 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { publishSequence } from '@/lib/sequences/publish'
-import { refuseIfFollowupOwned } from '@/lib/followup-owned-sequences'
+import { refuseIfFollowupOwned, isRetiredFollowupSequence, retiredFollowupResponse } from '@/lib/followup-owned-sequences'
 
 // Permissive — graph is a free-form object validated by compileForPublish.
 const PublishSchema = z.object({
@@ -39,7 +39,7 @@ export async function POST(request, props) {
 
   const db = createServerClient()
   const { data: existing } = await db.from('email_sequences')
-    .select('location_id, graph, draft_graph').eq('id', params.id).single()
+    .select('location_id, graph, draft_graph, status, trigger_type, trigger_config').eq('id', params.id).single()
   if (!existing) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
@@ -47,6 +47,9 @@ export async function POST(request, props) {
   if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
   const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: existing.location_id })
   if (owned) return owned
+  // PIPEBUILD.5l — publishing sets status 'active': never for a follow-up
+  // sequence a board retired (see PUT /api/sequences/[id]).
+  if (isRetiredFollowupSequence(existing)) return retiredFollowupResponse()
 
   // Publish the graph in the request body, else the saved draft, else the
   // already-published graph (republish).

@@ -24,6 +24,15 @@
 //            install at version + 1.
 //   off      stop the row's sequence the same way, then set the row off.
 //
+// Retiring the old sequence (PIPEBUILD.5l): once the installer has re-pointed
+// the row at a new sequence (or, on off, once the old one is paused), the old
+// one is archived (archiveSupersededSequence). Ownership is read from the
+// row's current sequence_id only, so a superseded sequence left paused would
+// show again in Automations, unlocked, and could be switched back on beside
+// its replacement. The sequence routes refuse to bring an archived follow-up
+// sequence back. A failed archive is logged and never fails the action: the
+// sequence is already stopped.
+//
 // THE RULE: a stage never has two follow-up sequences running at once. So on
 // replace the old sequence is stopped BEFORE the new one exists, and if
 // stopping it or switching the row off fails, nothing new is installed. And
@@ -35,6 +44,7 @@
 // write destructures `error`; the ones that must touch a row select `id` and
 // count it. Answers { ok: true, … } | { ok: false, status, error, code? }.
 import { installFollowupPack } from '@/lib/pipeline-followup-packs'
+import { archiveSupersededSequence } from '@/lib/followup-owned-sequences'
 import { logError } from '@/lib/log'
 import { RECIPES, renderPack, studioSlugFor } from '@shared/pipelines/recipes.js'
 
@@ -314,6 +324,7 @@ export async function applyFollowupAction(db, {
     if (!stopped.ok) return stopped
     const off = await switchRowOff(db, locationId, row)
     if (!off.ok) return off
+    await archiveSupersededSequence(db, locationId, row.sequence_id, { followupId: row.id, action: 'off' })
     return { ok: true, followup: off.followup }
   }
 
@@ -371,6 +382,12 @@ export async function applyFollowupAction(db, {
       locationId, followupId: row.id, status: installed.status, code: installed.code,
     })
     return { ...installed, error: `${installed.error} The old follow-up is switched off until this installs.` }
+  }
+  // The row now points at a new sequence: the old one (stopped above) is no
+  // longer owned, so retire it before anyone can switch it back on.
+  const newSequenceId = installed.ok ? installed.followup?.sequence_id : null
+  if (row?.sequence_id && newSequenceId && newSequenceId !== row.sequence_id) {
+    await archiveSupersededSequence(db, locationId, row.sequence_id, { followupId: row.id, action })
   }
   return installed
 }
