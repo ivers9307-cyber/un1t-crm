@@ -10,7 +10,12 @@
 // failed): the purchase may have gone through, so the alert says to check the
 // member's €0 New Start invoice in Glofox before adding the plan by hand. No
 // marker means nothing was bought.
-import { CORP_PROMOS } from '@/lib/corp-promos'
+//
+// WAYSIN.2: a claim is a Glofox claim by its own platform column (mig 816),
+// else, for a row not yet stamped, by its studio's corp_promos row of that key
+// (read once per studio per run). A studio whose promos cannot be read leaves
+// its unstamped claims for the next run and the run reports not ok.
+import { listCorpPromos } from '@/lib/corp-promos'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { escapeHtml } from '@/lib/html-escape'
 import { logError, logWarn } from '@/lib/log'
@@ -20,27 +25,40 @@ export const STALLED_AFTER_MS = 15 * 60_000
 export const STALLED_REASON = 'stalled'
 const BATCH = 100
 
-const glofoxPromoKeys = () => Object.values(CORP_PROMOS).filter((p) => p.platform === 'glofox').map((p) => p.key)
-
 /**
  * @param {object} db service-role client
  * @param {{ now?: number }} [opts]
  * @returns {Promise<{ ok: boolean, checked: number, filed: number, failed: number }>}
  */
 export async function sweepStalledGlofoxCorpClaims(db, { now = Date.now() } = {}) {
-  const keys = glofoxPromoKeys()
-  if (!keys.length) return { ok: true, checked: 0, filed: 0, failed: 0 }
   const cutoff = new Date(now - STALLED_AFTER_MS).toISOString()
   const { data, error } = await db.from('corp_promo_claims')
-    .select('id, location_id, promo_key, contact_id, first_name, last_name, customer_email, customer_phone, created_at, grant, glofox_member_id, status')
-    .eq('status', 'processing').in('promo_key', keys).lt('created_at', cutoff)
+    .select('id, location_id, promo_key, platform, contact_id, first_name, last_name, customer_email, customer_phone, created_at, grant, glofox_member_id, status')
+    .eq('status', 'processing').or('platform.eq.glofox,platform.is.null').lt('created_at', cutoff)
     .order('created_at', { ascending: true }).limit(BATCH)
   if (error) {
     logError(LOG, 'stalled claims read failed', { code: error.code ?? null })
     return { ok: false, checked: 0, filed: 0, failed: 0 }
   }
-  const rows = (data || []).filter((r) => keys.includes(r.promo_key))
-  if (!rows.length) return { ok: true, checked: 0, filed: 0, failed: 0 }
+  const candidates = (data || []).filter((r) => r.platform == null || r.platform === 'glofox')
+  if (!candidates.length) return { ok: true, checked: 0, filed: 0, failed: 0 }
+
+  // Each studio's promos, once per run, by key (null: unreadable).
+  let promosOk = true
+  const promosByLoc = new Map()
+  for (const locationId of new Set(candidates.map((r) => r.location_id))) {
+    const res = await listCorpPromos(db, { locationId })
+    if (!res.ok) {
+      promosOk = false
+      logError(LOG, 'studio promos read failed', { locationId })
+      promosByLoc.set(locationId, null)
+      continue
+    }
+    promosByLoc.set(locationId, new Map(res.promos.map((p) => [p.key, p])))
+  }
+  const promoOf = (row) => promosByLoc.get(row.location_id)?.get(row.promo_key) || null
+  const rows = candidates.filter((r) => (r.platform || promoOf(r)?.platform) === 'glofox')
+  if (!rows.length) return { ok: promosOk, checked: 0, filed: 0, failed: 0 }
 
   const locIds = [...new Set(rows.map((r) => r.location_id))]
   const { data: locs, error: locErr } = await db.from('locations').select('id, name, organization_id').in('id', locIds)
@@ -66,19 +84,18 @@ export async function sweepStalledGlofoxCorpClaims(db, { now = Date.now() } = {}
       if (!touched || touched.length === 0) continue
       filed++
       logWarn(LOG, 'stalled claim handed to staff', { claimId: row.id, locationId: row.location_id, promo: row.promo_key, mayHavePurchased: Boolean(row.grant) })
-      await alert(row, locById.get(row.location_id))
+      await alert(row, locById.get(row.location_id), promoOf(row))
     } catch (e) {
       failed++
       logError(LOG, 'stalled claim sweep threw', { claimId: row.id, errClass: e?.name })
     }
   }
-  return { ok: failed === 0, checked: rows.length, filed, failed }
+  return { ok: promosOk && failed === 0, checked: rows.length, filed, failed }
 }
 
-async function alert(row, location) {
+async function alert(row, location, promo) {
   try {
     if (!location?.organization_id) return
-    const promo = CORP_PROMOS[row.promo_key]
     const promoName = promo?.name || row.promo_key
     const person = `${row.first_name || ''} ${row.last_name || ''}`.trim()
     const mayHavePurchased = Boolean(row.grant)

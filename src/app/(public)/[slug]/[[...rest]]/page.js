@@ -64,7 +64,7 @@ import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { resolveGymSiteName } from '@/lib/default-site-name'
 import { campaignFunnelCopy, campaignFunnelClientCopy } from '@/lib/campaign-funnel'
 import { oneClassPresentation, classFirstStepCopy } from '@/lib/class-first-funnel'
-import { resolveCorpPromo, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
+import { resolveSeededCorpPromo, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
 import { classFunnelCtaLabel } from '@/lib/public-landing'
 import { pageCtas, clientSafeBlocks, blocksOrDefault } from '@/lib/landing-page-blocks'
 import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
@@ -363,7 +363,7 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     // live one) is "not available right now", as the claim route refuses it.
     const rowKey = str(mergedOffer?.promo_key)
     const wantedKey = sub.kind === 'promo' ? sub.key : rowKey
-    const resolved = rowKey && wantedKey === rowKey ? resolveCorpPromo(rowKey) : null
+    const resolved = rowKey && wantedKey === rowKey ? resolveSeededCorpPromo(rowKey) : null
     const promo = resolved && resolved.live && resolved.publicPath === contextPath ? resolved : null
     const corpStudioName = contextBrand?.locationName || contextBrand?.companyName || ''
     const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey, { platform: promo?.platform || resolved?.platform })

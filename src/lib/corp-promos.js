@@ -1,19 +1,33 @@
-// CORPPROMO.1 — the /corp corporate promos. Pure, no IO.
+// CORPPROMO.1 — the /corp corporate promos. WAYSIN.2: the definitions live in
+// public.corp_promos (mig 816), one row per studio and key; this module reads
+// them and keeps the words.
 //
 // A promo is a definition, not a page: the studio it runs at, the credits it
-// puts on the person's un1t.online account and how long they last. The page
-// and the claim route only ever pick from this registry, so a visitor can
-// never ask for another amount or studio. The words a visitor reads live on a
+// puts on the person's account and how long they last. The page and the claim
+// route only ever pick from the studio's own rows, so a visitor can never ask
+// for another amount or studio. The words a visitor reads live on a
 // `corp_promo` block of the studio's landing row (edited at
 // /settings/landing-page), each blank field on the default below.
 //
-// Only a un1t.online studio can run a promo today (the grant is
-// grantPromoCredits in src/lib/un1t-online-write-ops.js).
+// platform 'un1t_online' grants credits through grantPromoCredits
+// (src/lib/un1t-online-write-ops.js); platform 'glofox' buys the row's Glofox
+// plan (glofox_membership_id / glofox_plan_code / glofox_plan_name).
+//
+// The readers take a service-role client and are scoped by location_id. A
+// failed read is { ok: false, error }, never "no promos": the caller judges it.
 
-/** @typedef {{ key: string, name: string, platform: 'un1t_online'|'glofox', studio: 'hatch'|'stillorgan', publicPath: string, credits: number, expiresInDays: number, tag: string, leadSource: string, live: boolean }} CorpPromo */
+/** @typedef {{ membershipId: string, planCode: string, planName: string | null }} CorpPromoGlofoxPlan */
+/** @typedef {{ key: string, name: string, platform: 'un1t_online'|'glofox', studio: 'hatch'|'stillorgan', publicPath: string, credits: number, expiresInDays: number, tag: string, leadSource: string, live: boolean, glofox: CorpPromoGlofoxPlan | null }} CorpPromoSeed */
+/** @typedef {{ id: string, locationId: string, key: string, name: string, platform: 'un1t_online'|'glofox', credits: number, expiresInDays: number, live: boolean, tag: string, leadSource: string, glofox: CorpPromoGlofoxPlan | null }} CorpPromoRow */
 
-/** @type {Readonly<Record<string, CorpPromo>>} */
-export const CORP_PROMOS = Object.freeze({
+/**
+ * The seed of mig 816; the table is the truth. Kept in code only for the
+ * readers that still resolve synchronously until WAYSIN.3/.4 move them to the
+ * table (the claim route, the public page, the landing editor's promo picker)
+ * and for the migration guard that pins the seed.
+ * @type {Readonly<Record<string, CorpPromoSeed>>}
+ */
+export const CORP_PROMO_SEEDS = Object.freeze({
   // Richard, 28 Oct 2026: 3 free classes at Hatch Street, credits for 7 days,
   // anyone with the link who has never trained at Hatch.
   'hatch-3-free': Object.freeze({
@@ -27,11 +41,10 @@ export const CORP_PROMOS = Object.freeze({
     tag: 'hatch-corp-promo',
     leadSource: 'corp_promo',
     live: true,
+    glofox: null,
   }),
-  // A new Glofox promo key must be added to the corp_promo_claims_one_live_per_contact
-  // index in its own migration (mig 811 limits it to Glofox promos).
-  // NEWSTART.1: Stillorgan is a Glofox studio. Off until the Glofox plan ids
-  // exist in src/lib/corp-promo-glofox-plans.js.
+  // NEWSTART.1: Stillorgan is a Glofox studio. The plan was created in Glofox
+  // by Richard, 5 Nov 2026 ("New Start Free Trial", €0), bought by id.
   'stillorgan-newstart': Object.freeze({
     key: 'stillorgan-newstart',
     name: 'New Start (Stillorgan)',
@@ -43,23 +56,111 @@ export const CORP_PROMOS = Object.freeze({
     tag: 'stillorgan-newstart',
     leadSource: 'corp_promo',
     live: true,
+    glofox: Object.freeze({ membershipId: '6aec95d590a936f18c065d9f', planCode: '1793889679121', planName: 'New Start Free Trial' }),
   }),
 })
 
-/** The promo for `key`, or null when unknown. */
-export function resolveCorpPromo(key) {
+/**
+ * The SEED promo for `key`, or null when unknown. Synchronous, so it can only
+ * know the seed: WAYSIN.3 moves its last callers (the claim route and the
+ * public page) to readCorpPromo.
+ */
+export function resolveSeededCorpPromo(key) {
   if (typeof key !== 'string') return null
-  return Object.hasOwn(CORP_PROMOS, key) ? CORP_PROMOS[key] : null
+  return Object.hasOwn(CORP_PROMO_SEEDS, key) ? CORP_PROMO_SEEDS[key] : null
 }
 
-/** The live promos, in registry order. */
-export function liveCorpPromos() {
-  return Object.values(CORP_PROMOS).filter((p) => p.live)
+/** The live SEED promos, in seed order (the landing editor's picker until WAYSIN.4). */
+export function liveSeededCorpPromos() {
+  return Object.values(CORP_PROMO_SEEDS).filter((p) => p.live)
 }
 
-/** The live promos at the studio whose public path is `publicPath`, in registry order. */
-export function corpPromosForStudio(publicPath) {
-  return liveCorpPromos().filter((p) => p.publicPath === publicPath)
+/** The live SEED promos at the studio whose public path is `publicPath` (until WAYSIN.4). */
+export function seededCorpPromosForStudio(publicPath) {
+  return liveSeededCorpPromos().filter((p) => p.publicPath === publicPath)
+}
+
+// Named columns: check:select-columns resolves them against mig 816.
+export const CORP_PROMO_COLUMNS = 'id, location_id, key, name, platform, credits, expires_in_days, live, tag, lead_source, glofox_membership_id, glofox_plan_code, glofox_plan_name'
+const READ_PAGE = 1000
+
+const blank = (v) => typeof v !== 'string' || v.trim() === ''
+
+/**
+ * A corp_promos row with the camelCase accessors the fulfilment code reads
+ * (promo.credits, promo.expiresInDays, promo.name, promo.key, promo.tag,
+ * promo.leadSource). glofox is the plan binding, or null when its membership
+ * id or plan code is blank.
+ * @returns {CorpPromoRow | null}
+ */
+export function promoView(row) {
+  if (!row || typeof row !== 'object') return null
+  const glofox = blank(row.glofox_membership_id) || blank(row.glofox_plan_code)
+    ? null
+    : {
+      membershipId: row.glofox_membership_id.trim(),
+      planCode: row.glofox_plan_code.trim(),
+      planName: blank(row.glofox_plan_name) ? null : row.glofox_plan_name.trim(),
+    }
+  return {
+    id: row.id,
+    locationId: row.location_id,
+    key: row.key,
+    name: row.name,
+    platform: row.platform,
+    credits: row.credits,
+    expiresInDays: row.expires_in_days,
+    live: row.live === true,
+    tag: row.tag,
+    leadSource: row.lead_source,
+    glofox,
+  }
+}
+
+const readError = (error) => ({ ok: false, error: error?.message || String(error || 'corp_promos read failed') })
+
+/**
+ * The studio's promo with `key`, or null when that studio has none by that key.
+ * @returns {Promise<{ ok: true, promo: CorpPromoRow | null } | { ok: false, error: string }>}
+ */
+export async function readCorpPromo(db, { locationId, key } = {}) {
+  if (!locationId) return { ok: false, error: 'location_required' }
+  if (typeof key !== 'string' || key.trim() === '') return { ok: true, promo: null }
+  try {
+    // (location_id, key) is unique (corp_promos_location_key_unique): at most one row.
+    const { data, error } = await db.from('corp_promos')
+      .select(CORP_PROMO_COLUMNS)
+      .eq('location_id', locationId)
+      .eq('key', key)
+      .maybeSingle()
+    if (error) return readError(error)
+    return { ok: true, promo: data ? promoView(data) : null }
+  } catch (err) {
+    return readError(err)
+  }
+}
+
+/**
+ * Every promo at the studio (only the live ones with liveOnly), ordered by key,
+ * paged past the 1,000-row cap.
+ * @returns {Promise<{ ok: true, promos: CorpPromoRow[] } | { ok: false, error: string }>}
+ */
+export async function listCorpPromos(db, { locationId, liveOnly = false } = {}) {
+  if (!locationId) return { ok: false, error: 'location_required' }
+  const promos = []
+  try {
+    for (let from = 0; ; from += READ_PAGE) {
+      let q = db.from('corp_promos').select(CORP_PROMO_COLUMNS).eq('location_id', locationId)
+      if (liveOnly) q = q.eq('live', true)
+      const { data, error } = await q.order('key', { ascending: true }).range(from, from + READ_PAGE - 1)
+      if (error) return readError(error)
+      const rows = Array.isArray(data) ? data : []
+      for (const r of rows) promos.push(promoView(r))
+      if (rows.length < READ_PAGE) return { ok: true, promos }
+    }
+  } catch (err) {
+    return readError(err)
+  }
 }
 
 export const CORP_PROMO_COPY_DEFAULT = Object.freeze({

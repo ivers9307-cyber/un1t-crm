@@ -24,7 +24,7 @@ vi.mock('@/lib/corp-promo-claim', () => ({ fulfilCorpPromoClaim: m.fulfil }))
 // tests present it live with plan ids (controller ruling 3).
 vi.mock('@/lib/corp-promos', async (importOriginal) => {
   const actual = await importOriginal()
-  return { ...actual, resolveCorpPromo: (k) => (k === 'stillorgan-newstart' ? { ...actual.CORP_PROMOS[k], live: true } : actual.resolveCorpPromo(k)) }
+  return { ...actual, resolveSeededCorpPromo: (k) => (k === 'stillorgan-newstart' ? { ...actual.CORP_PROMO_SEEDS[k], live: true } : actual.resolveSeededCorpPromo(k)) }
 })
 vi.mock('@/lib/corp-promo-glofox-plans', () => ({ glofoxPlanForPromo: m.gPlan }))
 vi.mock('@/lib/corp-promo-eligibility-glofox', () => ({ glofoxCorpPromoEligibility: m.gElig }))

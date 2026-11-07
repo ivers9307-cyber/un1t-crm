@@ -48,8 +48,18 @@ export async function stillorganTrialHistory(db, { locationId, contact }) {
   // refuses them later), never a bar to buying the €39 Reset, so the status
   // reason and the plan-name reason (the plan is called "New Start Free
   // Trial") are dropped for that plan only. Every other signal is unchanged.
+  // WAYSIN.2: the promo plans are this studio's Glofox corp_promos rows, read
+  // only when the contact has a plan; a failed read is "cannot tell".
   const plan = String(contact?.glofox_membership_plan || '').trim().toLowerCase()
-  const onPromoPlan = plan !== '' && glofoxCorpPromoPlanNames().includes(plan)
+  let onPromoPlan = false
+  if (plan !== '') {
+    const promoPlans = await glofoxCorpPromoPlanNames(db, locationId)
+    if (!promoPlans.ok) {
+      logWarn('trial-eligibility', 'corp_promos read failed', { table: 'corp_promos', locationId, contactId: contact?.id ?? null })
+      return { ok: false, reason: 'corp_promos_unreadable' }
+    }
+    onPromoPlan = promoPlans.names.includes(plan)
+  }
   if (TRIAL_STATUSES.has(status) && !(status === 'trial' && onPromoPlan)) reasons.push(`membership_status=${status}`)
   if (!onPromoPlan && TRIAL_PLAN.test(contact?.glofox_membership_plan || '')) reasons.push('membership_plan_trial')
 

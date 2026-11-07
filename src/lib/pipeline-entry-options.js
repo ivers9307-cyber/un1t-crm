@@ -9,8 +9,8 @@
 //                   match landing_path  distinct trial_purchases.landing_path
 //                   match page_id       the organisation's landing pages that
 //                                       have a studio row for this studio
-//   corp_promo      CORP_PROMOS (the registry is keyed by public path, not by
-//                   studio, so no studio filter; the hint names its studio)
+//   corp_promo      the studio's corp_promos rows (listCorpPromos), by key; a
+//                   switched-off promo is hinted 'not live'
 //   lead_source     leadSourceSchema's values
 //   glofox_plan     active glofox_memberships names at the studio
 //   un1t_product    active un1t_products at the studio (value un1t_id), by title
@@ -22,7 +22,7 @@
 // landing_pages). Answers { ok: true, options: [{ value, label, hint? }] } |
 // { ok: false, status, error, code? }.
 import { ENTRY_TYPES, TRIAL_MATCHES } from '@shared/pipelines/offer-config.js'
-import { CORP_PROMOS } from '@/lib/corp-promos'
+import { listCorpPromos } from '@/lib/corp-promos'
 import { leadSourceSchema } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
 import { studioTagVocabulary } from '@/lib/studio-tag-vocabulary'
@@ -138,19 +138,10 @@ async function pageIdOptions(db, locationId) {
   return { ok: true, options }
 }
 
-// A promo's studio in plain English, from its public path: 'hatch-street' →
-// 'Hatch Street', 'stillorgan' → 'Stillorgan'.
-function studioLabel(promo) {
-  const raw = text(promo.publicPath) || text(promo.studio)
-  return raw.split(/[-_\s]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ')
-}
-
-function corpPromoOptions() {
-  const options = Object.values(CORP_PROMOS).map((p) => {
-    const studio = studioLabel(p)
-    return { value: p.key, label: p.name, hint: p.live ? studio : `${studio} (not live)` }
-  })
-  return { ok: true, options }
+async function corpPromoOptions(db, locationId) {
+  const res = await listCorpPromos(db, { locationId })
+  if (!res.ok) return unreadable("the studio's promos", res.error, { locationId })
+  return { ok: true, options: res.promos.map((p) => ({ value: p.key, label: p.name, hint: p.live ? '' : 'not live' })) }
 }
 
 function leadSourceOptions() {
@@ -226,7 +217,7 @@ export async function listEntryOptions(db, { locationId, type, match } = {}) {
       if (match === 'page_id') return pageIdOptions(db, locationId)
       return fail(400, `match must be one of ${TRIAL_MATCHES.join(', ')} for trial_purchase`, 'unknown_match')
     case 'corp_promo':
-      return corpPromoOptions()
+      return corpPromoOptions(db, locationId)
     case 'lead_source':
       return leadSourceOptions()
     case 'glofox_plan':

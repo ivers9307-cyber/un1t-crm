@@ -148,9 +148,14 @@ async function trialAtMint(db, { locationId, memberId }) {
 // NEWSTART.1g — a New Start claim (a Glofox corp promo) is this member's free
 // trial. Counts when granted, or when its grant carries a 'purchasing' marker
 // (it may have bought); a failed claim does not. { ok: false } on a failed read.
+// WAYSIN.2: the studio's Glofox promo keys come from its corp_promos rows; a
+// failed read of them is { ok: false } too, never "no promos".
 async function trialOnCorpClaim(db, { locationId, memberId }) {
-  const keys = glofoxCorpPromoKeys()
-  if (!memberId || !keys.length) return { ok: true, claimId: null }
+  if (!memberId) return { ok: true, claimId: null }
+  const promoKeys = await glofoxCorpPromoKeys(db, locationId)
+  if (!promoKeys.ok) return { ok: false }
+  const keys = promoKeys.keys
+  if (!keys.length) return { ok: true, claimId: null }
   const { data, error } = await db.from('corp_promo_claims')
     .select('id, status, grant')
     .eq('location_id', locationId)

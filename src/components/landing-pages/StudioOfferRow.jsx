@@ -22,6 +22,7 @@ import {
   pageSaveMessage, attributionDraft, attributionToSend, studioRowSaveBody,
 } from '@/components/landing-pages/page-save'
 import { Field, Input } from '@/components/landing-pages/fields'
+import { liveSeededCorpPromos, seededCorpPromosForStudio } from '@/lib/corp-promos'
 import { StudioOfferFields, fieldsFromOffer, offerFromFields } from '@/components/landing-pages/studio-offer-fields'
 
 const CHIPS = {
@@ -57,7 +58,13 @@ export default function StudioOfferRow({ page, row, onSave, canEdit }) {
   const offer = useMemo(() => offerFromFields(blockType, fields), [blockType, fields])
   const attribution = attributionToSend(attr, stored)
   const localReady = blockType
-    ? offerConfigured(blockType, mergeOfferBlock(pageBlock, { offer, attribution }), { landingPath: null, product: null })
+    ? offerConfigured(blockType, mergeOfferBlock(pageBlock, { offer, attribution }), {
+      landingPath: null,
+      product: null,
+      // WAYSIN.2: the local hint knows only the SEED promos (mig 816); the
+      // server's readiness reads the studio's rows. WAYSIN.4 fetches them here.
+      promos: row.public_path ? seededCorpPromosForStudio(row.public_path) : liveSeededCorpPromos(),
+    })
     : false
   const reason = serverReadiness?.reason || (localReady ? 'ready' : 'needs_plan')
   const [chipLabel, chipCls] = CHIPS[reason] || CHIPS.needs_plan

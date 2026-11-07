@@ -13,10 +13,10 @@ vi.mock('@/lib/un1t-online-account', () => ({ ensureUn1tAccount: vi.fn(), runSet
 vi.mock('@/lib/class-first-booking', async (importOriginal) => ({ ...(await importOriginal()), queueFundedClassBooking: vi.fn(async () => ({ queued: true, id: 'cbr-1' })) }))
 
 import { fulfilCorpPromoClaim } from './corp-promo-claim'
-import { resolveCorpPromo, corpPromoCopyFromBlocks } from './corp-promos'
+import { resolveSeededCorpPromo, corpPromoCopyFromBlocks } from './corp-promos'
 import { queueFundedClassBooking } from '@/lib/class-first-booking'
 
-const PROMO = resolveCorpPromo('hatch-3-free')
+const PROMO = resolveSeededCorpPromo('hatch-3-free')
 const COPY = corpPromoCopyFromBlocks([], PROMO.key)
 
 function fakeDb({ updateError = null } = {}) {

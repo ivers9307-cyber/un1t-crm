@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { CORP_PROMOS } from '../src/lib/corp-promos.js'
+import { CORP_PROMO_SEEDS } from '../src/lib/corp-promos.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const FILE = path.join(ROOT, 'supabase/migrations/816_corp_promos.sql')
@@ -51,11 +51,11 @@ describe('mig 816 corp_promos', () => {
     const sql = code()
     const seeded = [...sql.matchAll(/INSERT INTO public\.corp_promos/g)]
     expect(seeded.length).toBe(1)
-    for (const key of Object.keys(CORP_PROMOS)) expect(sql).toContain(`'${key}'`)
-    expect(Object.keys(CORP_PROMOS).sort()).toEqual(['hatch-3-free', 'stillorgan-newstart'])
+    for (const key of Object.keys(CORP_PROMO_SEEDS)) expect(sql).toContain(`'${key}'`)
+    expect(Object.keys(CORP_PROMO_SEEDS).sort()).toEqual(['hatch-3-free', 'stillorgan-newstart'])
     expect(sql).toContain("'UN1T Hatch Street'")
     expect(sql).toContain("'UN1T Stillorgan'")
-    // The Stillorgan plan ids of src/lib/corp-promo-glofox-plans.js.
+    // The Stillorgan plan ids of CORP_PROMO_SEEDS (formerly src/lib/corp-promo-glofox-plans.js).
     expect(sql).toContain("'6aec95d590a936f18c065d9f'")
     expect(sql).toContain("'1793889679121'")
     expect(sql).toContain("'New Start Free Trial'")

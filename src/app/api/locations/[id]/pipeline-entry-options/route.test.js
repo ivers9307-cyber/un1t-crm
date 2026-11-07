@@ -59,7 +59,8 @@ describe('GET /api/locations/[id]/pipeline-entry-options', () => {
   it('sequenceBuilderStaffCanRead', async () => {
     getCurrentUser.mockResolvedValue(userWith('staff'))
     canBuildSequencesAt.mockReturnValue(true)
-    expect((await GET(req('type=corp_promo'), props)).status).toBe(200)
+    // lead_source reads nothing (corp_promo now reads the studio's corp_promos rows).
+    expect((await GET(req('type=lead_source'), props)).status).toBe(200)
   })
 
   it('staffWithoutPermissionIs403', async () => {

@@ -63,7 +63,7 @@ vi.mock('@/lib/supabase', () => ({
         single: () => settle('one'),
         then: (res, rej) => settle('many').then(res, rej),
       }
-      for (const op of ['eq', 'is', 'in', 'neq', 'not', 'ilike', 'limit', 'order']) {
+      for (const op of ['eq', 'is', 'in', 'neq', 'not', 'ilike', 'limit', 'order', 'range']) {
         b[op] = (...args) => { filters.push([op, ...args]); return b }
       }
       return b
@@ -101,7 +101,7 @@ const freshState = () => ({
     loc2: { id: 'loc2', name: 'UN1T Hatch Street', organization_id: 'org1', settings: { un1t_online: { writes_enabled: true } } },
   },
   contact: { id: 'c1', email: 'ava@example.com', name: 'Ava Byrne', first_name: 'Ava', last_name: 'Byrne', phone: '0851234567', un1t_user_id: null, glofox_member_id: 'g1', glofox_membership_status: 'active', glofox_membership_plan: 'Monthly' },
-  rows: { glofox_trial_claims: [], glofox_push_events: [], trial_purchases: [], un1t_subscriptions: [], contact_studios: [] },
+  rows: { glofox_trial_claims: [], glofox_push_events: [], trial_purchases: [], un1t_subscriptions: [], contact_studios: [], corp_promos: [] },
   errors: {},
 })
 const filterValue = (filters, col) => filters.find((f) => f[0] === 'eq' && f[1] === col)?.[2]

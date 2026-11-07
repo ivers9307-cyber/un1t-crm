@@ -34,7 +34,8 @@ import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 import { hatchActiveMembership } from '@/lib/trial-eligibility'
-import { resolveCorpPromo, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
+// WAYSIN.2: still the SEED promos (synchronous); WAYSIN.3 reads the studio's corp_promos row.
+import { resolveSeededCorpPromo, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
 import { corpPromoEligibility } from '@/lib/corp-promo-eligibility'
 import { fulfilCorpPromoClaim } from '@/lib/corp-promo-claim'
 import { corpPromoTokens } from '@/lib/corp-promo-emails'
@@ -134,7 +135,7 @@ export async function POST(request) {
       const refusal = pageRequestRefusal(r.ok ? 'not_found' : r.reason)
       return NextResponse.json(refusal.body, { status: refusal.status })
     }
-    promo = resolveCorpPromo(rowKey)
+    promo = resolveSeededCorpPromo(rowKey)
     // Only a live promo at this page's studio is for sale (the page shows the same rule).
     if (!promo || !promo.live || promo.publicPath !== r.publicPath) return notAvailable('This offer is not available right now.')
     copy = corpPromoCopyFromBlocks([block], promo.key, { platform: promo.platform })
@@ -147,7 +148,7 @@ export async function POST(request) {
     tag = str(rowAttr.tag) || promo.tag
     leadSource = str(rowAttr.lead_source) || promo.leadSource
   } else {
-    promo = resolveCorpPromo(b.promo)
+    promo = resolveSeededCorpPromo(b.promo)
     if (!promo || !promo.live) return notAvailable('This offer is not available right now.')
     const limit = await checkRateLimit(db, `corpclaim:${promo.key}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
     if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
@@ -179,7 +180,7 @@ export async function POST(request) {
   let un1t = null
   if (isGlofox) {
     // No plan ids yet (or none for this key): nothing is for sale. Before any write.
-    if (!glofoxPlanForPromo(promo.key)) return notAvailable(copy.unavailable_text)
+    if (!glofoxPlanForPromo(promo)) return notAvailable(copy.unavailable_text)
     const creds = await glofoxCredentialsForLocation(db, locationId)
     if (creds?.readError) {
       logError('corp-promo', 'glofox credentials unreadable', { locationId })

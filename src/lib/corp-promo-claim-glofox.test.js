@@ -5,11 +5,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { fulfilGlofoxCorpPromoClaim } from './corp-promo-claim-glofox'
-import { resolveCorpPromo, corpPromoCopyFromBlocks } from './corp-promos'
+import { resolveSeededCorpPromo, corpPromoCopyFromBlocks } from './corp-promos'
 import { TRIAL_PURCHASE_BODY } from './trial-purchase-processor'
 import { logError, logWarn } from '@/lib/log'
 
-const PROMO = resolveCorpPromo('stillorgan-newstart')
+const PROMO = resolveSeededCorpPromo('stillorgan-newstart')
 const COPY = corpPromoCopyFromBlocks([], PROMO.key, { platform: 'glofox' })
 const PLAN = { membershipId: 'mem-ns', planCode: 'plan-ns', planName: 'New Start' }
 const CREDS = { branchId: 'br-1', apiKey: 'k', apiToken: 't', readError: null }

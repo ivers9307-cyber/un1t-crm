@@ -12,10 +12,16 @@
 // trial help cards (the same job); no new permission key. Scoped to the
 // viewer's active location (every row eq('location_id', activeId)). Decided on
 // the web /approvals tab only (noPhoneSurface, like trial_purchases).
+//
+// WAYSIN.2: a card's platform is the claim's own platform column (mig 816); a
+// row written before it was stamped falls back to ONE read of the studio's
+// corp_promos rows. A failed fallback read leaves platform null on those
+// cards (logged), never the tab empty.
 import { viewerActiveLocationId } from '../registry'
-import { resolveCorpPromo } from '@/lib/corp-promos'
+import { listCorpPromos } from '@/lib/corp-promos'
+import { logWarn } from '@/lib/log'
 
-const COLS = 'id, first_name, last_name, customer_email, customer_phone, promo_key, reason, created_at, contact_id, un1t_user_id, glofox_member_id, grant, location_id, location:location_id ( id, name )'
+const COLS = 'id, first_name, last_name, customer_email, customer_phone, promo_key, platform, reason, created_at, contact_id, un1t_user_id, glofox_member_id, grant, location_id, location:location_id ( id, name )'
 
 const WHY = Object.freeze({
   un1t_promo_unverified: 'un1t.online did not answer clearly and no credits show on the account. Check the account before adding any.',
@@ -44,7 +50,8 @@ export function claimWhy(reason, grant = null) {
   return r ? `Stopped with: ${r}` : 'The free credits were not put on the account.'
 }
 
-export function toItem(r) {
+/** One card. `promoPlatforms`: key -> platform from the fallback read, for rows with no platform. */
+export function toItem(r, promoPlatforms = null) {
   const name = `${r.first_name || ''} ${r.last_name || ''}`.trim()
   return {
     kind: 'help',
@@ -61,7 +68,7 @@ export function toItem(r) {
     contactId: r.contact_id || null,
     un1tUserId: r.un1t_user_id || null,
     glofoxMemberId: r.glofox_member_id || null,
-    platform: resolveCorpPromo(r.promo_key)?.platform || null,
+    platform: r.platform || promoPlatforms?.get(r.promo_key) || null,
     checkInvoice: /^grant_unverified/.test(String(r.reason || '')) || (/^stalled/.test(String(r.reason || '')) && grantStarted(r.grant)),
     why: claimWhy(r.reason, r.grant),
   }
@@ -85,7 +92,14 @@ export const corpPromoClaimsProvider = {
       .order('created_at', { ascending: false })
       .limit(50)
     if (error) throw new Error(`corp_promo_claims: ${error.message}`)
-    const items = (data || []).map(toItem)
+    const rows = data || []
+    let promoPlatforms = null
+    if (rows.some((r) => !r.platform)) {
+      const res = await listCorpPromos(db, { locationId: activeId })
+      if (res.ok) promoPlatforms = new Map(res.promos.map((p) => [p.key, p.platform]))
+      else logWarn('approvals', 'corp promos unreadable; platform unknown on unstamped claims', { locationId: activeId })
+    }
+    const items = rows.map((r) => toItem(r, promoPlatforms))
     return { count: items.length, items }
   },
 
