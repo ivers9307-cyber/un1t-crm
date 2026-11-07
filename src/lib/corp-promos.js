@@ -22,10 +22,10 @@
 
 /**
  * The seed of mig 816; the table is the truth. Carries NO Glofox plan ids
- * (glofox: null on every entry): this module is imported by client components. Kept in code only for the
- * readers that still resolve synchronously until WAYSIN.3/.4 move them to the
- * table (the claim route, the public page, the landing editor's promo picker)
- * and for the migration guard that pins the seed.
+ * (glofox: null on every entry): this module is imported by client components. Kept in code for the
+ * landing editor's promo picker (until WAYSIN.4), the claim route's legacy
+ * no-page form (a seed key's public path finds its studio) and the migration
+ * guard that pins the seed.
  * @type {Readonly<Record<string, CorpPromoSeed>>}
  */
 export const CORP_PROMO_SEEDS = Object.freeze({
@@ -63,16 +63,6 @@ export const CORP_PROMO_SEEDS = Object.freeze({
     glofox: null,
   }),
 })
-
-/**
- * The SEED promo for `key`, or null when unknown. Synchronous, so it can only
- * know the seed: WAYSIN.3 moves its last callers (the claim route and the
- * public page) to readCorpPromo.
- */
-export function resolveSeededCorpPromo(key) {
-  if (typeof key !== 'string') return null
-  return Object.hasOwn(CORP_PROMO_SEEDS, key) ? CORP_PROMO_SEEDS[key] : null
-}
 
 /** The live SEED promos, in seed order (the landing editor's picker until WAYSIN.4). */
 export function liveSeededCorpPromos() {

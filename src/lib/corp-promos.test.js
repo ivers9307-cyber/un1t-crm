@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { CORP_PROMO_SEEDS, CORP_PROMO_COPY_DEFAULT, resolveSeededCorpPromo, liveSeededCorpPromos, seededCorpPromosForStudio, CORP_PROMO_GLOFOX_COPY_DEFAULT, corpPromoCopyFromBlocks, fillCorpPromoTokens } from './corp-promos'
+import { CORP_PROMO_SEEDS, CORP_PROMO_COPY_DEFAULT, liveSeededCorpPromos, seededCorpPromosForStudio, CORP_PROMO_GLOFOX_COPY_DEFAULT, corpPromoCopyFromBlocks, fillCorpPromoTokens } from './corp-promos'
 import { readCorpPromo, listCorpPromos, promoView } from './corp-promos-db'
 import { glofoxPlanForPromo, glofoxCorpPromoKeys, glofoxCorpPromoPlanNames } from './corp-promo-glofox-plans'
 
@@ -49,19 +49,13 @@ function fakeDb(rows = ROWS, { fail = null } = {}) {
 
 describe('corp promo seeds (mig 816)', () => {
   it('hatch-3-free: 3 credits for 7 days at Hatch Street, live, no Glofox plan', () => {
-    expect(resolveSeededCorpPromo('hatch-3-free')).toMatchObject({ studio: 'hatch', publicPath: 'hatch-street', credits: 3, expiresInDays: 7, live: true, glofox: null })
+    expect(CORP_PROMO_SEEDS['hatch-3-free']).toMatchObject({ studio: 'hatch', publicPath: 'hatch-street', credits: 3, expiresInDays: 7, live: true, glofox: null })
     expect(Object.isFrozen(CORP_PROMO_SEEDS['hatch-3-free'])).toBe(true)
   })
 
   it('no seed carries a Glofox plan (the ids live in corp_promos, server side)', () => {
     for (const seed of Object.values(CORP_PROMO_SEEDS)) expect(seed.glofox).toBeNull()
-    expect(glofoxPlanForPromo(resolveSeededCorpPromo('stillorgan-newstart'))).toBeNull()
-  })
-
-  it('an unknown or non-string key is null; an inherited name is not a promo', () => {
-    expect(resolveSeededCorpPromo('nope')).toBeNull()
-    expect(resolveSeededCorpPromo(undefined)).toBeNull()
-    expect(resolveSeededCorpPromo('toString')).toBeNull()
+    expect(glofoxPlanForPromo(CORP_PROMO_SEEDS['stillorgan-newstart'])).toBeNull()
   })
 
   it('lists only live seeds, and per studio by public path', () => {

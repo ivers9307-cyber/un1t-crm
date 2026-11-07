@@ -64,7 +64,8 @@ import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { resolveGymSiteName } from '@/lib/default-site-name'
 import { campaignFunnelCopy, campaignFunnelClientCopy } from '@/lib/campaign-funnel'
 import { oneClassPresentation, classFirstStepCopy } from '@/lib/class-first-funnel'
-import { resolveSeededCorpPromo, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
+import { corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
+import { readCorpPromo } from '@/lib/corp-promos-db'
 import { classFunnelCtaLabel } from '@/lib/public-landing'
 import { pageCtas, clientSafeBlocks, blocksOrDefault } from '@/lib/landing-page-blocks'
 import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
@@ -357,20 +358,33 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
   }
 
   if (page.offer_type === 'promo_credits') {
-    // The promo is the registry's (credits, expiry, studio); the page names
-    // which one, and only a live promo at this page's studio is offered. The
-    // page offers ONLY its row's promo: a sub-path naming another key (even a
-    // live one) is "not available right now", as the claim route refuses it.
+    // WAYSIN.3 — the promo is this studio's corp_promos row (credits,
+    // expiry), read at the studio's location_id, never by key alone; the page
+    // names which one, and only a live one is offered. The page offers ONLY
+    // its row's promo: a sub-path naming another key (even a live one) is
+    // "not available right now", as the claim route refuses it. A failed read
+    // shows the card's try-again words (never a 404, which reads as a dead
+    // link, and never a throw).
     const rowKey = str(mergedOffer?.promo_key)
     const wantedKey = sub.kind === 'promo' ? sub.key : rowKey
-    const resolved = rowKey && wantedKey === rowKey ? resolveSeededCorpPromo(rowKey) : null
-    const promo = resolved && resolved.live && resolved.publicPath === contextPath ? resolved : null
+    let resolved = null
+    let readFailed = false
+    if (rowKey && wantedKey === rowKey && contextLocationId) {
+      const read = await readCorpPromo(db, { locationId: contextLocationId, key: rowKey })
+      if (read.ok) resolved = read.promo
+      else {
+        readFailed = true
+        logWarn('public-page', 'corp promo unreadable; try-again card shown', { slug: page.slug, locationId: contextLocationId })
+      }
+    }
+    const promo = resolved && resolved.live ? resolved : null
     const corpStudioName = contextBrand?.locationName || contextBrand?.companyName || ''
     const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey, { platform: promo?.platform || resolved?.platform })
+    if (readFailed) raw.unavailable_text = CORP_PROMO_READ_FAILED_TEXT
     const tokens = { studio_name: corpStudioName, credits: promo?.credits ?? '' }
     const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v.map((t) => fillCorpPromoTokens(t, tokens)) : fillCorpPromoTokens(v, tokens)]))
     // NEWSTART.1: a Glofox promo takes no un1t.online terms tick.
-    const terms = promo && promo.platform !== 'glofox' ? await termsFor(db, contextLocationId, { studioName: corpStudioName, publicPath: promo.publicPath }) : null
+    const terms = promo && promo.platform !== 'glofox' ? await termsFor(db, contextLocationId, { studioName: corpStudioName, publicPath: contextPath }) : null
     // CLASSFIRST.1 — the one_class layout round the card: the hero reads the
     // FILLED words ({studio_name}, {credits}), the strip the block's; the
     // class step's words go to the card resolved.
@@ -409,6 +423,9 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
   const { primary } = pageCtas(bodyBlocks)
   return { kind, cta: { href: primary?.href || null, label: primary?.label } }
 }
+
+// WAYSIN.3 — the promo card's words when the studio's corp_promos row could not be read.
+const CORP_PROMO_READ_FAILED_TEXT = "We couldn't load this offer just now. Please try again in a minute."
 
 // A studio page's offer block id (the first block of its offer type, wherever
 // it sits), null when the page sells nothing or has no such block.
