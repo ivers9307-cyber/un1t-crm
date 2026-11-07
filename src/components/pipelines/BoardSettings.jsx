@@ -35,7 +35,7 @@ export const FILLED_IN_NOTE = 'These messages were filled in when they were sent
 export const OWNER_ONLY_INSTALL_NOTE = 'Only an owner can install this follow-up. Ask an owner, or change the wording once it is set up.'
 export const OWNER_ONLY_REJECTED_NOTE = 'Meta rejected this wording. Ask an owner to install it again.'
 // RAILS.2 — switching off retires the sequence and a later install goes back to Meta.
-export const FOLLOWUP_OFF_CONFIRM = 'This stops the follow-up for everyone now, including people part-way through it, and retires its sequence. Switching it on again sends the message to WhatsApp for approval again, which can take hours.'
+export const FOLLOWUP_OFF_CONFIRM = 'This stops the follow-up for everyone now, including people part-way through it, and archives its sequence. Switching it on again sends the message to WhatsApp for approval again, which can take hours.'
 export const START_FROM_STANDARD = 'Start from the standard wording'
 // RAILS.4 — keyed by the board's placement cadence (placementCadence).
 export const BASELINE_NOTE = {

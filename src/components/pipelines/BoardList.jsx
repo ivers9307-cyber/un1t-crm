@@ -1,6 +1,6 @@
 'use client'
 
-import { NO_WHATSAPP_NOTICE } from './NoWhatsappNotice'
+import NoWhatsappNotice from './NoWhatsappNotice'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Button, Card } from '@/components/ui'
@@ -147,7 +147,7 @@ function RecipeCards({ hasWhatsapp }) {
           <Card key={r.key}>
             <h3 className="text-sm font-semibold text-un1t-text">{r.name}</h3>
             <p className="text-sm text-un1t-subtle mt-1">{r.description}</p>
-            {hasWhatsapp === false && <p className="text-xs text-amber-700 mt-2">{NO_WHATSAPP_NOTICE}</p>}
+            {hasWhatsapp === false && <NoWhatsappNotice className="text-xs text-amber-700 mt-2" />}
             <Link href={`/settings/pipelines/new?recipe=${encodeURIComponent(r.key)}`} className="inline-block mt-2 text-sm text-un1t-accent">
               Set up
             </Link>

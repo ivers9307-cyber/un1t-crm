@@ -9,7 +9,8 @@
 // like a missing one. Who: owner or master at that studio, OR someone who may
 // both build sequences and manage WhatsApp templates there. Built-in boards are
 // 409. RAILS.1: installing a follow-up afresh (no row, or a rejected/off one)
-// and switching one off are owner work (403 owner_only); the wording tier may
+// and switching one off are owner work; so is a replace over no row or a
+// spent one (403 owner_only); the wording tier may
 // change the wording of a follow-up already set up and install a draft. The
 // pack must belong to the board's recipe and fit the stage (400
 // pack_not_for_stage). The order of the writes (the old sequence stopped
@@ -71,7 +72,10 @@ export async function PUT(request, { params }) {
 
   // UNIQUE (stage_id, pack_key): at most one row.
   const row = (board.followups || []).find((f) => f.stage_id === stageId && f.pack_key === packKey) ?? null
-  const ownerWork = action === 'off' || (action === 'install' && (!row || SPENT_STATES.has(row.state)))
+  // A replace over a spent row is a fresh install too (old sequence stopped,
+  // version + 1, a new Meta submission).
+  const fresh = !row || SPENT_STATES.has(row.state)
+  const ownerWork = action === 'off' || ((action === 'install' || action === 'replace') && fresh)
   if (ownerWork && !isOwner) {
     return NextResponse.json(
       { success: false, error: 'Only an owner can install or switch off a follow-up. You can change the wording of one that is already set up.', code: 'owner_only' },

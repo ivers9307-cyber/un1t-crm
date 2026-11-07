@@ -169,7 +169,7 @@ export default function BoardWizard({
           </p>
         </Card>
         {hasWhatsapp === false && <Card><NoWhatsappNotice /></Card>}
-        <BoardLaunchPanel board={launch.board} followups={launch.followups} issues={launch.issues} onRetry={retry} retryDisabled={busy || hasWhatsapp === false} installing={busy} expectedKeys={launch.expectedKeys} hasWhatsapp={hasWhatsapp} />
+        <BoardLaunchPanel board={launch.board} followups={launch.followups} issues={launch.issues} onRetry={retry} retryDisabled={busy || hasWhatsapp === false} installing={busy} expectedKeys={launch.expectedKeys} />
       </div>
     )
   }

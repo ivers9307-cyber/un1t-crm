@@ -40,7 +40,7 @@ async function postJson(url) {
  * @param {(key: string) => void} [props.onRetry]
  * @param {boolean} [props.installing]  an install is still running: Turn on waits
  * @param {string[]|null} [props.expectedKeys]  pack keys that must each have a row or an issue first
- * @param {boolean|null} [props.hasWhatsapp]  false: the studio has no WhatsApp number on, and the note says so
+ * @param {boolean|null} [props.hasWhatsapp]  false: the studio has no WhatsApp number on, and the note says so (BoardSettings passes it; the wizard does not, its own notice card already says so)
  * @param {(board: object) => void} [props.onEnabled]
  * @param {boolean} [props.showBoardLink]
  */

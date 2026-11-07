@@ -53,6 +53,7 @@ describe('PUT /api/pipelines/[id]/followups/[stageId]', () => {
     getCurrentUser.mockResolvedValue(userWith('manager'))
     canBuildSequencesAt.mockReturnValue(true)
     canManageWaTemplatesAt.mockReturnValue(true)
+    getBoard.mockResolvedValue({ ok: true, board: theBoard({ followups: [{ id: 'f0', stage_id: STAGE, pack_key: 'book_first_class', state: 'live' }] }) })
     const res = await PUT(req(body), props)
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, data: { followup: { id: 'f1', state: 'awaiting_approval' }, created: true } })
@@ -95,6 +96,9 @@ describe('PUT /api/pipelines/[id]/followups/[stageId]', () => {
       ['install on a rejected row', install, [row('rejected')]],
       ['install on an off row', install, [row('off')]],
       ['off on a live row', off, [row('live')]],
+      ['replace on an off row', body, [row('off')]],
+      ['replace on a rejected row', body, [row('rejected')]],
+      ['replace on a stage with no row', body, []],
     ]
     const managerAllowed = new Set(['replace on a live row', 'install with bodies on a draft row'])
 

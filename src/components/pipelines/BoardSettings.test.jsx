@@ -211,7 +211,7 @@ describe('BoardSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Switch off' }))
     expect(screen.getByText('Switch off this follow-up')).toBeTruthy()
     expect(screen.getByText(FOLLOWUP_OFF_CONFIRM)).toBeTruthy()
-    expect(FOLLOWUP_OFF_CONFIRM).toBe('This stops the follow-up for everyone now, including people part-way through it, and retires its sequence. Switching it on again sends the message to WhatsApp for approval again, which can take hours.')
+    expect(FOLLOWUP_OFF_CONFIRM).toBe('This stops the follow-up for everyone now, including people part-way through it, and archives its sequence. Switching it on again sends the message to WhatsApp for approval again, which can take hours.')
     expect(calls(fetchMock, 'PUT')).toHaveLength(0)
     fireEvent.click(screen.getAllByRole('button', { name: 'Switch off' }).pop())
     await waitFor(() => expect(calls(fetchMock, 'PUT')).toHaveLength(1))
