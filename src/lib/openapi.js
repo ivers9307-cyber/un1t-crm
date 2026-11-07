@@ -589,8 +589,9 @@ registry.registerPath({
     400: { description: 'Validation failed, studio_required, not_available (unknown or switched-off promo, writes off) or terms_required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'not_found: no live promo page by that slug, the studio is not on it, or `promo` names another promo', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'glofox_plan_missing: the studio\'s Glofox promo row has no plan binding; refused before any Glofox call', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Lead capture failed', content: { 'application/json': { schema: ErrorResponse } } },
-    503: { description: 'unavailable: the page or another read failed, or un1t.online is busy; try again (nothing granted)', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: the page, the studio\'s promo row or another read failed, or un1t.online is busy; try again (nothing granted)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

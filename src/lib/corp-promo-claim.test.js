@@ -13,10 +13,12 @@ vi.mock('@/lib/un1t-online-account', () => ({ ensureUn1tAccount: vi.fn(), runSet
 vi.mock('@/lib/class-first-booking', async (importOriginal) => ({ ...(await importOriginal()), queueFundedClassBooking: vi.fn(async () => ({ queued: true, id: 'cbr-1' })) }))
 
 import { fulfilCorpPromoClaim } from './corp-promo-claim'
-import { resolveSeededCorpPromo, corpPromoCopyFromBlocks } from './corp-promos'
+import { corpPromoCopyFromBlocks } from './corp-promos'
+import { promoView } from './corp-promos-db'
 import { queueFundedClassBooking } from '@/lib/class-first-booking'
 
-const PROMO = resolveSeededCorpPromo('hatch-3-free')
+// WAYSIN.3 — the fulfilment takes the studio's corp_promos row (promoView).
+const PROMO = promoView({ id: 'cp-h', location_id: 'loc-h', key: 'hatch-3-free', name: 'Corporate trial (Hatch Street)', platform: 'un1t_online', credits: 3, expires_in_days: 7, live: true, tag: 'hatch-corp-promo', lead_source: 'corp_promo', glofox_membership_id: null, glofox_plan_code: null, glofox_plan_name: null })
 const COPY = corpPromoCopyFromBlocks([], PROMO.key)
 
 function fakeDb({ updateError = null } = {}) {
@@ -93,6 +95,14 @@ describe('fulfilCorpPromoClaim', () => {
     expect(lastStatus(f.updates)).toMatchObject({ status: 'granted', un1t_user_id: 'u-1', un1t_ledger_id: 'pg-1', credits: 3, expires_at: '2026-11-04T10:00:00.000Z' })
     expect(d.sendCorpPromoEmail).toHaveBeenCalledTimes(1)
     expect(d.runSetPasswordStep).not.toHaveBeenCalled()
+  })
+
+  it('an edited row: the grant carries the row\'s credits and expiry, never a default', async () => {
+    const f = fakeDb()
+    const d = deps()
+    const edited = promoView({ id: 'cp-h', location_id: 'loc-h', key: 'hatch-3-free', name: 'x', platform: 'un1t_online', credits: 5, expires_in_days: 14, live: true, tag: 't', lead_source: 'corp_promo' })
+    await fulfilCorpPromoClaim(f.db, { claim, location, contact, promo: edited, copy: COPY, zone: 'Europe/Dublin', trialProductId: 'tp' }, d)
+    expect(d.grantPromoCredits).toHaveBeenCalledWith(f.db, expect.objectContaining({ promoKey: 'hatch-3-free', amount: 5, expiresInDays: 14 }))
   })
 
   it('a new account: the confirmation rides the set-password step, sent once', async () => {

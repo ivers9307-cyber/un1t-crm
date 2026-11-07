@@ -5,11 +5,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { fulfilGlofoxCorpPromoClaim } from './corp-promo-claim-glofox'
-import { resolveSeededCorpPromo, corpPromoCopyFromBlocks } from './corp-promos'
+import { corpPromoCopyFromBlocks } from './corp-promos'
+import { promoView } from './corp-promos-db'
 import { TRIAL_PURCHASE_BODY } from './trial-purchase-processor'
 import { logError, logWarn } from '@/lib/log'
 
-const PROMO = resolveSeededCorpPromo('stillorgan-newstart')
+// WAYSIN.3 — the fulfilment takes the studio's corp_promos row (promoView).
+const PROMO = promoView({ id: 'cp-s', location_id: 'loc-s', key: 'stillorgan-newstart', name: 'New Start (Stillorgan)', platform: 'glofox', credits: 3, expires_in_days: 7, live: true, tag: 'stillorgan-newstart', lead_source: 'corp_promo', glofox_membership_id: 'mem-ns', glofox_plan_code: 'plan-ns', glofox_plan_name: 'New Start' })
 const COPY = corpPromoCopyFromBlocks([], PROMO.key, { platform: 'glofox' })
 const PLAN = { membershipId: 'mem-ns', planCode: 'plan-ns', planName: 'New Start' }
 const CREDS = { branchId: 'br-1', apiKey: 'k', apiToken: 't', readError: null }
