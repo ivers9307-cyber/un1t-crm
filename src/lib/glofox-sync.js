@@ -19,7 +19,7 @@ import { PIPELINE_MODES, getBoardModule } from '../../shared/pipelines/index.js'
 // boards, and the trial's own credits are never a Class Pack.
 import { routeContact, CLAIM_BOARD_MODULES, OFFER_MODULES, BOARD_KEYS } from '../../shared/pipelines/router.js'
 import { loadPlacementClaims, loadBoardsForLocation, loadPackGuardForContact, placementPackGuard } from './pipeline-claims.js'
-import { placementDescriptors } from './pipeline-offer-claims.js'
+import { placementDescriptors, offerPlacementSilence } from './pipeline-offer-claims.js'
 import { findGlofoxCrossoverContact, recordGlofoxCrossover } from './glofox-crossover.js'
 import { upsertContactStudio } from './contact-studios.js'
 import { hasBookableMembership } from './person-accounts.js'
@@ -615,6 +615,18 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   }
   const pipelineId = targetBoard.id
 
+  // PIPEBUILD.5m — the FIRST placement onto an offer board (a create, or a
+  // deal arriving from another board) fires the board's stage follow-up only
+  // when the person's claim started at or after the board's baseline_at. An
+  // older claim, or one whose time is unknown, places silently: the deal is
+  // written and the result carries { silent: true, silent_reason }, which
+  // every caller (and triggerSequencesForDealPlacement) honours. Built-in
+  // boards (board_type null) and moves within the offer board are unchanged.
+  const arrivalSilence = targetBoard.board_type
+    ? offerPlacementSilence(targetBoard, claims?.offers instanceof Map ? (claims.offers.get(targetBoard.key) ?? null) : null)
+    : null
+  const silentOnArrival = arrivalSilence ? { silent: true, silent_reason: arrivalSilence } : {}
+
   // With claim boards the open deal may sit on ANY enabled board here (it
   // follows the person); without them, on the primary as before. Two open
   // deals (a public form raced a move) is a person on two boards: the deal on
@@ -684,7 +696,7 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
       .select('id')
       .single()
     if (error) return { action: 'error', error: error.message }
-    return { action: 'create', deal_id: data.id, stage_slug: resolvedSlug, pipeline_id: pipelineId, ...dup }
+    return { action: 'create', deal_id: data.id, stage_slug: resolvedSlug, pipeline_id: pipelineId, ...silentOnArrival, ...dup }
   }
 
   // EXISTING deal — move iff the classifier says we should be in a
@@ -718,6 +730,9 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     pipeline_id: pipelineId,
     location_id: locationId,
     ...(crossBoard ? { from_board: fromBoard, to_board: targetBoard.key } : {}),
+    // Arriving on the offer board (from another board, or a deal that named
+    // none) is its first placement; a move within it fires as before.
+    ...(existing.pipeline_id !== pipelineId ? silentOnArrival : {}),
     ...dup,
   }
 }
@@ -2637,7 +2652,11 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
   // landed moves on the un1t.online, €39 and offer boards, and its offer-board
   // creates (TDSEQ.1 / STILL39SEQ.1 / PIPEBUILD.3d).
   let stageChangeTriggerResult = null
-  if (dealResult?.action === 'move') {
+  if (dealResult?.silent === true) {
+    // PIPEBUILD.5m — a first offer-board placement on a claim older than the
+    // board's baseline (or of unknown age): the deal is written, nothing fires.
+    stageChangeTriggerResult = { fired: false, silent_reason: dealResult.silent_reason ?? null }
+  } else if (dealResult?.action === 'move') {
     try {
       const { triggerSequencesForDealPlacement } = await import('./sequences/triggers.js')
       await triggerSequencesForDealPlacement(contactId, dealResult, {

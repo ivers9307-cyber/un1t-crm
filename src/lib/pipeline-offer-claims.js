@@ -13,7 +13,11 @@
 // (Glofox overwrites the plan on every sync, tags are removed): the same
 // reasoning as the Programmes claim in pipeline-claims.js.
 //
-// A claim is { start, end, source } in epoch ms. Every read answers
+// A claim is { start, end, source, claimedAt }: start/end in epoch ms, and
+// claimedAt the ISO time the person started qualifying (PIPEBUILD.5m), which
+// is the claim's start: granted_at (else paid_at) of the latest counting
+// trial_purchases row, corp_promo_claims.created_at, or
+// pipeline_board_claims.claimed_at for the recorded kinds. Every read answers
 // { ok: false, reason } on a failure and the whole call fails with it: a
 // caller that places people treats that as "cannot tell", never "no claims".
 // Only the tables an ACTIVE offer board's entry type uses are read. Logs carry
@@ -221,7 +225,32 @@ export function withoutOfferPurchases(purchases, entries) {
   return (purchases || []).filter((p) => !entries.some((e) => purchaseMatchesEntry(p, e)))
 }
 
-const claimOf = (start, durationDays, source) => ({ start, end: start + durationDays * DAY_MS, source })
+const claimOf = (start, durationDays, source) => ({
+  start, end: start + durationDays * DAY_MS, source, claimedAt: new Date(start).toISOString(),
+})
+
+/**
+ * PIPEBUILD.5m — may an EVENT path's first placement onto this offer board fire
+ * the board's stage follow-up? Only when the person's claim on the board
+ * started at or after the board's `baseline_at`: the nightly pass places every
+ * qualifier it reads silently and stamps the baseline, but it reads only the
+ * studio's own contacts, so an older claim reaching the board through an event
+ * (a sibling-studio contact's webhook, place-now, Cold) must stay silent too.
+ * Pure. Answers null (fire) or why the placement is silent:
+ *   'no_baseline'            the board carries no readable baseline_at
+ *   'claim_time_unknown'     no claim, or no readable claimedAt
+ *   'claim_before_baseline'  the claim started before the baseline
+ * @param {{ baseline_at?: string|null }} board
+ * @param {{ claimedAt?: string }|null} claim
+ * @returns {null|'no_baseline'|'claim_time_unknown'|'claim_before_baseline'}
+ */
+export function offerPlacementSilence(board, claim) {
+  const baselineMs = typeof board?.baseline_at === 'string' ? Date.parse(board.baseline_at) : NaN
+  if (!Number.isFinite(baselineMs)) return 'no_baseline'
+  const claimedMs = typeof claim?.claimedAt === 'string' ? Date.parse(claim.claimedAt) : NaN
+  if (!Number.isFinite(claimedMs)) return 'claim_time_unknown'
+  return claimedMs >= baselineMs ? null : 'claim_before_baseline'
+}
 
 function addOffer(offersByContact, contactId, boardKey, claim) {
   if (!offersByContact.has(contactId)) offersByContact.set(contactId, new Map())
@@ -296,7 +325,9 @@ async function loadOffers(db, { locationId, boards, contacts, now, scopeContactI
         // the builder sets the offer's length, and the row's own (the €39
         // trial's 14 days, a plan default) says nothing about this board.
         const c = trialPurchaseOfferClaim(list, board.config, now)
-        if (c) addOffer(offersByContact, contactId, board.key, { start: c.start, end: c.end, source: 'trial_purchase' })
+        // PIPEBUILD.5m — claimedAt is the claim's start: the latest counting
+        // purchase's granted_at, else its paid_at (when the trial began).
+        if (c) addOffer(offersByContact, contactId, board.key, { start: c.start, end: c.end, source: 'trial_purchase', claimedAt: new Date(c.start).toISOString() })
       }
     }
   }
@@ -391,7 +422,7 @@ async function loadOffers(db, { locationId, boards, contacts, now, scopeContactI
  *
  * @param {object} db
  * @param {{ locationId: string, boards: object[], contacts: object[], now?: number }} args
- * @returns {Promise<{ ok: true, offersByContact: Map<string, Map<string, {start:number,end:number,source:string}>>, pending: object[], skipped: object[] }
+ * @returns {Promise<{ ok: true, offersByContact: Map<string, Map<string, {start:number,end:number,source:string,claimedAt:string}>>, pending: object[], skipped: object[] }
  *   | { ok: false, reason: string, err: string }>}
  */
 export async function loadOfferClaimsForLocation(db, { locationId, boards, contacts, now = Date.now() }) {

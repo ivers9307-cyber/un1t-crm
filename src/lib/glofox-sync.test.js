@@ -3310,4 +3310,112 @@ describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e
       expect(await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')).toMatchObject({ action: 'create', pipeline_id: 'p-corp', stage_slug: 'o_corp_new' })
     })
   })
+
+  // PIPEBUILD.5m — the nightly baseline reads only the studio's own contacts,
+  // so on EVERY event path the first placement onto an offer board fires its
+  // follow-up only for a claim that started at or after board.baseline_at. An
+  // older claim, or one of unknown age, places silently.
+  describe('claimAgeOnEventPaths (PIPEBUILD.5m)', () => {
+    const BASED = { ...CORP, baseline_at: ago(2) }
+    const oldPromo = { ...promo, created_at: ago(5), updated_at: ago(5) }
+    const newPromo = { ...promo, created_at: ago(1), updated_at: ago(1) }
+    const sibling = { ...lead, location_id: 'loc-hatch' }
+
+    it('siblingContactWithOldClaimPlacesSilently', async () => {
+      const { db, writes } = offerDb({ pipelines: [ACQ, BASED], promos: [oldPromo] })
+      const out = await ensureDealForContact(db, LOC, 'c1', sibling, 'Corp Lead')
+      // The deal IS created on the offer board, marked silent.
+      expect(out).toMatchObject({ action: 'create', deal_id: 'd-new', pipeline_id: 'p-corp', stage_slug: 'o_corp_new', silent: true, silent_reason: 'claim_before_baseline' })
+      expect(writes.find((w) => w.table === 'deals' && w.op === 'insert').payload).toMatchObject({ pipeline_id: 'p-corp', stage_id: 's-o_corp_new' })
+
+      // place-now: the deal lands, no trigger fires.
+      vi.mocked(triggerSequencesForDealPlacement).mockClear()
+      const row = { id: 'c1', name: 'Corp Lead', ...sibling }
+      const now = offerDb({ pipelines: [ACQ, BASED], promos: [oldPromo], contacts: [row] })
+      const placed = await placeContactNow(now.db, { locationId: LOC, contactId: 'c1', now: NOW })
+      expect(placed).toMatchObject({ ok: true, deal: { action: 'create', pipeline_id: 'p-corp', silent: true } })
+      expect(triggerSequencesForDealPlacement).not.toHaveBeenCalled()
+    })
+
+    it('newClaimAfterBaselineFires', async () => {
+      const { db } = offerDb({ pipelines: [ACQ, BASED], promos: [newPromo] })
+      const out = await ensureDealForContact(db, LOC, 'c1', sibling, 'Corp Lead')
+      expect(out).toMatchObject({ action: 'create', pipeline_id: 'p-corp', stage_slug: 'o_corp_new' })
+      expect(out).not.toHaveProperty('silent')
+
+      vi.mocked(triggerSequencesForDealPlacement).mockClear()
+      const row = { id: 'c1', name: 'Corp Lead', ...sibling }
+      const now = offerDb({ pipelines: [ACQ, BASED], promos: [newPromo], contacts: [row] })
+      const placed = await placeContactNow(now.db, { locationId: LOC, contactId: 'c1', now: NOW })
+      expect(vi.mocked(triggerSequencesForDealPlacement).mock.calls).toEqual([
+        ['c1', placed.deal, { dealLocationId: LOC, pipelineId: 'p-corp', configuredBoardsOnly: true }],
+      ])
+    })
+
+    it('a claim starting exactly at the baseline fires', async () => {
+      const at = ago(2)
+      const { db } = offerDb({ pipelines: [ACQ, { ...CORP, baseline_at: at }], promos: [{ ...promo, created_at: at }] })
+      const out = await ensureDealForContact(db, LOC, 'c1', sibling, 'Corp Lead')
+      expect(out).toMatchObject({ action: 'create', pipeline_id: 'p-corp' })
+      expect(out).not.toHaveProperty('silent')
+    })
+
+    it('unknownClaimTimePlacesSilently', async () => {
+      const { db, writes } = offerDb({ pipelines: [ACQ, BASED] })
+      // The webhook path's pre-loaded claim, live but with no claimedAt.
+      const offers = new Map([['o_corp', { start: NOW - 86_400_000, end: NOW + 13 * 86_400_000, source: 'corp_promo' }]])
+      const out = await ensureDealForContact(db, LOC, 'c1', sibling, 'Corp Lead', { boards: [ACQ, BASED], claims: { paid: null, programme: null, offers } })
+      expect(out).toMatchObject({ action: 'create', pipeline_id: 'p-corp', silent: true, silent_reason: 'claim_time_unknown' })
+      expect(writes.some((w) => w.table === 'deals' && w.op === 'insert')).toBe(true)
+    })
+
+    it('a cross-board move onto the offer board on an old claim is silent (deal moved, both ids in one update)', async () => {
+      const { db, writes } = offerDb({
+        pipelines: [ACQ, BASED], promos: [oldPromo],
+        deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-acq', stage_id: 's-new_lead', status: 'open' }],
+      })
+      const out = await ensureDealForContact(db, LOC, 'c1', sibling, 'Corp Lead')
+      expect(out).toMatchObject({ action: 'move', deal_id: 'd1', to_slug: 'o_corp_new', pipeline_id: 'p-corp', from_board: 'acquisition', to_board: 'o_corp', silent: true, silent_reason: 'claim_before_baseline' })
+      expect(writes.filter((w) => w.table === 'deals' && w.op === 'update')[0].payload).toEqual({ stage_id: 's-o_corp_new', pipeline_id: 'p-corp' })
+    })
+
+    it('a move within the offer board fires as before, whatever the claim age', async () => {
+      const { db } = offerDb({
+        pipelines: [ACQ, BASED], promos: [oldPromo],
+        deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-corp', stage_id: 's-o_corp_new', status: 'open' }],
+      })
+      const out = await ensureDealForContact(db, LOC, 'c1', { ...sibling, last_attended_at: ago(1) }, 'Corp Lead')
+      expect(out).toMatchObject({ action: 'move', deal_id: 'd1', from_slug: 'o_corp_new', to_slug: 'o_corp_first_class', pipeline_id: 'p-corp' })
+      expect(out).not.toHaveProperty('silent')
+    })
+
+    it('applyMemberSync (the Glofox webhook path): an old claim creates the offer deal and fires nothing', async () => {
+      vi.mocked(triggerSequencesForDealPlacement).mockClear()
+      const row = { id: 'c1', location_id: LOC, email: 'corp@x.com', first_name: 'Corp', last_name: 'Lead', glofox_member_id: 'g1', glofox_membership_status: 'lead' }
+      const member = { _id: 'g1', email: 'corp@x.com', first_name: 'Corp', last_name: 'Lead', lead_status: 'LEAD', joined_at: ago(1) }
+      const { db, writes } = offerDb({ pipelines: [ACQ, BASED], promos: [oldPromo], contacts: [row] })
+      const out = await applyMemberSync(db, LOC, member, { bookings: [], skipInteractions: true })
+      expect(out.deal).toMatchObject({ action: 'create', pipeline_id: 'p-corp', silent: true, silent_reason: 'claim_before_baseline' })
+      expect(writes.some((w) => w.table === 'deals' && w.op === 'insert')).toBe(true)
+      expect(triggerSequencesForDealPlacement).not.toHaveBeenCalled()
+      expect(out.stage_change_trigger).toEqual({ fired: false, silent_reason: 'claim_before_baseline' })
+    })
+
+    it('applyMemberSync: a claim after the baseline passes the create to the stage adapter', async () => {
+      vi.mocked(triggerSequencesForDealPlacement).mockClear()
+      const row = { id: 'c1', location_id: LOC, email: 'corp@x.com', first_name: 'Corp', last_name: 'Lead', glofox_member_id: 'g1', glofox_membership_status: 'lead' }
+      const member = { _id: 'g1', email: 'corp@x.com', first_name: 'Corp', last_name: 'Lead', lead_status: 'LEAD', joined_at: ago(1) }
+      const { db } = offerDb({ pipelines: [ACQ, BASED], promos: [newPromo], contacts: [row] })
+      const out = await applyMemberSync(db, LOC, member, { bookings: [], skipInteractions: true })
+      expect(out.deal).toMatchObject({ action: 'create', pipeline_id: 'p-corp' })
+      expect(triggerSequencesForDealPlacement).toHaveBeenCalledWith('c1', out.deal, { dealLocationId: LOC, pipelineId: 'p-corp' })
+    })
+
+    it('built-in boards are unchanged: a programme lead created on the Programmes board is never silent', async () => {
+      const { db } = offerDb({ pipelines: [ACQ, PAID, PROG] })
+      const out = await ensureDealForContact(db, LOC, 'c2', fiftyLead, 'Fifty')
+      expect(out).toMatchObject({ action: 'create', pipeline_id: 'p-prog' })
+      expect(out).not.toHaveProperty('silent')
+    })
+  })
 })

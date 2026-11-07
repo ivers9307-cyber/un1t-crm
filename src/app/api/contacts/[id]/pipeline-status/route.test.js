@@ -237,6 +237,17 @@ describe('POST /api/contacts/[id]/pipeline-status', () => {
     )
   })
 
+  // PIPEBUILD.5m — a first offer-board placement on a claim older than the
+  // board's baseline is written but marked silent: the route starts nothing.
+  it('a placement marked silent is not passed to the stage adapter', async () => {
+    createServerClient.mockReturnValue(makeDb(vi.fn()))
+    const placed = { action: 'create', deal_id: 'd1', stage_slug: 'corp_new', pipeline_id: 'pl-corp', silent: true, silent_reason: 'claim_before_baseline' }
+    ensureDealForContact.mockResolvedValueOnce(placed)
+    const res = await POST(req({ cold: false }), props)
+    expect(res.status).toBe(200)
+    expect(triggerSequencesForDealPlacement).not.toHaveBeenCalled()
+  })
+
   it('the contact read selects every board module\'s fields (offer boards included)', async () => {
     const db = makeDb(vi.fn())
     createServerClient.mockReturnValue(db)
