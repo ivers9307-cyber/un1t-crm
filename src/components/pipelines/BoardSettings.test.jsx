@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import BoardSettings, {
   REPLACE_CONFIRM, SWITCH_OFF_NOTE, LEGACY_NOTICE, WORDING_UNKNOWN_NOTE, REJECTED_NOTE, TURN_OFF_CONFIRM,
-  OLD_WORDING_UNKNOWN_NOTE, FILLED_IN_NOTE, START_FROM_STANDARD, staleWordingNotice,
+  OLD_WORDING_UNKNOWN_NOTE, FILLED_IN_NOTE, START_FROM_STANDARD, OWNER_ONLY_INSTALL_NOTE, staleWordingNotice,
 } from './BoardSettings.jsx'
 import { LEGACY_BOARD_ERROR } from '@/lib/pipeline-boards'
 import { RECIPES } from '@shared/pipelines/recipes.js'
@@ -110,6 +110,38 @@ describe('BoardSettings', () => {
     const change = screen.getAllByRole('button', { name: 'Change wording' })
     expect(change.length).toBe(3)
     expect(change.every((b) => !b.disabled)).toBe(true)
+    // RAILS.1 — installing or switching off is owner work.
+    expect(screen.queryByRole('button', { name: 'Switch off' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
+  })
+
+  it('a manager opening the editor on a stage with no follow-up is told only an owner can install it', async () => {
+    const fetchMock = stubApi({ canEdit: false, canEditWording: true })
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    // s1 (New Leads) has no row.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Change wording' })[0])
+    expect(await screen.findByText(OWNER_ONLY_INSTALL_NOTE)).toBeTruthy()
+    const save = screen.getByRole('button', { name: 'Save wording' })
+    expect(save.disabled).toBe(true)
+    fireEvent.click(save)
+    expect(calls(fetchMock, 'PUT').length).toBe(0)
+  })
+
+  it('a manager changing a live follow-up sees no owner-only note', async () => {
+    stubApi({ canEdit: false, canEditWording: true })
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
+    // s2 (1st Class) is live.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Change wording' })[1])
+    await screen.findByRole('button', { name: 'Save wording' })
+    expect(screen.queryByText(OWNER_ONLY_INSTALL_NOTE)).toBeNull()
+  })
+
+  it('an owner sees Switch off and Install', async () => {
+    stubApi()
+    renderPage()
+    await screen.findByLabelText(/^Board name/)
     expect(screen.getByRole('button', { name: 'Switch off' }).disabled).toBe(false)
     expect(screen.getAllByRole('button', { name: 'Install' }).length).toBe(2)
   })

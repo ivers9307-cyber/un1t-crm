@@ -30,6 +30,8 @@ export const TURN_OFF_CONFIRM = 'While the board is off, nobody new is placed an
 // Meta, so a later change to the offer name, sign-off or offer length does not
 // reach it on its own.
 export const FILLED_IN_NOTE = 'These messages were filled in when they were sent to Meta. If you change the offer name, sign-off or offer length, change the wording of each message too.'
+// RAILS.1 — installing afresh is owner work; the server refuses it too.
+export const OWNER_ONLY_INSTALL_NOTE = 'Only an owner can install this follow-up. Ask an owner, or change the wording once it is set up.'
 export const START_FROM_STANDARD = 'Start from the standard wording'
 export const BASELINE_NOTE = 'Switching a board on never messages people who already qualify. They are placed that night without any messages; only people who qualify after that get the follow-ups.'
 
@@ -42,6 +44,9 @@ const STOPPABLE = new Set(['live', 'awaiting_approval', 'draft', 'rejected'])
 // Install (as it stands) only where nothing was refused: a rejected row's
 // wording is changed first, never resent.
 const INSTALLABLE = new Set(['off', 'draft'])
+// No row, or a spent one: installing it is a fresh install, owner work.
+const OWNER_ONLY_INSTALL = new Set(['rejected', 'off'])
+const isOwnerOnlyInstall = (row) => !row || OWNER_ONLY_INSTALL.has(row.state)
 
 // The wizard's reducer, plus 'reset' to load a board the server returned.
 function settingsReducer(state, action) {
@@ -341,6 +346,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
 
   async function saveWording(stage, pack, row) {
     if (row && SENDING.has(row.state)) { setConfirm({ stage, pack }); return }
+    if (!canEdit && isOwnerOnlyInstall(row)) return
     const done = await followupAction(stage, pack, 'install', packBodies(state, pack.key))
     if (done) { setEditing(null); clearStale(stage.id) }
   }
@@ -465,6 +471,8 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
             // only through Change wording, which says it starts from standard.
             const offUnreadable = unreadable && rowState === 'off'
             const canInstall = !row || INSTALLABLE.has(rowState)
+            const ownerOnlyInstall = isOwnerOnlyInstall(row)
+            const installBlocked = !canEdit && ownerOnlyInstall
             const rejected = rowState === 'rejected'
             const unchanged = isEditing && editing && pack
               && Object.entries(editing.before).every(([ref, body]) => state.bodies[pack.key]?.[ref] === body)
@@ -501,12 +509,13 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                     <FollowupsStep state={state} dispatch={dispatch} packKeys={[pack.key]} />
                     {dirty && <p className="text-sm text-amber-700">Save the board first: the preview and Meta use the saved offer name and sign-off.</p>}
                     <div className="flex flex-wrap gap-2">
-                      <Button type="button" size="sm" loading={busy} disabled={wErrors.length > 0 || dirty || (rejected && unchanged)}
+                      <Button type="button" size="sm" loading={busy} disabled={installBlocked || wErrors.length > 0 || dirty || (rejected && unchanged)}
                         onClick={() => saveWording(stage, pack, row)}>
                         Save wording
                       </Button>
                       <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={cancelEditing}>Cancel</Button>
                     </div>
+                    {installBlocked && <p className="text-sm text-amber-700">{OWNER_ONLY_INSTALL_NOTE}</p>}
                   </div>
                 )}
                 {pack && rejected && <p className="mt-2 text-sm text-red-700">{REJECTED_NOTE}</p>}
@@ -517,13 +526,13 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                     <Button type="button" size="sm" variant="secondary" disabled={!!fuBusy || !!editing || wordingUnknown} onClick={() => startEditing(stage, pack, offUnreadable)}>
                       Change wording
                     </Button>
-                    {row && STOPPABLE.has(rowState) && (
+                    {canEdit && row && STOPPABLE.has(rowState) && (
                       <Button type="button" size="sm" variant="secondary" loading={busy} disabled={!!fuBusy && !busy}
                         onClick={async () => { if (await followupAction(stage, pack, 'off')) clearStale(stage.id) }}>
                         Switch off
                       </Button>
                     )}
-                    {canInstall && (
+                    {canInstall && (canEdit || !ownerOnlyInstall) && (
                       <Button type="button" size="sm" loading={busy} disabled={(!!fuBusy && !busy) || dirty || wordingUnknown || offUnreadable}
                         onClick={() => followupAction(stage, pack, 'install', packBodies(state, pack.key))}>
                         Install

@@ -8,7 +8,10 @@
 // assertLocationAccessOr404 on it, so another studio's board is a 404 exactly
 // like a missing one. Who: owner or master at that studio, OR someone who may
 // both build sequences and manage WhatsApp templates there. Built-in boards are
-// 409. The pack must belong to the board's recipe and fit the stage (400
+// 409. RAILS.1: installing a follow-up afresh (no row, or a rejected/off one)
+// and switching one off are owner work (403 owner_only); the wording tier may
+// change the wording of a follow-up already set up and install a draft. The
+// pack must belong to the board's recipe and fit the stage (400
 // pack_not_for_stage). The order of the writes (the old sequence stopped
 // before the new one exists) lives in src/lib/pipeline-board-followups.js.
 import { NextResponse } from 'next/server'
@@ -20,7 +23,7 @@ import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
 import { boardLocationId, getBoard } from '@/lib/pipeline-boards'
 import { assertNotLegacyBoard } from '@/lib/pipeline-board-guard'
-import { applyFollowupAction, packForStage } from '@/lib/pipeline-board-followups'
+import { applyFollowupAction, packForStage, SPENT_STATES } from '@/lib/pipeline-board-followups'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -65,6 +68,16 @@ export async function PUT(request, { params }) {
   if (!stage) return notFound()
   const packCheck = packForStage(board, stage, packKey)
   if (!packCheck.ok) return failure(packCheck)
+
+  // UNIQUE (stage_id, pack_key): at most one row.
+  const row = (board.followups || []).find((f) => f.stage_id === stageId && f.pack_key === packKey) ?? null
+  const ownerWork = action === 'off' || (action === 'install' && (!row || SPENT_STATES.has(row.state)))
+  if (ownerWork && !isOwner) {
+    return NextResponse.json(
+      { success: false, error: 'Only an owner can install or switch off a follow-up. You can change the wording of one that is already set up.', code: 'owner_only' },
+      { status: 403 },
+    )
+  }
 
   const result = await applyFollowupAction(db, { user, board, stage, action, packKey, bodies, locationId })
   if (!result.ok) return failure(result)
