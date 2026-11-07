@@ -572,6 +572,17 @@ describe('PIPEBUILD.3h — unreadable source and the pack guard', () => {
     expect(out.claims.paid).toBeNull()
     expect(out.purchasePaid).toMatchObject({ start: T0, durationDays: 14 })
     expect(placementPackGuard(out, contact, T0)).toBe(true)
+    // AUDIT.2 — the same board switched on and not yet baselined: it strips
+    // nothing and loads no offer claim (nothing on this path places it), but
+    // the guard still sees every purchase, so the trial's credits never stamp
+    // a Class Pack.
+    const fresh = fakeDb({ pipelines: [ACQ, { ...RESET, baseline_at: null }], locations: [{ id: LOC, membership_source: 'glofox' }], trial_purchases: [buy(T0)], pipeline_board_claims: [] })
+    const freshOut = await loadPlacementClaims(fresh.db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+    expect(freshOut).toMatchObject({ ok: true, claimBoards: true })
+    expect(freshOut.claims.paid).toBeNull()
+    expect(freshOut.claims.offers).toBeUndefined()
+    expect(freshOut.purchasePaid).toMatchObject({ start: T0, durationDays: 14 })
+    expect(placementPackGuard(freshOut, contact, T0)).toBe(true)
     const down = fakeDb({ pipelines: [ACQ, RESET], locations: [{ id: LOC, membership_source: 'glofox' }] }, { errors: { trial_purchases: 'x' } })
     expect(await loadPlacementClaims(down.db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })).toMatchObject({ ok: false, reason: 'purchases_unreadable' })
     // a corp_promo offer board alone reads no purchases (no trial_purchase entry)

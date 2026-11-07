@@ -344,7 +344,13 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
   // it places them (silently). The membership-source read below still keys on
   // every enabled offer board, so a refusal is answered exactly as before.
   const offerRows = enabledOfferRows.filter((b) => b.baseline_at != null)
-  if (!legacyBoards && offerRows.length === 0) return { ok: true, boards, claimBoards: false, claims: null, ...holds }
+  // The Class Pack guard is the exception: it must see the claim over every
+  // purchase whenever ANY enabled trial_purchase board runs (PIPEBUILD.3h),
+  // baselined or not, or an offer trial's credits could stamp a pack here.
+  const guardEntries = offerPurchaseEntries(enabledOfferRows)
+  if (!legacyBoards && offerRows.length === 0 && guardEntries.length === 0) {
+    return { ok: true, boards, claimBoards: false, claims: null, ...holds }
+  }
 
   // The membership source is read first (only when an offer board runs), so a
   // refused studio's offer boards take nothing out of the €39 claim, exactly
@@ -356,11 +362,10 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
   // (and no pack stamp). A un1t.online studio is a deliberate answer, not an
   // unknown, and is unchanged; so is an unreadable source whose offer boards
   // hold no trial purchase (they are held, the other boards run).
-  const offerTrialEntries = offerPurchaseEntries(offerRows)
   let offersRefused = null
   if (enabledOfferRows.length > 0) {
     const source = await readMembershipSource(db, locationId)
-    if (!source.ok && offerTrialEntries.length > 0) {
+    if (!source.ok && guardEntries.length > 0) {
       logWarn('pipeline-claims', 'membership source unreadable beside a trial_purchase offer board; placing nobody', { locationId })
       return { ok: false, reason: source.reason, boards }
     }
@@ -381,7 +386,7 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
     if (!claimsRes.ok) return { ok: false, reason: claimsRes.reason, boards }
     claims = claimsRes.claims
     if ('purchasePaid' in claimsRes) purchasePaid = claimsRes.purchasePaid
-  } else if (offerTrialEntries.length > 0) {
+  } else if (guardEntries.length > 0) {
     // PIPEBUILD.3h — no €39/Programmes board, but a trial_purchase offer
     // board: the Class Pack guard still needs the claim over every purchase
     // (else an offer trial's credits could stamp a pack here while the
