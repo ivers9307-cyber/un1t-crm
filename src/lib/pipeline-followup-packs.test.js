@@ -322,9 +322,14 @@ describe('installFollowupPack', () => {
   it('reinstallLinksExistingTemplate', async () => {
     // A rejected earlier install left the stage's row in 'rejected' and its
     // template saved here; a reinstall hits the name clash on that template.
-    submitWhatsappTemplate.mockResolvedValue({
-      ok: false, status: 409, code: 'name_clash', existing: { id: 'wt-saved' },
-      error: 'That name is already used by UN1T Stillorgan on this WhatsApp account. Pick another name.',
+    // The saved template holds the wording this run renders (a retry).
+    submitWhatsappTemplate.mockImplementation(async (_db, t) => {
+      const saved = lastTables.whatsapp_templates.find((w) => w.id === 'wt-saved')
+      if (saved) saved.components = t.components
+      return {
+        ok: false, status: 409, code: 'name_clash', existing: { id: 'wt-saved' },
+        error: 'That name is already used by UN1T Stillorgan on this WhatsApp account. Pick another name.',
+      }
     })
     const { db, tables } = fakeDb({
       whatsapp_templates: [{ id: 'wt-saved', location_id: LOC, status: 'PENDING' }],
@@ -344,6 +349,27 @@ describe('installFollowupPack', () => {
       id: 'fu-1', whatsapp_template_id: 'wt-saved', sequence_id: tables.email_sequences[0].id,
       state: 'awaiting_approval', want_live: true, pack_key: 'book_first_class',
     })
+  })
+
+  it('refuses to link a clashing template whose wording differs, and writes nothing', async () => {
+    submitWhatsappTemplate.mockResolvedValue({ ok: false, status: 409, code: 'name_clash', existing: { id: 'wt-saved' }, error: 'clash' })
+    const { db, tables } = fakeDb({
+      whatsapp_templates: [{ id: 'wt-saved', location_id: LOC, status: 'PENDING', components: [{ type: 'BODY', text: 'Old wording' }] }],
+    })
+    const r = await installFollowupPack(db, args())
+    expect(r).toEqual({ ok: false, status: 409, code: 'template_wording_differs', error: 'A template with this name already exists with different wording.' })
+    expect(tables.email_sequences).toHaveLength(0)
+    expect(tables.pipeline_stage_followups).toHaveLength(0)
+  })
+
+  it('treats a clashing template with no BODY as different wording', async () => {
+    submitWhatsappTemplate.mockResolvedValue({ ok: false, status: 409, code: 'name_clash', existing: { id: 'wt-saved' }, error: 'clash' })
+    const { db, tables } = fakeDb({
+      whatsapp_templates: [{ id: 'wt-saved', location_id: LOC, status: 'PENDING', components: [{ type: 'FOOTER', text: 'x' }] }],
+    })
+    const r = await installFollowupPack(db, args())
+    expect(r).toMatchObject({ ok: false, code: 'template_wording_differs' })
+    expect(tables.email_sequences).toHaveLength(0)
   })
 
   it('reinstall refuses to link a template Meta rejected', async () => {

@@ -196,7 +196,7 @@ export async function installFollowupPack(db, {
       // A reinstall: this studio already holds the template (same name and
       // language on its WABA). Link it instead of failing.
       if (submitted.code === 'name_clash' && submitted.existing?.id) {
-        const linked = await readOwnTemplate(db, locationId, submitted.existing.id, t.name)
+        const linked = await readOwnTemplate(db, locationId, submitted.existing.id, t.name, t.components)
         if (!linked.ok) return linked
         templateIds[t.ref] = linked.template.id
         continue
@@ -426,9 +426,16 @@ async function rereadFollowup(db, locationId, followup) {
 }
 
 // The clashing row submitWhatsappTemplate named, re-read at THIS studio.
-async function readOwnTemplate(db, locationId, templateId, name) {
+const bodyTextOf = (components) => {
+  const body = Array.isArray(components)
+    ? components.find((c) => String(c?.type || '').toUpperCase() === 'BODY')
+    : null
+  return typeof body?.text === 'string' ? body.text.trim() : null
+}
+
+async function readOwnTemplate(db, locationId, templateId, name, wantedComponents) {
   const { data, error } = await db.from('whatsapp_templates')
-    .select('id, status')
+    .select('id, status, components')
     .eq('id', templateId)
     .eq('location_id', locationId)
     .maybeSingle()
@@ -438,6 +445,14 @@ async function readOwnTemplate(db, locationId, templateId, name) {
   // the same name is not a way out; replacing the template is an admin job.
   if (DEAD_TEMPLATE_STATUSES.includes(data.status)) {
     return fail(409, `This step's WhatsApp template (${name}) was ${DEAD_TEMPLATE_WORDS[data.status]} by Meta. Ask an admin to replace it before installing again.`, 'template_rejected')
+  }
+  // Same name, different wording: a failed run left old wording under this
+  // name. Linking it would send words nobody chose, so refuse (the caller
+  // moves to a fresh version). Same wording is a retry converging.
+  const have = bodyTextOf(data.components)
+  const want = bodyTextOf(wantedComponents)
+  if (have == null || want == null || have !== want) {
+    return fail(409, 'A template with this name already exists with different wording.', 'template_wording_differs')
   }
   return { ok: true, template: data }
 }
