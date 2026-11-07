@@ -129,6 +129,10 @@ export function placementDescriptors(boards, { offersKnown = true, holdUnbaselin
   const heldIds = new Set()
   for (const b of Array.isArray(boards) ? boards : []) {
     if (!b || b.mode !== 'derived' || b.enabled === false || typeof b.key !== 'string') continue
+    // PIPEBUILD.3b — an offer_un1t board is placed by the hourly un1t pass
+    // only (loadPlacementClaims never loads it): held on every event path, so
+    // a person with a deal on it is left alone, as the pass would.
+    if (b.module === 'offer_un1t') { heldIds.add(b.id); continue }
     if (OFFER_MODULES.includes(b.module)) {
       const parsed = offersKnown && b.board_type === 'offer' && !(holdUnbaselined && b.baseline_at == null)
         ? splitOfferBoards([{ ...b, enabled: true }]).descriptors[0]

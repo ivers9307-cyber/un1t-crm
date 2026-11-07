@@ -92,6 +92,12 @@ describe('placementDescriptors — baseline (PIPEBUILD.5c)', () => {
     expect(descriptors.map((d) => d.key)).toEqual(['acquisition', 'o_x', 'o_z'])
     expect(heldIds.size).toBe(0)
   })
+  it('PIPEBUILD.3b: an offer_un1t board is never placed on an event path (held), even baselined with offers known', () => {
+    const ou = { ...board('o_u', { type: 'corp_promo', values: ['acme'] }), module: 'offer_un1t', baseline_at: '2026-11-01T00:00:00Z' }
+    const { descriptors, heldIds } = placementDescriptors([acq, baselined, ou])
+    expect(descriptors.map((d) => d.key)).toEqual(['acquisition', 'o_z'])
+    expect([...heldIds]).toEqual(['p-o_u'])
+  })
   it('offers unknown still holds a baselined board', () => {
     const { descriptors, heldIds } = placementDescriptors([acq, baselined], { offersKnown: false, holdUnbaselined: false })
     expect(descriptors.map((d) => d.key)).toEqual(['acquisition'])
