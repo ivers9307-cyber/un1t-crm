@@ -6,7 +6,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+vi.mock('@/lib/auth', () => ({
+  getCurrentUser: vi.fn(),
+  // The route's create gate, as auth.js has it: master, or owner AT the studio.
+  guardMasterOrOwner: (user, loc) => (user.profileRole === 'master' || user.rolesByLocation?.[loc] === 'owner' ? null : { status: 403 }),
+}))
 vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('next/navigation', () => ({ redirect: vi.fn((u) => { throw new Error(`NEXT_REDIRECT:${u}`) }) }))
@@ -372,5 +376,86 @@ describe('/pipeline — follow-up coverage strip (PIPEBUILD.1f)', () => {
     asRole('owner')
     createServerClient.mockReturnValue(dbFor({ mode: 'manual' }))
     expect(renderToStaticMarkup(await Page({ searchParams: {} }))).not.toContain('coverage:')
+  })
+})
+
+
+// PIPEBUILD.5p — the board header links into the builder: "New pipeline" for
+// whoever may create a board here, and the active board's settings for
+// managers and up ("Edit pipeline" on an offer board, the read-only list for a
+// built-in one). Staff see neither.
+describe('/pipeline — builder links (PIPEBUILD.5p)', () => {
+  function dbBoards(rows) {
+    return {
+      from: (table) => {
+        const chain = {}
+        for (const m of ['select', 'eq', 'in', 'order', 'range']) chain[m] = () => chain
+        const out = table === 'pipelines' ? { data: rows, error: null }
+          : table === 'pipeline_stages' ? { data: [STAGE], error: null }
+          : { data: [], error: null, count: 0 }
+        chain.then = (res, rej) => Promise.resolve(out).then(res, rej)
+        return chain
+      },
+    }
+  }
+  const asRole = (role, profileRole = 'staff') => getCurrentUser.mockResolvedValue({
+    id: 'u1', profileRole, rolesByLocation: role ? { [LOC]: role } : {}, activeLocation: { id: LOC, name: 'Studio' },
+  })
+  const BUILT_IN = { id: 'p1', key: 'funnel', name: 'Funnel', mode: 'derived', module: 'acquisition', board_type: null }
+  const OFFER = { id: 'p9', key: 'o_reset', name: 'Reset', mode: 'derived', module: 'offer', board_type: 'offer' }
+
+  beforeEach(() => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
+  })
+
+  it('owner on an offer board: New pipeline and Edit pipeline (that board)', async () => {
+    asRole('owner')
+    createServerClient.mockReturnValue(dbBoards([OFFER]))
+    const html = renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(html).toContain('href="/settings/pipelines/new"')
+    expect(html).toContain('New pipeline')
+    expect(html).toContain('href="/settings/pipelines/p9"')
+    expect(html).toContain('Edit pipeline')
+  })
+
+  it('owner on a built-in board: the settings list, never an edit link for code', async () => {
+    asRole('owner')
+    createServerClient.mockReturnValue(dbBoards([BUILT_IN]))
+    const html = renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(html).toContain('href="/settings/pipelines"')
+    expect(html).toContain('Pipeline settings')
+    expect(html).not.toContain('Edit pipeline')
+    expect(html).not.toContain('href="/settings/pipelines/p1"')
+  })
+
+  it('manager: the settings link, no New pipeline (creating is owner-only)', async () => {
+    asRole('manager')
+    createServerClient.mockReturnValue(dbBoards([OFFER]))
+    const html = renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(html).toContain('href="/settings/pipelines/p9"')
+    expect(html).not.toContain('New pipeline')
+  })
+
+  it('staff: neither link', async () => {
+    asRole('staff')
+    createServerClient.mockReturnValue(dbBoards([OFFER]))
+    const html = renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(html).not.toContain('/settings/pipelines')
+  })
+
+  it('master with no role here: both links', async () => {
+    asRole(null, 'master')
+    createServerClient.mockReturnValue(dbBoards([OFFER]))
+    const html = renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(html).toContain('New pipeline')
+    expect(html).toContain('Edit pipeline')
+  })
+
+  it('no board yet: an owner still gets New pipeline', async () => {
+    asRole('owner')
+    createServerClient.mockReturnValue(dbBoards([]))
+    const html = renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(html).toContain('No pipeline is configured')
+    expect(html).toContain('href="/settings/pipelines/new"')
   })
 })

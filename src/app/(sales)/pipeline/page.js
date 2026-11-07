@@ -37,7 +37,7 @@ import {
   pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, classesOf3ForModule,
   initialPageSizeFor, readWholeColumn, PIPELINE_READ_PAGE,
 } from '@/lib/pipeline-board'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, guardMasterOrOwner } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { canWriteActivitiesAt } from '@/lib/activity-write-gate'
 import { redirect } from 'next/navigation'
@@ -50,12 +50,39 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { splitStagesByFunnel } from '@/lib/pipeline-classifier'
 import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
 import Link from 'next/link'
+import { Button } from '@/components/ui'
 import { zoneOfLocation } from '@/lib/location-time'
 import { loadUn1tCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
 import { stageShowsSignals } from '@/lib/pipeline-card-signal-slugs'
 import { logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
+
+// PIPEBUILD.5p — the way into the board builder from the board itself.
+// "New pipeline" follows the create gate of POST /api/locations/[id]/pipelines
+// (owner, org admin or master at this studio). The settings link follows the
+// /settings/pipelines pages' view gate (manager and up here): an offer board
+// opens its own settings ("Edit pipeline"); a built-in board, which is code and
+// read only, opens the list ("Pipeline settings"). Nothing renders for anyone
+// else.
+function BoardBuilderLinks({ user, locationId, board }) {
+  const canCreate = guardMasterOrOwner(user, locationId) === null
+  const canView = hasRoleAtLocation(user, locationId, MANAGER_ROLES)
+  if (!canCreate && !canView) return null
+  const offerBoard = Boolean(board?.board_type)
+  return (
+    <div className="flex items-center gap-2">
+      {canView && board && (
+        <Button as={Link} variant="secondary" size="sm" href={offerBoard ? `/settings/pipelines/${board.id}` : '/settings/pipelines'}>
+          {offerBoard ? 'Edit pipeline' : 'Pipeline settings'}
+        </Button>
+      )}
+      {canCreate && (
+        <Button as={Link} size="sm" href="/settings/pipelines/new">New pipeline</Button>
+      )}
+    </div>
+  )
+}
 
 export default async function PipelinePage(props) {
   const searchParams = await props.searchParams;
@@ -95,7 +122,10 @@ export default async function PipelinePage(props) {
   if (!activePipeline) {
     return (
       <div className="p-6">
-        <h2 className="text-2xl font-bold mb-4">Pipeline</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-2xl font-bold">Pipeline</h2>
+          <BoardBuilderLinks user={user} locationId={locationId} board={null} />
+        </div>
         <p className="text-sm text-un1t-subtle">No pipeline is configured for this location.</p>
       </div>
     )
@@ -241,9 +271,12 @@ export default async function PipelinePage(props) {
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Pipeline</h2>
-        <span className="text-sm text-un1t-subtle">
-          {visibleTotal.toLocaleString()} {totalLabel}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-un1t-subtle">
+            {visibleTotal.toLocaleString()} {totalLabel}
+          </span>
+          <BoardBuilderLinks user={user} locationId={locationId} board={activePipeline} />
+        </div>
       </div>
 
       {noSourceNote && (
