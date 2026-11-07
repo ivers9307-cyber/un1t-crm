@@ -33,10 +33,12 @@ async function postJson(url) {
  * @param {object[]} props.followups  rows with stage_id and state
  * @param {{ key: string, label: string, error: string }[]} [props.issues]  installs that failed
  * @param {(key: string) => void} [props.onRetry]
+ * @param {boolean} [props.installing]  an install is still running: Turn on waits
+ * @param {string[]|null} [props.expectedKeys]  pack keys that must each have a row or an issue first
  * @param {(board: object) => void} [props.onEnabled]
  * @param {boolean} [props.showBoardLink]
  */
-export default function BoardLaunchPanel({ board, followups, issues = [], onRetry, retryDisabled = false, onEnabled, showBoardLink = false }) {
+export default function BoardLaunchPanel({ board, followups, issues = [], onRetry, retryDisabled = false, installing = false, expectedKeys = null, onEnabled, showBoardLink = false }) {
   const [dry, setDry] = useState(null)
   const [dryBusy, setDryBusy] = useState(false)
   const [dryError, setDryError] = useState(null)
@@ -48,7 +50,9 @@ export default function BoardLaunchPanel({ board, followups, issues = [], onRetr
 
   const stages = [...(board.stages || [])]
   const hasFollowup = (followups || []).some((f) => LIVE_STATES.includes(f.state))
-  const canTurnOn = !!dry && hasFollowup && !enabled
+  const settled = !installing && (expectedKeys == null
+    || expectedKeys.every((k) => (followups || []).some((f) => f.pack_key === k) || issues.some((i) => i.key === k)))
+  const canTurnOn = !!dry && hasFollowup && settled && !enabled
 
   async function runDry() {
     if (inFlight.current) return
@@ -135,6 +139,7 @@ export default function BoardLaunchPanel({ board, followups, issues = [], onRetr
           ? <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-xs text-green-700">On</span>
           : <Button type="button" disabled={!canTurnOn} onClick={() => setConfirming(true)}>Turn on</Button>}
         {showBoardLink && <Link href={`/settings/pipelines/${board.id}`} className="text-sm text-un1t-accent">Open the board</Link>}
+        {!enabled && !settled && <span className="text-sm text-un1t-subtle">Installing follow-ups…</span>}
         {!enabled && !dry && <span className="text-sm text-un1t-subtle">Check who would enter first.</span>}
       </div>
 

@@ -55,6 +55,30 @@ describe('BoardLaunchPanel', () => {
     expect(fetchMock.mock.calls[1][0]).toBe('/api/pipelines/b1/enable')
   })
 
+  async function dryRun() {
+    fireEvent.click(screen.getByRole('button', { name: 'Check who would enter' }))
+    await screen.findByText(/would enter this board/)
+  }
+
+  it('Turn on waits while an install is running', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok(DRY)))
+    render(<BoardLaunchPanel board={board} followups={live} installing />)
+    await dryRun()
+    expect(screen.getByRole('button', { name: 'Turn on' }).disabled).toBe(true)
+    expect(screen.getByText('Installing follow-ups…')).toBeTruthy()
+  })
+
+  it('Turn on waits for every expected pack to have a row or an issue', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok(DRY)))
+    const rowA = { stage_id: 's1', state: 'live', pack_key: 'a' }
+    const { rerender } = render(<BoardLaunchPanel board={board} followups={[rowA]} expectedKeys={['a', 'b']} />)
+    await dryRun()
+    expect(screen.getByRole('button', { name: 'Turn on' }).disabled).toBe(true)
+    rerender(<BoardLaunchPanel board={board} followups={[rowA]} issues={[{ key: 'b', label: 'B', error: 'nope' }]} expectedKeys={['a', 'b']} />)
+    expect(screen.getByRole('button', { name: 'Turn on' }).disabled).toBe(false)
+    expect(screen.queryByText('Installing follow-ups…')).toBeNull()
+  })
+
   it('failedInstallOffersRetry', () => {
     const onRetry = vi.fn()
     render(<BoardLaunchPanel board={board} followups={[]} issues={[{ key: 'book', label: 'Book the first class', error: 'name clash' }]} onRetry={onRetry} />)
@@ -129,6 +153,30 @@ describe('BoardWizard finish', () => {
     fireEvent.click(btn)
     await screen.findByRole('button', { name: 'Check who would enter' })
     expect(fetchMock.mock.calls.filter(([u]) => u === '/api/locations/loc1/pipelines').length).toBe(1)
+  })
+
+  it('Turn on stays disabled until the last install resolves', async () => {
+    await toReview()
+    let release
+    const gate = new Promise((r) => { release = r })
+    let n = 0
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (url === '/api/locations/loc1/pipelines') return ok({ board: createdBoard })
+      if (url.includes('/dry-run')) return ok(DRY)
+      if (url.includes('/followups/')) {
+        n += 1
+        if (n === 2) await gate
+        return ok({ followup: { state: 'live', stage_id: url.split('/').pop() } })
+      }
+      return ok({})
+    }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create board (switched off)' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Check who would enter' }))
+    await screen.findByText(/would enter this board/)
+    expect(screen.getByRole('button', { name: 'Turn on' }).disabled).toBe(true)
+    expect(screen.getByText('Installing follow-ups…')).toBeTruthy()
+    release()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Turn on' }).disabled).toBe(false))
   })
 
   it('a rejected install does not stop the rest, and Try again re-installs', async () => {

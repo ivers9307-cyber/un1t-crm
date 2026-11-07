@@ -23,7 +23,7 @@ export const LEGACY_NOTICE = "This board is built in code and can't be changed h
 export const WORDING_UNKNOWN_NOTE = "The current wording couldn't be read. Try again later before changing it."
 export const OLD_WORDING_UNKNOWN_NOTE = "The old wording couldn't be read, so this starts from the standard wording."
 export const REJECTED_NOTE = 'Meta rejected this wording. Change it to try again.'
-export const TURN_OFF_CONFIRM = 'While the board is off, nobody new is placed and people already on it stay where they are, with no messages. When you turn it back on, people who qualified in the meantime are placed without messages.'
+export const TURN_OFF_CONFIRM = 'While the board is off, nobody new is placed and people already on it stay where they are, with no messages. When you turn it back on, people who qualified in the meantime are placed without messages. Follow-ups already on their way stop the next time they check the board, and turning it back on does not restart them.'
 // PIPEBUILD.5o — a follow-up's template text is filled in when it is sent to
 // Meta, so a later change to the offer name, sign-off or offer length does not
 // reach it on its own.

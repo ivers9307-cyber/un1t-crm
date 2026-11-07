@@ -325,7 +325,7 @@ describe('BoardSettings', () => {
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Turn off' }))
     expect(screen.getByText(TURN_OFF_CONFIRM)).toBeTruthy()
-    expect(TURN_OFF_CONFIRM).toBe('While the board is off, nobody new is placed and people already on it stay where they are, with no messages. When you turn it back on, people who qualified in the meantime are placed without messages.')
+    expect(TURN_OFF_CONFIRM).toBe('While the board is off, nobody new is placed and people already on it stay where they are, with no messages. When you turn it back on, people who qualified in the meantime are placed without messages. Follow-ups already on their way stop the next time they check the board, and turning it back on does not restart them.')
     expect(calls(fetchMock, 'POST')).toHaveLength(0)
     fireEvent.click(screen.getAllByRole('button', { name: 'Turn off' }).pop())
     await waitFor(() => expect(calls(fetchMock, 'POST')).toHaveLength(1))
