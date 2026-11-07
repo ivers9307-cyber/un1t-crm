@@ -566,16 +566,23 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   const now = Number.isFinite(opts?.now) ? opts.now : Date.now()
   let boards = null
   let claims = null
+  // PIPEBUILD.5o — the location's switched-off offer boards, from the same
+  // read as the boards (loadBoardsForLocation), so an unreadable read places
+  // nobody. Pre-loaded boards bring them as opts.disabledOfferIds (absent =
+  // none, as loadPlacementClaims answers).
+  let disabledOfferIds = []
   if (opts?.claimsError) {
     return { action: 'error', error: `claims unavailable: ${opts.claimsError}` }
   }
   if (opts?.claims !== undefined) {
     if (Array.isArray(opts.boards)) {
       boards = opts.boards
+      disabledOfferIds = Array.isArray(opts.disabledOfferIds) ? opts.disabledOfferIds : []
     } else {
       const boardsRes = await loadBoardsForLocation(db, locationId)
       if (!boardsRes.ok) return { action: 'error', error: `claims unavailable: ${boardsRes.reason}` }
       boards = boardsRes.boards
+      disabledOfferIds = boardsRes.disabledOfferIds || []
     }
     claims = opts.claims
   } else {
@@ -583,7 +590,9 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     if (!placement.ok) return { action: 'error', error: `claims unavailable: ${placement.reason}` }
     boards = placement.boards
     claims = placement.claims
+    disabledOfferIds = placement.disabledOfferIds || []
   }
+  const switchedOff = new Set(disabledOfferIds)
   const derivedBoards = (boards || []).filter((b) => b.mode === PIPELINE_MODES.DERIVED)
   // PIPEBUILD.3e — an offer board is a claim board too (its claims arrive as
   // claims.offers).
@@ -638,12 +647,24 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   // the TARGET board is kept, the rest are closed 'lost' (mig 598's own rule
   // for duplicates) and counted. A deal on a DISABLED board is invisible to
   // the nightly pass and is left alone.
+  //
+  // PIPEBUILD.5o — a person with an open deal on a SWITCHED-OFF offer board is
+  // left exactly where they are (no move, no create elsewhere, so nothing
+  // fires), with or without claim boards running: the owner switched the
+  // board off to edit it, and placing its people on another board would start
+  // that board's follow-ups. The nightly pass holds them the same way. They
+  // are placed again once the board is back on (silently, by its baseline).
   let existing = null
   let duplicatesClosed = 0
+  let open = null
+  if (switchedOff.size > 0 || claimBoards.length > 0) {
+    open = await findOpenDealsAtLocation(db, contactId, locationId)
+    if (open === null) return { action: 'error', error: 'open deals unreadable' }
+    const onOff = switchedOff.size > 0 ? open.find((d) => switchedOff.has(d.pipeline_id)) : null
+    if (onOff) return { action: 'leave', deal_id: onOff.id, stage_slug: null, reason: 'board_switched_off' }
+  }
   if (claimBoards.length > 0) {
     const enabledIds = new Set((boards || []).filter((b) => b.enabled !== false).map((b) => b.id))
-    const open = await findOpenDealsAtLocation(db, contactId, locationId)
-    if (open === null) return { action: 'error', error: 'open deals unreadable' }
     const visible = open.filter((d) => enabledIds.has(d.pipeline_id))
     // PIPEBUILD.3e — a person with an open deal on a HELD offer board is left
     // exactly as they are (the nightly pass's rule): no move, no create, no
@@ -2411,7 +2432,12 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       logWarn('glofox-sync', 'board claims unreadable; no pack stamp, no placement this sync', { locationId, contactId, reason: placement.reason })
     } else if (placement.claimBoards) {
       // The boards ride along so ensureDealForContact reads `pipelines` no more.
-      placementOpts = { claims: placement.claims, boards: placement.boards }
+      placementOpts = {
+        claims: placement.claims,
+        boards: placement.boards,
+        // PIPEBUILD.5o — the switched-off offer boards, from the same read.
+        ...(placement.disabledOfferIds ? { disabledOfferIds: placement.disabledOfferIds } : {}),
+      }
       // PIPEBUILD.3g/3h — the €39 claim over EVERY purchase, or a live
       // trial_purchase offer claim (its own, possibly longer, window): an
       // offer trial's credits are the trial's too, never a Class Pack. The

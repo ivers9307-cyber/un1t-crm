@@ -507,7 +507,7 @@ describe('HATCHPIPE.2 — contacts-input path is unchanged', () => {
         ['select', 'id'], ['single']],
       ['pipelines',
         ['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at, updated_at'], // PIPEBUILD.3d: the board settings ride along
-        ['eq', 'location_id', 'loc-st'], ['eq', 'enabled', true]],
+        ['eq', 'location_id', 'loc-st']], // PIPEBUILD.5o: every board is read; the switched-on ones run (in memory)
       ['pipeline_stages',
         ['select', 'id, slug, pipeline_id'],
         ['eq', 'location_id', 'loc-st'], ['in', 'pipeline_id', ['p-acq']]],
@@ -1900,14 +1900,15 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     const out = await reclassifyAllContacts(rec.db, { locationId: STILL, source: 'cron', userId: 'u-1' })
     // Recorded against the orchestrator BEFORE PIPEBUILD.3d (ff83a44e1), same
     // fixture: identical calls, order and payloads, except that the pipelines
-    // select names the three board-settings columns.
+    // select names the three board-settings columns and (PIPEBUILD.5o) reads
+    // every board at the studio, the switched-on ones kept in memory.
     expect(rec.calls).toEqual([
       ['pipeline_classification_runs',
         ['insert', { location_id: STILL, source: 'cron', dry_run: false, status: 'running', created_by: 'u-1' }],
         ['select', 'id'], ['single']],
       ['pipelines',
         ['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at, updated_at'],
-        ['eq', 'location_id', STILL], ['eq', 'enabled', true]],
+        ['eq', 'location_id', STILL]],
       ['pipeline_stages', ['select', 'id, slug, pipeline_id'], ['eq', 'location_id', STILL], ['in', 'pipeline_id', ['p-acq', 'p-paid']]],
       ['contacts',
         ['select', 'id, name, email, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, last_attended_at, total_attended_7d, total_attended_30d, last_payment_at, joined_at, created_at, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at, gympass_member_id, last_lead_source_at'],
@@ -2151,6 +2152,47 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     const stagesRead = rec.calls.find((e) => e[0] === 'pipeline_stages')
     expect(rec.argOf(stagesRead, 'in')).toEqual(['in', 'pipeline_id', ['p-acq']])
     expect(rec.writesTo('deals')).toHaveLength(0)
+  })
+
+  // PIPEBUILD.5o — an owner switches an offer board off to edit it: its people
+  // stay where they are (no move, no second deal on another board, so no
+  // other board's follow-up starts). A switched-off built-in board is today.
+  it('a switched-off offer board holds its people: no move, no deal elsewhere, nothing fired', async () => {
+    const off = { ...CORP, enabled: false }
+    const rec = recordingDb(corpFixtures({
+      pipelines: [ACQ, off, { ...PAID, enabled: false }],
+      contacts: [corpAttended('c-held'), corpNew('c-fresh')],
+      deals: [{ id: 'd-held', contact_id: 'c-held', stage_id: 's-o_corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' }],
+    }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(out).toMatchObject({ ok: true, deals_held: 1, deals_moved: 0, deals_created: 1, pipelines_skipped: [] })
+    // The switched-off offer board's deals are read; the built-in one's are not.
+    const dealsRead = rec.calls.find((e) => e[0] === 'deals' && rec.argOf(e, 'select'))
+    expect(rec.argOf(dealsRead, 'in')).toEqual(['in', 'pipeline_id', ['p-acq', 'p-corp']])
+    const stagesRead = rec.calls.find((e) => e[0] === 'pipeline_stages')
+    expect(rec.argOf(stagesRead, 'in')).toEqual(['in', 'pipeline_id', ['p-acq']])
+    // Only the deal-less contact is created (on acquisition); c-held is untouched.
+    const dealWrites = rec.writesTo('deals')
+    expect(dealWrites).toHaveLength(1)
+    expect(rec.argOf(dealWrites[0], 'insert')[1]).toMatchObject({ contact_id: 'c-fresh', pipeline_id: 'p-acq' })
+    expect(JSON.stringify(dealWrites)).not.toContain('c-held')
+    expect(JSON.stringify(dealWrites)).not.toContain('d-held')
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+
+  it('a failed boards read places nobody (the switched-off boards come from the same read)', async () => {
+    const rec = recordingDb(corpFixtures({ pipelines: [ACQ, { ...CORP, enabled: false }] }), { errors: { pipelines: 'down' } })
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(out).toMatchObject({ ok: false, error: 'pipeline load: down' })
+    expect(rec.writesTo('deals')).toHaveLength(0)
+  })
+
+  it('a dry run previewing the switched-off board runs it, not holds it', async () => {
+    const off = { ...CORP, enabled: false }
+    const rec = recordingDb(corpFixtures({ pipelines: [ACQ, off] }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true, includeDisabledBoardIds: ['p-corp'] })
+    expect(out.deals_held).toBeUndefined()
+    expect(out).toMatchObject({ ok: true, board_histogram: { o_corp: 2 } })
   })
 
   it('an offer board at a un1t.online studio is refused (un1t_online_studio); the un1t boards run as before', async () => {

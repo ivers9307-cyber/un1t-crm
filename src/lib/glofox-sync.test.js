@@ -3314,6 +3314,69 @@ describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e
     })
   })
 
+  // PIPEBUILD.5o — an owner switches an offer board off to edit it. Its people
+  // stay where they are on every event path: no move, no deal on another board
+  // (whose follow-ups would start), nothing fired.
+  describe('switchedOffOfferBoardHoldsItsPeople (PIPEBUILD.5o)', () => {
+    const OFF = { ...CORP, enabled: false }
+    const onCorp = { id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-corp', stage_id: 's-o_corp_first_class', status: 'open' }
+
+    it('ensureDealForContact: a person on the switched-off board is left; no deal anywhere else', async () => {
+      const { db, writes } = offerDb({ pipelines: [ACQ, OFF], promos: [promo], deals: [onCorp] })
+      const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')
+      expect(out).toEqual({ action: 'leave', deal_id: 'd1', stage_slug: null, reason: 'board_switched_off' })
+      expect(writes.filter((w) => w.table === 'deals')).toHaveLength(0)
+    })
+
+    it('beside running claim boards too (the €39 and Programmes boards on)', async () => {
+      const { db, writes } = offerDb({ pipelines: [ACQ, PAID, PROG, OFF], promos: [promo], deals: [onCorp] })
+      expect(await ensureDealForContact(db, LOC, 'c1', fiftyLead, 'Corp Lead')).toMatchObject({ action: 'leave', deal_id: 'd1', reason: 'board_switched_off' })
+      expect(writes.filter((w) => w.table === 'deals')).toHaveLength(0)
+    })
+
+    it('the webhook path (pre-loaded boards, claims and switched-off ids) holds them with no pipelines read', async () => {
+      const { db, writes, reads } = offerDb({ pipelines: [ACQ, PAID, OFF], deals: [onCorp] })
+      const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead', {
+        boards: [ACQ, PAID], claims: { paid: null, programme: null }, disabledOfferIds: ['p-corp'],
+      })
+      expect(out).toMatchObject({ action: 'leave', deal_id: 'd1', reason: 'board_switched_off' })
+      expect(reads).not.toContain('pipelines')
+      expect(writes.filter((w) => w.table === 'deals')).toHaveLength(0)
+    })
+
+    it('placeContactNow: no deal elsewhere, so nothing fires', async () => {
+      vi.mocked(triggerSequencesForDealPlacement).mockClear()
+      const row = { id: 'c1', name: 'Corp Lead', location_id: LOC, ...lead }
+      const { db, writes } = offerDb({ pipelines: [ACQ, OFF], promos: [promo], deals: [onCorp], contacts: [row] })
+      const out = await placeContactNow(db, { locationId: LOC, contactId: 'c1', now: NOW })
+      expect(out).toMatchObject({ ok: true, deal: { action: 'leave', deal_id: 'd1', reason: 'board_switched_off' } })
+      expect(writes.filter((w) => w.table === 'deals')).toHaveLength(0)
+      expect(triggerSequencesForDealPlacement).not.toHaveBeenCalled()
+    })
+
+    it('a person with no deal on it is placed as usual, never onto the switched-off board', async () => {
+      const { db } = offerDb({ pipelines: [ACQ, OFF], promos: [promo] })
+      expect(await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')).toMatchObject({ action: 'create', pipeline_id: 'p-acq', stage_slug: 'new_lead' })
+    })
+
+    it('a switched-off BUILT-IN board holds nobody: exactly today', async () => {
+      const { db } = offerDb({
+        pipelines: [ACQ, { ...PAID, enabled: false }],
+        deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-paid', stage_id: 's-paid_trial_new_lead', status: 'open' }],
+      })
+      expect(await ensureDealForContact(db, LOC, 'c1', lead, 'Lead')).toMatchObject({ action: 'create', pipeline_id: 'p-acq' })
+    })
+
+    it('an unreadable boards read places nobody', async () => {
+      // The switched-off ids come from the same pipelines read as the boards,
+      // so a failed read places nobody (here the primary-board read fails first).
+      const { db, writes } = offerDb({ pipelines: [ACQ, OFF], promos: [promo], deals: [onCorp], errors: { pipelines: 'down' } })
+      const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')
+      expect(['leave', 'error']).toContain(out.action)
+      expect(writes.filter((w) => w.table === 'deals')).toHaveLength(0)
+    })
+  })
+
   // PIPEBUILD.5m — the nightly baseline reads only the studio's own contacts,
   // so on EVERY event path the first placement onto an offer board fires its
   // follow-up only for a claim that started at or after board.baseline_at. An

@@ -53,18 +53,40 @@ export function programmeRulesFromSettings(settings) {
  * A location's ENABLED boards. PIPEBUILD.5c — with baseline_at (mig 815): an
  * offer board not yet baselined is held on the event paths
  * (placementDescriptors), so every caller handing these rows on must read it.
+ *
+ * PIPEBUILD.5o — the same one read also names the location's SWITCHED-OFF
+ * offer boards (`board_type` set, `enabled` false) as `disabledOfferIds`,
+ * present only when there is one. A person with an open deal on one is left
+ * exactly where they are on every placement path (ensureDealForContact, the
+ * nightly pass), like a person on a held board: switching an offer board off
+ * to edit it must not hand its people to another board and its follow-ups.
+ * Built-in boards (`board_type` null) never count, so a studio without a
+ * switched-off offer board gets exactly today's answer. The filter is in
+ * memory, so the boards and the holds come from one read and fail together.
  */
 export async function loadBoardsForLocation(db, locationId) {
   const { data, error } = await db
     .from('pipelines')
     .select('id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at')
     .eq('location_id', locationId)
-    .eq('enabled', true)
   if (error) {
     logWarn('pipeline-claims', 'pipelines read failed', { locationId, err: bounded(error) })
     return { ok: false, reason: 'boards_unreadable', err: bounded(error) }
   }
-  return { ok: true, boards: Array.isArray(data) ? data : [] }
+  const rows = Array.isArray(data) ? data : []
+  const disabledOfferIds = disabledOfferBoardIds(rows)
+  return {
+    ok: true,
+    boards: rows.filter((b) => b && b.enabled !== false),
+    ...(disabledOfferIds.length > 0 ? { disabledOfferIds } : {}),
+  }
+}
+
+/** PIPEBUILD.5o — the ids of switched-off offer boards among `rows`. Pure. */
+export function disabledOfferBoardIds(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((b) => b && b.enabled === false && b.board_type != null && b.id)
+    .map((b) => b.id)
 }
 
 /** The programme rules for a location, from locations.settings. */
@@ -295,17 +317,20 @@ export async function loadClaimsForContact(db, { locationId, contactId, contact,
  * with no €39/Programmes board too, or as claims.paid itself when a €39 board
  * runs beside refused offer boards (which take nothing out of it).
  *
- * @returns {Promise<{ ok: true, boards: object[], claimBoards: boolean, claims: { paid, programme, offers? }|null, offersRefused?: string, purchasePaid?: object|null }
+ * @returns {Promise<{ ok: true, boards: object[], claimBoards: boolean, claims: { paid, programme, offers? }|null, offersRefused?: string, purchasePaid?: object|null, disabledOfferIds?: string[] }
  *   | { ok: false, reason: string, boards?: object[] }>}
  */
 export async function loadPlacementClaims(db, { locationId, contactId, contact, now = Date.now(), write = true }) {
   const boardsRes = await loadBoardsForLocation(db, locationId)
   if (!boardsRes.ok) return { ok: false, reason: boardsRes.reason }
   const boards = boardsRes.boards
+  // PIPEBUILD.5o — the switched-off offer boards ride along on every answer
+  // (only when there is one), so ensureDealForContact holds their people.
+  const holds = boardsRes.disabledOfferIds ? { disabledOfferIds: boardsRes.disabledOfferIds } : {}
   const derived = boards.filter((b) => b.mode === 'derived')
   const legacyBoards = derived.some((b) => CLAIM_BOARD_MODULES.includes(b.module))
   const offerRows = derived.filter((b) => OFFER_MODULES.includes(b.module))
-  if (!legacyBoards && offerRows.length === 0) return { ok: true, boards, claimBoards: false, claims: null }
+  if (!legacyBoards && offerRows.length === 0) return { ok: true, boards, claimBoards: false, claims: null, ...holds }
 
   // The membership source is read first (only when an offer board runs), so a
   // refused studio's offer boards take nothing out of the €39 claim, exactly
@@ -354,17 +379,17 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
   // PIPEBUILD.3g — the paid claim over every purchase, present only when an
   // offer board took a purchase out of `claims.paid` (the Class Pack guard).
   const extra = purchasePaid !== undefined ? { purchasePaid } : {}
-  if (offerRows.length === 0) return { ok: true, boards, claimBoards: true, claims, ...extra }
+  if (offerRows.length === 0) return { ok: true, boards, claimBoards: true, claims, ...extra, ...holds }
 
   if (offersRefused) {
     logWarn('pipeline-claims', 'offer boards refused', { locationId, reason: offersRefused })
-    return { ok: true, boards, claimBoards: true, claims: { ...claims, offers: null }, offersRefused, ...extra }
+    return { ok: true, boards, claimBoards: true, claims: { ...claims, offers: null }, offersRefused, ...extra, ...holds }
   }
   const offerRes = await loadOfferClaimsForContact(db, {
     locationId, boards: offerRows, contact: { ...(contact || {}), id: contactId }, now, write,
   })
   if (!offerRes.ok) return { ok: false, reason: offerRes.reason, boards }
-  return { ok: true, boards, claimBoards: true, claims: { ...claims, offers: offerRes.offers }, ...extra }
+  return { ok: true, boards, claimBoards: true, claims: { ...claims, offers: offerRes.offers }, ...extra, ...holds }
 }
 
 async function readContactPurchases(db, { locationId, contactId }) {
