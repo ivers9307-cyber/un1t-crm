@@ -31,6 +31,7 @@ import {
   studioBlastSignoffSchema,
   usageEventsSchema,
   boardCreateSchema, boardPatchSchema,
+  followupActionSchema, entryOptionsQuerySchema,
 } from './schemas.js'
 import {
   landingPageCreateSchema, landingPageUpdateSchema, landingPageStudioSchema, landingPagePublishSchema,
@@ -7286,6 +7287,42 @@ for (const [mode, verb] of [['enable', 'on'], ['disable', 'off']]) {
     },
   })
 }
+
+// PIPEBUILD.5f — one stage's follow-up, and the entry-rule pickers.
+registry.registerPath({
+  method: 'put',
+  path: '/api/pipelines/{id}/followups/{stageId}',
+  tags: ['Pipelines'],
+  security: [{ CookieAuth: [] }],
+  summary: "Install, replace the wording of, or switch off one stage's follow-up",
+  request: {
+    params: z.object({ id: uuidLike, stageId: uuidLike }),
+    body: { content: { 'application/json': { schema: followupActionSchema } } },
+  },
+  description: "Owner or master at the board's studio, or sequence-builder plus WhatsApp-template management there. pack_key must be a pack of the board's recipe whose role matches the stage (400 pack_not_for_stage). install: version 1 with no row; a draft, awaiting-approval or live row is returned (a stranded one is republished); a rejected or off row is reinstalled at version + 1 after its old draft sequence is deleted. replace: the wording is checked first (400), then the old sequence is paused (or deleted while a draft), the row is set off, and the new wording installs at version + 1; if the pause or the switch-off fails nothing is installed. off: the sequence is stopped the same way and the row is set off (already off: unchanged true). 409: built-in board, no_followup, followup_changed, sequence_changed, or the installer's recipe_mismatch / stage_role_mismatch / old_sequence_active / install_raced. Returns { followup, created?, unchanged?, publish_error?, code? }.",
+  responses: {
+    200: { description: '{ followup, created?, unchanged?, publish_error?, code? }' },
+    400: { description: 'Validation error, bad wording, or a pack that does not fit the stage', content: { 'application/json': { schema: ErrorResponse } } },
+    ...boardErrors,
+    409: { description: 'Refused (see description)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read or write failed; nothing new was installed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/pipeline-entry-options',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "Values to offer for an offer board's entry rule at a studio",
+  request: { params: z.object({ id: uuidLike }), query: entryOptionsQuerySchema },
+  description: "{ options: [{ value, label, hint? }] }. type: trial_purchase (with match plan_code: the studio's trial purchase plan codes plus its landing page offers'; landing_path: the studio's trial purchase landing paths; page_id: the organisation's landing pages with a row for this studio), corp_promo (the promo registry), lead_source (the lead source values), glofox_plan (active Glofox membership names at the studio) or tag (the studio's tag vocabulary, as /api/segments). Needs a manager role or the sequence-builder permission at the studio. Unknown type or match is 400.",
+  responses: {
+    200: { description: 'The options' },
+    400: { description: 'Unknown type or match', content: { 'application/json': { schema: ErrorResponse } } },
+    ...boardErrors,
+    503: { description: 'Could not read the options', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
 
 // SCHEDULE-SPEND-AGG.1 — the roster's contractor spend panel. Studio totals
 // only; FTECOSTVIS.1 keeps the salary-derived FTE labour total to admins.

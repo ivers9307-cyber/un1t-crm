@@ -30,9 +30,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { TAG_RULES } from '@/lib/contact-events'
-import { PLATFORM_TAGS, describeTag } from '@/lib/sequences/tag-vocabulary'
-import { selectAll } from '@/lib/select-all'
+import { buildTagVocabulary, studioTagCounts } from '@/lib/studio-tag-vocabulary'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,25 +53,9 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
-  const ruleDescriptions = new Map(TAG_RULES.map(r => [r.tag, r.description]))
-  const build = (counts) => {
-    // Union, de-duplicated, with the used tags first — a tag with reach is
-    // more useful at the top of a dropdown than the alphabetically-first echo
-    // of a webhook nobody targets.
-    const tags = Array.from(new Set([
-      ...TAG_RULES.map(r => r.tag),
-      ...PLATFORM_TAGS,
-      ...counts.keys(),
-    ]))
-    return tags
-      .map(tag => ({
-        tag,
-        description: describeTag(tag, ruleDescriptions.get(tag)),
-        count: counts.get(tag) || 0,
-        inUse: (counts.get(tag) || 0) > 0,
-      }))
-      .sort((a, b) => (b.count - a.count) || a.tag.localeCompare(b.tag))
-  }
+  // The union and its order live in studio-tag-vocabulary.js (shared with the
+  // pipeline builder's entry-rule picker, PIPEBUILD.5f).
+  const build = buildTagVocabulary
 
   // A master with no active location and no explicit one cannot scope the
   // counts. Return the vocabulary at zero rather than aggregating every
@@ -81,26 +63,14 @@ export async function GET(request) {
   if (!locationId) return NextResponse.json({ success: true, data: build(new Map()) })
 
   const db = createServerClient()
-  // ONE scan, paginated. contact_tags at a busy location is well over the
-  // PostgREST 1000-row cap and a truncated scan would UNDERCOUNT silently —
-  // the same class of bug as the audience truncation this programme opened on.
-  let rows
+  // ONE scan, paginated (studioTagCounts): contact_tags at a busy location is
+  // well over the PostgREST 1000-row cap and a truncated scan would UNDERCOUNT
+  // silently.
+  let counts
   try {
-    rows = await selectAll((from, to) => db
-      .from('contact_tags')
-      .select('tag')
-      .eq('location_id', locationId)
-      .is('removed_at', null)
-      .order('tag', { ascending: true })
-      .range(from, to))
+    counts = await studioTagCounts(db, locationId)
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || 'Could not read tags' }, { status: 500 })
-  }
-
-  const counts = new Map()
-  for (const r of rows || []) {
-    if (!r?.tag) continue
-    counts.set(r.tag, (counts.get(r.tag) || 0) + 1)
   }
 
   return NextResponse.json({ success: true, data: build(counts) })

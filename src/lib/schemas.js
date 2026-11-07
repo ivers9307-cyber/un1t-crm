@@ -578,3 +578,18 @@ export const boardPatchSchema = z.object({
 }).refine((v) => v.name !== undefined || v.priority !== undefined || v.config !== undefined, {
   message: 'Nothing to change',
 })
+// PIPEBUILD.5f — PUT /api/pipelines/[id]/followups/[stageId]. `bodies` is the
+// operator's wording per message ref; renderPack (shared/pipelines/recipes.js)
+// is the real validator ({{1}} only, the fill-in tokens, 1024 characters
+// rendered), so this only bounds the shape.
+export const followupActionSchema = z.object({
+  action: z.enum(['install', 'replace', 'off']),
+  pack_key: z.string().trim().min(1).max(60),
+  bodies: z.record(z.string().min(1).max(40), z.string().max(2000)).optional(),
+})
+// GET /api/locations/[id]/pipeline-entry-options query (the type list itself
+// is ENTRY_TYPES in shared/pipelines/offer-config.js; an unknown one is a 400).
+export const entryOptionsQuerySchema = z.object({
+  type: z.string().trim().min(1).max(40),
+  match: z.string().trim().min(1).max(40).optional(),
+})
