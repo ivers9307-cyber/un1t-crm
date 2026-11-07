@@ -55,7 +55,7 @@ export function splitOfferBoards(boards) {
   const skipped = []
   for (const b of Array.isArray(boards) ? boards : []) {
     if (!b || b.enabled !== true || b.board_type !== 'offer') continue
-    const parsed = parseOfferConfig(b.config, { boardKey: b.key })
+    const parsed = parseOfferConfig(b.config, { boardKey: b.key, module: b.module })
     if (!parsed.ok) {
       skipped.push({ key: b.key, errors: parsed.errors })
       logWarn('pipeline-offer-claims', 'offer board config skipped', { boardKey: b.key, errors: parsed.errors.slice(0, 5) })
@@ -129,6 +129,10 @@ export function placementDescriptors(boards, { offersKnown = true, holdUnbaselin
   const heldIds = new Set()
   for (const b of Array.isArray(boards) ? boards : []) {
     if (!b || b.mode !== 'derived' || b.enabled === false || typeof b.key !== 'string') continue
+    // PIPEBUILD.3b — an offer_un1t board is placed by the hourly un1t pass
+    // only (loadPlacementClaims never loads it): held on every event path, so
+    // a person with a deal on it is left alone, as the pass would.
+    if (b.module === 'offer_un1t') { heldIds.add(b.id); continue }
     if (OFFER_MODULES.includes(b.module)) {
       const parsed = offersKnown && b.board_type === 'offer' && !(holdUnbaselined && b.baseline_at == null)
         ? splitOfferBoards([{ ...b, enabled: true }]).descriptors[0]
@@ -163,7 +167,7 @@ export function trialPurchaseOfferConfigs(boards) {
   const out = []
   for (const b of Array.isArray(boards) ? boards : []) {
     if (!b || b.enabled !== true || b.board_type !== 'offer') continue
-    const parsed = parseOfferConfig(b.config, { boardKey: b.key })
+    const parsed = parseOfferConfig(b.config, { boardKey: b.key, module: b.module })
     if (parsed.ok && parsed.config.entry.type === 'trial_purchase') out.push({ key: b.key, config: parsed.config })
   }
   return out
@@ -448,4 +452,121 @@ export async function loadOfferClaimsForContact(db, { locationId, boards, contac
   if (!res.ok) return res
   if (write && res.pending.length > 0) await upsertBoardClaims(db, locationId, res.pending, now)
   return { ok: true, offers: res.offersByContact.get(contact.id) || new Map(), skipped: res.skipped }
+}
+
+// ---------------------------------------------------------------------------
+// PIPEBUILD.3b — claims for `offer_un1t` boards (a un1t.online studio).
+
+/**
+ * A un1t_product board's claim from one person's un1t_transactions rows. Pure.
+ * Rows whose product_id is exactly one of entry.values (case kept), not
+ * refunded, not a subscription renewal (the same offer carrying on, never a
+ * new start), with a readable remote_created_at; the newest wins. Amount is never
+ * read: a EUR 0 purchase of the product is still the offer.
+ * @returns {{ start: number, end: number } | null}
+ */
+export function un1tProductOfferClaim(transactions, config, now = Date.now()) { // eslint-disable-line no-unused-vars
+  const values = config?.entry?.values || []
+  let best = null
+  for (const t of Array.isArray(transactions) ? transactions : []) {
+    if (!t || t.refunded === true || t.type === 'sub_renewal' || !values.includes(t.product_id)) continue
+    const at = parseMs(t.remote_created_at)
+    if (at != null && (best == null || at > best)) best = at
+  }
+  return best == null ? null : { start: best, end: best + config.duration_days * DAY_MS }
+}
+
+const IN_CHUNK = 200
+
+/**
+ * Offer claims for the offer_un1t boards at one un1t.online studio, per contact
+ * per board key. Only enabled board_type 'offer' boards of module offer_un1t
+ * with a parseable config count (the rest are `skipped`). trial_purchase and
+ * corp_promo boards go through loadOffers (same reads, same rules); un1t_product
+ * boards read un1t_transactions. A failed read fails the call (never "no claims").
+ * @returns {Promise<{ ok: true, offersByContact: Map, skipped: object[] } | { ok: false, reason: string, err: string }>}
+ */
+export async function loadUn1tOfferClaims(db, { locationId, boards, contactIds, now = Date.now() }) {
+  const skipped = []
+  const eligible = []
+  const productBoards = []
+  for (const b of Array.isArray(boards) ? boards : []) {
+    if (!b || b.enabled !== true || b.board_type !== 'offer' || b.module !== 'offer_un1t') continue
+    const parsed = parseOfferConfig(b.config, { boardKey: b.key, module: 'offer_un1t' })
+    if (!parsed.ok) {
+      skipped.push({ key: b.key, errors: parsed.errors })
+      logWarn('pipeline-offer-claims', 'offer board config skipped', { boardKey: b.key, errors: parsed.errors.slice(0, 5) })
+      continue
+    }
+    if (parsed.config.entry.type === 'un1t_product') {
+      productBoards.push({ key: b.key, config: parsed.config })
+    } else eligible.push(b)
+  }
+  // Boards that were skipped by the module/enabled filter are reported too, as
+  // splitOfferBoards does for a bad config only: here a wrong-module board is
+  // simply not ours, but is listed so a caller can see it was not read.
+  for (const b of Array.isArray(boards) ? boards : []) {
+    if (b && b.board_type === 'offer' && (b.enabled !== true || b.module !== 'offer_un1t')) {
+      skipped.push({ key: b.key, errors: [b.enabled !== true ? 'disabled' : 'not an offer_un1t board'] })
+    }
+  }
+
+  const offersByContact = new Map()
+  const wanted = new Set(contactIds || [])
+
+  if (eligible.length) {
+    const res = await loadOffers(db, {
+      locationId, boards: eligible, contacts: (contactIds || []).map((id) => ({ id })), now,
+    })
+    if (!res.ok) return res
+    for (const [cid, m] of res.offersByContact) for (const [k, claim] of m) addOffer(offersByContact, cid, k, claim)
+  }
+
+  if (productBoards.length) {
+    const productIds = [...new Set(productBoards.flatMap((b) => b.config.entry.values))]
+    const rows = []
+    try {
+      for (let i = 0; i < productIds.length; i += IN_CHUNK) {
+        const chunk = productIds.slice(i, i + IN_CHUNK)
+        const part = await selectAll((from, to) => db
+          .from('un1t_transactions')
+          .select('un1t_id, un1t_user_id, contact_id, product_id, type, refunded, remote_created_at')
+          .eq('location_id', locationId)
+          .in('product_id', chunk)
+          .order('un1t_id', { ascending: true })
+          .range(from, to), { pageSize: PAGE })
+        rows.push(...part)
+      }
+    } catch (e) { return failed('un1t_transactions_unreadable', 'un1t_transactions', locationId, e) }
+
+    let clients
+    try {
+      clients = await selectAll((from, to) => db
+        .from('un1t_clients')
+        .select('un1t_user_id, contact_id')
+        .eq('location_id', locationId)
+        .order('id', { ascending: true })
+        .range(from, to), { pageSize: PAGE })
+    } catch (e) { return failed('un1t_clients_unreadable', 'un1t_clients', locationId, e) }
+
+    // Ownership mirrors src/lib/membership/reads/un1t-online.js (its helpers are
+    // private): a row's person is its un1t user's contact, else its own contact_id.
+    const contactOfUser = new Map(clients.filter((c) => c?.contact_id != null).map((c) => [c.un1t_user_id, c.contact_id]))
+    const owner = (r) => (r.un1t_user_id != null ? contactOfUser.get(r.un1t_user_id) : null) ?? r.contact_id ?? null
+    const byContact = new Map()
+    for (const r of rows) {
+      const o = owner(r)
+      if (!o || !wanted.has(o)) continue
+      if (!byContact.has(o)) byContact.set(o, [])
+      byContact.get(o).push(r)
+    }
+    for (const board of productBoards) {
+      for (const [contactId, list] of byContact) {
+        const c = un1tProductOfferClaim(list, board.config, now)
+        if (c) addOffer(offersByContact, contactId, board.key, claimOf(c.start, board.config.duration_days, 'un1t_product'))
+      }
+    }
+  }
+
+  return { ok: true, offersByContact, skipped }
 }

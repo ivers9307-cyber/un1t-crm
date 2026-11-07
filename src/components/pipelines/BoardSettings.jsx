@@ -7,12 +7,14 @@ import {
   initialWizardState, wizardReducer, stateFromBoard, settingsConfig, stepErrors,
   packForBoardStage, packBodies, previewTemplate,
 } from '@/lib/pipeline-wizard'
+import { ENTRY_TYPES_BY_MODULE } from '@shared/pipelines/offer-config.js'
 import NameOfferStep from './wizard/NameOfferStep'
 import EntryStep from './wizard/EntryStep'
 import StagesStep from './wizard/StagesStep'
 import FollowupsStep from './wizard/FollowupsStep'
 import MiaNotesStep from './wizard/MiaNotesStep'
 import BoardLaunchPanel from './BoardLaunchPanel'
+import BoardReport from './BoardReport'
 import { boardStatus, followupChip } from './BoardList'
 
 export const SWITCH_OFF_NOTE = 'Switch the board off to change this.'
@@ -384,6 +386,8 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
         <p className="mt-2 text-sm text-un1t-subtle">{BASELINE_NOTE}</p>
       </Section>
 
+      {board.board_type === 'offer' && <BoardReport boardId={boardId} stages={board.stages || []} />}
+
       {canEdit && !on && (
         <BoardLaunchPanel board={board} followups={board.followups || []} onEnabled={() => refresh()} />
       )}
@@ -398,7 +402,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
       </Section>
 
       <Section title="Who enters" note={lockNote}>
-        <EntryStep state={state} dispatch={dispatch} locationId={locationId} disabled={structureLocked} />
+        <EntryStep state={state} dispatch={dispatch} locationId={locationId} entryTypes={ENTRY_TYPES_BY_MODULE[board.module] || ENTRY_TYPES_BY_MODULE.offer} disabled={structureLocked} />
       </Section>
 
       <Section title="Stages" note={lockNote ? `${lockNote} Stage names can change any time.` : null}>

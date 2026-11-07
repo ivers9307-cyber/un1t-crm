@@ -12,6 +12,7 @@ import * as paidTrial from './paid-trial.js'
 import * as programmes from './programmes.js'
 import * as paidTrialUn1t from './paid-trial-un1t.js'
 import * as offer from './offer.js'
+import * as offerUn1t from './offer-un1t.js'
 
 export const BOARD_MODULES = Object.freeze({
   acquisition,
@@ -24,6 +25,8 @@ export const BOARD_MODULES = Object.freeze({
   paid_trial_un1t: paidTrialUn1t,
   // PIPEBUILD.3a — self-service offer boards: stages come from pipelines.config.
   offer,
+  // PIPEBUILD.3b — the same offer board, fed from un1t.online (Hatch Street).
+  offer_un1t: offerUn1t,
 })
 
 export const PIPELINE_MODES = Object.freeze({ DERIVED: 'derived', MANUAL: 'manual' })

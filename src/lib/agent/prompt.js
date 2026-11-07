@@ -580,6 +580,7 @@ export const VOICE_NOTES_PROMPT_SECTION = '## Voice notes\nMessages that begin "
  * @param {boolean}[opts.bookingFlow] MIAFLOW.1: the turn offers send_booking_flow (the studio's WhatsApp booking Flow); adds BOOKING_FLOW_PROMPT_SECTION
  * @param {string} [opts.trialUsedClassLine] MIAHATCH.6: buildTrialUsedClassLine's output (un1t_full turns only); uncached suffix only
  * @param {string|null}[opts.trialDoneLine] TRIALDONE.6: trialDoneLineFor's output (the studio's trial-done brief); uncached suffix only
+ * @param {string|null}[opts.boardContextLine] PIPEBUILD.6-1: describeContactBoard's output (the person's offer board); uncached suffix only
  * @param {string} [opts.otherStudiosBlock] MIAFIX.1: buildOtherStudiosBlock's output; uncached suffix only
  * @param {string} [opts.studioChoiceBlock] MIAASKSTUDIO.1: buildStudioChoiceBlock's output; uncached suffix only
  * @returns {{ stable: string, volatile: string }}
@@ -696,6 +697,12 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   // the trial-done opener (trialDoneLineFor). Per-contact: uncached suffix only.
   if (typeof opts.trialDoneLine === 'string' && opts.trialDoneLine.trim()) {
     volatileParts.push('## This person just finished their trial\n' + opts.trialDoneLine.trim())
+  }
+
+  // PIPEBUILD.6-1 — the offer board this contact is on (describeContactBoard).
+  // Per-contact: uncached suffix only.
+  if (typeof opts.boardContextLine === 'string' && opts.boardContextLine.trim()) {
+    volatileParts.push("## This person's offer board\n" + opts.boardContextLine.trim())
   }
 
   return { stable: stableParts.join('\n\n'), volatile: volatileParts.join('\n\n') }

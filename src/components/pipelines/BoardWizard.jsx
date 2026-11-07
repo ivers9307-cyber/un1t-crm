@@ -6,7 +6,7 @@ import { Button, Card } from '@/components/ui'
 import { RECIPES } from '@shared/pipelines/recipes.js'
 import {
   initialWizardState, wizardReducer, stepErrors, wizardCreateBody, wizardBodies,
-  followupPacks, WIZARD_STEPS, UN1T_STUDIO_NOTICE, OWNER_ONLY_NOTICE, isUn1tStudio,
+  followupPacks, WIZARD_STEPS, OWNER_ONLY_NOTICE, entryTypesFor,
 } from '@/lib/pipeline-wizard'
 import RecipeStep from './wizard/RecipeStep'
 import NameOfferStep from './wizard/NameOfferStep'
@@ -53,6 +53,7 @@ function stageForPack(board, pack) {
  * @param {string} props.studioName
  * @param {boolean} props.canEdit           owner, org admin or master at the studio
  * @param {string|null} props.membershipSource
+ * @param {string} [props.initialRecipe]    a RECIPES key to start on (PIPEBUILD.6-5)
  * @param {string} [props.bookingFlowId]   the Book button the follow-ups would carry
  * @param {{ iosUrl: string, androidUrl: string }} [props.appLinks]
  * @param {(body: object, bodies: object, state: object) => void} [props.onCreate]
@@ -65,13 +66,18 @@ function stageForPack(board, pack) {
  * (off), install each ticked follow-up one at a time, then show the launch panel.
  */
 export default function BoardWizard({
-  locationId, studioName, canEdit, membershipSource, bookingFlowId, appLinks,
+  locationId, studioName, canEdit, membershipSource, bookingFlowId, appLinks, initialRecipe,
   onCreate, creating: creatingProp = false, createError: createErrorProp = null,
 }) {
   const [state, dispatch] = useReducer(
     wizardReducer,
-    { studioName, bookingFlowId, appLinks },
-    initialWizardState,
+    { studioName, bookingFlowId, appLinks, entryTypes: entryTypesFor(membershipSource) },
+    // PIPEBUILD.6-5: a valid ?recipe= starts on that recipe (an unknown key is
+    // ignored by pickRecipe, so the wizard starts blank as before).
+    (init) => {
+      const blank = initialWizardState(init)
+      return initialRecipe ? wizardReducer(blank, { type: 'pickRecipe', recipeKey: initialRecipe }) : blank
+    },
   )
 
   const [creating, setCreating] = useState(false)
@@ -143,7 +149,6 @@ export default function BoardWizard({
   }
 
   if (!canEdit) return <Card><p className="text-sm text-un1t-text">{OWNER_ONLY_NOTICE}</p></Card>
-  if (isUn1tStudio(membershipSource)) return <Card><p className="text-sm text-un1t-text">{UN1T_STUDIO_NOTICE}</p></Card>
 
   if (launch) {
     return (

@@ -121,7 +121,7 @@ function stubDb(cfg) {
         update: (patch) => { q.op = 'update'; q.patch = patch; return b },
         insert: (row) => { q.op = 'insert'; q.patch = row; return Promise.resolve(finish()) },
         eq: f('eq'), in: f('in'), gte: f('gte'), lt: f('lt'), lte: f('lte'), is: f('is'), not: f('not'),
-        order: () => b, limit: () => b, maybeSingle: () => b, single: () => b,
+        order: () => b, limit: () => b, range: () => b, maybeSingle: () => b, single: () => b,
         then: (ok, bad) => Promise.resolve(finish()).then(ok, bad),
       }
       return b

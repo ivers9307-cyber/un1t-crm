@@ -50,6 +50,7 @@ function stubApi({ board = BOARD, canEdit = true, canEditWording = true, patch, 
     if (url === '/api/pipelines/b1' && method === 'GET') return ok({ board, can_edit: canEdit, can_edit_wording: canEditWording })
     if (url === '/api/pipelines/b1' && method === 'PATCH') return patch ? patch(JSON.parse(opts.body)) : ok({ board })
     if (String(url).startsWith('/api/locations/loc1/pipeline-entry-options')) return ok({ options: [{ value: 'RESET39', label: '14 Day Reset' }] })
+    if (url === '/api/pipelines/b1/report') return json(500, { success: false, error: 'no report in this test' })
     if (url === '/api/pipelines/b1/disable' && method === 'POST') return ok({ board: { ...board, enabled: false } })
     if (String(url).startsWith('/api/pipelines/b1/followups/') && method === 'PUT') return put ? put(JSON.parse(opts.body)) : ok({ followup: {} })
     throw new Error(`unexpected ${method} ${url}`)

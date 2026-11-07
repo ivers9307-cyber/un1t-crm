@@ -12,19 +12,27 @@
 
 import { RECIPES, renderPack, studioSlugFor } from '@shared/pipelines/recipes.js'
 import {
-  parseOfferConfig, stageSlugFor, MIA_NOTES_MAX, OFFER_NAME_MAX, SIGNER_MAX,
+  parseOfferConfig, stageSlugFor, ENTRY_TYPES_BY_MODULE, moduleForMembershipSource, MIA_NOTES_MAX, OFFER_NAME_MAX, SIGNER_MAX,
 } from '@shared/pipelines/offer-config.js'
 
 export const WIZARD_STEPS = Object.freeze([
   'Recipe', 'Name and offer', 'Who enters', 'Stages', 'Follow-ups', 'Notes for Mia', 'Review',
 ])
 
-// The server's words and list (src/lib/pipeline-boards.js UN1T_STUDIO_ERROR,
-// src/lib/pipeline-offer-claims.js UN1T_MEMBERSHIP_SOURCES), copied because a
-// client bundle must not import those server modules; the test pins both.
-export const UN1T_STUDIO_NOTICE = "Offer boards at un1t.online studios aren't available yet."
-export const UN1T_SOURCES = Object.freeze(['un1t_online', 'un1t'])
-export const isUn1tStudio = (source) => UN1T_SOURCES.includes(source)
+// The entry types a studio's offer module accepts (shared/pipelines/offer-config.js).
+export const entryTypesFor = (membershipSource) => ENTRY_TYPES_BY_MODULE[moduleForMembershipSource(membershipSource)]
+
+export const ENTRY_TYPE_LABELS = Object.freeze({
+  trial_purchase: 'A paid trial',
+  corp_promo: 'A corporate promo',
+  lead_source: 'A lead source',
+  glofox_plan: 'A Glofox plan',
+  tag: 'A tag',
+  un1t_product: 'A un1t.online product',
+})
+export const ENTRY_TYPE_HELP = Object.freeze({
+  un1t_product: 'People who buy this product enter the board.',
+})
 
 export const OWNER_ONLY_NOTICE = 'Only owners can build boards.'
 export const DEFAULT_PRIORITY = 100
@@ -43,6 +51,7 @@ export const TRIAL_MATCH_LABELS = Object.freeze({
 })
 const ENTRY_WORDS = Object.freeze({
   corp_promo: 'People who claim the promo…',
+  un1t_product: 'People who buy the un1t.online product…',
   lead_source: 'People who come in through the lead source…',
   glofox_plan: 'People on the Glofox membership…',
   tag: 'People tagged…',
@@ -76,6 +85,7 @@ export function initialWizardState(studio = {}) {
     showErrors: false,
     studio: {
       name: String(studio.studioName ?? '').trim(),
+      ...(Array.isArray(studio.entryTypes) ? { entryTypes: [...studio.entryTypes] } : {}),
       ...(studio.bookingFlowId ? { bookingFlowId: studio.bookingFlowId } : {}),
       ...(studio.appLinks ? { appLinks: studio.appLinks } : {}),
     },
@@ -140,7 +150,11 @@ export function wizardReducer(state, action) {
     case 'pickRecipe': {
       const recipe = RECIPES[action.recipeKey]
       if (!recipe || state.recipeKey === recipe.key) return { ...state, showErrors: false }
-      return { ...state, ...fromRecipe(recipe), showErrors: false }
+      const next = fromRecipe(recipe)
+      // A recipe whose default entry type does not work at this studio starts on the first one that does.
+      const allowed = state.studio?.entryTypes
+      if (allowed?.length && !allowed.includes(next.entry.type)) next.entry = { type: allowed[0], values: [] }
+      return { ...state, ...next, showErrors: false }
     }
     case 'setName': return { ...state, name: String(action.name ?? '') }
     case 'setOfferName': return { ...state, offerName: String(action.name ?? '') }
@@ -150,6 +164,15 @@ export function wizardReducer(state, action) {
     case 'setEntryValues':
       if (!state.entry) return state
       return { ...state, entry: { ...state.entry, values: Array.isArray(action.values) ? [...action.values] : [] } }
+    case 'setEntryType': {
+      const allowed = state.studio?.entryTypes
+      if (!state.entry || (allowed && !allowed.includes(action.entryType))) return state
+      if (state.entry.type === action.entryType) return state
+      // Each type lists different values: a type change empties the pick.
+      const entry = { type: action.entryType, values: [] }
+      if (action.entryType === 'trial_purchase') entry.match = 'plan_code'
+      return { ...state, entry }
+    }
     case 'setEntryMatch':
       if (!state.entry || state.entry.type !== 'trial_purchase') return state
       if (state.entry.match === action.match) return state

@@ -35,6 +35,7 @@ import { logError, logWarn } from '@/lib/log'
 import { countCheckinSends, readCheckinSendsToday, checkinDayStartIso } from './checkin-counts'
 import { isWhatsAppStaffOutbound } from '@/lib/whatsapp-staff-sources'
 import { resolveAgentSettingsForLocation } from './settings-resolve'
+import { selectAll, selectAllByKeys } from '@/lib/select-all'
 
 // MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
 // like the same person who answers the thread.
@@ -880,6 +881,57 @@ async function reopenStaleCheckinClaims(db, locationId, nowMs, bump) {
 }
 
 /**
+ * PIPEBUILD.6 — contacts a board's own follow-up already covers. An open deal
+ * on an enabled offer board, sitting in a stage of this `role` that has a LIVE
+ * pipeline_stage_followups row, is messaged by that follow-up; the first-class
+ * check-in must not send a second message to the same person.
+ * Returns { ok: false } on ANY read error: unknown is not "not covered".
+ */
+export async function contactsCoveredByBoardFollowup(db, { locationId, contactIds, role = 'first_class' }) {
+  const ids = [...new Set((contactIds || []).filter(Boolean))]
+  const covered = new Set()
+  if (ids.length === 0) return { ok: true, ids: covered }
+  const opts = { chunkSize: 200 }
+  try {
+    // A studio with no enabled offer board has nothing to cover: one read,
+    // and the deals table is never touched.
+    const pipelines = await selectAll((from, to) => db.from('pipelines')
+      .select('id').eq('location_id', locationId).eq('enabled', true).eq('board_type', 'offer')
+      .order('id').range(from, to))
+    if (pipelines.length === 0) return { ok: true, ids: covered }
+    const offerIds = pipelines.map((p) => p.id)
+    const offerBoards = new Set(offerIds)
+
+    const deals = await selectAllByKeys(ids, (chunk, from, to) => db.from('deals')
+      .select('id, contact_id, pipeline_id, stage_id')
+      .eq('status', 'open').eq('location_id', locationId).in('pipeline_id', offerIds).in('contact_id', chunk)
+      .order('id').range(from, to), opts)
+    const withBoard = deals.filter((d) => d.pipeline_id && d.stage_id && offerBoards.has(d.pipeline_id))
+    if (withBoard.length === 0) return { ok: true, ids: covered }
+
+    const stageIds = [...new Set(withBoard.filter((d) => offerBoards.has(d.pipeline_id)).map((d) => d.stage_id))]
+    if (stageIds.length === 0) return { ok: true, ids: covered }
+    const stages = await selectAllByKeys(stageIds, (chunk, from, to) => db.from('pipeline_stages')
+      .select('id').in('id', chunk).eq('stage_role', role)
+      .order('id').range(from, to), opts)
+    const roleStages = stages.map((r) => r.id)
+    if (roleStages.length === 0) return { ok: true, ids: covered }
+    const followups = await selectAllByKeys(roleStages, (chunk, from, to) => db.from('pipeline_stage_followups')
+      .select('id, stage_id').in('stage_id', chunk).eq('state', 'live')
+      .order('id').range(from, to), opts)
+    const liveStages = new Set(followups.map((f) => f.stage_id))
+    const roleSet = new Set(roleStages)
+    for (const d of withBoard) {
+      if (offerBoards.has(d.pipeline_id) && roleSet.has(d.stage_id) && liveStages.has(d.stage_id)) covered.add(d.contact_id)
+    }
+    return { ok: true, ids: covered }
+  } catch (err) {
+    logError('agent-followups', 'board follow-up coverage read failed', { locationId, err })
+    return { ok: false }
+  }
+}
+
+/**
  * One cron tick of first-class check-ins (spec:
  * docs/AGENT_FIRST_CLASS_CHECKIN_SPEC.md). Case A (open 24h window —
  * they messaged us recently, usually because Mia booked the class) →
@@ -940,11 +992,28 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
     // reads differently from a day of candidates all skipped.
     results.candidates += (contacts || []).length
 
+    // PIPEBUILD.6 — a person a board's live first-class follow-up already
+    // messages is not checked in on as well. An unreadable answer skips the
+    // studio this tick rather than risk a double message.
+    const coverage = await contactsCoveredByBoardFollowup(db, {
+      locationId: location.id, contactIds: (contacts || []).map((c) => c.id), role: 'first_class',
+    })
+    if (!coverage.ok) {
+      logError('agent-followups', 'checkin skipped for the studio: board follow-up coverage unreadable', { locationId: location.id })
+      bump('board_followup_read_failed')
+      continue
+    }
+    const candidates = (contacts || []).filter((c) => {
+      if (!coverage.ids.has(c.id)) return true
+      bump('board_followup'); results.skipped++
+      return false
+    })
+
     const branding = await getLocationBranding(db, location.id)
     const knowledge = await loadAgentKnowledge(db, location.id)
     const capability = promptCapabilityFor(location, settings) // T6-D
 
-    for (const contact of contacts || []) {
+    for (const contact of candidates) {
       try {
         const decision = classifyCheckinCandidate({
           stage: contact.pipeline_stage_slug,

@@ -40,7 +40,7 @@ export const BOARD_KEYS = Object.freeze({
 export const CLAIM_BOARD_MODULES = Object.freeze([BOARD_KEYS.PAID_TRIAL, BOARD_KEYS.PROGRAMMES])
 
 /** PIPEBUILD.3b — modules whose boards are configured offers, placed by priority (3g). */
-export const OFFER_MODULES = Object.freeze(['offer'])
+export const OFFER_MODULES = Object.freeze(['offer', 'offer_un1t'])
 
 /** PIPEBUILD.3g — where an offer board without a usable priority sorts. */
 export const OFFER_DEFAULT_PRIORITY = 100
