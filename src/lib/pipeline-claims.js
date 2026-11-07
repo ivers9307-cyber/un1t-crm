@@ -334,7 +334,16 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
   // anywhere else the pass refuses it), so it is never loaded here and
   // placementDescriptors holds it. offersRefused therefore only ever names
   // `offer` boards a un1t.online studio refuses.
-  const offerRows = derived.filter((b) => OFFER_MODULES.includes(b.module) && b.module !== 'offer_un1t')
+  const enabledOfferRows = derived.filter((b) => OFFER_MODULES.includes(b.module) && b.module !== 'offer_un1t')
+  // AUDIT.2 — only a BASELINED offer board loads claims and takes purchases
+  // out of the €39 claim here. placementDescriptors holds an unbaselined one
+  // on every event path (PIPEBUILD.5c), so stripping for it left a current
+  // €39 buyer with no paid claim and no board to go to: on the next webhook
+  // they read as a Class Pack member and their deal left the €39 board until
+  // the nightly pass. The nightly strips for every enabled offer board because
+  // it places them (silently). The membership-source read below still keys on
+  // every enabled offer board, so a refusal is answered exactly as before.
+  const offerRows = enabledOfferRows.filter((b) => b.baseline_at != null)
   if (!legacyBoards && offerRows.length === 0) return { ok: true, boards, claimBoards: false, claims: null, ...holds }
 
   // The membership source is read first (only when an offer board runs), so a
@@ -349,7 +358,7 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
   // hold no trial purchase (they are held, the other boards run).
   const offerTrialEntries = offerPurchaseEntries(offerRows)
   let offersRefused = null
-  if (offerRows.length > 0) {
+  if (enabledOfferRows.length > 0) {
     const source = await readMembershipSource(db, locationId)
     if (!source.ok && offerTrialEntries.length > 0) {
       logWarn('pipeline-claims', 'membership source unreadable beside a trial_purchase offer board; placing nobody', { locationId })

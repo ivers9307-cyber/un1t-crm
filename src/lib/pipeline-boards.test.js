@@ -31,7 +31,7 @@ const clientConfig = (over = {}) => ({
 
 const seedDb = (source = 'glofox', extra = {}) => fakeDb({
   locations: [{ id: LOC, membership_source: source }, { id: OTHER, membership_source: 'glofox' }],
-  pipelines: [{ id: 'legacy1', location_id: LOC, key: 'acquisition', name: 'Acquisition', board_type: null, enabled: true, is_primary: true, priority: 100, config: {}, display_order: 1 }],
+  pipelines: [{ id: 'legacy1', location_id: LOC, key: 'acquisition', name: 'Acquisition', board_type: null, mode: 'derived', enabled: true, is_primary: true, priority: 100, config: {}, display_order: 1 }],
   ...extra,
 })
 
@@ -729,5 +729,35 @@ describe('setBoardEnabled', () => {
     expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
       .toMatchObject({ ok: false, status: 409, code: 'invalid_config' })
     expect(db.calls.updates).toHaveLength(0)
+  })
+
+  // AUDIT.1 — an offer board switches on only beside an enabled derived primary
+  // board: the router files everyone without a live claim on it, and every
+  // event path places from it.
+  it('enableRefusesWithoutPrimaryBoard', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    db.tables.pipelines.find((p) => p.id === 'legacy1').enabled = false
+    const before = db.calls.updates.length
+    expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
+      .toMatchObject({ ok: false, status: 409, code: 'no_primary_board', error: expect.stringContaining('Acquisition board first') })
+    expect(db.calls.updates).toHaveLength(before)
+  })
+
+  it('enableRefusesBesideAManualPrimaryBoard', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    db.tables.pipelines.find((p) => p.id === 'legacy1').mode = 'manual'
+    expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true }))
+      .toMatchObject({ ok: false, status: 409, code: 'no_primary_board' })
+  })
+
+  it('disableNeedsNoPrimaryBoard', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: true })
+    db.tables.pipelines.find((p) => p.id === 'legacy1').enabled = false
+    expect(await setBoardEnabled(db, { locationId: LOC, boardId: board.id, enabled: false }))
+      .toMatchObject({ ok: true, board: { enabled: false } })
   })
 })
