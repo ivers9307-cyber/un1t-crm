@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./pipeline-stage-coverage', () => ({ loadStageCoverage: vi.fn() }))
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
+vi.mock('./pipeline-offer-claims', async (importOriginal) => ({ ...(await importOriginal()), loadOfferClaimsForLocation: vi.fn() }))
 
 import { buildBoardReport } from './pipeline-board-report'
 import { loadStageCoverage } from './pipeline-stage-coverage'
+import { loadOfferClaimsForLocation } from './pipeline-offer-claims'
 import { logError } from './log'
 
 const LOC = 'loc-1'
@@ -52,10 +54,28 @@ const baseDeals = () => [
   deal('d1', S1, ago(2)), deal('d2', S1, ago(5)), deal('d3', S2, ago(10)),
   deal('d4', S2, ago(20), { status: 'won' }), deal('d5', S1, ago(60)),
 ]
-const run = (tables, b = board(), opts = {}, dbOpts) => buildBoardReport(fakeDb(tables, dbOpts), { board: b, locationId: LOC, nowMs: NOW, ...opts })
+// Claim start per contact. By default each deal's claim starts when the deal
+// was created (so the older tests read as before); a test can override it.
+let claimStarts = null
+const claimsFor = (deals) => (_db, { boards, contacts }) => {
+  const starts = claimStarts || new Map((deals || []).map((d) => [d.contact_id, d.created_at]))
+  const key = boards[0].key
+  const offersByContact = new Map()
+  for (const c of contacts) {
+    const iso = starts.get(c.id)
+    if (iso) offersByContact.set(c.id, new Map([[key, { start: Date.parse(iso), end: Date.parse(iso) + 14 * 86400000, source: 'trial_purchase' }]]))
+  }
+  return Promise.resolve({ ok: true, offersByContact, pending: [], skipped: [] })
+}
+const run = (tables, b = board(), opts = {}, dbOpts) => {
+  if (!loadOfferClaimsForLocation.getMockImplementation()) loadOfferClaimsForLocation.mockImplementation(claimsFor(tables.deals))
+  return buildBoardReport(fakeDb(tables, dbOpts), { board: b, locationId: LOC, nowMs: NOW, ...opts })
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
+  loadOfferClaimsForLocation.mockReset()
+  claimStarts = null
   loadStageCoverage.mockResolvedValue({ ok: true, boards: [{ id: 'b1', stages: [{ id: S1, followups: [] }, { id: S2, followups: [] }] }] })
 })
 
@@ -103,6 +123,58 @@ describe('funnel', () => {
     expect(r.funnel.entered7).toBe(1500)
     expect(r.funnel.stages[0].now).toBe(1500)
     expect(pageLog.filter(([t]) => t === 'deals').length).toBe(2)
+  })
+})
+
+describe('entered counts by the board claim', () => {
+  it('counts a deal created long ago that moved in when its claim started 3 days ago', async () => {
+    claimStarts = new Map([['c-old', ago(3)]])
+    const r = await run({ deals: [deal('old', S1, ago(200), { contact_id: 'c-old' })], activities: [] })
+    expect(r.funnel.entered7).toBe(1)
+    expect(r.funnel.entered30).toBe(1)
+    expect(r.conversion).toEqual({ entered30: 1, converted30: 0, rate: 0 })
+    expect(r.health.map((h) => h.code)).not.toContain('nobody_entered_7d')
+  })
+
+  it('a deal created this week whose claim started long ago is not entered', async () => {
+    claimStarts = new Map([['c-new', ago(90)]])
+    const r = await run({ deals: [deal('new', S1, ago(1), { contact_id: 'c-new' })], activities: [] })
+    expect(r.funnel.entered7).toBe(0)
+    expect(r.conversion.entered30).toBe(0)
+  })
+
+  it('a claims read failure nulls the entered numbers and raises no nobody_entered_7d', async () => {
+    loadOfferClaimsForLocation.mockResolvedValue({ ok: false, reason: 'purchases_unreadable', err: 'boom' })
+    const r = await run({ deals: [deal('d5', S1, ago(60))], activities: [] })
+    expect(r.funnel).not.toBeNull()
+    expect(r.funnel.entered7).toBeNull()
+    expect(r.funnel.entered30).toBeNull()
+    expect(r.funnel.stages[0].now).toBe(1)
+    expect(r.conversion).toEqual({ entered30: null, converted30: null, rate: null })
+    expect(r.health.map((h) => h.code)).not.toContain('nobody_entered_7d')
+    expect(logError).toHaveBeenCalledTimes(1)
+  })
+
+  it('a board config the loader skips counts as unreadable', async () => {
+    loadOfferClaimsForLocation.mockResolvedValue({ ok: true, offersByContact: new Map(), pending: [], skipped: [{ key: 'k', errors: ['x'] }] })
+    const r = await run({ deals: baseDeals(), activities: [] })
+    expect(r.funnel.entered7).toBeNull()
+  })
+
+  it('passes ids only for a purchase board, and the board as enabled even when paused', async () => {
+    await run({ deals: baseDeals(), activities: [] }, board({ enabled: false }))
+    const args = loadOfferClaimsForLocation.mock.calls[0][1]
+    expect(args.contacts).toEqual(['c-d1', 'c-d2', 'c-d3', 'c-d4', 'c-d5'].map((id) => ({ id })))
+    expect(args.boards).toEqual([expect.objectContaining({ key: 'k', enabled: true })])
+    expect(args).toMatchObject({ locationId: LOC, now: NOW })
+  })
+
+  it('reads the contact columns (paged) for a recorded entry type', async () => {
+    const contacts = [{ id: 'c-d1', last_lead_source: 'meta' }, { id: 'c-d2', last_lead_source: null }]
+    const pageLog = []
+    await run({ deals: baseDeals().slice(0, 2), activities: [], contacts }, board({ config: { entry: { type: 'lead_source', values: ['meta'] } } }), {}, { pageLog })
+    expect(loadOfferClaimsForLocation.mock.calls[0][1].contacts).toEqual(contacts)
+    expect(pageLog.some(([t]) => t === 'contacts')).toBe(true)
   })
 })
 

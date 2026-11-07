@@ -82,8 +82,8 @@ export default function BoardReport({ boardId, stages: boardStages = [] }) {
           <h3 className="mb-1 text-sm font-semibold text-un1t-text">Conversion</h3>
           {!conversion ? <Broken /> : (
             <dl className="grid grid-cols-3 gap-3 text-sm">
-              <div><dt className="text-un1t-subtle">Entered in 30 days</dt><dd className="text-un1t-text">{conversion.entered30}</dd></div>
-              <div><dt className="text-un1t-subtle">Converted</dt><dd className="text-un1t-text">{conversion.converted30}</dd></div>
+              <div><dt className="text-un1t-subtle">Entered in 30 days</dt><dd className="text-un1t-text">{conversion.entered30 ?? '—'}</dd></div>
+              <div><dt className="text-un1t-subtle">Converted</dt><dd className="text-un1t-text">{conversion.converted30 ?? '—'}</dd></div>
               <div><dt className="text-un1t-subtle">Conversion rate</dt><dd className="text-un1t-text">{conversion.rate == null ? '—' : `${Math.round(conversion.rate * 100)}%`}</dd></div>
             </dl>
           )}

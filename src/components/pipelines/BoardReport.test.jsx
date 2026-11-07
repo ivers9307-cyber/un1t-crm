@@ -69,6 +69,12 @@ describe('BoardReport', () => {
     expect(await screen.findByText('3 purchases')).toBeTruthy()
     expect(screen.getByText('—')).toBeTruthy()
   })
+  it('shows dashes when the entered numbers are unknown', async () => {
+    stub({ ...DATA, conversion: { entered30: null, converted30: null, rate: null } })
+    render(<BoardReport boardId="b1" />)
+    await screen.findAllByText('New Leads')
+    expect(screen.getAllByText('—').length).toBe(3)
+  })
   it('treats success with null data as every block failing, without throwing', async () => {
     stub(null)
     render(<BoardReport boardId="b1" />)

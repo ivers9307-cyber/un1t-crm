@@ -6,15 +6,25 @@
 // other blocks' problem). Every read is scoped to the studio it was given, and
 // every fan-out is paged (selectAll / selectAllByKeys, explicit .order()).
 //
+// "Entered" is the board CLAIM's start (loadOfferClaimsForLocation), never the
+// deal's created_at: a deal follows the person across boards (pipeline_id +
+// stage_id in one update), so a deal on this board is usually months older
+// than the board's own clock. funnel.entered7/entered30, conversion's
+// entered30/converted30 and health's nobody_entered_7d all read the claims;
+// when the claims cannot be read those numbers are null and the warning is
+// not raised. They count distinct people.
+//
 // Honest limits, said in the output where they matter:
 //   - movedIn* counts the "Pipeline: moved to <stage name>" timeline rows, so
 //     history before a stage rename is not counted (historyNote);
 //   - a deal CREATED onto the first stage logs no move, so deals created in the
-//     window are added to the board's first stage.
+//     window are added to the board's first stage (this one IS created_at: it
+//     stands in for the move row a creation never writes).
 import { RECIPES } from '@shared/pipelines/recipes.js'
 import { stageRoleOf, isPileRole } from '@shared/pipelines/stage-roles'
 import { otherPackTemplateNames } from './pipeline-boards'
-import { purchaseMatchesEntry } from './pipeline-offer-claims'
+import { purchaseMatchesEntry, loadOfferClaimsForLocation } from './pipeline-offer-claims'
+import { requiredFields as OFFER_CONTACT_FIELDS } from '@shared/pipelines/offer'
 import { loadStageCoverage } from './pipeline-stage-coverage'
 import { selectAll, selectAllByKeys } from './select-all'
 import { logError } from './log'
@@ -25,6 +35,8 @@ const CHUNK = 200
 const REPLY_WINDOW_MS = 72 * 3600000
 const BOOKING_WINDOW_MS = 14 * DAY_MS
 const CANCELLED = new Set(['CANCELLED', 'CANCELED', 'LATE_CANCELLED'])
+// Entry types matched on contact columns: the claims loader needs those columns.
+const RECORDED_ENTRY_TYPES = new Set(['lead_source', 'glofox_plan', 'tag'])
 
 function packTemplateNames(board, followup, firstName) {
   const names = new Set([firstName])
@@ -75,7 +87,50 @@ async function readMoves(db, locationId, dealIds, sinceIso) {
     .range(from, to), { chunkSize: CHUNK })
 }
 
-function buildFunnel(board, deals, moves, nowMs) {
+// Map<contactId, claim start ms> for THIS board's deal contacts. Throws when
+// the claims cannot be read (or the board's config will not parse), so the
+// caller reports "unknown", never "nobody entered". Never writes a claim.
+async function readClaimStarts(db, board, locationId, deals, nowMs) {
+  const contactIds = [...new Set(deals.map((d) => d.contact_id).filter(Boolean))]
+  if (contactIds.length === 0) return new Map()
+  const contacts = RECORDED_ENTRY_TYPES.has(board.config?.entry?.type)
+    ? await selectAllByKeys(contactIds, (keys, from, to) => db
+      .from('contacts')
+      .select(OFFER_CONTACT_FIELDS.join(', '))
+      .in('id', keys)
+      .order('id', { ascending: true })
+      .range(from, to), { chunkSize: CHUNK })
+    : contactIds.map((id) => ({ id }))
+  // The loader reads ENABLED boards only; a paused board still has a history.
+  const res = await loadOfferClaimsForLocation(db, { locationId, boards: [{ ...board, enabled: true }], contacts, now: nowMs })
+  if (!res?.ok) throw new Error(`claims unreadable: ${res?.reason || 'unknown'}`)
+  if ((res.skipped || []).some((s) => s.key === board.key)) throw new Error('board config unreadable')
+  const starts = new Map()
+  for (const [contactId, offers] of res.offersByContact || []) {
+    const start = Number(offers.get(board.key)?.start)
+    if (Number.isFinite(start)) starts.set(contactId, start)
+  }
+  return starts
+}
+
+// Distinct people on this board whose claim started in the last 7 / 30 days,
+// or nulls when the claims are unknown.
+function enteredCounts(deals, starts, nowMs) {
+  if (!starts) return { entered7: null, entered30: null }
+  const since7 = nowMs - 7 * DAY_MS
+  const since30 = nowMs - 30 * DAY_MS
+  const in7 = new Set()
+  const in30 = new Set()
+  for (const d of deals) {
+    const t = starts.get(d.contact_id)
+    if (t == null) continue
+    if (t >= since30) in30.add(d.contact_id)
+    if (t >= since7) in7.add(d.contact_id)
+  }
+  return { entered7: in7.size, entered30: in30.size }
+}
+
+function buildFunnel(board, deals, moves, nowMs, entered) {
   const stages = [...(board.stages || [])].sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
   const since7 = nowMs - 7 * DAY_MS
   const since30 = nowMs - 30 * DAY_MS
@@ -91,18 +146,18 @@ function buildFunnel(board, deals, moves, nowMs) {
     if (t >= since30) in30.set(stageId, (in30.get(stageId) || 0) + 1)
     if (t >= since7) in7.set(stageId, (in7.get(stageId) || 0) + 1)
   }
-  let entered7 = 0
-  let entered30 = 0
+  let created7 = 0
+  let created30 = 0
   for (const d of deals) {
     const t = ms(d.created_at)
     if (t == null) continue
-    if (t >= since30) entered30 += 1
-    if (t >= since7) entered7 += 1
+    if (t >= since30) created30 += 1
+    if (t >= since7) created7 += 1
   }
   const first = stages[0]?.id
   if (first) {
-    if (entered7) in7.set(first, (in7.get(first) || 0) + entered7)
-    if (entered30) in30.set(first, (in30.get(first) || 0) + entered30)
+    if (created7) in7.set(first, (in7.get(first) || 0) + created7)
+    if (created30) in30.set(first, (in30.get(first) || 0) + created30)
   }
   return {
     stages: stages.map((s) => ({
@@ -113,24 +168,25 @@ function buildFunnel(board, deals, moves, nowMs) {
       movedIn7: in7.get(s.id) || 0,
       movedIn30: in30.get(s.id) || 0,
     })),
-    entered7,
-    entered30,
+    entered7: entered.entered7,
+    entered30: entered.entered30,
     historyNote: HISTORY_NOTE,
   }
 }
 
-function buildConversion(board, deals, nowMs) {
+function buildConversion(board, deals, starts, nowMs) {
+  if (!starts) return { entered30: null, converted30: null, rate: null }
   const since30 = nowMs - 30 * DAY_MS
   const roles = new Map((board.stages || []).map((s) => [s.id, stageRoleOf(s)]))
-  let entered30 = 0
-  let converted30 = 0
+  const entered = new Set()
+  const converted = new Set()
   for (const d of deals) {
-    const t = ms(d.created_at)
+    const t = starts.get(d.contact_id)
     if (t == null || t < since30) continue
-    entered30 += 1
-    if (roles.get(d.stage_id) === 'converted' || d.status === 'won') converted30 += 1
+    entered.add(d.contact_id)
+    if (roles.get(d.stage_id) === 'converted' || d.status === 'won') converted.add(d.contact_id)
   }
-  return { entered30, converted30, rate: entered30 === 0 ? null : converted30 / entered30 }
+  return { entered30: entered.size, converted30: converted.size, rate: entered.size === 0 ? null : converted.size / entered.size }
 }
 
 async function buildRevenue(db, board, locationId, deals) {
@@ -318,13 +374,16 @@ export async function buildBoardReport(db, { board, locationId, nowMs = Date.now
   if (deals) {
     moves = await block('moves', ids, () => readMoves(db, locationId, deals.map((d) => d.id), new Date(nowMs - 30 * DAY_MS).toISOString()))
   }
-  const funnel = deals && moves ? buildFunnel(board, deals, moves, nowMs) : null
-  const conversion = deals ? buildConversion(board, deals, nowMs) : null
+  let starts = null
+  if (deals) starts = await block('claims', ids, () => readClaimStarts(db, board, locationId, deals, nowMs))
+  const entered = deals ? enteredCounts(deals, starts, nowMs) : { entered7: null, entered30: null }
+  const funnel = deals && moves ? buildFunnel(board, deals, moves, nowMs, entered) : null
+  const conversion = deals ? buildConversion(board, deals, starts, nowMs) : null
   const revenue = includeRevenue && deals
     ? await block('revenue', ids, () => buildRevenue(db, board, locationId, deals))
     : null
   const followups = deals ? await block('followups', ids, () => buildFollowups(db, board, locationId, deals)) : null
-  const entered7 = deals ? buildFunnel(board, deals, [], nowMs).entered7 : null
+  const entered7 = entered.entered7
   const health = await block('health', ids, () => buildHealth(db, board, locationId, entered7))
   return { funnel, conversion, revenue, followups, health }
 }
