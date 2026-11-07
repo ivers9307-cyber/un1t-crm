@@ -1,6 +1,8 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+const paidTrialIds = vi.hoisted(() => vi.fn())
+vi.mock('./paid-trial-products.js', () => ({ paidTrialProductIdsFor: paidTrialIds }))
 
 import {
   listBoards, getBoard, createBoard, updateBoard, setBoardEnabled, boardLocationId,
@@ -8,6 +10,8 @@ import {
 } from './pipeline-boards.js'
 import { fakeDb, uniqueError } from './pipeline-boards.test-helpers.js'
 import { stateFromBoard, settingsConfig, wizardReducer } from './pipeline-wizard.js'
+
+beforeEach(() => { paidTrialIds.mockReset(); paidTrialIds.mockResolvedValue(new Set(['paid-trial'])) })
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const OTHER = 'a0000000-0000-0000-0000-000000000002'
@@ -40,6 +44,30 @@ async function createdBoard(db, over = {}) {
 const stageBySlug = (board, slug) => board.stages.find((s) => s.slug === slug)
 
 describe('createBoard', () => {
+  it('refusesThePaidTrialProduct', async () => {
+    const db = seedDb('un1t_online')
+    const config = clientConfig({ entry: { type: 'un1t_product', values: ['other', 'paid-trial'] } })
+    const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config })
+    expect(res).toMatchObject({ ok: false, status: 400, code: 'paid_trial_product' })
+    expect(db.calls.rpc).toHaveLength(0)
+  })
+
+  it('aFailedPaidTrialReadIs503', async () => {
+    paidTrialIds.mockRejectedValue(new Error('down'))
+    const db = seedDb('un1t_online')
+    const config = clientConfig({ entry: { type: 'un1t_product', values: ['prod-1'] } })
+    const res = await createBoard(db, { locationId: LOC, name: 'Reset', recipeKey: 'paid_trial_offer', config })
+    expect(res).toMatchObject({ ok: false, status: 503, code: 'paid_trial_products_unreadable' })
+    expect(db.calls.rpc).toHaveLength(0)
+  })
+
+  it('aNormalProductPasses', async () => {
+    const db = seedDb('un1t_online')
+    const config = clientConfig({ entry: { type: 'un1t_product', values: ['prod-1'] } })
+    await createdBoard(db, { config })
+    expect(db.calls.rpc).toHaveLength(1)
+  })
+
   it('createsOffBoardWithStages', async () => {
     const db = seedDb()
     const board = await createdBoard(db)
@@ -277,6 +305,23 @@ describe('listBoards / getBoard', () => {
 })
 
 describe('updateBoard', () => {
+  it('refusesThePaidTrialProductAndUnreadableCheck', async () => {
+    const db = seedDb('un1t_online')
+    const board = await createdBoard(db, { config: clientConfig({ entry: { type: 'un1t_product', values: ['prod-1'] } }) })
+    const cfg = structuredClone(board.config)
+    cfg.entry.values = ['paid-trial']
+    const before = db.calls.updates.length
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config: cfg } })
+    expect(res).toMatchObject({ ok: false, status: 400, code: 'paid_trial_product' })
+    paidTrialIds.mockRejectedValue(new Error('down'))
+    const res2 = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config: cfg } })
+    expect(res2).toMatchObject({ ok: false, status: 503, code: 'paid_trial_products_unreadable' })
+    expect(db.calls.updates).toHaveLength(before)
+    paidTrialIds.mockResolvedValue(new Set(['paid-trial']))
+    cfg.entry.values = ['prod-2']
+    expect((await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config: cfg } })).ok).toBe(true)
+  })
+
   const editableConfig = (board, mutate) => {
     const c = structuredClone(board.config)
     mutate(c)

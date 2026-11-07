@@ -27,6 +27,7 @@ import { leadSourceSchema } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
 import { studioTagVocabulary } from '@/lib/studio-tag-vocabulary'
 import { logError } from '@/lib/log'
+import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 
 const MODULE = 'pipeline-entry-options'
 const PAGE = 1000
@@ -172,6 +173,13 @@ async function glofoxPlanOptions(db, locationId) {
 }
 
 async function un1tProductOptions(db, locationId) {
+  // The €39 paid trial has its own board; it is never offered as a way in.
+  let paidTrial
+  try {
+    paidTrial = await paidTrialProductIdsFor(db, locationId)
+  } catch (err) {
+    return unreadable("the studio's paid-trial products", err, { locationId })
+  }
   const { data, error } = await db
     .from('un1t_products')
     .select('un1t_id, title, price_cents')
@@ -182,7 +190,7 @@ async function un1tProductOptions(db, locationId) {
   if (error) return unreadable('the un1t.online products', error, { locationId })
   const map = new Map()
   for (const p of data || []) {
-    if (!p.un1t_id) continue
+    if (!p.un1t_id || paidTrial.has(p.un1t_id)) continue
     const label = p.price_cents == null ? p.title : `${p.title} · €${p.price_cents % 100 === 0 ? p.price_cents / 100 : (p.price_cents / 100).toFixed(2)}`
     addOption(map, p.un1t_id, label)
   }

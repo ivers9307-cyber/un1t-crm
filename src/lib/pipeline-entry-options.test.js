@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
+const paidTrialIds = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/paid-trial-products', () => ({ paidTrialProductIdsFor: paidTrialIds }))
 
 import { listEntryOptions } from './pipeline-entry-options'
 import { CORP_PROMOS } from '@/lib/corp-promos'
@@ -39,7 +41,7 @@ function makeDb(tables) {
 }
 
 let db
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => { vi.clearAllMocks(); paidTrialIds.mockReset(); paidTrialIds.mockResolvedValue(new Set()) })
 
 describe('listEntryOptions', () => {
   it('unknownTypeIs400', async () => {
@@ -161,6 +163,24 @@ describe('listEntryOptions', () => {
         { value: 'p3', label: 'Pack · €49.50' },
       ] })
       expect(db.log[0].filters).toEqual({ location_id: LOC, status: 'active' })
+    })
+
+    it('un1t_product: leaves out the paid-trial product', async () => {
+      paidTrialIds.mockResolvedValue(new Set(['p1']))
+      db = makeDb({
+        un1t_products: () => ({ data: [
+          { un1t_id: 'p1', title: '14 Day Reset', price_cents: 3900 },
+          { un1t_id: 'p3', title: 'Pack', price_cents: 4950 },
+        ], error: null }),
+      })
+      const res = await listEntryOptions(db, { locationId: LOC, type: 'un1t_product' })
+      expect(res.options.map((o) => o.value)).toEqual(['p3'])
+    })
+
+    it('un1t_product: a failed paid-trial read is 503, not a full list', async () => {
+      paidTrialIds.mockRejectedValue(new Error('down'))
+      db = makeDb({ un1t_products: () => ({ data: [{ un1t_id: 'p1', title: 'X', price_cents: 100 }], error: null }) })
+      expect(await listEntryOptions(db, { locationId: LOC, type: 'un1t_product' })).toMatchObject({ ok: false, status: 503 })
     })
 
     it('un1t_product: a failed read is 503', async () => {

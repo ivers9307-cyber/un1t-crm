@@ -29,6 +29,7 @@ import { RECIPES, templateNameFor } from '@shared/pipelines/recipes.js'
 import { boardKeyFor, moduleForMembershipSource, parseOfferConfig, stageSlugFor } from '@shared/pipelines/offer-config.js'
 import { stagesFor } from '@shared/pipelines/offer.js'
 import { readMembershipSource } from './pipeline-offer-claims.js'
+import { paidTrialProductIdsFor } from './paid-trial-products.js'
 import { assertNotLegacyBoard } from './pipeline-board-guard.js'
 import { archiveSupersededSequence } from './followup-owned-sequences.js'
 import { logError } from './log.js'
@@ -350,6 +351,26 @@ async function withFollowupWording(db, locationId, board) {
  * @param {object} db
  * @param {{ locationId: string, name: string, recipeKey: string, config: object, priority?: number, createdBy?: string|null }} input
  */
+/**
+ * The €39 paid-trial product already has its own board; a un1t_product board
+ * on it would take every buyer off that board and double their messages.
+ * Returns a refusal, or null when the entry is fine.
+ */
+async function paidTrialEntryRefusal(db, locationId, entry) {
+  if (entry?.type !== 'un1t_product') return null
+  let ids
+  try {
+    ids = await paidTrialProductIdsFor(db, locationId)
+  } catch (err) {
+    logError(MODULE, 'paid-trial products read failed', { locationId, err: err?.message || String(err) })
+    return fail(503, "Could not check this studio's paid-trial products.", { code: 'paid_trial_products_unreadable' })
+  }
+  if ((entry.values || []).some((v) => ids.has(v))) {
+    return fail(400, "This product is the studio's paid trial, which already has its own board.", { code: 'paid_trial_product' })
+  }
+  return null
+}
+
 export async function createBoard(db, { locationId, name, recipeKey, config, priority, createdBy } = {}) {
   const studio = await studioModule(db, locationId)
   if (!studio.ok) return studio
@@ -376,6 +397,8 @@ export async function createBoard(db, { locationId, name, recipeKey, config, pri
     if (!parsed.ok) {
       return fail(400, 'The board setup has problems.', { code: 'invalid_config', issues: parseIssues(parsed.errors) })
     }
+    const paidTrial = await paidTrialEntryRefusal(db, locationId, parsed.config.entry)
+    if (paidTrial) return paidTrial
     const { data: newId, error } = await db.rpc('create_configured_pipeline', {
       p_location_id: locationId,
       p_key: key,
@@ -465,6 +488,8 @@ export async function updateBoard(db, { locationId, boardId, patch = {} } = {}) 
       return fail(400, 'The board setup has problems.', { code: 'invalid_config', issues: parseIssues(parsed.errors) })
     }
     next = parsed.config
+    const paidTrial = await paidTrialEntryRefusal(db, locationId, next.entry)
+    if (paidTrial) return paidTrial
   }
 
   const structural = structuralChange(row.config, next, row, patch)
