@@ -70,4 +70,48 @@ describe('BoardList', () => {
     expect(chip.label).toBe('Off')
     expect(followupChip([{ stage_id: 's', state: 'mystery' }], 's').label).toBe('None')
   })
+
+  // PIPEBUILD.5p — built-in boards are live and send; their follow-ups are
+  // sequences, read from stage-coverage, never pipeline_stage_followups.
+  function stubBoth(pipelinesData, coverage) {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).includes('/stage-coverage')) {
+        if (coverage === 'fail') return { ok: false, json: async () => ({ success: false }) }
+        return { ok: true, json: async () => ({ success: true, data: { boards: coverage } }) }
+      }
+      return { ok: true, json: async () => ({ success: true, data: pipelinesData }) }
+    }))
+  }
+  const BUILT = {
+    id: 'b9', key: 'acquisition', name: 'Acquisition', board_type: null, enabled: true, baseline_at: null, priority: 0,
+    stages: [stage('k1', 'New Leads', 1), stage('k2', '1st Class', 2), stage('k3', 'Converted', 3)], followups: [],
+  }
+  it('a built-in board with no baseline reads On, never "first placement tonight"', async () => {
+    stubBoth({ boards: [BUILT], can_edit: false }, [])
+    render(<BoardList locationId="loc1" />)
+    await screen.findByText('Acquisition')
+    expect(screen.getByText('On')).toBeTruthy()
+    expect(screen.queryByText(/first placement tonight/)).toBeNull()
+  })
+  it('a built-in board shows its sequences per stage from coverage', async () => {
+    stubBoth({ boards: [BUILT], can_edit: false }, [{
+      id: 'b9', stages: [
+        { id: 'k1', name: 'New Leads', followups: [{ id: 'q1' }, { id: 'q2' }] },
+        { id: 'k2', name: '1st Class', followups: [{ id: 'q3' }] },
+        { id: 'k3', name: 'Converted', followups: [] },
+      ],
+    }])
+    render(<BoardList locationId="loc1" />)
+    expect((await screen.findByText('2 sequences')).className).toContain('text-green-700')
+    expect(screen.getByText('1 sequence')).toBeTruthy()
+    expect(screen.getAllByText('None')).toHaveLength(1)
+  })
+  it('a failed coverage read shows no chip on a built-in board, never "None"', async () => {
+    stubBoth({ boards: [BUILT], can_edit: false }, 'fail')
+    render(<BoardList locationId="loc1" />)
+    await screen.findByText('Acquisition')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByText('None')).toBeNull()
+    expect(screen.queryByText(/sequence/)).toBeNull()
+  })
 })
