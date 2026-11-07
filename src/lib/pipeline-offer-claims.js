@@ -460,7 +460,8 @@ export async function loadOfferClaimsForContact(db, { locationId, boards, contac
 /**
  * A un1t_product board's claim from one person's un1t_transactions rows. Pure.
  * Rows whose product_id is exactly one of entry.values (case kept), not
- * refunded, with a readable remote_created_at; the newest wins. Amount is never
+ * refunded, not a subscription renewal (the same offer carrying on, never a
+ * new start), with a readable remote_created_at; the newest wins. Amount is never
  * read: a EUR 0 purchase of the product is still the offer.
  * @returns {{ start: number, end: number } | null}
  */
@@ -468,7 +469,7 @@ export function un1tProductOfferClaim(transactions, config, now = Date.now()) { 
   const values = config?.entry?.values || []
   let best = null
   for (const t of Array.isArray(transactions) ? transactions : []) {
-    if (!t || t.refunded === true || !values.includes(t.product_id)) continue
+    if (!t || t.refunded === true || t.type === 'sub_renewal' || !values.includes(t.product_id)) continue
     const at = parseMs(t.remote_created_at)
     if (at != null && (best == null || at > best)) best = at
   }
@@ -529,7 +530,7 @@ export async function loadUn1tOfferClaims(db, { locationId, boards, contactIds, 
         const chunk = productIds.slice(i, i + IN_CHUNK)
         const part = await selectAll((from, to) => db
           .from('un1t_transactions')
-          .select('un1t_id, un1t_user_id, contact_id, product_id, refunded, remote_created_at')
+          .select('un1t_id, un1t_user_id, contact_id, product_id, type, refunded, remote_created_at')
           .eq('location_id', locationId)
           .in('product_id', chunk)
           .order('un1t_id', { ascending: true })

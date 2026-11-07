@@ -386,6 +386,15 @@ describe('un1t offer claims (PIPEBUILD.3b)', () => {
     expect(c.start).toBe(T0 - DAY)
     expect(c.end - c.start).toBe(14 * DAY)
   })
+  it('un1tProductOfferClaim: a later sub_renewal does not restart the claim', () => {
+    const c = un1tProductOfferClaim([
+      tx('AbC123', iso(T0 - 5 * DAY), { type: 'sub_initial' }), tx('AbC123', iso(T0), { type: 'sub_renewal' }),
+    ], cfg, T0)
+    expect(c.start).toBe(T0 - 5 * DAY)
+  })
+  it('un1tProductOfferClaim: a renewal alone is no claim', () => {
+    expect(un1tProductOfferClaim([tx('AbC123', iso(T0), { type: 'sub_renewal' })], cfg, T0)).toBeNull()
+  })
   it('un1tProductOfferClaim: a EUR 0 row counts, case is exact, no match is null', () => {
     expect(un1tProductOfferClaim([tx('AbC123', iso(T0), { amount_cents: 0 })], cfg, T0).start).toBe(T0)
     expect(un1tProductOfferClaim([tx('abc123', iso(T0))], cfg, T0)).toBeNull()
