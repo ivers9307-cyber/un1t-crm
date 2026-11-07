@@ -6,11 +6,14 @@ vi.mock('@/lib/auth', async () => {
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('@/lib/pipeline-boards', () => ({ listBoards: vi.fn(), createBoard: vi.fn() }))
+vi.mock('@/lib/whatsapp-config', () => ({ locationsWithWhatsApp: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
 vi.mock('@/lib/sequence-access', () => ({ canBuildSequencesAt: vi.fn() }))
 
 import { GET, POST } from './route'
 import { getCurrentUser } from '@/lib/auth'
 import { listBoards, createBoard } from '@/lib/pipeline-boards'
+import { locationsWithWhatsApp } from '@/lib/whatsapp-config'
 import { canBuildSequencesAt } from '@/lib/sequence-access'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
@@ -27,11 +30,23 @@ const getReq = () => new Request(`http://x/api/locations/${LOC}/pipelines`)
 beforeEach(() => {
   vi.clearAllMocks()
   canBuildSequencesAt.mockReturnValue(false)
+  locationsWithWhatsApp.mockResolvedValue(new Set([LOC]))
   listBoards.mockResolvedValue({ ok: true, boards: [{ id: 'b1' }] })
   createBoard.mockResolvedValue({ ok: true, board: { id: 'b2', enabled: false } })
 })
 
 describe('GET /api/locations/[id]/pipelines', () => {
+  it('hasWhatsappTrueFalseNull', async () => {
+    getCurrentUser.mockResolvedValue(userWith('owner'))
+    expect((await (await GET(getReq(), props)).json()).data.has_whatsapp).toBe(true)
+    locationsWithWhatsApp.mockResolvedValue(new Set())
+    expect((await (await GET(getReq(), props)).json()).data.has_whatsapp).toBe(false)
+    locationsWithWhatsApp.mockRejectedValue(new Error('boom'))
+    const res = await GET(getReq(), props)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.has_whatsapp).toBeNull()
+  })
+
   it('otherStudioIs404', async () => {
     getCurrentUser.mockResolvedValue(userWith('owner', ['other']))
     const res = await GET(getReq(), props)
@@ -52,7 +67,7 @@ describe('GET /api/locations/[id]/pipelines', () => {
     getCurrentUser.mockResolvedValue(userWith('manager'))
     const res = await GET(getReq(), props)
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, data: { boards: [{ id: 'b1' }], can_edit: false } })
+    expect(await res.json()).toEqual({ success: true, data: { boards: [{ id: 'b1' }], can_edit: false, has_whatsapp: true } })
     expect(listBoards).toHaveBeenCalledWith(expect.anything(), LOC)
   })
 

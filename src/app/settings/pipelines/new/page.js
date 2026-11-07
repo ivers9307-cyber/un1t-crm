@@ -4,6 +4,7 @@ import { getCurrentUser, guardMasterOrOwner } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { createServerClient } from '@/lib/supabase'
 import { renderInputsFor } from '@/lib/pipeline-board-followups'
+import { RECIPES } from '@shared/pipelines/recipes.js'
 import BoardWizard from '@/components/pipelines/BoardWizard'
 
 export const dynamic = 'force-dynamic'
@@ -12,7 +13,10 @@ export const dynamic = 'force-dynamic'
 // and masters at the active studio build boards (guardMasterOrOwner, the
 // create route's gate); anyone else on the pipelines page sees a notice. The
 // studio's membership source rides on the user object (CLIENT_LOCATION_COLUMNS).
-export default async function NewBoardPage() {
+export default async function NewBoardPage(props) {
+  const sp = (await props.searchParams) || {}
+  const wanted = Array.isArray(sp.recipe) ? sp.recipe[0] : sp.recipe
+  const initialRecipe = typeof wanted === 'string' && Object.hasOwn(RECIPES, wanted) ? wanted : undefined
   const user = await getCurrentUser()
   if (!user || !MANAGER_ROLES.includes(user.role)) redirect('/')
   const location = user.activeLocation
@@ -43,6 +47,7 @@ export default async function NewBoardPage() {
         membershipSource={location.membership_source ?? null}
         bookingFlowId={bookingFlowId}
         appLinks={appLinks}
+        initialRecipe={initialRecipe}
       />
     </div>
   )

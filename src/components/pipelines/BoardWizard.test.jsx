@@ -142,4 +142,18 @@ describe('BoardWizard', () => {
     expect(onCreate).toHaveBeenCalledTimes(1)
     expect(onCreate.mock.calls[0][0].name).toBe('Spring reset')
   })
+
+  it('initialRecipeStartsOnThatRecipe', () => {
+    stubOptions()
+    render(<BoardWizard {...props} initialRecipe="paid_trial_offer" />)
+    next()
+    expect(screen.getByRole('heading', { name: 'Name and offer' })).toBeTruthy()
+  })
+
+  it('anUnknownInitialRecipeIsIgnored', () => {
+    stubOptions()
+    render(<BoardWizard {...props} initialRecipe="nope" />)
+    next()
+    expect(screen.getByText('Pick a recipe.')).toBeTruthy()
+  })
 })

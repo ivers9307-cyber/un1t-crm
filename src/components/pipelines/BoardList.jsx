@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Button, Card } from '@/components/ui'
+import { RECIPES } from '@shared/pipelines/recipes.js'
 
 // Follow-up state -> chip. Several rows can exist for a stage (a rejected one
 // kept beside its replacement), so the most current one wins.
@@ -85,8 +86,31 @@ function BoardCard({ board, coverageStages }) {
   )
 }
 
+const NO_WHATSAPP_NOTICE = "This studio has no WhatsApp number switched on yet. You can build the board now; its follow-ups can't be submitted until a number is on."
+
+// PIPEBUILD.6-5 — a studio with no offer boards starts from a recipe.
+function RecipeCards({ hasWhatsapp }) {
+  return (
+    <div className="space-y-2">
+      <h2 className="text-base font-semibold text-un1t-text">Start from a recipe</h2>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {Object.values(RECIPES).map((r) => (
+          <Card key={r.key}>
+            <h3 className="text-sm font-semibold text-un1t-text">{r.name}</h3>
+            <p className="text-sm text-un1t-subtle mt-1">{r.description}</p>
+            {hasWhatsapp === false && <p className="text-xs text-amber-700 mt-2">{NO_WHATSAPP_NOTICE}</p>}
+            <Link href={`/settings/pipelines/new?recipe=${encodeURIComponent(r.key)}`} className="inline-block mt-2 text-sm text-un1t-accent">
+              Set up
+            </Link>
+          </Card>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function BoardList({ locationId }) {
-  const [state, setState] = useState({ loading: true, error: null, boards: [], canEdit: false })
+  const [state, setState] = useState({ loading: true, error: null, boards: [], canEdit: false, hasWhatsapp: null })
   const [coverage, setCoverage] = useState(null)
 
   useEffect(() => {
@@ -96,9 +120,9 @@ export default function BoardList({ locationId }) {
         const res = await fetch(`/api/locations/${locationId}/pipelines`)
         const json = await res.json()
         if (!res.ok || !json.success) throw new Error(json.error || 'Could not load pipelines')
-        if (!cancelled) setState({ loading: false, error: null, boards: json.data.boards || [], canEdit: !!json.data.can_edit })
+        if (!cancelled) setState({ loading: false, error: null, boards: json.data.boards || [], canEdit: !!json.data.can_edit, hasWhatsapp: json.data.has_whatsapp ?? null })
       } catch (e) {
-        if (!cancelled) setState({ loading: false, error: e.message, boards: [], canEdit: false })
+        if (!cancelled) setState({ loading: false, error: e.message, boards: [], canEdit: false, hasWhatsapp: null })
       }
     }
     async function loadCoverage() {
@@ -130,6 +154,7 @@ export default function BoardList({ locationId }) {
           <Button as={Link} href="/settings/pipelines/new">New board</Button>
         </div>
       )}
+      {state.canEdit && offers.length === 0 && <RecipeCards hasWhatsapp={state.hasWhatsapp} />}
       {offers.length === 0 && <p className="text-sm text-un1t-subtle">No offer boards yet.</p>}
       {offers.map((b) => <BoardCard key={b.id} board={b} />)}
       {builtIn.map((b) => <BoardCard key={b.id} board={b} coverageStages={coverage?.[b.id] || null} />)}

@@ -53,6 +53,7 @@ function stageForPack(board, pack) {
  * @param {string} props.studioName
  * @param {boolean} props.canEdit           owner, org admin or master at the studio
  * @param {string|null} props.membershipSource
+ * @param {string} [props.initialRecipe]    a RECIPES key to start on (PIPEBUILD.6-5)
  * @param {string} [props.bookingFlowId]   the Book button the follow-ups would carry
  * @param {{ iosUrl: string, androidUrl: string }} [props.appLinks]
  * @param {(body: object, bodies: object, state: object) => void} [props.onCreate]
@@ -65,13 +66,18 @@ function stageForPack(board, pack) {
  * (off), install each ticked follow-up one at a time, then show the launch panel.
  */
 export default function BoardWizard({
-  locationId, studioName, canEdit, membershipSource, bookingFlowId, appLinks,
+  locationId, studioName, canEdit, membershipSource, bookingFlowId, appLinks, initialRecipe,
   onCreate, creating: creatingProp = false, createError: createErrorProp = null,
 }) {
   const [state, dispatch] = useReducer(
     wizardReducer,
     { studioName, bookingFlowId, appLinks },
-    initialWizardState,
+    // PIPEBUILD.6-5: a valid ?recipe= starts on that recipe (an unknown key is
+    // ignored by pickRecipe, so the wizard starts blank as before).
+    (init) => {
+      const blank = initialWizardState(init)
+      return initialRecipe ? wizardReducer(blank, { type: 'pickRecipe', recipeKey: initialRecipe }) : blank
+    },
   )
 
   const [creating, setCreating] = useState(false)

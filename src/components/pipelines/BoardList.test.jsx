@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { RECIPES } from '@shared/pipelines/recipes.js'
 import BoardList, { followupChip } from './BoardList.jsx'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -113,5 +114,36 @@ describe('BoardList', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(screen.queryByText('None')).toBeNull()
     expect(screen.queryByText(/sequence/)).toBeNull()
+  })
+
+  it('recipeCardsShowWithNoOfferBoardsAndCanEdit', async () => {
+    stub({ boards: [BOARDS[1]], can_edit: true, has_whatsapp: true })
+    render(<BoardList locationId="loc1" />)
+    await screen.findByText('Start from a recipe')
+    for (const r of Object.values(RECIPES)) {
+      expect(screen.getByText(r.name)).toBeTruthy()
+      const links = screen.getAllByRole('link', { name: 'Set up' }).map((a) => a.getAttribute('href'))
+      expect(links).toContain(`/settings/pipelines/new?recipe=${r.key}`)
+    }
+    expect(screen.queryByText(/no WhatsApp number switched on/)).toBeNull()
+  })
+
+  it('recipeCardsHiddenWithAnOfferBoardOrWithoutCanEdit', async () => {
+    stub({ boards: BOARDS, can_edit: true })
+    render(<BoardList locationId="loc1" />)
+    await screen.findByText('Summer offer')
+    expect(screen.queryByText('Start from a recipe')).toBeNull()
+    cleanup()
+    stub({ boards: [BOARDS[1]], can_edit: false })
+    render(<BoardList locationId="loc1" />)
+    await screen.findByText('Cold calls')
+    expect(screen.queryByText('Start from a recipe')).toBeNull()
+  })
+
+  it('recipeCardsCarryTheWhatsAppNoticeWhenNoNumber', async () => {
+    stub({ boards: [], can_edit: true, has_whatsapp: false })
+    render(<BoardList locationId="loc1" />)
+    await screen.findByText('Start from a recipe')
+    expect(screen.getAllByText("This studio has no WhatsApp number switched on yet. You can build the board now; its follow-ups can't be submitted until a number is on.")).toHaveLength(Object.keys(RECIPES).length)
   })
 })
