@@ -2,8 +2,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/pipeline-offer-claims', () => ({ loadOfferClaimsForContact: vi.fn() }))
 
 import { logWarn } from '@/lib/log'
+import { loadOfferClaimsForContact } from '@/lib/pipeline-offer-claims'
 import { describeContactBoard } from './board-context'
 
 const LOC = '28c78d6b-f7b3-4edf-8c7c-840bd047b3f4'
@@ -16,7 +18,7 @@ function fakeDb(tables) {
   return {
     from(table) {
       const chain = {}
-      for (const m of ['select', 'eq', 'in', 'order', 'limit', 'range']) chain[m] = () => chain
+      for (const m of ['select', 'eq', 'in', 'order', 'limit', 'range', 'maybeSingle']) chain[m] = () => chain
       chain.then = (res, rej) => Promise.resolve(
         typeof tables[table] === 'function' ? tables[table]() : tables[table],
       ).then(res, rej)
@@ -26,8 +28,11 @@ function fakeDb(tables) {
 }
 
 const deal = (over = {}) => ({ id: 'd1', pipeline_id: 'p1', stage_id: 's1', status: 'open', created_at: '2026-11-03T10:00:00Z', ...over })
+const DAY = 86400000
+const claim = (startIso, days = 14) => ({ start: Date.parse(startIso), end: Date.parse(startIso) + days * DAY, source: 'trial_purchase', claimedAt: startIso })
+const claimsOk = (entries) => ({ ok: true, offers: new Map(entries), skipped: [] })
 const pipeline = (over = {}) => ({
-  id: 'p1', name: 'Trial board', enabled: true, board_type: 'offer',
+  id: 'p1', key: 'trial', name: 'Trial board', enabled: true, board_type: 'offer',
   config: { offer_name: '69 trial', duration_days: 14, entry: { type: 'trial_purchase' }, mia_notes: 'Push the 3-month pack.' },
   ...over,
 })
@@ -35,7 +40,10 @@ const stage = (over = {}) => ({ id: 's1', name: '1st Class', stage_role: 'first_
 const args = { locationId: LOC, contactId: CONTACT, nowMs: NOW, zone: ZONE }
 
 describe('describeContactBoard', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    loadOfferClaimsForContact.mockResolvedValue(claimsOk([['trial', claim('2026-11-03T10:00:00Z')]]))
+  })
 
   it('describes an open deal on an enabled offer board', async () => {
     const db = fakeDb({ deals: { data: [deal()], error: null }, pipelines: { data: [pipeline()], error: null }, pipeline_stages: { data: [stage()], error: null } })
@@ -53,17 +61,93 @@ describe('describeContactBoard', () => {
     expect(await describeContactBoard(db, args)).toContain('They have reached the end of the offer; help them choose the next step.')
   })
 
-  it('says the offer finished past its duration', async () => {
-    const db = fakeDb({ deals: { data: [deal({ created_at: '2026-10-01T10:00:00Z' })], error: null }, pipelines: { data: [pipeline()], error: null }, pipeline_stages: { data: [stage()], error: null } })
+  it('says the offer finished past its duration on a done stage', async () => {
+    loadOfferClaimsForContact.mockResolvedValue(claimsOk([['trial', claim('2026-10-01T10:00:00Z')]]))
+    const db = fakeDb({ deals: { data: [deal()], error: null }, pipelines: { data: [pipeline()], error: null }, pipeline_stages: { data: [stage({ name: 'Trial Done', stage_role: 'done' })], error: null } })
     const out = await describeContactBoard(db, args)
     expect(out).toContain('The offer has finished.')
     expect(out).not.toContain('Day 36')
   })
 
   it('counts day 1 on the studio calendar, not UTC', async () => {
-    const db = fakeDb({ deals: { data: [deal({ created_at: '2026-06-30T23:30:00Z' })], error: null }, pipelines: { data: [pipeline()], error: null }, pipeline_stages: { data: [stage()], error: null } })
+    loadOfferClaimsForContact.mockResolvedValue(claimsOk([['trial', claim('2026-06-30T23:30:00Z')]]))
+    const db = fakeDb({ deals: { data: [deal()], error: null }, pipelines: { data: [pipeline()], error: null }, pipeline_stages: { data: [stage()], error: null } })
     const out = await describeContactBoard(db, { ...args, nowMs: Date.parse('2026-07-02T10:00:00Z'), zone: 'Europe/Dublin' })
     expect(out).toContain('Day 2 of 14')
+  })
+
+  it('counts days from the board claim, never the deal created_at', async () => {
+    // The deal followed the person onto this board 60 days after it was created.
+    loadOfferClaimsForContact.mockResolvedValue(claimsOk([['trial', claim(new Date(NOW - 2 * DAY).toISOString())]]))
+    const db = fakeDb({ deals: { data: [deal({ created_at: new Date(NOW - 60 * DAY).toISOString() })], error: null }, pipelines: { data: [pipeline()], error: null }, pipeline_stages: { data: [stage()], error: null } })
+    const out = await describeContactBoard(db, args)
+    expect(out).toContain('Day 3 of 14')
+    expect(out).not.toContain('finished')
+    expect(loadOfferClaimsForContact).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: LOC, contact: { id: CONTACT }, now: NOW, write: false }))
+  })
+
+  it('omits the Day line when there is no claim, and still describes the board', async () => {
+    loadOfferClaimsForContact.mockResolvedValue(claimsOk([]))
+    const db = fakeDb({ deals: { data: [deal()], error: null }, pipelines: { data: [pipeline()], error: null }, pipeline_stages: { data: [stage()], error: null } })
+    const out = await describeContactBoard(db, args)
+    expect(out).toContain('Board: 69 trial. Stage: 1st Class.')
+    expect(out).toContain('the trial checkout')
+    expect(out).toContain('Push the 3-month pack.')
+    expect(out).not.toMatch(/Day \d+ of/)
+    expect(out).not.toContain('finished')
+  })
+
+  it('omits the Day line when the claims read fails, and logs once', async () => {
+    loadOfferClaimsForContact.mockResolvedValue({ ok: false, reason: 'purchases_unreadable', err: 'boom' })
+    const db = fakeDb({ deals: { data: [deal()], error: null }, pipelines: { data: [pipeline()], error: null }, pipeline_stages: { data: [stage()], error: null } })
+    const out = await describeContactBoard(db, args)
+    expect(out).toContain('Board: 69 trial. Stage: 1st Class.')
+    expect(out).not.toMatch(/Day \d+ of/)
+    expect(logWarn).toHaveBeenCalledTimes(1)
+  })
+
+  it('omits the Day line when the claims loader throws', async () => {
+    loadOfferClaimsForContact.mockRejectedValue(new Error('boom'))
+    const db = fakeDb({ deals: { data: [deal()], error: null }, pipelines: { data: [pipeline()], error: null }, pipeline_stages: { data: [stage()], error: null } })
+    const out = await describeContactBoard(db, args)
+    expect(out).toContain('Board: 69 trial.')
+    expect(out).not.toMatch(/Day \d+ of/)
+  })
+
+  it('past the claim end on a first_class stage: no Day line and no "finished"', async () => {
+    loadOfferClaimsForContact.mockResolvedValue(claimsOk([['trial', claim('2026-10-01T10:00:00Z')]]))
+    const db = fakeDb({ deals: { data: [deal()], error: null }, pipelines: { data: [pipeline()], error: null }, pipeline_stages: { data: [stage()], error: null } })
+    const out = await describeContactBoard(db, args)
+    expect(out).toContain('Stage: 1st Class.')
+    expect(out).not.toMatch(/Day \d+ of/)
+    expect(out).not.toContain('The offer has finished.')
+  })
+
+  it('reads the contact columns for a recorded entry type', async () => {
+    loadOfferClaimsForContact.mockResolvedValue(claimsOk([['prog', claim('2026-11-04T10:00:00Z', 30)]]))
+    const contactRow = { id: CONTACT, last_lead_source: 'meta_50plus' }
+    const db = fakeDb({
+      deals: { data: [deal()], error: null },
+      pipelines: { data: [pipeline({ key: 'prog', config: { offer_name: 'Programme', duration_days: 30, entry: { type: 'lead_source' } } })], error: null },
+      pipeline_stages: { data: [stage()], error: null },
+      contacts: { data: contactRow, error: null },
+    })
+    const out = await describeContactBoard(db, args)
+    expect(out).toContain('Day 2 of 30')
+    expect(loadOfferClaimsForContact).toHaveBeenCalledWith(db, expect.objectContaining({ contact: contactRow, write: false }))
+  })
+
+  it('no Day line when the contact read fails for a recorded entry type', async () => {
+    const db = fakeDb({
+      deals: { data: [deal()], error: null },
+      pipelines: { data: [pipeline({ key: 'prog', config: { offer_name: 'Programme', duration_days: 30, entry: { type: 'tag' } } })], error: null },
+      pipeline_stages: { data: [stage()], error: null },
+      contacts: { data: null, error: { code: '42501' } },
+    })
+    const out = await describeContactBoard(db, args)
+    expect(out).toContain('Board: Programme.')
+    expect(out).not.toMatch(/Day \d+ of/)
+    expect(loadOfferClaimsForContact).not.toHaveBeenCalled()
   })
 
   it('frames the notes as guidance', async () => {
@@ -81,9 +165,10 @@ describe('describeContactBoard', () => {
     expect(await describeContactBoard(db, args)).toBeNull()
   })
 
-  it('returns null when there is no open deal', async () => {
+  it('returns null when there is no open deal, without reading claims', async () => {
     const db = fakeDb({ deals: { data: [], error: null }, pipelines: { data: [], error: null }, pipeline_stages: { data: [], error: null } })
     expect(await describeContactBoard(db, args)).toBeNull()
+    expect(loadOfferClaimsForContact).not.toHaveBeenCalled()
   })
 
   it('ignores a closed deal', async () => {
@@ -116,5 +201,24 @@ describe('describeContactBoard', () => {
     expect(out).toContain('Offer p2')
     expect(out).not.toContain('Offer p3')
     expect(out.indexOf('Offer p1')).toBeLessThan(out.indexOf('Offer p2'))
+  })
+})
+
+describe('describeContactBoard with the real claims loader', () => {
+  it('days a trial_purchase board from the purchase grant', async () => {
+    const actual = await vi.importActual('@/lib/pipeline-offer-claims')
+    loadOfferClaimsForContact.mockImplementation(actual.loadOfferClaimsForContact)
+    const { RECIPES } = await vi.importActual('@shared/pipelines/recipes')
+    const cfg = RECIPES.paid_trial_offer.defaultConfig('o_trial')
+    const config = { ...cfg, offer_name: '69 trial', entry: { ...cfg.entry, values: ['PLAN'] } }
+    const granted = new Date(NOW - 4 * DAY).toISOString()
+    const db = fakeDb({
+      deals: { data: [deal({ created_at: new Date(NOW - 90 * DAY).toISOString() })], error: null },
+      pipelines: { data: [pipeline({ key: 'o_trial', config })], error: null },
+      pipeline_stages: { data: [stage()], error: null },
+      trial_purchases: { data: [{ id: 'tp1', contact_id: CONTACT, status: 'granted', payment_status: 'paid', paid_at: granted, granted_at: granted, plan_code: 'PLAN' }], error: null },
+    })
+    const out = await describeContactBoard(db, args)
+    expect(out).toContain('Day 5 of 14')
   })
 })
