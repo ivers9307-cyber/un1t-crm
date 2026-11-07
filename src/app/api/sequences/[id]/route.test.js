@@ -24,7 +24,7 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 
-vi.mock('@/lib/followup-owned-sequences', () => ({ refuseIfFollowupOwned: async () => null, isRetiredFollowupSequence: () => false, retiredFollowupResponse: () => null })) // PIPEBUILD.5g/5l: the guards have their own tests
+vi.mock('@/lib/followup-owned-sequences', async (importOriginal) => ({ ...(await importOriginal()), refuseIfFollowupOwned: async () => null })) // PIPEBUILD.5g: the owned guard has its own tests; the retired rule is real (PIPEBUILD.5n)
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 
@@ -372,5 +372,44 @@ describe('PUT /api/sequences/[id] — activation refuses an unapproved WhatsApp 
     const res = await PUT(putReq({ status: 'active' }), props)
     expect(res.status).toBe(503)
     expect(updateSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('PUT /api/sequences/[id] — a retired follow-up sequence (PIPEBUILD.5n)', () => {
+  const retired = {
+    id: SEQ_ID, location_id: LOC_ID, status: 'archived',
+    trigger_type: 'pipeline_stage_change', trigger_config: { to_status: 'o_reset_39_done', from_status: null },
+  }
+
+  it('lets a rename through when the settings panel sends the stored trigger back unchanged', async () => {
+    const { db, updateSpy } = mockDb({ row: retired })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq({
+      name: 'Renamed',
+      trigger_type: 'pipeline_stage_change',
+      trigger_config: { from_status: null, to_status: 'o_reset_39_done' },
+    }), props)
+    expect(res.status).toBe(200)
+    expect(updateSpy).toHaveBeenCalled()
+  })
+
+  it('409s followup_retired when the trigger changes', async () => {
+    const { db, updateSpy } = mockDb({ row: retired })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq({
+      name: 'Renamed',
+      trigger_type: 'pipeline_stage_change',
+      trigger_config: { to_status: 'o_other', from_status: null },
+    }), props)
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('followup_retired')
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('still refuses a move off archived', async () => {
+    const { db } = mockDb({ row: retired })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq({ status: 'paused' }), props)
+    expect(res.status).toBe(409)
   })
 })

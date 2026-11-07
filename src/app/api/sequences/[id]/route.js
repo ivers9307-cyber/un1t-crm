@@ -101,6 +101,14 @@ export async function GET(request, props) {
   return NextResponse.json({ success: true, sequence: data })
 }
 
+// Key-order-independent JSON, so a trigger_config read back from jsonb compares
+// equal to the one the settings panel posts.
+function stableJson(v) {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(',')}}`
+  return JSON.stringify(v ?? null)
+}
+
 // PUT /api/sequences/[id]
 export async function PUT(request, props) {
   const params = await props.params;
@@ -146,7 +154,11 @@ export async function PUT(request, props) {
   // Every other archived sequence keeps archive / unarchive as before.
   if (isRetiredFollowupSequence(existing)) {
     const leavesArchived = updates.status !== undefined && updates.status !== 'archived'
-    const touchesTrigger = updates.trigger_type !== undefined || updates.trigger_config !== undefined
+    // Only a trigger that CHANGES is refused: the settings panel always sends
+    // both fields, so a rename carries the stored trigger back unchanged.
+    const touchesTrigger =
+      (updates.trigger_type !== undefined && updates.trigger_type !== existing.trigger_type) ||
+      (updates.trigger_config !== undefined && stableJson(updates.trigger_config) !== stableJson(existing.trigger_config))
     if (leavesArchived || touchesTrigger) return retiredFollowupResponse()
   }
   // SEQPAGEGATE.1: '' and null both mean "no secret" (the inbound webhook

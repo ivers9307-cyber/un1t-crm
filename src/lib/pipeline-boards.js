@@ -436,6 +436,20 @@ async function applyStageDiff(db, { locationId, row, next }) {
   const nextSlugs = stageSlugs(next)
   const nextRows = stagesFor(next)
 
+  // 0. A final name that an orphan or archived row on the board already holds
+  //    would only fail the UNIQUE (pipeline_id, name) halfway through the
+  //    edit, so it is refused here, before any write. Same comparison as the
+  //    parser's duplicate-name rule: case-insensitive, trimmed.
+  const normName = (n) => String(n ?? '').trim().toLowerCase()
+  const heldByOthers = new Set(
+    (stageRows || [])
+      .filter((s) => !nextSlugs.has(s.slug) && !storedSlugs.has(s.slug))
+      .map((s) => normName(s.name)),
+  )
+  if (nextRows.some((s) => heldByOthers.has(normName(s.name)))) {
+    return fail(409, STAGE_NAME_TAKEN_ERROR, { code: 'stage_name_taken' })
+  }
+
   // 1. Every removal is checked before anything is written, so a refusal
   //    leaves the board exactly as it was.
   const removals = []
@@ -524,21 +538,47 @@ async function applyStageDiff(db, { locationId, row, next }) {
     .map((s) => ({ s, existing: bySlug.get(s.slug) }))
     .filter(({ s, existing }) => existing && existing.name !== s.name)
   const stillParked = new Set()
-  // A failure after parking puts every still-parked stage back on its old
-  // name, best-effort, so a board never shows a __tmp_ column. A restore that
-  // fails is logged (the next save of the board renames it again).
+  // What each renamed stage is called in the database right now.
+  const currentName = new Map(renamed.map(({ existing }) => [existing.id, existing.name]))
+  const rename = async (stageId, name) => {
+    const { error } = await db
+      .from('pipeline_stages')
+      .update({ name })
+      .eq('id', stageId)
+      .eq('location_id', locationId)
+      .eq('pipeline_id', row.id)
+      .select('id')
+    if (error) return error
+    currentName.set(stageId, name)
+    return null
+  }
+  // A failure after parking puts every renamed stage back on its ORIGINAL
+  // name, so a board never shows a __tmp_ column. Step 6 renames that already
+  // landed are first undone (in reverse order) back onto a temporary name, so
+  // an original name is never wanted while another stage still holds it; then
+  // every parked stage goes home. Each write is retried once (the undo on a
+  // fresh temporary name); what is still wrong is logged exactly.
   const unpark = async () => {
+    for (const { existing } of [...renamed].reverse()) {
+      const now = currentName.get(existing.id)
+      if (now === existing.name || now === tempStageName(existing.id)) continue
+      let error = await rename(existing.id, tempStageName(existing.id))
+      if (error) error = await rename(existing.id, `${tempStageName(existing.id)}_${Date.now().toString(36)}`)
+      if (error) logError(MODULE, 'renamed stage not re-parked', { locationId, stageId: existing.id, err: error.message })
+    }
     for (const { existing } of renamed) {
-      if (!stillParked.has(existing.id)) continue
-      const { error } = await db
-        .from('pipeline_stages')
-        .update({ name: existing.name })
-        .eq('id', existing.id)
-        .eq('location_id', locationId)
-        .eq('pipeline_id', row.id)
-        .eq('name', tempStageName(existing.id))
-        .select('id')
-      if (error) logError(MODULE, 'parked stage name not restored', { locationId, stageId: existing.id, err: error.message })
+      if (currentName.get(existing.id) === existing.name) continue
+      let error = await rename(existing.id, existing.name)
+      if (error) error = await rename(existing.id, existing.name)
+      if (error) logError(MODULE, 'parked stage name not restored', { locationId, stageId: existing.id, name: currentName.get(existing.id), originalName: existing.name, err: error.message })
+    }
+    const left = renamed.filter(({ existing }) => currentName.get(existing.id) !== existing.name)
+    if (left.length) {
+      logError(MODULE, 'stage names left changed after a failed edit', {
+        locationId,
+        boardId: row.id,
+        stages: left.map(({ existing }) => ({ stageId: existing.id, name: currentName.get(existing.id), originalName: existing.name })),
+      })
     }
   }
   for (const { existing } of renamed) {
@@ -547,6 +587,7 @@ async function applyStageDiff(db, { locationId, row, next }) {
       await unpark()
       return failed
     }
+    currentName.set(existing.id, tempStageName(existing.id))
     stillParked.add(existing.id)
   }
 
@@ -585,6 +626,7 @@ async function applyStageDiff(db, { locationId, row, next }) {
       await unpark()
       return failed
     }
+    if (change.name) currentName.set(existing.id, change.name)
     stillParked.delete(existing.id)
   }
   return { ok: true }

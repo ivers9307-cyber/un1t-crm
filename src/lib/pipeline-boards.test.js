@@ -373,6 +373,60 @@ describe('updateBoard', () => {
     expect(db.tables.pipeline_stages.find((s) => s.slug === 'o_reset_39_done').name).toBe('Done')
   })
 
+  it('anOrphanRowHoldingAFinalNameIsRefusedBeforeAnyWrite', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    db.tables.pipeline_stages.push({ id: 'orph1', pipeline_id: board.id, location_id: LOC, slug: 'o_reset_39_orphan', name: '  kept NAME ', archived: false })
+    const writes = () => db.calls.updates.length + db.calls.inserts.length + db.calls.deletes.length
+    const before = writes()
+    const config = editableConfig(board, (c) => {
+      c.stages.find((s) => s.role === 'done').name = 'Trial over'
+      c.stages.push({ role: 'converted', name: 'Kept name' })
+    })
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res).toMatchObject({ ok: false, status: 409, code: 'stage_name_taken', error: STAGE_NAME_TAKEN_ERROR })
+    expect(writes()).toBe(before)
+  })
+
+  it('aMidSwapFailureInTheFinalRenamesLeavesNoTempName', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const config = editableConfig(board, (c) => {
+      c.stages.find((s) => s.role === 'new').name = 'Done'
+      c.stages.find((s) => s.role === 'done').name = 'New'
+    })
+    // Fail the SECOND final rename (the first has already landed).
+    const realFrom = db.from.bind(db)
+    let finals = 0
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table !== 'pipeline_stages') return b
+      const realUpdate = b.update
+      b.update = (patch) => {
+        if (patch.name && !String(patch.name).startsWith('__tmp_') && ['Done', 'New'].includes(patch.name) && patch.display_order === undefined) {
+          finals += 1
+          if (finals === 1) {
+            // let the first final through
+            return realUpdate(patch)
+          }
+          if (finals === 2) {
+            const failing = realUpdate({})
+            failing.then = (resolve) => Promise.resolve({ data: null, error: { code: 'XX000', message: 'boom' } }).then(resolve)
+            return failing
+          }
+        }
+        return realUpdate(patch)
+      }
+      return b
+    }
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res.ok).toBe(false)
+    expect(finals).toBeGreaterThanOrEqual(2)
+    expect(db.tables.pipeline_stages.some((s) => String(s.name).startsWith('__tmp_'))).toBe(false)
+    expect(db.tables.pipeline_stages.find((s) => s.slug === 'o_reset_39_new').name).toBe('New')
+    expect(db.tables.pipeline_stages.find((s) => s.slug === 'o_reset_39_done').name).toBe('Done')
+  })
+
   it('removingAStageArchivesItsFollowupSequencesFirst', async () => {
     const db = seedDb()
     const board = await createdBoard(db)

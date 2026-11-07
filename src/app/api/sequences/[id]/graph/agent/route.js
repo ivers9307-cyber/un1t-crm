@@ -5,7 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { runFlowAgent } from '@/lib/sequences/agent/run'
 import { validateBody } from '@/lib/validate'
-import { refuseIfFollowupOwned } from '@/lib/followup-owned-sequences'
+import { refuseIfFollowupOwned, isRetiredFollowupSequence, retiredFollowupResponse } from '@/lib/followup-owned-sequences'
 
 const AgentSchema = z.object({
   prompt: z.string().optional(),
@@ -27,7 +27,7 @@ export async function POST(request, props) {
 
   const db = createServerClient()
   const { data: sequence } = await db.from('email_sequences')
-    .select('location_id, name, trigger_type, trigger_config').eq('id', params.id).single()
+    .select('location_id, name, trigger_type, trigger_config, status').eq('id', params.id).single()
   if (!sequence) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, sequence.location_id)
   if (guard) return guard
@@ -35,6 +35,10 @@ export async function POST(request, props) {
   if (!canBuildSequencesAt(user, sequence.location_id)) return sequencePermissionRequired()
   const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: sequence.location_id })
   if (owned) return owned
+  // PIPEBUILD.5n — this route rewrites trigger_type / trigger_config, which
+  // would take a retired follow-up sequence out of the retired rule (the same
+  // refusal PUT /api/sequences/[id] gives).
+  if (isRetiredFollowupSequence(sequence)) return retiredFollowupResponse()
 
   const validation = await validateBody(request, AgentSchema, { allowEmpty: true })
   if (!validation.ok) return validation.response
