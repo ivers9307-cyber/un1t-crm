@@ -351,6 +351,9 @@ describe('health', () => {
       code: 'baseline_held',
       message: "First placement is held: 3 people could not be checked on the last run (6 Nov). Follow-ups won't start until a run completes cleanly.",
     }])
+    const exclusion = await run(tables, board({ baseline_at: null, baseline_pending: { cadence: 'nightly', last_run: { ...lastRun, status: 'success', errors: 0 }, held: true } }))
+    expect(exclusion.health.find((h) => h.code === 'baseline_held').message)
+      .toBe("First placement is held: the last run (6 Nov) could not complete. Follow-ups won't start until a run completes cleanly.")
     const quiet = await run(tables, pendingBoard(false))
     expect(quiet.health.map((h) => h.code)).not.toContain('baseline_held')
     const unread = await run(tables, board({ baseline_at: null, baseline_pending: { cadence: 'nightly', last_run: null, held: false, unread: true } }))

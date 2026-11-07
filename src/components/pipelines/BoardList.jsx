@@ -75,8 +75,9 @@ export function boardStatus(board) {
     const date = runDateLabel(pending.last_run.started_at)
     const when = date ? ` (${date})` : ''
     if (n > 0) return `On — first placement held: ${n} ${n === 1 ? 'person' : 'people'} could not be checked${when}`
-    // A run that failed outright skipped nobody by count: never "0 people".
-    return `On — first placement held: the last run did not complete${when}`
+    // A run that failed outright (or whose exclusion read failed) skipped
+    // nobody by count: never "0 people".
+    return `On — first placement held: the last run could not complete${when}`
   }
   return placementCadence(board) === 'hourly'
     ? 'On — first placement within the hour, no messages'

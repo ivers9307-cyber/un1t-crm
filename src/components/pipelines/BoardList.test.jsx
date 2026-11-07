@@ -141,7 +141,10 @@ describe('BoardList', () => {
       .toBe('On — first placement within the hour, no messages')
     // A run with no count that failed outright never reads "0 people".
     expect(boardStatus({ ...offer, baseline_pending: { cadence: 'nightly', last_run: { ...run, status: 'failed', errors: 0 }, held: true } }))
-      .toBe('On — first placement held: the last run did not complete (6 Nov)')
+      .toBe('On — first placement held: the last run could not complete (6 Nov)')
+    // A run still in flight is pending, not held.
+    expect(boardStatus({ ...offer, baseline_pending: { cadence: 'nightly', last_run: { ...run, status: 'running', errors: 0 }, held: false } }))
+      .toBe('On — first placement tonight, no messages')
     // A board from before RAILS.4's field: by its module.
     expect(boardStatus({ ...offer, module: 'offer_un1t' })).toBe('On — first placement within the hour, no messages')
   })

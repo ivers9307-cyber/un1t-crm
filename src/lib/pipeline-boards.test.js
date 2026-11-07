@@ -452,6 +452,20 @@ describe('listBoards / getBoard', () => {
       expect(pending.last_run.status).toBe('failed')
     })
 
+    it('aRunningRunAfterSwitchOnIsPendingNotHeld', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-07T03:30:00.000Z', status: 'running', errors: 0 }])
+      const pending = await pendingOf(db, id)
+      expect(pending.held).toBe(false)
+      expect(pending.last_run.status).toBe('running')
+    })
+
+    it('aCleanCountWithAnExclusionFailureIsHeld', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-07T03:30:00.000Z', status: 'success', errors: 0, error_message: 'other-studio members unavailable: x' }])
+      const pending = await pendingOf(db, id)
+      expect(pending.held).toBe(true)
+      expect(pending.last_run).toEqual({ status: 'success', errors: 0, started_at: '2026-11-07T03:30:00.000Z', finished_at: null })
+    })
+
     it('noRunIsLastRunNull', async () => {
       const { db, id } = await pendingBoard([])
       expect(await pendingOf(db, id)).toEqual({ cadence: 'nightly', last_run: null, held: false })

@@ -402,7 +402,7 @@ async function baselineHeldMessage(db, locationId, run) {
   const when = date ? ` (${date})` : ''
   const n = Number(run.errors) || 0
   // A run that failed outright skipped nobody by count: never "0 people".
-  if (n === 0) return `First placement is held: the last run${when} did not complete. ${HELD_TAIL}`
+  if (n === 0) return `First placement is held: the last run${when} could not complete. ${HELD_TAIL}`
   return `First placement is held: ${n} ${n === 1 ? 'person' : 'people'} could not be checked on the last run${when}. ${HELD_TAIL}`
 }
 

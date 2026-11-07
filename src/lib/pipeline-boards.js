@@ -265,12 +265,16 @@ export function baselineHeld(lastRun, boardUpdatedAt) {
   const started = Date.parse(lastRun.started_at)
   const switched = Date.parse(boardUpdatedAt)
   if (!Number.isFinite(started) || !Number.isFinite(switched) || started <= switched) return false
-  return lastRun.status !== 'success' || (Number(lastRun.errors) || 0) > 0
+  // A run still in flight has not decided anything yet: pending, not held.
+  if (lastRun.status === 'running') return false
+  // A clean count with an error_message is the exclusion read failing, which
+  // refuses the baseline stamp too.
+  return lastRun.status !== 'success' || (Number(lastRun.errors) || 0) > 0 || !!lastRun.error_message
 }
 
 async function withBaselinePending(db, locationId, rawRows, boards) {
-  const updatedAt = new Map(rawRows.map((r) => [r.id, r.updated_at]))
   if (!boards.some(isPendingBaseline)) return boards
+  const updatedAt = new Map(rawRows.map((r) => [r.id, r.updated_at]))
   const { data, error } = await db
     .from('pipeline_classification_runs')
     .select(RUN_COLUMNS)
@@ -287,7 +291,8 @@ async function withBaselinePending(db, locationId, rawRows, boards) {
     if (!isPendingBaseline(b)) return b
     const cadence = placementCadence(b)
     if (error) return { ...b, baseline_pending: { cadence, last_run: null, held: false, unread: true } }
-    return { ...b, baseline_pending: { cadence, last_run: lastRun, held: baselineHeld(lastRun, updatedAt.get(b.id)) } }
+    const held = baselineHeld(row && { ...lastRun, error_message: row.error_message }, updatedAt.get(b.id))
+    return { ...b, baseline_pending: { cadence, last_run: lastRun, held } }
   })
 }
 
