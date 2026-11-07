@@ -3,7 +3,14 @@
 import { useEffect, useState } from 'react'
 import { Card } from '@/components/ui'
 
-const EUR = new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' })
+// The report's own currency (EUR when it names none, or one Intl refuses).
+function money(cents, currency) {
+  try {
+    return new Intl.NumberFormat('en-IE', { style: 'currency', currency: currency || 'EUR' }).format(cents / 100)
+  } catch {
+    return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(cents / 100)
+  }
+}
 const BROKEN = "Couldn't load this part."
 
 function Broken() {
@@ -89,11 +96,9 @@ export default function BoardReport({ boardId, stages: boardStages = [] }) {
           )}
         </div>
 
-        {revenue && (
+        {revenue && revenue.offerCents != null && (
           <p className="text-sm text-un1t-text">
-            {revenue.offerCents == null
-              ? `${revenue.purchases} ${revenue.purchases === 1 ? 'purchase' : 'purchases'}`
-              : `Offer revenue ${EUR.format(revenue.offerCents / 100)} from ${revenue.purchases} ${revenue.purchases === 1 ? 'purchase' : 'purchases'}`}
+            {`Offer revenue (all time) ${money(revenue.offerCents, revenue.currency)} from ${revenue.purchases} ${revenue.purchases === 1 ? 'purchase' : 'purchases'}`}
           </p>
         )}
 

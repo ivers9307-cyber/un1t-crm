@@ -23,6 +23,7 @@ describe('BoardReport', () => {
     expect((await screen.findAllByText('New Leads')).length).toBe(2)
     expect(screen.getByText('History before a stage rename is not counted.')).toBeTruthy()
     expect(screen.getByText(/Offer revenue .*117\.00 from 3 purchases/)).toBeTruthy()
+    expect(screen.getByText(/Offer revenue \(all time\) €117\.00/)).toBeTruthy()
     expect(screen.getByText('Nobody entered this board in 7 days.').className).toContain('text-amber-700')
     expect(screen.getByText('33%')).toBeTruthy()
   })
@@ -63,11 +64,18 @@ describe('BoardReport', () => {
     expect(rowCells('Board Stage')[1]).toBe('5')
     expect(screen.getByText('Unknown stage')).toBeTruthy()
   })
-  it('says purchases without a figure when offerCents is null, and a dash for a null rate', async () => {
+  it('hides the revenue line when offerCents is null, and shows a dash for a null rate', async () => {
     stub({ ...DATA, revenue: { currency: 'EUR', offerCents: null, purchases: 3 }, conversion: { entered30: 0, converted30: 0, rate: null } })
     render(<BoardReport boardId="b1" />)
-    expect(await screen.findByText('3 purchases')).toBeTruthy()
+    await screen.findAllByText('New Leads')
+    expect(screen.queryByText(/purchase/)).toBeNull()
+    expect(screen.queryByText(/Offer revenue/)).toBeNull()
     expect(screen.getByText('—')).toBeTruthy()
+  })
+  it("formats revenue in the report's currency", async () => {
+    stub({ ...DATA, revenue: { currency: 'GBP', offerCents: 5000, purchases: 1 } })
+    render(<BoardReport boardId="b1" />)
+    expect(await screen.findByText('Offer revenue (all time) £50.00 from 1 purchase')).toBeTruthy()
   })
   it('shows dashes when the entered numbers are unknown', async () => {
     stub({ ...DATA, conversion: { entered30: null, converted30: null, rate: null } })
