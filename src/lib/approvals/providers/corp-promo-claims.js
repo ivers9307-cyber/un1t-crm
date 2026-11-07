@@ -18,7 +18,7 @@
 // corp_promos rows. A failed fallback read leaves platform null on those
 // cards (logged), never the tab empty.
 import { viewerActiveLocationId } from '../registry'
-import { listCorpPromos } from '@/lib/corp-promos'
+import { listCorpPromos } from '@/lib/corp-promos-db'
 import { logWarn } from '@/lib/log'
 
 const COLS = 'id, first_name, last_name, customer_email, customer_phone, promo_key, platform, reason, created_at, contact_id, un1t_user_id, glofox_member_id, grant, location_id, location:location_id ( id, name )'

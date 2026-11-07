@@ -178,7 +178,7 @@ function CampaignFunnelFields({ row, load, fields, set }) {
 
 function CorpPromoFields({ row, fields, set }) {
   // The page studio's own promos (row.public_path); a row that does not know its path lists every live promo.
-  // WAYSIN.2: still the SEED of mig 816 (synchronous, client side); WAYSIN.4 fetches the studio's rows.
+  // WAYSIN.2: still the SEED of mig 816 (synchronous, client side; no Glofox plan ids); WAYSIN.4 fetches the studio's rows.
   const promos = row?.public_path ? seededCorpPromosForStudio(row.public_path) : liveSeededCorpPromos()
   const key = fields.promo_key || ''
   return (

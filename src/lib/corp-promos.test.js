@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { CORP_PROMO_SEEDS, CORP_PROMO_COPY_DEFAULT, resolveSeededCorpPromo, liveSeededCorpPromos, seededCorpPromosForStudio, CORP_PROMO_GLOFOX_COPY_DEFAULT, corpPromoCopyFromBlocks, fillCorpPromoTokens, readCorpPromo, listCorpPromos, promoView } from './corp-promos'
+import { CORP_PROMO_SEEDS, CORP_PROMO_COPY_DEFAULT, resolveSeededCorpPromo, liveSeededCorpPromos, seededCorpPromosForStudio, CORP_PROMO_GLOFOX_COPY_DEFAULT, corpPromoCopyFromBlocks, fillCorpPromoTokens } from './corp-promos'
+import { readCorpPromo, listCorpPromos, promoView } from './corp-promos-db'
 import { glofoxPlanForPromo, glofoxCorpPromoKeys, glofoxCorpPromoPlanNames } from './corp-promo-glofox-plans'
 
 const HATCH = 'loc-hatch'
@@ -52,8 +53,9 @@ describe('corp promo seeds (mig 816)', () => {
     expect(Object.isFrozen(CORP_PROMO_SEEDS['hatch-3-free'])).toBe(true)
   })
 
-  it('stillorgan-newstart carries its Glofox plan ids', () => {
-    expect(glofoxPlanForPromo(resolveSeededCorpPromo('stillorgan-newstart'))).toEqual({ membershipId: '6aec95d590a936f18c065d9f', planCode: '1793889679121', planName: 'New Start Free Trial' })
+  it('no seed carries a Glofox plan (the ids live in corp_promos, server side)', () => {
+    for (const seed of Object.values(CORP_PROMO_SEEDS)) expect(seed.glofox).toBeNull()
+    expect(glofoxPlanForPromo(resolveSeededCorpPromo('stillorgan-newstart'))).toBeNull()
   })
 
   it('an unknown or non-string key is null; an inherited name is not a promo', () => {

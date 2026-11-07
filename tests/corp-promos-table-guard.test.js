@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { CORP_PROMO_SEEDS } from '../src/lib/corp-promos.js'
+import { SEED_GLOFOX_PLANS } from '../src/lib/corp-promo-glofox-plans.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const FILE = path.join(ROOT, 'supabase/migrations/816_corp_promos.sql')
@@ -55,10 +56,11 @@ describe('mig 816 corp_promos', () => {
     expect(Object.keys(CORP_PROMO_SEEDS).sort()).toEqual(['hatch-3-free', 'stillorgan-newstart'])
     expect(sql).toContain("'UN1T Hatch Street'")
     expect(sql).toContain("'UN1T Stillorgan'")
-    // The Stillorgan plan ids of CORP_PROMO_SEEDS (formerly src/lib/corp-promo-glofox-plans.js).
-    expect(sql).toContain("'6aec95d590a936f18c065d9f'")
-    expect(sql).toContain("'1793889679121'")
-    expect(sql).toContain("'New Start Free Trial'")
+    // The Stillorgan plan ids of SEED_GLOFOX_PLANS (server-only).
+    const plan = SEED_GLOFOX_PLANS['stillorgan-newstart']
+    expect(sql).toContain(`'${plan.membershipId}'`)
+    expect(sql).toContain(`'${plan.planCode}'`)
+    expect(sql).toContain(`'${plan.planName}'`)
   })
 
   it('adds and backfills corp_promo_claims.platform', () => {

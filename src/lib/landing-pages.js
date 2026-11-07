@@ -29,7 +29,7 @@ import { isOrgAdmin, adminOrganizationIds } from '@/lib/org-admin'
 import { LANDING_PAGE_PUBLISH_STATES } from '@/lib/landing-page-schemas'
 import { UUID_SHAPE } from '@/lib/uuid-shape'
 import { un1tFunnelCopyFromTerms } from '@/lib/un1t-online-funnel-copy'
-import { listCorpPromos } from '@/lib/corp-promos'
+import { listCorpPromos } from '@/lib/corp-promos-db'
 import { logWarn, logError } from '@/lib/log'
 
 // The edge-safe half lives in its own module so the proxy can import it.

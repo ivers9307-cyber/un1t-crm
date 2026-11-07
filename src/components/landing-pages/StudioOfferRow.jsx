@@ -61,8 +61,9 @@ export default function StudioOfferRow({ page, row, onSave, canEdit }) {
     ? offerConfigured(blockType, mergeOfferBlock(pageBlock, { offer, attribution }), {
       landingPath: null,
       product: null,
-      // WAYSIN.2: the local hint knows only the SEED promos (mig 816); the
-      // server's readiness reads the studio's rows. WAYSIN.4 fetches them here.
+      // WAYSIN.2: the local hint knows only the SEED promos (mig 816), which
+      // carry no Glofox plan ids; the server's readiness reads the studio's
+      // rows. WAYSIN.4 fetches them here.
       promos: row.public_path ? seededCorpPromosForStudio(row.public_path) : liveSeededCorpPromos(),
     })
     : false

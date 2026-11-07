@@ -15,7 +15,7 @@
 // else, for a row not yet stamped, by its studio's corp_promos row of that key
 // (read once per studio per run). A studio whose promos cannot be read leaves
 // its unstamped claims for the next run and the run reports not ok.
-import { listCorpPromos } from '@/lib/corp-promos'
+import { listCorpPromos } from '@/lib/corp-promos-db'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { escapeHtml } from '@/lib/html-escape'
 import { logError, logWarn } from '@/lib/log'

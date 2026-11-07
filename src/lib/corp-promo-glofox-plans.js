@@ -4,15 +4,27 @@
 // src/lib/corp-promos.js.
 //
 // SERVER-ONLY by convention (no server-only package in this repo): the plan
-// ids are operator configuration for the Glofox purchase. A promo whose
-// membership id or plan code is blank cannot grant (glofoxPlanForPromo ->
-// null), and the claim refuses it.
+// ids are operator configuration for the Glofox purchase. They live in the
+// corp_promos table and in SEED_GLOFOX_PLANS below, NEVER in a module a client
+// component imports (src/lib/corp-promos.js reaches the client bundle;
+// tests/corp-promos-client-safe.test.js pins that). At runtime
+// glofoxPlanForPromo reads only the row's binding: a promo whose membership id
+// or plan code is blank cannot grant (null), and the claim refuses it.
 
-import { listCorpPromos } from '@/lib/corp-promos'
+import { listCorpPromos } from '@/lib/corp-promos-db'
 
 /**
- * The plan of a promo view (promoView, or a seed): its `glofox` binding, or
- * null when it has none.
+ * Mig 816's seed of the Glofox plan bindings, for the migration guard and as
+ * documentation only. NOT a runtime fallback: no code path reads it.
+ * Created in Glofox by Richard, 5 Nov 2026 ("New Start Free Trial", €0).
+ */
+export const SEED_GLOFOX_PLANS = Object.freeze({
+  'stillorgan-newstart': Object.freeze({ membershipId: '6aec95d590a936f18c065d9f', planCode: '1793889679121', planName: 'New Start Free Trial' }),
+})
+
+/**
+ * The plan of a promo view (promoView of a corp_promos row): its `glofox`
+ * binding, or null when it has none. A seed always answers null.
  * @returns {{ membershipId: string, planCode: string, planName: string | null } | null}
  */
 export function glofoxPlanForPromo(promo) {

@@ -22,7 +22,7 @@
 // landing_pages). Answers { ok: true, options: [{ value, label, hint? }] } |
 // { ok: false, status, error, code? }.
 import { ENTRY_TYPES, TRIAL_MATCHES } from '@shared/pipelines/offer-config.js'
-import { listCorpPromos } from '@/lib/corp-promos'
+import { listCorpPromos } from '@/lib/corp-promos-db'
 import { leadSourceSchema } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
 import { studioTagVocabulary } from '@/lib/studio-tag-vocabulary'
