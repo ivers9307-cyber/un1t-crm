@@ -7,13 +7,18 @@
 // first, for the three things an operator can do from the board builder:
 //
 //   install  no row: install at version 1.
-//            row draft / awaiting_approval / live: the same call with the
-//            row's own version; the installer returns the row, and its
-//            recheck republishes a stranded one, so it doubles as "publish now".
+//            row awaiting_approval / live: the same call with the row's own
+//            version; the installer returns the row, and its recheck
+//            republishes a stranded one, so it doubles as "publish now". New
+//            wording here is refused (409 use_replace): the installer would
+//            drop it.
+//            row draft: the same version, over the row (bodies allowed).
 //            row rejected / off: Meta will not take the old template name
-//            again, so install at version + 1, after deleting the row's old
-//            sequence when it is still a draft (the PR 4 "old draft left
-//            behind" carry-over).
+//            again, so install at version + 1.
+//            Over a draft, rejected or off row the old sequence is stopped
+//            first (deleted while a draft, the PR 4 "old draft left behind"
+//            carry-over; paused if still active), since the installer points
+//            the row at a new one.
 //   replace  new wording on an existing row: stop the row's sequence (pause it
 //            when active, delete it when a draft), set the row off, then
 //            install at version + 1.
@@ -44,6 +49,8 @@ const FOLLOWUP_COLUMNS = 'id, location_id, pipeline_id, stage_id, sequence_id, w
 // recovery recheck) instead of installing over it.
 const CURRENT_STATES = new Set(['draft', 'awaiting_approval', 'live'])
 const SPENT_STATES = new Set(['rejected', 'off'])
+// Submitted to Meta or live: the installer returns these as they stand.
+const INSTALLED_STATES = new Set(['awaiting_approval', 'live'])
 
 const LEGACY_BOARD_ERROR = "This board is built in code and can't be changed here."
 
@@ -213,27 +220,64 @@ async function stopSequence(db, locationId, sequenceId) {
   return fail(409, "This follow-up's sequence changed while it was being stopped. Refresh and try again.", 'sequence_changed')
 }
 
-// Row → off, compare-and-set on the state it was read in.
+const CHANGED_WHILE_OFF = 'This follow-up changed while it was being switched off. Switch it off or change the wording again.'
+
+// One compare-and-set of the row to off from `fromState`. → { error } | { touched }
+async function casRowOff(db, locationId, rowId, fromState, updatedAt) {
+  const { data, error } = await db.from('pipeline_stage_followups')
+    .update({ state: 'off', updated_at: updatedAt })
+    .eq('id', rowId)
+    .eq('location_id', locationId)
+    .eq('state', fromState)
+    .select('id')
+  if (error) return { error }
+  return { touched: (data || []).length }
+}
+
+// Row → off, compare-and-set on the state it was read in. Called only after
+// the row's sequence is stopped, so nothing sends whatever happens here.
+//
+// A miss usually means the approval hook moved the row between our read and
+// this write (awaiting_approval → live as it published the sequence we have
+// since paused). Re-read once: if it still points at the SAME sequence and is
+// now live or awaiting_approval, retry from that state. Anything else (a new
+// sequence, a second click that already switched it off or re-installed) is
+// a 409: the caller must look again before acting.
 async function switchRowOff(db, locationId, row) {
   if (row.state === 'off') return { ok: true, followup: row }
   const updatedAt = nowIso()
-  const { data, error } = await db.from('pipeline_stage_followups')
-    .update({ state: 'off', updated_at: updatedAt })
-    .eq('id', row.id)
-    .eq('location_id', locationId)
-    .eq('state', row.state)
-    .select('id')
-  if (error) {
-    logError(MODULE, 'follow-up switch-off failed', { locationId, followupId: row.id, err: error.message })
+  const first = await casRowOff(db, locationId, row.id, row.state, updatedAt)
+  if (first.error) {
+    logError(MODULE, 'follow-up switch-off failed', { locationId, followupId: row.id, err: first.error.message })
     return fail(500, "Could not switch this follow-up off just now. Its sequence is stopped. Try again.")
   }
-  if (!data?.length) {
-    // The row moved (the approval hook, or a second click). Its sequence is
-    // already stopped, so nothing sends; say so and stop here.
-    logError(MODULE, 'follow-up changed before it could be switched off', { locationId, followupId: row.id, readState: row.state })
-    return fail(409, 'This follow-up changed while it was being switched off. Its sequence is stopped. Refresh and check it.', 'followup_changed')
+  if (first.touched) return { ok: true, followup: { ...row, state: 'off', updated_at: updatedAt } }
+
+  const { data: now, error: rereadErr } = await db.from('pipeline_stage_followups')
+    .select(FOLLOWUP_COLUMNS)
+    .eq('id', row.id)
+    .eq('location_id', locationId)
+    .maybeSingle()                         // primary key
+  if (rereadErr) {
+    logError(MODULE, 'follow-up re-read after a missed switch-off failed', { locationId, followupId: row.id, err: rereadErr.message })
+    return fail(500, "Could not switch this follow-up off just now. Its sequence is stopped. Try again.")
   }
-  return { ok: true, followup: { ...row, state: 'off', updated_at: updatedAt } }
+  const retryable = now
+    && now.sequence_id === row.sequence_id
+    && (now.state === 'live' || now.state === 'awaiting_approval')
+  if (retryable) {
+    const again = await casRowOff(db, locationId, row.id, now.state, updatedAt)
+    if (again.error) {
+      logError(MODULE, 'follow-up switch-off retry failed', { locationId, followupId: row.id, err: again.error.message })
+      return fail(500, "Could not switch this follow-up off just now. Its sequence is stopped. Try again.")
+    }
+    if (again.touched) return { ok: true, followup: { ...now, state: 'off', updated_at: updatedAt } }
+  }
+  logError(MODULE, 'follow-up changed before it could be switched off', {
+    locationId, followupId: row.id, readState: row.state, nowState: now?.state ?? null,
+    sameSequence: now ? now.sequence_id === row.sequence_id : null,
+  })
+  return fail(409, CHANGED_WHILE_OFF, 'followup_changed')
 }
 
 /**
@@ -274,6 +318,12 @@ export async function applyFollowupAction(db, {
   }
 
   if (action === 'replace' && !row) return fail(409, 'This stage has no follow-up to change yet. Install it first.', 'no_followup')
+  // New wording on a follow-up that is already submitted or live would be
+  // dropped by the installer (it returns the row as it stands). A draft row
+  // has no published wording, so it may take bodies.
+  if (action === 'install' && bodies != null && row && INSTALLED_STATES.has(row.state)) {
+    return fail(409, 'This follow-up is already set up. Use Change wording to send new wording.', 'use_replace')
+  }
 
   const inputs = await renderInputsFor(db, board, locationId)
   if (!inputs.ok) return inputs
@@ -293,12 +343,12 @@ export async function applyFollowupAction(db, {
     const off = await switchRowOff(db, locationId, row)
     if (!off.ok) return off
   } else if (row && (SPENT_STATES.has(row.state) || row.state === 'draft') && row.sequence_id) {
-    // A spent row's old sequence, or a never-installed draft row's, is a
-    // draft nothing links to once the installer re-points the row: remove it.
-    // (An `off` row whose sequence is still ACTIVE is left for the installer
-    // to refuse with old_sequence_active.)
-    const del = await deleteDraftSequence(db, locationId, row.sequence_id)
-    if (!del.ok) return del
+    // The installer re-points the row at a NEW sequence, so the old one must
+    // be stopped first: deleted while a draft (nothing links to it any more),
+    // paused if it is somehow still active, refused on any other answer. A
+    // spent row's old sequence left active would run beside the new one.
+    const stopped = await stopSequence(db, locationId, row.sequence_id)
+    if (!stopped.ok) return stopped
   }
 
   const installed = await installFollowupPack(db, {

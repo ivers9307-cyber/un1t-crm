@@ -123,7 +123,8 @@ describe('listEntryOptions', () => {
       db = makeDb({})
       const res = await listEntryOptions(db, { locationId: LOC, type: 'corp_promo' })
       expect(res.options).toHaveLength(Object.keys(CORP_PROMOS).length)
-      expect(res.options[0]).toEqual({ value: 'hatch-3-free', label: 'Corporate trial (Hatch Street)', hint: 'hatch' })
+      expect(res.options[0]).toEqual({ value: 'hatch-3-free', label: 'Corporate trial (Hatch Street)', hint: 'Hatch Street' })
+      expect(res.options.find((o) => o.value === 'stillorgan-newstart').hint).toBe('Stillorgan')
       expect(db.log).toEqual([])
     })
 

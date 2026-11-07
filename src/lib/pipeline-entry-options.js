@@ -136,12 +136,18 @@ async function pageIdOptions(db, locationId) {
   return { ok: true, options }
 }
 
+// A promo's studio in plain English, from its public path: 'hatch-street' →
+// 'Hatch Street', 'stillorgan' → 'Stillorgan'.
+function studioLabel(promo) {
+  const raw = text(promo.publicPath) || text(promo.studio)
+  return raw.split(/[-_\s]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ')
+}
+
 function corpPromoOptions() {
-  const options = Object.values(CORP_PROMOS).map((p) => ({
-    value: p.key,
-    label: p.name,
-    hint: p.live ? p.studio : `${p.studio} (not live)`,
-  }))
+  const options = Object.values(CORP_PROMOS).map((p) => {
+    const studio = studioLabel(p)
+    return { value: p.key, label: p.name, hint: p.live ? studio : `${studio} (not live)` }
+  })
   return { ok: true, options }
 }
 

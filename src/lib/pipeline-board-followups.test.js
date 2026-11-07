@@ -84,6 +84,12 @@ const liveRow = (over = {}) => ({
   created_by: 'user-0', created_at: '2026-11-01T00:00:00Z', updated_at: '2026-11-01T00:00:00Z', ...over,
 })
 
+// The row's old sequence is a draft: the pause CAS misses, the re-read says draft.
+const draftSequence = {
+  'email_sequences:update': () => ({ data: [], error: null }),
+  'email_sequences:select': () => ({ data: { id: 's1', status: 'draft' }, error: null }),
+}
+
 let db
 beforeEach(() => {
   vi.clearAllMocks()
@@ -185,24 +191,81 @@ describe('applyFollowupAction: install', () => {
   })
 
   it('installOverRejectedBumpsVersionAndDropsDraft', async () => {
-    db = makeDb(responder({ row: liveRow({ state: 'rejected', version: 1 }) }))
+    db = makeDb(responder({ row: liveRow({ state: 'rejected', version: 1 }), overrides: draftSequence }))
     const res = await run()
     expect(res.ok).toBe(true)
-    expect(writes()).toEqual(['email_sequences:delete', 'installFollowupPack:call'])
-    const del = db.log.find((e) => e.table === 'email_sequences')
+    expect(writes()).toEqual(['email_sequences:update', 'email_sequences:delete', 'installFollowupPack:call'])
+    const del = db.log.find((e) => e.table === 'email_sequences' && e.op === 'delete')
     expect(del.filters).toEqual({ id: 's1', location_id: LOC, status: 'draft' })
     expect(installFollowupPack.mock.calls[0][1].version).toBe(2)
   })
 
-  it('installOverADraftRowKeepsItsVersionAndDropsItsDraftSequence', async () => {
-    db = makeDb(responder({ row: liveRow({ state: 'draft', version: 2 }) }))
-    await run()
-    expect(writes()).toEqual(['email_sequences:delete', 'installFollowupPack:call'])
+  it('installOverRejectedWithAnActiveSequencePausesItFirst', async () => {
+    db = makeDb(responder({ row: liveRow({ state: 'rejected', version: 1 }) }))
+    const res = await run()
+    expect(res.ok).toBe(true)
+    expect(writes()).toEqual(['email_sequences:update', 'installFollowupPack:call'])
+    const pause = db.log.find((e) => e.table === 'email_sequences' && e.op === 'update')
+    expect(pause.values).toMatchObject({ status: 'paused' })
+    expect(pause.filters).toEqual({ id: 's1', location_id: LOC, status: 'active' })
     expect(installFollowupPack.mock.calls[0][1].version).toBe(2)
   })
 
+  it('installOverASpentRowRefusesAnUnknownSequenceStatus', async () => {
+    db = makeDb(responder({
+      row: liveRow({ state: 'off' }),
+      overrides: {
+        'email_sequences:update': () => ({ data: [], error: null }),
+        'email_sequences:select': () => ({ data: { id: 's1', status: 'mystery' }, error: null }),
+      },
+    }))
+    expect(await run()).toMatchObject({ ok: false, status: 409, code: 'sequence_changed' })
+    expect(installFollowupPack).not.toHaveBeenCalled()
+  })
+
+  it('installOverADraftRowKeepsItsVersionAndDropsItsDraftSequence', async () => {
+    db = makeDb(responder({ row: liveRow({ state: 'draft', version: 2 }), overrides: draftSequence }))
+    await run()
+    expect(writes()).toEqual(['email_sequences:update', 'email_sequences:delete', 'installFollowupPack:call'])
+    expect(installFollowupPack.mock.calls[0][1].version).toBe(2)
+  })
+
+  it('installWithBodiesOnADraftRowIsAllowed', async () => {
+    const bodies = { main: 'Hi {{1}}, see you at {studio}. {signer}' }
+    db = makeDb(responder({ row: liveRow({ state: 'draft', version: 1 }), overrides: draftSequence }))
+    expect((await run({ bodies })).ok).toBe(true)
+    expect(installFollowupPack.mock.calls[0][1].bodies).toEqual(bodies)
+  })
+
+  it('installWithBodiesOnALiveOrAwaitingRowIs409UseReplace', async () => {
+    const bodies = { main: 'Hi {{1}}, see you at {studio}. {signer}' }
+    for (const state of ['live', 'awaiting_approval']) {
+      installFollowupPack.mockClear()
+      db = makeDb(responder({ row: liveRow({ state }) }))
+      const res = await run({ bodies })
+      expect(res).toEqual({
+        ok: false, status: 409, code: 'use_replace',
+        error: 'This follow-up is already set up. Use Change wording to send new wording.',
+      })
+      expect(installFollowupPack).not.toHaveBeenCalled()
+      expect(writes()).toEqual([])
+    }
+  })
+
+  it('installWithoutBodiesOnALiveRowStillPublishesNow', async () => {
+    const row = liveRow({ state: 'awaiting_approval', version: 3 })
+    db = makeDb(responder({ row }))
+    installFollowupPack.mockResolvedValueOnce({ ok: true, followup: { ...row, state: 'live' }, created: false })
+    const res = await run()
+    expect(res).toMatchObject({ ok: true, followup: { state: 'live' }, created: false })
+    expect(installFollowupPack.mock.calls[0][1].version).toBe(3)
+    expect(installFollowupPack.mock.calls[0][1]).not.toHaveProperty('bodies')
+    // No sequence or row write of this file's own (the mock call is not logged here).
+    expect(writes()).toEqual([])
+  })
+
   it('installOverOffBumpsVersion', async () => {
-    db = makeDb(responder({ row: liveRow({ state: 'off', version: 3 }) }))
+    db = makeDb(responder({ row: liveRow({ state: 'off', version: 3 }), overrides: draftSequence }))
     await run()
     expect(installFollowupPack.mock.calls[0][1].version).toBe(4)
   })
@@ -210,7 +273,7 @@ describe('applyFollowupAction: install', () => {
   it('aFailedDraftDeleteInstallsNothing', async () => {
     db = makeDb(responder({
       row: liveRow({ state: 'rejected' }),
-      overrides: { 'email_sequences:delete': () => ({ data: null, error: { message: 'boom' } }) },
+      overrides: { ...draftSequence, 'email_sequences:delete': () => ({ data: null, error: { message: 'boom' } }) },
     }))
     const res = await run()
     expect(res).toMatchObject({ ok: false, status: 500 })
@@ -264,14 +327,53 @@ describe('applyFollowupAction: replace', () => {
     expect(writes()).toEqual(['email_sequences:update'])
   })
 
-  it('replaceStopsWhenTheRowMoved', async () => {
+  it('replaceRetriesTheSwitchOffWhenTheHookMovedTheRowToLive', async () => {
+    // Read as awaiting_approval; the hook published the same sequence (which
+    // we then paused) and claimed the row live before our switch-off.
+    let followupReads = 0
+    let offWrites = 0
     db = makeDb(responder({
-      row: liveRow(),
-      overrides: { 'pipeline_stage_followups:update': () => ({ data: [], error: null }) },
+      row: liveRow({ state: 'awaiting_approval' }),
+      overrides: {
+        'pipeline_stage_followups:select': () => {
+          followupReads += 1
+          return followupReads === 1 ? undefined : { data: liveRow({ state: 'live' }), error: null }
+        },
+        'pipeline_stage_followups:update': (e) => {
+          offWrites += 1
+          return e.filters.state === 'live' ? { data: [{ id: 'f1' }], error: null } : { data: [], error: null }
+        },
+      },
     }))
     const res = await run({ action: 'replace', bodies })
-    expect(res).toMatchObject({ ok: false, status: 409, code: 'followup_changed' })
+    expect(res.ok).toBe(true)
+    expect(offWrites).toBe(2)
+    expect(writes()).toEqual(['email_sequences:update', 'pipeline_stage_followups:update', 'pipeline_stage_followups:update', 'installFollowupPack:call'])
+    const [firstOff, retryOff] = db.log.filter((e) => e.table === 'pipeline_stage_followups' && e.op === 'update')
+    expect(firstOff.filters.state).toBe('awaiting_approval')
+    expect(retryOff.filters).toEqual({ id: 'f1', location_id: LOC, state: 'live' })
+  })
+
+  it('replaceStopsWhenTheRowNowPointsAtAnotherSequence', async () => {
+    let followupReads = 0
+    db = makeDb(responder({
+      row: liveRow(),
+      overrides: {
+        'pipeline_stage_followups:select': () => {
+          followupReads += 1
+          return followupReads === 1 ? undefined : { data: liveRow({ sequence_id: 's2' }), error: null }
+        },
+        'pipeline_stage_followups:update': () => ({ data: [], error: null }),
+      },
+    }))
+    const res = await run({ action: 'replace', bodies })
+    expect(res).toEqual({
+      ok: false, status: 409, code: 'followup_changed',
+      error: 'This follow-up changed while it was being switched off. Switch it off or change the wording again.',
+    })
     expect(installFollowupPack).not.toHaveBeenCalled()
+    // One attempt only: no retry against a row that moved on.
+    expect(db.log.filter((e) => e.table === 'pipeline_stage_followups' && e.op === 'update')).toHaveLength(1)
   })
 
   it('aDraftSequenceIsDeletedNotPaused', async () => {
