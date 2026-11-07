@@ -173,12 +173,18 @@ describe('routeContact — board descriptors and offer boards', () => {
     ])
   })
   it('exports OFFER_MODULES', () => {
-    expect([...OFFER_MODULES]).toEqual(['offer'])
+    expect([...OFFER_MODULES]).toEqual(['offer', 'offer_un1t'])
   })
   it('offerBeatsPaid', () => {
     const offers = new Map([['o_b_one', offerClaim]])
     expect(routeContact(trialer, { paid, programme: null, offers }, T0 + DAY_MS, [acqD, paidD, offerBoard('o_b_one', 5)]))
       .toEqual({ boardKey: 'o_b_one', slug: 'o_b_one_new' })
+  })
+  it('offer_un1t routes exactly like offer', () => {
+    const offers = new Map([['o_x', offerClaim]])
+    const d = { ...offerBoard('o_x', 50), module: 'offer_un1t' }
+    expect(routeContact(trialer, { paid, programme: null, offers }, T0 + DAY_MS, [acqD, paidD, d]))
+      .toEqual({ boardKey: 'o_x', slug: 'o_x_new' })
   })
   it('offerPriorityThenKey', () => {
     const offers = new Map([['o_b_a', offerClaim], ['o_b_b', offerClaim], ['o_b_c', offerClaim]])

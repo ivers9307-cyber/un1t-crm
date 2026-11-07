@@ -430,6 +430,60 @@ describe('offer-matched purchases are not €39 paid claims (PIPEBUILD.3g)', () 
   })
 })
 
+// PIPEBUILD.3b — offer_un1t boards are placed by the hourly un1t pass only:
+// a single-contact path never loads them, and offersRefused names the `offer`
+// boards a un1t.online studio refuses.
+describe('loadPlacementClaims — offer_un1t boards (PIPEBUILD.3b)', () => {
+  const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null }
+  const CORP = {
+    id: 'p3', location_id: LOC, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 10,
+    config: {
+      entry: { type: 'corp_promo', values: ['acme'] },
+      stages: [{ role: 'new', slug: 'o_corp_new', name: 'New' }, { role: 'converted', slug: 'o_corp_converted', name: 'Converted' }],
+      duration_days: 14,
+    },
+  }
+  const OU = {
+    ...CORP, id: 'p4', key: 'o_u', module: 'offer_un1t',
+    config: { ...CORP.config, stages: [{ role: 'new', slug: 'o_u_new', name: 'New' }, { role: 'converted', slug: 'o_u_converted', name: 'Converted' }] },
+  }
+  const contact = { id: 'c1', location_id: LOC }
+  const promo = { id: 'cp1', location_id: LOC, contact_id: 'c1', promo_key: 'acme', status: 'granted', created_at: iso(T0), updated_at: iso(T0) }
+
+  it('an offer_un1t board at a un1t.online studio is not loaded and sets no offersRefused (no source read, no claim read)', async () => {
+    const { db, reads } = fakeDb(
+      { pipelines: [ACQ, OU], locations: [{ id: LOC, membership_source: 'un1t_online' }], corp_promo_claims: [promo] },
+      { errors: { corp_promo_claims: 'must not be read', un1t_transactions: 'must not be read' } },
+    )
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })
+    expect(out).toMatchObject({ ok: true, claimBoards: false, claims: null })
+    expect(out).not.toHaveProperty('offersRefused')
+    expect(reads).toEqual(['pipelines'])
+  })
+
+  it('beside an offer board at a un1t.online studio only the offer board is refused (un1t_online_studio)', async () => {
+    const { db } = fakeDb(
+      { pipelines: [ACQ, CORP, OU], locations: [{ id: LOC, membership_source: 'un1t_online' }] },
+      { errors: { corp_promo_claims: 'must not be read' } },
+    )
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })
+    expect(out).toMatchObject({ ok: true, claimBoards: true, offersRefused: 'un1t_online_studio' })
+    expect(out.claims.offers).toBeNull()
+  })
+
+  it('beside an offer board at a Glofox studio only the offer board\'s claims are loaded', async () => {
+    const { db, reads } = fakeDb(
+      { pipelines: [ACQ, CORP, OU], locations: [{ id: LOC, membership_source: 'glofox' }], corp_promo_claims: [promo] },
+      { errors: { un1t_transactions: 'must not be read' } },
+    )
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })
+    expect(out).toMatchObject({ ok: true, claimBoards: true })
+    expect(out).not.toHaveProperty('offersRefused')
+    expect([...out.claims.offers.keys()]).toEqual(['o_corp'])
+    expect(reads).not.toContain('un1t_transactions')
+  })
+})
+
 // PIPEBUILD.3h — an unreadable studio setting places nobody beside a
 // trial_purchase offer board; the Class Pack guard follows the offer window.
 describe('PIPEBUILD.3h — unreadable source and the pack guard', () => {

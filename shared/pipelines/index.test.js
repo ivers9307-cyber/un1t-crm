@@ -21,7 +21,7 @@ describe('board registry', () => {
     for (const [name, mod] of Object.entries(BOARD_MODULES)) {
       expect(Array.isArray(mod.stages), `${name}.stages`).toBe(true)
       // `offer` takes its stages from the board's config, so its static list is empty.
-      if (name !== 'offer') expect(mod.stages.length, `${name}.stages non-empty`).toBeGreaterThan(0)
+      if (name !== 'offer' && name !== 'offer_un1t') expect(mod.stages.length, `${name}.stages non-empty`).toBeGreaterThan(0)
       expect(Array.isArray(mod.requiredFields), `${name}.requiredFields`).toBe(true)
       expect(mod.requiredFields.length, `${name}.requiredFields non-empty`).toBeGreaterThan(0)
       expect(typeof mod.classify, `${name}.classify`).toBe('function')
@@ -165,5 +165,14 @@ describe('PIPEBUILD.3a — offer', () => {
     for (const f of ['lead_source', 'last_lead_source', 'last_lead_source_at', 'glofox_membership_plan', 'recent_bookings', 'converted_at']) {
       expect(mod.requiredFields, `missing ${f}`).toContain(f)
     }
+  })
+})
+
+describe('PIPEBUILD.3b — offer_un1t', () => {
+  it('registers offer_un1t on the un1t.online input; offer has none', () => {
+    expect(getBoardModule('offer_un1t').inputSource).toBe('un1t_online')
+    expect(getBoardModule('offer_un1t').stages).toEqual([])
+    expect(getBoardModule('offer_un1t').requiredFields).toEqual(['id', 'name', 'email', 'location_id'])
+    expect(getBoardModule('offer').inputSource).toBeUndefined()
   })
 })

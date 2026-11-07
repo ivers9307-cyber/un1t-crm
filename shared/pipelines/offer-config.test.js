@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseOfferConfig, stageSlugFor, ENTRY_TYPES, boardKeyFor, BOARD_KEY_RE } from './offer-config.js'
+import { parseOfferConfig, stageSlugFor, ENTRY_TYPES, boardKeyFor, BOARD_KEY_RE, moduleForMembershipSource } from './offer-config.js'
 
 const KEY = 'o_reset'
 const full = () => ({
@@ -45,7 +45,6 @@ describe('parseOfferConfig', () => {
     }
     expect(bad((c) => c.stages.push({ role: 'new', slug: 'o_reset_new', name: 'Again' }))).toMatch(/exactly one new/)
     expect(bad((c) => { c.entry.type = 'nonsense' })).toMatch(/entry.type/)
-    expect(bad((c) => { c.entry.type = 'un1t_product' })).toMatch(/entry.type/)
     expect(bad((c) => { c.stages[1].slug = 'wrong' })).toMatch(/slug must be o_reset_first_class/)
     expect(bad((c) => { c.stages[3].day = 0; c.stages[3].slug = 'o_reset_day_0' })).toMatch(/checkpoint needs/)
     expect(bad((c) => { c.stages.push({ role: 'pile', slug: 'o_reset_pile', name: 'P' }) })).toMatch(/role must be one of/)
@@ -67,8 +66,27 @@ describe('parseOfferConfig', () => {
     expect(parseOfferConfig(full(), { boardKey: KEY }).ok).toBe(true)
   })
 
-  it('exposes the entry types without un1t_product', () => {
-    expect(ENTRY_TYPES).toEqual(['trial_purchase', 'corp_promo', 'lead_source', 'glofox_plan', 'tag'])
+  it('exposes the entry types including un1t_product', () => {
+    expect(ENTRY_TYPES).toEqual(['trial_purchase', 'corp_promo', 'lead_source', 'glofox_plan', 'tag', 'un1t_product'])
+  })
+
+  const BASE = { stages: [{ role: 'new', slug: 'o_x_new', name: 'New' }] }
+  it('un1t_product keeps case and is allowed on offer_un1t', () => {
+    const r = parseOfferConfig({ ...BASE, entry: { type: 'un1t_product', values: ['AbC123'] } }, { boardKey: 'o_x', module: 'offer_un1t' })
+    expect(r.ok).toBe(true)
+    expect(r.config.entry).toEqual({ type: 'un1t_product', values: ['AbC123'] })
+  })
+  it('refuses un1t_product on an offer board and lead_source on an offer_un1t board', () => {
+    expect(parseOfferConfig({ ...BASE, entry: { type: 'un1t_product', values: ['a'] } }, { boardKey: 'o_x', module: 'offer' }).ok).toBe(false)
+    const r = parseOfferConfig({ ...BASE, entry: { type: 'lead_source', values: ['meta'] } }, { boardKey: 'o_x', module: 'offer_un1t' })
+    expect(r.ok).toBe(false)
+    expect(r.errors.join(' ')).toContain('does not work at this studio')
+  })
+  it('moduleForMembershipSource', () => {
+    expect(moduleForMembershipSource('un1t_online')).toBe('offer_un1t')
+    expect(moduleForMembershipSource('un1t')).toBe('offer_un1t')
+    expect(moduleForMembershipSource('glofox')).toBe('offer')
+    expect(moduleForMembershipSource('none')).toBe('offer')
   })
 })
 

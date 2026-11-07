@@ -329,7 +329,12 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
   const holds = boardsRes.disabledOfferIds ? { disabledOfferIds: boardsRes.disabledOfferIds } : {}
   const derived = boards.filter((b) => b.mode === 'derived')
   const legacyBoards = derived.some((b) => CLAIM_BOARD_MODULES.includes(b.module))
-  const offerRows = derived.filter((b) => OFFER_MODULES.includes(b.module))
+  // PIPEBUILD.3b — `offer` boards only: an `offer_un1t` board is placed by the
+  // hourly un1t pass alone (no event path places at a un1t.online studio, and
+  // anywhere else the pass refuses it), so it is never loaded here and
+  // placementDescriptors holds it. offersRefused therefore only ever names
+  // `offer` boards a un1t.online studio refuses.
+  const offerRows = derived.filter((b) => OFFER_MODULES.includes(b.module) && b.module !== 'offer_un1t')
   if (!legacyBoards && offerRows.length === 0) return { ok: true, boards, claimBoards: false, claims: null, ...holds }
 
   // The membership source is read first (only when an offer board runs), so a

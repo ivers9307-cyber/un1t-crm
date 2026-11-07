@@ -7,6 +7,7 @@ import {
   initialWizardState, wizardReducer, stateFromBoard, settingsConfig, stepErrors,
   packForBoardStage, packBodies, previewTemplate,
 } from '@/lib/pipeline-wizard'
+import { ENTRY_TYPES_BY_MODULE } from '@shared/pipelines/offer-config.js'
 import NameOfferStep from './wizard/NameOfferStep'
 import EntryStep from './wizard/EntryStep'
 import StagesStep from './wizard/StagesStep'
@@ -401,7 +402,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
       </Section>
 
       <Section title="Who enters" note={lockNote}>
-        <EntryStep state={state} dispatch={dispatch} locationId={locationId} disabled={structureLocked} />
+        <EntryStep state={state} dispatch={dispatch} locationId={locationId} entryTypes={ENTRY_TYPES_BY_MODULE[board.module] || ENTRY_TYPES_BY_MODULE.offer} disabled={structureLocked} />
       </Section>
 
       <Section title="Stages" note={lockNote ? `${lockNote} Stage names can change any time.` : null}>

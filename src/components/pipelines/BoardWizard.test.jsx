@@ -19,10 +19,21 @@ const props = { locationId: 'loc1', studioName: 'UN1T Stillorgan', canEdit: true
 const next = () => fireEvent.click(screen.getByRole('button', { name: 'Next' }))
 
 describe('BoardWizard', () => {
-  it('un1tStudioShowsNotice', () => {
+  it('un1tStudioOffersUn1tProduct', async () => {
+    stubOptions([{ value: 'p1', label: '14 Day Reset · €39' }])
     render(<BoardWizard {...props} membershipSource="un1t_online" />)
-    expect(screen.getByText("Offer boards at un1t.online studios aren't available yet.")).toBeTruthy()
-    expect(screen.queryByText('Paid trial')).toBeNull()
+    expect(screen.queryByText("Offer boards at un1t.online studios aren't available yet.")).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Programme/ }))
+    next()
+    fireEvent.change(screen.getByLabelText(/Board name/), { target: { value: 'Hatch board' } })
+    next()
+    // The recipe's lead_source default does not work here: it starts on the first allowed type.
+    expect(await screen.findByLabelText(/14 Day Reset/)).toBeTruthy()
+    const select = screen.getByLabelText('Who enters')
+    expect(screen.getByRole('option', { name: 'A un1t.online product' })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: 'A Glofox plan' })).toBeNull()
+    expect(select.value).toBe('un1t_product')
+    expect(screen.getByText('People who buy this product enter the board.')).toBeTruthy()
   })
 
   it('a non-owner sees the owner notice and no wizard', () => {

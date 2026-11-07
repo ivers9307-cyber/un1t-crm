@@ -3,8 +3,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   splitOfferBoards, loadOfferClaimsForLocation, loadOfferClaimsForContact,
-  offerPurchaseEntries, withoutOfferPurchases, placementDescriptors, offerPlacementSilence,
+  trialPurchaseOfferConfigs, offerPurchaseEntries, withoutOfferPurchases, placementDescriptors, offerPlacementSilence,
+  un1tProductOfferClaim, loadUn1tOfferClaims, UN1T_MEMBERSHIP_SOURCES,
 } from './pipeline-offer-claims.js'
+import { moduleForMembershipSource } from '@shared/pipelines/offer-config.js'
 import { loadClaimsForLocation, pendingProgrammeClaims } from './pipeline-claims.js'
 
 vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
@@ -70,6 +72,29 @@ describe('splitOfferBoards', () => {
     expect(descriptors[0].entry).toEqual({ type: 'tag', values: ['vip'] })
     expect(skipped.map((s) => s.key)).toEqual(['o_broken'])
   })
+
+  it('judges each board against its own module (un1t_product on offer, lead_source on offer_un1t)', () => {
+    const un1tOnOffer = board('o_a', { type: 'un1t_product', values: ['p1'] })
+    const leadOnUn1t = { ...board('o_b', { type: 'lead_source', values: ['meta'] }), module: 'offer_un1t' }
+    const { descriptors, skipped } = splitOfferBoards([un1tOnOffer, leadOnUn1t])
+    expect(descriptors).toEqual([])
+    expect(skipped.map((s) => s.key)).toEqual(['o_a', 'o_b'])
+  })
+})
+
+describe('trialPurchaseOfferConfigs module check', () => {
+  it('drops a trial_purchase board whose module the entry does not suit', () => {
+    const entry = { type: 'trial_purchase', match: 'plan_code', values: ['T39'] }
+    const ok = board('o_ok', entry)
+    const wrong = { ...board('o_wrong', entry), module: 'bogus_module' }
+    expect(trialPurchaseOfferConfigs([ok, wrong]).map((b) => b.key)).toEqual(['o_ok'])
+  })
+
+  it('keeps a trial_purchase board of module offer_un1t', () => {
+    const entry = { type: 'trial_purchase', match: 'plan_code', values: ['T39'] }
+    const un1t = { ...board('o_un1t', entry), module: 'offer_un1t' }
+    expect(trialPurchaseOfferConfigs([un1t]).map((b) => b.key)).toEqual(['o_un1t'])
+  })
 })
 
 // PIPEBUILD.3g — the trial_purchase entries the €39 claim loaders leave out.
@@ -90,6 +115,12 @@ describe('placementDescriptors — baseline (PIPEBUILD.5c)', () => {
     const { descriptors, heldIds } = placementDescriptors([acq, unbaselined, baselined], { holdUnbaselined: false })
     expect(descriptors.map((d) => d.key)).toEqual(['acquisition', 'o_x', 'o_z'])
     expect(heldIds.size).toBe(0)
+  })
+  it('PIPEBUILD.3b: an offer_un1t board is never placed on an event path (held), even baselined with offers known', () => {
+    const ou = { ...board('o_u', { type: 'corp_promo', values: ['acme'] }), module: 'offer_un1t', baseline_at: '2026-11-01T00:00:00Z' }
+    const { descriptors, heldIds } = placementDescriptors([acq, baselined, ou])
+    expect(descriptors.map((d) => d.key)).toEqual(['acquisition', 'o_z'])
+    expect([...heldIds]).toEqual(['p-o_u'])
   })
   it('offers unknown still holds a baselined board', () => {
     const { descriptors, heldIds } = placementDescriptors([acq, baselined], { offersKnown: false, holdUnbaselined: false })
@@ -342,5 +373,89 @@ describe('programmeClaimsUnchanged', () => {
     ] })
     const out = await loadClaimsForLocation(db, { locationId: LOC, contactIds: new Set(['c1']), now: T0 })
     expect(out.programmeByContact.get('c1')).toEqual({ claimedAt: T0, source: 'lead_source' })
+  })
+})
+
+describe('un1t offer claims (PIPEBUILD.3b)', () => {
+  it('the two un1t source lists agree', () => {
+    for (const s of UN1T_MEMBERSHIP_SOURCES) expect(moduleForMembershipSource(s)).toBe('offer_un1t')
+    for (const s of ['glofox', 'none', null]) expect(moduleForMembershipSource(s)).toBe('offer')
+  })
+  const cfg = { duration_days: 14, entry: { type: 'un1t_product', values: ['AbC123'] } }
+  const tx = (product_id, at, over = {}) => ({ product_id, refunded: false, remote_created_at: at, ...over })
+
+  it('un1tProductOfferClaim: newest non-refunded matching row wins', () => {
+    const c = un1tProductOfferClaim([
+      tx('AbC123', iso(T0 - 3 * DAY)), tx('AbC123', iso(T0 - DAY)), tx('AbC123', iso(T0), { refunded: true }),
+    ], cfg, T0)
+    expect(c.start).toBe(T0 - DAY)
+    expect(c.end - c.start).toBe(14 * DAY)
+  })
+  it('un1tProductOfferClaim: a later sub_renewal does not restart the claim', () => {
+    const c = un1tProductOfferClaim([
+      tx('AbC123', iso(T0 - 5 * DAY), { type: 'sub_initial' }), tx('AbC123', iso(T0), { type: 'sub_renewal' }),
+    ], cfg, T0)
+    expect(c.start).toBe(T0 - 5 * DAY)
+  })
+  it('un1tProductOfferClaim: a renewal alone is no claim', () => {
+    expect(un1tProductOfferClaim([tx('AbC123', iso(T0), { type: 'sub_renewal' })], cfg, T0)).toBeNull()
+  })
+  it('un1tProductOfferClaim: a EUR 0 row counts, case is exact, no match is null', () => {
+    expect(un1tProductOfferClaim([tx('AbC123', iso(T0), { amount_cents: 0 })], cfg, T0).start).toBe(T0)
+    expect(un1tProductOfferClaim([tx('abc123', iso(T0))], cfg, T0)).toBeNull()
+    expect(un1tProductOfferClaim([tx('AbC123', 'nope')], cfg, T0)).toBeNull()
+    expect(un1tProductOfferClaim([], cfg, T0)).toBeNull()
+  })
+
+  const un1tBoard = (key, entry, extra = {}) => ({ ...board(key, entry, extra), module: 'offer_un1t' })
+  const prodBoard = un1tBoard('o_prod', { type: 'un1t_product', values: ['AbC123'] })
+
+  it('resolves an owner through un1t_clients and keys the claim by board key', async () => {
+    const { db } = fakeDb({
+      un1t_transactions: [
+        { location_id: LOC, un1t_id: 't1', un1t_user_id: 'u1', contact_id: null, product_id: 'AbC123', refunded: false, remote_created_at: iso(T0) },
+        { location_id: LOC, un1t_id: 't2', un1t_user_id: 'u9', contact_id: 'c-out', product_id: 'AbC123', refunded: false, remote_created_at: iso(T0) },
+        { location_id: LOC, un1t_id: 't3', un1t_user_id: null, contact_id: null, product_id: 'AbC123', refunded: false, remote_created_at: iso(T0) },
+      ],
+      un1t_clients: [{ location_id: LOC, un1t_user_id: 'u1', contact_id: 'c1' }, { location_id: LOC, un1t_user_id: 'u8', contact_id: null }],
+    })
+    const res = await loadUn1tOfferClaims(db, { locationId: LOC, boards: [prodBoard], contactIds: ['c1'], now: T0 })
+    expect(res.ok).toBe(true)
+    const claim = res.offersByContact.get('c1').get('o_prod')
+    expect(claim).toMatchObject({ start: T0, end: T0 + 14 * DAY, source: 'un1t_product', claimedAt: iso(T0) })
+    expect(res.offersByContact.has('c-out')).toBe(false)
+    expect(res.offersByContact.size).toBe(1)
+  })
+
+  it('a transactions read error is un1t_transactions_unreadable', async () => {
+    const { db } = fakeDb({}, { errors: { un1t_transactions: 'boom' } })
+    const res = await loadUn1tOfferClaims(db, { locationId: LOC, boards: [prodBoard], contactIds: ['c1'], now: T0 })
+    expect(res).toMatchObject({ ok: false, reason: 'un1t_transactions_unreadable' })
+  })
+
+  it('a clients read error is un1t_clients_unreadable', async () => {
+    const { db } = fakeDb({}, { errors: { un1t_clients: 'boom' } })
+    const res = await loadUn1tOfferClaims(db, { locationId: LOC, boards: [prodBoard], contactIds: ['c1'], now: T0 })
+    expect(res).toMatchObject({ ok: false, reason: 'un1t_clients_unreadable' })
+  })
+
+  it('disabled and non-offer_un1t boards are skipped and never read', async () => {
+    const { db, reads } = fakeDb({})
+    const res = await loadUn1tOfferClaims(db, {
+      locationId: LOC, contactIds: ['c1'], now: T0,
+      boards: [{ ...prodBoard, enabled: false }, board('o_plain', { type: 'un1t_product', values: ['x'] })],
+    })
+    expect(res.ok).toBe(true)
+    expect(reads).toEqual([])
+    expect(res.offersByContact.size).toBe(0)
+    expect(res.skipped.map((s) => s.key)).toContain('o_plain')
+  })
+
+  it('a trial_purchase offer_un1t board reads trial_purchases like the contacts path', async () => {
+    const { db } = fakeDb({ trial_purchases: [purchase('p1', 'c1', { plan_code: 'PLAN' })] })
+    const b = un1tBoard('o_tp', { type: 'trial_purchase', match: 'plan_code', values: ['PLAN'] })
+    const res = await loadUn1tOfferClaims(db, { locationId: LOC, boards: [b], contactIds: ['c1'], now: T0 })
+    expect(res.ok).toBe(true)
+    expect(res.offersByContact.get('c1').get('o_tp')).toMatchObject({ source: 'trial_purchase', start: T0 })
   })
 })

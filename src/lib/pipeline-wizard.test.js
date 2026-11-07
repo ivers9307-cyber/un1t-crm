@@ -1,13 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   initialWizardState, wizardReducer, wizardConfig, wizardBodies, stepErrors, followupPacks,
-  previewTemplate, WIZARD_STEPS, UN1T_STUDIO_NOTICE, UN1T_SOURCES, isUn1tStudio,
+  previewTemplate, WIZARD_STEPS, entryTypesFor,
   stateFromBoard, settingsConfig, packForBoardStage, packBodies,
 } from './pipeline-wizard.js'
 import { RECIPES } from '@shared/pipelines/recipes.js'
 import { parseOfferConfig, MIA_NOTES_MAX } from '@shared/pipelines/offer-config.js'
-import { UN1T_STUDIO_ERROR } from './pipeline-boards.js'
-import { UN1T_MEMBERSHIP_SOURCES } from './pipeline-offer-claims.js'
 import { boardCreateSchema } from './schemas.js'
 
 const run = (state, ...actions) => actions.reduce(wizardReducer, state)
@@ -198,12 +196,21 @@ describe('pipeline wizard', () => {
       .toEqual([false, true, true, false])
   })
 
-  it('keeps the un1t.online notice and sources in step with the server', () => {
-    expect(UN1T_STUDIO_NOTICE).toBe(UN1T_STUDIO_ERROR)
-    expect([...UN1T_SOURCES]).toEqual([...UN1T_MEMBERSHIP_SOURCES])
-    expect(isUn1tStudio('un1t_online')).toBe(true)
-    expect(isUn1tStudio('glofox')).toBe(false)
-    expect(isUn1tStudio(null)).toBe(false)
+  it('entryTypesFor follows the studio\'s module', () => {
+    expect([...entryTypesFor('un1t_online')]).toEqual(['un1t_product', 'trial_purchase', 'corp_promo'])
+    expect(entryTypesFor('glofox')).not.toContain('un1t_product')
+    expect(entryTypesFor(null)).not.toContain('un1t_product')
+  })
+
+  it('a recipe whose entry type is not allowed starts on the first allowed type', () => {
+    const s0 = initialWizardState({ studioName: 'Hatch', entryTypes: entryTypesFor('un1t_online') })
+    const lead = wizardReducer(s0, { type: 'pickRecipe', recipeKey: 'programme_lead' })
+    expect(lead.entry).toEqual({ type: 'un1t_product', values: [] })
+    const trial = wizardReducer(s0, { type: 'pickRecipe', recipeKey: 'paid_trial_offer' })
+    expect(trial.entry.type).toBe('trial_purchase')
+    const swapped = wizardReducer(trial, { type: 'setEntryType', entryType: 'un1t_product' })
+    expect(swapped.entry).toEqual({ type: 'un1t_product', values: [] })
+    expect(wizardReducer(trial, { type: 'setEntryType', entryType: 'tag' })).toBe(trial)
   })
 })
 
