@@ -27,7 +27,12 @@ const STEP_COMPONENTS = {
 }
 
 async function send(url, method, body) {
-  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  let res
+  try {
+    res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  } catch {
+    return { ok: false, json: { error: 'Could not reach the server. Try again.' } }
+  }
   let json = null
   try { json = await res.json() } catch { /* a non-JSON failure gets the generic message */ }
   return { ok: res.ok && !!json?.success, json }
@@ -36,10 +41,7 @@ async function send(url, method, body) {
 // The board stage a pack belongs to: same role, and for a checkpoint the same day.
 function stageForPack(board, pack) {
   const same = (board.stages || []).filter((s) => s.stage_role === pack.role)
-  if (pack.day != null) {
-    const byDay = same.find((s) => s.role_config?.day === pack.day)
-    if (byDay) return byDay
-  }
+  if (pack.day != null) return same.find((s) => s.role_config?.day === pack.day) || null
   return same[0] || null
 }
 
@@ -75,13 +77,14 @@ export default function BoardWizard({
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState(null)
   const [launch, setLaunch] = useState(null) // { board, followups, issues, wording }
+  const [busy, setBusy] = useState(false)
   const inFlight = useRef(false)
 
   async function installOne(board, packKey, wording) {
     const pack = RECIPES[state.recipeKey]?.packs.find((p) => p.key === packKey)
     const stage = pack && stageForPack(board, pack)
     const label = pack?.name || packKey
-    if (!stage) return { key: packKey, label, error: 'This stage is not on the board.' }
+    if (!stage) return { key: packKey, label, error: pack?.day != null ? 'No stage for this check-in message.' : 'This stage is not on the board.' }
     const bodies = wording[packKey]
     const { ok, json } = await send(
       `/api/pipelines/${board.id}/followups/${stage.id}`, 'PUT',
@@ -111,6 +114,7 @@ export default function BoardWizard({
       if (!created.ok) { setCreateError(created.json?.error || 'The board could not be created.'); return }
       const board = created.json.data.board
       setLaunch({ board, followups: [], issues: [], wording })
+      setBusy(true)
       for (const pack of followupPacks(wizardState)) {
         const r = await installOne(board, pack.key, wording)
         setLaunch((prev) => applyResult(prev, r))
@@ -119,6 +123,7 @@ export default function BoardWizard({
       setCreateError('The board could not be created.')
     } finally {
       inFlight.current = false
+      setBusy(false)
       setCreating(false)
     }
   }
@@ -126,11 +131,13 @@ export default function BoardWizard({
   async function retry(key) {
     if (inFlight.current || !launch) return
     inFlight.current = true
+    setBusy(true)
     try {
       const r = await installOne(launch.board, key, launch.wording)
       setLaunch((prev) => applyResult(prev, r))
     } finally {
       inFlight.current = false
+      setBusy(false)
     }
   }
 
@@ -147,7 +154,7 @@ export default function BoardWizard({
             <Link href={`/settings/pipelines/${launch.board.id}`} className="text-un1t-accent">Open the board</Link>
           </p>
         </Card>
-        <BoardLaunchPanel board={launch.board} followups={launch.followups} issues={launch.issues} onRetry={retry} />
+        <BoardLaunchPanel board={launch.board} followups={launch.followups} issues={launch.issues} onRetry={retry} retryDisabled={busy} />
       </div>
     )
   }

@@ -36,7 +36,7 @@ async function postJson(url) {
  * @param {(board: object) => void} [props.onEnabled]
  * @param {boolean} [props.showBoardLink]
  */
-export default function BoardLaunchPanel({ board, followups, issues = [], onRetry, onEnabled, showBoardLink = false }) {
+export default function BoardLaunchPanel({ board, followups, issues = [], onRetry, retryDisabled = false, onEnabled, showBoardLink = false }) {
   const [dry, setDry] = useState(null)
   const [dryBusy, setDryBusy] = useState(false)
   const [dryError, setDryError] = useState(null)
@@ -100,7 +100,7 @@ export default function BoardLaunchPanel({ board, followups, issues = [], onRetr
             {issues.map((i) => (
               <li key={i.key} className="flex flex-wrap items-center gap-2 text-sm text-red-700">
                 <span>{i.label}: {i.error}</span>
-                {onRetry && <Button type="button" size="sm" variant="secondary" onClick={() => onRetry(i.key)}>Try again</Button>}
+                {onRetry && <Button type="button" size="sm" variant="secondary" disabled={retryDisabled} onClick={() => onRetry(i.key)}>Try again</Button>}
               </li>
             ))}
           </ul>

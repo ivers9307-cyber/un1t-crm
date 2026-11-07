@@ -130,4 +130,30 @@ describe('BoardWizard finish', () => {
     await screen.findByRole('button', { name: 'Check who would enter' })
     expect(fetchMock.mock.calls.filter(([u]) => u === '/api/locations/loc1/pipelines').length).toBe(1)
   })
+
+  it('a rejected install does not stop the rest, and Try again re-installs', async () => {
+    await toReview()
+    let n = 0
+    let failSecond = true
+    const fetchMock = vi.fn(async (url, init) => {
+      if (url === '/api/locations/loc1/pipelines') return ok({ board: createdBoard })
+      if (url.includes('/followups/')) {
+        n += 1
+        if (n === 2 && failSecond) throw new Error('network')
+        return ok({ followup: { state: 'live', stage_id: url.split('/').pop() } })
+      }
+      return ok({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    fireEvent.click(screen.getByRole('button', { name: 'Create board (switched off)' }))
+    const retryBtn = await screen.findByRole('button', { name: 'Try again' })
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([u]) => u.includes('/followups/')).length).toBe(4))
+    expect(screen.getAllByRole('button', { name: 'Try again' }).length).toBe(1)
+    failSecond = false
+    await waitFor(() => expect(retryBtn.disabled).toBe(false))
+    fireEvent.click(retryBtn)
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull())
+    const last = fetchMock.mock.calls.filter(([u]) => u.includes('/followups/')).pop()
+    expect(JSON.parse(last[1].body).action).toBe('install')
+  })
 })
