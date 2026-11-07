@@ -2331,6 +2331,23 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
       expect(rec.calls.indexOf(stamps[0])).toBeGreaterThan(lastDealWrite)
     })
 
+    // AUDIT.1 — a studio whose only enabled board is the offer board (its
+    // Acquisition board off: Test Studio, 7 Nov 2026). The router files a
+    // person with no live claim on the acquisition board, which has no stage
+    // here: that is a skip, never an error, so the run stays clean and the
+    // baseline is stamped. A slug missing on a board that IS running is still
+    // an error.
+    it('offerOnlyStudioSkipsClaimlessPeopleAndStamps: no acquisition board → the plain contact is skipped_no_board, errors 0, baseline stamped', async () => {
+      const plain = { id: 'c-plain', name: 'Plain', email: null, glofox_membership_status: 'lead', joined_at: ago(1), created_at: ago(1), recent_bookings: [] }
+      const rec = recordingDb(corpFixtures({ pipelines: [UNBASED], pipeline_stages: [...CORP_STAGES], contacts: [corpNew('c-new'), plain], deals: [] }))
+      const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+      expect(out).toMatchObject({ ok: true, errors: 0, deals_created: 1, skipped_no_board: 1, boards_baselined: ['o_corp'] })
+      const inserts = rec.writesTo('deals').filter((e) => rec.argOf(e, 'insert'))
+      expect(inserts).toHaveLength(1)
+      expect(rec.argOf(inserts[0], 'insert')[1]).toMatchObject({ contact_id: 'c-new', pipeline_id: 'p-corp' })
+      expect(stampWrites(rec)).toHaveLength(1)
+    })
+
     it('the silent set is the union: silentBoardIds still silences a baselined board beside the unbaselined one', async () => {
       const buyer = { id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', joined_at: ago(8), created_at: ago(8), last_attended_at: ago(6), recent_bookings: [attendedBooking(6)] }
       const rec = recordingDb(corpFixtures({

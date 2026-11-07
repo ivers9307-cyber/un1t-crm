@@ -46,7 +46,7 @@ const BOOK_FIRST_CLASS = 'Hi {{1}}, thanks for starting your {offer} at {studio}
 
 const AFTER_FIRST_CLASS = 'Hi {{1}}, great to have you in for your first class of the {offer} at {studio} 💪 How did you find it? If you\'ve any questions about classes, I\'m here to help. The more you come in over the {days} days, the more you\'ll get out of it. Download the app to book your classes, or reply here and I can get you sorted. Thanks, {signer}'
 
-const HALFWAY_MAIN = 'Hi {{1}}, you\'re halfway through your {offer} at {studio} 💪 You\'ve {days_left} days of unlimited classes left, so book your next few sessions now and finish strong. Any questions, just reply here. {signer}'
+const HALFWAY_MAIN = 'Hi {{1}}, you\'re halfway through your {offer} at {studio} 💪 You\'ve {days_left} days of your {offer} left, so book your next few sessions now and finish strong. Any questions, just reply here. {signer}'
 
 const OFFER_ENDED = 'Hi {{1}}, {signer} from {studio} here 👋\n\nYour {offer} has come to an end, and I hope you enjoyed the sessions. How did you find them?\n\nIf you\'d like to keep training with us, reply here and I\'ll talk you through the memberships and any offers that suit you best. Happy to jump on a quick call too if that\'s easier.\n\nTalk soon, {signer}'
 

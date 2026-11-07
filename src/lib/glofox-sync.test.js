@@ -2964,7 +2964,7 @@ describe('applyMemberSync — pack stamp beside a trial_purchase offer board (PI
   const at = new Date(Date.now() - 2 * 86_400_000).toISOString()
   const granted = { id: 'tp1', location_id: 'stillorgan', contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: at, granted_at: at, duration_days: 14, plan_code: 'RESET14', landing_path: null, page_id: null }
   const RESET = {
-    id: 'p-reset', key: 'o_reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
+    id: 'p-reset', key: 'o_reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', baseline_at: '2026-01-01T00:00:00Z', priority: 50,
     config: {
       entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] },
       stages: [{ role: 'new', slug: 'o_reset_new', name: 'New' }, { role: 'converted', slug: 'o_reset_converted', name: 'Converted' }],
@@ -2981,6 +2981,25 @@ describe('applyMemberSync — pack stamp beside a trial_purchase offer board (PI
     const writes = []
     await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [granted], pipelines, writes }), 'stillorgan', member, { bookings: [], skipInteractions: true })
     expect(packStamps(writes)).toHaveLength(0)
+  })
+
+  // AUDIT.2 — the Reset board switched on and not yet baselined: the buyer's
+  // purchase stays a €39 claim on the webhook, so they land on (or stay on)
+  // the €39 board, never on acquisition as a Class Pack member, until the
+  // nightly pass moves them silently.
+  it('unbaselinedTrialBoardKeepsTheBuyerOnThe39Board (event path)', async () => {
+    const UNBASED = { ...RESET, baseline_at: null }
+    const writes = []
+    await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [granted], pipelines: [pipelines[0], pipelines[1], UNBASED], writes }), 'stillorgan', member, { bookings: [], skipInteractions: true })
+    expect(packStamps(writes)).toHaveLength(0)
+    const dealWrites = writes.filter((w) => w.table === 'deals')
+    expect(dealWrites.length).toBeGreaterThan(0)
+    for (const w of dealWrites) {
+      const payload = JSON.stringify(w.payload)
+      expect(payload).toContain('p-paid')
+      expect(payload).not.toContain('p-reset')
+      expect(payload).not.toContain('p-acq')
+    }
   })
 
   // PIPEBUILD.3h — finding 1, event path: an unreadable membership source

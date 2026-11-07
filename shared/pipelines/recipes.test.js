@@ -130,7 +130,7 @@ describe('recipes', () => {
     const book = 'Hi {{1}}, thanks for starting your 14 Day Reset at UN1T Stillorgan 💪 We haven\'t seen you book your first class yet. Tap below to pick one this week, or reply here and we\'ll book it for you. Garrett'
     expect(t('book_first_class').main).toBe(book)
     expect(t('after_first_class').main).toBe('Hi {{1}}, great to have you in for your first class of the 14 Day Reset at UN1T Stillorgan 💪 How did you find it? If you\'ve any questions about classes, I\'m here to help. The more you come in over the 14 days, the more you\'ll get out of it. Download the app to book your classes, or reply here and I can get you sorted. Thanks, Garrett')
-    expect(t('halfway').main).toBe('Hi {{1}}, you\'re halfway through your 14 Day Reset at UN1T Stillorgan 💪 You\'ve 7 days of unlimited classes left, so book your next few sessions now and finish strong. Any questions, just reply here. Garrett')
+    expect(t('halfway').main).toBe('Hi {{1}}, you\'re halfway through your 14 Day Reset at UN1T Stillorgan 💪 You\'ve 7 days of your 14 Day Reset left, so book your next few sessions now and finish strong. Any questions, just reply here. Garrett')
     expect(t('halfway').nudge).toBe(book)
   })
 
@@ -187,7 +187,7 @@ describe('recipes', () => {
       expect(() => renderPack('paid_trial_offer', 'halfway', { ...BASE, durationDays: d }), String(d)).toThrow(/day 7 check-in/)
     }
     const ok = renderPack('paid_trial_offer', 'halfway', { ...BASE, durationDays: 8 })
-    expect(bodyOf(ok.templates[0])).toContain("You've 1 days of unlimited classes left")
+    expect(bodyOf(ok.templates[0])).toContain("You've 1 days of your 14 Day Reset left")
     // Only the halfway pack is held to it.
     expect(() => renderPack('paid_trial_offer', 'after_first_class', { ...BASE, durationDays: 7 })).not.toThrow()
   })

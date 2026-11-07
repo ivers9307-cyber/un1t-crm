@@ -479,6 +479,9 @@ export async function reclassifyAllContacts(db, args) {
   }
 
   const activePipelineIds = activePipelines.map((p) => p.id)
+  // AUDIT.1 — the boards running this pass, by router key: a route to any other
+  // board is a person this pass has nowhere to put, never an error.
+  const activeKeys = new Set(activePipelines.map((p) => p.key))
   // PIPEBUILD.3d — held boards' open deals are read (so their people are left
   // alone, below); no stage of theirs is a target.
   const heldPipelineIds = new Set(heldPipelines.map((p) => p.id))
@@ -801,6 +804,7 @@ export async function reclassifyAllContacts(db, args) {
   let createsWithheld = 0
   let createsHeld = 0
   let dealsHeld = 0 // PIPEBUILD.3d: people left alone because a deal of theirs sits on a held board
+  let skippedNoBoard = 0 // AUDIT.1: people routed to a board this studio does not run
   const createsLanded = [] // PIPEBUILD.3d: real runs, offer boards: creates whose insert landed
   const stageHistogram = {} // dry runs only: { target_slug: count }
   const boardHistogram = {} // dry runs only, PIPE3: { board key: count }
@@ -845,8 +849,18 @@ export async function reclassifyAllContacts(db, args) {
     const targetSlug = route ? route.slug : null
     const targetStageId = stageIdBySlug.get(targetSlug)
     if (!targetStageId) {
-      // Migration set should guarantee every slug exists; if not,
-      // count + move on rather than crashing the whole run.
+      // AUDIT.1 — the router answers the acquisition board for everyone without
+      // a live claim (Cold, Gympass, a plain contact). A studio that does not
+      // run that board (its primary off, an offer board on) has no stage for
+      // them: not this pass's person, skipped. Counting it as an error held
+      // the studio's offer-board baseline for ever (stampBaselines needs
+      // errors === 0): Test Studio's "69 trial", 7 Nov 2026.
+      if (route && !activeKeys.has(route.boardKey)) {
+        skippedNoBoard++
+        continue
+      }
+      // A slug missing on a board that IS running: the migration set should
+      // guarantee every slug exists; count + move on rather than crash the run.
       errors++
       continue
     }
@@ -1235,6 +1249,7 @@ export async function reclassifyAllContacts(db, args) {
     ...(needsClaims ? { claims_pending: claimsPending } : {}),
     ...(dryRun ? { board_histogram: boardHistogram } : {}),
     ...(heldPipelineIds.size > 0 ? { deals_held: dealsHeld } : {}),
+    ...(skippedNoBoard > 0 ? { skipped_no_board: skippedNoBoard } : {}),
     ...(dryRun ? { board_overlap: boardOverlap } : {}),
     ...(baselined ? { boards_baselined: baselined } : {}),
     ...(baselineHeld ? { baseline_held: baselineHeld } : {}),

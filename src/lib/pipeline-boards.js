@@ -824,6 +824,26 @@ export async function setBoardEnabled(db, { locationId, boardId, enabled } = {})
     if (row.module !== studio.module) {
       return fail(409, 'This board was built for a different kind of studio.', { code: 'module_mismatch' })
     }
+    // AUDIT.1 — the router files everyone without a live claim on the studio's
+    // primary (Acquisition) board, and every event path places from it. With
+    // that board off, an offer board's people are placed by the nightly pass
+    // alone, and nobody else can be placed at all (Test Studio, 7 Nov 2026).
+    // So an offer board switches on only beside an enabled derived primary.
+    const { data: primaryRows, error: primaryErr } = await db
+      .from('pipelines')
+      .select('id')
+      .eq('location_id', locationId)
+      .eq('is_primary', true)
+      .eq('enabled', true)
+      .eq('mode', 'derived')
+      .limit(1)
+    if (primaryErr) {
+      logError(MODULE, 'primary board read failed', { locationId, boardId, err: primaryErr.message })
+      return fail(503, "Could not check this studio's boards just now. Try again.", { code: 'boards_unreadable' })
+    }
+    if (!primaryRows?.length) {
+      return fail(409, "Switch on this studio's Acquisition board first. An offer board holds only the people who qualify for it; everyone else is placed on the Acquisition board.", { code: 'no_primary_board' })
+    }
     update = { enabled: true, baseline_at: null, updated_at: nowIso() }
   } else {
     update = { enabled: false, updated_at: nowIso() }

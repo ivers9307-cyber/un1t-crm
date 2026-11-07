@@ -275,7 +275,7 @@ describe('loadPlacementClaims — offer boards (PIPEBUILD.3e)', () => {
   const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null }
   const PAID = { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false, board_type: null }
   const CORP = {
-    id: 'p3', location_id: LOC, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 10,
+    id: 'p3', location_id: LOC, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', baseline_at: '2026-01-01T00:00:00Z', priority: 10,
     config: {
       entry: { type: 'corp_promo', values: ['acme'] },
       stages: [{ role: 'new', slug: 'o_corp_new', name: 'New' }, { role: 'converted', slug: 'o_corp_converted', name: 'Converted' }],
@@ -346,7 +346,7 @@ describe('offer-matched purchases are not €39 paid claims (PIPEBUILD.3g)', () 
   const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null }
   const PAID = { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false, board_type: null }
   const RESET = {
-    id: 'p3', location_id: LOC, key: 'o_reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
+    id: 'p3', location_id: LOC, key: 'o_reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', baseline_at: '2026-01-01T00:00:00Z', priority: 50,
     config: {
       entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] },
       stages: [{ role: 'new', slug: 'o_reset_new', name: 'New' }, { role: 'converted', slug: 'o_reset_converted', name: 'Converted' }],
@@ -384,6 +384,38 @@ describe('offer-matched purchases are not €39 paid claims (PIPEBUILD.3g)', () 
     expect(res.claims.paid).toBeNull()
     expect(res.claims.offers.get('o_reset')).toMatchObject({ start: T0, end: T0 + 10 * 86_400_000, source: 'trial_purchase' })
     expect(res.purchasePaid).toMatchObject({ start: T0 })
+  })
+
+  // AUDIT.2 — a trial_purchase offer board switched on and NOT yet baselined is
+  // held on every event path (PIPEBUILD.5c), so it takes nothing out of the €39
+  // claim here: the buyer keeps their €39 claim and stays on the €39 board
+  // until the nightly pass moves them silently. Before this a current €39
+  // buyer read as a Class Pack member on the next webhook.
+  it('unbaselinedOfferBoardLeavesThePaidClaimAlone (event path)', async () => {
+    const UNBASED = { ...RESET, baseline_at: null }
+    const placed = fakeDb({
+      pipelines: [ACQ, PAID, UNBASED], locations: [{ id: LOC, settings: {}, membership_source: 'glofox' }],
+      trial_purchases: [buy('t1', 'c1', 'RESET14')], pipeline_board_claims: [],
+    })
+    const res = await loadPlacementClaims(placed.db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+    expect(res.ok).toBe(true)
+    expect(res.claims.paid).toMatchObject({ start: T0 })
+    // no offer claims were loaded for a board nothing here will place
+    expect(res.claims.offers).toBeUndefined()
+    expect('purchasePaid' in res).toBe(false)
+  })
+
+  it('an unbaselined offer board beside a baselined one: only the baselined one strips', async () => {
+    const UNBASED_TAG = { ...TAGGED, baseline_at: null }
+    const placed = fakeDb({
+      pipelines: [ACQ, PAID, RESET, UNBASED_TAG], locations: [{ id: LOC, settings: {}, membership_source: 'glofox' }],
+      trial_purchases: [buy('t1', 'c1', 'RESET14')], pipeline_board_claims: [], contact_tags: [],
+    })
+    const res = await loadPlacementClaims(placed.db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+    expect(res.ok).toBe(true)
+    expect(res.claims.paid).toBeNull()
+    expect(res.claims.offers.get('o_reset')).toMatchObject({ source: 'trial_purchase' })
+    expect(res.claims.offers.has('o_tagged')).toBe(false)
   })
 
   it('unmatchedPurchaseStillPaid', async () => {
@@ -436,7 +468,7 @@ describe('offer-matched purchases are not €39 paid claims (PIPEBUILD.3g)', () 
 describe('loadPlacementClaims — offer_un1t boards (PIPEBUILD.3b)', () => {
   const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null }
   const CORP = {
-    id: 'p3', location_id: LOC, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 10,
+    id: 'p3', location_id: LOC, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', baseline_at: '2026-01-01T00:00:00Z', priority: 10,
     config: {
       entry: { type: 'corp_promo', values: ['acme'] },
       stages: [{ role: 'new', slug: 'o_corp_new', name: 'New' }, { role: 'converted', slug: 'o_corp_converted', name: 'Converted' }],
@@ -491,7 +523,7 @@ describe('PIPEBUILD.3h — unreadable source and the pack guard', () => {
   const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null }
   const PAID = { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false, board_type: null }
   const RESET = {
-    id: 'p3', location_id: LOC, key: 'o_reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
+    id: 'p3', location_id: LOC, key: 'o_reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', baseline_at: '2026-01-01T00:00:00Z', priority: 50,
     config: {
       entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] },
       stages: [{ role: 'new', slug: 'o_reset_new', name: 'New' }, { role: 'converted', slug: 'o_reset_converted', name: 'Converted' }],
@@ -540,6 +572,17 @@ describe('PIPEBUILD.3h — unreadable source and the pack guard', () => {
     expect(out.claims.paid).toBeNull()
     expect(out.purchasePaid).toMatchObject({ start: T0, durationDays: 14 })
     expect(placementPackGuard(out, contact, T0)).toBe(true)
+    // AUDIT.2 — the same board switched on and not yet baselined: it strips
+    // nothing and loads no offer claim (nothing on this path places it), but
+    // the guard still sees every purchase, so the trial's credits never stamp
+    // a Class Pack.
+    const fresh = fakeDb({ pipelines: [ACQ, { ...RESET, baseline_at: null }], locations: [{ id: LOC, membership_source: 'glofox' }], trial_purchases: [buy(T0)], pipeline_board_claims: [] })
+    const freshOut = await loadPlacementClaims(fresh.db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
+    expect(freshOut).toMatchObject({ ok: true, claimBoards: true })
+    expect(freshOut.claims.paid).toBeNull()
+    expect(freshOut.claims.offers).toBeUndefined()
+    expect(freshOut.purchasePaid).toMatchObject({ start: T0, durationDays: 14 })
+    expect(placementPackGuard(freshOut, contact, T0)).toBe(true)
     const down = fakeDb({ pipelines: [ACQ, RESET], locations: [{ id: LOC, membership_source: 'glofox' }] }, { errors: { trial_purchases: 'x' } })
     expect(await loadPlacementClaims(down.db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })).toMatchObject({ ok: false, reason: 'purchases_unreadable' })
     // a corp_promo offer board alone reads no purchases (no trial_purchase entry)
