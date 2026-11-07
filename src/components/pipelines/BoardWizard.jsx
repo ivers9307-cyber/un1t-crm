@@ -1,10 +1,12 @@
 'use client'
 
-import { useReducer } from 'react'
+import { useReducer, useRef, useState } from 'react'
+import Link from 'next/link'
 import { Button, Card } from '@/components/ui'
+import { RECIPES } from '@shared/pipelines/recipes.js'
 import {
   initialWizardState, wizardReducer, stepErrors, wizardCreateBody, wizardBodies,
-  WIZARD_STEPS, UN1T_STUDIO_NOTICE, OWNER_ONLY_NOTICE, isUn1tStudio,
+  followupPacks, WIZARD_STEPS, UN1T_STUDIO_NOTICE, OWNER_ONLY_NOTICE, isUn1tStudio,
 } from '@/lib/pipeline-wizard'
 import RecipeStep from './wizard/RecipeStep'
 import NameOfferStep from './wizard/NameOfferStep'
@@ -13,6 +15,7 @@ import StagesStep from './wizard/StagesStep'
 import FollowupsStep from './wizard/FollowupsStep'
 import MiaNotesStep from './wizard/MiaNotesStep'
 import ReviewStep from './wizard/ReviewStep'
+import BoardLaunchPanel from './BoardLaunchPanel'
 
 const STEP_COMPONENTS = {
   Recipe: RecipeStep,
@@ -21,6 +24,23 @@ const STEP_COMPONENTS = {
   Stages: StagesStep,
   'Follow-ups': FollowupsStep,
   'Notes for Mia': MiaNotesStep,
+}
+
+async function send(url, method, body) {
+  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  let json = null
+  try { json = await res.json() } catch { /* a non-JSON failure gets the generic message */ }
+  return { ok: res.ok && !!json?.success, json }
+}
+
+// The board stage a pack belongs to: same role, and for a checkpoint the same day.
+function stageForPack(board, pack) {
+  const same = (board.stages || []).filter((s) => s.stage_role === pack.role)
+  if (pack.day != null) {
+    const byDay = same.find((s) => s.role_config?.day === pack.day)
+    if (byDay) return byDay
+  }
+  return same[0] || null
 }
 
 /**
@@ -38,10 +58,13 @@ const STEP_COMPONENTS = {
  *   and the changed follow-up wording by pack and ref
  * @param {boolean} [props.creating]
  * @param {string|null} [props.createError]
+ *
+ * PIPEBUILD.5j: with no `onCreate`, the wizard finishes itself: create the board
+ * (off), install each ticked follow-up one at a time, then show the launch panel.
  */
 export default function BoardWizard({
   locationId, studioName, canEdit, membershipSource, bookingFlowId, appLinks,
-  onCreate, creating = false, createError = null,
+  onCreate, creating: creatingProp = false, createError: createErrorProp = null,
 }) {
   const [state, dispatch] = useReducer(
     wizardReducer,
@@ -49,8 +72,85 @@ export default function BoardWizard({
     initialWizardState,
   )
 
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState(null)
+  const [launch, setLaunch] = useState(null) // { board, followups, issues, wording }
+  const inFlight = useRef(false)
+
+  async function installOne(board, packKey, wording) {
+    const pack = RECIPES[state.recipeKey]?.packs.find((p) => p.key === packKey)
+    const stage = pack && stageForPack(board, pack)
+    const label = pack?.name || packKey
+    if (!stage) return { key: packKey, label, error: 'This stage is not on the board.' }
+    const bodies = wording[packKey]
+    const { ok, json } = await send(
+      `/api/pipelines/${board.id}/followups/${stage.id}`, 'PUT',
+      { action: 'install', pack_key: packKey, ...(bodies ? { bodies } : {}) },
+    )
+    if (!ok) return { key: packKey, label, error: json?.error || 'The follow-up could not be installed.' }
+    const publishError = json.data?.publish_error || json.data?.publishError
+    return { key: packKey, label, stageId: stage.id, followup: json.data?.followup, ...(publishError ? { error: publishError } : {}) }
+  }
+
+  function applyResult(prev, r) {
+    const rest = (prev.followups || []).filter((f) => f.pack_key !== r.key)
+    const issues = prev.issues.filter((i) => i.key !== r.key)
+    return {
+      ...prev,
+      followups: r.followup ? [...rest, { ...r.followup, stage_id: r.followup.stage_id || r.stageId, pack_key: r.followup.pack_key || r.key }] : rest,
+      issues: r.error ? [...issues, { key: r.key, label: r.label, error: r.error }] : issues,
+    }
+  }
+
+  async function finish(body, wording, wizardState) {
+    if (inFlight.current) return
+    inFlight.current = true
+    setCreating(true); setCreateError(null)
+    try {
+      const created = await send(`/api/locations/${locationId}/pipelines`, 'POST', body)
+      if (!created.ok) { setCreateError(created.json?.error || 'The board could not be created.'); return }
+      const board = created.json.data.board
+      setLaunch({ board, followups: [], issues: [], wording })
+      for (const pack of followupPacks(wizardState)) {
+        const r = await installOne(board, pack.key, wording)
+        setLaunch((prev) => applyResult(prev, r))
+      }
+    } catch {
+      setCreateError('The board could not be created.')
+    } finally {
+      inFlight.current = false
+      setCreating(false)
+    }
+  }
+
+  async function retry(key) {
+    if (inFlight.current || !launch) return
+    inFlight.current = true
+    try {
+      const r = await installOne(launch.board, key, launch.wording)
+      setLaunch((prev) => applyResult(prev, r))
+    } finally {
+      inFlight.current = false
+    }
+  }
+
   if (!canEdit) return <Card><p className="text-sm text-un1t-text">{OWNER_ONLY_NOTICE}</p></Card>
   if (isUn1tStudio(membershipSource)) return <Card><p className="text-sm text-un1t-text">{UN1T_STUDIO_NOTICE}</p></Card>
+
+  if (launch) {
+    return (
+      <div className="space-y-4">
+        <Card>
+          <h2 className="text-lg font-semibold text-un1t-text">{launch.board.name} is created and switched off</h2>
+          <p className="mt-1 text-sm text-un1t-subtle">
+            Check who would enter, then turn it on.{' '}
+            <Link href={`/settings/pipelines/${launch.board.id}`} className="text-un1t-accent">Open the board</Link>
+          </p>
+        </Card>
+        <BoardLaunchPanel board={launch.board} followups={launch.followups} issues={launch.issues} onRetry={retry} />
+      </div>
+    )
+  }
 
   const stepName = WIZARD_STEPS[state.step]
   const errors = state.showErrors ? stepErrors(state, state.step) : []
@@ -75,11 +175,11 @@ export default function BoardWizard({
         {isReview ? (
           <ReviewStep
             state={state}
-            onCreate={typeof onCreate === 'function'
-              ? () => onCreate(wizardCreateBody(state), wizardBodies(state), state)
-              : undefined}
-            creating={creating}
-            createError={createError}
+            onCreate={() => (typeof onCreate === 'function'
+              ? onCreate(wizardCreateBody(state), wizardBodies(state), state)
+              : finish(wizardCreateBody(state), wizardBodies(state), state))}
+            creating={creating || creatingProp}
+            createError={createError || createErrorProp}
           />
         ) : (
           <StepComponent state={state} dispatch={dispatch} locationId={locationId} />
