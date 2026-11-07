@@ -38,8 +38,6 @@ const PAGE = 1000
 // A runaway guard on the open-deal read (100k open deals at one studio).
 const MAX_DEAL_PAGES = 100
 
-// Task 5 deletes this together with the wizard's copy.
-export const UN1T_STUDIO_ERROR = "Offer boards at un1t.online studios aren't available yet."
 export const SWITCH_OFF_FIRST_ERROR = 'Switch the board off before changing its entry rule, stages or timings.'
 // assertNotLegacyBoard's own words (it answers a NextResponse; this file answers data).
 export const LEGACY_BOARD_ERROR = "This board is built in code and can't be changed here."
@@ -156,6 +154,7 @@ function shapeBoard(b, stages, followups, counts) {
     key: b.key,
     name: b.name,
     board_type: b.board_type,
+    module: b.module ?? null,
     recipe_key: b.recipe_key,
     enabled: b.enabled,
     baseline_at: b.baseline_at,

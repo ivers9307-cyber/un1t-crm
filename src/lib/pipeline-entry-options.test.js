@@ -146,6 +146,28 @@ describe('listEntryOptions', () => {
       expect(db.log[0].filters).toEqual({ location_id: LOC, active: true })
     })
 
+    it('un1t_product: active products at the studio, price in the label, by title', async () => {
+      db = makeDb({
+        un1t_products: () => ({ data: [
+          { un1t_id: 'p1', title: '14 Day Reset', price_cents: 3900 },
+          { un1t_id: 'p2', title: 'Free trial', price_cents: null },
+          { un1t_id: 'p3', title: 'Pack', price_cents: 4950 },
+        ], error: null }),
+      })
+      const res = await listEntryOptions(db, { locationId: LOC, type: 'un1t_product' })
+      expect(res).toEqual({ ok: true, options: [
+        { value: 'p1', label: '14 Day Reset · €39' },
+        { value: 'p2', label: 'Free trial' },
+        { value: 'p3', label: 'Pack · €49.50' },
+      ] })
+      expect(db.log[0].filters).toEqual({ location_id: LOC, status: 'active' })
+    })
+
+    it('un1t_product: a failed read is 503', async () => {
+      db = makeDb({ un1t_products: () => ({ data: null, error: { message: 'boom' } }) })
+      expect(await listEntryOptions(db, { locationId: LOC, type: 'un1t_product' })).toMatchObject({ ok: false, status: 503 })
+    })
+
     it('tag: the studio vocabulary from the /api/segments helper', async () => {
       db = makeDb({ contact_tags: () => ({ data: [{ tag: 'my-sequence-tag' }, { tag: 'my-sequence-tag' }], error: null }) })
       const res = await listEntryOptions(db, { locationId: LOC, type: 'tag' })

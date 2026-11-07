@@ -13,6 +13,7 @@
 //                   studio, so no studio filter; the hint names its studio)
 //   lead_source     leadSourceSchema's values
 //   glofox_plan     active glofox_memberships names at the studio
+//   un1t_product    active un1t_products at the studio (value un1t_id), by title
 //   tag             the studio's tag vocabulary, from the same helper as
 //                   /api/segments (studio-tag-vocabulary.js)
 //
@@ -170,6 +171,24 @@ async function glofoxPlanOptions(db, locationId) {
   return { ok: true, options: [...map.values()].sort(byLabel) }
 }
 
+async function un1tProductOptions(db, locationId) {
+  const { data, error } = await db
+    .from('un1t_products')
+    .select('un1t_id, title, price_cents')
+    .eq('location_id', locationId)
+    .eq('status', 'active')
+    .order('title', { ascending: true })
+    .range(0, PAGE - 1)
+  if (error) return unreadable('the un1t.online products', error, { locationId })
+  const map = new Map()
+  for (const p of data || []) {
+    if (!p.un1t_id) continue
+    const label = p.price_cents == null ? p.title : `${p.title} · €${p.price_cents % 100 === 0 ? p.price_cents / 100 : (p.price_cents / 100).toFixed(2)}`
+    addOption(map, p.un1t_id, label)
+  }
+  return { ok: true, options: [...map.values()] }
+}
+
 async function tagOptions(db, locationId) {
   let vocabulary
   try {
@@ -204,6 +223,8 @@ export async function listEntryOptions(db, { locationId, type, match } = {}) {
       return leadSourceOptions()
     case 'glofox_plan':
       return glofoxPlanOptions(db, locationId)
+    case 'un1t_product':
+      return un1tProductOptions(db, locationId)
     case 'tag':
       return tagOptions(db, locationId)
     default:

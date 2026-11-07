@@ -3,12 +3,12 @@
 import { useEffect, useState } from 'react'
 import { Field, Loading } from '@/components/ui'
 import { TRIAL_MATCHES } from '@shared/pipelines/offer-config.js'
-import { entryDescription, TRIAL_MATCH_LABELS } from '@/lib/pipeline-wizard'
+import { entryDescription, TRIAL_MATCH_LABELS, ENTRY_TYPE_LABELS, ENTRY_TYPE_HELP } from '@/lib/pipeline-wizard'
 
 // Step 3: who enters. The entry type comes from the recipe; the values are
 // the studio's own (GET /api/locations/[id]/pipeline-entry-options).
 // `disabled` makes it read-only (the settings page, while the board is on).
-export default function EntryStep({ state, dispatch, locationId, disabled = false }) {
+export default function EntryStep({ state, dispatch, locationId, entryTypes, disabled = false }) {
   const entry = state.entry
   const type = entry?.type
   const match = entry?.match
@@ -43,8 +43,21 @@ export default function EntryStep({ state, dispatch, locationId, disabled = fals
   const listed = new Set(opts.options.map((o) => o.value))
   const options = [...opts.options, ...entry.values.filter((v) => !listed.has(v)).map((v) => ({ value: v, label: v }))]
 
+  const types = entryTypes || state.studio?.entryTypes
   return (
     <div className="space-y-4">
+      {types && types.length > 0 && (
+        <Field id="wiz-entry-type" label="Who enters" hint={ENTRY_TYPE_HELP[type]}>
+          {(p) => (
+            <select {...p} disabled={disabled} value={type || ''} onChange={(e) => dispatch({ type: 'setEntryType', entryType: e.target.value })}
+              className="rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text">
+              {[...new Set([...(type && !types.includes(type) ? [type] : []), ...types])].map((t) => (
+                <option key={t} value={t}>{ENTRY_TYPE_LABELS[t] || t}</option>
+              ))}
+            </select>
+          )}
+        </Field>
+      )}
       {type === 'trial_purchase' && (
         <Field id="wiz-match" label="Match on">
           {(p) => (
