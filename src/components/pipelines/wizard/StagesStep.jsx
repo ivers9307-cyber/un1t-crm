@@ -5,7 +5,11 @@ import { INPUT, NUMBER_INPUT } from './styles'
 // Step 4: the recipe's stages. The first stage is always on; the rest can be
 // switched off and renamed, and a check-in day or class count changed (a
 // check-in day the recipe's message is written for stays fixed).
-export default function StagesStep({ state, dispatch }) {
+// The settings page (PIPEBUILD.5k): `structureLocked` keeps the names
+// editable but not which stages or their days (the board is on); `disabled`
+// makes everything read-only.
+export default function StagesStep({ state, dispatch, structureLocked = false, disabled = false }) {
+  const fixed = structureLocked || disabled
   return (
     <ul className="space-y-3">
       {state.stages.map((s, index) => (
@@ -14,14 +18,14 @@ export default function StagesStep({ state, dispatch }) {
             type="checkbox"
             aria-label={`Use the ${s.defaultName} stage`}
             checked={s.enabled}
-            disabled={s.locked}
+            disabled={s.locked || fixed}
             onChange={() => dispatch({ type: 'toggleStage', index })}
           />
           <input
             aria-label={`Name for the ${s.defaultName} stage`}
             className={`${INPUT} max-w-xs`}
             value={s.name}
-            disabled={!s.enabled}
+            disabled={!s.enabled || disabled}
             onChange={(e) => dispatch({ type: 'renameStage', index, name: e.target.value })}
           />
           {s.role === 'checkpoint' && s.fixedDay != null && (
@@ -39,7 +43,7 @@ export default function StagesStep({ state, dispatch }) {
                 aria-label={`Check-in day for ${s.defaultName}`}
                 className={NUMBER_INPUT}
                 value={s.day ?? ''}
-                disabled={!s.enabled}
+                disabled={!s.enabled || fixed}
                 onChange={(e) => dispatch({ type: 'setStageDay', index, day: e.target.value })}
               />
             </label>
@@ -53,7 +57,7 @@ export default function StagesStep({ state, dispatch }) {
                 aria-label={`Class number for ${s.defaultName}`}
                 className={NUMBER_INPUT}
                 value={s.count ?? ''}
-                disabled={!s.enabled}
+                disabled={!s.enabled || fixed}
                 onChange={(e) => dispatch({ type: 'setStageCount', index, count: e.target.value })}
               />
             </label>

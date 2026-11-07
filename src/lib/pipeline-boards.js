@@ -23,7 +23,7 @@
 //   - built-in boards (board_type null) are read-only here;
 //   - no offer boards at un1t.online studios yet (offer_un1t is PR 3b).
 
-import { RECIPES } from '@shared/pipelines/recipes.js'
+import { RECIPES, templateNameFor } from '@shared/pipelines/recipes.js'
 import { boardKeyFor, parseOfferConfig, stageSlugFor } from '@shared/pipelines/offer-config.js'
 import { stagesFor } from '@shared/pipelines/offer.js'
 import { readMembershipSource, UN1T_MEMBERSHIP_SOURCES } from './pipeline-offer-claims.js'
@@ -237,12 +237,93 @@ export async function listBoards(db, locationId) {
   return loadBoards(db, locationId)
 }
 
-/** One board at the studio (404 when it is not there). */
+/** One board at the studio (404 when it is not there), with each follow-up's current wording. */
 export async function getBoard(db, locationId, boardId) {
   const res = await loadBoards(db, locationId, boardId)
   if (!res.ok) return res
   if (res.boards.length === 0) return fail(404, 'Board not found')
-  return { ok: true, board: res.boards[0] }
+  return { ok: true, board: await withFollowupWording(db, locationId, res.boards[0]) }
+}
+
+const bodyTextOf = (components) => {
+  const body = Array.isArray(components) ? components.find((c) => c?.type === 'BODY') : null
+  return typeof body?.text === 'string' ? body.text : null
+}
+
+// PIPEBUILD.5k — what each installed follow-up says now, from its WhatsApp
+// template rows (read at THIS studio only), so the settings page can show it
+// and start Change wording from it. Each follow-up gets `body_texts` by
+// message ref and `body_text` (its first message). The row links only its
+// first template (whatsapp_template_id); a pack's other messages share that
+// name's studio prefix (templateNameFor), so they are read by name. Display
+// only: a failed read leaves the wording out and sets `wording_unread`, and
+// never fails the board read.
+async function withFollowupWording(db, locationId, board) {
+  const recipe = RECIPES[board.recipe_key]
+  const linked = (board.followups || []).filter((f) => f.whatsapp_template_id)
+  if (!recipe || board.board_type == null || linked.length === 0) return board
+
+  const { data: firsts, error } = await db
+    .from('whatsapp_templates')
+    .select('id, name, components')
+    .eq('location_id', locationId)
+    .in('id', linked.map((f) => f.whatsapp_template_id))
+  if (error) {
+    logError(MODULE, 'follow-up template read failed', { locationId, boardId: board.id, err: error.message })
+    return { ...board, wording_unread: true }
+  }
+  const byId = new Map((firsts || []).map((t) => [t.id, t]))
+
+  // The other messages' names, per follow-up.
+  const wanted = new Map()        // followup id -> [{ ref, name }]
+  for (const f of linked) {
+    const pack = recipe.packs.find((p) => p.key === f.pack_key)
+    const first = byId.get(f.whatsapp_template_id)
+    if (!pack || !first || pack.templates.length < 2) continue
+    try {
+      const version = Number.isInteger(f.version) ? f.version : undefined
+      const suffix = templateNameFor({ studioSlug: 's', boardKey: board.key, packKey: pack.key, ref: pack.templates[0].ref, version }).slice(1)
+      if (!String(first.name ?? '').endsWith(suffix)) continue
+      const studioSlug = first.name.slice(0, -suffix.length)
+      if (!studioSlug) continue
+      wanted.set(f.id, pack.templates.slice(1).map((t) => ({
+        ref: t.ref,
+        name: templateNameFor({ studioSlug, boardKey: board.key, packKey: pack.key, ref: t.ref, version }),
+      })))
+    } catch {
+      // A name templateNameFor refuses was never installed: nothing to read.
+    }
+  }
+  const names = [...new Set([...wanted.values()].flat().map((w) => w.name))]
+  const byName = new Map()
+  if (names.length) {
+    const { data: others, error: othersError } = await db
+      .from('whatsapp_templates')
+      .select('id, name, components')
+      .eq('location_id', locationId)
+      .in('name', names)
+    if (othersError) {
+      logError(MODULE, 'follow-up template read failed', { locationId, boardId: board.id, err: othersError.message })
+      return { ...board, wording_unread: true }
+    }
+    for (const t of others || []) byName.set(t.name, t)
+  }
+
+  return {
+    ...board,
+    followups: board.followups.map((f) => {
+      const first = f.whatsapp_template_id ? byId.get(f.whatsapp_template_id) : null
+      const pack = recipe.packs.find((p) => p.key === f.pack_key)
+      const firstText = first ? bodyTextOf(first.components) : null
+      if (!pack || firstText == null) return f
+      const texts = { [pack.templates[0].ref]: firstText }
+      for (const w of wanted.get(f.id) || []) {
+        const text = bodyTextOf(byName.get(w.name)?.components)
+        if (text != null) texts[w.ref] = text
+      }
+      return { ...f, body_text: firstText, body_texts: texts }
+    }),
+  }
 }
 
 // ---------------------------------------------------------------------------

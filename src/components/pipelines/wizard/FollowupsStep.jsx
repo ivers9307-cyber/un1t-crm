@@ -1,6 +1,7 @@
 'use client'
 
 import WhatsAppTemplatePreview from '@/components/WhatsAppTemplatePreview'
+import { RECIPES } from '@shared/pipelines/recipes.js'
 import { followupPacks, previewTemplate } from '@/lib/pipeline-wizard'
 import { INPUT } from './styles'
 
@@ -13,8 +14,12 @@ export const TOKEN_NOTE = "{{1}} is the person's first name. You can use {studio
 
 // Step 5: the wording of each ticked stage's follow-up, beside a preview of
 // what WhatsApp will show ({{1}} as Tim, the fill-ins filled in).
-export default function FollowupsStep({ state, dispatch }) {
-  const packs = followupPacks(state)
+// `packKeys` (the settings page's Change wording, PIPEBUILD.5k) shows just
+// those packs of the recipe.
+export default function FollowupsStep({ state, dispatch, packKeys = null }) {
+  const packs = packKeys
+    ? (RECIPES[state.recipeKey]?.packs || []).filter((p) => packKeys.includes(p.key))
+    : followupPacks(state)
   if (packs.length === 0) return <p className="text-sm text-un1t-subtle">No ticked stage has a follow-up.</p>
   const stageName = (role) => state.stages.find((s) => s.role === role)?.name || ''
   return (

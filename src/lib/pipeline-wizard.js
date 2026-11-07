@@ -187,6 +187,134 @@ export function wizardReducer(state, action) {
 }
 
 // ---------------------------------------------------------------------------
+// editing a saved board (PIPEBUILD.5k, /settings/pipelines/[id])
+// ---------------------------------------------------------------------------
+
+/**
+ * Wizard state for a board that already exists, so the settings page edits it
+ * with the same reducer and step components. The recipe gives the stage list
+ * (a stage the board does not use comes back unticked, at its recipe place),
+ * the board gives every value. A stage on the board that the recipe does not
+ * list is kept, ticked, so a save never drops it. A checkpoint with a pack
+ * keeps that pack's fixed day (Task 9's rule).
+ *
+ * The follow-up wording starts as each installed follow-up's current template
+ * text (`followups[].body_texts`, by ref), else the recipe's own.
+ *
+ * @param {object} board  GET /api/pipelines/[id]'s board
+ * @param {object|string} recipe  RECIPES entry, or its key
+ * @param {object} [studio]  as initialWizardState
+ */
+export function stateFromBoard(board, recipe, studio = {}) {
+  const r = typeof recipe === 'string' ? RECIPES[recipe] : recipe
+  const base = initialWizardState(studio)
+  if (!r || !board) return base
+  const fresh = fromRecipe(r)
+  const config = board.config && typeof board.config === 'object' ? board.config : {}
+  const stored = Array.isArray(config.stages) ? config.stages : []
+
+  const byRole = new Map()
+  for (const s of fresh.stages) if (!byRole.has(s.role)) byRole.set(s.role, s)
+  const used = new Set()
+  const stages = stored.map((s) => {
+    const def = byRole.get(s.role)
+    const takeDef = def && !used.has(s.role)
+    if (takeDef) used.add(s.role)
+    const out = {
+      role: s.role,
+      name: String(s.name ?? ''),
+      defaultName: takeDef ? def.defaultName : String(s.name ?? ''),
+      enabled: true,
+      locked: s.role === 'new',
+    }
+    if (s.role === 'checkpoint') {
+      out.day = s.day
+      if (takeDef && def.fixedDay != null) out.fixedDay = def.fixedDay
+    }
+    if (s.role === 'class_n') out.count = s.count
+    return out
+  })
+  // The recipe's unused stages, unticked, each after the last board stage
+  // that comes before it in the recipe (or first).
+  fresh.stages.forEach((def, i) => {
+    if (used.has(def.role)) return
+    const before = new Set(fresh.stages.slice(0, i).map((s) => s.role))
+    let at = 0
+    stages.forEach((s, j) => { if (before.has(s.role)) at = j + 1 })
+    stages.splice(at, 0, { ...def, enabled: false })
+    used.add(def.role)
+  })
+
+  const bodies = { ...fresh.bodies }
+  for (const f of board.followups || []) {
+    const texts = f?.body_texts
+    if (!bodies[f?.pack_key] || !texts || typeof texts !== 'object') continue
+    const next = { ...bodies[f.pack_key] }
+    for (const [ref, text] of Object.entries(texts)) {
+      if (ref in next && typeof text === 'string' && text) next[ref] = text
+    }
+    bodies[f.pack_key] = next
+  }
+
+  const entry = config.entry && typeof config.entry === 'object'
+    ? {
+      type: config.entry.type,
+      ...(config.entry.match ? { match: config.entry.match } : {}),
+      values: Array.isArray(config.entry.values) ? [...config.entry.values] : [],
+    }
+    : fresh.entry
+
+  return {
+    ...base,
+    recipeKey: r.key,
+    name: String(board.name ?? ''),
+    offerName: String(config.offer_name ?? ''),
+    signer: String(config.signer ?? ''),
+    priority: Number.isInteger(board.priority) ? board.priority : DEFAULT_PRIORITY,
+    durationDays: config.duration_days ?? fresh.durationDays,
+    entry,
+    stages,
+    bodies,
+    miaNotes: String(config.mia_notes ?? ''),
+  }
+}
+
+/**
+ * The config PATCH /api/pipelines/[id] takes: the wizard's, keeping the stored
+ * quiet_days and converted_window_days, which the wizard does not edit (left
+ * out, the server would put the defaults back, which needs the board off).
+ */
+export function settingsConfig(state, storedConfig = {}) {
+  const config = wizardConfig(state)
+  const s = storedConfig && typeof storedConfig === 'object' ? storedConfig : {}
+  if (s.quiet_days != null) config.quiet_days = s.quiet_days
+  if (s.converted_window_days != null) config.converted_window_days = s.converted_window_days
+  return config
+}
+
+/** The recipe's pack for one board stage: same role, and for a checkpoint the same day. */
+export function packForBoardStage(recipe, stage) {
+  const r = typeof recipe === 'string' ? RECIPES[recipe] : recipe
+  if (!r || !stage) return null
+  const same = r.packs.filter((p) => p.role === stage.stage_role)
+  if (stage.stage_role === 'checkpoint') {
+    const day = stage.role_config?.day
+    return same.find((p) => p.day != null && p.day === day) || null
+  }
+  return same[0] || null
+}
+
+/**
+ * One pack's wording, only the messages that differ from the recipe's (as
+ * wizardBodies), for the follow-up PUT's `bodies`. Null when nothing differs,
+ * so the server renders the recipe's own.
+ */
+export function packBodies(state, packKey) {
+  const out = wizardBodies(state)[packKey]
+  return out && Object.keys(out).length ? out : null
+}
+
+// ---------------------------------------------------------------------------
 // what the wizard sends
 // ---------------------------------------------------------------------------
 

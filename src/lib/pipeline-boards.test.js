@@ -176,6 +176,45 @@ describe('listBoards / getBoard', () => {
     expect(await boardLocationId(db, 'nope')).toMatchObject({ ok: false, status: 404 })
   })
 
+  it('getBoardCarriesEachFollowupsCurrentWordingFromItsTemplates', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const day7 = stageBySlug(board, 'o_reset_39_day_7')
+    const newStage = stageBySlug(board, 'o_reset_39_new')
+    const body = (text) => [{ type: 'BODY', text }, { type: 'FOOTER', text: 'Reply STOP to unsubscribe' }]
+    db.tables.whatsapp_templates = [
+      { id: 't1', location_id: LOC, name: 'un1t_stillorgan_o_reset_39_halfway_main_v2', components: body('Hi {{1}}, halfway. Karl') },
+      { id: 't2', location_id: LOC, name: 'un1t_stillorgan_o_reset_39_halfway_nudge_v2', components: body('Hi {{1}}, book a class. Karl') },
+      // Same name at another studio: never read.
+      { id: 't3', location_id: OTHER, name: 'un1t_stillorgan_o_reset_39_book_first_class_main', components: body('Hi {{1}}, other studio.') },
+      { id: 't4', location_id: LOC, name: 'un1t_stillorgan_o_reset_39_halfway_nudge', components: body('Hi {{1}}, the old v1 nudge.') },
+    ]
+    db.tables.pipeline_stage_followups.push(
+      { id: 'f1', location_id: LOC, pipeline_id: board.id, stage_id: day7.id, pack_key: 'halfway', state: 'live', want_live: true, version: 2, sequence_id: 's1', whatsapp_template_id: 't1' },
+      { id: 'f2', location_id: LOC, pipeline_id: board.id, stage_id: newStage.id, pack_key: 'book_first_class', state: 'live', want_live: true, version: 1, sequence_id: 's2', whatsapp_template_id: 't3' },
+    )
+    const res = await getBoard(db, LOC, board.id)
+    expect(res.ok).toBe(true)
+    const f1 = res.board.followups.find((f) => f.id === 'f1')
+    expect(f1.body_text).toBe('Hi {{1}}, halfway. Karl')
+    expect(f1.body_texts).toEqual({ main: 'Hi {{1}}, halfway. Karl', nudge: 'Hi {{1}}, book a class. Karl' })
+    const f2 = res.board.followups.find((f) => f.id === 'f2')
+    expect(f2.body_text).toBeUndefined()
+    expect(res.board.wording_unread).toBeUndefined()
+  })
+
+  it('anUnreadableTemplateLeavesTheWordingOutAndNeverFailsTheRead', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const newStage = stageBySlug(board, 'o_reset_39_new')
+    db.tables.pipeline_stage_followups.push({ id: 'f1', location_id: LOC, pipeline_id: board.id, stage_id: newStage.id, pack_key: 'book_first_class', state: 'live', want_live: true, version: 1, sequence_id: 's1', whatsapp_template_id: 't1' })
+    db.failures['whatsapp_templates:select'] = { message: 'down' }
+    const res = await getBoard(db, LOC, board.id)
+    expect(res.ok).toBe(true)
+    expect(res.board.wording_unread).toBe(true)
+    expect(res.board.followups[0].body_text).toBeUndefined()
+  })
+
   it('unreadableDealsIs503NotZero', async () => {
     const db = seedDb()
     await createdBoard(db)

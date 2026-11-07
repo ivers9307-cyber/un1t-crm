@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   initialWizardState, wizardReducer, wizardConfig, wizardBodies, stepErrors, followupPacks,
   previewTemplate, WIZARD_STEPS, UN1T_STUDIO_NOTICE, UN1T_SOURCES, isUn1tStudio,
+  stateFromBoard, settingsConfig, packForBoardStage, packBodies,
 } from './pipeline-wizard.js'
 import { RECIPES } from '@shared/pipelines/recipes.js'
 import { parseOfferConfig, MIA_NOTES_MAX } from '@shared/pipelines/offer-config.js'
@@ -203,5 +204,81 @@ describe('pipeline wizard', () => {
     expect(isUn1tStudio('un1t_online')).toBe(true)
     expect(isUn1tStudio('glofox')).toBe(false)
     expect(isUn1tStudio(null)).toBe(false)
+  })
+})
+
+// PIPEBUILD.5k — the settings page edits a saved board with the same state.
+describe('stateFromBoard', () => {
+  const savedBoard = (over = {}) => ({
+    id: 'b1',
+    name: 'Spring reset',
+    priority: 40,
+    recipe_key: 'paid_trial_offer',
+    config: {
+      entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET39'] },
+      stages: [
+        { role: 'new', slug: 'o_spring_reset_new', name: 'Bought' },
+        { role: 'first_class', slug: 'o_spring_reset_first_class', name: 'First class' },
+        { role: 'checkpoint', slug: 'o_spring_reset_day_7', name: 'Day 7', day: 7 },
+        { role: 'converted', slug: 'o_spring_reset_converted', name: 'Joined' },
+      ],
+      duration_days: 21,
+      quiet_days: 90,
+      converted_window_days: 30,
+      offer_name: '14 Day Reset',
+      signer: 'Karl',
+      mia_notes: 'Mention the towel.',
+    },
+    followups: [
+      { id: 'f1', stage_id: 's1', pack_key: 'halfway', state: 'live', body_texts: { main: 'Hi {{1}}, halfway there. Karl', nudge: 'Hi {{1}}, book now. Karl' } },
+    ],
+    ...over,
+  })
+
+  it('stateFromBoardRoundTripsTheSavedConfig', () => {
+    const s = stateFromBoard(savedBoard(), RECIPES.paid_trial_offer, { studioName: 'UN1T Stillorgan' })
+    expect(s).toMatchObject({ recipeKey: 'paid_trial_offer', name: 'Spring reset', offerName: '14 Day Reset', signer: 'Karl', priority: 40, durationDays: 21, miaNotes: 'Mention the towel.' })
+    expect(s.entry).toEqual({ type: 'trial_purchase', match: 'plan_code', values: ['RESET39'] })
+    // The unused recipe stage comes back unticked at its recipe place.
+    expect(s.stages.map((st) => [st.role, st.name, st.enabled])).toEqual([
+      ['new', 'Bought', true], ['first_class', 'First class', true], ['checkpoint', 'Day 7', true],
+      ['done', 'Trial Done', false], ['converted', 'Joined', true],
+    ])
+    const config = settingsConfig(s, savedBoard().config)
+    const { stages, ...rest } = savedBoard().config
+    expect(config).toEqual({ ...rest, stages: stages.map(({ slug: _slug, ...st }) => st) })
+  })
+
+  it('checkpointWithAPackKeepsItsFixedDay', () => {
+    const s = stateFromBoard(savedBoard(), 'paid_trial_offer')
+    const cp = s.stages.find((st) => st.role === 'checkpoint')
+    expect(cp).toMatchObject({ day: 7, fixedDay: 7 })
+    const moved = run(s, { type: 'setStageDay', index: s.stages.indexOf(cp), day: 9 })
+    expect(moved.stages.find((st) => st.role === 'checkpoint').day).toBe(7)
+  })
+
+  it('followUpWordingStartsAsTheCurrentTemplateText', () => {
+    const s = stateFromBoard(savedBoard(), 'paid_trial_offer')
+    expect(s.bodies.halfway).toEqual({ main: 'Hi {{1}}, halfway there. Karl', nudge: 'Hi {{1}}, book now. Karl' })
+    expect(s.bodies.book_first_class.main).toBe(RECIPES.paid_trial_offer.packs[0].templates[0].body)
+    expect(packBodies(s, 'halfway')).toEqual({ main: 'Hi {{1}}, halfway there. Karl', nudge: 'Hi {{1}}, book now. Karl' })
+    expect(packBodies(s, 'book_first_class')).toBeNull()
+  })
+
+  it('aStageTheRecipeDoesNotListIsKeptTicked', () => {
+    const board = savedBoard()
+    board.config.stages.splice(2, 0, { role: 'class_n', slug: 'o_spring_reset_class_3', name: 'Third class', count: 3 })
+    const s = stateFromBoard(board, 'paid_trial_offer')
+    expect(s.stages.find((st) => st.role === 'class_n')).toMatchObject({ name: 'Third class', count: 3, enabled: true })
+    expect(wizardConfig(s).stages.map((st) => st.role)).toEqual(['new', 'first_class', 'class_n', 'checkpoint', 'converted'])
+  })
+
+  it('packForBoardStageMatchesRoleAndCheckpointDay', () => {
+    const r = RECIPES.paid_trial_offer
+    expect(packForBoardStage(r, { stage_role: 'checkpoint', role_config: { day: 7 } })?.key).toBe('halfway')
+    expect(packForBoardStage(r, { stage_role: 'checkpoint', role_config: { day: 10 } })).toBeNull()
+    expect(packForBoardStage('paid_trial_offer', { stage_role: 'done' })?.key).toBe('trial_done')
+    expect(packForBoardStage(r, { stage_role: 'converted' })).toBeNull()
+    expect(packForBoardStage(null, { stage_role: 'new' })).toBeNull()
   })
 })

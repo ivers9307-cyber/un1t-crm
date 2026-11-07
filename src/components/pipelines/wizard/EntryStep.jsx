@@ -7,7 +7,8 @@ import { entryDescription, TRIAL_MATCH_LABELS } from '@/lib/pipeline-wizard'
 
 // Step 3: who enters. The entry type comes from the recipe; the values are
 // the studio's own (GET /api/locations/[id]/pipeline-entry-options).
-export default function EntryStep({ state, dispatch, locationId }) {
+// `disabled` makes it read-only (the settings page, while the board is on).
+export default function EntryStep({ state, dispatch, locationId, disabled = false }) {
   const entry = state.entry
   const type = entry?.type
   const match = entry?.match
@@ -47,7 +48,7 @@ export default function EntryStep({ state, dispatch, locationId }) {
       {type === 'trial_purchase' && (
         <Field id="wiz-match" label="Match on">
           {(p) => (
-            <select {...p} value={match || ''} onChange={(e) => dispatch({ type: 'setEntryMatch', match: e.target.value })}
+            <select {...p} disabled={disabled} value={match || ''} onChange={(e) => dispatch({ type: 'setEntryMatch', match: e.target.value })}
               className="rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text">
               {TRIAL_MATCHES.map((m) => <option key={m} value={m}>{TRIAL_MATCH_LABELS[m] || m}</option>)}
             </select>
@@ -66,7 +67,7 @@ export default function EntryStep({ state, dispatch, locationId }) {
             {options.map((o) => (
               <li key={o.value}>
                 <label className="flex items-start gap-2 text-sm text-un1t-text">
-                  <input type="checkbox" className="mt-0.5" checked={picked.has(o.value)} onChange={() => toggle(o.value)} />
+                  <input type="checkbox" className="mt-0.5" disabled={disabled} checked={picked.has(o.value)} onChange={() => toggle(o.value)} />
                   <span>
                     {o.label}
                     {o.label !== o.value && <span className="ml-1 text-xs text-un1t-subtle">({o.value})</span>}
