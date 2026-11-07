@@ -22,6 +22,7 @@ vi.mock('@/lib/auth', () => ({
     return null
   },
 }))
+vi.mock('@/lib/followup-owned-sequences', () => ({ refuseIfFollowupOwned: async () => null })) // PIPEBUILD.5g: the guard has its own tests
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 

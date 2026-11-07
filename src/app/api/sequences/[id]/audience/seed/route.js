@@ -34,6 +34,7 @@ import { buildEligibleAudienceQuery } from '@/lib/audience-eligibility'
 import { InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { selectAll } from '@/lib/select-all'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { refuseIfFollowupOwned } from '@/lib/followup-owned-sequences'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -95,6 +96,8 @@ export async function POST(request, props) {
   if (!hasPermissionForLocation(user, seq.location_id, 'email')) {
     return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
+  const owned = await refuseIfFollowupOwned(db, { id: seq.id, location_id: seq.location_id })
+  if (owned) return owned
 
   if (seq.trigger_type !== 'audience_match') {
     return NextResponse.json({
@@ -189,6 +192,8 @@ export async function DELETE(_request, props) {
   if (!hasRoleAtLocation(user, seq.location_id, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
+  const owned = await refuseIfFollowupOwned(db, { id: seq.id, location_id: seq.location_id })
+  if (owned) return owned
 
   const { data: updated, error } = await db
     .from('email_sequences')

@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { runFlowAgent } from '@/lib/sequences/agent/run'
 import { validateBody } from '@/lib/validate'
+import { refuseIfFollowupOwned } from '@/lib/followup-owned-sequences'
 
 const AgentSchema = z.object({
   prompt: z.string().optional(),
@@ -32,6 +33,8 @@ export async function POST(request, props) {
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
   if (!canBuildSequencesAt(user, sequence.location_id)) return sequencePermissionRequired()
+  const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: sequence.location_id })
+  if (owned) return owned
 
   const validation = await validateBody(request, AgentSchema, { allowEmpty: true })
   if (!validation.ok) return validation.response

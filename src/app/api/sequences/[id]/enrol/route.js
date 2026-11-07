@@ -22,6 +22,7 @@ import { uuidLike } from '@/lib/schemas'
 import { enrolContacts } from '@/lib/sequences'
 import { contactIdsLinkedToStudio } from '@/lib/contact-studio-link'
 import { validateBody } from '@/lib/validate'
+import { refuseIfFollowupOwned } from '@/lib/followup-owned-sequences'
 
 export const runtime = 'nodejs'
 
@@ -68,6 +69,9 @@ export async function POST(request, props) {
   if (!hasPermissionForLocation(user, sequence.location_id, 'email')) {
     return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
+  // PIPEBUILD.5g — a board's follow-up takes people from its own placement code only.
+  const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: sequence.location_id })
+  if (owned) return owned
 
   // Constrain enrolments to the sequence's studio's people: its own contacts,
   // plus a sibling studio's contact (same organisation) who has joined it, a

@@ -21,6 +21,7 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 
+vi.mock('@/lib/followup-owned-sequences', () => ({ refuseIfFollowupOwned: async () => null })) // PIPEBUILD.5g: the guard has its own tests
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
 import { GET, DELETE } from './route.js'

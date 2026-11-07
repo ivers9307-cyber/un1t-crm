@@ -8,6 +8,7 @@ import { createServerClient } from '@/lib/supabase'
 import { logError } from '@/lib/log'
 import { zoneOfLocation } from '@/lib/location-time'
 import { canCloneSequenceAt } from '@/lib/sequence-access'
+import { followupOwnedSequenceIds } from '@/lib/followup-owned-sequences'
 import { AUTOMATIONS } from '@/lib/automations/registry'
 import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
 import { membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
@@ -138,9 +139,18 @@ export default async function AutomationsPage() {
     const scoped = (query) => query
       .eq('location_id', flowsLocationId)
       .order('created_at', { ascending: false })
+    // PIPEBUILD.5g — sequences a pipeline board's follow-up owns are managed in
+    // Settings → Pipelines, so they are not listed here. A failed ownership read
+    // must not blank the page: show the list unfiltered (the routes are the lock
+    // and fail closed).
+    const owned = await followupOwnedSequenceIds(db, flowsLocationId)
+    if (!owned.ok) {
+      logError('automations', 'follow-up ownership read failed; the flow list is not filtered', { err: owned.error, locationId: flowsLocationId })
+    }
+    const hideOwned = (rows) => (owned.ok ? rows.filter((r) => !owned.ids.has(r.id)) : rows)
     const counted = await scoped(db.from('email_sequences').select(FLOW_COLUMNS_COUNTED))
     if (!counted.error) {
-      sequences = (counted.data || []).map(({ sequence_enrollments: enrolments, ...row }) => ({
+      sequences = hideOwned(counted.data || []).map(({ sequence_enrollments: enrolments, ...row }) => ({
         ...row,
         enrolled_count: Number(enrolments?.[0]?.count ?? 0),
       }))
@@ -148,7 +158,7 @@ export default async function AutomationsPage() {
       logError('automations', 'enrolment count read failed; the flow list renders without counts', { code: counted.error.code || null, locationId: flowsLocationId })
       const plain = await scoped(db.from('email_sequences').select(FLOW_COLUMNS))
       if (!plain.error) {
-        sequences = (plain.data || []).map((row) => ({ ...row, enrolled_count: null }))
+        sequences = hideOwned(plain.data || []).map((row) => ({ ...row, enrolled_count: null }))
       } else {
         logError('automations', 'sequences read failed; the flow list shows a notice', { code: plain.error.code || null, locationId: flowsLocationId })
         flowsLoadFailed = true

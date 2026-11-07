@@ -59,6 +59,17 @@ export async function loadStageCoverage(db, locationId) {
     .range(0, PAGE - 1)
   if (sequencesError) return { ok: false, error: sequencesError.message || 'Could not read sequences' }
 
+  // PIPEBUILD.5g — the board's own follow-ups per stage, by state, so the strip
+  // can say "draft / awaiting approval / live" rather than only "covered".
+  const { data: followupRows, error: followupError } = await db
+    .from('pipeline_stage_followups')
+    .select('stage_id, pack_key, state, version')
+    .eq('location_id', locationId)
+    .in('pipeline_id', boardRows.map((b) => b.id))
+    .order('id', { ascending: true })
+    .range(0, PAGE - 1)
+  if (followupError) return { ok: false, error: followupError.message || 'Could not read pipeline follow-ups' }
+
   const followupsFor = (slug, entry) => {
     return (sequences || [])
       .filter((s) => {
@@ -81,6 +92,9 @@ export async function loadStageCoverage(db, locationId) {
           slug: s.slug,
           name: s.name,
           isPile: isPileRole(stageRoleOf(s)),
+          followupStates: (followupRows || [])
+            .filter((f) => f.stage_id === s.id)
+            .map((f) => ({ pack_key: f.pack_key, state: f.state, version: f.version })),
           followups: followupsFor(
             s.slug,
             stageRoleOf(s) === 'new' ? ENTRY_TRIGGERS_BY_MODULE[b.module] || [] : [],

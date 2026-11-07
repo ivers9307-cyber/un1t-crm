@@ -10,6 +10,7 @@ import { whatsappApprovalIssues, loadTemplatesForApproval } from '@/lib/sequence
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { SEQUENCE_BUILDER_ROW_SELECT, toBuilderSequence } from '@/lib/sequences/builder-shape'
 import { uuidLike } from '@/lib/schemas'
+import { refuseIfFollowupOwned } from '@/lib/followup-owned-sequences'
 
 const SequenceUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -131,6 +132,8 @@ export async function PUT(request, props) {
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
   if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
+  const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: existing.location_id })
+  if (owned) return owned
 
   const validation = await validateBody(request, SequenceUpdateSchema)
   if (!validation.ok) return validation.response
@@ -294,6 +297,8 @@ export async function DELETE(request, props) {
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
   if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
+  const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: existing.location_id })
+  if (owned) return owned
 
   // Delete steps first
   await db.from('sequence_steps').delete().eq('sequence_id', params.id)

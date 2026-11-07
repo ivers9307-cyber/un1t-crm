@@ -17,7 +17,7 @@ function fakeDb(tables) {
         range: () => q,
         then: (res, rej) => {
           seen.push({ table, filters })
-          const t = tables[table]
+          const t = tables[table] || { data: [] }
           let data = t.data
           const archivedEq = filters.find((f) => f[1] === 'archived')
           if (table === 'pipeline_stages' && archivedEq) data = data.filter((r) => r.archived === archivedEq[2])
@@ -128,5 +128,36 @@ describe('loadStageCoverage', () => {
     })
     const r = await loadStageCoverage(db, 'loc1')
     expect(r).toEqual({ ok: false, error: 'boom' })
+  })
+
+  it('coverageIncludesFollowupStates', async () => {
+    const db = fakeDb({
+      pipelines: { data: [board] },
+      pipeline_stages: { data: [stage({ id: 's1', slug: 'first_class' }), stage({ id: 's2', slug: 'cold' })] },
+      email_sequences: { data: [] },
+      pipeline_stage_followups: { data: [
+        { stage_id: 's1', pack_key: 'after_first_class', state: 'live', version: 3 },
+        { stage_id: 's1', pack_key: 'nudge', state: 'draft', version: 1 },
+      ] },
+    })
+    const r = await loadStageCoverage(db, 'loc1')
+    const [fc, cold] = r.boards[0].stages
+    expect(fc.followupStates).toEqual([
+      { pack_key: 'after_first_class', state: 'live', version: 3 },
+      { pack_key: 'nudge', state: 'draft', version: 1 },
+    ])
+    expect(cold.followupStates).toEqual([])
+    expect(db.seen.find((s) => s.table === 'pipeline_stage_followups').filters).toContainEqual(['eq', 'location_id', 'loc1'])
+  })
+
+  it('followupReadFailureFailsCoverage', async () => {
+    const db = fakeDb({
+      pipelines: { data: [board] },
+      pipeline_stages: { data: [stage({ id: 's1' })] },
+      email_sequences: { data: [] },
+      pipeline_stage_followups: { data: [], error: { message: 'boom' } },
+    })
+    const r = await loadStageCoverage(db, 'loc1')
+    expect(r.ok).toBe(false)
   })
 })

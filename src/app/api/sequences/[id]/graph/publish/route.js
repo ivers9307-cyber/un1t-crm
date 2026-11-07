@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { publishSequence } from '@/lib/sequences/publish'
+import { refuseIfFollowupOwned } from '@/lib/followup-owned-sequences'
 
 // Permissive — graph is a free-form object validated by compileForPublish.
 const PublishSchema = z.object({
@@ -44,6 +45,8 @@ export async function POST(request, props) {
   if (guard) return guard
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
   if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
+  const owned = await refuseIfFollowupOwned(db, { id: params.id, location_id: existing.location_id })
+  if (owned) return owned
 
   // Publish the graph in the request body, else the saved draft, else the
   // already-published graph (republish).

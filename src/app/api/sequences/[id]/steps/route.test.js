@@ -23,6 +23,7 @@ vi.mock('@/lib/sequence-access', () => ({
   sequencePermissionRequired: () => new Response('{}', { status: 403 }),
   sequenceNotFound: () => new Response('{}', { status: 404 }),
 }))
+vi.mock('@/lib/followup-owned-sequences', () => ({ refuseIfFollowupOwned: async () => null })) // PIPEBUILD.5g: the guard has its own tests
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 

@@ -15,6 +15,7 @@ vi.mock('@/components/automations/AutomationsView', () => ({
 const seen = vi.hoisted(() => ({ flows: null }))
 vi.mock('@/components/automations/AutomationsFlowList', () => ({ default: (p) => { seen.flows = p; return null } }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/followup-owned-sequences', () => ({ followupOwnedSequenceIds: vi.fn() }))
 vi.mock('@/lib/sequence-access', () => ({ canCloneSequenceAt: vi.fn(() => false) }))
 vi.mock('@/components/automations/ClassClimateCard', () => ({ default: (p) => <div>{`climate:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
 vi.mock('@/components/automations/BathroomClimateCard', () => ({ default: (p) => <div>{`bathroom:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
@@ -36,6 +37,7 @@ import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
 import { hasPermission } from '@/lib/permissions'
 import { logError } from '@/lib/log'
 import { canCloneSequenceAt } from '@/lib/sequence-access'
+import { followupOwnedSequenceIds } from '@/lib/followup-owned-sequences'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 // A db whose every chain resolves to { data: [] } (location_automations, ac_devices).
@@ -46,6 +48,7 @@ const emptyDb = () => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  followupOwnedSequenceIds.mockResolvedValue({ ok: true, ids: new Set() })
   readGlofoxAutomationStatus.mockResolvedValue({ known: true, connected: true, membership: CONFIGURED, statuses: ALL_KNOWN })
   createServerClient.mockReturnValue(emptyDb())
   // The user object carries NO settings now (PROFILESPREAD.1a).
@@ -317,6 +320,33 @@ describe('/automations — flows (SEQCOUNTERS.1)', () => {
     expect(seen.flows.sequences).toEqual([])
     expect(logError).toHaveBeenCalledTimes(2)
     expect(logError).toHaveBeenLastCalledWith('automations', expect.stringMatching(/sequences read failed/), { code: '57014', locationId: LOC })
+  })
+
+  // PIPEBUILD.5g — a sequence a pipeline board's follow-up owns is not listed.
+  const OWNED = { ...ROW, id: 'a0000000-0000-4000-8000-0000000000ff', name: 'Board follow-up' }
+
+  it('automationsListHidesFollowupSequences: both the counted and the fallback read drop owned ids', async () => {
+    followupOwnedSequenceIds.mockResolvedValue({ ok: true, ids: new Set([OWNED.id]) })
+    const { db } = flowsDb(() => ({ data: [{ ...ROW, sequence_enrollments: [{ count: 1 }] }, { ...OWNED, sequence_enrollments: [{ count: 2 }] }], error: null }))
+    createServerClient.mockReturnValue(db)
+    renderToStaticMarkup(await AutomationsPage())
+    expect(followupOwnedSequenceIds).toHaveBeenCalledWith(expect.anything(), LOC)
+    expect(seen.flows.sequences.map((r) => r.id)).toEqual([ROW.id])
+
+    const fallback = flowsDb((sel) => (sel === WITH_COUNT ? { data: null, error: TIMEOUT } : { data: [ROW, OWNED], error: null }))
+    createServerClient.mockReturnValue(fallback.db)
+    renderToStaticMarkup(await AutomationsPage())
+    expect(seen.flows.sequences.map((r) => r.id)).toEqual([ROW.id])
+  })
+
+  it('a failed ownership read shows the list unfiltered and logs it', async () => {
+    followupOwnedSequenceIds.mockResolvedValue({ ok: false, error: 'boom' })
+    const { db } = flowsDb(() => ({ data: [{ ...ROW, sequence_enrollments: [] }, { ...OWNED, sequence_enrollments: [] }], error: null }))
+    createServerClient.mockReturnValue(db)
+    renderToStaticMarkup(await AutomationsPage())
+    expect(seen.flows.loadFailed).toBe(false)
+    expect(seen.flows.sequences.map((r) => r.id)).toEqual([ROW.id, OWNED.id])
+    expect(logError).toHaveBeenCalledWith('automations', expect.stringMatching(/ownership read failed/), { err: 'boom', locationId: LOC })
   })
 
   it('a user with no active location reads the nil location, like the page\'s other reads', async () => {
