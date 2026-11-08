@@ -94,6 +94,17 @@ describe('computeEditTransition', () => {
     const t = computeEditTransition(two, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }, { id: 'w2', start_time: '15:00' }] })
     expect(t).toEqual({ status: 'pending_review', reReview: true })
   })
+  // TIERS.1 — a tier change is a price change.
+  it('re-reviews when the pricing tiers change, not when they are the same list', () => {
+    const tiers = [{ id: 'a', name: 'Early', price_cents: 2500, capacity: 20 }]
+    const withTiers = { ...published, pricing_tiers: tiers }
+    const same = computeEditTransition(withTiers, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], pricing_tiers: [{ ...tiers[0] }] })
+    expect(same).toEqual({ status: 'published', reReview: false })
+    const changed = computeEditTransition(withTiers, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], pricing_tiers: [{ ...tiers[0], price_cents: 2000 }] })
+    expect(changed).toEqual({ status: 'pending_review', reReview: true })
+    const cleared = computeEditTransition(withTiers, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], pricing_tiers: null })
+    expect(cleared).toEqual({ status: 'pending_review', reReview: true })
+  })
   it('draft/rejected edits never trigger re-review and keep their status', () => {
     expect(computeEditTransition({ status: 'draft', non_member_fee_cents: 2500 }, { non_member_fee_cents: 9999 })).toEqual({ status: 'draft', reReview: false })
     expect(computeEditTransition({ status: 'rejected', non_member_fee_cents: 2500 }, { non_member_fee_cents: 9999 })).toEqual({ status: 'rejected', reReview: false })
@@ -227,6 +238,12 @@ describe('HostEventSchema sessions', () => {
   it('rejects the retired single-session keys (strict)', () => {
     const r = HostEventSchema.safeParse({ ...base, sessions: two, session_start_time: '10:00' })
     expect(r.success).toBe(false)
+  })
+  it('accepts pricing_tiers and rejects a malformed tier', () => {
+    const ok = HostEventSchema.safeParse({ ...base, sessions: two, pricing_tiers: [{ id: 'a', name: 'Early bird', price_cents: 2500, capacity: 20 }] })
+    expect(ok.success).toBe(true)
+    expect(HostEventSchema.safeParse({ ...base, sessions: two, pricing_tiers: null }).success).toBe(true)
+    expect(HostEventSchema.safeParse({ ...base, sessions: two, pricing_tiers: [{ id: 'a', name: '', price_cents: -1 }] }).success).toBe(false)
   })
   it('accepts an optional nullable series_id', () => {
     expect(HostEventSchema.safeParse({ ...base, sessions: two, series_id: null }).success).toBe(true)

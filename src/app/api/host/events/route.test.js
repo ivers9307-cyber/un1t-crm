@@ -73,6 +73,18 @@ describe('POST /api/host/events', () => {
     expect(res.status).toBe(200)
     expect(db.queries.find((q) => q.table === 'race_events' && q.action === 'insert').payload.series_id).toBe('d0000000-0000-4000-8000-0000000000d1')
   })
+  it('writes pricing_tiers (null when absent)', async () => {
+    const tiers = [{ id: 'a', name: 'Early bird', price_cents: 2500, capacity: 20 }]
+    await post({ ...BODY, pricing_tiers: tiers })
+    expect(db.queries.find((q) => q.table === 'race_events' && q.action === 'insert').payload.pricing_tiers).toEqual(tiers)
+    db = fakeDb((q) => {
+      if (q.table === 'event_hosts') return { data: { id: 'h1', name: 'Run Club', organization_id: 'o1', anchor_location_id: 'L-anchor' }, error: null }
+      if (q.table === 'race_events' && q.action === 'insert') return { data: { id: 'E-new', slug: q.payload.slug }, error: null }
+      return { data: null, error: null }
+    })
+    await post(BODY)
+    expect(db.queries.find((q) => q.table === 'race_events' && q.action === 'insert').payload.pricing_tiers).toBeNull()
+  })
   it('400 on the retired single-session keys', async () => {
     const res = await post({ ...BODY, session_start_time: '10:00' })
     expect(res.status).toBe(400)
