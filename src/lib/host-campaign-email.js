@@ -19,6 +19,7 @@
 // host_email_suppressions, deduped by lowercased email. Pure/DB-shaped
 // only — no Postmark here.
 
+import { tagHostCampaignLinks } from '@/lib/host-campaign-links'
 import { isEmailable } from './host-contact-list'
 import { scrubCss } from './email-html'
 import { reminderParentProblem } from './host-campaign-draft'
@@ -1081,7 +1082,13 @@ const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-s
  *   bodyHtml: string, unsubscribeUrl: string, sanitized?: boolean }} args
  * @returns {string} full HTML document
  */
-export function renderHostCampaignHtml({ host, subject, bodyHtml, unsubscribeUrl, sanitized = false }) {
+export function renderHostCampaignHtml({ host, subject, bodyHtml, unsubscribeUrl, sanitized = false, campaignId = null, tenantHost = null }) {
+  // HOSTSTATS.1 — the finished document (either shape) has its event links
+  // tagged with hc=<campaign id>; the preview passes no id and gets none.
+  return tagHostCampaignLinks(renderHostCampaignDocument({ host, subject, bodyHtml, unsubscribeUrl, sanitized }), { campaignId, tenantHost })
+}
+
+function renderHostCampaignDocument({ host, subject, bodyHtml, unsubscribeUrl, sanitized = false }) {
   // SANITIZE FIRST, ONCE, AND SNIFF THE SANITIZED TEXT (round-5 finding 4).
   // The doctype/`<html>` sniff below chooses between two SHAPES of email, and
   // it used to read the RAW body while the queue hands in an already-sanitized
