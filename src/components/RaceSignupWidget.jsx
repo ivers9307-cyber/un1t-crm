@@ -33,6 +33,7 @@ import { Suspense, useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, BadgeEuro, Info } from 'lucide-react'
 import { timePickerWaves, initialWaveId, formatTimeChoices } from '@/lib/event-time-slots'
+import { tierPriceLabel, groupPriceLabel, effectiveNonMemberFee } from '@/lib/pricing-tiers'
 import EventWaitlistForm from './EventWaitlistForm.jsx'
 import DonateCard, { CharityRaisedStrip, OrDivider } from './DonateCard.jsx'
 
@@ -362,7 +363,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // Live pricing preview. Mirrors computeTeamPricing on the server.
   const memberPricing = !!race?.member_pricing_enabled
   const memberFeeCents = Number.isFinite(race?.member_fee_cents) ? race.member_fee_cents : null
-  const nonMemberFeeCents = Number.isFinite(race?.non_member_fee_cents) ? race.non_member_fee_cents : null
+  // TIERS.1 — the per-person non-member fee for THIS headcount: the group
+  // price once the party is big enough, else the current tier, else base.
+  const tierPricing = race?.pricing && (race.pricing.current || race.pricing.group || race.pricing.next) ? race.pricing : null
+  const baseNonMemberFee = Number.isFinite(race?.non_member_fee_cents) ? race.non_member_fee_cents : null
+  const nonMemberFeeCents = tierPricing ? effectiveNonMemberFee(tierPricing, liveRoster.length) : baseNonMemberFee
   const currency = race?.payment_currency || 'EUR'
 
   let memberCount = 0, nonMemberCount = 0
@@ -679,7 +684,23 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               EVENT-PRICEBOX.1 — with member pricing on, BOTH rates show,
               and a null member fee reads "free" (it used to fall through
               to "€25.00 per person", so members thought they'd pay). */}
-          {(memberPricing && memberFeeCents != null) || nonMemberFeeCents != null ? (
+          {/* TIERS.1 — with tiers the row reads "Early bird €25.00 (limited),
+              then €35.00"; the group price gets its own row. Member pricing
+              keeps its two-rate copy (tiers replace the non-member fee only). */}
+          {tierPricing && !memberPricing ? (
+            <>
+              <div className="flex items-start gap-3">
+                <BadgeEuro size={16} className="text-white/40 mt-0.5 shrink-0" />
+                <span>{tierPriceLabel(tierPricing, { zone: race.locations?.timezone })}</span>
+              </div>
+              {groupPriceLabel(tierPricing) && (
+                <div className="flex items-start gap-3">
+                  <Info size={16} className="text-white/40 mt-0.5 shrink-0" />
+                  <span>{groupPriceLabel(tierPricing)}</span>
+                </div>
+              )}
+            </>
+          ) : (memberPricing && memberFeeCents != null) || nonMemberFeeCents != null ? (
             <div className="flex items-start gap-3">
               <BadgeEuro size={16} className="text-white/40 mt-0.5 shrink-0" />
               <span>

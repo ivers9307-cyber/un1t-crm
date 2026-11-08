@@ -201,6 +201,9 @@ export default function MoveEntryDialog({
             </div>
           )}
 
+          {target && (target.has_tiers || data?.source?.has_tiers) && (
+            <p className="text-[11px] text-un1t-muted">Tier pricing is not reflected in this difference: it compares the events&apos; standard prices.</p>
+          )}
           {target && gap !== 0 && (
             <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2 flex items-start gap-2">
               <Coins size={14} className="mt-0.5 shrink-0" />

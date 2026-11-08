@@ -104,6 +104,15 @@ describe('MoveEntryDialog', () => {
     await waitFor(() => expect(onMoved).toHaveBeenCalled())
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({ target_event_id: 'e1', target_wave_id: 'w2' })
   })
+  // TIERS.1 — the price gap is the base fees; tiers are not reflected.
+  it('notes that tier pricing is not in the difference when the target has tiers', async () => {
+    const tiered = { ...TARGETS, targets: [{ ...TARGETS.targets[0], has_tiers: true }] }
+    stubFetch([{ status: 200, body: { success: true, data: tiered } }])
+    render(<MoveEntryDialog open registration={registration} onClose={() => {}} onMoved={() => {}} onError={() => {}} />)
+    await screen.findByText(/Move The Crushers/)
+    fireEvent.change(screen.getByLabelText(/Target event/), { target: { value: 'e2' } })
+    expect(screen.getByText(/Tier pricing is not reflected in this difference/)).toBeTruthy()
+  })
   it('says so when nothing is eligible', async () => {
     stubFetch([{ status: 200, body: { success: true, data: { ...TARGETS, targets: [] } } }])
     render(<MoveEntryDialog open registration={registration} onClose={() => {}} onMoved={() => {}} onError={() => {}} />)

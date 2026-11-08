@@ -314,6 +314,16 @@ describe('listMoveTargets', () => {
     expect(r.targets[1].same_event).toBe(false)
     expect(r.targets[1].waves[0].current).toBe(false)
   })
+  // TIERS.1 — the dialog says the gap ignores tier pricing when either side has tiers.
+  it('flags has_tiers on a target and on the source summary', async () => {
+    const db = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: { ...REG, race: { ...REG.race, pricing_tiers: [{ id: 'e', name: 'E', price_cents: 100 }] } } } : { data: [] }),
+      race_events: { data: [{ ...TARGET, pricing_tiers: null }, { ...TARGET, id: 'e5', pricing_tiers: [{ id: 'x', name: 'X', price_cents: 1 }] }] },
+    })
+    const r = await listMoveTargets(db, { registrationId: 'r1', today: '2026-10-08' })
+    expect(r.targets.map((t) => [t.id, t.has_tiers])).toEqual([['e2', false], ['e5', true]])
+    expect(r.source.has_tiers).toBe(true)
+  })
   it('never offers the source event by default (the customer and Mia paths)', async () => {
     const db = fakeDb({
       race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: [] }),

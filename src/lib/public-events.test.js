@@ -135,3 +135,18 @@ describe('toBrowseCard registration closed (HOST-EVENTS-PAGE.2)', () => {
     expect(toBrowseCard(base, { soldOut: true, now: NOW })).toMatchObject({ badge: 'Sold out', closed: false })
   })
 })
+
+// TIERS.1 — a browse card says "From €X" when a cheaper tier is open now.
+describe('eventPriceLabel with tiers', () => {
+  const now = Date.parse('2026-11-15T12:00:00Z')
+  it('names the cheapest open tier as "From"', () => {
+    const e = { non_member_fee_cents: 3500, pricing_tiers: [{ id: 'e', name: 'Early bird', price_cents: 2500, capacity: 20 }, { id: 's', name: 'Std', price_cents: 3500 }] }
+    expect(eventPriceLabel(e, { now })).toBe('From €25')
+  })
+  it('a closed tier does not count; a dearer tier does not say From', () => {
+    const closed = { non_member_fee_cents: 3500, pricing_tiers: [{ id: 'e', name: 'Early', price_cents: 2500, ends_at: '2026-11-01T00:00:00Z' }] }
+    expect(eventPriceLabel(closed, { now })).toBe('€35')
+    const dearer = { non_member_fee_cents: 3500, pricing_tiers: [{ id: 'l', name: 'Late', price_cents: 4000 }] }
+    expect(eventPriceLabel(dearer, { now })).toBe('€35')
+  })
+})
