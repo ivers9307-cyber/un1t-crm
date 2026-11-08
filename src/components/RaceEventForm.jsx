@@ -341,6 +341,8 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
   const [pricingTiers, setPricingTiers] = useState(Array.isArray(race?.pricing_tiers) ? race.pricing_tiers : [])
   // QUESTIONS.1 (mig 819) — asked at signup.
   const [registrationQuestions, setRegistrationQuestions] = useState(Array.isArray(race?.registration_questions) ? race.registration_questions : [])
+  // CALENDAR.1 (mig 820) — minutes; blank = the kind's default.
+  const [durationMinutes, setDurationMinutes] = useState(race?.duration_minutes != null ? String(race.duration_minutes) : '')
   const [charityEnabled, setCharityEnabled] = useState(!!race?.charity_enabled)
   const [charityForm, setCharityForm] = useState(() => charityToForm(race?.charity))
   const setCharityField = (key, value) => setCharityForm((f) => ({ ...f, [key]: value }))
@@ -637,6 +639,7 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       non_member_fee_cents: nonMemberFeeCents,
       pricing_tiers: pricingTiers.length > 0 ? pricingTiers : null,
       registration_questions: registrationQuestions.length > 0 ? registrationQuestions : null,
+      duration_minutes: durationMinutes.trim() === '' ? null : parseInt(durationMinutes, 10),
       // TV logos: race-only. For non-race kinds we send an empty
       // array so any historical slots (shouldn't exist, since the
       // upload UI is gated) get cleared.
@@ -1247,6 +1250,22 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
         <div>
           <label className="block text-sm text-un1t-subtle mb-1">Pricing tiers <span className="text-un1t-muted">(optional)</span></label>
           <PricingTiersEditor value={pricingTiers} onChange={setPricingTiers} />
+        </div>
+
+        {/* CALENDAR.1 — the "add to calendar" entry's length. */}
+        <div>
+          <label className="block text-sm text-un1t-subtle mb-1">Duration (minutes) <span className="text-un1t-muted">(optional)</span></label>
+          <input
+            type="number"
+            min={5}
+            max={1440}
+            step={5}
+            value={durationMinutes}
+            onChange={(e) => setDurationMinutes(e.target.value)}
+            placeholder={kind === 'race' ? '120' : '60'}
+            className="w-40 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+          />
+          <p className="text-[11px] text-un1t-muted mt-1">For the calendar entry customers add. Blank = {kind === 'race' ? '2 hours' : '1 hour'}.</p>
         </div>
 
         {/* QUESTIONS.1 — asked at signup; answers appear on the Teams page and in the export. */}

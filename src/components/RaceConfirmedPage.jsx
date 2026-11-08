@@ -12,8 +12,6 @@ import Link from 'next/link'
 import { Loader2, AlertCircle, Calendar, BadgeCheck, QrCode } from 'lucide-react'
 import { timeRowLabel } from '@/lib/event-time-slots'
 
-// file, resolved once by the server page (resolveEventIcsIdentity). Both
-// optional: the builder has neutral floors, never a first-gym literal.
 // `brandName` (optional): names the organisation on the verified-member badge.
 export default function RaceConfirmedPage({ slug, registrationId, brandName = '' }) {
   const [data, setData] = useState(null)

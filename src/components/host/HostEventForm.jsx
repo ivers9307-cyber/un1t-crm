@@ -97,6 +97,8 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   const [pricingTiers, setPricingTiers] = useState(Array.isArray(initial?.pricing_tiers) ? initial.pricing_tiers : [])
   // QUESTIONS.1 — asked at signup.
   const [questions, setQuestions] = useState(Array.isArray(initial?.registration_questions) ? initial.registration_questions : [])
+  // CALENDAR.1 — minutes; blank = the kind's default (120 race / 60 otherwise).
+  const [durationMinutes, setDurationMinutes] = useState(initial?.duration_minutes != null ? String(initial.duration_minutes) : '')
   const [heroImageUrl, setHeroImageUrl] = useState(initial?.hero_image_url || '')
   // HOST-PORTAL.11 — direct hero upload (edit mode only; the upload route
   // namespaces storage by event id, which doesn't exist until first save).
@@ -206,6 +208,10 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     if (pricingTiers.some((t) => !String(t.name || '').trim())) return 'Give every pricing tier a name.'
     if (questions.some((q) => !String(q.label || '').trim())) return 'Give every question a label.'
     if (questions.some((q) => q.type === 'choice' && (q.options || []).length < 2)) return 'A choice question needs at least two options.'
+    if (durationMinutes.trim() !== '') {
+      const d = parseInt(durationMinutes, 10)
+      if (!Number.isFinite(d) || d < 5 || d > 1440) return 'Duration must be between 5 minutes and a day.'
+    }
     if (accentHex.trim() && !ACCENT_RE.test(accentHex.trim())) {
       return 'Accent colour must be a hex like #1a2b3c (or leave it blank).'
     }
@@ -228,6 +234,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       ticket_price_cents: Math.round((parseFloat(priceEuros) || 0) * 100),
       pricing_tiers: pricingTiers.length > 0 ? pricingTiers : null,
       registration_questions: questions.length > 0 ? questions : null,
+      duration_minutes: durationMinutes.trim() === '' ? null : parseInt(durationMinutes, 10),
       sessions: sessions.map((s) => ({
         ...(s.id ? { id: s.id } : {}),
         start_time: s.start_time,
@@ -360,6 +367,22 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
               className={`${input} [color-scheme:dark]`}
               required
             />
+          </div>
+          {/* CALENDAR.1 — the calendar entry's length. */}
+          <div>
+            <label htmlFor="he-duration" className={labelCls}>Duration (minutes)</label>
+            <input
+              id="he-duration"
+              type="number"
+              min={5}
+              max={1440}
+              step={5}
+              value={durationMinutes}
+              onChange={(e) => setDurationMinutes(e.target.value)}
+              placeholder={kind === 'race' ? '120' : '60'}
+              className={input}
+            />
+            <p className="mt-1.5 text-xs text-white/35">For the "add to calendar" entry. Blank = {kind === 'race' ? '2 hours' : '1 hour'}.</p>
           </div>
         </div>
 

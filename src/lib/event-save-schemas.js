@@ -124,6 +124,8 @@ export const EventCreateFields = z.object({
   pricing_tiers: PricingTiersSchema.nullable().optional(),
   // QUESTIONS.1 (mig 819) — asked at signup (race_events.registration_questions).
   registration_questions: RegistrationQuestionsSchema.nullable().optional(),
+  // CALENDAR.1 (mig 820) — the calendar entry's length; null = the kind's default.
+  duration_minutes: z.number().int().min(5).max(1440).nullable().optional(),
   // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
   // (race_events.entry_policy, mig 767).
   entry_policy: EntryPolicySettingsSchema.nullable().optional(),
@@ -216,6 +218,8 @@ export const EventUpdateFields = z.object({
   pricing_tiers: PricingTiersSchema.nullable().optional(),
   // QUESTIONS.1 (mig 819) — asked at signup (race_events.registration_questions).
   registration_questions: RegistrationQuestionsSchema.nullable().optional(),
+  // CALENDAR.1 (mig 820) — the calendar entry's length; null = the kind's default.
+  duration_minutes: z.number().int().min(5).max(1440).nullable().optional(),
   // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
   // (race_events.entry_policy, mig 767).
   entry_policy: EntryPolicySettingsSchema.nullable().optional(),

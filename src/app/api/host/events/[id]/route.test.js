@@ -64,6 +64,13 @@ describe('GET /api/host/events/[id]', () => {
     expect(await res.json()).toEqual({ success: true, data: { id: E1, status: 'published', reReview: false } })
     expect(db.queries.find((q) => q.table === 'race_events' && q.action === 'update').payload.registration_questions).toEqual([{ id: 'q-size', label: 'Size', type: 'text', required: false, per: 'entry' }])
   })
+  it('returns duration_minutes and PUT writes it', async () => {
+    row.duration_minutes = 90
+    const j = await (await GET(new Request('https://crm.test'), props())).json()
+    expect(j.data.duration_minutes).toBe(90)
+    await put({ ...BODY, duration_minutes: 45 })
+    expect(db.queries.find((q) => q.table === 'race_events' && q.action === 'update').payload.duration_minutes).toBe(45)
+  })
   it('returns pricing_tiers', async () => {
     row.pricing_tiers = [{ id: 'a', name: 'Early bird', price_cents: 2500, capacity: 20 }]
     const j = await (await GET(new Request('https://crm.test'), props())).json()

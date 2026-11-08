@@ -90,6 +90,10 @@ describe('POST /api/host/events', () => {
     await post({ ...BODY, registration_questions: qs })
     expect(db.queries.find((q) => q.table === 'race_events' && q.action === 'insert').payload.registration_questions).toEqual(qs)
   })
+  it('writes duration_minutes (null when absent)', async () => {
+    await post({ ...BODY, duration_minutes: 90 })
+    expect(db.queries.find((q) => q.table === 'race_events' && q.action === 'insert').payload.duration_minutes).toBe(90)
+  })
   it('400 on the retired single-session keys', async () => {
     const res = await post({ ...BODY, session_start_time: '10:00' })
     expect(res.status).toBe(400)
