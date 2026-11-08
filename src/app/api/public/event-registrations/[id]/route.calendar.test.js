@@ -35,6 +35,15 @@ describe('GET /api/public/event-registrations/[id] — calendar', () => {
     expect(body.data.calendar.google_url).toContain('dates=20260718T090000Z%2F20260718T100000Z')
     expect(body.data.calendar.google_url).toContain('location=1+Hatch+St')
   })
+  it('hands the page a safe `where` (venue address → venue name → public location), never an anchor label', async () => {
+    row = { ...ROW, race: { ...ROW.race, venue_address: null, venue_name: null, locations: { name: 'Pride Training Club (host events)', address: null, timezone: 'Europe/Dublin', is_host_anchor: true } } }
+    const body = await (await get()).json()
+    expect(body.data.race.where).toBe('')
+    expect(JSON.stringify(body)).not.toContain('(host events)')
+    row = ROW
+    const ok = await (await get()).json()
+    expect(ok.data.race.where).toBe('1 Hatch St')
+  })
   it('null when the entry has no session time', async () => {
     row = { ...ROW, wave: null, race: { ...ROW.race, waves: undefined } }
     const body = await (await get()).json()

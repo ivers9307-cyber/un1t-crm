@@ -10,6 +10,9 @@
 -- (120 for a race, 60 for any other kind; src/lib/event-calendar-links.js
 -- eventDurationMinutes). Set on the host and staff forms. Safe to apply
 -- before the code deploys: nothing reads it until then.
+--
+-- grant: none needed — race_events has no client privilege (mig 682); the
+-- server reads this column on the service role.
 
 alter table public.race_events
   add column if not exists duration_minutes integer

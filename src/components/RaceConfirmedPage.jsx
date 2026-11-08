@@ -90,7 +90,8 @@ export default function RaceConfirmedPage({ slug, registrationId, brandName = ''
         weekday: 'short', day: 'numeric', month: 'short',
       })
     : null
-  const whereLabel = race.locations?.name || race.locations?.address
+  // CALENDAR.1 — the server's safe venue text first (never an anchor label).
+  const whereLabel = race.where || race.locations?.address || race.locations?.name
 
   return (
     <div className="min-h-screen bg-black text-white px-4 pt-16 pb-20">

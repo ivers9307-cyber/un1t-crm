@@ -390,6 +390,9 @@ export const EXEMPT = {
   'src/app/api/public/events/[slug]/route.js': {
     race_events: 'Public event page: race_events row resolved by published slug + active/published flags.',
   },
+  'src/app/api/public/events/[slug]/calendar.ics/route.js': {
+    race_events: 'CALENDAR.1 add-to-calendar file: race_events row resolved by published slug + active/published flags (the same row the public event page serves); reads one row, writes nothing, rate-limited per IP.',
+  },
   'src/app/api/public/events/[slug]/display/route.js': {
     race_events: 'Public race-day display for a published slug (TV screen at the venue).',
   },

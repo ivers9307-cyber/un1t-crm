@@ -376,7 +376,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
               type="number"
               min={5}
               max={1440}
-              step={5}
+              step={1}
               value={durationMinutes}
               onChange={(e) => setDurationMinutes(e.target.value)}
               placeholder={kind === 'race' ? '120' : '60'}

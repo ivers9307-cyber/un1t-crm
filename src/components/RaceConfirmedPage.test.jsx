@@ -42,6 +42,12 @@ describe('RaceConfirmedPage add to calendar (CALENDAR.1)', () => {
     expect(screen.getByRole('link', { name: /Google/ }).getAttribute('href')).toBe(CALENDAR.google_url)
     expect(document.body.innerHTML).not.toContain('data:text/calendar')
   })
+  it('the Where line is the server\'s safe `where`, never the raw location name', async () => {
+    mockFetch({ ...REGISTRATION, race: { ...REGISTRATION.race, where: 'Unit 4, Somewhere', locations: { name: 'Pride Training Club (host events)', address: null } } })
+    render(<RaceConfirmedPage slug="gym-a-nov1-1000" registrationId="reg-1" />)
+    await screen.findByText(/Unit 4, Somewhere/)
+    expect(document.body.textContent).not.toContain('(host events)')
+  })
   it('renders no calendar links when the data has none', async () => {
     mockFetch({ ...REGISTRATION, calendar: null })
     render(<RaceConfirmedPage slug="gym-a-nov1-1000" registrationId="reg-1" />)

@@ -13,7 +13,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { eventIsPublic } from '@/lib/host-events'
 import { zoneOfLocation } from '@/lib/location-time'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
-import { getLocationBranding } from '@/lib/location-branding'
+import { getLocationOrgBrandName } from '@/lib/location-branding'
 import { buildEventCalendarIcs } from '@/lib/event-calendar-links'
 import { logWarn } from '@/lib/log'
 
@@ -64,7 +64,10 @@ export async function GET(request, props) {
     logWarn('event-ics', 'tenant host unresolved; platform host in the UID', { err, slug: params.slug })
   }
   try {
-    brandName = String((await getLocationBranding(db, race.location_id))?.companyName || '').trim()
+    // W1.S1b — the ORGANISATION's brand, never the location's own label: a
+    // host event's location is its hidden anchor ("<host> (host events)").
+    brandName = String(await getLocationOrgBrandName(db, race.location_id) || '').trim()
+    if (race.locations?.is_host_anchor && brandName === String(race.locations.name || '').trim()) brandName = ''
   } catch (err) {
     logWarn('event-ics', 'brand unresolved; no description', { err, slug: params.slug })
   }

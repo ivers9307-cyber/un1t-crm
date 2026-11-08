@@ -10,7 +10,7 @@
 // would leak if the URL got shared.
 
 import { NextResponse } from 'next/server'
-import { eventCalendarLinks } from '@/lib/event-calendar-links'
+import { eventCalendarLinks, eventLocationText } from '@/lib/event-calendar-links'
 import { zoneOfLocation } from '@/lib/location-time'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { createServerClient } from '@/lib/supabase'
@@ -78,11 +78,26 @@ export async function GET(request, props) {
       status: data.status,
       registered_at: data.registered_at,
       team_composition: data.team_composition,
-      race: data.race,
+      // EVENT-COPY.1 / CALENDAR.1 — the page's "Where" is the venue text
+      // (venue address → venue name → the public location); a host anchor's
+      // internal label never leaves, and the zone/anchor flags stay server-side.
+      race: publicRace(data.race),
       wave: data.wave,
       team,
       // CALENDAR.1 — the entry's session as calendar links on the tenant host.
       calendar: eventCalendarLinks({ event: data.race, wave: data.wave, zone: zoneOfLocation(data.race?.locations), baseUrl: await resolveCustomerBaseUrl(db, data.race?.location_id || null) }),
     },
   })
+}
+
+// The race as the confirmed page may see it: identity, the safe venue text,
+// and the location's public name/address only when it is a real studio.
+function publicRace(race) {
+  if (!race) return null
+  const anchor = race.locations?.is_host_anchor === true
+  return {
+    id: race.id, name: race.name, slug: race.slug, kind: race.kind, race_date: race.race_date, location_id: race.location_id,
+    where: eventLocationText(race),
+    locations: { name: anchor ? null : (race.locations?.name ?? null), address: anchor ? null : (race.locations?.address ?? null) },
+  }
 }

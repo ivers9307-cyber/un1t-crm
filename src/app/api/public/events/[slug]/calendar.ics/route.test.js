@@ -10,7 +10,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn(async () => ({ allowed: true })), getClientIp: vi.fn(() => '1.2.3.4'), rateLimitResponse: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://un1t.repset.ie') }))
-vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T' })) }))
+vi.mock('@/lib/location-branding', () => ({ getLocationOrgBrandName: vi.fn(async () => 'UN1T') }))
 
 const { GET } = await import('./route.js')
 
@@ -54,6 +54,15 @@ describe('GET /api/public/events/[slug]/calendar.ics', () => {
     const ok = await get(`?wave=${W2}`)
     expect(ok.status).toBe(200)
     expect(await ok.text()).toContain('DTSTART:20260718T130000Z')
+  })
+  it('a host event never carries the anchor\'s internal label, in LOCATION or the brand lines', async () => {
+    const { getLocationOrgBrandName } = await import('@/lib/location-branding')
+    getLocationOrgBrandName.mockResolvedValueOnce('Pride Training Club (host events)') // a misconfigured org falls to the location name upstream; the route still must not print it
+    race = { ...RACE, name: '', venue_name: null, venue_address: null, host_id: 'h1',
+      locations: { id: 'A', name: 'Pride Training Club (host events)', address: null, timezone: 'Europe/Dublin', is_host_anchor: true, organization_id: 'o1' } }
+    const body = await (await get()).text()
+    expect(body).not.toContain('(host events)')
+    expect(body).toContain('SUMMARY:Event')
   })
   it('404 for an unknown slug', async () => {
     db = fakeDb(() => ({ data: null, error: null }))
