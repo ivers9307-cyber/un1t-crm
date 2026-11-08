@@ -8,9 +8,11 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 import { getCurrentHost } from '@/lib/host-auth'
 import { HostEventSchema, hostEventDefaults, ensureAnchorLocation } from '@/lib/host-events'
 import { eventSlug, uniqueEventSlug } from '@/lib/event-slug'
+import { syncEventSessions } from '@/lib/event-sessions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -54,10 +56,11 @@ export async function POST(request) {
   // Globally unique (mig 451: /event/[slug] resolves with no location
   // filter, so the probe is global too — HOST-APPROVALS.1); a
   // same-place-same-time clash takes -2, -3…
+  // HOSTSERIES.1 — the FIRST session's time names the slug.
   const slug = await uniqueEventSlug(db, eventSlug({
     place: input.venue_name,
     date: input.race_date,
-    time: input.session_start_time,
+    time: input.sessions[0].start_time,
     name: input.name,
   }))
 
@@ -86,22 +89,22 @@ export async function POST(request) {
       confirmation_email_intro: input.confirmation_email_intro ?? null,
       reminder_email_subject: input.reminder_email_subject ?? null,
       reminder_email_intro: input.reminder_email_intro ?? null,
+      series_id: input.series_id ?? null,
       ...defaults,
     })
     .select('id, slug')
     .single()
   if (error || !event) return NextResponse.json({ success: false, error: error?.message || 'Create failed' }, { status: 500 })
 
-  const { error: waveErr } = await db.from('race_waves').insert({
-    race_event_id: event.id,
-    start_time: input.session_start_time,
-    capacity: input.session_capacity,
-    label: input.session_label ?? null,
-    display_order: 0,
-  })
-  if (waveErr) {
-    await db.from('race_events').delete().eq('id', event.id)
-    return NextResponse.json({ success: false, error: waveErr.message }, { status: 500 })
+  // HOSTSERIES.1 — every session is a race_waves row, written by the one
+  // helper the edit route uses too. A refusal (two sessions at one time) or a
+  // failed write leaves no half-made event behind.
+  const synced = await syncEventSessions(db, { eventId: event.id, sessions: input.sessions, currentWaves: [] })
+  if (!synced.ok) {
+    const { error: delErr } = await db.from('race_events').delete().eq('id', event.id)
+    if (delErr) logError('host-events', 'rollback of a sessionless event failed', { err: delErr, eventId: event.id })
+    const status = synced.error === 'write_failed' ? 500 : 409
+    return NextResponse.json({ success: false, error: synced.message, code: synced.error }, { status })
   }
 
   return NextResponse.json({ success: true, data: { id: event.id } })
