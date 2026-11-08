@@ -22,11 +22,19 @@ const pageFor = (offerType, blockType) => ({
 const glofoxRow = (over = {}) => ({ location_id: STILL, name: 'UN1T Stillorgan', membership_source: 'glofox', enabled: true, sort_order: 0, offer: {}, attribution: {}, ...over })
 const un1tRow = (over = {}) => ({ location_id: HATCH, name: 'UN1T Hatch Street', membership_source: 'un1t_online', enabled: false, sort_order: 1, offer: {}, attribution: {}, ...over })
 
+// WAYSIN.4: the picker lists the studio's own live corp_promos rows (corp-promos?live=1).
+const PROMOS_BY_LOCATION = {
+  [STILL]: [{ id: 'cp1', key: 'stillorgan-newstart', name: 'New Start (Stillorgan)', credits: 3, expiresInDays: 7, live: true }],
+  [HATCH]: [{ id: 'cp2', key: 'hatch-3-free', name: 'Corporate trial (Hatch Street)', credits: 3, expiresInDays: 7, live: true }],
+}
+
 let puts
 let answer
+let promosAnswer
 beforeEach(() => {
   puts = []
   answer = null
+  promosAnswer = null
   globalThis.fetch = vi.fn(async (url, init) => {
     if (init?.method === 'PUT') {
       const body = JSON.parse(init.body)
@@ -37,6 +45,7 @@ beforeEach(() => {
     }
     if (url.includes('glofox-memberships')) return { ok: true, json: async () => ({ success: true, memberships: MEMBERSHIPS }) }
     if (url.includes('un1t-online')) return { ok: true, json: async () => ({ success: true, data: { paid_products: PRODUCTS } }) }
+    if (url.includes('corp-promos')) return promosAnswer ? promosAnswer(url) : { ok: true, json: async () => ({ success: true, data: { promos: PROMOS_BY_LOCATION[url.split('/')[3]] || [] } }) }
     return { ok: false, json: async () => ({}) }
   })
 })
@@ -202,20 +211,26 @@ describe('StudioOfferRow', () => {
     })
   })
 
-  it('a corp_promo row picks a live promo', async () => {
+  it('a corp_promo row picks one of its studio\'s live promos, fetched from corp-promos?live=1', async () => {
     mount({ page: pageFor('promo_credits', 'corp_promo'), row: glofoxRow() })
     expect(screen.getByText('Needs a plan')).toBeTruthy()
-    fireEvent.change(screen.getByRole('combobox', { name: 'Promo' }), { target: { value: 'hatch-3-free' } })
+    // Loading first, never the code seed.
+    expect(screen.getByRole('option', { name: 'Loading…' })).toBeTruthy()
+    await screen.findByRole('option', { name: 'New Start (Stillorgan) · 3 credits' })
+    expect(globalThis.fetch).toHaveBeenCalledWith(`/api/locations/${STILL}/corp-promos?live=1`, expect.anything())
+    // Another studio's promo is never offered.
+    expect(screen.queryByRole('option', { name: 'Corporate trial (Hatch Street) · 3 credits' })).toBeNull()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Promo' }), { target: { value: 'stillorgan-newstart' } })
     expect(screen.getByText('Ready')).toBeTruthy()
-    expect(screen.getByRole('option', { name: 'Corporate trial (Hatch Street) · 3 credits' })).toBeTruthy()
     await save()
-    expect(puts[0].body.offer).toEqual({ promo_key: 'hatch-3-free' })
+    expect(puts[0].body.offer).toEqual({ promo_key: 'stillorgan-newstart' })
   })
 
-  it('a corp_promo row that knows its studio lists only that studio\'s promos', () => {
-    mount({ page: pageFor('promo_credits', 'corp_promo'), row: glofoxRow({ public_path: 'stillorgan' }) })
-    // stillorgan-newstart ships live:false, and hatch-3-free is another studio's.
-    expect(screen.queryByRole('option', { name: 'Corporate trial (Hatch Street) · 3 credits' })).toBeNull()
+  it('a failed promo read says so and keeps the saved key selectable', async () => {
+    promosAnswer = () => ({ ok: false, status: 500, json: async () => ({ success: false }) })
+    mount({ page: pageFor('promo_credits', 'corp_promo'), row: glofoxRow({ offer: { promo_key: 'stillorgan-newstart' } }) })
+    expect(await screen.findByText("Could not load this studio's promos.")).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'stillorgan-newstart' })).toBeTruthy()
   })
 
   it('a refused save names the field, or shows the API error', async () => {

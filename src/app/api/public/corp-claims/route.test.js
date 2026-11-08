@@ -8,7 +8,7 @@ const m = vi.hoisted(() => ({
   rateLimit: vi.fn(), contact: vi.fn(), capi: vi.fn(), consent: vi.fn(), deal: vi.fn(), tag: vi.fn(),
   membership: vi.fn(), eligibility: vi.fn(), fulfil: vi.fn(), legal: vi.fn(), chosen: vi.fn(),
   reads: {}, readErrors: {}, inserted: vi.fn(), updates: [],
-  gElig: vi.fn(), gFulfil: vi.fn(), gPlan: vi.fn(), gCreds: vi.fn(),
+  gElig: vi.fn(), gFulfil: vi.fn(), gPlan: vi.fn(), gCreds: vi.fn(), promoRead: vi.fn(), promoRows: [],
 }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: m.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
 // MOBILEFUNNEL.1 — the route reads the outcome form; `m.created` says whether this POST made the contact.
@@ -20,12 +20,9 @@ vi.mock('@/lib/contact-tags', () => ({ writeContactTag: m.tag }))
 vi.mock('@/lib/trial-eligibility', () => ({ hatchActiveMembership: m.membership }))
 vi.mock('@/lib/corp-promo-eligibility', () => ({ corpPromoEligibility: m.eligibility }))
 vi.mock('@/lib/corp-promo-claim', () => ({ fulfilCorpPromoClaim: m.fulfil }))
-// NEWSTART.1 — the Glofox branch. The shipped registry keeps the promo off, so the
-// tests present it live with plan ids (controller ruling 3).
-vi.mock('@/lib/corp-promos', async (importOriginal) => {
-  const actual = await importOriginal()
-  return { ...actual, resolveCorpPromo: (k) => (k === 'stillorgan-newstart' ? { ...actual.CORP_PROMOS[k], live: true } : actual.resolveCorpPromo(k)) }
-})
+// WAYSIN.3 — the promo is the studio's corp_promos row (readCorpPromo, tested
+// beside it): the fake answers a row only at its own location_id.
+vi.mock('@/lib/corp-promos-db', async (importOriginal) => ({ ...(await importOriginal()), readCorpPromo: m.promoRead }))
 vi.mock('@/lib/corp-promo-glofox-plans', () => ({ glofoxPlanForPromo: m.gPlan }))
 vi.mock('@/lib/corp-promo-eligibility-glofox', () => ({ glofoxCorpPromoEligibility: m.gElig }))
 vi.mock('@/lib/corp-promo-claim-glofox', () => ({ fulfilGlofoxCorpPromoClaim: m.gFulfil }))
@@ -67,6 +64,10 @@ import { POST } from './route'
 import { resolvePublicPageRequest } from '@/lib/landing-pages'
 
 const LOC = 'loc-hatch'
+const GLOC = 'loc-still'
+// corp_promos rows as promoView gives them (mig 816's seed).
+const HATCH_PROMO = { id: 'cp-h', locationId: LOC, key: 'hatch-3-free', name: 'Corporate trial (Hatch Street)', platform: 'un1t_online', credits: 3, expiresInDays: 7, live: true, tag: 'hatch-corp-promo', leadSource: 'corp_promo', glofox: null }
+const STILL_PROMO = { id: 'cp-s', locationId: GLOC, key: 'stillorgan-newstart', name: 'New Start (Stillorgan)', platform: 'glofox', credits: 3, expiresInDays: 7, live: true, tag: 'stillorgan-newstart', leadSource: 'corp_promo', glofox: { membershipId: 'mem-1', planCode: 'plan-1', planName: 'New Start' } }
 // The resolver's answer for the promo's studio page (the legacy, no-page branch).
 const studioPageOk = (extra = {}) => ({
   ok: true, pageId: 'page-hatch', page: { id: 'page-hatch', slug: 'hatch-street', kind: 'studio' },
@@ -86,6 +87,8 @@ beforeEach(() => {
     locations: { id: LOC, name: 'UN1T Hatch Street', organization_id: 'org-1', timezone: 'Europe/Dublin', settings: { un1t_online: { writes_enabled: true, trial_product_id: 'tp' } } },
     contacts: { id: 'c-1', email: 'ann@work.ie', first_name: 'Ann', last_name: 'Byrne' },
   }
+  m.promoRows = [HATCH_PROMO, STILL_PROMO]
+  m.promoRead.mockImplementation(async (_db, { locationId, key }) => ({ ok: true, promo: m.promoRows.find((p) => p.locationId === locationId && p.key === key) || null }))
   resolvePublicPageRequest.mockReset()
   resolvePublicPageRequest.mockResolvedValue(studioPageOk())
   m.rateLimit.mockResolvedValue({ allowed: true })
@@ -338,7 +341,6 @@ describe('POST /api/public/corp-claims — page (PAGES.1)', () => {
 // NEWSTART.1 — a Glofox promo: no terms tick, no waitlist placement, its own
 // eligibility and fulfilment; Hatch's un1t.online flow is untouched.
 describe('POST /api/public/corp-claims — Glofox promo (NEWSTART.1)', () => {
-  const GLOC = 'loc-still'
   const GBODY = { promo: 'stillorgan-newstart', first_name: 'Ann', last_name: 'Byrne', email: 'Ann@Work.ie', phone: '0871234567', consent: true }
   beforeEach(() => {
     m.reads.locations = { id: GLOC, name: 'UN1T Stillorgan', organization_id: 'org-1', timezone: 'Europe/Dublin', settings: {} }
@@ -364,12 +366,36 @@ describe('POST /api/public/corp-claims — Glofox promo (NEWSTART.1)', () => {
     expect(m.gElig).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ promoKey: 'stillorgan-newstart', locationId: GLOC }))
   })
 
-  it('no plan ids: 400 not_available before any write', async () => {
+  it('no plan binding on the row: 409 glofox_plan_missing before any write or Glofox call', async () => {
     m.gPlan.mockReturnValue(null)
     const { status, json } = await call(GBODY)
-    expect([status, json.code]).toEqual([400, 'not_available'])
+    expect([status, json.code]).toEqual([409, 'glofox_plan_missing'])
+    expect(m.gPlan).toHaveBeenCalledWith(expect.objectContaining({ key: 'stillorgan-newstart', glofox: STILL_PROMO.glofox }))
+    expect(m.gCreds).not.toHaveBeenCalled()
+    expect(m.gElig).not.toHaveBeenCalled()
+    expect(m.gFulfil).not.toHaveBeenCalled()
     expect(m.contact).not.toHaveBeenCalled()
     expect(m.inserted).not.toHaveBeenCalled()
+  })
+
+  it('end to end: a row with glofox null and the REAL glofoxPlanForPromo is 409 glofox_plan_missing, no Glofox call, nothing written', async () => {
+    const { glofoxPlanForPromo: realPlan } = await vi.importActual('@/lib/corp-promo-glofox-plans')
+    m.gPlan.mockImplementation(realPlan)
+    m.promoRows = [HATCH_PROMO, { ...STILL_PROMO, glofox: null }]
+    const { status, json } = await call(GBODY)
+    expect([status, json.code]).toEqual([409, 'glofox_plan_missing'])
+    expect(m.gPlan).toHaveReturnedWith(null)
+    expect(m.gCreds).not.toHaveBeenCalled()
+    expect(m.gElig).not.toHaveBeenCalled()
+    expect(m.gFulfil).not.toHaveBeenCalled()
+    expect(m.contact).not.toHaveBeenCalled()
+    expect(m.inserted).not.toHaveBeenCalled()
+    expect(m.updates).toEqual([])
+  })
+
+  it('the claim row records platform glofox', async () => {
+    expect((await call(GBODY)).status).toBe(200)
+    expect(m.inserted).toHaveBeenCalledWith('corp_promo_claims', expect.objectContaining({ promo_key: 'stillorgan-newstart', platform: 'glofox', location_id: GLOC }))
   })
 
   it('credentials unreadable: 503; missing: 400 not_available; nothing captured', async () => {
@@ -427,5 +453,73 @@ describe('POST /api/public/corp-claims — Glofox promo (NEWSTART.1)', () => {
     expect(m.gElig).not.toHaveBeenCalled()
     expect(m.gPlan).not.toHaveBeenCalled()
     expect(m.gCreds).not.toHaveBeenCalled()
+  })
+})
+
+// WAYSIN.3 — the promo is the resolved studio's corp_promos row.
+describe('POST /api/public/corp-claims — the studio\'s promo row (WAYSIN.3)', () => {
+  const { promo: _omit, ...noPromo } = BODY
+  const pageOk = (extra = {}) => ({
+    ok: true, pageId: 'page-corp', page: { id: 'page-corp', slug: 'corp', offer_type: 'promo_credits' },
+    studioRow: { location_id: LOC, enabled: true, offer: { promo_key: 'hatch-3-free' }, attribution: {} },
+    locationId: LOC, publicPath: 'hatch-street', blocks: [{ type: 'corp_promo', promo_key: 'hatch-3-free' }],
+    attribution: {}, terms: {}, ...extra,
+  })
+
+  it('the row decides credits and expiry: an edited row reaches the fulfilment as written', async () => {
+    m.promoRows = [{ ...HATCH_PROMO, credits: 5, expiresInDays: 14, tag: 'edited-tag' }]
+    expect((await call()).status).toBe(200)
+    expect(m.promoRead).toHaveBeenCalledWith(expect.anything(), { locationId: LOC, key: 'hatch-3-free' })
+    expect(m.fulfil).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ promo: expect.objectContaining({ credits: 5, expiresInDays: 14 }) }))
+    expect(m.tag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'edited-tag' }))
+  })
+
+  it('the claim row records platform un1t_online', async () => {
+    await call()
+    expect(m.inserted).toHaveBeenCalledWith('corp_promo_claims', expect.objectContaining({ promo_key: 'hatch-3-free', platform: 'un1t_online' }))
+  })
+
+  it('a switched-off row: 400 not_available, nothing captured (both branches)', async () => {
+    m.promoRows = [{ ...HATCH_PROMO, live: false }]
+    let r = await call()
+    expect([r.status, r.json.code]).toEqual([400, 'not_available'])
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk())
+    r = await call({ ...noPromo, page: 'corp' })
+    expect([r.status, r.json.code]).toEqual([400, 'not_available'])
+    expect(m.contact).not.toHaveBeenCalled()
+    expect(m.inserted).not.toHaveBeenCalled()
+  })
+
+  it('a failed promo read: 503, nothing captured or written (both branches)', async () => {
+    m.promoRead.mockResolvedValue({ ok: false, error: 'boom' })
+    expect((await call()).status).toBe(503)
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk())
+    expect((await call({ ...noPromo, page: 'corp' })).status).toBe(503)
+    expect(m.contact).not.toHaveBeenCalled()
+    expect(m.inserted).not.toHaveBeenCalled()
+    expect(m.fulfil).not.toHaveBeenCalled()
+  })
+
+  it('the key held only by another studio is not available here (resolved by the studio, never by key alone)', async () => {
+    m.promoRows = [{ ...HATCH_PROMO, locationId: 'loc-other' }]
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk())
+    const r = await call({ ...noPromo, page: 'corp' })
+    expect([r.status, r.json.code]).toEqual([400, 'not_available'])
+    expect(m.promoRead).toHaveBeenCalledWith(expect.anything(), { locationId: LOC, key: 'hatch-3-free' })
+    expect(m.inserted).not.toHaveBeenCalled()
+  })
+
+  it('a page row naming a key that is not a seed still resolves at its studio', async () => {
+    m.promoRows = [HATCH_PROMO, { ...HATCH_PROMO, id: 'cp-x', key: 'acme-5-free', credits: 5 }]
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk({ blocks: [{ type: 'corp_promo', promo_key: 'acme-5-free' }] }))
+    const r = await call({ ...noPromo, page: 'corp' })
+    expect(r.status).toBe(200)
+    expect(m.inserted).toHaveBeenCalledWith('corp_promo_claims', expect.objectContaining({ promo_key: 'acme-5-free' }))
+  })
+
+  it('without page, a key that is not a seed is not available and nothing is read', async () => {
+    const r = await call({ ...BODY, promo: 'acme-5-free' })
+    expect([r.status, r.json.code]).toEqual([400, 'not_available'])
+    expect(m.promoRead).not.toHaveBeenCalled()
   })
 })

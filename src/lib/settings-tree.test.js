@@ -262,3 +262,15 @@ describe('PIPEBUILD.5h — Pipelines row', () => {
     expect(row.gate).toEqual({ roles: MANAGER_ROLES })
   })
 })
+
+describe('WAYSIN.4 — Promos row', () => {
+  it('sits in the workspace group, manager-gated (the page\'s own gate), at /settings/promos', () => {
+    const group = SETTINGS_TREE.find((g) => g.id === 'workspace')
+    const row = group.rows.find((r) => r.id === 'promos')
+    expect(row).toBeTruthy()
+    expect(row.label).toBe('Promos')
+    expect(row.href).toBe('/settings/promos')
+    expect(row.description).toBe('Corporate and partner promos: free classes with a claim link.')
+    expect(row.gate).toEqual({ roles: MANAGER_ROLES })
+  })
+})

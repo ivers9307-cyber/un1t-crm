@@ -216,9 +216,11 @@ export function normalizePhone(phone) {
 }
 
 /**
- * Glofox `source` values map to our leadSourceSchema enum
- * (src/lib/schemas.js — booking / meta / tiktok / walkin / referral /
- * website / whatsapp / classpass / other). Anything we can't recognise
+ * Glofox `source` values map to lead-source slugs. Lead sources are a
+ * per-studio vocabulary (the defaults plus the owner's list, see
+ * src/lib/lead-source-vocabulary.js), and every value is a slug
+ * (leadSourceSchema in src/lib/schemas.js: letters, digits, _ or -).
+ * This map writes only default slugs; anything we can't recognise
  * becomes 'other'.
  *
  * GLOFOX2.1.8 — `origin` takes precedence over `source`. Glofox uses

@@ -1,19 +1,34 @@
-// CORPPROMO.1 — the /corp corporate promos. Pure, no IO.
+// CORPPROMO.1 — the /corp corporate promos. WAYSIN.2: the definitions live in
+// public.corp_promos (mig 816), one row per studio and key; this module reads
+// them and keeps the words.
 //
 // A promo is a definition, not a page: the studio it runs at, the credits it
-// puts on the person's un1t.online account and how long they last. The page
-// and the claim route only ever pick from this registry, so a visitor can
-// never ask for another amount or studio. The words a visitor reads live on a
+// puts on the person's account and how long they last. The page and the claim
+// route only ever pick from the studio's own rows, so a visitor can never ask
+// for another amount or studio. The words a visitor reads live on a
 // `corp_promo` block of the studio's landing row (edited at
 // /settings/landing-page), each blank field on the default below.
 //
-// Only a un1t.online studio can run a promo today (the grant is
-// grantPromoCredits in src/lib/un1t-online-write-ops.js).
+// platform 'un1t_online' grants credits through grantPromoCredits
+// (src/lib/un1t-online-write-ops.js); platform 'glofox' buys the row's Glofox
+// plan.
+//
+// CLIENT-REACHABLE: client components import this module (directly and via
+// landing-page-blocks.js), so it holds no Glofox plan id or plan field
+// (tests/corp-promos-client-safe.test.js). The table readers (readCorpPromo,
+// listCorpPromos, promoView) live in the server-only src/lib/corp-promos-db.js.
 
-/** @typedef {{ key: string, name: string, platform: 'un1t_online'|'glofox', studio: 'hatch'|'stillorgan', publicPath: string, credits: number, expiresInDays: number, tag: string, leadSource: string, live: boolean }} CorpPromo */
+/** @typedef {{ key: string, name: string, platform: 'un1t_online'|'glofox', studio: 'hatch'|'stillorgan', publicPath: string, credits: number, expiresInDays: number, tag: string, leadSource: string, live: boolean, glofox: null }} CorpPromoSeed */
 
-/** @type {Readonly<Record<string, CorpPromo>>} */
-export const CORP_PROMOS = Object.freeze({
+/**
+ * The seed of mig 816; the table is the truth. Carries NO Glofox plan ids
+ * (glofox: null on every entry): this module is imported by client components. Kept in code for the
+ * landing editor's promo picker (until WAYSIN.4), the claim route's legacy
+ * no-page form (a seed key's public path finds its studio) and the migration
+ * guard that pins the seed.
+ * @type {Readonly<Record<string, CorpPromoSeed>>}
+ */
+export const CORP_PROMO_SEEDS = Object.freeze({
   // Richard, 28 Oct 2026: 3 free classes at Hatch Street, credits for 7 days,
   // anyone with the link who has never trained at Hatch.
   'hatch-3-free': Object.freeze({
@@ -27,11 +42,10 @@ export const CORP_PROMOS = Object.freeze({
     tag: 'hatch-corp-promo',
     leadSource: 'corp_promo',
     live: true,
+    glofox: null,
   }),
-  // A new Glofox promo key must be added to the corp_promo_claims_one_live_per_contact
-  // index in its own migration (mig 811 limits it to Glofox promos).
-  // NEWSTART.1: Stillorgan is a Glofox studio. Off until the Glofox plan ids
-  // exist in src/lib/corp-promo-glofox-plans.js.
+  // NEWSTART.1: Stillorgan is a Glofox studio; its plan binding is on its
+  // corp_promos row, read at claim time.
   'stillorgan-newstart': Object.freeze({
     key: 'stillorgan-newstart',
     name: 'New Start (Stillorgan)',
@@ -43,23 +57,21 @@ export const CORP_PROMOS = Object.freeze({
     tag: 'stillorgan-newstart',
     leadSource: 'corp_promo',
     live: true,
+    // Never here: this module reaches the client bundle (landing-page-blocks,
+    // the editor). The plan ids live in corp_promos (mig 816's seed) and
+    // SEED_GLOFOX_PLANS in the server-only corp-promo-glofox-plans.js.
+    glofox: null,
   }),
 })
 
-/** The promo for `key`, or null when unknown. */
-export function resolveCorpPromo(key) {
-  if (typeof key !== 'string') return null
-  return Object.hasOwn(CORP_PROMOS, key) ? CORP_PROMOS[key] : null
+/** The live SEED promos, in seed order (the landing editor's picker until WAYSIN.4). */
+export function liveSeededCorpPromos() {
+  return Object.values(CORP_PROMO_SEEDS).filter((p) => p.live)
 }
 
-/** The live promos, in registry order. */
-export function liveCorpPromos() {
-  return Object.values(CORP_PROMOS).filter((p) => p.live)
-}
-
-/** The live promos at the studio whose public path is `publicPath`, in registry order. */
-export function corpPromosForStudio(publicPath) {
-  return liveCorpPromos().filter((p) => p.publicPath === publicPath)
+/** The live SEED promos at the studio whose public path is `publicPath` (until WAYSIN.4). */
+export function seededCorpPromosForStudio(publicPath) {
+  return liveSeededCorpPromos().filter((p) => p.publicPath === publicPath)
 }
 
 export const CORP_PROMO_COPY_DEFAULT = Object.freeze({

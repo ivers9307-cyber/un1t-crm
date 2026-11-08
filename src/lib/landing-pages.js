@@ -29,6 +29,7 @@ import { isOrgAdmin, adminOrganizationIds } from '@/lib/org-admin'
 import { LANDING_PAGE_PUBLISH_STATES } from '@/lib/landing-page-schemas'
 import { UUID_SHAPE } from '@/lib/uuid-shape'
 import { un1tFunnelCopyFromTerms } from '@/lib/un1t-online-funnel-copy'
+import { listCorpPromos } from '@/lib/corp-promos-db'
 import { logWarn, logError } from '@/lib/log'
 
 // The edge-safe half lives in its own module so the proxy can import it.
@@ -270,13 +271,16 @@ export function mergedBlocksFor({ page, studio }) {
   return blocks.map((b, i) => (i === idx ? merged : b))
 }
 
-/** Is the offer ready to take a customer at this studio? */
-export function offerReady({ page, studio, landingPath, product = null }) {
+/**
+ * Is the offer ready to take a customer at this studio? `promos` is the
+ * studio's live corp promos (listCorpPromos), needed only for a corp_promo offer.
+ */
+export function offerReady({ page, studio, landingPath, product = null, promos = [] }) {
   const blockType = OFFER_BLOCK_TYPE[page.offer_type]
   if (!blockType) return false
   const merged = mergedBlocksFor({ page, studio }).find((b) => b?.type === blockType)
   if (!merged) return false
-  return offerConfigured(blockType, merged, { landingPath, product })
+  return offerConfigured(blockType, merged, { landingPath, product, promos })
 }
 
 const isMaster = (user) => Boolean(user && (user.isMaster || user.role === 'master'))
@@ -520,7 +524,7 @@ async function readAllRows(build, what) {
  *                un1t.online is its membership source.
  * A page with no offer type has nothing to sell and is ready everywhere.
  * `row` carries the STUDIO_ROW_COLUMNS `locations` embed. A failed read
- * (the public path, the un1t.online product) THROWS PageReadError: the caller
+ * (the public path, the un1t.online product, the studio's promos) THROWS PageReadError: the caller
  * answers 503, never "not ready". `publicPath` may be passed when the caller
  * already read it (studioPublicPath), so a list reads each studio once.
  * @returns {Promise<{ ready: boolean, reason: 'ready' | 'needs_plan' | 'no_platform' }>}
@@ -542,7 +546,14 @@ export async function studioRowReadiness(db, { page, row, publicPath }) {
     }
     if (source !== 'glofox') return NO_PLATFORM
   }
-  return offerReady({ page, studio: row, landingPath: path }) ? READY : NEEDS_PLAN
+  let promos = []
+  if (blockType === 'corp_promo') {
+    // Only a live promo at this studio takes a customer (the public page's rule).
+    const res = await listCorpPromos(db, { locationId: row.location_id, liveOnly: true })
+    if (!res.ok) throw new PageReadError('Could not read the studio\'s promos')
+    promos = res.promos
+  }
+  return offerReady({ page, studio: row, landingPath: path, promos }) ? READY : NEEDS_PLAN
 }
 
 /**

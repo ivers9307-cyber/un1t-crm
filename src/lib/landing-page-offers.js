@@ -4,7 +4,8 @@
 // cuts one of today's offer blocks in two; mergeOfferBlock puts them back so
 // the existing config functions (paidTrialConfigFromBlocks,
 // campaignFunnelConfig, classFunnelConfigFromBlocks,
-// manualTimetableConfigFromBlocks, resolveCorpPromo) keep reading one block.
+// manualTimetableConfigFromBlocks, the studio's corp promos) keep reading one
+// block.
 //
 // Pure, no IO, importable from the client bundle. STUDIO_OFFER_KEYS is pinned
 // against the SQL that strips the same keys out of the stored blocks, so edit
@@ -16,7 +17,6 @@ import { paidTrialConfigFromBlocks } from '@/lib/paid-trial'
 import { campaignFunnelConfig } from '@/lib/campaign-funnel'
 import { classFunnelConfigFromBlocks } from '@/lib/public-landing'
 import { manualTimetableConfigFromBlocks } from '@/lib/manual-timetable'
-import { resolveCorpPromo } from '@/lib/corp-promos'
 
 export const OFFER_TYPES = Object.freeze(['paid_trial', 'class_funnel', 'one_class', 'promo_credits', 'none'])
 
@@ -168,9 +168,11 @@ export function defaultAttribution({ publicPath, slug }) {
 
 /**
  * Is this offer ready to take a customer? Judged by the same functions the
- * public routes use, on the merged block.
+ * public routes use, on the merged block. A corp_promo block is ready when its
+ * promo_key is among `promos`, the studio's promo rows the caller preloaded
+ * (listCorpPromos, src/lib/corp-promos.js); no list, no promo.
  */
-export function offerConfigured(blockType, mergedBlock, { landingPath, product = null } = {}) {
+export function offerConfigured(blockType, mergedBlock, { landingPath, product = null, promos = [] } = {}) {
   if (blockType === 'paid_trial') {
     return paidTrialConfigFromBlocks([mergedBlock], landingPath, { product }) !== null
   }
@@ -183,7 +185,8 @@ export function offerConfigured(blockType, mergedBlock, { landingPath, product =
       || manualTimetableConfigFromBlocks([mergedBlock]) !== null
   }
   if (blockType === 'corp_promo') {
-    return resolveCorpPromo(mergedBlock?.promo_key) !== null
+    const key = typeof mergedBlock?.promo_key === 'string' ? mergedBlock.promo_key.trim() : ''
+    return key !== '' && Array.isArray(promos) && promos.some((p) => p?.key === key)
   }
   return false
 }

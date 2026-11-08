@@ -22,6 +22,7 @@ export const AUDITED_TABLES = Object.freeze([
   'org_settings', // mig 733 (ORGSETAUDIT.1): log_mutation('organization_id', 'updated_by')
   'landing_pages', // mig 792 (PAGES.1): log_mutation('id', 'updated_by'); no secret-named column or key
   'landing_page_studios', // mig 792 (PAGES.1): log_mutation('page_id', 'updated_by'); offer/attribution hold plan codes and tags only
+  'corp_promos', // mig 816 (WAYSIN.1): log_mutation('id', 'created_by'); glofox_* hold plan ids and a name, no credential
 ])
 
 /** Every secret-bearing name found on prod, 28 Sep 2026: audited columns and

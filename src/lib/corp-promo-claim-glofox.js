@@ -145,7 +145,7 @@ export async function fulfilGlofoxCorpPromoClaim(db, { claim, location, contact,
   }
 
   // ── 1. The plan ──
-  const plan = d.glofoxPlanForPromo(promo.key)
+  const plan = d.glofoxPlanForPromo(promo)
   if (!plan) return failed('plan_missing')
 
   // ── 2. Credentials ──

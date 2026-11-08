@@ -32,6 +32,7 @@ import {
   usageEventsSchema,
   boardCreateSchema, boardPatchSchema,
   followupActionSchema, entryOptionsQuerySchema,
+  corpPromoCreateSchema, corpPromoPatchSchema,
 } from './schemas.js'
 import {
   landingPageCreateSchema, landingPageUpdateSchema, landingPageStudioSchema, landingPagePublishSchema,
@@ -122,7 +123,7 @@ const Contact = z.object({
   name: z.string(),
   email: z.string(),
   phone: z.string().nullable(),
-  lead_source: leadSourceSchema.nullable(),
+  lead_source: z.string().nullable(),
   pipeline_stage_slug: z.string().nullable(),
   location_id: uuidLike.nullable(),
   created_at: z.string().datetime(),
@@ -589,8 +590,9 @@ registry.registerPath({
     400: { description: 'Validation failed, studio_required, not_available (unknown or switched-off promo, writes off) or terms_required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'not_found: no live promo page by that slug, the studio is not on it, or `promo` names another promo', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'glofox_plan_missing: the studio\'s Glofox promo row has no plan binding; refused before any Glofox call', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Lead capture failed', content: { 'application/json': { schema: ErrorResponse } } },
-    503: { description: 'unavailable: the page or another read failed, or un1t.online is busy; try again (nothing granted)', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: the page, the studio\'s promo row or another read failed, or un1t.online is busy; try again (nothing granted)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -7152,6 +7154,103 @@ registry.registerPath({
     400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAYSIN.5 — a studio's lead-source vocabulary and the owner's own list.
+const LeadSourcesBody = z.object({
+  sources: z.array(leadSourceSchema).max(50).describe("The studio's own lead sources: each trimmed, lower-cased, ^[a-z0-9][a-z0-9_-]{0,79}$"),
+})
+registry.register('LeadSourcesBody', LeadSourcesBody)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/lead-sources',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "A studio's lead-source vocabulary",
+  request: { params: z.object({ id: z.string().uuid() }) },
+  description: "Anyone holding Contacts at the studio: { sources: [{ value, label, origin: 'default'|'studio'|'seen' }], studio_sources, can_edit }. sources = the nine defaults, then the owner's list (locations.settings.lead_sources) and every value on a contact at the studio, alphabetically.",
+  responses: {
+    200: { description: 'The vocabulary' },
+    403: { description: 'Not a member, or no Contacts at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The contacts could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/lead-sources',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "Set a studio's own lead sources (owner / master at the studio)",
+  request: { params: z.object({ id: z.string().uuid() }), body: { content: { 'application/json': { schema: LeadSourcesBody } } } },
+  description: 'Membership first (assertLocationAccess), then master or owner AT the studio. At most 50, deduped; the settings jsonb is merged. Returns { studio_sources, can_edit }.',
+  responses: {
+    200: { description: "The studio's list after the write" },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAYSIN.4 — the studio's corporate and partner promos (public.corp_promos, mig 816).
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/corp-promos',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "A studio's corporate and partner promos (manager+ at the studio; the live list also landing_page)",
+  request: { params: z.object({ id: z.string().uuid() }), query: z.object({ live: z.enum(['1']).optional().describe('1 = only the live promos, trimmed (the landing editor picker)') }) },
+  description: '{ promos: [{ id, locationId, key, name, platform, credits, expiresInDays, live, tag, leadSource, glofox }], can_edit, platform, public_path }. Membership first (another studio is a 404), then manager+ at the studio. can_edit = owner or master at the studio. With live=1 it admits manager+ OR the landing_page permission at the studio and returns only { promos: [{ id, key, name, credits, expiresInDays, live }] } (no Glofox plan ids, no platform, no can_edit). A failed read is a 500, never an empty list.',
+  responses: {
+    200: { description: 'The promos' },
+    403: { description: 'Not a manager at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or another studio)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/corp-promos',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a promo (owner / master at the studio)',
+  request: { params: z.object({ id: z.string().uuid() }), body: { content: { 'application/json': { schema: corpPromoCreateSchema } } } },
+  description: "The platform is the studio's membership_source. A Glofox studio's promo needs its three plan fields (400 glofox_plan_missing); a un1t.online studio's carries none (400 glofox_not_applicable); a studio on neither is 409 no_platform. The key is unique per studio (409 key_taken) and immutable after create. Tag and lead source are stored trimmed and lowercased.",
+  responses: {
+    201: { description: 'The created promo' },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or another studio)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'key_taken or no_platform', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'patch',
+  path: '/api/locations/{id}/corp-promos/{promoId}',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Change a promo (owner / master at the studio)',
+  request: { params: z.object({ id: z.string().uuid(), promoId: z.string().uuid() }), body: { content: { 'application/json': { schema: corpPromoPatchSchema } } } },
+  description: 'name, credits, expires_in_days, live, tag, lead_source and (Glofox promos) the plan fields. A key in the body is a 400: the key is the claim link. Another studio\'s promo is a 404.',
+  responses: {
+    200: { description: 'The promo after the write' },
+    400: { description: 'Validation error (incl. key, glofox_plan_missing)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or another studio)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'delete',
+  path: '/api/locations/{id}/corp-promos/{promoId}',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a switched-off promo that has no claims (owner / master at the studio)',
+  request: { params: z.object({ id: z.string().uuid(), promoId: z.string().uuid() }) },
+  description: 'A live promo is refused: 409 still_live ("Switch this promo off first."). A promo with any corp_promo_claims row for its location and key can only be switched off: 409 has_claims. A failed claims count refuses the delete (500).',
+  responses: {
+    200: { description: '{ deleted: true }' },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or another studio)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'still_live or has_claims', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

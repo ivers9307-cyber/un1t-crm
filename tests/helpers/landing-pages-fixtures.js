@@ -59,6 +59,11 @@ export function fixtureTables() {
     un1t_products: [
       { location_id: HATCH, un1t_id: 'u1', status: 'active', type: 'one_time', price_cents: 3900, currency: 'eur', title: 'Hatch trial' },
     ],
+    // WAYSIN.2 — mig 816's seed: one promo per studio (a corp_promo offer is ready only for its studio's live row).
+    corp_promos: [
+      { id: 'cp-h', location_id: HATCH, key: 'hatch-3-free', name: 'Corporate trial (Hatch Street)', platform: 'un1t_online', credits: 3, expires_in_days: 7, live: true, tag: 'hatch-corp-promo', lead_source: 'corp_promo', glofox_membership_id: null, glofox_plan_code: null, glofox_plan_name: null },
+      { id: 'cp-s', location_id: STILL, key: 'stillorgan-newstart', name: 'New Start (Stillorgan)', platform: 'glofox', credits: 3, expires_in_days: 7, live: true, tag: 'stillorgan-newstart', lead_source: 'corp_promo', glofox_membership_id: 'm', glofox_plan_code: 'c', glofox_plan_name: 'New Start Free Trial' },
+    ],
   }
 }
 

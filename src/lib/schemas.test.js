@@ -10,6 +10,7 @@ import {
   ADMIN_ROLES, MANAGER_ROLES, DEFAULT_COLOR,
   MASTER_ASSIGNABLE_ROLES, OWNER_ASSIGNABLE_ROLES,
   passwordSchema, passwordRequirements, validatePasswordComplexity,
+  corpPromoCreateSchema, corpPromoPatchSchema,
 } from './schemas.js'
 
 describe('shared scalar schemas', () => {
@@ -336,5 +337,21 @@ describe('realIsoDate', () => {
   it('refuses a non-string without throwing', () => {
     expect(realIsoDate.safeParse(null).success).toBe(false)
     expect(realIsoDate.safeParse(20260925).success).toBe(false)
+  })
+})
+
+// WAYSIN.7 — a promo's lead_source is written onto contacts, so it takes the
+// same slug rule as every other lead source (no spaces).
+describe('corp promo lead_source', () => {
+  const create = { key: 'acme-3', name: 'Acme', credits: 3, expires_in_days: 7, tag: 'acme' }
+  it('refuses a space on create and on edit', () => {
+    expect(corpPromoCreateSchema.safeParse({ ...create, lead_source: 'clubhouse partner' }).success).toBe(false)
+    expect(corpPromoPatchSchema.safeParse({ lead_source: 'clubhouse partner' }).success).toBe(false)
+  })
+  it('accepts a slug, trimmed and lowercased', () => {
+    const c = corpPromoCreateSchema.safeParse({ ...create, lead_source: ' Clubhouse_Partner ' })
+    expect(c.success).toBe(true)
+    expect(c.data.lead_source).toBe('clubhouse_partner')
+    expect(corpPromoPatchSchema.safeParse({ lead_source: 'clubhouse_partner' }).success).toBe(true)
   })
 })

@@ -5,8 +5,7 @@ const paidTrialIds = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/paid-trial-products', () => ({ paidTrialProductIdsFor: paidTrialIds }))
 
 import { listEntryOptions } from './pipeline-entry-options'
-import { CORP_PROMOS } from '@/lib/corp-promos'
-import { leadSourceSchema } from '@/lib/schemas'
+import { DEFAULT_LEAD_SOURCES } from '@/lib/schemas'
 import { PLATFORM_TAGS } from '@/lib/sequences/tag-vocabulary'
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
@@ -25,6 +24,7 @@ function makeDb(tables) {
         eq(c, v) { entry.filters[c] = v; return q },
         in(c, v) { entry.filters[c] = v; return q },
         is(c, v) { entry.filters[c] = v; return q },
+        or(f) { entry.or = f; return q },
         order() { return q },
         range(a, b) { entry.range = [a, b]; return q },
         maybeSingle() { entry.single = true; return q },
@@ -121,20 +121,50 @@ describe('listEntryOptions', () => {
       expect(db.log.find((e) => e.table === 'landing_pages').filters).toEqual({ organization_id: ORG, id: ['pg1', 'pg2'] })
     })
 
-    it('corp_promo: the registry, no query', async () => {
-      db = makeDb({})
+    it('corp_promo: this studio\'s corp_promos rows only, by key; a switched-off one says so', async () => {
+      const OTHER = 'a0000000-0000-4000-8000-000000000002'
+      const rows = [
+        { id: 'p1', location_id: LOC, key: 'hatch-3-free', name: 'Corporate trial (Hatch Street)', platform: 'un1t_online', credits: 3, expires_in_days: 7, live: true, tag: 't', lead_source: 'corp_promo' },
+        { id: 'p2', location_id: LOC, key: 'hatch-old', name: 'Old promo', platform: 'un1t_online', credits: 3, expires_in_days: 7, live: false, tag: 't', lead_source: 'corp_promo' },
+        { id: 'p3', location_id: OTHER, key: 'stillorgan-newstart', name: 'New Start (Stillorgan)', platform: 'glofox', credits: 3, expires_in_days: 7, live: true, tag: 't', lead_source: 'corp_promo' },
+      ]
+      db = makeDb({ corp_promos: (e) => ({ data: rows.filter((r) => r.location_id === e.filters.location_id), error: null }) })
       const res = await listEntryOptions(db, { locationId: LOC, type: 'corp_promo' })
-      expect(res.options).toHaveLength(Object.keys(CORP_PROMOS).length)
-      expect(res.options[0]).toEqual({ value: 'hatch-3-free', label: 'Corporate trial (Hatch Street)', hint: 'Hatch Street' })
-      expect(res.options.find((o) => o.value === 'stillorgan-newstart').hint).toBe('Stillorgan')
-      expect(db.log).toEqual([])
+      expect(res).toEqual({ ok: true, options: [
+        { value: 'hatch-3-free', label: 'Corporate trial (Hatch Street)', hint: '' },
+        { value: 'hatch-old', label: 'Old promo', hint: 'not live' },
+      ] })
+      expect(db.log.map((e) => e.table)).toEqual(['corp_promos'])
+      expect(db.log[0].filters).toEqual({ location_id: LOC })
+      expect(db.log[0].range).toEqual([0, 999])
     })
 
-    it('lead_source: the enum, no query', async () => {
-      db = makeDb({})
+    it('corp_promo: a failed read is 503, never "no promos"', async () => {
+      db = makeDb({ corp_promos: () => ({ data: null, error: { message: 'boom' } }) })
+      expect(await listEntryOptions(db, { locationId: LOC, type: 'corp_promo' })).toMatchObject({ ok: false, status: 503 })
+    })
+
+    it("lead_source: the studio's vocabulary (defaults, the owner's list, values seen on contacts)", async () => {
+      db = makeDb({
+        locations: () => ({ data: { id: LOC, settings: { lead_sources: ['Clubhouse_Partner'] } }, error: null }),
+        contacts: () => ({ data: [{ id: 'c1', lead_source: 'corp_promo', last_lead_source: 'META' }], error: null }),
+      })
       const res = await listEntryOptions(db, { locationId: LOC, type: 'lead_source' })
-      expect(res.options.map((o) => o.value)).toEqual(leadSourceSchema.options)
-      expect(db.log).toEqual([])
+      expect(res.ok).toBe(true)
+      expect(res.options.map((o) => o.value)).toEqual([...DEFAULT_LEAD_SOURCES, 'clubhouse_partner', 'corp_promo'])
+      expect(res.options.find((o) => o.value === 'walkin')).toEqual({ value: 'walkin', label: 'Walk-in', hint: 'walkin' })
+      expect(res.options.find((o) => o.value === 'corp_promo')).toEqual({ value: 'corp_promo', label: 'corp_promo' })
+      const contactsRead = db.log.find((e) => e.table === 'contacts')
+      expect(contactsRead.filters).toEqual({ location_id: LOC })
+      expect(contactsRead.range).toEqual([0, 999])
+    })
+
+    it('lead_source: a failed contacts read is 503, never the defaults alone', async () => {
+      db = makeDb({
+        locations: () => ({ data: { id: LOC, settings: {} }, error: null }),
+        contacts: () => ({ data: null, error: { message: 'boom' } }),
+      })
+      expect(await listEntryOptions(db, { locationId: LOC, type: 'lead_source' })).toMatchObject({ ok: false, status: 503 })
     })
 
     it('glofox_plan: active memberships at the studio', async () => {

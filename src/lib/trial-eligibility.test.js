@@ -11,6 +11,8 @@ import { stillorganTrialHistory, hatchActiveMembership, reasonsText } from './tr
 
 const LOC = 'loc-stillorgan'
 const CONTACT = { id: 'c1', glofox_member_id: 'g1', glofox_membership_status: 'lead', glofox_membership_plan: null }
+// WAYSIN.2 — the studio's Glofox promo plans come from corp_promos.
+const NEWSTART_PROMO = { id: 'p1', location_id: LOC, key: 'stillorgan-newstart', name: 'New Start', platform: 'glofox', credits: 3, expires_in_days: 7, live: true, tag: 't', lead_source: 'corp_promo', glofox_membership_id: 'm', glofox_plan_code: 'c', glofox_plan_name: 'New Start Free Trial' }
 
 // A db whose from(table) returns a chainable builder answering per table.
 // rows[table] is the array the read resolves to; failing[table] makes it
@@ -30,6 +32,8 @@ function makeDb({ rows = {}, failing = [] } = {}) {
         is: (...a) => { log.ops.push(['is', ...a]); return chain },
         in: (...a) => { log.ops.push(['in', ...a]); return chain },
         limit: (...a) => { log.ops.push(['limit', ...a]); return chain },
+        order: (...a) => { log.ops.push(['order', ...a]); return chain },
+        range: (...a) => { log.ops.push(['range', ...a]); return chain },
         then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
       }
       return chain
@@ -59,7 +63,7 @@ describe('stillorganTrialHistory', () => {
   })
 
   it('NEWSTART.1g: a trial status under the New Start plan is not a prior trial, though its name says Trial (case and spaces ignored)', async () => {
-    const { db } = makeDb()
+    const { db } = makeDb({ rows: { corp_promos: [NEWSTART_PROMO] } })
     for (const plan of ['New Start Free Trial', '  new start free trial ']) {
       const r = await stillorganTrialHistory(db, { locationId: LOC, contact: { ...CONTACT, glofox_membership_status: 'trial', glofox_membership_plan: plan } })
       expect(r).toEqual({ ok: true, hadTrial: false, reasons: [] })
@@ -70,10 +74,31 @@ describe('stillorganTrialHistory', () => {
     const { db } = makeDb()
     const reset = await stillorganTrialHistory(db, { locationId: LOC, contact: { ...CONTACT, glofox_membership_status: 'trial', glofox_membership_plan: 'The UN1T 14 Day Reset Trial' } })
     expect(reset).toEqual({ ok: true, hadTrial: true, reasons: ['membership_status=trial', 'membership_plan_trial'] })
-    const { db: db2 } = makeDb({ rows: { glofox_trial_claims: [{ id: 'cl1' }] } })
+    const { db: db2 } = makeDb({ rows: { glofox_trial_claims: [{ id: 'cl1' }], corp_promos: [NEWSTART_PROMO] } })
     const other = await stillorganTrialHistory(db2, { locationId: LOC, contact: { ...CONTACT, glofox_member_id: 'gm1', glofox_membership_status: 'trial', glofox_membership_plan: 'New Start Free Trial' } })
     expect(other.hadTrial).toBe(true)
     expect(other.reasons).toEqual(['glofox_trial_claim'])
+  })
+
+  it('WAYSIN.2: with no Glofox promo at the studio the New Start plan is just a trial plan', async () => {
+    const { db } = makeDb()
+    const r = await stillorganTrialHistory(db, { locationId: LOC, contact: { ...CONTACT, glofox_membership_status: 'trial', glofox_membership_plan: 'New Start Free Trial' } })
+    expect(r.hadTrial).toBe(true)
+  })
+
+  it('WAYSIN.2: the promo plans are read for this studio only, and only when the contact has a plan', async () => {
+    const { db, calls } = makeDb({ rows: { corp_promos: [NEWSTART_PROMO] } })
+    await stillorganTrialHistory(db, { locationId: LOC, contact: CONTACT })
+    expect(calls.some((c) => c.table === 'corp_promos')).toBe(false)
+    await stillorganTrialHistory(db, { locationId: LOC, contact: { ...CONTACT, glofox_membership_plan: 'Monthly' } })
+    const read = calls.find((c) => c.table === 'corp_promos')
+    expect(read.ops).toContainEqual(['eq', 'location_id', LOC])
+  })
+
+  it('WAYSIN.2: an unreadable corp_promos read is ok:false, never a verdict', async () => {
+    const { db } = makeDb({ failing: ['corp_promos'] })
+    const r = await stillorganTrialHistory(db, { locationId: LOC, contact: { ...CONTACT, glofox_membership_status: 'trial', glofox_membership_plan: 'New Start Free Trial' } })
+    expect(r).toEqual({ ok: false, reason: 'corp_promos_unreadable' })
   })
 
   it('a live glofox_trial_claims row counts', async () => {

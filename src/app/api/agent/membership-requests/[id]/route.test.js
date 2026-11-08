@@ -94,6 +94,11 @@ function makeDbFor(row, updates, lists = {}) {
         insert: () => b,
         is: () => b,
         limit: () => b,
+        // WAYSIN.2 — the trial-history check reads the studio's corp_promos
+        // (listCorpPromos pages with .range()); this studio has none.
+        async range() {
+          return { data: table === 'corp_promos' ? [] : (lists[table] || []), error: null }
+        },
         then(resolve, reject) {
           return Promise.resolve({ data: lists[table] || [], error: null }).then(resolve, reject)
         },
@@ -765,6 +770,8 @@ describe('PATCH class_booking approval — the trial grant is written ahead (TRI
           insert: () => b,
           is: () => b,
           limit: () => b,
+          // WAYSIN.2 — the studio's corp_promos read (paged with .range()) finds none.
+          async range() { return { data: [], error: null } },
           then(resolve, reject) { return Promise.resolve({ data: [], error: null }).then(resolve, reject) },
           update(p) { patch = p; log.push({ table, patch: p, eqs }); return b },
           async maybeSingle() {

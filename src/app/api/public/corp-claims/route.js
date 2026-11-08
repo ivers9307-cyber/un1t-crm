@@ -1,7 +1,7 @@
 // POST /api/public/corp-claims — CORPPROMO.1: claim a /corp corporate promo.
 //
-// The body names the promo (a key in src/lib/corp-promos.js); the studio, the
-// credits and their expiry come from the registry, never the client. Captures
+// The body names the promo; the studio, the credits and their expiry come from
+// that studio's corp_promos row (WAYSIN.3, mig 816), never the client. Captures
 // the lead the way /trial does (contact, lead source, attribution, visit
 // origin, consent, deal placement, Meta Lead) against the promo's studio, then:
 //   - refuses an active member (200 active_member) and anyone not eligible
@@ -16,12 +16,19 @@
 // PAGES.1 — `page` (+ `studio`): the promo is the one the live page's studio
 // row names (its merged corp_promo block's promo_key); a body `promo` is
 // accepted only when it names that same promo (anything else is not_found).
-// Credits and expiry still come from the registry, never a row an editor
-// writes. The tag and lead source are the row's attribution when it sets
-// them, else the registry's (what /corp has always written); the words and
-// the studio are the page's; the claim records `page_id`. Without `page` the
-// body's `promo` key names the promo and its studio page (the promo's public
-// path is that page's slug): /corp's own form, same words, studio and terms.
+// Credits and expiry come from the studio's corp_promos row, never the
+// landing row. The tag and lead source are the landing row's attribution when
+// it sets them, else the promo's (what /corp has always written); the words
+// and the studio are the page's; the claim records `page_id`. Without `page`
+// the body's `promo` key is a SEED key (CORP_PROMO_SEEDS): its public path
+// names the studio page (/corp's own form, same words, studio and terms) and
+// the promo is that studio's row by that key.
+//
+// WAYSIN.3 — the promo is ALWAYS read at the resolved studio's location_id
+// (readCorpPromo is location-scoped), never by key alone: a key another
+// studio holds is not available here. A failed read is 503 with nothing
+// written; a Glofox promo with no plan binding is 409 glofox_plan_missing
+// before any Glofox call; every claim row records the promo's platform.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -34,7 +41,8 @@ import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 import { hatchActiveMembership } from '@/lib/trial-eligibility'
-import { resolveCorpPromo, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
+import { CORP_PROMO_SEEDS, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
+import { readCorpPromo } from '@/lib/corp-promos-db'
 import { corpPromoEligibility } from '@/lib/corp-promo-eligibility'
 import { fulfilCorpPromoClaim } from '@/lib/corp-promo-claim'
 import { corpPromoTokens } from '@/lib/corp-promo-emails'
@@ -90,6 +98,8 @@ const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
 const TRY_AGAIN = 'Something went wrong on our side. Please try again in a moment.'
 const unavailable = () => NextResponse.json({ success: false, code: 'unavailable', error: TRY_AGAIN }, { status: 503 })
 const notAvailable = (error) => NextResponse.json({ success: false, code: 'not_available', error }, { status: 400 })
+// A Glofox promo whose row carries no plan binding cannot grant: refused before any Glofox call.
+const planMissing = (error) => NextResponse.json({ success: false, code: 'glofox_plan_missing', error }, { status: 409 })
 // A refusal is a state the page shows, not a failure: 200 with the studio's words.
 const refused = (code, error) => NextResponse.json({ success: false, code, error })
 
@@ -114,6 +124,7 @@ export async function POST(request) {
   let promo
   let copy
   let locationId
+  let publicPath
   let terms
   let tag
   let leadSource
@@ -134,11 +145,17 @@ export async function POST(request) {
       const refusal = pageRequestRefusal(r.ok ? 'not_found' : r.reason)
       return NextResponse.json(refusal.body, { status: refusal.status })
     }
-    promo = resolveCorpPromo(rowKey)
-    // Only a live promo at this page's studio is for sale (the page shows the same rule).
-    if (!promo || !promo.live || promo.publicPath !== r.publicPath) return notAvailable('This offer is not available right now.')
+    // Only a live promo of THIS studio is for sale (the page shows the same rule).
+    const read = await readCorpPromo(db, { locationId: r.locationId, key: rowKey })
+    if (!read.ok) {
+      logError('corp-promo', 'promo unreadable', { locationId: r.locationId, promo: rowKey })
+      return unavailable()
+    }
+    promo = read.promo
+    if (!promo || !promo.live) return notAvailable('This offer is not available right now.')
     copy = corpPromoCopyFromBlocks([block], promo.key, { platform: promo.platform })
     locationId = r.locationId
+    publicPath = r.publicPath
     pageId = r.pageId
     terms = r.terms
     pageBlocks = r.blocks
@@ -147,21 +164,31 @@ export async function POST(request) {
     tag = str(rowAttr.tag) || promo.tag
     leadSource = str(rowAttr.lead_source) || promo.leadSource
   } else {
-    promo = resolveCorpPromo(b.promo)
-    if (!promo || !promo.live) return notAvailable('This offer is not available right now.')
-    const limit = await checkRateLimit(db, `corpclaim:${promo.key}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+    // The legacy form names a seed key; the seed's public path finds its studio.
+    const seed = Object.hasOwn(CORP_PROMO_SEEDS, b.promo) ? CORP_PROMO_SEEDS[b.promo] : null
+    if (!seed) return notAvailable('This offer is not available right now.')
+    const limit = await checkRateLimit(db, `corpclaim:${seed.key}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
     if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
 
-    // The promo's studio and its words, from the studio page at the promo's
+    // The promo's studio and its words, from the studio page at the seed's
     // public path. A failed read is 503, never a refusal.
-    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), legacyPath: promo.publicPath })
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), legacyPath: seed.publicPath })
     if (!r.ok && r.reason === 'unreadable') {
-      logError('corp-promo', 'studio page unreadable', { promo: promo.key })
+      logError('corp-promo', 'studio page unreadable', { promo: seed.key })
       return unavailable()
     }
     if (!r.ok) return notAvailable('This offer is not available right now.')
+    // The promo is that studio's row by the key: never another studio's.
+    const read = await readCorpPromo(db, { locationId: r.locationId, key: seed.key })
+    if (!read.ok) {
+      logError('corp-promo', 'promo unreadable', { locationId: r.locationId, promo: seed.key })
+      return unavailable()
+    }
+    promo = read.promo
+    if (!promo || !promo.live) return notAvailable('This offer is not available right now.')
     copy = corpPromoCopyFromBlocks(r.blocks, promo.key, { platform: promo.platform })
     locationId = r.locationId
+    publicPath = r.publicPath
     terms = r.terms // no page_id: the claim came from the promo's own form, not the studio page
     pageBlocks = r.blocks
     promoBlock = r.blocks.find((x) => x && typeof x === 'object' && x.type === 'corp_promo') || null
@@ -178,8 +205,11 @@ export async function POST(request) {
   const isGlofox = promo.platform === 'glofox'
   let un1t = null
   if (isGlofox) {
-    // No plan ids yet (or none for this key): nothing is for sale. Before any write.
-    if (!glofoxPlanForPromo(promo.key)) return notAvailable(copy.unavailable_text)
+    // No plan binding on the row: nothing can be granted. Before any write or Glofox call.
+    if (!glofoxPlanForPromo(promo)) {
+      logWarn('corp-promo', 'glofox promo has no plan binding', { locationId, promo: promo.key })
+      return planMissing(copy.unavailable_text)
+    }
     const creds = await glofoxCredentialsForLocation(db, locationId)
     if (creds?.readError) {
       logError('corp-promo', 'glofox credentials unreadable', { locationId })
@@ -195,7 +225,7 @@ export async function POST(request) {
 
   // A new un1t.online account needs the studio's terms and liability waiver.
   if (!isGlofox && b.terms_accepted !== true) {
-    const termsPayload = un1tTermsPayload({ terms, studioName: location.name, publicPath: promo.publicPath })
+    const termsPayload = un1tTermsPayload({ terms, studioName: location.name, publicPath })
     return NextResponse.json({
       success: false, code: 'terms_required', error: termsPayload.required_message,
       issues: { terms_accepted: termsPayload.required_message }, terms: termsPayload,
@@ -303,6 +333,7 @@ export async function POST(request) {
     location_id: locationId,
     contact_id: contactId,
     promo_key: promo.key,
+    platform: promo.platform,
     first_name: b.first_name,
     last_name: b.last_name,
     customer_email: email,

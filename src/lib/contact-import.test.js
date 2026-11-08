@@ -110,10 +110,21 @@ describe('validateRow', () => {
     expect(r.error).toMatch(/email/i)
   })
 
-  it('rejects an unknown lead_source value', () => {
+  // WAYSIN.5 — lead sources are a per-studio vocabulary: any slug imports,
+  // trimmed and lowercased; a value with a space is refused.
+  it('accepts a lead_source outside the nine, lowercased', () => {
     const r = validateRow({
       'Email': 'a@x.com',
-      'Lead Source': 'pigeon_carrier',
+      'Lead Source': ' Pigeon_Carrier ',
+    }, mapping)
+    expect(r.ok).toBe(true)
+    expect(r.payload.lead_source).toBe('pigeon_carrier')
+  })
+
+  it('rejects a lead_source with a space', () => {
+    const r = validateRow({
+      'Email': 'a@x.com',
+      'Lead Source': 'pigeon carrier',
     }, mapping)
     expect(r.ok).toBe(false)
     expect(r.error).toMatch(/lead_source/i)

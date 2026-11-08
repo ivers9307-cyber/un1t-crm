@@ -211,7 +211,7 @@ export const OWNER_ASSIGNABLE_ROLES = Object.freeze(['owner', 'manager', 'head_c
 // instead of hardcoding hex values.
 export const DEFAULT_COLOR = '#3B82F6'
 
-// Lead source — mirror the values surfaced in AudienceBuilder.jsx.
+// Lead source.
 // 'classpass' added in GLOFOX2.1.8 — preserves the 3rd-party origin signal
 // for ClassPass-sourced contacts (Glofox surfaces this on member.origin,
 // distinct from member.source which is 'UNKNOWN' for ClassPass).
@@ -219,9 +219,21 @@ export const DEFAULT_COLOR = '#3B82F6'
 // NOTE: leadStatusSchema removed in CLASSIFY.2 (mig 155 follow-up) — the
 // contacts.lead_status column is being dropped. Audience classification
 // now lives on contacts.pipeline_stage_slug (denormalised from deals).
-export const leadSourceSchema = z.enum([
+//
+// WAYSIN.5 — lead sources are a per-studio VOCABULARY, not an enum
+// (src/lib/lead-source-vocabulary.js): the nine below are the defaults every
+// studio offers, an owner adds their own (locations.settings.lead_sources),
+// and the public funnels already write values outside the nine ('corp_promo',
+// 'hatch_launch', …). A value is trimmed and lowercased, then must be a slug:
+// a letter or digit first, then letters, digits, '_' or '-', at most 80. A
+// space is refused rather than kept, so 'Clubhouse Partner' is a 400 and
+// ' META ' is 'meta'.
+export const DEFAULT_LEAD_SOURCES = Object.freeze([
   'booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'classpass', 'other',
 ])
+export const LEAD_SOURCE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,79}$/
+export const leadSourceSchema = z.string().trim().toLowerCase().min(1).max(80)
+  .regex(LEAD_SOURCE_PATTERN, 'A lead source is letters, digits, _ or - (no spaces), at most 80 characters.')
 
 // Deal status — open/won/lost from migration 001.
 export const dealStatusSchema = z.enum(['open', 'won', 'lost'])
@@ -578,6 +590,50 @@ export const boardPatchSchema = z.object({
 }).refine((v) => v.name !== undefined || v.priority !== undefined || v.config !== undefined, {
   message: 'Nothing to change',
 })
+// WAYSIN.4 — POST/PATCH /api/locations/[id]/corp-promos[/promoId] (mig 816).
+// key mirrors the table CHECK and is immutable after create (the patch schema
+// is strict, so a `key` in a PATCH is a 400). The tag allows a hyphen as well
+// as the brief's `[a-z0-9_]`: both seeded promos carry hyphenated tags
+// ('hatch-corp-promo', 'stillorgan-newstart'). Tag and lead source are stored
+// trimmed and lowercased. The Glofox fields are required iff the studio's
+// membership_source is glofox: the schema cannot know the studio, so the route
+// judges that (glofox_plan_missing).
+const corpPromoName = z.string().trim().min(1).max(80)
+const corpPromoCredits = z.number().int().min(1).max(50)
+const corpPromoExpires = z.number().int().min(1).max(365)
+const corpPromoTag = z.string().trim().toLowerCase().regex(/^[a-z0-9_-]{2,40}$/, 'Tag: 2-40 lowercase letters, digits, - or _')
+// WAYSIN.7 — the same slug rule as every other lead source: written onto
+// contacts, so a value with a space would 400 on the ContactForm later.
+const corpPromoLeadSource = leadSourceSchema
+const corpPromoGlofoxText = z.string().trim().max(200)
+export const CORP_PROMO_KEY_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/
+export const corpPromoCreateSchema = z.object({
+  key: z.string().trim().toLowerCase().regex(CORP_PROMO_KEY_RE, 'Key: 3-40 lowercase letters, digits and hyphens, starting and ending with a letter or digit'),
+  name: corpPromoName,
+  credits: corpPromoCredits,
+  expires_in_days: corpPromoExpires,
+  live: z.boolean().optional(),
+  tag: corpPromoTag,
+  lead_source: corpPromoLeadSource.optional(),
+  glofox_membership_id: corpPromoGlofoxText.optional().nullable(),
+  glofox_plan_code: corpPromoGlofoxText.optional().nullable(),
+  glofox_plan_name: corpPromoGlofoxText.optional().nullable(),
+}).strict()
+export const corpPromoPatchSchema = z.object({
+  name: corpPromoName.optional(),
+  credits: corpPromoCredits.optional(),
+  expires_in_days: corpPromoExpires.optional(),
+  live: z.boolean().optional(),
+  tag: corpPromoTag.optional(),
+  lead_source: corpPromoLeadSource.optional(),
+  glofox_membership_id: corpPromoGlofoxText.optional().nullable(),
+  glofox_plan_code: corpPromoGlofoxText.optional().nullable(),
+  glofox_plan_name: corpPromoGlofoxText.optional().nullable(),
+  // Accepted by the shape only so the refusal can name it: a promo's key is its claim link.
+  key: z.unknown().optional(),
+}).strict()
+  .refine((v) => v.key === undefined, { message: 'The key cannot be changed after a promo is created', path: ['key'] })
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' })
 // PIPEBUILD.5f — PUT /api/pipelines/[id]/followups/[stageId]. `bodies` is the
 // operator's wording per message ref; renderPack (shared/pipelines/recipes.js)
 // is the real validator ({{1}} only, the fill-in tokens, 1024 characters

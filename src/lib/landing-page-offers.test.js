@@ -24,6 +24,11 @@ describe('landing-page-offers', () => {
     expect(offerConfigured('paid_trial', { type: 'paid_trial', membership_id: 'm', plan_code: 'p', price_cents: 3900 }, { landingPath: 'stillorgan' })).toBe(true)
     expect(offerConfigured('paid_trial', { type: 'paid_trial', membership_id: '', plan_code: '', price_cents: 3900 }, { landingPath: 'stillorgan' })).toBe(false)
     expect(offerConfigured('corp_promo', { type: 'corp_promo', promo_key: 'no-such-promo' }, {})).toBe(false)
+    const promos = [{ key: 'hatch-3-free', live: true }]
+    expect(offerConfigured('corp_promo', { type: 'corp_promo', promo_key: 'hatch-3-free' }, { promos })).toBe(true)
+    expect(offerConfigured('corp_promo', { type: 'corp_promo', promo_key: 'stillorgan-newstart' }, { promos })).toBe(false)
+    expect(offerConfigured('corp_promo', { type: 'corp_promo', promo_key: 'hatch-3-free' }, {})).toBe(false)
+    expect(offerConfigured('corp_promo', { type: 'corp_promo' }, { promos })).toBe(false)
     expect(offerConfigured('class_funnel', { type: 'class_funnel', timetable: 'Mon 07:00 S&C' }, { landingPath: 'hatch-street' })).toBe(true)
   })
   it('names every studio key the migration strips (pinned by the migration test)', () => {

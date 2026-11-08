@@ -22,7 +22,7 @@ import {
   pageSaveMessage, attributionDraft, attributionToSend, studioRowSaveBody,
 } from '@/components/landing-pages/page-save'
 import { Field, Input } from '@/components/landing-pages/fields'
-import { StudioOfferFields, fieldsFromOffer, offerFromFields } from '@/components/landing-pages/studio-offer-fields'
+import { StudioOfferFields, fieldsFromOffer, offerFromFields, useStudioCorpPromos } from '@/components/landing-pages/studio-offer-fields'
 
 const CHIPS = {
   ready: ['Ready', 'bg-green-500/10 text-green-700'],
@@ -54,10 +54,17 @@ export default function StudioOfferRow({ page, row, onSave, canEdit }) {
   const setField = (patch) => { setFields((prev) => ({ ...prev, ...patch })); edited() }
   const setAttrField = (patch) => { setAttr((prev) => ({ ...prev, ...patch })); edited() }
 
+  // WAYSIN.4: the studio's own live promo rows, loaded once for the picker and the hint.
+  const corpPromos = useStudioCorpPromos(row.location_id, blockType === 'corp_promo' && Boolean(canEdit))
   const offer = useMemo(() => offerFromFields(blockType, fields), [blockType, fields])
   const attribution = attributionToSend(attr, stored)
   const localReady = blockType
-    ? offerConfigured(blockType, mergeOfferBlock(pageBlock, { offer, attribution }), { landingPath: null, product: null })
+    ? offerConfigured(blockType, mergeOfferBlock(pageBlock, { offer, attribution }), {
+      landingPath: null,
+      product: null,
+      // The studio's live promo rows (corp-promos?live=1); none while they load.
+      promos: corpPromos.promos || [],
+    })
     : false
   const reason = serverReadiness?.reason || (localReady ? 'ready' : 'needs_plan')
   const [chipLabel, chipCls] = CHIPS[reason] || CHIPS.needs_plan
@@ -115,7 +122,7 @@ export default function StudioOfferRow({ page, row, onSave, canEdit }) {
           />
           Switched on at this studio
         </label>
-        <StudioOfferFields blockType={blockType} row={row} load={Boolean(canEdit)} fields={fields} set={setField} />
+        <StudioOfferFields blockType={blockType} row={row} load={Boolean(canEdit)} fields={fields} set={setField} corpPromos={blockType === 'corp_promo' ? corpPromos : undefined} />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <Field label="Tag" hint={`On every lead from this studio. ${blankHint}`}>
             <Input ariaLabel="Tag" value={attr.tag} onChange={(v) => setAttrField({ tag: v })} maxLength={80} placeholder={defaults?.tag} />

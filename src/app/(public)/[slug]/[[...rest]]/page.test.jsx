@@ -15,6 +15,10 @@ const h = vi.hoisted(() => ({
   reviews: [],
   studioChrome: null,
   productError: null,
+  // WAYSIN.3 — the studio's corp_promos rows (promoView shape) and a read failure.
+  promoRows: [],
+  promoReadFails: false,
+  promoReads: [],
   calls: { load: [], reviews: [], legacy: [], tables: [] },
 }))
 
@@ -66,6 +70,15 @@ function makeDb() {
   return { from: (table) => q(table) }
 }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => makeDb() }))
+vi.mock('@/lib/corp-promos-db', async (importOriginal) => ({
+  ...(await importOriginal()),
+  readCorpPromo: vi.fn(async (_db, args) => {
+    h.promoReads.push(args)
+    if (h.promoReadFails) return { ok: false, error: 'boom' }
+    return { ok: true, promo: h.promoRows.find((p) => p.locationId === args.locationId && p.key === args.key) || null }
+  }),
+}))
+const HATCH_PROMO_ROW = { id: 'cp-h', locationId: 'loc-h', key: 'hatch-3-free', name: 'Corporate trial (Hatch Street)', platform: 'un1t_online', credits: 3, expiresInDays: 7, live: true, tag: 'hatch-corp-promo', leadSource: 'corp_promo', glofox: null }
 vi.mock('@/lib/host-brand', () => ({
   resolveOrgChrome: vi.fn(async () => ({ companyName: 'UN1T', shortName: 'UN1T', studios: [], legalName: 'Champ Fitness Ltd' })),
   resolveLocationBrand: vi.fn(async ({ locationId }) => ({
@@ -173,6 +186,9 @@ beforeEach(() => {
   h.reviews = []
   h.studioChrome = null
   h.productError = null
+  h.promoRows = [HATCH_PROMO_ROW]
+  h.promoReadFails = false
+  h.promoReads = []
   h.calls = { load: [], reviews: [], legacy: [], tables: [] }
 })
 
@@ -379,6 +395,30 @@ describe('the [slug] page route', () => {
     const other = propsOf(await render({ slug: 'corp', rest: ['hatch-3-free'] }), 'corp')
     expect(other.promoKey).toBeNull()
     expect(other.copy.unavailable_text).toBe('This offer is not available right now.')
+  })
+
+  it('WAYSIN.3: the promo is read at the page studio; switched off or held by another studio is not available; a failed read is the try-again card, never a 404', async () => {
+    h.loaded = { page: CORP, studios: CORP_STUDIOS }
+    await render({ slug: 'corp' })
+    expect(h.promoReads).toContainEqual({ locationId: 'loc-h', key: 'hatch-3-free' })
+    // An edited row's credits fill the words.
+    h.promoRows = [{ ...HATCH_PROMO_ROW, credits: 5 }]
+    h.loaded = { page: { ...CORP, blocks: [{ id: 'cp', type: 'corp_promo', heading: '{credits} free classes' }] }, studios: CORP_STUDIOS }
+    expect(propsOf(await render({ slug: 'corp' }), 'corp').copy.heading).toBe('5 free classes')
+    h.loaded = { page: CORP, studios: CORP_STUDIOS }
+    h.promoRows = [{ ...HATCH_PROMO_ROW, live: false }]
+    const off = propsOf(await render({ slug: 'corp' }), 'corp')
+    expect([off.promoKey, off.copy.unavailable_text]).toEqual([null, 'This offer is not available right now.'])
+    h.promoRows = [{ ...HATCH_PROMO_ROW, locationId: 'loc-s' }]
+    expect(propsOf(await render({ slug: 'corp' }), 'corp').promoKey).toBeNull()
+    h.promoRows = [HATCH_PROMO_ROW]
+    h.promoReadFails = true
+    expect(await outcome({ slug: 'corp' })).not.toBe('NEXT_NOT_FOUND')
+    const failed = propsOf(await render({ slug: 'corp' }), 'corp')
+    expect(failed.promoKey).toBeNull()
+    expect(failed.terms).toBeNull()
+    expect(failed.copy.unavailable_text).toBe("We couldn't load this offer just now. Please try again in a minute.")
+    expect(vi.mocked(logWarn)).toHaveBeenCalledWith('public-page', expect.stringContaining('corp promo unreadable'), expect.objectContaining({ locationId: 'loc-h' }))
   })
 
   it('reads reviews for the resolved studio when the page has a reviews block', async () => {

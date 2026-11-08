@@ -32,7 +32,7 @@ export const IMPORT_FIELDS = Object.freeze([
   { key: 'last_name',          label: 'Last name',          hint: '' },
   { key: 'email',              label: 'Email',              hint: 'Required. Match key for update vs create.' },
   { key: 'phone',              label: 'Phone',              hint: 'E.164 format ideally (+353871234567).' },
-  { key: 'lead_source',        label: 'Lead source',        hint: 'booking / meta / tiktok / walkin / referral / website / whatsapp / other' },
+  { key: 'lead_source',        label: 'Lead source',        hint: 'a slug: letters, digits, _ or - (e.g. meta, walkin, clubhouse_partner)' },
   { key: 'label',              label: 'Label',              hint: 'Free-form bucket — e.g. VIP, deposit-paid.' },
   { key: 'glofox_member_id',   label: 'Glofox member ID',   hint: '' },
   { key: 'tags',               label: 'Tags',               hint: 'Comma-separated. Merged with the batch tag if set.' },

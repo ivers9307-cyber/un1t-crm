@@ -2,14 +2,26 @@ import { describe, it, expect, vi } from 'vitest'
 import { corpPromoClaimsProvider, claimWhy, toItem } from './corp-promo-claims'
 
 const user = { activeLocation: { id: 'loc-h' } }
-function db(rows, error = null) {
+// promos: the corp_promos rows the fallback read answers; promoError fails it.
+function db(rows, error = null, { promos = [], promoError = null } = {}) {
   const filters = []
-  const q = {
-    select: () => q, order: () => q, limit: () => q,
-    eq: (c, v) => { filters.push([c, v]); return q },
-    then: (ok, no) => Promise.resolve({ data: rows, error, count: rows?.length ?? 0 }).then(ok, no),
-  }
-  return { from: vi.fn(() => q), filters }
+  const promoReads = []
+  const from = vi.fn((table) => {
+    const own = []
+    const q = {
+      select: () => q, order: () => q, limit: () => q, range: () => q,
+      eq: (c, v) => { (table === 'corp_promos' ? own : filters).push([c, v]); return q },
+      then: (ok, no) => {
+        if (table === 'corp_promos') {
+          promoReads.push(own)
+          return Promise.resolve(promoError ? { data: null, error: promoError } : { data: promos, error: null }).then(ok, no)
+        }
+        return Promise.resolve({ data: rows, error, count: rows?.length ?? 0 }).then(ok, no)
+      },
+    }
+    return q
+  })
+  return { from, filters, promoReads }
 }
 
 describe('corpPromoClaimsProvider', () => {
@@ -54,10 +66,38 @@ describe('corpPromoClaimsProvider', () => {
   })
 
   it('item carries the Glofox member, platform and the invoice-check flag', () => {
-    const it1 = toItem({ id: 'g', promo_key: 'stillorgan-newstart', reason: 'grant_unverified', glofox_member_id: 'gm1' })
-    expect(it1).toMatchObject({ glofoxMemberId: 'gm1', checkInvoice: true })
+    const it1 = toItem({ id: 'g', promo_key: 'stillorgan-newstart', platform: 'glofox', reason: 'grant_unverified', glofox_member_id: 'gm1' })
+    expect(it1).toMatchObject({ glofoxMemberId: 'gm1', platform: 'glofox', checkInvoice: true })
     expect(toItem({ id: 's', promo_key: 'p', reason: 'stalled', grant: null }).checkInvoice).toBe(false)
     expect(toItem({ id: 's', promo_key: 'p', reason: 'stalled', grant: { stage: 'purchasing' } }).checkInvoice).toBe(true)
     expect(toItem({ id: 'u', promo_key: 'p', reason: 'un1t_promo_unverified' }).checkInvoice).toBe(false)
+  })
+
+  // WAYSIN.2 — the platform is the claim's own column; a row written before it
+  // was stamped falls back to one read of the studio's promos.
+  it('platform from the claim row; no promo read when every row carries one', async () => {
+    const d = db([{ id: 'c1', promo_key: 'stillorgan-newstart', platform: 'glofox', reason: 'stalled' }])
+    const out = await corpPromoClaimsProvider.fetchPending(d, user)
+    expect(out.items[0].platform).toBe('glofox')
+    expect(d.promoReads).toEqual([])
+  })
+
+  it('an unstamped row takes the platform from one batch read of the studio\'s promos', async () => {
+    const promos = [{ id: 'p', location_id: 'loc-h', key: 'hatch-3-free', name: 'H', platform: 'un1t_online', credits: 3, expires_in_days: 7, live: true, tag: 't', lead_source: 'corp_promo' }]
+    const d = db([
+      { id: 'c1', promo_key: 'hatch-3-free', platform: null, reason: 'un1t_promo_unverified' },
+      { id: 'c2', promo_key: 'hatch-3-free', platform: null, reason: 'un1t_promo_unverified' },
+      { id: 'c3', promo_key: 'gone', platform: null, reason: 'x' },
+    ], null, { promos })
+    const out = await corpPromoClaimsProvider.fetchPending(d, user)
+    expect(out.items.map((i) => i.platform)).toEqual(['un1t_online', 'un1t_online', null])
+    expect(d.promoReads).toEqual([[['location_id', 'loc-h']]])
+  })
+
+  it('a failed fallback read leaves platform unknown on those cards, never the tab empty', async () => {
+    const d = db([{ id: 'c1', promo_key: 'hatch-3-free', platform: null, reason: 'x' }], null, { promoError: { message: 'boom' } })
+    const out = await corpPromoClaimsProvider.fetchPending(d, user)
+    expect(out.count).toBe(1)
+    expect(out.items[0].platform).toBeNull()
   })
 })

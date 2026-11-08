@@ -4,7 +4,27 @@ vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
 })
-vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
+// leadSourceVocabulary reads the studio's locations row and pages its
+// contacts (eq → or → order → range); this studio has no list and no contacts.
+function fakeDb() {
+  return {
+    from() {
+      const q = {
+        select: () => q,
+        eq: () => q,
+        or: () => q,
+        in: () => q,
+        is: () => q,
+        order: () => q,
+        range: () => Promise.resolve({ data: [], error: null }),
+        maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        then(resolve, reject) { return Promise.resolve({ data: [], error: null }).then(resolve, reject) },
+      }
+      return q
+    },
+  }
+}
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => fakeDb()) }))
 vi.mock('@/lib/sequence-access', () => ({ canBuildSequencesAt: vi.fn() }))
 vi.mock('@/lib/pipeline-entry-options', async () => {
   const actual = await vi.importActual('@/lib/pipeline-entry-options')
@@ -59,7 +79,8 @@ describe('GET /api/locations/[id]/pipeline-entry-options', () => {
   it('sequenceBuilderStaffCanRead', async () => {
     getCurrentUser.mockResolvedValue(userWith('staff'))
     canBuildSequencesAt.mockReturnValue(true)
-    expect((await GET(req('type=corp_promo'), props)).status).toBe(200)
+    // lead_source reads nothing (corp_promo now reads the studio's corp_promos rows).
+    expect((await GET(req('type=lead_source'), props)).status).toBe(200)
   })
 
   it('staffWithoutPermissionIs403', async () => {
