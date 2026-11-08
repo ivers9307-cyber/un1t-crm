@@ -144,6 +144,8 @@ export const HostEventSchema = z
     pricing_tiers: PricingTiersSchema.nullable().optional(),
     // QUESTIONS.1 — asked at signup (race_events.registration_questions); never a re-review.
     registration_questions: RegistrationQuestionsSchema.nullable().optional(),
+    // CALENDAR.1 — how long a session runs (race_events.duration_minutes); null = the kind's default.
+    duration_minutes: z.number().int().min(5).max(1440).nullable().optional(),
     hero_image_url: z.string().url().optional().nullable(),
     accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().nullable(),
     venue_name: z.string().trim().min(1).max(200),

@@ -102,6 +102,7 @@ export async function POST(request) {
       series_id: input.series_id ?? null,
       pricing_tiers: input.pricing_tiers ?? null,
       registration_questions: input.registration_questions ?? null,
+      duration_minutes: input.duration_minutes ?? null,
       ...defaults,
     })
     .select('id, slug')

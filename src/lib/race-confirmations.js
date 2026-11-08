@@ -16,6 +16,8 @@
 // duplicate messages.
 
 import { sendTransactionalEmail } from './postmark'
+import { eventCalendarLinks } from './event-calendar-links'
+import { zoneOfLocation } from './location-time'
 import { eventDateLong } from './event-day'
 import { getAppUrl } from './app-url'
 import { signCheckinToken } from './event-checkin-tokens'
@@ -66,6 +68,17 @@ function findTeamParagraphHtml(text) {
 function manageLineHtml(manageUrl) {
   if (!manageUrl) return ''
   return `<br><br>Need a different date? <a href="${escapeHtml(manageUrl)}" style="color:#111;font-weight:600">Change it here</a>.`
+}
+
+/**
+ * CALENDAR.1 — the "Add it to your calendar" line after the manage line:
+ * the .ics route (Apple / Outlook) and a Google template link. '' without
+ * links (no session instant), so the copy is then exactly as before.
+ * Operator copy can carry {{calendar_url}} and {{google_calendar_url}}.
+ */
+function calendarLineHtml(links) {
+  if (!links?.ics_url || !links?.google_url) return ''
+  return `<br>Add it to your calendar: <a href="${escapeHtml(links.ics_url)}" style="color:#111;font-weight:600">Apple / Outlook</a> · <a href="${escapeHtml(links.google_url)}" style="color:#111;font-weight:600">Google</a>.`
 }
 
 /** "Heat A · 09:30", "09:30", or '' with no wave. */
@@ -119,8 +132,8 @@ export async function sendRaceConfirmations({ db, paymentId }) {
         venue_name, venue_address,
         accent_hex, hero_image_url,
         confirmation_email_subject, confirmation_email_intro, confirmation_email_template_id,
-        find_team,
-        locations:location_id ( id, name, is_host_anchor, organization_id )
+        find_team, duration_minutes,
+        locations:location_id ( id, name, is_host_anchor, organization_id, timezone )
       ),
       registration:race_registration_id (
         id, wave_id, looking_for_team,
@@ -200,8 +213,13 @@ export async function sendRaceConfirmations({ db, paymentId }) {
 
   const teamMembersWithQr = mintMemberQrs({ eventId: race?.id || null, registrationId: reg?.id || null, members: teamMembers })
 
+  // W1.L3b — the EVENT LOCATION's tenant host (the resolver floors to the CRM
+  // host and never throws past it): the manage link and the calendar links.
+  const customerBaseUrl = await resolveCustomerBaseUrl(db, race?.location_id || null)
   const ctx = {
     raceName: race?.name || 'Your event',
+    // CALENDAR.1 — the session as a UTC instant on the studio's clock.
+    calendarLinks: eventCalendarLinks({ event: race, wave, zone: zoneOfLocation(location), baseUrl: customerBaseUrl }),
     raceDateLabel: fmtRaceDate(race?.race_date),
     waveLabel: waveText(wave),
     // EVENT-MULTITIME.1 — "Wave" for races, "Time" for a class/workshop.
@@ -239,9 +257,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     // to the CRM host and never throws past it). The check-in QR image URLs
     // above stay on the CRM host on purpose: the mail client fetches them, the
     // customer never reads them.
-    manageUrl: entryManageUrl(reg?.id || payment.race_registration_id || null, {
-      baseUrl: await resolveCustomerBaseUrl(db, race?.location_id || null),
-    }),
+    manageUrl: entryManageUrl(reg?.id || payment.race_registration_id || null, { baseUrl: customerBaseUrl }),
     // FINDTEAM.3 — a solo who booked "find me a team" gets one extra paragraph
     // saying a team is coming. Left off the ctx entirely otherwise, so the
     // default email is unchanged for everyone else.
@@ -414,7 +430,7 @@ export function buildConfirmationDefaults(ctx) {
     infoRows,
     afterInfoHtml,
     memberQrs,
-    footerHtml: `<strong>What's next:</strong> arrive 10-15 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.${manageLineHtml(ctx.manageUrl)}`,
+    footerHtml: `<strong>What's next:</strong> arrive 10-15 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.${manageLineHtml(ctx.manageUrl)}${calendarLineHtml(ctx.calendarLinks)}`,
     locationName: ctx.locationName || '',
     brand,
   }
@@ -495,6 +511,9 @@ async function sendEmail({ db, payment, ctx: baseCtx, commsLocationId }) {
   }
   const extras = {
     event_name: ctx.raceName,
+    // CALENDAR.1 — for operator copy that wants the links.
+    calendar_url: ctx.calendarLinks?.ics_url || '',
+    google_calendar_url: ctx.calendarLinks?.google_url || '',
     team_name: ctx.teamName,
     when: ctx.waveLabel || ctx.raceDateLabel,
     location: ctx.locationName,
@@ -549,7 +568,7 @@ export function buildMovedDefaults(ctx) {
   const to = `<strong>${escapeHtml(ctx.raceName)}</strong>`
   const footerHtml = (ctx.isRace
     ? `<strong>What's next:</strong> arrive 10-15 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before.`
-    : `<strong>What's next:</strong> arrive 10-15 minutes before your start. Bring water and a towel. We'll send a reminder the day before.`) + manageLineHtml(ctx.manageUrl)
+    : `<strong>What's next:</strong> arrive 10-15 minutes before your start. Bring water and a towel. We'll send a reminder the day before.`) + manageLineHtml(ctx.manageUrl) + calendarLineHtml(ctx.calendarLinks)
   if (ctx.sameEvent) {
     const oldTime = escapeHtml(ctx.oldWhen || 'your previous time')
     const newTime = `<strong>${escapeHtml(ctx.waveLabel || ctx.raceDateLabel || '')}</strong>`
@@ -619,8 +638,8 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
       race:race_event_id (
         id, name, slug, kind, race_date, location_id, host_id, sending_location_id,
         venue_name, accent_hex, hero_image_url,
-        moved_email_subject, moved_email_intro,
-        locations:location_id ( id, name, is_host_anchor, organization_id )
+        moved_email_subject, moved_email_intro, duration_minutes,
+        locations:location_id ( id, name, is_host_anchor, organization_id, timezone )
       )
     `)
     .eq('id', registrationId)
@@ -708,11 +727,13 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
     // EVENT-MOVE.6 — the same entry, so the same page; a fresh 90-day link.
     // W1.L3b — on the event location's tenant host, as the confirmation's is.
     manageUrl: entryManageUrl(reg.id, { baseUrl: await resolveCustomerBaseUrl(db, race.location_id || null) }),
+    // CALENDAR.1 — the NEW session's calendar links.
+    calendarLinks: eventCalendarLinks({ event: race, wave, zone: zoneOfLocation(race.locations), baseUrl: await resolveCustomerBaseUrl(db, race.location_id || null) }),
     // W1.S1a — the sending location's brand (header, member badge, signature).
     brand: await resolveEventBrand(db, {}, commsLocationId),
   }
   const mergeContact = { first_name: contact.first_name || '', name: [contact.first_name, contact.last_name].filter(Boolean).join(' '), email: toEmail, phone: contact.phone || '' }
-  const extras = { event_name: ctx.raceName, team_name: ctx.teamName, when: ctx.waveLabel || ctx.raceDateLabel, location: ctx.locationName, old_event_name: ctx.oldEventName, old_when: ctx.oldWhen, manage_url: ctx.manageUrl || '' }
+  const extras = { event_name: ctx.raceName, team_name: ctx.teamName, when: ctx.waveLabel || ctx.raceDateLabel, location: ctx.locationName, old_event_name: ctx.oldEventName, old_when: ctx.oldWhen, manage_url: ctx.manageUrl || '', calendar_url: ctx.calendarLinks?.ics_url || '', google_calendar_url: ctx.calendarLinks?.google_url || '' }
 
   try {
     const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'moved', race, contact: mergeContact, extras, defaults: buildMovedDefaults(ctx), brandLocationId: commsLocationId })

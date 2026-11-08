@@ -1639,6 +1639,22 @@ registry.registerPath({
   },
 })
 
+// CALENDAR.1 — one session of a published event as an .ics download.
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/events/{slug}/calendar.ics',
+  tags: ['Public'],
+  summary: "Add-to-calendar file for one session of a published event (RFC 5545, UTC times from the studio's zone)",
+  description: '`?wave=<id>` names the session; it may be omitted only when the event has exactly one. A draft, unpublished or unknown event, a foreign wave, or a missing wave on a multi-time event is 404. Rate-limited per IP.',
+  request: { params: z.object({ slug: z.string() }), query: z.object({ wave: uuidLike.optional() }) },
+  responses: {
+    200: { description: 'text/calendar attachment', content: { 'text/calendar': { schema: z.string() } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Event read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // HOSTSERIES.1 — copy an event to a new date as a draft (fields, waves, a
 // shifted registration window, its own hero file; never registrations or
 // promo codes). Host: own event only; staff: manager+ holding races at the

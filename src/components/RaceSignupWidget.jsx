@@ -445,6 +445,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
 
   const kind = race?.kind || 'race'
   const copy = copyFor(kind)
+  // CALENDAR.1 — the chosen session's calendar links (one session: always).
+  const calendarWaveId = (race?.waves || []).length === 1 ? race.waves[0].id : waveId
+  const calendarLinks = (calendarWaveId && race?.calendar?.by_wave?.[calendarWaveId]) || null
   // QUESTIONS.1 — the event's questions (public copy); answers travel with the body.
   const questions = resolveRegistrationQuestions(race)
   const entryQuestions = questions.filter((q) => q.per !== 'person')
@@ -738,6 +741,17 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
             <div className="flex items-start gap-3">
               <Clock size={16} className="text-white/40 mt-0.5 shrink-0" />
               <span>{copy.sidebarTimeOne(formatTimeChoices(wavesArr))}</span>
+            </div>
+          )}
+          {/* CALENDAR.1 — add the chosen session to a calendar (the one
+              session of a single-time event; the picked one otherwise). */}
+          {calendarLinks && (
+            <div className="flex items-start gap-3">
+              <Calendar size={16} className="text-white/40 mt-0.5 shrink-0" />
+              <span>
+                Add to calendar: <a href={calendarLinks.ics_url} className="underline underline-offset-2 text-white/85 hover:text-white">Apple / Outlook</a>
+                {' · '}<a href={calendarLinks.google_url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 text-white/85 hover:text-white">Google</a>
+              </span>
             </div>
           )}
           {/* Per-person price at a glance; the Total card below still

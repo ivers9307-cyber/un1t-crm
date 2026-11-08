@@ -18,7 +18,7 @@ export const dynamic = 'force-dynamic'
 async function loadOwn(db, session, id) {
   const { data } = await db
     .from('race_events')
-    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, series_id, pricing_tiers, registration_questions, race_waves ( id, start_time, capacity, label, display_order )')
+    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, series_id, pricing_tiers, registration_questions, duration_minutes, race_waves ( id, start_time, capacity, label, display_order )')
     .eq('id', id)
     .maybeSingle()
   if (!data || data.host_id !== session.host.id) return null
@@ -107,6 +107,7 @@ export async function PUT(request, props) {
     non_member_fee_cents: input.ticket_price_cents,
     pricing_tiers: input.pricing_tiers ?? null,
     registration_questions: input.registration_questions ?? null,
+    duration_minutes: input.duration_minutes ?? null,
     hero_image_url: input.hero_image_url ?? null,
     accent_hex: input.accent_hex ?? null,
     venue_name: input.venue_name,

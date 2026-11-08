@@ -11,12 +11,9 @@ import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
 import { Loader2, AlertCircle, Calendar, BadgeCheck, QrCode } from 'lucide-react'
 import { timeRowLabel } from '@/lib/event-time-slots'
-import { buildEventIcs, eventIcsDataHref, eventWallClockMs } from '@/lib/event-ics'
 
-// `brandName` + `hostname` (W1.L5): the tenant's identity for the calendar
-// file, resolved once by the server page (resolveEventIcsIdentity). Both
-// optional: the builder has neutral floors, never a first-gym literal.
-export default function RaceConfirmedPage({ slug, registrationId, brandName = '', hostname = '' }) {
+// `brandName` (optional): names the organisation on the verified-member badge.
+export default function RaceConfirmedPage({ slug, registrationId, brandName = '' }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [polling, setPolling] = useState(false)
@@ -84,28 +81,17 @@ export default function RaceConfirmedPage({ slug, registrationId, brandName = ''
   // Per-attendee check-in QR URLs, minted server-side once confirmed.
   const membersWithQr = members.filter((m) => m.qr_url)
 
-  // Client-side .ics — no backend. 2h default duration, TZ-safe: the Dublin
-  // wall-clock start is composed with Date.UTC and emitted as floating local
-  // time (src/lib/event-ics.js), so the host machine's offset never leaks.
-  const calendarHref = (() => {
-    const startsAt = eventWallClockMs(race.race_date, wave?.start_time)
-    if (startsAt == null) return null
-    const ics = buildEventIcs({
-      id: data.id,
-      title: race.name,
-      startsAt,
-      location: race.locations?.address || race.locations?.name || '',
-      description: team.name ? `Team ${team.name}` : '',
-    }, { brandName, hostname })
-    return eventIcsDataHref(ics)
-  })()
+  // CALENDAR.1 — the server built the links (the .ics route carries the
+  // tenant's identity and the studio-zone instant); none when no session.
+  const calendar = data.calendar || null
 
   const dateLabel = race.race_date
     ? new Date(`${String(race.race_date).slice(0, 10)}T00:00:00`).toLocaleDateString('en-IE', {
         weekday: 'short', day: 'numeric', month: 'short',
       })
     : null
-  const whereLabel = race.locations?.name || race.locations?.address
+  // CALENDAR.1 — the server's safe venue text first (never an anchor label).
+  const whereLabel = race.where || race.locations?.address || race.locations?.name
 
   return (
     <div className="min-h-screen bg-black text-white px-4 pt-16 pb-20">
@@ -239,14 +225,14 @@ export default function RaceConfirmedPage({ slug, registrationId, brandName = ''
               </div>
             )}
 
-            {race.race_date && calendarHref && (
-              <a
-                href={calendarHref}
-                download="event.ics"
-                className="mt-5 flex items-center justify-center gap-2 w-full text-[13px] font-semibold py-3 rounded-xl border border-white/18 text-white/90 bg-white/[0.03] hover:bg-white/[0.08] hover:border-white/40 transition-colors"
-              >
-                <Calendar size={15} /> Add to calendar
-              </a>
+            {calendar && (
+              <div className="mt-5">
+                <div className="flex items-center justify-center gap-2 text-[12px] text-white/55 mb-2"><Calendar size={14} /> Add to calendar</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <a href={calendar.ics_url} className="flex items-center justify-center text-[13px] font-semibold py-3 rounded-xl border border-white/18 text-white/90 bg-white/[0.03] hover:bg-white/[0.08] hover:border-white/40 transition-colors">Apple / Outlook</a>
+                  <a href={calendar.google_url} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center text-[13px] font-semibold py-3 rounded-xl border border-white/18 text-white/90 bg-white/[0.03] hover:bg-white/[0.08] hover:border-white/40 transition-colors">Google</a>
+                </div>
+              </div>
             )}
           </div>
         </div>

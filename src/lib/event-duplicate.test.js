@@ -133,6 +133,7 @@ describe('duplicateEvent', () => {
   it('DUPLICATE_COLUMNS carries the pricing tiers (TIERS.1) and the registration questions (QUESTIONS.1)', () => {
     expect(DUPLICATE_COLUMNS).toContain('pricing_tiers')
     expect(DUPLICATE_COLUMNS).toContain('registration_questions')
+    expect(DUPLICATE_COLUMNS).toContain('duration_minutes')
   })
   it('DUPLICATE_COLUMNS never names id, slug, status, series_id or the review stamps', () => {
     for (const c of ['id', 'slug', 'status', 'series_id', 'submitted_at', 'reviewed_at', 'rejected_reason', 'active', 'created_at']) {

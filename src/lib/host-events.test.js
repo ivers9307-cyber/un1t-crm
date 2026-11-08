@@ -261,6 +261,11 @@ describe('HostEventSchema sessions', () => {
     expect(HostEventSchema.safeParse({ ...base, sessions: two, registration_questions: null }).success).toBe(true)
     expect(HostEventSchema.safeParse({ ...base, sessions: two, registration_questions: [{ id: 'q-1', label: 'Size', type: 'choice', options: ['S'] }] }).success).toBe(false)
   })
+  it('accepts duration_minutes within 5..1440, nullable', () => {
+    expect(HostEventSchema.safeParse({ ...base, sessions: two, duration_minutes: 90 }).success).toBe(true)
+    expect(HostEventSchema.safeParse({ ...base, sessions: two, duration_minutes: null }).success).toBe(true)
+    expect(HostEventSchema.safeParse({ ...base, sessions: two, duration_minutes: 2 }).success).toBe(false)
+  })
   it('accepts an optional nullable series_id', () => {
     expect(HostEventSchema.safeParse({ ...base, sessions: two, series_id: null }).success).toBe(true)
     expect(HostEventSchema.safeParse({ ...base, sessions: two, series_id: 'd0000000-0000-4000-8000-0000000000d1' }).success).toBe(true)

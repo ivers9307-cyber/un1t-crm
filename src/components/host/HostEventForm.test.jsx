@@ -137,3 +137,21 @@ describe('HostEventForm registration questions', () => {
     expect(JSON.parse(init.body).registration_questions).toEqual(qs)
   })
 })
+
+// CALENDAR.1 — a Duration field in Schedule; minutes travel as duration_minutes.
+describe('HostEventForm duration', () => {
+  it('hydrates and posts duration_minutes; blank posts null', async () => {
+    const fetchMock = vi.fn(async (url) => (String(url) === '/api/host/series'
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<HostEventForm mode="edit" eventId="E1" initial={{ ...initial, duration_minutes: 90 }} brandName="UN1T" />)
+    const field = screen.getByLabelText(/Duration/)
+    expect(field.value).toBe('90')
+    fireEvent.change(field, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/host/events/E1')).toBe(true))
+    const [, init] = fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events/E1')
+    expect(JSON.parse(init.body).duration_minutes).toBeNull()
+  })
+})
