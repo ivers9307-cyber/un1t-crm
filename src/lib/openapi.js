@@ -1639,6 +1639,46 @@ registry.registerPath({
   },
 })
 
+// HOSTSERIES.1 — copy an event to a new date as a draft (fields, waves, a
+// shifted registration window, its own hero file; never registrations or
+// promo codes). Host: own event only; staff: manager+ holding races at the
+// event's studio.
+const DuplicateEventBody = z.object({ race_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).openapi({ description: 'The copy\'s date (YYYY-MM-DD)' }) })
+const DuplicateEventResponse = z.object({ success: z.literal(true), data: z.object({ id: uuidLike, slug: z.string() }) })
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/events/{id}/duplicate',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Copy one of the host's own events to a new date, as a draft",
+  description: 'Host session (getCurrentHost). The source must be the host\'s (404 otherwise). The copy carries every operator field and every session time, its registration window moved by the same number of days, and its own copy of the hero file; registrations, promo codes, waitlist rows and moves are never copied.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: DuplicateEventBody } } } },
+  responses: {
+    200: { description: 'The new draft', content: { 'application/json': { schema: DuplicateEventResponse } } },
+    400: { description: 'Bad date', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed / write_failed: nothing was created', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/duplicate',
+  tags: ['Events'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Copy an event to a new date, as a draft (manager+ holding races at its studio)',
+  description: 'Same copy as the host route. An event outside the caller\'s studios is 404; a member without a manager role or the races permission at the studio is 403.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: DuplicateEventBody } } } },
+  responses: {
+    200: { description: 'The new draft', content: { 'application/json': { schema: DuplicateEventResponse } } },
+    400: { description: 'Bad date', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorised', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed / write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // EVENT-MOVE.2 — a host moves one of their own entries to another of their
 // OWN events. Same lib and shapes as the staff routes above.
 registry.registerPath({

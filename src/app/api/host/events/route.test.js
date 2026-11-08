@@ -51,6 +51,28 @@ describe('POST /api/host/events', () => {
     expect(insert.payload).toMatchObject({ status: 'draft', non_member_fee_cents: 2500, host_id: 'h1', location_id: 'L-anchor' })
     expect(insert.payload.slug).toMatch(/1000$/) // the FIRST session's time names the slug
   })
+  it('refuses a series that belongs to another host (400 invalid_series), inserting nothing', async () => {
+    db = fakeDb((q) => {
+      if (q.table === 'event_hosts') return { data: { id: 'h1', name: 'Run Club', organization_id: 'o1', anchor_location_id: 'L-anchor' }, error: null }
+      if (q.table === 'event_series') return { data: { id: 'S9', host_id: 'h2' }, error: null }
+      return { data: null, error: null }
+    })
+    const res = await post({ ...BODY, series_id: 'd0000000-0000-4000-8000-0000000000d9' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('invalid_series')
+    expect(db.queries.some((q) => q.table === 'race_events')).toBe(false)
+  })
+  it('accepts the host\'s own series', async () => {
+    db = fakeDb((q) => {
+      if (q.table === 'event_hosts') return { data: { id: 'h1', name: 'Run Club', organization_id: 'o1', anchor_location_id: 'L-anchor' }, error: null }
+      if (q.table === 'event_series') return { data: { id: 'S1', host_id: 'h1' }, error: null }
+      if (q.table === 'race_events' && q.action === 'insert') return { data: { id: 'E-new', slug: q.payload.slug }, error: null }
+      return { data: null, error: null }
+    })
+    const res = await post({ ...BODY, series_id: 'd0000000-0000-4000-8000-0000000000d1' })
+    expect(res.status).toBe(200)
+    expect(db.queries.find((q) => q.table === 'race_events' && q.action === 'insert').payload.series_id).toBe('d0000000-0000-4000-8000-0000000000d1')
+  })
   it('400 on the retired single-session keys', async () => {
     const res = await post({ ...BODY, session_start_time: '10:00' })
     expect(res.status).toBe(400)

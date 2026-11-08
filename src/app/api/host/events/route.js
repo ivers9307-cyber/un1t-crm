@@ -13,6 +13,7 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { HostEventSchema, hostEventDefaults, ensureAnchorLocation } from '@/lib/host-events'
 import { eventSlug, uniqueEventSlug } from '@/lib/event-slug'
 import { syncEventSessions } from '@/lib/event-sessions'
+import { hostOwnsSeries } from '@/lib/event-series'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,6 +44,15 @@ export async function POST(request) {
   const input = parsed.data
 
   const db = createServerClient()
+  // HOSTSERIES.1 — a series id from the body must be this host's own.
+  if (input.series_id) {
+    const owns = await hostOwnsSeries(db, { seriesId: input.series_id, hostId: session.host.id })
+    if (!owns.ok) {
+      return owns.error === 'load_failed'
+        ? NextResponse.json({ success: false, error: 'load_failed', message: 'The series could not be read. Try again.' }, { status: 500 })
+        : NextResponse.json({ success: false, error: 'invalid_series', message: 'That series is not one of yours.' }, { status: 400 })
+    }
+  }
   const { data: host } = await db
     .from('event_hosts')
     .select('id, name, organization_id, anchor_location_id')

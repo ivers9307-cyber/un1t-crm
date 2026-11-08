@@ -18,6 +18,7 @@ import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostAttendeeTable from '@/components/host/HostAttendeeTable'
 import HostPromoCodes from '@/components/host/HostPromoCodes'
 import HostEventActions from '@/components/host/HostEventActions'
+import DuplicateEventButton from '@/components/DuplicateEventButton'
 import EventWaitlistPanel from '@/components/EventWaitlistPanel'
 
 export const dynamic = 'force-dynamic'
@@ -91,6 +92,14 @@ export default async function HostEventDetail(props) {
               Export CSV
             </a>
           )}
+          {/* HOSTSERIES.1 — copy this event to a new date as a draft. */}
+          <DuplicateEventButton
+            eventId={race.id}
+            raceDate={race.race_date}
+            apiUrl={`/api/host/events/${race.id}/duplicate`}
+            editHrefFor={(id) => `/host/events/${id}/edit`}
+            dark
+          />
           <HostEventActions eventId={race.id} status={race.status} hasRegistrations={regs.length > 0} brandName={brand.name} />
         </div>
       </div>

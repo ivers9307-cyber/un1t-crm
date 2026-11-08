@@ -37,6 +37,7 @@ beforeEach(() => {
   }
   db = fakeDb((q) => {
     if (q.table === 'race_events' && q.action === 'select') return { data: row, error: null }
+    if (q.table === 'event_series') return { data: { id: q.ops.find((o) => o[0] === 'eq' && o[1] === 'id')?.[2], host_id: 'h1' }, error: null }
     return { data: null, error: null }
   })
   syncEventSessions.mockResolvedValue({ ok: true, waves: [] })
@@ -76,6 +77,18 @@ describe('PUT /api/host/events/[id]', () => {
     await put({ ...BODY, series_id: 'd0000000-0000-4000-8000-0000000000d1' })
     const update = db.queries.find((q) => q.table === 'race_events' && q.action === 'update')
     expect(update.payload.series_id).toBe('d0000000-0000-4000-8000-0000000000d1')
+  })
+  it('refuses a series that belongs to another host (400 invalid_series), writing nothing', async () => {
+    db = fakeDb((q) => {
+      if (q.table === 'race_events' && q.action === 'select') return { data: row, error: null }
+      if (q.table === 'event_series') return { data: { id: 'S9', host_id: 'h2' }, error: null }
+      return { data: null, error: null }
+    })
+    const res = await put({ ...BODY, series_id: 'd0000000-0000-4000-8000-0000000000d9' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('invalid_series')
+    expect(db.queries.some((q) => q.action === 'update')).toBe(false)
+    expect(syncEventSessions).not.toHaveBeenCalled()
   })
   it('a refused sync is 409 with the lib\'s message', async () => {
     syncEventSessions.mockResolvedValue({ ok: false, error: 'session_has_entries', session_time: '10:00', message: 'The 10:00 session has bookings, so it cannot be removed.' })

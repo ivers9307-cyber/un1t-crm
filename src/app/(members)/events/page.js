@@ -17,6 +17,7 @@ import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse } from 
 import { eventToday } from '@/lib/event-day'
 import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
 import { showsDonationsLink } from '@/lib/charity-donations'
+import DuplicateEventButton from '@/components/DuplicateEventButton'
 import { logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
@@ -327,6 +328,13 @@ export default async function EventsIndexPage(props) {
                           >
                             Edit
                           </Link>
+                          {/* HOSTSERIES.1 — copy to a new date as a draft. */}
+                          <DuplicateEventButton
+                            eventId={r.id}
+                            raceDate={r.race_date}
+                            apiUrl={`/api/events/${r.id}/duplicate`}
+                            editHrefFor={(id) => `/events/${id}/edit`}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -420,6 +428,13 @@ export default async function EventsIndexPage(props) {
                     >
                       Edit
                     </Link>
+                    {/* HOSTSERIES.1 — copy to a new date as a draft. */}
+                    <DuplicateEventButton
+                      eventId={r.id}
+                      raceDate={r.race_date}
+                      apiUrl={`/api/events/${r.id}/duplicate`}
+                      editHrefFor={(id) => `/events/${id}/edit`}
+                    />
                     <a
                       href={publicUrl}
                       target="_blank"

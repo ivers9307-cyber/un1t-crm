@@ -10,6 +10,7 @@ import { HostEventSchema, computeEditTransition } from '@/lib/host-events'
 import { eventSlug, uniqueEventSlug, shouldRederiveSlug } from '@/lib/event-slug'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import { syncEventSessions, sessionsFromWaves } from '@/lib/event-sessions'
+import { hostOwnsSeries } from '@/lib/event-series'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -50,6 +51,15 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const current = await loadOwn(db, session, params.id)
   if (!current) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  // HOSTSERIES.1 — a series id from the body must be this host's own.
+  if (input.series_id) {
+    const owns = await hostOwnsSeries(db, { seriesId: input.series_id, hostId: session.host.id })
+    if (!owns.ok) {
+      return owns.error === 'load_failed'
+        ? NextResponse.json({ success: false, error: 'load_failed', message: 'The series could not be read. Try again.' }, { status: 500 })
+        : NextResponse.json({ success: false, error: 'invalid_series', message: 'That series is not one of yours.' }, { status: 400 })
+    }
+  }
 
   // HOSTSERIES.1 — normalise to DB-column names so computeEditTransition
   // compares like-for-like: existing sessions by id (HH:MM on both sides;
