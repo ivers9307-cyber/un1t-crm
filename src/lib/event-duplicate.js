@@ -127,12 +127,13 @@ export async function duplicateEvent(db, { sourceId, raceDate, seriesId = null, 
     const from = `race-hero/${sourceId}/hero.${ext}`
     const to = `race-hero/${created.id}/hero.${ext}`
     try {
-      const bucket = db.storage.from('branding')
-      const { error: copyErr } = await bucket.copy(from, to)
+      // Direct calls on the bucket, never through a handle: the branding bucket
+      // guard (tests/branding-bucket-guard.test.js, LIB_WRITERS) reads them.
+      const { error: copyErr } = await db.storage.from('branding').copy(from, to)
       if (copyErr) {
         logWarn('event-duplicate', 'hero copy failed; the copy has no hero', { err: copyErr, sourceId, newId: created.id })
       } else {
-        const { data: urlData } = bucket.getPublicUrl(to)
+        const { data: urlData } = db.storage.from('branding').getPublicUrl(to)
         const url = urlData?.publicUrl ? `${urlData.publicUrl}?t=${Date.now()}` : null
         if (url) {
           const { error: heroErr } = await db.from('race_events').update({ hero_image_url: url }).eq('id', created.id)

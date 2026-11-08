@@ -104,6 +104,16 @@ const WRITERS = {
   'src/app/api/me/signature-photo/route.js': 'getCurrentUser',
   'src/app/api/staff/[id]/permanent/route.js': 'getCurrentUser',
 }
+// HOSTSERIES.1 — library writers: a server lib handed the service client by a
+// gated route (it calls no gate itself), allowed ONE kind of write. The copy
+// of an event's hero into the duplicate's own folder: both paths are under
+// race-hero/, the ids are rows the calling route gated (the host and staff
+// duplicate routes, the host series route through event-series.js). Every
+// bucket call is made directly on `.storage.from('branding')`, so this file
+// reads each one; a new call kind fails the test below until reviewed.
+const LIB_WRITERS = {
+  'src/lib/event-duplicate.js': { calls: ['copy', 'getPublicUrl'], folder: 'race-hero/' },
+}
 // Server files that only READ the bucket (list + public URL), with the scope
 // helper each must call: the media library lists `pages/<id>/` and the legacy
 // studio folder only for pages canViewPage admits (its route,
@@ -480,7 +490,33 @@ describe('every server writer is known, service-role, gated and inside the bucke
     const found = walk(path.join(ROOT, 'src'))
       .filter((f) => !client.has(f) && NAMES_BUCKET.test(codeOfFile(f)))
       .map(rel).sort()
-    expect(found, 'a new server file names the branding bucket: a writer gates on the studio or event the file belongs to and goes in WRITERS; a reader lists and resolves URLs only, scopes what it lists, and goes in READERS').toEqual([...Object.keys(WRITERS), ...Object.keys(READERS)].sort())
+    expect(found, 'a new server file names the branding bucket: a writer gates on the studio or event the file belongs to and goes in WRITERS; a reader lists and resolves URLs only, scopes what it lists, and goes in READERS; a lib handed the client by gated routes goes in LIB_WRITERS with its one allowed write').toEqual([...Object.keys(WRITERS), ...Object.keys(READERS), ...Object.keys(LIB_WRITERS)].sort())
+  })
+
+  it('each lib writer makes only its allowed calls, directly on the bucket, inside its folder', () => {
+    for (const [f, rule] of Object.entries(LIB_WRITERS)) {
+      const code = codeOfFile(path.join(ROOT, f))
+      const froms = [...code.matchAll(FROM_BUCKET)]
+      expect(froms.length, `${f} names the bucket`).toBeGreaterThan(0)
+      const calls = bucketCallsIn(code)
+      // Every .from('branding') is followed at once by a call this file reads
+      // (a handle in a variable could hide a write).
+      expect(calls.length, `${f}: every .from('branding') must be followed by a call`).toBe(froms.length)
+      expect(calls.filter((c) => !rule.calls.includes(c)), `${f} makes a call outside ${rule.calls.join('/')}`).toEqual([])
+      expect(code, `${f} takes the client from its caller, never mints one`).not.toMatch(/\bcreateServerClient\(/)
+      expect(code, `${f} must not mint upload tokens`).not.toMatch(/createSignedUploadUrl|createSignedUrl|\.upload\(|\.remove\(|\.move\(/)
+      // Each path handed to .copy( is a template starting with the folder.
+      const copies = [...code.matchAll(/\.copy\(\s*([^,]+),\s*([^)]+)\)/g)]
+      expect(copies.length, `${f} copies at least once`).toBeGreaterThan(0)
+      for (const m of copies) {
+        for (const arg of [m[1], m[2]]) {
+          const name = arg.trim()
+          const def = code.match(new RegExp(String.raw`const\s+${reEscape(name)}\s*=\s*\`([^\`]*)\``))
+          const literal = def ? def[1] : name.replace(/^[\`'"]/, '')
+          expect(literal.startsWith(rule.folder), `${f}: copy path ${name} must start with ${rule.folder}`).toBe(true)
+        }
+      }
+    }
   })
 
   it('each reader only lists and resolves public URLs on the bucket, and scopes what it lists', () => {
