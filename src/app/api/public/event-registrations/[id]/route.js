@@ -10,6 +10,9 @@
 // would leak if the URL got shared.
 
 import { NextResponse } from 'next/server'
+import { eventCalendarLinks } from '@/lib/event-calendar-links'
+import { zoneOfLocation } from '@/lib/location-time'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { createServerClient } from '@/lib/supabase'
 import { signCheckinToken } from '@/lib/event-checkin-tokens'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
@@ -35,8 +38,8 @@ export async function GET(request, props) {
     .select(`
       id, status, registered_at, team_composition,
       race:race_event_id (
-        id, name, slug, kind, race_date, location_id,
-        locations:location_id ( name, address )
+        id, name, slug, kind, race_date, location_id, venue_name, venue_address, duration_minutes,
+        locations:location_id ( name, address, timezone, is_host_anchor )
       ),
       wave:wave_id ( id, start_time, label ),
       teams:team_id ( id, name, size,
@@ -78,6 +81,8 @@ export async function GET(request, props) {
       race: data.race,
       wave: data.wave,
       team,
+      // CALENDAR.1 — the entry's session as calendar links on the tenant host.
+      calendar: eventCalendarLinks({ event: data.race, wave: data.wave, zone: zoneOfLocation(data.race?.locations), baseUrl: await resolveCustomerBaseUrl(db, data.race?.location_id || null) }),
     },
   })
 }

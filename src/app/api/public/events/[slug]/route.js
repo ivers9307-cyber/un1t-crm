@@ -6,6 +6,9 @@
 
 import { NextResponse } from 'next/server'
 import { resolvePricingTiers, loadSoldByTier, publicPricing } from '@/lib/pricing-tiers'
+import { eventCalendarLinks } from '@/lib/event-calendar-links'
+import { zoneOfLocation } from '@/lib/location-time'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { createServerClient } from '@/lib/supabase'
 import { loadForMode } from '@/lib/event-signups'
 import { eventIsPublic } from '@/lib/host-events'
@@ -45,7 +48,7 @@ export async function GET(request, props) {
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency,
       hero_image_url, accent_hex, active, status,
-      charity_enabled, charity, find_team, pricing_tiers, registration_questions,
+      charity_enabled, charity, find_team, pricing_tiers, registration_questions, duration_minutes,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       locations:location_id ( id, name, address, timezone, is_host_anchor, organization_id ),
       host:event_hosts!host_id ( name )
@@ -189,8 +192,28 @@ export async function GET(request, props) {
       host_name: data.host?.name || null,
       organization_name: organizationName,
       pricing: await buildPublicPricing(db, data, now),
+      calendar: await buildPublicCalendar(db, data),
     },
   })
+}
+
+// CALENDAR.1 — per-session calendar links (the .ics route + Google) on the
+// tenant host; the widget shows them for the chosen time. Best-effort: an
+// unresolved host falls back to the CRM host inside the resolver.
+async function buildPublicCalendar(db, race) {
+  const by_wave = {}
+  try {
+    const baseUrl = await resolveCustomerBaseUrl(db, race.location_id || null)
+    const zone = zoneOfLocation(race.locations)
+    for (const w of race.waves || []) {
+      const links = eventCalendarLinks({ event: { ...race, waves: race.waves }, wave: w, zone, baseUrl })
+      if (links) by_wave[w.id] = { ics_url: links.ics_url, google_url: links.google_url }
+    }
+  } catch (err) {
+    // The links are a convenience: a page with no calendar row beats no page.
+    logWarn('public-event', 'calendar links unavailable', { err, eventId: race.id })
+  }
+  return { by_wave }
 }
 
 // TIERS.1 — the buyer's view of the tiers: the tier one person gets now, what

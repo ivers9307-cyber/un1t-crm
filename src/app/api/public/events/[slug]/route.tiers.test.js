@@ -7,6 +7,7 @@ import { fakeDb } from '@/lib/event-waitlist.test-helpers'
 
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn(async () => ({ allowed: true })), getClientIp: vi.fn(() => '1.2.3.4'), rateLimitResponse: vi.fn() }))
 vi.mock('@/lib/location-branding', () => ({ getOrgBrandName: vi.fn().mockResolvedValue('UN1T Dublin') }))
+vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://un1t.repset.ie') }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 let db
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
@@ -89,5 +90,15 @@ describe('GET /api/public/events/[slug] — registration questions', () => {
     const sel = db.queries.find((q) => q.table === 'race_events').ops.find((o) => o[0] === 'select')[1]
     expect(sel).toMatch(/registration_questions/)
     expect(sel).not.toMatch(/\banswers\b/)
+  })
+})
+
+// CALENDAR.1 — per-session calendar links on the tenant host.
+describe('GET /api/public/events/[slug] — calendar links', () => {
+  it('carries the .ics route and Google link per wave, built on the tenant host and the studio zone', async () => {
+    db = makeDb(race({ pricing_tiers: null, duration_minutes: 60 }))
+    const body = await (await get()).json()
+    expect(body.data.calendar.by_wave.w1.ics_url).toBe('https://un1t.repset.ie/api/public/events/mob/calendar.ics?wave=w1')
+    expect(body.data.calendar.by_wave.w1.google_url).toContain('dates=20261205T100000Z%2F20261205T110000Z') // Dublin in December = UTC
   })
 })
