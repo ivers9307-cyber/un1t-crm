@@ -77,3 +77,17 @@ describe('GET /api/public/events/[slug] — pricing tiers', () => {
     expect(db.queries.some(isTierRead)).toBe(false)
   })
 })
+
+// QUESTIONS.1 — the public payload carries the event's questions (public
+// copy) and never anyone's answers.
+describe('GET /api/public/events/[slug] — registration questions', () => {
+  it('exposes registration_questions and never selects answers', async () => {
+    const qs = [{ id: 'q-diet', label: 'Dietary needs', type: 'text', required: false, per: 'person' }]
+    db = makeDb(race({ pricing_tiers: null, registration_questions: qs }))
+    const body = await (await get()).json()
+    expect(body.data.registration_questions).toEqual(qs)
+    const sel = db.queries.find((q) => q.table === 'race_events').ops.find((o) => o[0] === 'select')[1]
+    expect(sel).toMatch(/registration_questions/)
+    expect(sel).not.toMatch(/\banswers\b/)
+  })
+})

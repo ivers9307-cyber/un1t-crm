@@ -39,6 +39,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
 import { applyTierPricing } from '@/lib/pricing-tiers'
+import { resolveRegistrationQuestions, validateAnswers } from '@/lib/registration-questions'
 import { normalizeCode, computeDiscountCents, promoCodeError } from '@/lib/promo-codes'
 import { createRacePayment, refreshRacePaymentFromProvider } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
@@ -92,6 +93,13 @@ const RegisterSchema = z.object({
   // team_name / team_size; the route books a team of one flagged
   // looking_for_team and staff place them later.
   find_team: z.boolean().optional(),
+  // QUESTIONS.1 — answers to the event's registration questions, keyed by
+  // question id: `entry` for the booking, `people[i]` for roster person i
+  // (0 = the captain). Validated against the event's questions in the handler.
+  answers: z.object({
+    entry: z.record(z.string(), z.unknown()).optional(),
+    people: z.array(z.record(z.string(), z.unknown()).nullable()).max(50).optional(),
+  }).optional(),
 })
 
 // FINDTEAM.8 (C1) — how many suffixed names a solo's team row may try.
@@ -205,7 +213,7 @@ export async function POST(request, props) {
       id, location_id, name, slug, race_date, kind, capacity_mode, allowed_team_sizes,
       registration_opens_at, registration_closes_at, active, status,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency, create_in_glofox, host_id, find_team, entry_policy, pricing_tiers,
+      members_only, payment_currency, create_in_glofox, host_id, find_team, entry_policy, pricing_tiers, registration_questions,
       waves:race_waves ( id, start_time, capacity, label )
     `)
     .eq('slug', params.slug)
@@ -777,6 +785,15 @@ export async function POST(request, props) {
     }
   }
 
+  // QUESTIONS.1 — the event's questions, answered for the entry and for every
+  // person on the roster (captain first). A missing required answer or a bad
+  // choice refuses the signup with field-level issues the form shows inline.
+  const answered = validateAnswers(resolveRegistrationQuestions(race), body.answers, { peopleCount: validatedRoster.length })
+  if (!answered.ok) {
+    if (findTeam) await discardSoloTeam(db, teamId) // FINDTEAM.9
+    return NextResponse.json({ success: false, error: 'Please answer the required questions.', code: 'invalid_answers', issues: answered.issues }, { status: 400 })
+  }
+
   // TIERS.1 — the tier this entry gets (early bird, capacity tier, group
   // price) replaces the non-member fee before the breakdown. A failed tier
   // read never prices blind: 503, nothing inserted.
@@ -850,6 +867,8 @@ export async function POST(request, props) {
       member_validation_status: m.status,
       member_contact_id: m.member_contact_id || null,
       member_validated_at: m.status === 'verified' ? new Date().toISOString() : null,
+      // QUESTIONS.1 — this person's answers (null when none asked or given).
+      answers: answered.people[idx] ?? null,
     })
   }
   await db.from('team_members').insert(memberRows)
@@ -871,6 +890,8 @@ export async function POST(request, props) {
       promo_discount_cents: appliedPromo ? promoDiscountCents : null,
       // TIERS.1 — the tier bought; only such entries consume tier seats.
       pricing_tier_id: priced.tier?.id ?? null,
+      // QUESTIONS.1 — the entry-level answers.
+      answers: answered.entry,
       // HOST-CONSENT.1 — persisted so the attendee sync can grant HOST consent
       // when the registration confirms (immediately for free, on payment for paid).
       marketing_consent: body.marketing_consent !== false,
