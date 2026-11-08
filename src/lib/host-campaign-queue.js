@@ -219,6 +219,9 @@ async function runChunk(db, campaignId) {
     // because it is the only one holding a body it sanitized itself. The
     // preview and test-send routes render once and keep sanitizing inline.
     const safeBody = sanitizeCampaignHtml(campaign.body_html)
+    // HOSTSTATS.1 — the tenant host the event links are tagged on (hc=<id>).
+    let tenantHost = null
+    try { tenantHost = new URL(baseUrl).host } catch { tenantHost = null }
 
     for (const row of sendable) {
       // Fresh per-contact unsubscribe token — the footer link is per-host,
@@ -238,6 +241,8 @@ async function runChunk(db, campaignId) {
         bodyHtml: safeBody,
         sanitized: true,
         unsubscribeUrl,
+        campaignId: campaign.id,
+        tenantHost,
       }), tagContact, { unsubscribe_url: unsubscribeUrl })
       const mergedSubject = applyMergeTags(campaign.subject, tagContact) || campaign.subject
       try {

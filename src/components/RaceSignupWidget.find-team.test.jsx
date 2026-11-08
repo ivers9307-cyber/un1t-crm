@@ -100,8 +100,10 @@ describe('RaceSignupWidget — Find me a team', () => {
       else if (el.type === 'text' && !el.value) fireEvent.change(el, { target: { value: 'Ann Example' } })
     }
     fireEvent.submit(form)
-    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(2))
-    const [url, init] = fetchMock.mock.calls[1]
+    // HOSTSTATS.1 — the mount also posts a page-view beacon, so the register
+    // call is found by URL, not by position.
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/register'))).toBe(true))
+    const [url, init] = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/register'))
     expect(String(url)).toBe('/api/public/events/hatch-relay/register')
     const body = JSON.parse(init.body)
     expect(body.find_team).toBe(true)
@@ -136,8 +138,8 @@ describe('RaceSignupWidget — Find me a team', () => {
       else if (el.type === 'text' && !el.value) fireEvent.change(el, { target: { value: 'Iron Dogs' } })
     }
     fireEvent.submit(form)
-    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(2))
-    const body = JSON.parse(fetchMock.mock.calls[1][1].body)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/register'))).toBe(true))
+    const body = JSON.parse(fetchMock.mock.calls.find(([u]) => String(u).endsWith('/register'))[1].body)
     expect(body).not.toHaveProperty('find_team')
     expect(body.team_size).toBe(2)
     expect(body.team_name).toBe('Iron Dogs')

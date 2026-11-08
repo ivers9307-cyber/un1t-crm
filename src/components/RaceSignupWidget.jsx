@@ -35,6 +35,7 @@ import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, Badge
 import { timePickerWaves, initialWaveId, formatTimeChoices } from '@/lib/event-time-slots'
 import { tierPriceLabel, groupPriceLabel, effectiveNonMemberFee } from '@/lib/pricing-tiers'
 import { resolveRegistrationQuestions, validateAnswers } from '@/lib/registration-questions'
+import { rememberEventAttribution, readEventAttribution } from '@/lib/event-attribution'
 import EventWaitlistForm from './EventWaitlistForm.jsx'
 import DonateCard, { CharityRaisedStrip, OrDivider } from './DonateCard.jsx'
 
@@ -298,6 +299,24 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     } catch { /* no URL to read: no token */ }
   }, [])
 
+  // HOSTSTATS.1 — remember the tab's first touch, then tell the server this
+  // page was viewed (once per mount; the server dedupes per session per
+  // day). Best-effort: a tab with no usable storage has no session id and
+  // sends nothing; a failed beacon is never surfaced.
+  useEffect(() => {
+    rememberEventAttribution()
+    const a = readEventAttribution()
+    if (!a?.session_id) return
+    try {
+      fetch(`/api/public/events/${slug}/view`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: a.session_id, attribution: a }),
+        keepalive: true,
+      }).catch(() => {})
+    } catch { /* telemetry only */ }
+  }, [slug])
+
   // Initial load
   useEffect(() => {
     fetch(`/api/public/events/${slug}`)
@@ -532,6 +551,8 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           })),
         }),
         source: 'race_signup_widget',
+        // HOSTSTATS.1 — where this tab came from (null when nothing was kept).
+        attribution: readEventAttribution(),
         marketing_consent: marketingConsent,
         ...(questions.length > 0 ? { answers: { entry: answers.entry, people: liveRoster.map((_, i) => answers.people[i] || {}) } } : {}),
         ...(promoCode.trim() ? { promo_code: promoCode.trim() } : {}),

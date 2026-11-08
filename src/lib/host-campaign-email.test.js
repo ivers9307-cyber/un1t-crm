@@ -2487,3 +2487,22 @@ describe('sanitizeCampaignHtml — seeded mini-fuzz over the parsed invariant', 
     if (FUZZ_N === 2000) expect(performance.now() - started).toBeLessThan(6000)
   }, FUZZ_N > 2000 ? 3_600_000 : undefined)
 })
+
+// HOSTSTATS.1 — the rendered campaign tags its event links with the campaign id.
+describe('renderHostCampaignHtml — hc on event links', () => {
+  const HC = '80000000-0000-4000-8000-000000000001'
+  it('tags /event/ and /h/ links on the tenant host on both render paths, never the unsubscribe link', () => {
+    const body = '<p><a href="https://un1t.repset.ie/event/mob">Book</a> <a href="https://un1t.repset.ie/h/acme">More</a></p>'
+    for (const bodyHtml of [body, `<!DOCTYPE html><html><body>${body}</body></html>`]) {
+      const html = renderHostCampaignHtml({ host: PARSED_HOST, subject: 'S', bodyHtml, unsubscribeUrl: PARSED_UNSUB, campaignId: HC, tenantHost: 'un1t.repset.ie' })
+      expect(html).toContain(`https://un1t.repset.ie/event/mob?hc=${HC}`)
+      expect(html).toContain(`https://un1t.repset.ie/h/acme?hc=${HC}`)
+      expect(html).toContain(`href="${PARSED_UNSUB}"`)
+      expect(html.match(/hc=/g).length).toBe(2)
+    }
+  })
+  it('without a campaign id (the preview) nothing is tagged', () => {
+    const html = renderHostCampaignHtml({ host: PARSED_HOST, subject: 'S', bodyHtml: '<a href="https://un1t.repset.ie/event/mob">Book</a>', unsubscribeUrl: PARSED_UNSUB })
+    expect(html).not.toContain('hc=')
+  })
+})

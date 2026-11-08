@@ -17,6 +17,8 @@ vi.mock('@/lib/supabase', () => ({
 }))
 vi.mock('@/lib/attendee-export', () => ({ fetchEventAttendees: vi.fn(async () => []) }))
 vi.mock('@/lib/registration-move-history', () => ({ loadMoveHistory: vi.fn(async () => ({ lastMoveByReg: {}, movedOut: [] })) }))
+// HOSTSTATS.1 — the Signups card's lib has its own tests; the page test's db stub has no paging.
+vi.mock('@/lib/event-stats', () => ({ loadEventStats: vi.fn(async () => ({ ok: false, error: { message: 'stubbed' } })) }))
 vi.mock('@/components/host/HostAttendeeTable', () => ({ default: function HostAttendeeTable() { return null } }))
 vi.mock('@/components/host/HostPromoCodes', () => ({ default: function HostPromoCodes() { return null } }))
 vi.mock('@/components/host/HostEventActions', () => ({ default: function HostEventActions() { return null } }))
