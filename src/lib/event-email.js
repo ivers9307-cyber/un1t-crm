@@ -82,6 +82,10 @@ export function applyEventMergeTags(text, contact, extras = {}) {
   // EVENT-WAITLIST.1 — set by the waitlist offer email (waitlist_email_*):
   // the link to the event page that books the freed place.
   out = out.replaceAll('{{claim_url}}', extras.claim_url || '')
+  // HOSTPAGE.2 — set by the post-event rating request (rating_email_*): the
+  // host's name and the signed link to the rate page.
+  out = out.replaceAll('{{host_name}}', extras.host_name || '')
+  out = out.replaceAll('{{rate_url}}', extras.rate_url || '')
   return out
 }
 
@@ -109,6 +113,9 @@ export function applyEventMergeTagsHtml(html, contact, extras = {}) {
     pay_url: escapeHtml(extras.pay_url || ''),
     manage_url: escapeHtml(extras.manage_url || ''),
     claim_url: escapeHtml(extras.claim_url || ''),
+    // HOSTPAGE.2 — the rating request's host name and signed rate link.
+    host_name: escapeHtml(extras.host_name || ''),
+    rate_url: escapeHtml(extras.rate_url || ''),
   }
   return applyEventMergeTags(html, safeContact, safeExtras)
 }
@@ -272,7 +279,7 @@ function renderOperatorIntro(text, contact, extras) {
  *   race_events.rating_email_subject/intro, mig 823)
  * @param {object} args.race     the race_events row (new EVENTS-EMAILCFG columns + accent_hex/hero_image_url)
  * @param {object} args.contact  merge contact ({ first_name, name, email, ... })
- * @param {object} args.extras   { event_name, team_name, when, location, old_event_name?, old_when?, difference?, pay_url?, manage_url?, claim_url? }
+ * @param {object} args.extras   { event_name, team_name, when, location, old_event_name?, old_when?, difference?, pay_url?, manage_url?, claim_url?, host_name?, rate_url? }
  * @param {object} args.defaults default subject + shell slots for this email
  * @param {?string} [args.brandLocationId] the sending location whose brand the shell carries
  * @returns {Promise<{ subject: string, htmlBody: string }>}

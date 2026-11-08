@@ -18,7 +18,7 @@ import { NextResponse } from 'next/server'
 import crypto from 'node:crypto'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentHost } from '@/lib/host-auth'
-import { HOST_PHOTOS_MAX, hostPageExtras } from '@/lib/host-page-extras'
+import { HOST_PHOTOS_MAX, hostPageExtras, hostPhotosFolder, hostPhotoPathOf } from '@/lib/host-page-extras'
 import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -28,17 +28,8 @@ const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const EXT_BY_TYPE = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }
 export const HOST_PHOTO_MAX_BYTES = 5 * 1024 * 1024
 
-const folderFor = (hostId) => `host-photos/${hostId}/`
-
-/** The bucket path a public URL points at, or null when it is not a branding URL. */
-function bucketPathOf(url) {
-  try {
-    const u = new URL(String(url))
-    const i = u.pathname.indexOf('/object/public/branding/')
-    if (i < 0) return null
-    return decodeURIComponent(u.pathname.slice(i + '/object/public/branding/'.length))
-  } catch { return null }
-}
+const folderFor = hostPhotosFolder
+const bucketPathOf = hostPhotoPathOf
 
 async function loadHost(db, hostId) {
   const { data, error } = await db.from('event_hosts').select('id, photos').eq('id', hostId).maybeSingle()

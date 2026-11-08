@@ -82,3 +82,17 @@ describe('rating-request arm (HOSTPAGE.2)', () => {
     expect(body.data.rating_requests).toEqual({ ok: false, error: 'arm down' })
   })
 })
+
+describe('rating-request arm — independent gate (HOSTPAGE.2 review)', () => {
+  it('runs on a tick where the parent already took its slot but the arm\'s own claim is still open', async () => {
+    await at('2026-07-01T09:00:00Z') // both claim
+    expect(runRatingRequests).toHaveBeenCalledTimes(1)
+    for (const k of [...claims.keys()]) if (k.startsWith('event-rating-requests|')) claims.delete(k)
+    vi.clearAllMocks()
+    const body = await at('2026-07-01T09:00:00Z') // the parent's claim is held: a quiet tick for it
+    expect(runEventReminders).not.toHaveBeenCalled()
+    expect(runRatingRequests).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat.mock.calls.map(([n]) => n)).toEqual(['event-rating-requests'])
+    expect(body.data.rating_requests).toMatchObject({ ok: true })
+  })
+})

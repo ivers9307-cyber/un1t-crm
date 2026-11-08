@@ -131,13 +131,14 @@ describe('PATCH /api/host/list-page — page extras (HOSTPAGE.2)', () => {
     mocks.getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
     const db = dbWith()
     mocks.createServerClient.mockReturnValue(db)
-    const photos = [{ url: 'https://cdn.test/host-photos/h1/a.jpg', caption: ' Warm up ' }]
+    // A URL under the host's own bucket folder (the upload route's shape); any other is refused below.
+    const photos = [{ url: 'https://cdn.test/storage/v1/object/public/branding/host-photos/h1/a.jpg', caption: ' Warm up ' }]
     const testimonials = [{ quote: ' Brilliant class ', author: 'Aoife' }]
     const res = await PATCH(req({ about_text: '  Who we are. ', photos, testimonials, show_ratings: false, show_past_events: true }))
     expect(res.status).toBe(200)
     expect(db._update).toHaveBeenCalledWith({
       about_text: 'Who we are.',
-      photos: [{ url: 'https://cdn.test/host-photos/h1/a.jpg', caption: 'Warm up' }],
+      photos: [{ url: 'https://cdn.test/storage/v1/object/public/branding/host-photos/h1/a.jpg', caption: 'Warm up' }],
       testimonials: [{ quote: 'Brilliant class', author: 'Aoife' }],
       show_ratings: false,
       show_past_events: true,
@@ -155,5 +156,24 @@ describe('PATCH /api/host/list-page — page extras (HOSTPAGE.2)', () => {
     mocks.createServerClient.mockReturnValue(dbWith({ row }))
     const res = await GET()
     expect((await res.json()).data).toEqual(row)
+  })
+})
+
+describe('PATCH /api/host/list-page — photo URLs (HOSTPAGE.2 review)', () => {
+  const OWN = 'https://cdn.test/storage/v1/object/public/branding/host-photos/h1/a.jpg'
+  const OWN2 = 'https://cdn.test/storage/v1/object/public/branding/host-photos/h1/b.jpg'
+  it('may caption or reorder stored photos and add a URL under the host\'s own folder, but never introduce any other URL', async () => {
+    mocks.getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
+    let db = dbWith({ row: { photos: [{ url: OWN, caption: null }] } })
+    mocks.createServerClient.mockReturnValue(db)
+    expect((await PATCH(req({ photos: [{ url: OWN, caption: 'Warm up' }, { url: OWN2, caption: null }] }))).status).toBe(200)
+    expect(db._update).toHaveBeenCalledWith({ photos: [{ url: OWN, caption: 'Warm up' }, { url: OWN2, caption: null }] })
+    for (const bad of ['https://evil.example/pixel.gif', 'data:image/png;base64,AAAA', 'javascript:alert(1)', 'https://cdn.test/storage/v1/object/public/branding/host-photos/h2/x.jpg']) {
+      db = dbWith({ row: { photos: [{ url: OWN, caption: null }] } })
+      mocks.createServerClient.mockReturnValue(db)
+      const res = await PATCH(req({ photos: [{ url: OWN, caption: null }, { url: bad, caption: null }] }))
+      expect(res.status, bad).toBe(400)
+      expect(db._update, bad).not.toHaveBeenCalled()
+    }
   })
 })

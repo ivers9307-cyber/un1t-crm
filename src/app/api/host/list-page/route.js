@@ -8,7 +8,7 @@ import { z } from 'zod'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { logError } from '@/lib/log'
-import { HostPhotosSchema, HostTestimonialsSchema, HOST_ABOUT_MAX } from '@/lib/host-page-extras'
+import { HostPhotosSchema, HostTestimonialsSchema, HOST_ABOUT_MAX, hostPageExtras, isOwnHostPhotoUrl } from '@/lib/host-page-extras'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -70,6 +70,21 @@ export async function PATCH(request) {
   }
 
   const db = createServerClient()
+  // HOSTPAGE.2 — PATCH may caption or reorder photos and keep ones the upload
+  // route stored, but never introduce a URL from elsewhere: a photo is either
+  // already on the host's list or lives under the host's own bucket folder.
+  if (Array.isArray(patch.photos)) {
+    const { data: current, error: readErr } = await db.from('event_hosts').select('id, photos').eq('id', session.host.id).maybeSingle()
+    if (readErr) {
+      logError('host-list-page', 'photos read failed', { err: readErr })
+      return NextResponse.json({ success: false, error: 'Could not save — try again shortly.' }, { status: 500 })
+    }
+    const stored = new Set(hostPageExtras(current).photos.map((p) => p.url))
+    const foreign = patch.photos.find((p) => !stored.has(p.url) && !isOwnHostPhotoUrl(p.url, session.host.id))
+    if (foreign) {
+      return NextResponse.json({ success: false, error: 'Photos must be uploaded through your page; a URL from elsewhere cannot be added.', code: 'foreign_photo_url' }, { status: 400 })
+    }
+  }
   const { error } = await db.from('event_hosts').update(patch).eq('id', session.host.id)
   if (error) {
     logError('host-list-page', 'update failed', { err: error })

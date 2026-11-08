@@ -13,8 +13,11 @@ export const HOST_PHOTOS_MAX = 12
 export const HOST_TESTIMONIALS_MAX = 6
 export const HOST_PAST_EVENTS_MAX = 24
 
+// A photo URL is an http(s) URL (the sibling hero_image_url rule): never
+// data:/javascript:. Which hosts may appear is the list-page route's call
+// (hostPhotoPathOf: the host's own folder in the branding bucket).
 const PhotoSchema = z.object({
-  url: z.string().trim().url().max(2000),
+  url: z.string().trim().url().max(2000).regex(/^https?:\/\//i, 'https URL'),
   caption: z.string().trim().max(120).optional().nullable(),
 })
 const TestimonialSchema = z.object({
@@ -61,4 +64,24 @@ export function pastEventCards(rows, today, { max = HOST_PAST_EVENTS_MAX } = {})
     .sort((a, b) => b.race_date.localeCompare(a.race_date))
     .slice(0, max)
     .map((r) => ({ id: r.id, name: r.name, dateLabel: eventDateLong(r.race_date) }))
+}
+
+/** The branding-bucket folder a host's uploaded photos live in. */
+export const hostPhotosFolder = (hostId) => `host-photos/${hostId}/`
+
+/** The branding-bucket path a public URL points at, or null when it is not a branding URL. */
+export function hostPhotoPathOf(url) {
+  try {
+    const u = new URL(String(url))
+    const marker = '/object/public/branding/'
+    const i = u.pathname.indexOf(marker)
+    if (i < 0) return null
+    return decodeURIComponent(u.pathname.slice(i + marker.length))
+  } catch { return null }
+}
+
+/** Is `url` one of this host's own uploaded photos (under its folder in the bucket)? */
+export function isOwnHostPhotoUrl(url, hostId) {
+  const path = hostPhotoPathOf(url)
+  return !!path && path.startsWith(hostPhotosFolder(hostId))
 }

@@ -100,3 +100,12 @@ describe('runRatingRequests', () => {
     expect(sendTransactionalEmail.mock.calls[0][0].subject).toBe('Tell us about Mobility Workshop')
   })
 })
+describe('runRatingRequests — operator intro merge tags', () => {
+  it('{{host_name}} and {{rate_url}} resolve in operator copy', async () => {
+    events = [{ ...EV, rating_email_intro: 'Tell {{host_name}}: {{rate_url}}' }]
+    await runRatingRequests({ db: db(), nowMs: NOW, isDue })
+    const html = sendTransactionalEmail.mock.calls[0][0].htmlBody
+    expect(html).toContain('Tell Acme Events: https://un1t.repset.ie/event/rate/')
+    expect(html).not.toContain('{{')
+  })
+})

@@ -36,18 +36,21 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'event-reminders', { nowMs, module: 'event-reminders' })
   if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
 
+  // HOSTPAGE.2 — the rating-request arm: its own slot claim (same hour, its
+  // own key) and its own heartbeat row, stamped only on a clean outcome. It
+  // runs BEFORE the parent's quiet-tick return so its gate decides on its
+  // own (a parent slot already taken, or a faulted parent claim, never
+  // silences the arm). Its result rides in the response and never decides
+  // this cron's stamp or status (a thrown arm is a field; its own row goes
+  // stale).
+  const ratingRequests = await runRatingRequestsArm(db, nowMs)
+
   if (gate.slots.size === 0) {
     // A quiet tick (no slot taken) never stamps, so the row keeps the legacy
     // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
-    return NextResponse.json({ success: !gate.faulted, data: { events: 0, sent: 0, skipped: 0, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
+    return NextResponse.json({ success: !gate.faulted, data: { events: 0, sent: 0, skipped: 0, rating_requests: ratingRequests, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
   }
   const data = await runEventReminders({ db, nowMs, isDue: (locationId) => !!slotFor(gate.slots, locationId) })
-
-  // HOSTPAGE.2 — the rating-request arm: its own slot claim (same hour, its
-  // own key) and its own heartbeat row, stamped only on a clean outcome. Its
-  // result rides in the response and never decides this cron's stamp or
-  // status (a thrown arm is a field; its own row goes stale).
-  const ratingRequests = await runRatingRequestsArm(db, nowMs)
 
   if (slotTickStampable(gate)) await stampHeartbeat('event-reminders', { ...data, slot: gate.summary })
   return NextResponse.json({ success: !gate.faulted, data: { ...data, rating_requests: ratingRequests, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })

@@ -1663,7 +1663,7 @@ registry.registerPath({
   path: '/api/public/event-rating/{token}',
   tags: ['Public'],
   summary: 'The event a rating link is for, and the rating already given (if any)',
-  description: 'Anonymous; the token is the credential. 404 for a bad or expired token, a token whose event does not match the entry, a UN1T event (no host), an inactive event, or a missing entry. Rate limited: 60 per IP per 5 minutes.',
+  description: 'Anonymous; the token is the credential. 404 for a bad or expired token, a token whose event does not match the entry, an event with no host (a studio-run event), an inactive event, or a missing entry. Rate limited: 60 per IP per 5 minutes.',
   request: { params: z.object({ token: RatingToken }) },
   responses: {
     200: { description: 'The event and any existing rating', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ event: z.object({ name: z.string(), date_label: z.string(), host_name: z.string() }), existing: RatingGiven.nullable() }) }) } } },
