@@ -8,11 +8,12 @@ import { z } from 'zod'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { logError } from '@/lib/log'
+import { HostPhotosSchema, HostTestimonialsSchema, HOST_ABOUT_MAX } from '@/lib/host-page-extras'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const COLS = 'slug, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb'
+const COLS = 'slug, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb, about_text, photos, testimonials, show_past_events, show_ratings'
 
 const field = (max) => z.string().trim().max(max).optional()
 // HOST-EVENTS-PAGE.1 — branding + events copy (mig 707). The hero is a
@@ -28,6 +29,13 @@ const ListPageSchema = z.object({
   events_blurb: field(500),
   hero_image_url: emptyOr(z.string().trim().url().max(2000).regex(/^https?:\/\//i, 'https URL')).optional(),
   accent_hex: emptyOr(z.string().trim().regex(/^#[0-9a-fA-F]{6}$/, '#rrggbb')).optional(),
+  // HOSTPAGE.2 — the page extras (mig 823). Lists are written as given
+  // (trimmed by their schemas); the toggles are plain booleans.
+  about_text: field(HOST_ABOUT_MAX),
+  photos: HostPhotosSchema.optional(),
+  testimonials: HostTestimonialsSchema.optional(),
+  show_past_events: z.boolean().optional(),
+  show_ratings: z.boolean().optional(),
 }).strict()
 
 export async function GET() {

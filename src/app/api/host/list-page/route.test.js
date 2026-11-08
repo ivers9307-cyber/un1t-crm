@@ -124,3 +124,36 @@ describe('PATCH /api/host/list-page — branding (HOST-EVENTS-PAGE.1)', () => {
     expect(db._update).toHaveBeenCalledWith({ accent_hex: '#FF5A1F', hero_image_url: 'https://cdn.example/hero.png', events_headline: 'Train with PTC', events_blurb: null })
   })
 })
+
+// HOSTPAGE.2 — the page extras ride the same PATCH.
+describe('PATCH /api/host/list-page — page extras (HOSTPAGE.2)', () => {
+  it('writes about, photos, testimonials and the toggles as given', async () => {
+    mocks.getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
+    const db = dbWith()
+    mocks.createServerClient.mockReturnValue(db)
+    const photos = [{ url: 'https://cdn.test/host-photos/h1/a.jpg', caption: ' Warm up ' }]
+    const testimonials = [{ quote: ' Brilliant class ', author: 'Aoife' }]
+    const res = await PATCH(req({ about_text: '  Who we are. ', photos, testimonials, show_ratings: false, show_past_events: true }))
+    expect(res.status).toBe(200)
+    expect(db._update).toHaveBeenCalledWith({
+      about_text: 'Who we are.',
+      photos: [{ url: 'https://cdn.test/host-photos/h1/a.jpg', caption: 'Warm up' }],
+      testimonials: [{ quote: 'Brilliant class', author: 'Aoife' }],
+      show_ratings: false,
+      show_past_events: true,
+    })
+  })
+  it('refuses a 401-char quote and a thirteenth photo', async () => {
+    mocks.getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
+    mocks.createServerClient.mockReturnValue(dbWith())
+    expect((await PATCH(req({ testimonials: [{ quote: 'x'.repeat(401) }] }))).status).toBe(400)
+    expect((await PATCH(req({ photos: Array.from({ length: 13 }, () => ({ url: 'https://cdn.test/p.jpg' })) }))).status).toBe(400)
+  })
+  it('GET returns the extras too', async () => {
+    mocks.getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
+    const row = { slug: 'acme', about_text: 'Hi', photos: [], testimonials: [], show_past_events: true, show_ratings: true }
+    mocks.createServerClient.mockReturnValue(dbWith({ row }))
+    const res = await GET()
+    expect((await res.json()).data).toEqual(row)
+  })
+})

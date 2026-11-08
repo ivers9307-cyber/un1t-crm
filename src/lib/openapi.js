@@ -12244,6 +12244,12 @@ const HostListPageCopy = z.object({
   events_blurb: z.string().max(500).nullable().optional(),
   hero_image_url: z.string().max(2000).nullable().optional(),
   accent_hex: z.string().max(7).nullable().optional(),
+  // HOSTPAGE.2
+  about_text: z.string().max(2000).nullable().optional(),
+  photos: z.array(z.object({ url: z.string(), caption: z.string().max(120).nullable().optional() })).max(12).nullable().optional(),
+  testimonials: z.array(z.object({ quote: z.string().max(400), author: z.string().max(80).nullable().optional() })).max(6).nullable().optional(),
+  show_past_events: z.boolean().optional(),
+  show_ratings: z.boolean().optional(),
 }).openapi('HostListPageCopy')
 
 const HostListPageUpdate = z.object({
@@ -12255,7 +12261,44 @@ const HostListPageUpdate = z.object({
   events_blurb: z.string().max(500).optional(),
   hero_image_url: z.string().max(2000).optional(),
   accent_hex: z.string().max(7).optional(),
+  // HOSTPAGE.2
+  about_text: z.string().max(2000).optional(),
+  photos: z.array(z.object({ url: z.string().url(), caption: z.string().max(120).nullable().optional() })).max(12).optional(),
+  testimonials: z.array(z.object({ quote: z.string().min(1).max(400), author: z.string().max(80).nullable().optional() })).max(6).optional(),
+  show_past_events: z.boolean().optional(),
+  show_ratings: z.boolean().optional(),
 }).openapi('HostListPageUpdate')
+
+// HOSTPAGE.2 — host page photos.
+const HostPhotosResponse = z.object({ success: z.literal(true), url: z.string().optional(), data: z.object({ url: z.string().optional(), photos: z.array(z.object({ url: z.string(), caption: z.string().nullable().optional() })) }) })
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/list-page/photos',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Add a photo to the host's public page (multipart file; PNG/JPEG/WebP ≤5 MB; at most 12)",
+  description: 'Host session (getCurrentHost). Stored in the public branding bucket under host-photos/<host id>/ and appended to event_hosts.photos with no caption (set it with PATCH /api/host/list-page). 400 photos_full at twelve.',
+  request: { body: { content: { 'multipart/form-data': { schema: z.object({ file: z.string().openapi({ format: 'binary' }) }) } } } },
+  responses: {
+    200: { description: 'The new URL and the full list', content: { 'application/json': { schema: HostPhotosResponse } } },
+    400: { description: 'No file, wrong type, too large, or photos_full', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'delete',
+  path: '/api/host/list-page/photos',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Remove one of the host\'s page photos (?url=)',
+  description: 'The URL must be in the host\'s own photos AND point under host-photos/<host id>/, else 404. The object removal is best-effort; the list entry always goes.',
+  request: { query: z.object({ url: z.string().url() }) },
+  responses: {
+    200: { description: 'The remaining list', content: { 'application/json': { schema: HostPhotosResponse } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of this host\'s photos', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
 
 const HostSendTestBody = z.object({
   to: z.string().email().optional(),
