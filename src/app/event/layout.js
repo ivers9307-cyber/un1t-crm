@@ -22,11 +22,21 @@
 
 import { headers } from 'next/headers'
 import { customerFacingMetadata } from '@/lib/default-site-name'
+import EventAttributionCapture from '@/components/EventAttributionCapture'
 
 export async function generateMetadata() {
   return customerFacingMetadata({ host: (await headers()).get('host') })
 }
 
+// HOSTSTATS.1 — every /event/* page (the event page, the series page, the
+// confirmed page) keeps the tab's first-touch attribution, so a reader who
+// lands on a series page from a host email and picks a date still books as
+// host_email. (/h/<slug> mounts the same capture itself.)
 export default function EventLayout({ children }) {
-  return children
+  return (
+    <>
+      <EventAttributionCapture />
+      {children}
+    </>
+  )
 }

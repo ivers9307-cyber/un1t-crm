@@ -47,6 +47,10 @@ describe('POST /api/public/events/[slug]/view', () => {
       day: '2026-07-19', // 23:30Z on the 18th is 00:30 Irish Summer Time on the 19th
     })
   })
+  it('a referrer on the request\'s own host (a reader coming from the series page) is direct, not a source', async () => {
+    await post({ session_id: 'sess-000001', attribution: { referrer: 'https://un1t.repset.ie/event/series/mob-dates' } })
+    expect(inserted().payload).toMatchObject({ source: 'direct', referrer_host: null })
+  })
   it('a view without attribution is direct', async () => {
     await post({ session_id: 'sess-000001' })
     expect(inserted().payload).toMatchObject({ source: 'direct', utm_campaign: null, referrer_host: null })

@@ -29,10 +29,11 @@ describe('loadEventStats', () => {
     expect(r.ok).toBe(true)
     expect(r.stats).toEqual({
       views: 3, unique_visitors: 2, registrations: 2, confirmed: 1, conversion_pct: 50,
+      // booked per source counts CONFIRMED entries only (the pending one under
+      // 'unknown' adds nothing, and a bucket with no views and no bookings is dropped).
       by_source: [
-        { source: 'instagram', label: 'Instagram', views: 2, registrations: 1 },
-        { source: 'host_email', label: 'Host email', views: 1, registrations: 0 },
-        { source: 'unknown', label: 'Unknown', views: 0, registrations: 1 },
+        { source: 'instagram', label: 'Instagram', views: 2, booked: 1 },
+        { source: 'host_email', label: 'Host email', views: 1, booked: 0 },
       ],
       waitlist: { waiting: 2, offered: 1, claimed: 1 },
       capped: false,
@@ -53,6 +54,17 @@ describe('loadEventStats', () => {
   it('an empty event answers zeros, an empty source list and a zero waitlist', async () => {
     const r = await loadEventStats(dbWith({ views: [], regs: [], wait: [] }), 'e1')
     expect(r.stats).toMatchObject({ views: 0, unique_visitors: 0, registrations: 0, confirmed: 0, conversion_pct: null, by_source: [], waitlist: { waiting: 0, offered: 0, claimed: 0 } })
+  })
+  it('a confirmed booking with no attribution counts under Unknown', async () => {
+    const r = await loadEventStats(dbWith({ views: [], regs: [{ status: 'confirmed', attribution: null }], wait: [] }), 'e1')
+    expect(r.stats.by_source).toEqual([{ source: 'unknown', label: 'Unknown', views: 0, booked: 1 }])
+  })
+  it('folds everything past the top 8 sources into one Other line', async () => {
+    const views = Array.from({ length: 12 }, (_, i) => Array.from({ length: 12 - i }, (__, j) => ({ session_id: `s${i}-${j}`, source: `src${i}` }))).flat()
+    const r = await loadEventStats(dbWith({ views, regs: [{ status: 'confirmed', attribution: { source: 'src11' } }], wait: [] }), 'e1')
+    expect(r.stats.by_source.length).toBe(9)
+    expect(r.stats.by_source[0]).toMatchObject({ source: 'src0', views: 12 })
+    expect(r.stats.by_source[8]).toEqual({ source: 'other', label: 'Other', views: 4 + 3 + 2 + 1, booked: 1 })
   })
   it('a read error on any table is { ok: false }', async () => {
     for (const t of ['event_page_views', 'race_registrations', 'event_waitlist']) {

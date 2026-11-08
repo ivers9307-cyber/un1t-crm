@@ -362,7 +362,7 @@ export async function POST(request, props) {
       status: 'confirmed', wave_id: null, team_composition: 'all_non_members',
       answers: leadAnswers.entry,
       // HOSTSTATS.1 — where the lead came from.
-      attribution: await resolveEventAttribution(db, body.attribution, race),
+      attribution: await resolveEventAttribution(db, body.attribution, race, { requestHost: new URL(request.url).host }),
       // HOST-CONSENT.1 — persisted so the attendee sync can grant HOST consent.
       marketing_consent: body.marketing_consent !== false,
     }).select('id, registered_at').single()
@@ -908,7 +908,7 @@ export async function POST(request, props) {
       // QUESTIONS.1 — the entry-level answers.
       answers: answered.entry,
       // HOSTSTATS.1 — where the booking came from (null when the form sent none).
-      attribution: await resolveEventAttribution(db, body.attribution, race),
+      attribution: await resolveEventAttribution(db, body.attribution, race, { requestHost: new URL(request.url).host }),
       // HOST-CONSENT.1 — persisted so the attendee sync can grant HOST consent
       // when the registration confirms (immediately for free, on payment for paid).
       marketing_consent: body.marketing_consent !== false,

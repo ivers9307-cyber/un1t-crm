@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   EVENT_ATTRIBUTION_KEY, rememberEventAttribution, readEventAttribution,
-  sanitiseEventAttribution, sourceOf, referrerSourceLabel, sourceLabel,
+  sanitiseEventAttribution, sourceOf, referrerSourceLabel, attributionSourceLabel,
 } from './event-attribution'
 
 const HC = '80000000-0000-4000-8000-000000000001'
@@ -44,7 +44,7 @@ describe('sanitiseEventAttribution (server)', () => {
     expect(s.utm_source.length).toBe(120)
     expect(s.host_campaign_id).toBeNull()
     expect(s.referrer_host).toBeNull()
-    expect(s.source).toBe('x'.repeat(40))
+    expect(s.source).toBe('direct') // 500 chars is not a token: falls through
   })
   it('a host campaign id wins over every other signal', () => {
     const s = sanitiseEventAttribution({ session_id: 'sess-00001', hc: HC, utm_source: 'instagram' })
@@ -60,12 +60,19 @@ describe('sanitiseEventAttribution (server)', () => {
   })
 })
 
-describe('sourceOf / referrerSourceLabel / sourceLabel', () => {
+describe('sourceOf / referrerSourceLabel / attributionSourceLabel', () => {
   it('derives the source in order: campaign, utm_source, referrer, direct', () => {
     expect(sourceOf({ host_campaign_id: HC, utm_source: 'ig', referrer_host: 'x.com' })).toBe('host_email')
     expect(sourceOf({ host_campaign_id: null, utm_source: 'IG', referrer_host: 'x.com' })).toBe('ig')
     expect(sourceOf({ host_campaign_id: null, utm_source: null, referrer_host: 't.co' })).toBe('x')
     expect(sourceOf({ host_campaign_id: null, utm_source: null, referrer_host: null })).toBe('direct')
+  })
+  it('a utm_source that is not a plain token (letters, digits, _ . -; ≤40) falls through, so the card never shows attacker text', () => {
+    expect(sourceOf({ host_campaign_id: null, utm_source: '<script>alert(1)</script>', referrer_host: 'l.instagram.com' })).toBe('instagram')
+    expect(sourceOf({ host_campaign_id: null, utm_source: 'Meta Ads', referrer_host: null })).toBe('direct')
+    expect(sourceOf({ host_campaign_id: null, utm_source: 'x'.repeat(41), referrer_host: null })).toBe('direct')
+    expect(sourceOf({ host_campaign_id: null, utm_source: '-lead', referrer_host: null })).toBe('direct')
+    expect(sourceOf({ host_campaign_id: null, utm_source: 'meta_ads.v2-b', referrer_host: null })).toBe('meta_ads.v2-b')
   })
   it('a utm_source spelling a reserved word cannot pose as a server-derived source', () => {
     expect(sourceOf({ host_campaign_id: null, utm_source: 'host_email', referrer_host: 'l.instagram.com' })).toBe('instagram')
@@ -78,9 +85,9 @@ describe('sourceOf / referrerSourceLabel / sourceLabel', () => {
     }
   })
   it('labels for operators', () => {
-    expect(sourceLabel('host_email')).toBe('Host email')
-    expect(sourceLabel('direct')).toBe('Direct')
-    expect(sourceLabel('whatsapp')).toBe('WhatsApp')
-    expect(sourceLabel('example.org')).toBe('example.org')
+    expect(attributionSourceLabel('host_email')).toBe('Host email')
+    expect(attributionSourceLabel('direct')).toBe('Direct')
+    expect(attributionSourceLabel('whatsapp')).toBe('WhatsApp')
+    expect(attributionSourceLabel('example.org')).toBe('example.org')
   })
 })

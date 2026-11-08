@@ -6,18 +6,22 @@
 //   event_page_views  → views (rows), unique visitors (distinct session_id),
 //                       views by source
 //   race_registrations → registrations (not cancelled), confirmed, and
-//                       registrations by attribution.source ('unknown' when
-//                       an entry carries none: staff-added, pre-feature)
+//                       CONFIRMED bookings by attribution.source ('unknown'
+//                       when an entry carries none: staff-added, pre-feature),
+//                       so the per-source "booked" adds up to the headline
 //   event_waitlist    → waiting / offered / claimed
 // conversion_pct = confirmed / unique visitors, one decimal; null with no
 // visitors (an event older than the beacon), 0 with visitors and no bookings.
 // A failed read on any table is { ok: false }: the card then says the stats
 // are unavailable rather than showing a partial picture as the whole one.
 
-import { sourceLabel } from '@/lib/event-attribution'
+import { attributionSourceLabel } from '@/lib/event-attribution'
 
 const PAGE_SIZE = 1000
 const MAX_PAGES = 10
+// The card lists at most this many sources; the rest fold into one 'other'
+// line, so an unauthenticated beacon cannot fill the card with lines.
+export const MAX_SOURCES = 8
 
 async function readAll(makeQuery) {
   const rows = []
@@ -51,7 +55,7 @@ export async function loadEventStats(db, eventId) {
   const bySource = new Map()
   const bucket = (source) => {
     const key = source || 'unknown'
-    if (!bySource.has(key)) bySource.set(key, { source: key, label: sourceLabel(key), views: 0, registrations: 0 })
+    if (!bySource.has(key)) bySource.set(key, { source: key, label: attributionSourceLabel(key), views: 0, booked: 0 })
     return bySource.get(key)
   }
   for (const v of views.rows) {
@@ -63,15 +67,23 @@ export async function loadEventStats(db, eventId) {
   for (const r of regs.rows) {
     if (r.status === 'cancelled') continue
     registrations += 1
-    if (r.status === 'confirmed') confirmed += 1
-    bucket(r.attribution?.source).registrations += 1
+    if (r.status !== 'confirmed') continue
+    confirmed += 1
+    bucket(r.attribution?.source).booked += 1
   }
   const waitlist = { waiting: 0, offered: 0, claimed: 0 }
   for (const w of wait.rows) if (w.status in waitlist) waitlist[w.status] += 1
 
   const unique_visitors = sessions.size
-  const by_source = [...bySource.values()].sort((a, b) =>
-    b.views - a.views || b.registrations - a.registrations || a.source.localeCompare(b.source))
+  const ranked = [...bySource.values()]
+    .filter((x) => x.views > 0 || x.booked > 0)
+    .sort((a, b) => b.views - a.views || b.booked - a.booked || a.source.localeCompare(b.source))
+  const by_source = ranked.length > MAX_SOURCES + 1
+    ? [...ranked.slice(0, MAX_SOURCES), ranked.slice(MAX_SOURCES).reduce(
+        (acc, x) => ({ ...acc, views: acc.views + x.views, booked: acc.booked + x.booked }),
+        { source: 'other', label: attributionSourceLabel('other'), views: 0, booked: 0 },
+      )]
+    : ranked
 
   return {
     ok: true,

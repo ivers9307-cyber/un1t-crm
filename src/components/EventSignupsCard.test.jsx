@@ -10,8 +10,8 @@ afterEach(cleanup)
 const STATS = {
   views: 48, unique_visitors: 40, registrations: 6, confirmed: 5, conversion_pct: 12.5,
   by_source: [
-    { source: 'host_email', label: 'Host email', views: 30, registrations: 4 },
-    { source: 'instagram', label: 'Instagram', views: 10, registrations: 1 },
+    { source: 'host_email', label: 'Host email', views: 30, booked: 4 },
+    { source: 'instagram', label: 'Instagram', views: 10, booked: 1 },
   ],
   waitlist: { waiting: 3, offered: 1, claimed: 2 },
   capped: false,
@@ -27,6 +27,7 @@ describe('EventSignupsCard', () => {
     expect(screen.getByText('12.5%')).toBeTruthy()
     expect(screen.getByText('Host email')).toBeTruthy()
     expect(screen.getByText('Instagram')).toBeTruthy()
+    expect(screen.getByText('30 views · 4 booked')).toBeTruthy()
     expect(screen.getByText(/3 waiting/)).toBeTruthy()
     expect(screen.getByText(/1 offered/)).toBeTruthy()
     expect(screen.getByText(/2 booked from the list/)).toBeTruthy()

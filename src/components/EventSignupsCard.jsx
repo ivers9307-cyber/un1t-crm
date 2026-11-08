@@ -45,7 +45,7 @@ export default function EventSignupsCard({ stats, dark = false }) {
               <li key={s.source} className="flex items-center justify-between gap-3 py-1.5">
                 <span className="truncate">{s.label || s.source}</span>
                 <span className={`shrink-0 tabular-nums text-xs ${muted}`}>
-                  {s.views} view{s.views === 1 ? '' : 's'} · {s.registrations} booked
+                  {s.views} view{s.views === 1 ? '' : 's'} · {s.booked} booked
                 </span>
               </li>
             ))}

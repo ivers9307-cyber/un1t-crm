@@ -52,7 +52,7 @@ export async function POST(request, props) {
   }
   if (!race || !eventIsPublic(race)) return notFound()
 
-  const a = await resolveEventAttribution(db, body.attribution, race)
+  const a = await resolveEventAttribution(db, body.attribution, race, { requestHost: new URL(request.url).host })
   const { error: insErr } = await db.from('event_page_views').insert({
     race_event_id: race.id,
     session_id: body.session_id,

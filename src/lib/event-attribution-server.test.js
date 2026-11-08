@@ -23,6 +23,15 @@ describe('resolveEventAttribution', () => {
     const failing = fakeDb((q) => (q.table === 'host_campaigns' ? { data: null, error: { message: 'boom' } } : { data: null, error: null }))
     expect(await resolveEventAttribution(failing, { hc: HC }, { host_id: 'h1' })).toMatchObject({ host_campaign_id: null, source: 'direct' })
   })
+  it('a referrer on the request\'s own host (the series or host page) is not a source: direct, or whatever else the tab knew', async () => {
+    const db = fakeDb(() => { throw new Error('must not read') })
+    const own = await resolveEventAttribution(db, { referrer: 'https://un1t.repset.ie/event/series/mob' }, { host_id: null }, { requestHost: 'un1t.repset.ie' })
+    expect(own).toMatchObject({ referrer_host: null, source: 'direct' })
+    const www = await resolveEventAttribution(db, { referrer: 'https://www.un1t.repset.ie/h/acme', utm_source: 'instagram' }, { host_id: null }, { requestHost: 'UN1T.repset.ie' })
+    expect(www).toMatchObject({ referrer_host: null, source: 'instagram' })
+    const other = await resolveEventAttribution(db, { referrer: 'https://l.instagram.com/' }, { host_id: null }, { requestHost: 'un1t.repset.ie' })
+    expect(other).toMatchObject({ referrer_host: 'l.instagram.com', source: 'instagram' })
+  })
   it('null in → null out, no read', async () => {
     const db = fakeDb(() => { throw new Error('must not read') })
     expect(await resolveEventAttribution(db, null, { host_id: 'h1' })).toBeNull()

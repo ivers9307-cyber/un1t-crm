@@ -87,24 +87,29 @@ export function referrerSourceLabel(host) {
 const RESERVED_SOURCES = new Set(['host_email', 'direct', 'unknown'])
 
 /** One source word: campaign → utm_source → referrer → direct. */
+// A utm_source becomes a source word only as a plain token: it is shown on
+// the host's and staff's card, and the beacon is unauthenticated, so free
+// text there would be attacker-authored copy on an operator screen.
+const SOURCE_TOKEN = /^[a-z0-9][a-z0-9_.-]{0,39}$/
+
 export function sourceOf({ host_campaign_id, utm_source, referrer_host }) {
   if (host_campaign_id) return 'host_email'
   if (utm_source) {
-    const u = String(utm_source).trim().toLowerCase().slice(0, SOURCE_CAP)
-    if (u && !RESERVED_SOURCES.has(u)) return u
+    const u = String(utm_source).trim().toLowerCase()
+    if (u.length <= SOURCE_CAP && SOURCE_TOKEN.test(u) && !RESERVED_SOURCES.has(u)) return u
   }
   if (referrer_host) return referrerSourceLabel(referrer_host)
   return 'direct'
 }
 
 const LABELS = {
-  host_email: 'Host email', direct: 'Direct', unknown: 'Unknown',
+  host_email: 'Host email', direct: 'Direct', unknown: 'Unknown', other: 'Other',
   instagram: 'Instagram', facebook: 'Facebook', google: 'Google', whatsapp: 'WhatsApp',
   strava: 'Strava', linkedin: 'LinkedIn', tiktok: 'TikTok', x: 'X', youtube: 'YouTube',
 }
 
-/** Operator-facing label for a source word. */
-export function sourceLabel(source) {
+/** Operator-facing label for a source word. (Not `sourceLabel`: shared/format.js owns that name.) */
+export function attributionSourceLabel(source) {
   const s = String(source || '')
   return LABELS[s] || s
 }

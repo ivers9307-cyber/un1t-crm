@@ -1676,11 +1676,11 @@ registry.registerPath({
 })
 
 // HOSTSTATS.1 — one event's signup numbers.
-const EventStatsSource = z.object({ source: z.string(), label: z.string(), views: z.number().int(), registrations: z.number().int() })
+const EventStatsSource = z.object({ source: z.string(), label: z.string(), views: z.number().int(), booked: z.number().int().openapi({ description: 'confirmed bookings from this source' }) })
 const EventStats = z.object({
   views: z.number().int(), unique_visitors: z.number().int(), registrations: z.number().int(), confirmed: z.number().int(),
   conversion_pct: z.number().nullable().openapi({ description: 'confirmed / unique visitors, one decimal; null with no visitors' }),
-  by_source: z.array(EventStatsSource), waitlist: z.object({ waiting: z.number().int(), offered: z.number().int(), claimed: z.number().int() }),
+  by_source: z.array(EventStatsSource).openapi({ description: 'at most 8 sources by views, the rest folded into one `other` line' }), waitlist: z.object({ waiting: z.number().int(), offered: z.number().int(), claimed: z.number().int() }),
   capped: z.boolean(),
 })
 const EventStatsResponse = z.object({ success: z.literal(true), data: EventStats })
