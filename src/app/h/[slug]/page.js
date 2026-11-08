@@ -20,6 +20,7 @@ import { headers } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
 import HostListSignup from '@/components/HostListSignup'
 import HostPublicEvents from '@/components/host/HostPublicEvents'
+import EventAttributionCapture from '@/components/EventAttributionCapture'
 import { poppinsBody as poppins } from '@/fonts/poppins'
 import { getOrgBrandName } from '@/lib/location-branding'
 import { isEventSoldOut, toBrowseCard } from '@/lib/public-events'
@@ -127,6 +128,8 @@ export default async function HostPublicPage(props) {
   return (
     <div className={`${poppins.variable} font-body min-h-screen bg-black px-4 py-10 text-white sm:px-8 sm:py-16`}>
       <div className="mx-auto max-w-5xl">
+        {/* HOSTSTATS.1 — a booking made after browsing here keeps the link that brought them. */}
+        <EventAttributionCapture />
         <HostPublicEvents
           hostName={host.name}
           headline={copy.headline}

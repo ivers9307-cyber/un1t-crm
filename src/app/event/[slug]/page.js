@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
 import RaceSignupWidget from '@/components/RaceSignupWidget'
+import EventAttributionCapture from '@/components/EventAttributionCapture'
 import { redirectTargetForSlug } from '@/lib/event-slug'
 import { createServerClient } from '@/lib/supabase'
 import { getLocationBranding } from '@/lib/location-branding'
@@ -85,6 +86,8 @@ export default async function PublicRaceSignupPage(props) {
   if (target) redirect(`/event/${target}`)
   return (
     <div className={`${poppins.variable} font-body min-h-screen bg-black text-white`}>
+      {/* HOSTSTATS.1 — first touch is kept before the widget's own capture runs. */}
+      <EventAttributionCapture />
       <RaceSignupWidget slug={params.slug} />
     </div>
   )
