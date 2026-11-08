@@ -177,3 +177,19 @@ Mig: the five `event_hosts` columns, `event_ratings`, `event_rating_requests`, t
 - A new jsonb settings column carries `-- column-grant: withheld` and a Zod schema; a new table states `revoke all … from anon, authenticated`.
 - Timezones: every "today" and "the morning after" is the event studio's clock (`eventToday`, `gateDailySlot`); an `.ics` instant comes from `zonedWallClockToInstant`.
 - Series page, rating page and calendar route live under `/event/` so the four public allowlists are untouched; `RESERVED_EVENT_SLUGS` gains `series` and `rate`.
+
+---
+
+## Builder-check decisions (2026-11-08)
+
+A reviewer read the document as a builder and asked seven questions. All seven are settled here **(my calls)**, each following the rule the codebase already applies; Richard can flip any of them.
+
+1. **Tier counts stay private.** The public event API deliberately exposes no capacity number (only `is_full` per time), so `pricing.current` carries no `spots_left` either. The widget says "Early bird €25 (limited), then €35" and "€30 until Mon 1 Dec"; the exact remaining count is operator-only, on the forms and the host event page. Flip this if the "6 left" nudge is wanted.
+2. **Adding a session never re-reviews a published host event; changing an existing session's time does.** `computeEditTransition` compares only waves that already exist (by id); a new time is additive and harms no booking. Removing a session with live entries is refused (409 `session_has_entries`), so a removal never re-reviews either.
+3. **Every booking door prices the same way.** `applyTierPricing` (in `src/lib/pricing-tiers.js`) is called by the public register route AND `race-register-solo.js` (Mia quotes and books the tier, stamps `pricing_tier_id`). The legacy `src/app/api/public/races/[slug]/register/route.js` (no page calls it; `next.config.js` already rewrites that URL to the events route, which the file shadows) is deleted in PR 2 with its tests, so the rewrite takes over and there is one register path. PR 3 then has one door to put required questions on.
+4. **Tiers count people, always, and only tiered entries consume tier seats.** A price is per head, so a capacity tier is "the first N people", whatever the event's `capacity_mode`; one tier is resolved for the whole entry (a 4-person team either fits or moves on). Entries without `pricing_tier_id` (staff-added through `/api/events/[id]/teams`, pre-tier bookings) never consume a tier seat; the forms say so beside the limit field.
+5. **Duplicate shifts the registration window by the date delta and copies the hero file.** `registration_opens_at` / `closes_at` move by the same number of days as `race_date` (so "closes the day before" stays true); the hero object is copied in Storage to `race-hero/<new id>/` (the hero route deletes stale files on re-upload, so sharing the URL would lose the copy's image); `tv_logos` URLs copy as-is.
+6. **Host events never use the windowed time picker.** `timePickerWaves`' 90-minute release window exists for UN1T's generated Hyrox waves; an event with a `host_id` lists every session plainly.
+7. **The rating request goes out like a reminder.** Same identity (`resolveEventCommsLocation`: the organisation's comms location), same transactional consent gate and suppression path as the event reminders; the host's own sender domain is for the host's campaigns, and a rating request is part of the booking relationship, not marketing.
+
+Also noted by the reviewer and adopted: `renderHostCampaignHtml` gains a `campaignId` argument for the `hc` link parameter; `event_series` carries `headline` and `blurb` (operator-editable copy for the series page, default "Pick a date"); the rating arm rides `event-reminders`' 09:00 daily slot; `race_events` still holds a pre-mig-677 table grant to `authenticated`, so the new columns are RLS-readable rather than withheld (nothing secret goes in them).
