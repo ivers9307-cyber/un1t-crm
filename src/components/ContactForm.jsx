@@ -10,31 +10,47 @@
 // Backed by /api/contacts (POST + PUT) which now accepts cookie auth
 // for manager+ in addition to the per-org API key path.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save, AlertCircle, Loader2 } from 'lucide-react'
+import { DEFAULT_LEAD_SOURCES, leadSourceLabel } from '@/lib/lead-source-vocabulary'
 
 // CLASSIFY.2 — the lead_status picker is gone. Pipeline stage is now
 // auto-derived from the contact's open deal (trigger from mig 155),
 // so operators move stage by moving the deal on the kanban, not by
 // flipping a select on the contact form.
 
-const LEAD_SOURCES = [
-  { value: '',          label: '(none)' },
-  { value: 'booking',   label: 'Booking' },
-  { value: 'meta',      label: 'Meta (Facebook/Instagram)' },
-  { value: 'tiktok',    label: 'TikTok' },
-  { value: 'walkin',    label: 'Walk-in' },
-  { value: 'referral',  label: 'Referral' },
-  { value: 'website',   label: 'Website' },
-  { value: 'whatsapp',  label: 'WhatsApp' },
-  { value: 'other',     label: 'Other' },
-]
+// WAYSIN.5 — the lead-source picker offers the studio's vocabulary (the nine
+// defaults, the owner's own list, values already on contacts there), fetched
+// from /api/locations/[id]/lead-sources. Until it answers, or if it cannot
+// (no Contacts at that studio, a failed read), it offers the nine. A contact's
+// current value is always offered, so editing never blanks it.
+const DEFAULT_OPTIONS = DEFAULT_LEAD_SOURCES.map((value) => ({ value, label: leadSourceLabel(value) }))
 
-export default function ContactForm({ contact = null, onCancelHref = '/contacts' }) {
+function useLeadSourceOptions(locationId) {
+  const [options, setOptions] = useState(DEFAULT_OPTIONS)
+  useEffect(() => {
+    if (!locationId) return undefined
+    let cancelled = false
+    fetch(`/api/locations/${encodeURIComponent(locationId)}/lead-sources`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled || !j?.success || !Array.isArray(j.data?.sources)) return
+        setOptions(j.data.sources.map((s) => ({ value: s.value, label: s.label })))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [locationId])
+  return options
+}
+
+export default function ContactForm({ contact = null, onCancelHref = '/contacts', locationId = null }) {
   const router = useRouter()
   const isEditing = !!contact
+  // The studio the contact lives at (edit) or is created at (new: the page
+  // passes the active studio, which is where POST /api/contacts creates).
+  const leadSourceOptions = useLeadSourceOptions(contact?.location_id || locationId)
 
   const [firstName, setFirstName] = useState(contact?.first_name || '')
   const [lastName, setLastName] = useState(contact?.last_name || '')
@@ -78,7 +94,9 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
       last_name: trimmedLast || null,
       email: email.trim(),
       phone: phone.trim() || null,
-      lead_source: leadSource || undefined,
+      // Sent on create, and on edit only when changed: a legacy value the
+      // slug rule would refuse never blocks saving the rest of the form.
+      lead_source: (!isEditing || leadSource !== (contact?.lead_source || '')) ? (leadSource || undefined) : undefined,
       label: label.trim() || null,
       glofox_member_id: glofoxId.trim() || null,
     }
@@ -188,9 +206,13 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
             onChange={e => setLeadSource(e.target.value)}
             className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           >
-            {LEAD_SOURCES.map(s => (
+            <option value="">(none)</option>
+            {leadSourceOptions.map(s => (
               <option key={s.value} value={s.value}>{s.label}</option>
             ))}
+            {leadSource && !leadSourceOptions.some(s => s.value === leadSource) && (
+              <option value={leadSource}>{leadSource}</option>
+            )}
           </select>
           <p className="text-[11px] text-un1t-muted mt-2">
             Pipeline stage is set automatically when you move the contact&apos;s deal on the kanban board.

@@ -103,4 +103,15 @@ describe('every writer of locations.settings goes through mergeLocationSettings'
       expect(code(join(repo, r)), r).toMatch(/mergeLocationSettings\(/)
     }
   })
+
+  // Routes that write a settings slice and were built on the helper from day
+  // one. Listed so a rewrite that drops the helper fails here, not in prod.
+  it('later settings writers use the helper', () => {
+    for (const [r, why] of Object.entries({
+      'src/app/api/locations/[id]/pipeline-programmes/route.js': 'PIPE3.8: settings.pipelines.programmes',
+      'src/app/api/locations/[id]/lead-sources/route.js': "WAYSIN.5: settings.lead_sources, the owner's lead-source list",
+    })) {
+      expect(code(join(repo, r)), `${r} (${why})`).toMatch(/mergeLocationSettings\(/)
+    }
+  })
 })

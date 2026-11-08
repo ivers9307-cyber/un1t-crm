@@ -27,7 +27,7 @@ export default async function NewContactPage() {
       <p className="text-sm text-un1t-subtle mb-6">
         Created at {user.activeLocation?.name || 'your active location'}.
       </p>
-      <ContactForm />
+      <ContactForm locationId={createAt} />
     </div>
   )
 }

@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { Plus, Trash2, Users, AlertTriangle, Sparkles } from 'lucide-react'
 // PIPEBUILD.2d — stages of boards the code doesn't know come from the studio's rows.
 import { useStudioStages } from '@/lib/use-studio-stages'
+import { DEFAULT_LEAD_SOURCES, LEAD_SOURCE_LABELS } from '@/lib/lead-source-vocabulary'
 // FILTER-A.1 — the verified preset definitions live in their own module so the
 // counts they produce can be checked against the spec table without rendering.
 import { presetFilter } from '@/lib/audience-presets'
@@ -87,8 +88,10 @@ export const FIELD_OPTIONS = [
     valueLabels: STAGE_LABELS },
   { value: 'lead_source',           label: 'Lead Source',           type: 'select',
     group: 'Funnel',
-    options: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'classpass', 'other'],
-    valueLabels: { walkin: 'Walk-in', classpass: 'ClassPass', whatsapp: 'WhatsApp', tiktok: 'TikTok', meta: 'Meta' } },
+    // WAYSIN.5 — the nine defaults; the studio's vocabulary (its own list and
+    // values seen on its contacts) is added once fetched (withLeadSources).
+    options: [...DEFAULT_LEAD_SOURCES],
+    valueLabels: { ...LEAD_SOURCE_LABELS } },
   { value: 'glofox_source',         label: 'Signup Source',         type: 'text',
     group: 'Funnel',
     hint: 'How the booking system recorded the signup. Lead Source above is ours and is the one campaigns normally use.' },
@@ -371,6 +374,21 @@ export function withStudioStages(cfg, stages) {
   return { ...cfg, options, valueLabels }
 }
 
+// WAYSIN.5 — the nine defaults first, then every other value in the studio's
+// lead-source vocabulary (GET /api/locations/[id]/lead-sources). Nothing
+// loaded (no studio id, loading, failed) = exactly the static field.
+export function withLeadSources(cfg, sources) {
+  if (!cfg || cfg.value !== 'lead_source' || !Array.isArray(sources)) return cfg
+  const options = [...cfg.options]
+  const valueLabels = { ...cfg.valueLabels }
+  for (const s of sources) {
+    if (!s?.value || options.includes(s.value)) continue
+    options.push(s.value)
+    valueLabels[s.value] ??= s.label || s.value
+  }
+  return { ...cfg, options, valueLabels }
+}
+
 // The ops offered for a row = the per-type list ∩ the server allowlist for
 // that specific field. Keeps the UI unable to build a row the count/populate
 // side rejects (the composer used to swallow that 400 silently).
@@ -614,7 +632,10 @@ const AWAITS_A_VALUE = ['tag-select', 'event-select', 'plan-select', 'location-s
 // footer, which survives only for CampaignEditor's own count state.
 export default function AudienceBuilder({ filter, onChange, audienceCount = null, disabled = false, defaultFilterRow = null, presets = null, locationId = null, timeZone = null }) {
   const { stages: studioStages } = useStudioStages(locationId)
-  const getFieldConfig = (v) => withStudioStages(baseFieldConfig(v), studioStages)
+  // Keyed by the studio it was fetched for, so switching studio refetches.
+  const [leadSourceState, setLeadSourceState] = useState({ locationId: null, sources: null })
+  const leadSources = leadSourceState.locationId === locationId ? leadSourceState.sources : null
+  const getFieldConfig = (v) => withLeadSources(withStudioStages(baseFieldConfig(v), studioStages), leadSources)
   const filters = filter?.filters || []
   const logic = filter?.logic || 'and'
 
@@ -689,6 +710,19 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
     }).catch(() => { if (!cancelled) setTagOptions([]) })
     return () => { cancelled = true }
   }, [usesTagField, tagOptions, locationId])
+
+  // WAYSIN.5 — the studio's lead-source vocabulary, loaded once the operator
+  // adds a "Lead Source" row (and only with a studio to ask about). A failure
+  // leaves the nine defaults.
+  const usesLeadSourceField = filters.some(f => f.field === 'lead_source') || pendingList.includes('lead_source')
+  useEffect(() => {
+    if (!usesLeadSourceField || !locationId || leadSources !== null) return
+    let cancelled = false
+    fetch(`/api/locations/${encodeURIComponent(locationId)}/lead-sources`).then(r => r.json()).then(j => {
+      if (!cancelled) setLeadSourceState({ locationId, sources: j?.success && Array.isArray(j.data?.sources) ? j.data.sources : [] })
+    }).catch(() => { if (!cancelled) setLeadSourceState({ locationId, sources: [] }) })
+    return () => { cancelled = true }
+  }, [usesLeadSourceField, leadSources, locationId])
 
   // CHURN-PREP.2 — membership-plan options, loaded once the user
   // adds a "Membership Plan" row. The plan list is operator-defined,

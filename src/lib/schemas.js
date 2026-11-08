@@ -211,7 +211,7 @@ export const OWNER_ASSIGNABLE_ROLES = Object.freeze(['owner', 'manager', 'head_c
 // instead of hardcoding hex values.
 export const DEFAULT_COLOR = '#3B82F6'
 
-// Lead source — mirror the values surfaced in AudienceBuilder.jsx.
+// Lead source.
 // 'classpass' added in GLOFOX2.1.8 — preserves the 3rd-party origin signal
 // for ClassPass-sourced contacts (Glofox surfaces this on member.origin,
 // distinct from member.source which is 'UNKNOWN' for ClassPass).
@@ -219,9 +219,21 @@ export const DEFAULT_COLOR = '#3B82F6'
 // NOTE: leadStatusSchema removed in CLASSIFY.2 (mig 155 follow-up) — the
 // contacts.lead_status column is being dropped. Audience classification
 // now lives on contacts.pipeline_stage_slug (denormalised from deals).
-export const leadSourceSchema = z.enum([
+//
+// WAYSIN.5 — lead sources are a per-studio VOCABULARY, not an enum
+// (src/lib/lead-source-vocabulary.js): the nine below are the defaults every
+// studio offers, an owner adds their own (locations.settings.lead_sources),
+// and the public funnels already write values outside the nine ('corp_promo',
+// 'hatch_launch', …). A value is trimmed and lowercased, then must be a slug:
+// a letter or digit first, then letters, digits, '_' or '-', at most 80. A
+// space is refused rather than kept, so 'Clubhouse Partner' is a 400 and
+// ' META ' is 'meta'.
+export const DEFAULT_LEAD_SOURCES = Object.freeze([
   'booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'classpass', 'other',
 ])
+export const LEAD_SOURCE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,79}$/
+export const leadSourceSchema = z.string().trim().toLowerCase().min(1).max(80)
+  .regex(LEAD_SOURCE_PATTERN, 'A lead source is letters, digits, _ or - (no spaces), at most 80 characters.')
 
 // Deal status — open/won/lost from migration 001.
 export const dealStatusSchema = z.enum(['open', 'won', 'lost'])

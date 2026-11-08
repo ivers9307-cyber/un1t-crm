@@ -233,7 +233,7 @@ describe('loadOfferClaimsForLocation', () => {
     // by created_at (it is set at creation), and `now` only with neither.
     const contacts = [
       { id: 'c1', last_lead_source: 'META_X', last_lead_source_at: iso(T0 - DAY), created_at: iso(T0 - 90 * DAY) },
-      { id: 'c2', lead_source: 'meta_x', created_at: iso(T0 - 30 * DAY) },
+      { id: 'c2', lead_source: ' Meta_X ', created_at: iso(T0 - 30 * DAY) },   // read case-insensitively (WAYSIN.5)
       { id: 'c3', last_lead_source: 'other' },
       { id: 'c4', last_lead_source: 'meta_x', created_at: iso(T0 - 40 * DAY) },
       { id: 'c5', lead_source: 'meta_x' },

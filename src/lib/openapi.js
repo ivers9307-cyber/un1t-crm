@@ -123,7 +123,7 @@ const Contact = z.object({
   name: z.string(),
   email: z.string(),
   phone: z.string().nullable(),
-  lead_source: leadSourceSchema.nullable(),
+  lead_source: z.string().nullable(),
   pipeline_stage_slug: z.string().nullable(),
   location_id: uuidLike.nullable(),
   created_at: z.string().datetime(),
@@ -7151,6 +7151,41 @@ registry.registerPath({
   description: 'Membership first (assertLocationAccess), then master or owner AT the studio. Entries are stored lower-cased and trimmed; the settings jsonb is merged.',
   responses: {
     200: { description: 'The rules after the write' },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAYSIN.5 — a studio's lead-source vocabulary and the owner's own list.
+const LeadSourcesBody = z.object({
+  sources: z.array(leadSourceSchema).max(50).describe("The studio's own lead sources: each trimmed, lower-cased, ^[a-z0-9][a-z0-9_-]{0,79}$"),
+})
+registry.register('LeadSourcesBody', LeadSourcesBody)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/lead-sources',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "A studio's lead-source vocabulary",
+  request: { params: z.object({ id: z.string().uuid() }) },
+  description: "Anyone holding Contacts at the studio: { sources: [{ value, label, origin: 'default'|'studio'|'seen' }], studio_sources, can_edit }. sources = the nine defaults, then the owner's list (locations.settings.lead_sources) and every value on a contact at the studio, alphabetically.",
+  responses: {
+    200: { description: 'The vocabulary' },
+    403: { description: 'Not a member, or no Contacts at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The contacts could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/lead-sources',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "Set a studio's own lead sources (owner / master at the studio)",
+  request: { params: z.object({ id: z.string().uuid() }), body: { content: { 'application/json': { schema: LeadSourcesBody } } } },
+  description: 'Membership first (assertLocationAccess), then master or owner AT the studio. At most 50, deduped; the settings jsonb is merged. Returns { studio_sources, can_edit }.',
+  responses: {
+    200: { description: "The studio's list after the write" },
     400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },

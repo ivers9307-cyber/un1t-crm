@@ -37,6 +37,7 @@ import CommsFrequencyCapCard from '@/components/settings/CommsFrequencyCapCard'
 import GeofenceAttendanceCard from '@/components/settings/GeofenceAttendanceCard'
 import PayrollLieuCard from '@/components/settings/PayrollLieuCard'
 import ProgrammeBoardRulesCard from '@/components/settings/ProgrammeBoardRulesCard'
+import LeadSourcesCard from '@/components/settings/LeadSourcesCard'
 import SendQuietHoursCard from '@/components/settings/SendQuietHoursCard'
 import EmailCopyCard from '@/components/settings/EmailCopyCard'
 import EmailSpamFilterCard from '@/components/settings/EmailSpamFilterCard'
@@ -234,6 +235,10 @@ export default async function EditLocationPage(props) {
               (locations.settings.pipelines.programmes). Draws itself only at
               a studio that has that board. */}
           <ProgrammeBoardRulesCard locationId={location.id} />
+          {/* WAYSIN.5 — the studio's own lead sources
+              (locations.settings.lead_sources), added to the nine defaults
+              and the values already on its contacts. */}
+          <LeadSourcesCard locationId={location.id} />
         </>
       )}
 

@@ -11,7 +11,8 @@
 //                                       have a studio row for this studio
 //   corp_promo      the studio's corp_promos rows (listCorpPromos), by key; a
 //                   switched-off promo is hinted 'not live'
-//   lead_source     leadSourceSchema's values
+//   lead_source     the studio's lead-source vocabulary (defaults, the
+//                   owner's list, values seen on contacts; WAYSIN.5)
 //   glofox_plan     active glofox_memberships names at the studio
 //   un1t_product    active un1t_products at the studio (value un1t_id), by title
 //   tag             the studio's tag vocabulary, from the same helper as
@@ -23,7 +24,7 @@
 // { ok: false, status, error, code? }.
 import { ENTRY_TYPES, TRIAL_MATCHES } from '@shared/pipelines/offer-config.js'
 import { listCorpPromos } from '@/lib/corp-promos-db'
-import { leadSourceSchema } from '@/lib/schemas'
+import { leadSourceVocabulary } from '@/lib/lead-source-vocabulary'
 import { selectAll } from '@/lib/select-all'
 import { studioTagVocabulary } from '@/lib/studio-tag-vocabulary'
 import { logError } from '@/lib/log'
@@ -144,8 +145,15 @@ async function corpPromoOptions(db, locationId) {
   return { ok: true, options: res.promos.map((p) => ({ value: p.key, label: p.name, hint: p.live ? '' : 'not live' })) }
 }
 
-function leadSourceOptions() {
-  return { ok: true, options: leadSourceSchema.options.map((v) => ({ value: v, label: v })) }
+async function leadSourceOptions(db, locationId) {
+  const res = await leadSourceVocabulary(db, locationId)
+  if (!res.ok) return unreadable("the studio's lead sources", res.error, { locationId })
+  return {
+    ok: true,
+    options: res.sources.map((s) => (s.label !== s.value
+      ? { value: s.value, label: s.label, hint: s.value }
+      : { value: s.value, label: s.label })),
+  }
 }
 
 async function glofoxPlanOptions(db, locationId) {
@@ -219,7 +227,7 @@ export async function listEntryOptions(db, { locationId, type, match } = {}) {
     case 'corp_promo':
       return corpPromoOptions(db, locationId)
     case 'lead_source':
-      return leadSourceOptions()
+      return leadSourceOptions(db, locationId)
     case 'glofox_plan':
       return glofoxPlanOptions(db, locationId)
     case 'un1t_product':
