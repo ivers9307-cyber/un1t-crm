@@ -219,6 +219,10 @@ export async function listHostSeries(db, { hostId, today }) {
     return []
   }
   if (!series || series.length === 0) return []
+  // A deliberate cap: this feeds the dashboard's "N upcoming" counts, and a
+  // host with over 1,000 series dates is not a case worth a second page; the
+  // counts would read low, nothing else.
+  // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- dashboard counts; a host's series dates stay well under 1000
   const { data: events, error: evErr } = await db
     .from('race_events')
     .select('series_id, race_date, status, active')
