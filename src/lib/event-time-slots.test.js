@@ -33,6 +33,16 @@ describe('timePickerWaves', () => {
     expect(timePickerWaves('race', [w('a', '10:00:00')]).map((x) => x.id)).toEqual(['a'])
   })
 
+  // HOSTSERIES.1 (design decision 6) — a HOST event's sessions are a plain
+  // list, race kind included: the release window is for UN1T's generated waves.
+  it('a host race shows every session, no release window', () => {
+    const waves = [w('a', '10:00:00'), w('b', '11:00:00'), w('c', '14:00:00')]
+    expect(timePickerWaves('race', waves, { hosted: true }).map((x) => x.id)).toEqual(['a', 'b', 'c'])
+    expect(timePickerWaves('race', [w('a', '10:00:00')], { hosted: true }).map((x) => x.id)).toEqual(['a'])
+  })
+  it('a host workshop with one session still shows no picker', () => {
+    expect(timePickerWaves('workshop', [w('a', '10:00:00')], { hosted: true })).toEqual([])
+  })
   it('treats a missing kind as race', () => {
     const waves = [w('a', '10:00:00'), w('b', '14:00:00')]
     expect(timePickerWaves(undefined, waves).map((x) => x.id)).toEqual(['a'])

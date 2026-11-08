@@ -9,6 +9,8 @@ import { createServerClient } from '@/lib/supabase'
 import { HostEventSchema, computeEditTransition } from '@/lib/host-events'
 import { eventSlug, uniqueEventSlug, shouldRederiveSlug } from '@/lib/event-slug'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
+import { syncEventSessions, judgeSessions, sessionsFromWaves } from '@/lib/event-sessions'
+import { hostOwnsSeries } from '@/lib/event-series'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -16,7 +18,7 @@ export const dynamic = 'force-dynamic'
 async function loadOwn(db, session, id) {
   const { data } = await db
     .from('race_events')
-    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, race_waves ( id, start_time, capacity, label, display_order )')
+    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, series_id, race_waves ( id, start_time, capacity, label, display_order )')
     .eq('id', id)
     .maybeSingle()
   if (!data || data.host_id !== session.host.id) return null
@@ -30,7 +32,9 @@ export async function GET(_request, props) {
   const db = createServerClient()
   const event = await loadOwn(db, session, params.id)
   if (!event) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  return NextResponse.json({ success: true, data: event })
+  // HOSTSERIES.1 — the form reads sessions (HH:MM), not raw waves.
+  const { race_waves: waves, ...rest } = event
+  return NextResponse.json({ success: true, data: { ...rest, sessions: sessionsFromWaves(waves) } })
 }
 
 export async function PUT(request, props) {
@@ -47,30 +51,46 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const current = await loadOwn(db, session, params.id)
   if (!current) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  // HOSTSERIES.1 — a series id from the body must be this host's own.
+  if (input.series_id) {
+    const owns = await hostOwnsSeries(db, { seriesId: input.series_id, hostId: session.host.id })
+    if (!owns.ok) {
+      return owns.error === 'load_failed'
+        ? NextResponse.json({ success: false, error: 'load_failed', message: 'The series could not be read. Try again.' }, { status: 500 })
+        : NextResponse.json({ success: false, error: 'invalid_series', message: 'That series is not one of yours.' }, { status: 400 })
+    }
+  }
 
-  const firstWave = (current.race_waves || [])[0] || null
-  // Normalize to DB-column names so computeEditTransition compares like-for-like.
+  // HOSTSERIES.1 — normalise to DB-column names so computeEditTransition
+  // compares like-for-like: existing sessions by id (HH:MM on both sides;
+  // race_waves.start_time is a Postgres TIME, "HH:MM:SS" from PostgREST), a
+  // new session has no id and never re-reviews.
   const changes = {
     race_date: input.race_date,
     non_member_fee_cents: input.ticket_price_cents,
-    waves: firstWave ? [{ id: firstWave.id, start_time: input.session_start_time }] : [],
+    waves: input.sessions.filter((s) => s.id).map((s) => ({ id: s.id, start_time: s.start_time })),
   }
   const currentForDiff = {
     status: current.status,
     race_date: current.race_date,
     non_member_fee_cents: current.non_member_fee_cents,
-    // race_waves.start_time is a Postgres TIME → PostgREST returns "HH:MM:SS";
-    // input.session_start_time is "HH:MM". Slice to 5 so the wave-key compares
-    // like-for-like — otherwise EVERY edit reads as a time change and a cosmetic
-    // edit (e.g. a description typo) would knock a published event offline.
-    waves: firstWave ? [{ id: firstWave.id, start_time: String(firstWave.start_time).slice(0, 5) }] : [],
+    waves: sessionsFromWaves(current.race_waves).map((s) => ({ id: s.id, start_time: s.start_time })),
   }
   const transition = computeEditTransition(currentForDiff, changes)
+
+  // HOSTSERIES.1 — judge the session change BEFORE the event row is written:
+  // a refused swap or removal must not leave a published event stamped back
+  // to review with its times unchanged.
+  const judged = await judgeSessions(db, { eventId: current.id, sessions: input.sessions, currentWaves: current.race_waves || [] })
+  if (!judged.ok) {
+    const status = judged.error === 'write_failed' ? 500 : 409
+    return NextResponse.json({ success: false, error: judged.error, message: judged.message, session_time: judged.session_time ?? null }, { status })
+  }
 
   // EVENT-SLUG.1 — a draft's URL follows its venue/date/time; once
   // published the slug is frozen (the link may be out).
   const slugPatch = shouldRederiveSlug(current.status)
-    ? { slug: await uniqueEventSlug(db, eventSlug({ place: input.venue_name, date: input.race_date, time: input.session_start_time, name: input.name }), { excludeId: current.id }) }
+    ? { slug: await uniqueEventSlug(db, eventSlug({ place: input.venue_name, date: input.race_date, time: input.sessions[0].start_time, name: input.name }), { excludeId: current.id }) }
     : {}
 
   const { error } = await db.from('race_events').update({
@@ -91,15 +111,18 @@ export async function PUT(request, props) {
     confirmation_email_intro: input.confirmation_email_intro ?? null,
     reminder_email_subject: input.reminder_email_subject ?? null,
     reminder_email_intro: input.reminder_email_intro ?? null,
+    ...('series_id' in input ? { series_id: input.series_id ?? null } : {}),
     status: transition.status,
     ...(transition.reReview ? { submitted_at: new Date().toISOString(), reviewed_at: null } : {}),
   }).eq('id', current.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  const { error: waveErr } = firstWave
-    ? await db.from('race_waves').update({ start_time: input.session_start_time, capacity: input.session_capacity, label: input.session_label ?? null }).eq('id', firstWave.id)
-    : await db.from('race_waves').insert({ race_event_id: current.id, start_time: input.session_start_time, capacity: input.session_capacity, label: input.session_label ?? null, display_order: 0 })
-  if (waveErr) return NextResponse.json({ success: false, error: waveErr.message }, { status: 500 })
+  // HOSTSERIES.1 — the writes (judged above; a write that still fails is 500).
+  const synced = await syncEventSessions(db, { eventId: current.id, sessions: input.sessions, currentWaves: current.race_waves || [] })
+  if (!synced.ok) {
+    const status = synced.error === 'write_failed' ? 500 : 409
+    return NextResponse.json({ success: false, error: synced.error, message: synced.message, session_time: synced.session_time ?? null }, { status })
+  }
 
   return NextResponse.json({ success: true, data: { id: current.id, status: transition.status, reReview: transition.reReview } })
 }

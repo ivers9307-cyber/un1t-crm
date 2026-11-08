@@ -8,8 +8,14 @@
 // that leaves the server).
 import Link from 'next/link'
 
-export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, accentHex, cards }) {
+// HOSTSERIES.1 — `groups` (one-offs, then each series under its name with an
+// "All dates" link) is preferred; `cards` alone renders one plain group.
+export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, accentHex, cards, groups }) {
   const accent = accentHex || '#ffffff'
+  const groupList = Array.isArray(groups) && groups.length > 0
+    ? groups
+    : [{ seriesName: null, seriesSlug: null, cards: Array.isArray(cards) ? cards : [] }]
+  const total = groupList.reduce((n, g) => n + (g.cards?.length || 0), 0)
   return (
     <section className="w-full">
       <header className="relative overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03]">
@@ -29,14 +35,21 @@ export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, a
         </div>
       </header>
 
-      {(!cards || cards.length === 0) ? (
+      {total === 0 ? (
         <div className="mt-8 rounded-2xl border border-white/15 p-10 text-center text-white/60">
           <p className="mb-2 text-lg font-semibold text-white">No upcoming events right now</p>
           <p className="text-sm">Join the list below and you&rsquo;ll hear first when the next one opens.</p>
         </div>
-      ) : (
-        <ul className="mt-8 grid gap-5 sm:grid-cols-2">
-          {cards.map((c) => {
+      ) : groupList.filter((g) => g.cards?.length > 0).map((g) => (
+        <div key={g.seriesSlug || '__single'} className="mt-8">
+          {g.seriesName && (
+            <div className="mb-4 flex items-baseline justify-between gap-3">
+              <h2 className="text-xl font-semibold">{g.seriesName}</h2>
+              <Link href={`/event/series/${g.seriesSlug}`} className="text-sm font-semibold" style={{ color: accent }}>All dates →</Link>
+            </div>
+          )}
+        <ul className="grid gap-5 sm:grid-cols-2">
+          {g.cards.map((c) => {
             const soldOut = c.badge === 'Sold out'
             const closed = c.closed === true
             const badgeEl = c.badge && (
@@ -51,7 +64,7 @@ export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, a
                 <p className="mb-1 text-xs text-white/55">
                   {c.dateLabel}{c.timeLabel ? ` · ${c.timeLabel}` : ''}{c.venue ? ` · ${c.venue}` : ''}
                 </p>
-                <h2 className={`mb-4 text-xl font-semibold ${closed ? '' : 'transition-transform group-hover:translate-x-0.5'}`}>{c.title}</h2>
+                <h3 className={`mb-4 text-xl font-semibold ${closed ? '' : 'transition-transform group-hover:translate-x-0.5'}`}>{c.title}</h3>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-white/70">{c.priceLabel}</span>
                   {!closed && (
@@ -78,7 +91,8 @@ export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, a
             )
           })}
         </ul>
-      )}
+        </div>
+      ))}
     </section>
   )
 }

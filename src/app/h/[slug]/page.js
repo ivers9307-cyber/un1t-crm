@@ -23,7 +23,7 @@ import HostPublicEvents from '@/components/host/HostPublicEvents'
 import { poppinsBody as poppins } from '@/fonts/poppins'
 import { getOrgBrandName } from '@/lib/location-branding'
 import { isEventSoldOut, toBrowseCard } from '@/lib/public-events'
-import { pickHostBranding, hostPageCopy, hostPageEvents, hostPageMetadata } from '@/lib/host-public-page'
+import { pickHostBranding, hostPageCopy, hostPageEvents, hostPageMetadata, groupHostCards } from '@/lib/host-public-page'
 import { todayIsoIn } from '@shared/events'
 import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
@@ -36,7 +36,8 @@ export const dynamic = 'force-dynamic'
 const HOST_COLS = 'id, name, slug, organization_id, anchor_location_id, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb'
 
 // Public-safe SELECT. Embeds exist only for the sold-out boolean.
-const EVENT_COLS = 'slug, name, kind, race_date, start_time, venue_name, hero_image_url, accent_hex, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, waves:race_waves ( id, capacity, start_time ), registrations:race_registrations ( status, wave_id, looking_for_team, team:teams ( size ) )'
+// HOSTSERIES.1 — the series embed groups the cards under their series name.
+const EVENT_COLS = 'slug, name, kind, race_date, start_time, venue_name, hero_image_url, accent_hex, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, series_id, series:event_series ( id, name, slug ), waves:race_waves ( id, capacity, start_time ), registrations:race_registrations ( status, wave_id, looking_for_team, team:teams ( size ) )'
 
 // TZ.9 — a host's events live on its anchor location, so the page runs on
 // that studio's clock. This page is display-only: an unreadable zone falls
@@ -118,9 +119,8 @@ export default async function HostPublicPage(props) {
     getOrgBrandName(db, host.organization_id),
     loadHostEvents(db, host.id, zone),
   ])
-  const cards = upcoming.map((e) =>
-    toBrowseCard(e, { soldOut: isEventSoldOut(e.waves, e.registrations, e.capacity_mode), now: nowMs, zone }),
-  )
+  const makeCard = (e) => toBrowseCard(e, { soldOut: isEventSoldOut(e.waves, e.registrations, e.capacity_mode), now: nowMs, zone })
+  const groups = groupHostCards(upcoming, makeCard)
   const { heroUrl, accentHex } = pickHostBranding(host, upcoming)
   const copy = hostPageCopy(host)
 
@@ -133,7 +133,7 @@ export default async function HostPublicPage(props) {
           blurb={copy.blurb}
           heroUrl={heroUrl}
           accentHex={accentHex}
-          cards={cards}
+          groups={groups}
         />
         <div className="mt-16 flex justify-center">
           <HostListSignup

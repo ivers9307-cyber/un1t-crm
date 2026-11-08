@@ -4,6 +4,7 @@ import {
   hostEventDefaults,
   computeEditTransition,
   HOST_EVENT_KINDS,
+  HostEventSchema,
 } from './host-events'
 import { ensureAnchorLocation, resolveMasterLocationId, resolveMasterLocationIdStrict } from './host-events'
 
@@ -75,6 +76,22 @@ describe('computeEditTransition', () => {
   })
   it('re-reviews when a wave start_time changes on a published event', () => {
     const t = computeEditTransition(published, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '11:00' }] })
+    expect(t).toEqual({ status: 'pending_review', reReview: true })
+  })
+  // HOSTSERIES.1 — only an EXISTING session's time change re-reviews; adding
+  // or removing a session is additive and harms no booking.
+  it('adding a session to a published event keeps it published', () => {
+    const t = computeEditTransition(published, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }, { start_time: '14:00' }] })
+    expect(t).toEqual({ status: 'published', reReview: false })
+  })
+  it('removing a session from a published event keeps it published', () => {
+    const two = { ...published, waves: [{ id: 'w1', start_time: '10:00' }, { id: 'w2', start_time: '14:00' }] }
+    const t = computeEditTransition(two, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }] })
+    expect(t).toEqual({ status: 'published', reReview: false })
+  })
+  it('changing one existing session among several re-reviews', () => {
+    const two = { ...published, waves: [{ id: 'w1', start_time: '10:00' }, { id: 'w2', start_time: '14:00' }] }
+    const t = computeEditTransition(two, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }, { id: 'w2', start_time: '15:00' }] })
     expect(t).toEqual({ status: 'pending_review', reReview: true })
   })
   it('draft/rejected edits never trigger re-review and keep their status', () => {
@@ -178,5 +195,41 @@ describe('resolveMasterLocationId', () => {
     expect(await resolveMasterLocationIdStrict(orgDb({ master_location_id: 'master-1' }), { organization_id: 'org-1', anchor_location_id: 'anchor-1' })).toBe('master-1')
     expect(await resolveMasterLocationIdStrict(orgDb({ master_location_id: null }), { organization_id: 'org-1', anchor_location_id: 'anchor-1' })).toBe('anchor-1')
     expect(await resolveMasterLocationIdStrict(orgDb({}), { anchor_location_id: 'anchor-1' })).toBe('anchor-1')
+  })
+})
+
+// HOSTSERIES.1 — sessions[] replaces the single session_* fields.
+describe('HostEventSchema sessions', () => {
+  const base = {
+    kind: 'workshop', name: 'Mobility', race_date: '2026-12-05', allowed_team_sizes: [1, 2],
+    ticket_price_cents: 2500, venue_name: 'Studio 1',
+  }
+  const two = [{ start_time: '10:00', capacity: 20 }, { start_time: '14:00', label: 'Afternoon', capacity: 15 }]
+  it('accepts two sessions and reports them in order', () => {
+    const r = HostEventSchema.safeParse({ ...base, sessions: two })
+    expect(r.success).toBe(true)
+    expect(r.data.sessions.map((s) => s.start_time)).toEqual(['10:00', '14:00'])
+  })
+  it('accepts a session with an id (an existing wave being edited)', () => {
+    const r = HostEventSchema.safeParse({ ...base, sessions: [{ id: 'f0000000-0000-4000-8000-0000000000f1', start_time: '10:00', capacity: 20 }] })
+    expect(r.success).toBe(true)
+  })
+  it('rejects no sessions and more than twelve', () => {
+    expect(HostEventSchema.safeParse({ ...base, sessions: [] }).success).toBe(false)
+    const thirteen = Array.from({ length: 13 }, (_, i) => ({ start_time: `${String(6 + i).padStart(2, '0')}:00`, capacity: 5 }))
+    expect(HostEventSchema.safeParse({ ...base, sessions: thirteen }).success).toBe(false)
+  })
+  it('rejects two sessions at the same start time, on the sessions path', () => {
+    const r = HostEventSchema.safeParse({ ...base, sessions: [{ start_time: '10:00', capacity: 20 }, { start_time: '10:00', capacity: 5 }] })
+    expect(r.success).toBe(false)
+    expect(r.error.issues.some((i) => i.path.join('.') === 'sessions' && /own start time/.test(i.message))).toBe(true)
+  })
+  it('rejects the retired single-session keys (strict)', () => {
+    const r = HostEventSchema.safeParse({ ...base, sessions: two, session_start_time: '10:00' })
+    expect(r.success).toBe(false)
+  })
+  it('accepts an optional nullable series_id', () => {
+    expect(HostEventSchema.safeParse({ ...base, sessions: two, series_id: null }).success).toBe(true)
+    expect(HostEventSchema.safeParse({ ...base, sessions: two, series_id: 'd0000000-0000-4000-8000-0000000000d1' }).success).toBe(true)
   })
 })

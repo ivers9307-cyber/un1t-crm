@@ -10,6 +10,7 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostEventForm from '@/components/host/HostEventForm'
+import { sessionsFromWaves } from '@/lib/event-sessions'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,7 +26,7 @@ export default async function HostEditEventPage(props) {
       'id, host_id, status, rejected_reason, kind, name, description, race_date, ' +
         'registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, ' +
         'hero_image_url, accent_hex, venue_name, venue_address, ' +
-        'confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, ' +
+        'confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, series_id, ' +
         'race_waves ( id, start_time, capacity, label, display_order )'
     )
     .eq('id', params.id)
@@ -33,11 +34,6 @@ export default async function HostEditEventPage(props) {
 
   if (!event || event.host_id !== session.host.id) notFound()
   const brand = await resolveHostOrgBrand(db, session.host)
-
-  // First wave drives the single-session fields the form exposes.
-  const waves = Array.isArray(event.race_waves) ? [...event.race_waves] : []
-  waves.sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
-  const firstWave = waves[0] || null
 
   const initial = {
     kind: event.kind,
@@ -56,10 +52,9 @@ export default async function HostEditEventPage(props) {
     confirmation_email_intro: event.confirmation_email_intro,
     reminder_email_subject: event.reminder_email_subject,
     reminder_email_intro: event.reminder_email_intro,
-    // Postgres TIME comes back "HH:MM:SS" — the form wants "HH:MM".
-    session_start_time: firstWave ? String(firstWave.start_time).slice(0, 5) : '',
-    session_capacity: firstWave ? firstWave.capacity : null,
-    session_label: firstWave ? firstWave.label : null,
+    // HOSTSERIES.1 — every wave is a session row on the form (HH:MM).
+    sessions: sessionsFromWaves(event.race_waves),
+    series_id: event.series_id ?? null,
   }
 
   return (

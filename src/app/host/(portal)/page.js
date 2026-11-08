@@ -16,6 +16,10 @@ import HostSubmitButton from '@/components/host/HostSubmitButton'
 import HostPayouts from '@/components/host/HostPayouts'
 import HostStatements from '@/components/host/HostStatements'
 import HostSignupPageCard from '@/components/host/HostSignupPageCard'
+import HostSeriesList from '@/components/host/HostSeriesList'
+import { listHostSeries } from '@/lib/event-series'
+import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
+import { todayIsoIn } from '@shared/events'
 
 export const dynamic = 'force-dynamic'
 
@@ -105,6 +109,19 @@ export default async function HostDashboard() {
   }
   const netByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
 
+  // HOSTSERIES.1 — the host's series, counted on the anchor studio's clock.
+  // Display only: a failed read shows no section.
+  let series = []
+  try {
+    const { data: anchor } = await db.from('event_hosts').select('anchor_location_id').eq('id', session.host.id).maybeSingle()
+    let zone = DEFAULT_TZ
+    try { zone = await getLocationZone(db, anchor?.anchor_location_id || null) } catch (e) { logWarn('host-dashboard', 'anchor zone unreadable; series counted on the default zone', { err: e }) }
+    series = await listHostSeries(db, { hostId: session.host.id, today: todayIsoIn(zone) })
+  } catch (e) {
+    logWarn('host-dashboard', 'series section degraded', { err: e })
+    series = []
+  }
+
   // Only Stripe-Connect hosts have a platform booking fee + a settled "net to host"
   // (mig 381 columns). Revolut/internal hosts collect directly, so those columns
   // are NULL (→0) and would misrepresent as "€0 net" — show them gross only.
@@ -190,6 +207,8 @@ export default async function HostDashboard() {
           /api/host/statements and renders nothing until a month has settled
           ticket activity (HOST-PORTAL.13). */}
       <HostStatements />
+
+      <HostSeriesList series={series} />
 
       <section className="mt-8">
         <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Your events</h2>

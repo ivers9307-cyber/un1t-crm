@@ -8,10 +8,10 @@
 // editable here — they're passed through unchanged (normalized to ISO) so an
 // edit never silently wipes a reg window.
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { ImagePlus, Loader2, X } from 'lucide-react'
-import { HOST_EVENT_KINDS } from '@/lib/host-events'
+import { HOST_EVENT_KINDS, MAX_SESSIONS } from '@/lib/host-events'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 
@@ -54,11 +54,34 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   const [venueName, setVenueName] = useState(initial?.venue_name || '')
   const [venueAddress, setVenueAddress] = useState(initial?.venue_address || '')
   const [raceDate, setRaceDate] = useState(initial?.race_date || '')
-  const [sessionStartTime, setSessionStartTime] = useState(initial?.session_start_time || '')
-  const [sessionCapacity, setSessionCapacity] = useState(
-    initial?.session_capacity != null ? String(initial.session_capacity) : ''
-  )
-  const [sessionLabel, setSessionLabel] = useState(initial?.session_label || '')
+  // HOSTSERIES.1 — one row per session time (each a race_waves row). `key`
+  // is the React key for a row that has no id yet.
+  const [sessions, setSessions] = useState(() => {
+    const given = Array.isArray(initial?.sessions) && initial.sessions.length > 0 ? initial.sessions : [{}]
+    return given.map((s, i) => ({
+      key: s.id || `new-${i}`,
+      id: s.id || null,
+      start_time: s.start_time || '',
+      label: s.label || '',
+      capacity: s.capacity != null ? String(s.capacity) : '',
+    }))
+  })
+  // HOSTSERIES.1 — the host's series, for the Series select (hidden when none).
+  const [seriesId, setSeriesId] = useState(initial?.series_id ?? null)
+  const [seriesOptions, setSeriesOptions] = useState([])
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const r = await fetch('/api/host/series', { cache: 'no-store' })
+        const j = await r.json()
+        if (alive && j?.success && Array.isArray(j.data)) setSeriesOptions(j.data)
+      } catch {
+        // No series list: the select stays hidden; the form still saves.
+      }
+    })()
+    return () => { alive = false }
+  }, [])
   const [teamSizes, setTeamSizes] = useState(
     Array.isArray(initial?.allowed_team_sizes) && initial.allowed_team_sizes.length
       ? [...initial.allowed_team_sizes].sort((a, b) => a - b)
@@ -95,6 +118,16 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   // Reg window isn't editable here — preserve whatever the event already has.
   const regOpensAt = initial?.registration_opens_at ?? null
   const regClosesAt = initial?.registration_closes_at ?? null
+
+  function updateSession(key, patch) {
+    setSessions((prev) => prev.map((s) => (s.key === key ? { ...s, ...patch } : s)))
+  }
+  function addSession() {
+    setSessions((prev) => (prev.length >= MAX_SESSIONS ? prev : [...prev, { key: `new-${Date.now()}-${prev.length}`, id: null, start_time: '', label: '', capacity: '' }]))
+  }
+  function removeSession(key) {
+    setSessions((prev) => (prev.length <= 1 ? prev : prev.filter((s) => s.key !== key)))
+  }
 
   function toggleTeamSize(n) {
     setTeamSizes((prev) =>
@@ -155,9 +188,14 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     if (!name.trim()) return 'Please give your event a name.'
     if (!venueName.trim()) return 'Please add a venue name.'
     if (!raceDate) return 'Please pick a date.'
-    if (!sessionStartTime) return 'Please set a start time.'
-    const cap = parseInt(sessionCapacity, 10)
-    if (!Number.isFinite(cap) || cap < 1) return 'Capacity must be at least 1.'
+    const seen = new Set()
+    for (const [i, s] of sessions.entries()) {
+      if (!s.start_time) return `Please set a start time for session ${i + 1}.`
+      const cap = parseInt(s.capacity, 10)
+      if (!Number.isFinite(cap) || cap < 1) return `Capacity for session ${i + 1} must be at least 1.`
+      if (seen.has(s.start_time)) return 'Each session needs its own start time.'
+      seen.add(s.start_time)
+    }
     if (teamSizes.length === 0) return 'Pick at least one team size.'
     if (accentHex.trim() && !ACCENT_RE.test(accentHex.trim())) {
       return 'Accent colour must be a hex like #1a2b3c (or leave it blank).'
@@ -179,9 +217,15 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       registration_closes_at: normalizeIso(regClosesAt),
       allowed_team_sizes: [...teamSizes].sort((a, b) => a - b),
       ticket_price_cents: Math.round((parseFloat(priceEuros) || 0) * 100),
-      session_start_time: sessionStartTime,
-      session_capacity: parseInt(sessionCapacity, 10),
-      session_label: trimmedText(sessionLabel),
+      sessions: sessions.map((s) => ({
+        ...(s.id ? { id: s.id } : {}),
+        start_time: s.start_time,
+        label: trimmedText(s.label),
+        capacity: parseInt(s.capacity, 10),
+      })),
+      // A series pick travels; clearing it sends null (so an edit can leave a
+      // series); with no series at all the key is absent.
+      ...(seriesId ? { series_id: seriesId } : (initial?.series_id ? { series_id: null } : {})),
       hero_image_url: trimmedText(heroImageUrl),
       accent_hex: trimmedText(accentHex),
       venue_name: venueName.trim(),
@@ -306,42 +350,91 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
               required
             />
           </div>
-          <div>
-            <label htmlFor="he-start" className={labelCls}>Start time</label>
-            <input
-              id="he-start"
-              type="time"
-              value={sessionStartTime}
-              onChange={(e) => setSessionStartTime(e.target.value)}
-              className={`${input} [color-scheme:dark]`}
-              required
-            />
-          </div>
-          <div>
-            <label htmlFor="he-cap" className={labelCls}>Capacity</label>
-            <input
-              id="he-cap"
-              type="number"
-              min={1}
-              step={1}
-              value={sessionCapacity}
-              onChange={(e) => setSessionCapacity(e.target.value)}
-              placeholder="e.g. 30"
-              className={input}
-              required
-            />
-          </div>
         </div>
-        <div className="mt-4">
-          <label htmlFor="he-slabel" className={labelCls}>Session label <span className="text-white/30 normal-case">(optional)</span></label>
-          <input
-            id="he-slabel"
-            type="text"
-            value={sessionLabel}
-            onChange={(e) => setSessionLabel(e.target.value)}
-            placeholder="e.g. Morning session"
-            className={`${input} sm:max-w-xs`}
-          />
+
+        {(seriesOptions.length > 0 || seriesId) && (
+          <div className="mt-4">
+            <label htmlFor="he-series" className={labelCls}>Series <span className="text-white/30 normal-case">(optional)</span></label>
+            <select
+              id="he-series"
+              value={seriesId || ''}
+              onChange={(e) => setSeriesId(e.target.value || null)}
+              className={`${input} sm:max-w-md [color-scheme:dark]`}
+            >
+              <option value="">Not part of a series</option>
+              {seriesOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {seriesId && !seriesOptions.some((s) => s.id === seriesId) && <option value={seriesId}>Current series</option>}
+            </select>
+            <p className="mt-1.5 text-xs text-white/35">A series is one link that lists every published date.</p>
+          </div>
+        )}
+
+        {/* HOSTSERIES.1 — sessions: one row per start time, each with its own
+            capacity and optional label. The only row cannot be removed. */}
+        <div className="mt-5 space-y-3">
+          <span className={labelCls}>Sessions</span>
+          {sessions.map((sess, i) => (
+            <div key={sess.key} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1.4fr_auto] gap-3 items-end rounded-xl border border-white/10 bg-white/[0.02] p-3">
+              <div>
+                <label htmlFor={`he-start-${sess.key}`} className={labelCls}>Start time</label>
+                <input
+                  id={`he-start-${sess.key}`}
+                  type="time"
+                  value={sess.start_time}
+                  onChange={(e) => updateSession(sess.key, { start_time: e.target.value })}
+                  className={`${input} [color-scheme:dark]`}
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor={`he-cap-${sess.key}`} className={labelCls}>Capacity</label>
+                <input
+                  id={`he-cap-${sess.key}`}
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={sess.capacity}
+                  onChange={(e) => updateSession(sess.key, { capacity: e.target.value })}
+                  placeholder="e.g. 30"
+                  className={input}
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor={`he-slabel-${sess.key}`} className={labelCls}>Label <span className="text-white/30 normal-case">(optional)</span></label>
+                <input
+                  id={`he-slabel-${sess.key}`}
+                  type="text"
+                  value={sess.label}
+                  onChange={(e) => updateSession(sess.key, { label: e.target.value })}
+                  placeholder="e.g. Morning session"
+                  className={input}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => removeSession(sess.key)}
+                disabled={sessions.length <= 1}
+                aria-label={`Remove session ${i + 1}`}
+                title={sessions.length <= 1 ? 'An event needs at least one session' : 'Remove this session'}
+                className="h-[42px] px-3 rounded-lg border border-white/12 text-white/60 hover:text-white hover:border-white/30 disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+          {sessions.length < MAX_SESSIONS && (
+            <button
+              type="button"
+              onClick={addSession}
+              className="text-sm text-white/70 hover:text-white underline underline-offset-2"
+            >
+              + Add a session
+            </button>
+          )}
+          <p className="text-xs text-white/35">
+            Each session is its own start time with its own places. A session with bookings cannot be removed; changing an existing session&apos;s time on a live event sends it back for approval.
+          </p>
         </div>
       </section>
 

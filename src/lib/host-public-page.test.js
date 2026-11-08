@@ -184,3 +184,27 @@ describe.each(pages)('%s metadata lookup degradation', (_page, load) => {
     expect(await generateMetadata(props)).toMatchObject({ openGraph: { images: [{ url: HERO }] } })
   })
 })
+
+// HOSTSERIES.1 — cards grouped by series: the null group first (one-offs, in
+// date order), then each series in order of its first date.
+import { groupHostCards } from './host-public-page.js'
+describe('groupHostCards', () => {
+  it('groups by series, one-offs first, series by first date', () => {
+    const rows = [
+      { slug: 'a', race_date: '2027-01-02', series_id: 'S1', series: { id: 'S1', name: 'Monthly', slug: 'monthly' } },
+      { slug: 'solo', race_date: '2026-12-20', series_id: null, series: null },
+      { slug: 'c', race_date: '2026-12-28', series_id: 'S2', series: { id: 'S2', name: 'Camp', slug: 'camp' } },
+      { slug: 'b', race_date: '2027-02-06', series_id: 'S1', series: { id: 'S1', name: 'Monthly', slug: 'monthly' } },
+    ]
+    const groups = groupHostCards(rows, (e) => ({ slug: e.slug }))
+    expect(groups).toEqual([
+      { seriesName: null, seriesSlug: null, cards: [{ slug: 'solo' }] },
+      { seriesName: 'Camp', seriesSlug: 'camp', cards: [{ slug: 'c' }] },
+      { seriesName: 'Monthly', seriesSlug: 'monthly', cards: [{ slug: 'a' }, { slug: 'b' }] },
+    ])
+  })
+  it('no one-offs means no null group', () => {
+    const groups = groupHostCards([{ slug: 'a', race_date: '2027-01-02', series_id: 'S1', series: { id: 'S1', name: 'Monthly', slug: 'monthly' } }], (e) => ({ slug: e.slug }))
+    expect(groups.map((g) => g.seriesSlug)).toEqual(['monthly'])
+  })
+})
