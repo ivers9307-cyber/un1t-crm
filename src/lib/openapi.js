@@ -1679,6 +1679,58 @@ registry.registerPath({
   },
 })
 
+// HOSTSERIES.1 — event series: one public page (/event/series/<slug>), many dates.
+const SeriesSummary = z.object({ id: uuidLike, name: z.string(), slug: z.string(), headline: z.string().nullable(), blurb: z.string().nullable(), upcoming_count: z.number().int() })
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/events/{id}/series',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Make one of the host's own events the first date of a new series; one draft copy per other date",
+  description: 'Host session. 404 for another host\'s event; 409 already_in_series; 400 invalid_dates (1–24 dates, each once, none the event\'s own); 500 write_failed carries `created`, the copies made before the failure (the series exists; add the missing dates again).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ name: z.string().min(1).max(120), dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).min(1).max(24) }) } } },
+  },
+  responses: {
+    200: { description: 'The series and the copies', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ series: z.object({ id: uuidLike, slug: z.string() }), created: z.array(z.object({ id: uuidLike, slug: z.string(), race_date: z.string() })) }) }) } } },
+    400: { description: 'Bad body or invalid_dates', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'already_in_series', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed / write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/series',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "The host's series, each with how many published dates are still to come",
+  responses: {
+    200: { description: 'Series', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.array(SeriesSummary) }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'patch',
+  path: '/api/host/series/{id}',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Edit a series' name and its public page copy (empty = the default)",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ name: z.string().min(1).max(120).optional(), headline: z.string().max(120).nullable().optional(), blurb: z.string().max(500).nullable().optional() }) } } },
+  },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    400: { description: 'Bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not this host's series", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // EVENT-MOVE.2 — a host moves one of their own entries to another of their
 // OWN events. Same lib and shapes as the staff routes above.
 registry.registerPath({
