@@ -1655,6 +1655,26 @@ registry.registerPath({
   },
 })
 
+// HOSTSTATS.1 — the signup page's page-view beacon.
+const EventViewBody = z.object({
+  session_id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).openapi({ description: 'The tab\'s random session id (sessionStorage; no cookie)' }),
+  attribution: z.record(z.string(), z.unknown()).nullable().optional().openapi({ description: 'First-touch signals: utm_source/medium/campaign/content, hc (host campaign id), referrer. Sanitised server-side.' }),
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/events/{slug}/view',
+  tags: ['Public'],
+  summary: 'Record one page view of a published event (deduped per session per day on the studio clock)',
+  description: 'Called by the signup widget on mount. A draft, unpublished or unknown event is 404. A repeat view by the same session on the same day answers recorded:false. A failed write is logged and answers recorded:false — telemetry never fails the visitor. Rate-limited per slug + IP.',
+  request: { params: z.object({ slug: z.string() }), body: { content: { 'application/json': { schema: EventViewBody } } } },
+  responses: {
+    200: { description: 'Recorded (or already counted today)', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ recorded: z.boolean() }) }) } } },
+    400: { description: 'Bad session id', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // HOSTSERIES.1 — copy an event to a new date as a draft (fields, waves, a
 // shifted registration window, its own hero file; never registrations or
 // promo codes). Host: own event only; staff: manager+ holding races at the

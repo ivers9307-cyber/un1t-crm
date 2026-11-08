@@ -81,10 +81,18 @@ export function referrerSourceLabel(host) {
   return h
 }
 
+// Words only the SERVER derives. A utm_source spelling one of them is a
+// visitor posing as a host-email conversion (or hiding as direct) and is
+// skipped, so the two namespaces stay disjoint.
+const RESERVED_SOURCES = new Set(['host_email', 'direct', 'unknown'])
+
 /** One source word: campaign → utm_source → referrer → direct. */
 export function sourceOf({ host_campaign_id, utm_source, referrer_host }) {
   if (host_campaign_id) return 'host_email'
-  if (utm_source) return String(utm_source).trim().toLowerCase().slice(0, SOURCE_CAP)
+  if (utm_source) {
+    const u = String(utm_source).trim().toLowerCase().slice(0, SOURCE_CAP)
+    if (u && !RESERVED_SOURCES.has(u)) return u
+  }
   if (referrer_host) return referrerSourceLabel(referrer_host)
   return 'direct'
 }

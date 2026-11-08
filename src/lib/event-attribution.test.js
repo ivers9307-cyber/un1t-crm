@@ -67,6 +67,11 @@ describe('sourceOf / referrerSourceLabel / sourceLabel', () => {
     expect(sourceOf({ host_campaign_id: null, utm_source: null, referrer_host: 't.co' })).toBe('x')
     expect(sourceOf({ host_campaign_id: null, utm_source: null, referrer_host: null })).toBe('direct')
   })
+  it('a utm_source spelling a reserved word cannot pose as a server-derived source', () => {
+    expect(sourceOf({ host_campaign_id: null, utm_source: 'host_email', referrer_host: 'l.instagram.com' })).toBe('instagram')
+    expect(sourceOf({ host_campaign_id: null, utm_source: 'Direct', referrer_host: null })).toBe('direct')
+    expect(sourceOf({ host_campaign_id: null, utm_source: 'unknown', referrer_host: null })).toBe('direct')
+  })
   it('knows the social and search hosts', () => {
     for (const [host, label] of [['lm.facebook.com', 'facebook'], ['m.facebook.com', 'facebook'], ['wa.me', 'whatsapp'], ['google.ie', 'google'], ['strava.com', 'strava'], ['linkedin.com', 'linkedin'], ['tiktok.com', 'tiktok'], ['youtube.com', 'youtube'], ['example.org', 'example.org']]) {
       expect(referrerSourceLabel(host)).toBe(label)

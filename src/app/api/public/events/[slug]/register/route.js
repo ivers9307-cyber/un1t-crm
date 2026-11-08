@@ -51,6 +51,7 @@ import { logWarn } from '@/lib/log'
 import { wouldFit } from '@/lib/event-signups'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { eventIsPublic, resolveMasterLocationId } from '@/lib/host-events'
+import { resolveEventAttribution } from '@/lib/event-attribution-server'
 import { claimWaitlistOnRegistration, claimWaitlistByEmail } from '@/lib/event-waitlist'
 import { resolveFindTeamSettings, soloTeamName } from '@/lib/find-team'
 import { holdingPlaces, pendingLapsed } from '@/lib/entry-policy'
@@ -96,6 +97,10 @@ const RegisterSchema = z.object({
   // QUESTIONS.1 — answers to the event's registration questions, keyed by
   // question id: `entry` for the booking, `people[i]` for roster person i
   // (0 = the captain). Validated against the event's questions in the handler.
+  // HOSTSTATS.1 — the first-touch attribution the tab remembered (utm_*, the
+  // host-campaign `hc`, the referrer, a per-tab session id). Sanitised and
+  // the campaign proven server-side; stored on the registration.
+  attribution: z.record(z.string(), z.unknown()).nullable().optional(),
   answers: z.object({
     entry: z.record(z.string(), z.unknown()).optional(),
     people: z.array(z.record(z.string(), z.unknown()).nullable()).max(50).optional(),
@@ -356,6 +361,8 @@ export async function POST(request, props) {
       race_event_id: race.id, team_id: teamId, contact_id: contactId,
       status: 'confirmed', wave_id: null, team_composition: 'all_non_members',
       answers: leadAnswers.entry,
+      // HOSTSTATS.1 — where the lead came from.
+      attribution: await resolveEventAttribution(db, body.attribution, race),
       // HOST-CONSENT.1 — persisted so the attendee sync can grant HOST consent.
       marketing_consent: body.marketing_consent !== false,
     }).select('id, registered_at').single()
@@ -900,6 +907,8 @@ export async function POST(request, props) {
       pricing_tier_id: priced.tier?.id ?? null,
       // QUESTIONS.1 — the entry-level answers.
       answers: answered.entry,
+      // HOSTSTATS.1 — where the booking came from (null when the form sent none).
+      attribution: await resolveEventAttribution(db, body.attribution, race),
       // HOST-CONSENT.1 — persisted so the attendee sync can grant HOST consent
       // when the registration confirms (immediately for free, on payment for paid).
       marketing_consent: body.marketing_consent !== false,
