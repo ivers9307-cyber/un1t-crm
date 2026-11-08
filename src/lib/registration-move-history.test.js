@@ -9,7 +9,7 @@ function fakeDb({ movesIn = [], movesOut = [], inError = null, outError = null }
       const q = { table, ops: [] }
       calls.push(q)
       const b = {}
-      for (const name of ['select', 'eq', 'in', 'order', 'limit']) b[name] = (...a) => { q.ops.push([name, ...a]); return b }
+      for (const name of ['select', 'eq', 'neq', 'in', 'order', 'limit']) b[name] = (...a) => { q.ops.push([name, ...a]); return b }
       b.then = (res, rej) => {
         const isOut = q.ops.some((o) => o[0] === 'eq' && o[1] === 'from_event_id')
         const v = isOut ? { data: outError ? null : movesOut, error: outError } : { data: inError ? null : movesIn, error: inError }
@@ -43,6 +43,20 @@ describe('loadMoveHistory', () => {
     const cols = movesIn.ops.find((o) => o[0] === 'select')[1].split(',').map((c) => c.trim())
     expect(cols).toEqual(expect.arrayContaining(['gap_settled_at', 'gap_settled_how', 'gap_settled_by_name']))
     expect(lastMoveByReg.r1).toMatchObject({ gap_settled_how: 'waived', gap_settled_by_name: 'Richard' })
+  })
+  // SAMETIME.1 — a change of time stays on the event: it is flagged on the
+  // chip and never counted as a move OUT.
+  it('flags a change of time on the chip and excludes it from the moves out', async () => {
+    const db = fakeDb({ movesIn: [mv({ id: 'same', from_event: { id: 'e2', name: 'A', race_date: '2026-10-18' } })] })
+    const { lastMoveByReg } = await loadMoveHistory(db, { eventId: 'e2', regIds: ['r1'] })
+    expect(lastMoveByReg.r1.time_change).toBe(true)
+    const out = db.calls.find((q) => q.ops.some((o) => o[0] === 'eq' && o[1] === 'from_event_id'))
+    expect(out.ops).toContainEqual(['neq', 'to_event_id', 'e2'])
+  })
+  it('a move in from another event is not a change of time', async () => {
+    const db = fakeDb({ movesIn: [mv()] })
+    const { lastMoveByReg } = await loadMoveHistory(db, { eventId: 'e2', regIds: ['r1'] })
+    expect(lastMoveByReg.r1.time_change).toBe(false)
   })
   it('skips the moves-in read when there are no entries', async () => {
     const db = fakeDb()

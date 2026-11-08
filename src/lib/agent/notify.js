@@ -124,7 +124,7 @@ export const EVENT_MOVE_FAILURE_REASONS = Object.freeze({
   not_found: 'we could not find the entry',
   not_active: 'the entry is no longer active',
   checked_in: 'the entry has already been checked in',
-  same_event: 'the entry is already on that date',
+  same_event: 'the entry is already booked at that time',
   target_unavailable: 'that date is no longer available',
   different_payee: 'that date is no longer available',
   already_entered: 'there is already an entry for you on that date',

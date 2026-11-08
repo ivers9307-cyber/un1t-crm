@@ -89,7 +89,7 @@ const MESSAGES = Object.freeze({
   pending_payment: 'This entry is still waiting for payment. Once it is paid you can change the date here.',
   checked_in: 'This entry has already been checked in, so its date cannot be changed.',
   event_past: 'This event has already happened, so its date cannot be changed.',
-  same_event: 'You are already booked on that date.',
+  same_event: 'You are already booked at that time.',
   target_unavailable: 'That date is no longer available. Pick another one.',
   different_payee: 'That date is no longer available. Pick another one.',
   already_entered: 'Your team already has an entry on that date.',

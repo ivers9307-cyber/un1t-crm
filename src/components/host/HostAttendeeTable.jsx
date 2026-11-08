@@ -66,7 +66,12 @@ export default function HostAttendeeTable({ entries, movedOut }) {
                 <tr key={e.id} className="border-b border-white/5 last:border-0">
                   <td className={td}>
                     <span className="text-white">{e.label}</span>
-                    {e.last_move && (
+                    {e.last_move && e.last_move.time_change && (
+                      <span className="ml-2 text-[11px] text-sky-300" title={`Time changed on ${fmtDate(e.last_move.created_at)} by ${e.last_move.actor_name || 'staff'}${e.last_move.forced ? ' (time was full)' : ''}`}>
+                        time changed {fmtDate(e.last_move.created_at)}
+                      </span>
+                    )}
+                    {e.last_move && !e.last_move.time_change && (
                       <span className="ml-2 text-[11px] text-sky-300" title={`Moved in from ${e.last_move.from_event?.name || 'another event'} on ${fmtDate(e.last_move.created_at)} by ${e.last_move.actor_name || 'staff'}${e.last_move.forced ? ' (time was full)' : ''}`}>
                         moved in from {e.last_move.from_event?.name || 'another event'} {fmtDate(e.last_move.created_at)}
                       </span>

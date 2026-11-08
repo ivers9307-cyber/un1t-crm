@@ -83,7 +83,7 @@ describe('GET /api/events/[id]/teams — move history', () => {
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json.success).toBe(true)
-    expect(json.data.find((r) => r.id === 'r1').last_move).toEqual(MOVE_IN_NEW)
+    expect(json.data.find((r) => r.id === 'r1').last_move).toEqual({ ...MOVE_IN_NEW, time_change: false })
     expect(json.data.find((r) => r.id === 'r2').last_move).toBeNull()
     const movesIn = globalThis.__calls.find((c) => c.table === 'registration_moves' && has(c.ops, 'eq', 'to_event_id', EV))
     // One filter on the event, never a URL that grows with the entry list.
@@ -95,7 +95,7 @@ describe('GET /api/events/[id]/teams — move history', () => {
     const gone = { ...MOVE_IN_NEW, id: 'm9', registration_id: 'r-left-again', created_at: '2026-10-08T10:00:00Z' }
     moves.in = { data: [gone, MOVE_IN_NEW, MOVE_IN_OLD], error: null }
     const json = await (await GET(req(), props)).json()
-    expect(json.data.find((r) => r.id === 'r1').last_move).toEqual(MOVE_IN_NEW)
+    expect(json.data.find((r) => r.id === 'r1').last_move).toEqual({ ...MOVE_IN_NEW, time_change: false })
     expect(json.data.find((r) => r.id === 'r2').last_move).toBeNull()
     expect(json.data.some((r) => r.last_move?.id === 'm9')).toBe(false)
   })
@@ -142,7 +142,7 @@ describe('GET /api/events/[id]/teams — move history', () => {
     const json = await res.json()
     expect(json.data).toHaveLength(2)
     expect(json.moved_out).toEqual([])
-    expect(json.data.find((r) => r.id === 'r1').last_move).toEqual(MOVE_IN_NEW)
+    expect(json.data.find((r) => r.id === 'r1').last_move).toEqual({ ...MOVE_IN_NEW, time_change: false })
     expect(logError).toHaveBeenCalled()
   })
 

@@ -32,6 +32,10 @@ function fmtDate(d) {
 function waveLabel(w) {
   return `${w.label ? `${w.label} · ` : ''}${(w.start_time || '').slice(0, 5)}`
 }
+// SAMETIME.1 — the entry's own event reads as a change of time.
+function targetLabel(t) {
+  return `${fmtDate(t.race_date)} · ${t.name}${t.same_event ? ' · this event (change time)' : ''}`
+}
 
 export default function MoveEntryDialog({
   open, registration, onClose, onMoved, onNotice,
@@ -131,7 +135,7 @@ export default function MoveEntryDialog({
   )
 
   return (
-    <Modal open={open} onClose={onClose} dismissable={!busy} title={`Move ${label} to another event`} footer={footer} size="md">
+    <Modal open={open} onClose={onClose} dismissable={!busy} title={`Move ${label} to another event or time`} footer={footer} size="md">
       <p className="text-sm text-un1t-subtle mb-4">
         The entry, its people and its payment travel together. Nothing is charged or refunded by this move.
       </p>
@@ -157,13 +161,17 @@ export default function MoveEntryDialog({
                 ? studios.map((s) => (
                   <optgroup key={s} label={s}>
                     {data.targets.filter((t) => t.location_name === s).map((t) => (
-                      <option key={t.id} value={t.id}>{fmtDate(t.race_date)} · {t.name}</option>
+                      <option key={t.id} value={t.id}>{targetLabel(t)}</option>
                     ))}
                   </optgroup>
                 ))
-                : data.targets.map((t) => (<option key={t.id} value={t.id}>{fmtDate(t.race_date)} · {t.name}</option>))}
+                : data.targets.map((t) => (<option key={t.id} value={t.id}>{targetLabel(t)}</option>))}
             </select>
-            <p className="text-[11px] text-un1t-muted mt-1">Only upcoming events paid to the same host are listed.</p>
+            <p className="text-[11px] text-un1t-muted mt-1">
+              {data.targets.some((t) => t.same_event)
+                ? "This event's other times, and upcoming events paid to the same host."
+                : 'Only upcoming events paid to the same host are listed.'}
+            </p>
           </div>
 
           {waveField && (
@@ -177,8 +185,9 @@ export default function MoveEntryDialog({
               >
                 <option value="">Choose a time…</option>
                 {target.waves.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {waveLabel(w)}{w.spots_left === null ? '' : w.spots_left === 0 ? ' · full' : ` · ${w.spots_left} left`}
+                  // SAMETIME.1 — the entry's own time is shown, not offered.
+                  <option key={w.id} value={w.id} disabled={!!w.current}>
+                    {waveLabel(w)}{w.current ? ' · current' : w.spots_left === null ? '' : w.spots_left === 0 ? ' · full' : ` · ${w.spots_left} left`}
                   </option>
                 ))}
               </select>
