@@ -8,7 +8,7 @@ vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 
 const {
   PricingTiersSchema, resolvePricingTiers, tierIsOpen, resolveTier, loadSoldByTier, applyTierPricing,
-  publicPricing, tierPriceLabel, groupPriceLabel, effectiveNonMemberFee,
+  publicPricing, tierPriceLabel, groupPriceLabel, effectiveNonMemberFee, canonicalTiers,
 } = await import('./pricing-tiers.js')
 
 const NOW = Date.parse('2026-11-15T12:00:00Z')
@@ -112,15 +112,35 @@ describe('applyTierPricing', () => {
 })
 
 describe('publicPricing', () => {
-  it('current, next and group, with no counts anywhere', () => {
-    const p = publicPricing({ race: RACE, nowMs: NOW, soldByTier: { early: 5 } })
+  it('current, next, group and the per-headcount prices the server would charge, with no counts anywhere', () => {
+    const p = publicPricing({ race: { ...RACE, allowed_team_sizes: [1, 2, 3, 4] }, nowMs: NOW, soldByTier: { early: 5 } })
     expect(p).toEqual({
       base_cents: 3500,
       current: { id: 'early', name: 'Early bird', price_cents: 2500, ends_at: null, limited: true },
       next: { name: 'Standard', price_cents: 3500, starts_at: null },
-      group: { min_people: 3, price_cents: 2800 },
+      // The early bird is first in order and has room for 3, so it wins over
+      // the group tier; the group label is only shown when the group tier is
+      // what a group would actually get.
+      group: null,
+      prices_by_headcount: { 1: 2500, 2: 2500, 3: 2500, 4: 2500 },
     })
     expect(JSON.stringify(p)).not.toMatch(/sold|spots|capacity/)
+  })
+  it('a group tier that a group would actually get is offered, and the table agrees', () => {
+    const p = publicPricing({ race: { ...RACE, allowed_team_sizes: [1, 2, 3, 4] }, nowMs: NOW, soldByTier: { early: 18 } })
+    expect(p.group).toEqual({ min_people: 3, price_cents: 2800 })
+    expect(p.prices_by_headcount).toEqual({ 1: 2500, 2: 2500, 3: 2800, 4: 2800 })
+  })
+  it('a group tier behind an uncapped standard tier can never apply, so it is never advertised', () => {
+    const p = publicPricing({ race: { ...RACE, allowed_team_sizes: [1, 3], pricing_tiers: [std, group] }, nowMs: NOW, soldByTier: {} })
+    expect(p.group).toBeNull()
+    expect(p.prices_by_headcount).toEqual({ 1: 3500, 3: 3500 })
+  })
+  it('"then" skips a tier that has ended or is full', () => {
+    const later = publicPricing({ race: { ...RACE, pricing_tiers: [{ ...early, capacity: null }, dec, std] }, nowMs: Date.parse('2026-12-05T00:00:00Z'), soldByTier: {} })
+    expect(later.next).toEqual({ name: 'Standard', price_cents: 3500, starts_at: null })
+    const full = publicPricing({ race: { ...RACE, pricing_tiers: [{ ...early, capacity: null }, { ...early, id: 'e2', name: 'Second', capacity: 5, price_cents: 3000 }, std] }, nowMs: NOW, soldByTier: { e2: 5 } })
+    expect(full.next).toEqual({ name: 'Standard', price_cents: 3500, starts_at: null })
   })
   it('a sold-out early bird is not current; a full group tier is not offered', () => {
     const p = publicPricing({ race: RACE, nowMs: NOW, soldByTier: { early: 20 } })
@@ -129,8 +149,8 @@ describe('publicPricing', () => {
     const fullGroup = publicPricing({ race: { ...RACE, pricing_tiers: [{ ...group, capacity: 3 }] }, nowMs: NOW, soldByTier: { group: 1 } })
     expect(fullGroup.group).toBeNull()
   })
-  it('no tiers → base only', () => {
-    expect(publicPricing({ race: { non_member_fee_cents: 3500, pricing_tiers: null }, nowMs: NOW, soldByTier: {} })).toEqual({ base_cents: 3500, current: null, next: null, group: null })
+  it('no tiers → base only, with no table', () => {
+    expect(publicPricing({ race: { non_member_fee_cents: 3500, pricing_tiers: null }, nowMs: NOW, soldByTier: {} })).toEqual({ base_cents: 3500, current: null, next: null, group: null, prices_by_headcount: null })
   })
 })
 
@@ -145,11 +165,29 @@ describe('labels and the live fee', () => {
     expect(groupPriceLabel({ group: { min_people: 3, price_cents: 2800 } })).toBe('3+ people: €28.00 each')
     expect(groupPriceLabel({ group: null })).toBe('')
   })
-  it('effectiveNonMemberFee: group price at the group size, else the current tier, else base', () => {
-    const p = { base_cents: 3500, current: { price_cents: 2500 }, next: null, group: { min_people: 3, price_cents: 2800 } }
+  it('effectiveNonMemberFee reads the server table for the headcount, else the current tier, else base', () => {
+    const p = { base_cents: 3500, current: { price_cents: 2500 }, next: null, group: { min_people: 3, price_cents: 2800 }, prices_by_headcount: { 1: 2500, 2: 2500, 3: 2800 } }
     expect(effectiveNonMemberFee(p, 1)).toBe(2500)
     expect(effectiveNonMemberFee(p, 3)).toBe(2800)
-    expect(effectiveNonMemberFee({ base_cents: 3500, current: null, next: null, group: null }, 2)).toBe(3500)
+    expect(effectiveNonMemberFee(p, 5)).toBe(2500) // not in the table: the one-person tier
+    expect(effectiveNonMemberFee({ base_cents: 3500, current: null, next: null, group: null, prices_by_headcount: null }, 2)).toBe(3500)
     expect(effectiveNonMemberFee(null, 2)).toBeNull()
+  })
+  it('the table matches what applyTierPricing charges for the same fixture', async () => {
+    const race = { ...RACE, allowed_team_sizes: [1, 2, 3, 4] }
+    const sold = { early: 18 }
+    const p = publicPricing({ race, nowMs: NOW, soldByTier: sold })
+    for (const n of [1, 2, 3, 4]) {
+      const rows = Array.from({ length: 18 }, () => held('early', 1))
+      const r = await applyTierPricing(soldDb(rows), { race, headcount: n, nowMs: NOW })
+      expect(r.race.non_member_fee_cents).toBe(p.prices_by_headcount[n])
+    }
+  })
+  it('canonicalTiers gives one key order with explicit nulls, so a jsonb round trip compares equal', () => {
+    const fromForm = [{ id: 'a', name: 'Early', price_cents: 2500, capacity: 20 }]
+    const fromDb = [{ id: 'a', name: 'Early', ends_at: null, capacity: 20, starts_at: null, min_people: null, price_cents: 2500 }]
+    expect(JSON.stringify(canonicalTiers(fromForm))).toBe(JSON.stringify(canonicalTiers(fromDb)))
+    expect(canonicalTiers(null)).toBeNull()
+    expect(canonicalTiers([])).toBeNull()
   })
 })

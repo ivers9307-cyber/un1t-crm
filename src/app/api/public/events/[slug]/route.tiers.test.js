@@ -48,7 +48,10 @@ describe('GET /api/public/events/[slug] — pricing tiers', () => {
       base_cents: 3500,
       current: { id: 'early', name: 'Early bird', price_cents: 2500, ends_at: null, limited: true },
       next: null,
-      group: { min_people: 3, price_cents: 2800 },
+      // The early bird (first, room for everyone) wins for every size, so the
+      // group tier is never what a group would get and is not advertised.
+      group: null,
+      prices_by_headcount: { 1: 2500, 2: 2500, 3: 2500, 4: 2500 },
     })
     expect(body.data).not.toHaveProperty('pricing_tiers')
     expect(JSON.stringify(body)).not.toMatch(/"sold|spots_left|"capacity"/)
@@ -65,12 +68,12 @@ describe('GET /api/public/events/[slug] — pricing tiers', () => {
     const res = await get()
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data.pricing).toEqual({ base_cents: 3500, current: null, next: null, group: null })
+    expect(body.data.pricing).toEqual({ base_cents: 3500, current: null, next: null, group: null, prices_by_headcount: null })
   })
   it('an event without tiers reads no sold count and reports base only', async () => {
     db = makeDb(race({ pricing_tiers: null }))
     const body = await (await get()).json()
-    expect(body.data.pricing).toEqual({ base_cents: 3500, current: null, next: null, group: null })
+    expect(body.data.pricing).toEqual({ base_cents: 3500, current: null, next: null, group: null, prices_by_headcount: null })
     expect(db.queries.some(isTierRead)).toBe(false)
   })
 })

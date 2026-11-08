@@ -202,7 +202,7 @@ async function buildPublicPricing(db, race, nowMs) {
   const sold = await loadSoldByTier(db, { eventId: race.id, race, nowMs })
   if (!sold.ok) {
     logWarn('public-event', 'tier sold-count unreadable; showing the base price', { eventId: race.id })
-    return { base_cents: race.non_member_fee_cents ?? null, current: null, next: null, group: null }
+    return { base_cents: race.non_member_fee_cents ?? null, current: null, next: null, group: null, prices_by_headcount: null }
   }
   return publicPricing({ race, nowMs, soldByTier: sold.soldByTier })
 }

@@ -135,25 +135,50 @@ export async function applyTierPricing(db, { race, headcount, nowMs = Date.now()
 }
 
 /**
- * What a buyer may see: the tier one person gets now, the next tier in
- * order (skipping group tiers), and the group price. Never a count.
+ * The per-tier shape in ONE key order with explicit nulls, so a list read
+ * back from jsonb (Postgres reorders object keys) compares equal to the form's
+ * list. null for no tiers.
+ */
+export function canonicalTiers(tiers) {
+  if (!Array.isArray(tiers) || tiers.length === 0) return null
+  return tiers.map((t) => ({
+    id: t.id, name: t.name, price_cents: t.price_cents,
+    capacity: t.capacity ?? null, starts_at: t.starts_at ?? null, ends_at: t.ends_at ?? null, min_people: t.min_people ?? null,
+  }))
+}
+
+const DEFAULT_HEADCOUNTS = [1, 2, 3, 4, 5, 6, 7, 8]
+
+/**
+ * What a buyer may see: the tier one person gets now, what follows, the group
+ * price, and `prices_by_headcount`: the per-person price the SERVER would
+ * charge an entry of each allowed size right now (resolveTier, exactly as
+ * applyTierPricing resolves it), so the page's total and the charge agree.
+ * `group` is offered only when a group of `min_people` would actually get
+ * that tier; `next` skips a tier that has ended or is full. Never a count.
  */
 export function publicPricing({ race, nowMs = Date.now(), soldByTier = {} }) {
   const tiers = resolvePricingTiers(race)
   const base_cents = race?.non_member_fee_cents ?? null
-  if (tiers.length === 0) return { base_cents, current: null, next: null, group: null }
+  if (tiers.length === 0) return { base_cents, current: null, next: null, group: null, prices_by_headcount: null }
+  const priceFor = (n) => resolveTier({ tiers, nowMs, headcount: n, soldByTier })?.price_cents ?? base_cents
   const current = resolveTier({ tiers, nowMs, headcount: 1, soldByTier })
   let next = null
   if (current) {
-    const after = tiers.slice(tiers.indexOf(current) + 1).find((t) => t.min_people == null)
+    const after = tiers.slice(tiers.indexOf(current) + 1).find((t) => t.min_people == null
+      && !(t.ends_at && nowMs >= Date.parse(t.ends_at))
+      && hasRoom(t, soldByTier, 1))
     if (after) next = { name: after.name, price_cents: after.price_cents, starts_at: after.starts_at ?? null }
   }
-  const g = tiers.find((t) => t.min_people != null && tierIsOpen(t, nowMs) && hasRoom(t, soldByTier, t.min_people))
+  const g = tiers.find((t) => t.min_people != null && resolveTier({ tiers, nowMs, headcount: t.min_people, soldByTier })?.id === t.id)
+  const sizes = Array.isArray(race?.allowed_team_sizes) && race.allowed_team_sizes.length > 0 ? race.allowed_team_sizes : DEFAULT_HEADCOUNTS
+  const prices_by_headcount = Object.fromEntries(sizes.map((n) => [n, priceFor(n)]))
   return {
     base_cents,
     current: current ? { id: current.id, name: current.name, price_cents: current.price_cents, ends_at: current.ends_at ?? null, limited: current.capacity != null } : null,
     next,
     group: g ? { min_people: g.min_people, price_cents: g.price_cents } : null,
+    prices_by_headcount,
   }
 }
 
@@ -177,11 +202,13 @@ export function groupPriceLabel(pricing) {
   return g ? `${g.min_people}+ people: ${euro(g.price_cents)} each` : ''
 }
 
-/** The per-person non-member fee the live total should use for `headcount`. */
+/** The per-person non-member fee the live total should use for `headcount`:
+ * the server's own table first, else the one-person tier, else base. */
 export function effectiveNonMemberFee(pricing, headcount) {
   if (!pricing) return null
   const n = Math.max(1, Number(headcount) || 1)
-  if (pricing.group && n >= pricing.group.min_people) return pricing.group.price_cents
+  const table = pricing.prices_by_headcount
+  if (table && table[n] != null) return table[n]
   if (pricing.current) return pricing.current.price_cents
   return pricing.base_cents ?? null
 }

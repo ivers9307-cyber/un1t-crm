@@ -130,6 +130,9 @@ describe('duplicateEvent', () => {
     expect([...tables].sort()).toEqual(['race_events', 'race_waves'])
   })
 
+  it('DUPLICATE_COLUMNS carries the pricing tiers (TIERS.1)', () => {
+    expect(DUPLICATE_COLUMNS).toContain('pricing_tiers')
+  })
   it('DUPLICATE_COLUMNS never names id, slug, status, series_id or the review stamps', () => {
     for (const c of ['id', 'slug', 'status', 'series_id', 'submitted_at', 'reviewed_at', 'rejected_reason', 'active', 'created_at']) {
       expect(DUPLICATE_COLUMNS).not.toContain(c)

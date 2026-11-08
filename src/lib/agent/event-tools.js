@@ -436,7 +436,7 @@ export async function executeEventTool(toolName, input, ctx) {
       return { error: 'no_contact', message: 'No contact linked to this conversation — collect their name and email, then hand off to the team.' }
     }
     const { data: race } = await db.from('race_events')
-      .select('id, name, kind, slug, description, race_date, active, location_id, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, pricing_tiers, waves:race_waves(id, start_time, capacity, label)')
+      .select('id, name, kind, slug, description, race_date, active, location_id, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, pricing_tiers, waves:race_waves(id, start_time, capacity, label)')
       .eq('id', String(input?.event_id || ''))
       .eq('location_id', locationId)
       .maybeSingle()

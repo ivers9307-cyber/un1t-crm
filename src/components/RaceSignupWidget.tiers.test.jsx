@@ -19,6 +19,9 @@ const RACE = {
     current: { id: 'early', name: 'Early bird', price_cents: 2500, ends_at: null, limited: true },
     next: { name: 'Standard', price_cents: 3500, starts_at: null },
     group: { min_people: 3, price_cents: 2800 },
+    // The server's own per-headcount prices: the early bird has room for 2
+    // but not 3 more, so a group of 3 gets the group tier.
+    prices_by_headcount: { 1: 2500, 2: 2500, 3: 2800, 4: 2800 },
   },
 }
 const jsonRes = (body) => ({ ok: true, status: 200, headers: { get: (h) => (h.toLowerCase() === 'content-type' ? 'application/json' : null) }, json: async () => body })

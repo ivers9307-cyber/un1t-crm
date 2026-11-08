@@ -105,6 +105,12 @@ describe('computeEditTransition', () => {
     const cleared = computeEditTransition(withTiers, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], pricing_tiers: null })
     expect(cleared).toEqual({ status: 'pending_review', reReview: true })
   })
+  it('the same tiers in jsonb\'s key order are not a change', () => {
+    const fromDb = [{ id: 'a', name: 'Early', ends_at: null, capacity: 20, starts_at: null, min_people: null, price_cents: 2500 }]
+    const fromForm = [{ id: 'a', name: 'Early', price_cents: 2500, capacity: 20, starts_at: null, ends_at: null, min_people: null }]
+    const t = computeEditTransition({ ...published, pricing_tiers: fromDb }, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], pricing_tiers: fromForm })
+    expect(t).toEqual({ status: 'published', reReview: false })
+  })
   it('draft/rejected edits never trigger re-review and keep their status', () => {
     expect(computeEditTransition({ status: 'draft', non_member_fee_cents: 2500 }, { non_member_fee_cents: 9999 })).toEqual({ status: 'draft', reReview: false })
     expect(computeEditTransition({ status: 'rejected', non_member_fee_cents: 2500 }, { non_member_fee_cents: 9999 })).toEqual({ status: 'rejected', reReview: false })

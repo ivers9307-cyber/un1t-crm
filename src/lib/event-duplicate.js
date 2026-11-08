@@ -35,7 +35,7 @@ export const DUPLICATE_COLUMNS = Object.freeze([
   'moved_email_subject', 'moved_email_intro',
   'waitlist_email_subject', 'waitlist_email_intro',
   'gap_email_subject', 'gap_email_intro',
-  'entry_policy', 'find_team', 'charity_enabled', 'charity', 'tv_logos',
+  'entry_policy', 'find_team', 'charity_enabled', 'charity', 'tv_logos', 'pricing_tiers',
   'shared', 'staff_required', 'sending_location_id', 'create_in_glofox',
   'race_date',
 ])

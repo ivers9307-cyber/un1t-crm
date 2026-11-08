@@ -15,7 +15,7 @@
 
 import { z } from 'zod'
 import { uuidLike } from '@/lib/schemas'
-import { PricingTiersSchema } from '@/lib/pricing-tiers'
+import { PricingTiersSchema, canonicalTiers } from '@/lib/pricing-tiers'
 
 // The four lifecycle states a host event moves through.
 export const HOST_EVENT_STATUSES = ['draft', 'pending_review', 'published', 'rejected']
@@ -93,8 +93,9 @@ export function computeEditTransition(current, changes) {
   })()
 
   // TIERS.1 — a tier change is a price change.
+  // Compared in one key order: jsonb reorders object keys on the way back.
   const tiersChanged = 'pricing_tiers' in changes
-    && JSON.stringify(changes.pricing_tiers ?? null) !== JSON.stringify(current.pricing_tiers ?? null)
+    && JSON.stringify(canonicalTiers(changes.pricing_tiers)) !== JSON.stringify(canonicalTiers(current.pricing_tiers))
 
   const reReview = priceChanged || dateChanged || waveTimeChanged || tiersChanged
   return { status: reReview ? 'pending_review' : 'published', reReview }

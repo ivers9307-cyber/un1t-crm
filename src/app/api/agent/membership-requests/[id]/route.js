@@ -355,7 +355,8 @@ export async function PATCH(request, { params }) {
       .eq('id', row.contact_id)
       .maybeSingle()
     const { data: race } = await db.from('race_events')
-      .select('id, name, kind, slug, race_date, active, location_id, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, waves:race_waves(id, start_time, capacity, label)')
+      // TIERS.1 — pricing_tiers, entry_policy and capacity_mode: this door prices and gates like the public route.
+      .select('id, name, kind, slug, race_date, active, location_id, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, pricing_tiers, waves:race_waves(id, start_time, capacity, label)')
       .eq('id', details.event_id)
       .maybeSingle()
     if (!contact || !race) {
