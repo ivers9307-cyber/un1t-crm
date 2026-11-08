@@ -536,7 +536,10 @@ async function sendEmail({ db, payment, ctx: baseCtx, commsLocationId }) {
 /**
  * Default shell slots for the moved email. Mirrors buildConfirmationDefaults so
  * resolveEventEmail({ kind: 'moved' }) can layer operator copy on top.
- * @param {object} ctx  buildConfirmationDefaults' ctx plus { oldEventName, oldWhen, isRace }
+ * @param {object} ctx  buildConfirmationDefaults' ctx plus { oldEventName, oldWhen, isRace, sameEvent }
+ *   sameEvent (SAMETIME.1): a change of TIME on the entry's own event. The QR
+ *   tokens are signed on event + entry + person, so the tickets are unchanged
+ *   and the copy says so.
  */
 export function buildMovedDefaults(ctx) {
   const base = buildConfirmationDefaults(ctx)
@@ -547,6 +550,21 @@ export function buildMovedDefaults(ctx) {
   const footerHtml = (ctx.isRace
     ? `<strong>What's next:</strong> arrive 10-15 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before.`
     : `<strong>What's next:</strong> arrive 10-15 minutes before your start. Bring water and a towel. We'll send a reminder the day before.`) + manageLineHtml(ctx.manageUrl)
+  if (ctx.sameEvent) {
+    const oldTime = escapeHtml(ctx.oldWhen || 'your previous time')
+    const newTime = `<strong>${escapeHtml(ctx.waveLabel || ctx.raceDateLabel || '')}</strong>`
+    return {
+      ...base,
+      subject: `Your time has changed for ${ctx.raceName}`,
+      heading: solo ? `Your time has changed, ${who}.` : `Your team's time has changed, ${who}.`,
+      introHtml: solo
+        ? `Your entry for ${to} has moved from ${oldTime} to ${newTime}. Your ticket below still works.`
+        : `Your team's entry for ${to} has moved from ${oldTime} to ${newTime}. Your tickets below still work.`,
+      infoRows: solo ? buildInfoRows(ctx, buildBreakdownLine(ctx), { teamSizeRow: false }) : base.infoRows,
+      afterInfoHtml: solo ? '' : base.afterInfoHtml,
+      footerHtml,
+    }
+  }
   return {
     ...base,
     subject: `Your entry has moved to ${ctx.raceName}`,
@@ -685,6 +703,8 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
     nonMemberFeeLabel: payment?.non_member_fee_cents != null ? fmtMoney(payment.non_member_fee_cents, currency) : null,
     oldEventName: move.from_event?.name || '',
     oldWhen,
+    // SAMETIME.1 — a change of time on the entry's own event.
+    sameEvent: !!move.from_event?.id && move.from_event.id === reg.race_event_id,
     // EVENT-MOVE.6 — the same entry, so the same page; a fresh 90-day link.
     // W1.L3b — on the event location's tenant host, as the confirmation's is.
     manageUrl: entryManageUrl(reg.id, { baseUrl: await resolveCustomerBaseUrl(db, race.location_id || null) }),

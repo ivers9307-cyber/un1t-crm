@@ -74,7 +74,14 @@ export function evaluateMove({
   if ((checkinCount || 0) > 0) return fail(MOVE_ERRORS.CHECKED_IN)
   if (registration.race_started_at || registration.race_finished_at) return fail(MOVE_ERRORS.CHECKED_IN)
   if (!targetEvent) return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
-  if (targetEvent.id === registration.race_event_id) return fail(MOVE_ERRORS.SAME_EVENT)
+  // SAMETIME.1 — the entry's own event is a target only for a change of
+  // TIME: another of its waves. No time, the entry's own time, or an event
+  // with no times is same_event. Everything after this (published, upcoming,
+  // wave belongs, capacity) still applies to the new time.
+  if (targetEvent.id === registration.race_event_id) {
+    const hasWaves = Array.isArray(targetEvent.waves) && targetEvent.waves.length > 0
+    if (!hasWaves || !targetWave || targetWave.id === registration.wave_id) return fail(MOVE_ERRORS.SAME_EVENT)
+  }
   if (targetEvent.active !== true || targetEvent.status !== 'published') return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
   if (!targetEvent.race_date || String(targetEvent.race_date).slice(0, 10) < (today || eventToday(targetEvent))) return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
   if (!samePayee(sourceEvent, targetEvent)) return fail(MOVE_ERRORS.DIFFERENT_PAYEE)
@@ -291,8 +298,12 @@ function entrySummary(registration) {
  * @param {string[]|null} [args.allowedLocationIds]   staff caller: getUserLocationIds (null = master)
  * @param {string} [args.today]  one YYYY-MM-DD for every target; omitted, each
  *   target is upcoming by its own studio's day (TZ.9: the list crosses studios)
+ * @param {boolean} [args.sameEventTimes]  SAMETIME.1: also offer the entry's OWN
+ *   event, first, when it has another time (`same_event: true`, the entry's
+ *   wave flagged `current`). Off by default: the customer page and Mia list
+ *   dates, and only the staff and host dialogs ask for it.
  */
-export async function listMoveTargets(db, { registrationId, allowedEventIds = null, allowedLocationIds = null, today = null }) {
+export async function listMoveTargets(db, { registrationId, allowedEventIds = null, allowedLocationIds = null, today = null, sameEventTimes = false }) {
   const { registration, error: readErr } = await readRegistrationForMove(db, registrationId)
   if (!registration) return entryReadRefusal(readErr)
   const source = registration.race
@@ -318,7 +329,8 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
   const members = membersOf(registration)
   const headcount = entryHeadcount(registration)
   const eligible = (events || []).filter((ev) => {
-    if (ev.id === source?.id) return false
+    // SAMETIME.1 — the source is a target only for a change of time.
+    if (ev.id === source?.id && (!sameEventTimes || (ev.waves || []).length < 2)) return false
     if (!samePayee(source, ev)) return false
     if (allowedEventIds && !allowedEventIds.has(ev.id)) return false
     if (Array.isArray(allowedLocationIds) && !allowedLocationIds.includes(ev.location_id)) return false
@@ -339,20 +351,28 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
   const targets = []
   for (const ev of eligible) {
     const mode = ev.capacity_mode === 'people' ? 'people' : 'teams'
+    const sameEvent = ev.id === source?.id
     const waves = sortWaves(ev.waves).map((w) => ({
       id: w.id, start_time: w.start_time, label: w.label, capacity: w.capacity,
       // ENTRYPOLICY.1 — a lapsed unpaid entry no longer holds its place.
       spots_left: spotsLeft(w.capacity, holdingPlaces(byWave.get(w.id) || [], nowMs, ev), mode, { held: true }),
+      // SAMETIME.1 — the time the entry already has (the dialog disables it).
+      current: sameEvent && w.id === (registration.wave_id || null),
     }))
-    targets.push({
+    const target = {
       id: ev.id, name: ev.name, race_date: ev.race_date, kind: ev.kind,
       location_id: ev.location_id, location_name: ev.locations?.name || '',
       crosses_studio: (ev.location_id || null) !== (source?.location_id || null),
       capacity_mode: mode,
-      price_gap_cents: computePriceGapCents({ sourceEvent: source, targetEvent: ev, members, headcount }),
+      same_event: sameEvent,
+      // A change of time costs nothing: same event, same fees.
+      price_gap_cents: sameEvent ? 0 : computePriceGapCents({ sourceEvent: source, targetEvent: ev, members, headcount }),
       currency: ev.payment_currency || source?.payment_currency || 'EUR',
       waves,
-    })
+    }
+    // The entry's own event leads the list: a change of time is the common ask.
+    if (sameEvent) targets.unshift(target)
+    else targets.push(target)
   }
   return {
     ok: true,

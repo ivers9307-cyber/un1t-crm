@@ -134,8 +134,25 @@ describe('evaluateMove', () => {
     expect(evaluateMove(base({ registration: { ...reg, race_started_at: '2026-10-08T10:00:00Z' } })).error).toBe(MOVE_ERRORS.CHECKED_IN)
     expect(evaluateMove(base({ registration: { ...reg, race_finished_at: '2026-10-08T10:20:00Z' } })).error).toBe(MOVE_ERRORS.CHECKED_IN)
   })
-  it('same_event when the target is the source', () => {
-    expect(evaluateMove(base({ targetEvent: { ...base().targetEvent, id: 'e1' } })).error).toBe(MOVE_ERRORS.SAME_EVENT)
+  // SAMETIME.1 — the same event is a target only for a change of TIME.
+  it('same_event when the target is the source and no time is picked', () => {
+    const source = { ...base().targetEvent, id: 'e1', waves: [{ id: 'w1', capacity: 10 }, { id: 'w2', capacity: 10 }] }
+    expect(evaluateMove(base({ targetEvent: source, targetWave: null })).error).toBe(MOVE_ERRORS.SAME_EVENT)
+  })
+  it('same_event when the time picked is the one the entry already has', () => {
+    const source = { ...base().targetEvent, id: 'e1', waves: [{ id: 'w1', capacity: 10 }, { id: 'w2', capacity: 10 }] }
+    expect(evaluateMove(base({ targetEvent: source, targetWave: { id: 'w1', race_event_id: 'e1', capacity: 10 } })).error).toBe(MOVE_ERRORS.SAME_EVENT)
+  })
+  it('same_event when the source has no times at all', () => {
+    const source = { ...base().targetEvent, id: 'e1', waves: [] }
+    expect(evaluateMove(base({ targetEvent: source, targetWave: null })).error).toBe(MOVE_ERRORS.SAME_EVENT)
+  })
+  it('a different time on the same event passes, and its capacity still counts', () => {
+    const source = { ...base().targetEvent, id: 'e1', waves: [{ id: 'w1', capacity: 10 }, { id: 'w2', capacity: 1 }] }
+    const wave = { id: 'w2', race_event_id: 'e1', capacity: 1 }
+    expect(evaluateMove(base({ targetEvent: source, targetWave: wave }))).toEqual({ ok: true })
+    const full = evaluateMove(base({ targetEvent: source, targetWave: wave, targetWaveRegistrations: [{ status: 'confirmed', team: { size: 1 } }] }))
+    expect(full.error).toBe(MOVE_ERRORS.WAVE_FULL)
   })
   it('target_unavailable for draft, inactive or past events', () => {
     expect(evaluateMove(base({ targetEvent: { ...base().targetEvent, status: 'draft' } })).error).toBe(MOVE_ERRORS.TARGET_UNAVAILABLE)
@@ -281,6 +298,37 @@ describe('listMoveTargets', () => {
     const ops = db.calls.find((c) => c.table === 'race_events').ops
     expect(ops).toContainEqual(['eq', 'host_id', 'h1'])
     expect(r.targets.map((t) => t.id)).toEqual(['e3']) // the JS belt still drops e2
+  })
+  // SAMETIME.1 — a change of time on the entry's own event.
+  const SOURCE_TWO_TIMES = { ...TARGET, id: 'e1', name: 'Hatch Oct 18', race_date: '2026-10-18',
+    waves: [{ id: 'w1', race_event_id: 'e1', start_time: '11:00:00', label: null, capacity: 10 }, { id: 'w2', race_event_id: 'e1', start_time: '12:30:00', label: null, capacity: 10 }] }
+  it('offers the source event FIRST for a change of time when sameEventTimes is on and it has another time', async () => {
+    const db = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: [] }),
+      race_events: { data: [SOURCE_TWO_TIMES, TARGET] },
+    })
+    const r = await listMoveTargets(db, { registrationId: 'r1', today: '2026-10-08', sameEventTimes: true })
+    expect(r.targets.map((t) => t.id)).toEqual(['e1', 'e2'])
+    expect(r.targets[0]).toMatchObject({ same_event: true, price_gap_cents: 0, crosses_studio: false })
+    expect(r.targets[0].waves.map((w) => [w.id, w.current])).toEqual([['w1', true], ['w2', false]])
+    expect(r.targets[1].same_event).toBe(false)
+    expect(r.targets[1].waves[0].current).toBe(false)
+  })
+  it('never offers the source event by default (the customer and Mia paths)', async () => {
+    const db = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: [] }),
+      race_events: { data: [SOURCE_TWO_TIMES, TARGET] },
+    })
+    const r = await listMoveTargets(db, { registrationId: 'r1', today: '2026-10-08' })
+    expect(r.targets.map((t) => t.id)).toEqual(['e2'])
+  })
+  it('does not offer the source event when it has only one time', async () => {
+    const db = fakeDb({
+      race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: [] }),
+      race_events: { data: [{ ...SOURCE_TWO_TIMES, waves: [SOURCE_TWO_TIMES.waves[0]] }, TARGET] },
+    })
+    const r = await listMoveTargets(db, { registrationId: 'r1', today: '2026-10-08', sameEventTimes: true })
+    expect(r.targets.map((t) => t.id)).toEqual(['e2'])
   })
   it('not_found for an unknown entry', async () => {
     const r = await listMoveTargets(fakeDb({ race_registrations: { data: null } }), { registrationId: 'nope' })

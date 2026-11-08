@@ -34,7 +34,11 @@ export async function loadMoveHistory(db, { eventId, regIds }) {
       // A move in whose entry has since left this event is not on the list.
       const onList = new Set(regIds)
       for (const m of movesIn || []) {
-        if (onList.has(m.registration_id) && !lastMoveByReg[m.registration_id]) lastMoveByReg[m.registration_id] = m
+        if (onList.has(m.registration_id) && !lastMoveByReg[m.registration_id]) {
+          // SAMETIME.1 — a change of time stays on this event: the chip says
+          // so instead of "moved in from <this event>".
+          lastMoveByReg[m.registration_id] = { ...m, time_change: (m.from_event?.id || null) === eventId }
+        }
       }
     } catch (err) {
       logError('registration-move-history', 'moves-in read threw; chips omitted', { err, eventId })
@@ -48,6 +52,8 @@ export async function loadMoveHistory(db, { eventId, regIds }) {
       .from('registration_moves')
       .select('id, created_at, actor_name, registration:registration_id ( id, contact:contact_id ( first_name, last_name ), teams:team_id ( name, size, team_members ( name, role ) ) ), to_event:to_event_id ( id, name, race_date )')
       .eq('from_event_id', eventId)
+      // SAMETIME.1 — a change of time is not a move OUT of the event.
+      .neq('to_event_id', eventId)
       .order('created_at', { ascending: false })
       .limit(200)
     if (movesOutErr) logError('registration-move-history', 'moves-out read failed; footer omitted', { err: movesOutErr, eventId })

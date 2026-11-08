@@ -23,7 +23,8 @@ export async function GET(_request, props) {
   if (ctx.response) return ctx.response
   const { db, allowedEventIds } = ctx
 
-  const result = await listMoveTargets(db, { registrationId: params.id, allowedEventIds, allowedLocationIds: null })
+  // SAMETIME.1 — the entry's own event is offered too, for a change of time.
+  const result = await listMoveTargets(db, { registrationId: params.id, allowedEventIds, allowedLocationIds: null, sameEventTimes: true })
   if (!result.ok) {
     return NextResponse.json({
       success: false, error: result.error,

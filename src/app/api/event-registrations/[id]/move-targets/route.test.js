@@ -94,7 +94,7 @@ describe('GET /api/event-registrations/[id]/move-targets', () => {
     })
     const res = await GET(get(), props())
     expect(res.status).toBe(200)
-    expect(listMoveTargets).toHaveBeenCalledWith(expect.anything(), { registrationId: R1, allowedLocationIds: [L1, L2, L3] })
+    expect(listMoveTargets).toHaveBeenCalledWith(expect.anything(), { registrationId: R1, allowedLocationIds: [L1, L2, L3], sameEventTimes: true })
     const json = await res.json()
     expect(json.success).toBe(true)
     expect(json.data.targets.map((t) => t.id)).toEqual(['t1'])

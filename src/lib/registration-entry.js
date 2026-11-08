@@ -46,7 +46,7 @@ export const MOVE_ERROR_MESSAGES = Object.freeze({
   not_active: 'Only a confirmed entry can be moved.',
   pending_payment: 'This entry is awaiting payment, so its payment link is priced for this event. Collect payment first, or cancel and rebook, then move it.',
   checked_in: 'Someone on this entry has already checked in or raced, so it cannot move.',
-  same_event: 'That is the event the entry is already on. Use the wave select to change its time.',
+  same_event: 'The entry is already on that event at that time. Pick another time or another event.',
   target_unavailable: 'The target event is not published or has already happened.',
   different_payee: 'The target event is paid to a different host, so the payment cannot follow.',
   already_entered: 'This team already has an entry on the target event (a cancelled one counts).',
