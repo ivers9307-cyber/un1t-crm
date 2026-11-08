@@ -20,6 +20,7 @@ function makeDb(tables) {
       const q = {
         select(c) { entry.select = c; return q },
         eq(c, v) { entry.filters[c] = v; return q },
+        or(f) { entry.or = f; return q },
         order(c) { entry.order = c; return q },
         range(a, b) { entry.range = [a, b]; return q },
         maybeSingle() { entry.single = true; return q },
@@ -90,6 +91,8 @@ describe('leadSourceVocabulary', () => {
     const contacts = db.log.find((e) => e.table === 'contacts')
     expect(contacts.select).toBe('id, lead_source, last_lead_source')
     expect(contacts.filters).toEqual({ location_id: LOC })
+    // Only rows carrying a non-default value are read.
+    expect(contacts.or).toBe('lead_source.not.in.(booking,meta,tiktok,walkin,referral,website,whatsapp,classpass,other),last_lead_source.not.in.(booking,meta,tiktok,walkin,referral,website,whatsapp,classpass,other)')
     expect(contacts.order).toBe('id')
     expect(contacts.range).toEqual([0, 999])
   })

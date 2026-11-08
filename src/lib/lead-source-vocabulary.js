@@ -51,6 +51,13 @@ export const STUDIO_LEAD_SOURCES_MAX = 50
 // ~10k contacts).
 const CONTACT_SCAN_CAP = 50000
 
+// Only a contact carrying a NON-default value can change the answer (the
+// defaults are in the vocabulary already), so the scan reads just those rows:
+// at Stillorgan that is a handful of pages fewer per ContactForm open. A NULL
+// falls out of `not.in` on its own; a capitalised default ('Meta') still comes
+// back and is normalised below, which is harmless.
+export const NON_DEFAULT_FILTER = `lead_source.not.in.(${DEFAULT_LEAD_SOURCES.join(',')}),last_lead_source.not.in.(${DEFAULT_LEAD_SOURCES.join(',')})`
+
 const norm = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : '')
 
 // The owner's list out of a locations.settings object: strings only,
@@ -106,6 +113,7 @@ export async function leadSourceVocabulary(db, locationId) {
       .from('contacts')
       .select('id, lead_source, last_lead_source')
       .eq('location_id', locationId)
+      .or(NON_DEFAULT_FILTER)
       .order('id', { ascending: true })
       .range(from, to), { hardCap: CONTACT_SCAN_CAP })
   } catch (err) {

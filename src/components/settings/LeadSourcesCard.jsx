@@ -6,7 +6,7 @@
 // ones the studio wants to pick before any contact carries them. Reads and
 // writes /api/locations/[id]/lead-sources (owner or master writes).
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Tags, Loader2, Check, AlertTriangle } from 'lucide-react'
 
 const MAX = 50
@@ -23,11 +23,13 @@ export default function LeadSourcesCard({ locationId }) {
   const [saving, setSaving] = useState(false)
   const [savedFlash, setSavedFlash] = useState(false)
   const [error, setError] = useState(null)
+  const flashTimer = useRef(null)
+  useEffect(() => () => clearTimeout(flashTimer.current), [])
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetch(`/api/locations/${locationId}/lead-sources`)
+    fetch(`/api/locations/${encodeURIComponent(locationId)}/lead-sources`)
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return
@@ -51,7 +53,7 @@ export default function LeadSourcesCard({ locationId }) {
     if (bad.length || tooMany) return
     setSaving(true); setError(null)
     try {
-      const res = await fetch(`/api/locations/${locationId}/lead-sources`, {
+      const res = await fetch(`/api/locations/${encodeURIComponent(locationId)}/lead-sources`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sources: list }),
@@ -61,7 +63,8 @@ export default function LeadSourcesCard({ locationId }) {
       const t = toText(j.data.studio_sources)
       setText(t); setSaved(t)
       setSavedFlash(true)
-      setTimeout(() => setSavedFlash(false), 2000)
+      clearTimeout(flashTimer.current)
+      flashTimer.current = setTimeout(() => setSavedFlash(false), 2000)
     } catch (e) {
       setError(e?.message || 'Could not save')
     } finally {
