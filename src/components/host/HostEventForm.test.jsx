@@ -103,3 +103,20 @@ describe('HostEventForm series select', () => {
     expect(JSON.parse(init.body)).not.toHaveProperty('series_id')
   })
 })
+
+// TIERS.1 — the Pricing section carries tiers; the body sends pricing_tiers.
+describe('HostEventForm pricing tiers', () => {
+  it('hydrates tiers from initial and posts them; an empty list posts null', async () => {
+    const tiers = [{ id: 'tier-a', name: 'Early bird', price_cents: 2500, capacity: 20, starts_at: null, ends_at: null, min_people: null }]
+    const fetchMock = vi.fn(async (url) => (String(url) === '/api/host/series'
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<HostEventForm mode="edit" eventId="E1" initial={{ ...initial, pricing_tiers: tiers }} brandName="UN1T" />)
+    expect(screen.getByLabelText(/Tier 1 name/).value).toBe('Early bird')
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/host/events/E1')).toBe(true))
+    const [, init] = fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events/E1')
+    expect(JSON.parse(init.body).pricing_tiers).toEqual(tiers)
+  })
+})

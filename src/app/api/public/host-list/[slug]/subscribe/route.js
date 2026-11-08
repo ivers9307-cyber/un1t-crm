@@ -1,7 +1,7 @@
 // POST /api/public/host-list/[slug]/subscribe
 //
 // Public mailing-list signup for an event host's list (HOST-EMAIL.2). No
-// auth — same posture as /api/public/races/[slug]/register: per-IP rate
+// auth — same posture as /api/public/events/[slug]/register: per-IP rate
 // limit + Zod body + slug lookup (404 on unknown slug; slugs are public).
 //
 // Flow: find-or-create the contact at the org's MASTER location (HOST-MASTER.4

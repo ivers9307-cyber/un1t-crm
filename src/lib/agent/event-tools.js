@@ -45,6 +45,7 @@
 // here.
 
 import { linkedAccountsForContact, hasBookableMembership } from '@/lib/person-accounts'
+import { publicPricing } from '@/lib/pricing-tiers'
 import { dateLabel, todayIn } from './event-date-label'
 import { DEFAULT_TZ } from '@/lib/location-time'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
@@ -149,13 +150,26 @@ function euro(cents) {
   return `€${Number.isInteger(n) ? n : n.toFixed(2)}`
 }
 
-/** Human pricing summary from the mig-084 fee columns. Pure. */
+/**
+ * Human pricing summary from the mig-084 fee columns. Pure.
+ * TIERS.1 — with a `pricing` block (publicPricing) the current tier leads
+ * ("Early bird €25 per person (limited), then €35") and a group price
+ * follows ("; 3+ people: €28 each"). Member pricing keeps its own copy.
+ */
 export function formatEventPrice({
   member_pricing_enabled,
   member_fee_cents,
   non_member_fee_cents,
   members_only,
-} = {}) {
+} = {}, pricing = null) {
+  if (!member_pricing_enabled && pricing && (pricing.current || pricing.group)) {
+    const c = pricing.current
+    let s = c
+      ? `${c.name} ${euro(c.price_cents)} per person${members_only ? ' (members only)' : c.limited ? ' (limited)' : ''}${pricing.next ? `, then ${euro(pricing.next.price_cents)}` : ''}`
+      : (non_member_fee_cents == null ? (members_only ? 'Free (members only)' : 'Free') : `${euro(non_member_fee_cents)} per person${members_only ? ' (members only)' : ''}`)
+    if (pricing.group) s += `; ${pricing.group.min_people}+ people: ${euro(pricing.group.price_cents)} each`
+    return s
+  }
   if (member_pricing_enabled) {
     const memberPart = member_fee_cents == null ? 'Free for members' : `${euro(member_fee_cents)} members`
     if (members_only) return `${memberPart} (members only)`
@@ -260,7 +274,10 @@ export function shapeEventsForAgent(events, takenByWave, nowMs, baseUrl, zone = 
       kind: e.kind || 'race',
       date: dateLabel(String(e.race_date)),
       race_date: String(e.race_date),
-      price: formatEventPrice(e),
+      // TIERS.1 — the tier open NOW with no sold-count read (a listing is
+      // cheap; the booking itself re-resolves with the count, so a just-sold-
+      // out early bird may show here and then not apply).
+      price: formatEventPrice(e, publicPricing({ race: e, soldByTier: {} })),
       ...(e.description ? { description: String(e.description).replace(/\s+/g, ' ').trim().slice(0, MAX_DESCRIPTION) } : {}),
       waves,
       signup_url: `${baseUrl}/event/${e.slug}`,
@@ -338,7 +355,7 @@ export async function executeEventTool(toolName, input, ctx) {
     const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
     const today = todayIn(Date.now(), zone)
     const { data: events } = await db.from('race_events')
-      .select('id, name, kind, slug, description, race_date, active, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, waves:race_waves(id, start_time, capacity, label)')
+      .select('id, name, kind, slug, description, race_date, active, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, pricing_tiers, waves:race_waves(id, start_time, capacity, label)')
       .eq('location_id', locationId)
       .eq('active', true)
       .gte('race_date', today)
@@ -419,7 +436,7 @@ export async function executeEventTool(toolName, input, ctx) {
       return { error: 'no_contact', message: 'No contact linked to this conversation — collect their name and email, then hand off to the team.' }
     }
     const { data: race } = await db.from('race_events')
-      .select('id, name, kind, slug, description, race_date, active, location_id, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, waves:race_waves(id, start_time, capacity, label)')
+      .select('id, name, kind, slug, description, race_date, active, location_id, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, pricing_tiers, waves:race_waves(id, start_time, capacity, label)')
       .eq('id', String(input?.event_id || ''))
       .eq('location_id', locationId)
       .maybeSingle()
@@ -513,7 +530,7 @@ export async function executeEventTool(toolName, input, ctx) {
       return {
         booked: false,
         requires_payment: true,
-        price: formatEventPrice(race),
+        price: formatEventPrice(race, publicPricing({ race, soldByTier: {} })),
         signup_url: `${baseUrl}/event/${race.slug}`,
         message: 'This entry has a fee — share the signup link so they can register and pay securely there. Never collect payment in chat.',
       }

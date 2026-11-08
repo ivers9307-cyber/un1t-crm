@@ -14,6 +14,7 @@ import { ImagePlus, Loader2, X } from 'lucide-react'
 import { HOST_EVENT_KINDS, MAX_SESSIONS } from '@/lib/host-events'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
+import PricingTiersEditor from '@/components/PricingTiersEditor'
 
 const KIND_LABELS = {
   workshop: 'Workshop',
@@ -91,6 +92,8 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     initial?.non_member_fee_cents != null ? centsToEuros(initial.non_member_fee_cents) : ''
   )
   const [description, setDescription] = useState(initial?.description || '')
+  // TIERS.1 — early bird / capacity / group tiers.
+  const [pricingTiers, setPricingTiers] = useState(Array.isArray(initial?.pricing_tiers) ? initial.pricing_tiers : [])
   const [heroImageUrl, setHeroImageUrl] = useState(initial?.hero_image_url || '')
   // HOST-PORTAL.11 — direct hero upload (edit mode only; the upload route
   // namespaces storage by event id, which doesn't exist until first save).
@@ -197,6 +200,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       seen.add(s.start_time)
     }
     if (teamSizes.length === 0) return 'Pick at least one team size.'
+    if (pricingTiers.some((t) => !String(t.name || '').trim())) return 'Give every pricing tier a name.'
     if (accentHex.trim() && !ACCENT_RE.test(accentHex.trim())) {
       return 'Accent colour must be a hex like #1a2b3c (or leave it blank).'
     }
@@ -217,6 +221,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       registration_closes_at: normalizeIso(regClosesAt),
       allowed_team_sizes: [...teamSizes].sort((a, b) => a - b),
       ticket_price_cents: Math.round((parseFloat(priceEuros) || 0) * 100),
+      pricing_tiers: pricingTiers.length > 0 ? pricingTiers : null,
       sessions: sessions.map((s) => ({
         ...(s.id ? { id: s.id } : {}),
         start_time: s.start_time,
@@ -443,7 +448,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         <h2 className={sectionCls}>Tickets &amp; teams</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label htmlFor="he-price" className={labelCls}>Ticket price (EUR)</label>
+            <label htmlFor="he-price" className={labelCls}>Standard price (EUR)</label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-white/40">€</span>
               <input
@@ -457,7 +462,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 className={`${input} pl-7`}
               />
             </div>
-            <p className="mt-1.5 text-xs text-white/35">Set 0.00 for a free event.</p>
+            <p className="mt-1.5 text-xs text-white/35">Set 0.00 for a free event. Pricing tiers below replace it while they apply.</p>
           </div>
           <div>
             <span className={labelCls}>Allowed team sizes</span>
@@ -486,6 +491,11 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
             </div>
             <p className="mt-1.5 text-xs text-white/35">Pick every team size a booking may have.</p>
           </div>
+        </div>
+        {/* TIERS.1 — early bird, capacity tiers and a group price. */}
+        <div className="mt-5">
+          <span className={labelCls}>Pricing tiers <span className="text-white/30 normal-case">(optional)</span></span>
+          <PricingTiersEditor value={pricingTiers} onChange={setPricingTiers} dark />
         </div>
       </section>
 

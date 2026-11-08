@@ -38,6 +38,7 @@ import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
+import { applyTierPricing } from '@/lib/pricing-tiers'
 import { normalizeCode, computeDiscountCents, promoCodeError } from '@/lib/promo-codes'
 import { createRacePayment, refreshRacePaymentFromProvider } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
@@ -204,7 +205,7 @@ export async function POST(request, props) {
       id, location_id, name, slug, race_date, kind, capacity_mode, allowed_team_sizes,
       registration_opens_at, registration_closes_at, active, status,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency, create_in_glofox, host_id, find_team, entry_policy,
+      members_only, payment_currency, create_in_glofox, host_id, find_team, entry_policy, pricing_tiers,
       waves:race_waves ( id, start_time, capacity, label )
     `)
     .eq('slug', params.slug)
@@ -776,8 +777,16 @@ export async function POST(request, props) {
     }
   }
 
+  // TIERS.1 — the tier this entry gets (early bird, capacity tier, group
+  // price) replaces the non-member fee before the breakdown. A failed tier
+  // read never prices blind: 503, nothing inserted.
+  const priced = await applyTierPricing(db, { race, headcount: validatedRoster.length })
+  if (!priced.ok) {
+    if (findTeam) await discardSoloTeam(db, teamId) // FINDTEAM.9
+    return NextResponse.json({ success: false, error: 'Pricing is unavailable right now. Please try again in a moment.', code: 'pricing_unavailable' }, { status: 503 })
+  }
   // Pricing breakdown.
-  const pricing = computeTeamPricing({ validatedRoster, race })
+  const pricing = computeTeamPricing({ validatedRoster, race: priced.race })
 
   // ── Promo code (EVENTS-PROMO.1) ──────────────────────────────────────────
   // Applied to the ticket amount BEFORE the per-ticket booking fee. A bad code
@@ -860,6 +869,8 @@ export async function POST(request, props) {
       team_composition: pricing.team_composition,
       promo_code_id: appliedPromo?.id || null,
       promo_discount_cents: appliedPromo ? promoDiscountCents : null,
+      // TIERS.1 — the tier bought; only such entries consume tier seats.
+      pricing_tier_id: priced.tier?.id ?? null,
       // HOST-CONSENT.1 — persisted so the attendee sync can grant HOST consent
       // when the registration confirms (immediately for free, on payment for paid).
       marketing_consent: body.marketing_consent !== false,
@@ -1044,6 +1055,8 @@ export async function POST(request, props) {
         non_member_count: pricing.non_member_count,
         member_fee_cents: pricing.member_fee_cents,
         non_member_fee_cents: pricing.non_member_fee_cents,
+        // TIERS.1 — the tier this entry was priced at, or null (base price).
+        tier: priced.tier ? { id: priced.tier.id, name: priced.tier.name } : null,
       },
       payment: {
         id: paymentResult.payment.id,

@@ -42,7 +42,6 @@ import { createServerClient } from '@/lib/supabase'
 import { GET as availabilityGET } from './bookings/[slug]/availability/route.js'
 import { POST as hostListPOST } from './host-list/[slug]/subscribe/route.js'
 import { POST as eventRegisterPOST } from './events/[slug]/register/route.js'
-import { POST as raceRegisterPOST } from './races/[slug]/register/route.js'
 import { POST as checkMemberPOST } from './events/[slug]/check-member/route.js'
 import { POST as waitlistPOST } from './events/[slug]/waitlist/route.js'
 import { POST as staffOfferPOST } from '../events/[id]/waitlist/offer/route.js'
@@ -155,8 +154,8 @@ describe('SAAS-6 tenant-keyed rate limits — swept call sites', () => {
     expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 3, windowMs: 3_600_000 })
   })
 
-  it('race register keys on the race slug', async () => {
-    const res = await raceRegisterPOST(req('/api/public/races/hyrox/register', { method: 'POST', body: {} }), props({ slug: 'hyrox' }))
+  it('event register keys on the event slug (the /races/ URL rewrites here since TIERS.1 removed the legacy file)', async () => {
+    const res = await eventRegisterPOST(req('/api/public/events/hyrox/register', { method: 'POST', body: {} }), props({ slug: 'hyrox' }))
     expect(res.status).toBe(429)
     expect(limiterKey()).toBe(`race-register:hyrox:${IP}`)
   })

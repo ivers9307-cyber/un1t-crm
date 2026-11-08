@@ -159,7 +159,7 @@ export async function addEventToSeries(db, { eventId, seriesId, hostId }) {
 
 // Public-safe SELECT for a series date: the same shape /h/[slug] uses, so
 // toBrowseCard + isEventSoldOut read it. Embeds only for the sold-out boolean.
-export const SERIES_DATE_COLS = 'id, slug, name, kind, race_date, start_time, venue_name, description, hero_image_url, accent_hex, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, waves:race_waves ( id, capacity, start_time ), registrations:race_registrations ( status, wave_id, looking_for_team, team:teams ( size ) )'
+export const SERIES_DATE_COLS = 'id, slug, name, kind, race_date, start_time, venue_name, description, hero_image_url, accent_hex, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, pricing_tiers, waves:race_waves ( id, capacity, start_time ), registrations:race_registrations ( status, wave_id, looking_for_team, team:teams ( size ) )'
 
 async function zoneFor(db, locationId) {
   try {

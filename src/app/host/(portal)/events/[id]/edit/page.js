@@ -24,7 +24,7 @@ export default async function HostEditEventPage(props) {
     .from('race_events')
     .select(
       'id, host_id, status, rejected_reason, kind, name, description, race_date, ' +
-        'registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, ' +
+        'registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, pricing_tiers, ' +
         'hero_image_url, accent_hex, venue_name, venue_address, ' +
         'confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, series_id, ' +
         'race_waves ( id, start_time, capacity, label, display_order )'
@@ -44,6 +44,7 @@ export default async function HostEditEventPage(props) {
     registration_closes_at: event.registration_closes_at,
     allowed_team_sizes: event.allowed_team_sizes,
     non_member_fee_cents: event.non_member_fee_cents,
+    pricing_tiers: event.pricing_tiers ?? null,
     hero_image_url: event.hero_image_url,
     accent_hex: event.accent_hex,
     venue_name: event.venue_name,

@@ -15,6 +15,7 @@
 import { z } from 'zod'
 import { uuidLike } from './schemas.js'
 import { CharitySettingsSchema } from './charity-donations'
+import { PricingTiersSchema } from './pricing-tiers'
 import { FindTeamSettingsSchema } from './find-team'
 import { EntryPolicySettingsSchema } from './entry-policy'
 
@@ -118,6 +119,8 @@ export const EventCreateFields = z.object({
   charity: CharitySettingsSchema.nullable().optional(),
   // FINDTEAM.6 — "Find me a team" switch + copy (race_events.find_team, mig 766).
   find_team: FindTeamSettingsSchema.nullable().optional(),
+  // TIERS.1 (mig 818) — early bird / capacity / group tiers (race_events.pricing_tiers).
+  pricing_tiers: PricingTiersSchema.nullable().optional(),
   // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
   // (race_events.entry_policy, mig 767).
   entry_policy: EntryPolicySettingsSchema.nullable().optional(),
@@ -206,6 +209,8 @@ export const EventUpdateFields = z.object({
   charity: CharitySettingsSchema.nullable().optional(),
   // FINDTEAM.6 — "Find me a team" switch + copy (race_events.find_team, mig 766).
   find_team: FindTeamSettingsSchema.nullable().optional(),
+  // TIERS.1 (mig 818) — early bird / capacity / group tiers (race_events.pricing_tiers).
+  pricing_tiers: PricingTiersSchema.nullable().optional(),
   // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
   // (race_events.entry_policy, mig 767).
   entry_policy: EntryPolicySettingsSchema.nullable().optional(),

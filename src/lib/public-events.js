@@ -5,6 +5,7 @@
 import { eventKindLabel } from '@shared/events'
 import { formatInZone, DEFAULT_TZ } from '@shared/zoned-time'
 import { loadForMode } from './event-signups'
+import { resolvePricingTiers, tierIsOpen } from './pricing-tiers'
 
 const EUR = (cents) => {
   const n = (Number(cents) || 0) / 100
@@ -30,12 +31,17 @@ function formatOpensDate(iso, zone = DEFAULT_TZ) {
   return formatInZone(d, zone, { day: 'numeric', month: 'short' }, 'en-GB')
 }
 
-/** "Free" | "€25" | "From €15" (cheaper of member/non-member when member pricing on). */
-export function eventPriceLabel(e) {
+/** "Free" | "€25" | "From €15" (cheaper of member/non-member when member
+ * pricing on; TIERS.1: or a cheaper tier that is open now). */
+export function eventPriceLabel(e, { now = Date.now() } = {}) {
   if (e?.non_member_fee_cents == null) return 'Free'
   if (e?.member_pricing_enabled && e?.member_fee_cents != null) {
     return `From ${EUR(Math.min(e.member_fee_cents, e.non_member_fee_cents))}`
   }
+  const cheapest = resolvePricingTiers(e)
+    .filter((t) => t.min_people == null && tierIsOpen(t, now) && t.price_cents < e.non_member_fee_cents)
+    .reduce((min, t) => (min == null || t.price_cents < min ? t.price_cents : min), null)
+  if (cheapest != null) return `From ${EUR(cheapest)}`
   return EUR(e.non_member_fee_cents)
 }
 

@@ -1982,28 +1982,6 @@ registry.registerPath({
 })
 
 registry.registerPath({
-  method: 'post',
-  path: '/api/public/races/{slug}/register',
-  tags: ['Public'],
-  summary: 'Race signup',
-  request: {
-    params: z.object({ slug: z.string() }),
-    body: {
-      content: {
-        'application/json': {
-          schema: z.object({}).passthrough().openapi('RaceRegisterBody'),
-        },
-      },
-    },
-  },
-  responses: {
-    200: { description: 'Registration confirmed' },
-    400: { description: 'Validation failed or registration closed', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Race not found', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
-
-registry.registerPath({
   method: 'get',
   path: '/api/public/deposit/{token}',
   tags: ['Public'],
@@ -2659,7 +2637,6 @@ registry.registerPath({
   responses: { ...GoneOnly },
 })
 
-
 // ══ MAIL-TRIAL.B — THE email surface (sole surface since RETIRE-TICKETS.1) ══
 // The SAME data model as the old ticket queue, presented as a mail client:
 // read/unread weight, archive as the primary verb, no assignment and no
@@ -2796,7 +2773,6 @@ registry.registerPath({
   },
 })
 
-
 // INBOX-SURFACE.C — the Mail surface's OWN nav badge, the mirror image of the
 // ticket count above. TWO badges exist rather than one shared count because
 // each counts EXACTLY the rows its own queue lists (MAIL-TRIAL.B): a mailbox
@@ -2909,7 +2885,6 @@ registry.registerPath({
     503: { description: 'The ticketing Postmark server is unconfigured — nothing was sent', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
-
 
 
 

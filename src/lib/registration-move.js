@@ -119,7 +119,7 @@ const EVENT_COLUMNS = `
   capacity_mode, allowed_team_sizes,
   member_pricing_enabled, member_fee_cents, non_member_fee_cents, payment_currency,
   venue_name, accent_hex, hero_image_url, sending_location_id,
-  moved_email_subject, moved_email_intro, entry_policy,
+  moved_email_subject, moved_email_intro, entry_policy, pricing_tiers,
   waves:race_waves ( id, race_event_id, start_time, label, capacity, display_order ),
   locations:location_id ( id, name, is_host_anchor, organization_id, timezone )
 `
@@ -365,6 +365,8 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
       crosses_studio: (ev.location_id || null) !== (source?.location_id || null),
       capacity_mode: mode,
       same_event: sameEvent,
+      // TIERS.1 — the gap is the base fees; the dialog says tiers are not in it.
+      has_tiers: Array.isArray(ev.pricing_tiers) && ev.pricing_tiers.length > 0,
       // A change of time costs nothing: same event, same fees.
       price_gap_cents: sameEvent ? 0 : computePriceGapCents({ sourceEvent: source, targetEvent: ev, members, headcount }),
       currency: ev.payment_currency || source?.payment_currency || 'EUR',
@@ -377,7 +379,7 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
   return {
     ok: true,
     entry: entrySummary(registration),
-    source: { event_id: source?.id || null, event_name: source?.name || '', race_date: source?.race_date || null, wave_id: registration.wave_id || null, location_id: source?.location_id || null },
+    source: { event_id: source?.id || null, event_name: source?.name || '', race_date: source?.race_date || null, wave_id: registration.wave_id || null, location_id: source?.location_id || null, has_tiers: Array.isArray(source?.pricing_tiers) && source.pricing_tiers.length > 0 },
     targets,
   }
 }

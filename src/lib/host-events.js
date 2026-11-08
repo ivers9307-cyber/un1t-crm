@@ -15,6 +15,7 @@
 
 import { z } from 'zod'
 import { uuidLike } from '@/lib/schemas'
+import { PricingTiersSchema, canonicalTiers } from '@/lib/pricing-tiers'
 
 // The four lifecycle states a host event moves through.
 export const HOST_EVENT_STATUSES = ['draft', 'pending_review', 'published', 'rejected']
@@ -91,7 +92,12 @@ export function computeEditTransition(current, changes) {
     return false
   })()
 
-  const reReview = priceChanged || dateChanged || waveTimeChanged
+  // TIERS.1 — a tier change is a price change.
+  // Compared in one key order: jsonb reorders object keys on the way back.
+  const tiersChanged = 'pricing_tiers' in changes
+    && JSON.stringify(canonicalTiers(changes.pricing_tiers)) !== JSON.stringify(canonicalTiers(current.pricing_tiers))
+
+  const reReview = priceChanged || dateChanged || waveTimeChanged || tiersChanged
   return { status: reReview ? 'pending_review' : 'published', reReview }
 }
 
@@ -133,6 +139,8 @@ export const HostEventSchema = z
       }
     }),
     series_id: uuidLike.nullable().optional(),
+    // TIERS.1 — early bird / capacity / group tiers (race_events.pricing_tiers).
+    pricing_tiers: PricingTiersSchema.nullable().optional(),
     hero_image_url: z.string().url().optional().nullable(),
     accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().nullable(),
     venue_name: z.string().trim().min(1).max(200),

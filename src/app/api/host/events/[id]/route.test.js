@@ -56,6 +56,11 @@ describe('GET /api/host/events/[id]', () => {
     row.host_id = 'h2'
     expect((await GET(new Request('https://crm.test'), props())).status).toBe(404)
   })
+  it('returns pricing_tiers', async () => {
+    row.pricing_tiers = [{ id: 'a', name: 'Early bird', price_cents: 2500, capacity: 20 }]
+    const j = await (await GET(new Request('https://crm.test'), props())).json()
+    expect(j.data.pricing_tiers).toEqual(row.pricing_tiers)
+  })
 })
 
 describe('PUT /api/host/events/[id]', () => {
@@ -73,6 +78,12 @@ describe('PUT /api/host/events/[id]', () => {
     const update = db.queries.find((q) => q.table === 'race_events' && q.action === 'update')
     expect(update.payload).toMatchObject({ status: 'pending_review', reviewed_at: null })
     expect(update.payload.submitted_at).toBeTruthy()
+  })
+  it('a tier change on a published event re-reviews it and writes the tiers', async () => {
+    const res = await put({ ...BODY, pricing_tiers: [{ id: 'a', name: 'Early bird', price_cents: 2500, capacity: 20 }] })
+    expect(await res.json()).toEqual({ success: true, data: { id: E1, status: 'pending_review', reReview: true } })
+    const update = db.queries.find((q) => q.table === 'race_events' && q.action === 'update')
+    expect(update.payload.pricing_tiers).toEqual([{ id: 'a', name: 'Early bird', price_cents: 2500, capacity: 20 }])
   })
   it('writes series_id when the body carries it', async () => {
     await put({ ...BODY, series_id: 'd0000000-0000-4000-8000-0000000000d1' })

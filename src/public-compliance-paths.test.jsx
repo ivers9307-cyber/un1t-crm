@@ -345,7 +345,7 @@ describe('the embed checkout leg resolves on every host that serves the embed', 
 // delete them:
 //   - src/lib/agent/event-tools.js mints `${appUrl}/race/<slug>` as the
 //     signup_url Mia hands customers in WhatsApp — two call sites, live.
-//   - src/app/api/public/races/[slug]/register/route.js and
+//   - the (since-removed, TIERS.1) /api/public/races/[slug]/register route and
 //     src/lib/race-register-solo.js both set the Revolut post-payment
 //     returnUrl to `${baseUrl}/race/<slug>/confirmed`.
 // Both audiences are anonymous by definition: a WhatsApp recipient and a

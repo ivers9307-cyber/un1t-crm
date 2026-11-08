@@ -35,6 +35,7 @@ import { generateWaveTimes } from '@/lib/wave-generate'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { CHARITY_DEFAULTS, CharitySettingsSchema, formatCents } from '@/lib/charity-donations'
 import { FIND_TEAM_DEFAULTS } from '@/lib/find-team'
+import PricingTiersEditor from '@/components/PricingTiersEditor'
 import { ENTRY_POLICY_DEFAULTS, ENTRY_POLICY_TEXT_KEYS, ENTRY_POLICY_HOURS_MAX } from '@/lib/entry-policy'
 import { useLocationBrand } from './use-location-brand'
 
@@ -335,6 +336,8 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
   // CHARITY.9 (mig 765) — "Charity day": card donations on the public page.
   // The switch is race_events.charity_enabled; the rest is the charity jsonb,
   // held as form strings and converted (euros -> cents) on save.
+  // TIERS.1 (mig 818) — early bird / capacity / group tiers.
+  const [pricingTiers, setPricingTiers] = useState(Array.isArray(race?.pricing_tiers) ? race.pricing_tiers : [])
   const [charityEnabled, setCharityEnabled] = useState(!!race?.charity_enabled)
   const [charityForm, setCharityForm] = useState(() => charityToForm(race?.charity))
   const setCharityField = (key, value) => setCharityForm((f) => ({ ...f, [key]: value }))
@@ -629,6 +632,7 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       sending_location_id: hostId ? (sendingLocationId || null) : null,
       member_fee_cents: memberPricingEnabled ? memberFeeCents : null,
       non_member_fee_cents: nonMemberFeeCents,
+      pricing_tiers: pricingTiers.length > 0 ? pricingTiers : null,
       // TV logos: race-only. For non-race kinds we send an empty
       // array so any historical slots (shouldn't exist, since the
       // upload UI is gated) get cleared.
@@ -1232,6 +1236,13 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
           <p className="text-[11px] text-un1t-muted mt-1">
             Charged per non-member entrant. Leave empty for a free {meta.value === 'race' ? 'race' : 'event'}.
           </p>
+        </div>
+
+        {/* TIERS.1 — early bird, capacity tiers and a group price replace the
+            non-member fee while they apply. */}
+        <div>
+          <label className="block text-sm text-un1t-subtle mb-1">Pricing tiers <span className="text-un1t-muted">(optional)</span></label>
+          <PricingTiersEditor value={pricingTiers} onChange={setPricingTiers} />
         </div>
 
         <div className="flex items-center justify-between gap-3 pt-2 border-t border-un1t-border">

@@ -5,6 +5,7 @@
 // info sidebar. Mirrors the shape of /api/public/events/[slug].
 
 import { NextResponse } from 'next/server'
+import { resolvePricingTiers, loadSoldByTier, publicPricing } from '@/lib/pricing-tiers'
 import { createServerClient } from '@/lib/supabase'
 import { loadForMode } from '@/lib/event-signups'
 import { eventIsPublic } from '@/lib/host-events'
@@ -44,7 +45,7 @@ export async function GET(request, props) {
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency,
       hero_image_url, accent_hex, active, status,
-      charity_enabled, charity, find_team,
+      charity_enabled, charity, find_team, pricing_tiers,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       locations:location_id ( id, name, address, timezone, is_host_anchor, organization_id ),
       host:event_hosts!host_id ( name )
@@ -135,7 +136,8 @@ export async function GET(request, props) {
   // CHARITY.4 — the raw `charity` settings object (receipt copy, include_entries)
   // and the enabled flag are stripped too; the resolved public block is built
   // below and emitted under `charity` only when the event has it switched on.
-  const { capacity: _omit, host: _host, charity: _charityRaw, charity_enabled: _charityOn, find_team: _findTeamRaw, ...racePublic } = data
+  // TIERS.1 — the raw tier list (capacities inside) never leaves; `pricing` below is the public view.
+  const { capacity: _omit, host: _host, charity: _charityRaw, charity_enabled: _charityOn, find_team: _findTeamRaw, pricing_tiers: _tiersRaw, ...racePublic } = data
 
   // EVENT-COPY.1 — NEVER let the ops-only anchor label leave this endpoint.
   //
@@ -186,8 +188,23 @@ export async function GET(request, props) {
       registration_state,
       host_name: data.host?.name || null,
       organization_name: organizationName,
+      pricing: await buildPublicPricing(db, data, now),
     },
   })
+}
+
+// TIERS.1 — the buyer's view of the tiers: the tier one person gets now, what
+// follows, the group price; never a count. A failed sold-count read shows the
+// base price (logged), never a failed page: the booking itself re-resolves
+// with the count and refuses to price blind.
+async function buildPublicPricing(db, race, nowMs) {
+  if (resolvePricingTiers(race).length === 0) return publicPricing({ race, nowMs, soldByTier: {} })
+  const sold = await loadSoldByTier(db, { eventId: race.id, race, nowMs })
+  if (!sold.ok) {
+    logWarn('public-event', 'tier sold-count unreadable; showing the base price', { eventId: race.id })
+    return { base_cents: race.non_member_fee_cents ?? null, current: null, next: null, group: null, prices_by_headcount: null }
+  }
+  return publicPricing({ race, nowMs, soldByTier: sold.soldByTier })
 }
 
 // CHARITY.4 — the donor-facing charity block, or null when the event has not

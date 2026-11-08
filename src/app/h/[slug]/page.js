@@ -37,7 +37,7 @@ const HOST_COLS = 'id, name, slug, organization_id, anchor_location_id, list_hea
 
 // Public-safe SELECT. Embeds exist only for the sold-out boolean.
 // HOSTSERIES.1 — the series embed groups the cards under their series name.
-const EVENT_COLS = 'slug, name, kind, race_date, start_time, venue_name, hero_image_url, accent_hex, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, series_id, series:event_series ( id, name, slug ), waves:race_waves ( id, capacity, start_time ), registrations:race_registrations ( status, wave_id, looking_for_team, team:teams ( size ) )'
+const EVENT_COLS = 'slug, name, kind, race_date, start_time, venue_name, hero_image_url, accent_hex, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, pricing_tiers, series_id, series:event_series ( id, name, slug ), waves:race_waves ( id, capacity, start_time ), registrations:race_registrations ( status, wave_id, looking_for_team, team:teams ( size ) )'
 
 // TZ.9 — a host's events live on its anchor location, so the page runs on
 // that studio's clock. This page is display-only: an unreadable zone falls
