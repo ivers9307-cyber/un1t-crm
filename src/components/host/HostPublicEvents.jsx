@@ -10,7 +10,7 @@ import Link from 'next/link'
 
 // HOSTSERIES.1 — `groups` (one-offs, then each series under its name with an
 // "All dates" link) is preferred; `cards` alone renders one plain group.
-export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, accentHex, cards, groups }) {
+export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, accentHex, cards, groups, aboveEvents = null }) {
   const accent = accentHex || '#ffffff'
   const groupList = Array.isArray(groups) && groups.length > 0
     ? groups
@@ -34,6 +34,9 @@ export default function HostPublicEvents({ hostName, headline, blurb, heroUrl, a
           <div aria-hidden className="mt-6 h-1 w-16 rounded-full" style={{ backgroundColor: accent }} />
         </div>
       </header>
+
+      {/* HOSTPAGE.2 — the About section sits between the hero and the events. */}
+      {aboveEvents}
 
       {total === 0 ? (
         <div className="mt-8 rounded-2xl border border-white/15 p-10 text-center text-white/60">

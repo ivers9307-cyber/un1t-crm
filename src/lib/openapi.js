@@ -1707,6 +1707,40 @@ registry.registerPath({
   },
 })
 
+// HOSTPAGE.2 — a host's event ratings (list + hide/show).
+const HostRating = z.object({ id: uuidLike, rating: z.number().int().min(1).max(5), comment: z.string().nullable(), is_public: z.boolean(), created_at: z.string(), author: z.string().openapi({ description: 'first name only' }) })
+const RatingSummary = z.object({ average: z.number(), count: z.number().int(), comments: z.array(z.object({ rating: z.number().int(), comment: z.string(), author: z.string(), created_at: z.string() })) }).nullable()
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/events/{id}/ratings',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Every rating of one of the host's own events (hidden ones included), with the public summary",
+  description: 'Host session (getCurrentHost). Another host\'s event is 404. `summary` is null under three public ratings.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Ratings + summary', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ ratings: z.array(HostRating), summary: RatingSummary }) }) } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Ratings read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'patch',
+  path: '/api/host/events/{id}/ratings/{ratingId}',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Hide or show one rating of the host\'s own event',
+  description: 'The update is pinned to the event; a rating on another event is 404.',
+  request: { params: z.object({ id: uuidLike, ratingId: uuidLike }), body: { content: { 'application/json': { schema: z.object({ is_public: z.boolean() }) } } } },
+  responses: {
+    200: { description: 'The flag as written', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, is_public: z.boolean() }) }) } } },
+    400: { description: 'Bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // HOSTSTATS.1 — one event's signup numbers.
 const EventStatsSource = z.object({ source: z.string(), label: z.string(), views: z.number().int(), booked: z.number().int().openapi({ description: 'confirmed bookings from this source' }) })
 const EventStats = z.object({

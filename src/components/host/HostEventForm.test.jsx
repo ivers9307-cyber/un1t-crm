@@ -155,3 +155,23 @@ describe('HostEventForm duration', () => {
     expect(JSON.parse(init.body).duration_minutes).toBeNull()
   })
 })
+
+// HOSTPAGE.2 — the rating request's subject/intro ride the email section.
+describe('HostEventForm rating request copy', () => {
+  it('hydrates and submits rating_email_subject / rating_email_intro', async () => {
+    const fetchMock = vi.fn(async (url) => (String(url) === '/api/host/series'
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<HostEventForm mode="edit" eventId="E1" initial={{ ...initial, rating_email_subject: 'Tell us about {{event_name}}' }} brandName="UN1T" />)
+    // The email section opens itself when any copy is set.
+    const subject = screen.getByLabelText(/Rating request subject/)
+    expect(subject.value).toBe('Tell us about {{event_name}}')
+    fireEvent.change(screen.getByLabelText(/Rating request intro/), { target: { value: 'Two minutes, we promise.' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save changes|Save event|Create event/ }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/host/events/E1')).toBe(true))
+    const body = JSON.parse(fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events/E1')[1].body)
+    expect(body.rating_email_subject).toBe('Tell us about {{event_name}}')
+    expect(body.rating_email_intro).toBe('Two minutes, we promise.')
+  })
+})

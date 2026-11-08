@@ -23,6 +23,7 @@ import DuplicateEventButton from '@/components/DuplicateEventButton'
 import HostSeriesActions from '@/components/host/HostSeriesActions'
 import EventWaitlistPanel from '@/components/EventWaitlistPanel'
 import EventSignupsCard from '@/components/EventSignupsCard'
+import HostEventRatings from '@/components/host/HostEventRatings'
 import { loadEventStats } from '@/lib/event-stats'
 
 export const dynamic = 'force-dynamic'
@@ -141,6 +142,9 @@ export default async function HostEventDetail(props) {
       />
 
       <HostPromoCodes eventId={race.id} />
+
+      {/* HOSTPAGE.2 — attendee ratings, with Hide/Show per rating. */}
+      <HostEventRatings eventId={race.id} />
     </div>
   )
 }

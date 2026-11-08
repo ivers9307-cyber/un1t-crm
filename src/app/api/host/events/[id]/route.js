@@ -18,7 +18,7 @@ export const dynamic = 'force-dynamic'
 async function loadOwn(db, session, id) {
   const { data } = await db
     .from('race_events')
-    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, series_id, pricing_tiers, registration_questions, duration_minutes, race_waves ( id, start_time, capacity, label, display_order )')
+    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, rating_email_subject, rating_email_intro, series_id, pricing_tiers, registration_questions, duration_minutes, race_waves ( id, start_time, capacity, label, display_order )')
     .eq('id', id)
     .maybeSingle()
   if (!data || data.host_id !== session.host.id) return null
@@ -116,6 +116,8 @@ export async function PUT(request, props) {
     confirmation_email_intro: input.confirmation_email_intro ?? null,
     reminder_email_subject: input.reminder_email_subject ?? null,
     reminder_email_intro: input.reminder_email_intro ?? null,
+    rating_email_subject: input.rating_email_subject ?? null,
+    rating_email_intro: input.rating_email_intro ?? null,
     ...('series_id' in input ? { series_id: input.series_id ?? null } : {}),
     status: transition.status,
     ...(transition.reReview ? { submitted_at: new Date().toISOString(), reviewed_at: null } : {}),
