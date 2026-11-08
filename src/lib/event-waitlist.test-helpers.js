@@ -10,7 +10,7 @@ export function fakeDb(respond) {
       const q = { table, action: 'select', payload: null, ops: [] }
       queries.push(q)
       const b = {}
-      for (const name of ['select', 'eq', 'in', 'is', 'order', 'range', 'limit', 'gte', 'lt', 'neq']) {
+      for (const name of ['select', 'eq', 'in', 'is', 'not', 'order', 'range', 'limit', 'gte', 'lt', 'neq']) {
         b[name] = (...a) => { q.ops.push([name, ...a]); return b }
       }
       b.insert = (payload) => { q.action = 'insert'; q.payload = payload; return b }
