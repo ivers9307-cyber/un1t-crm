@@ -119,6 +119,16 @@ describe('sendRegistrationMovedEmail', () => {
   })
 })
 
+describe('sendRegistrationMovedEmail — a change of time (SAMETIME.1)', () => {
+  it('a move whose source is the entry\'s own event sends the time-change copy', async () => {
+    const move = { ...MOVE, from_event: { id: 'e2', name: 'Hatch Oct 25', race_date: '2026-10-25' }, from_wave: { start_time: '09:00:00', label: null } }
+    const r = await sendRegistrationMovedEmail(fakeDb({ move }), { registrationId: 'r1', moveId: 'mv1' })
+    expect(r.sent).toEqual(['email'])
+    expect(sent().subject).toBe('Your time has changed for Hatch Oct 25')
+    expect(sent().htmlBody).toContain('09:00')
+  })
+})
+
 describe('sendRegistrationMovedEmail — guards', () => {
   it('mints every QR against the TARGET event, so the old tickets stop working', async () => {
     await sendRegistrationMovedEmail(fakeDb(), { registrationId: 'r1', moveId: 'mv1' })
@@ -214,6 +224,20 @@ describe('buildMovedDefaults', () => {
     expect(d.infoRows).not.toContain('Team size')
     expect(d.infoRows).toContain('Total paid')
     expect(d.memberQrs).toHaveLength(1)
+  })
+  // SAMETIME.1 — a change of time on the same event: the tickets are the same
+  // tokens (event + entry + person), so the copy says they still work.
+  it('a change of time on the same event says so and keeps the tickets', () => {
+    const d = buildMovedDefaults({ ...CTX, sameEvent: true, oldEventName: 'B', oldWhen: 'Sat 25 Oct · 09:00' })
+    expect(d.subject).toBe('Your time has changed for B')
+    expect(d.heading).toBe("Your team's time has changed, Aoife.")
+    expect(d.introHtml).toContain('09:00')
+    expect(d.introHtml).toContain('<strong>11:00</strong>')
+    expect(d.introHtml).toContain('still work')
+    expect(d.introHtml).not.toContain('no longer work')
+    const solo = buildMovedDefaults({ ...CTX, sameEvent: true, teamMembers: [CTX.teamMembers[0]] })
+    expect(solo.heading).toBe('Your time has changed, Aoife.')
+    expect(solo.introHtml).toContain('still works')
   })
   it('the footer speaks of a wave and race-day energy only for a race', () => {
     expect(buildMovedDefaults(CTX).footerHtml).toContain('before your wave')

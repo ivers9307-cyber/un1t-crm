@@ -819,9 +819,10 @@ function TeamCard({ registration, placedIntoName = null, waves, onChanged, onErr
           {registration.last_move && (
             <span
               className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-700 inline-flex items-center gap-1"
-              title={`Moved from ${registration.last_move.from_event?.name || 'another event'} by ${actorOf(registration.last_move)} on ${new Date(registration.last_move.created_at).toLocaleDateString('en-IE')}${registration.last_move.forced ? ' (wave was full)' : ''}${settledNote(registration.last_move)}`}
+              title={`${registration.last_move.time_change ? 'Time changed' : `Moved from ${registration.last_move.from_event?.name || 'another event'}`} by ${actorOf(registration.last_move)} on ${new Date(registration.last_move.created_at).toLocaleDateString('en-IE')}${registration.last_move.forced ? ' (wave was full)' : ''}${settledNote(registration.last_move)}`}
             >
-              <ArrowRightCircle size={10} /> Moved from {registration.last_move.from_event?.name || 'another event'}
+              {/* SAMETIME.1 — a change of time stays on this event. */}
+              <ArrowRightCircle size={10} /> {registration.last_move.time_change ? 'Time changed' : `Moved from ${registration.last_move.from_event?.name || 'another event'}`}
             </span>
           )}
           {registration.last_move && registration.last_move.notified_at === null && (

@@ -47,7 +47,8 @@ export async function GET(_request, props) {
   if (guard) return guard
   if (!canMoveAt(user, sourceLocationId)) return forbidden()
 
-  const result = await listMoveTargets(db, { registrationId: params.id, allowedLocationIds: getUserLocationIds(user) })
+  // SAMETIME.1 — the entry's own event is offered too, for a change of time.
+  const result = await listMoveTargets(db, { registrationId: params.id, allowedLocationIds: getUserLocationIds(user), sameEventTimes: true })
   if (!result.ok) {
     return NextResponse.json({
       success: false, error: result.error,

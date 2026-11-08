@@ -85,6 +85,25 @@ describe('MoveEntryDialog', () => {
     expect(screen.getByRole('button', { name: /^Move entry$/ })).toBeTruthy()
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
+  // SAMETIME.1 — the entry's own event is offered for a change of time.
+  it('offers the entry\'s own event as a change of time, with its current time disabled', async () => {
+    const same = { id: 'e1', name: 'Hatch Oct 18', race_date: '2026-10-18', location_id: 'L1', location_name: 'Hatch St', crosses_studio: false, price_gap_cents: 0, currency: 'EUR', same_event: true,
+      waves: [{ id: 'w1', start_time: '11:00:00', label: null, capacity: 10, spots_left: 3, current: true }, { id: 'w2', start_time: '12:30:00', label: null, capacity: 10, spots_left: 5, current: false }] }
+    const fetchMock = stubFetch([{ status: 200, body: { success: true, data: { ...TARGETS, targets: [same, ...TARGETS.targets] } } }, { status: 200, body: { success: true, data: {} } }])
+    const onMoved = vi.fn()
+    render(<MoveEntryDialog open registration={registration} onClose={() => {}} onMoved={onMoved} onError={() => {}} />)
+    await screen.findByText(/Move The Crushers to another event or time/)
+    const option = screen.getByRole('option', { name: /Hatch Oct 18 · this event \(change time\)/ })
+    expect(option.value).toBe('e1')
+    fireEvent.change(screen.getByLabelText(/Target event/), { target: { value: 'e1' } })
+    const current = screen.getByRole('option', { name: /11:00 · current/ })
+    expect(current.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText(/^Time|^Wave/), { target: { value: 'w2' } })
+    expect(screen.queryByText(/per person/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^Move entry$/ }))
+    await waitFor(() => expect(onMoved).toHaveBeenCalled())
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({ target_event_id: 'e1', target_wave_id: 'w2' })
+  })
   it('says so when nothing is eligible', async () => {
     stubFetch([{ status: 200, body: { success: true, data: { ...TARGETS, targets: [] } } }])
     render(<MoveEntryDialog open registration={registration} onClose={() => {}} onMoved={() => {}} onError={() => {}} />)
