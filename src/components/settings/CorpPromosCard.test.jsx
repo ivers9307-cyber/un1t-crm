@@ -166,6 +166,10 @@ describe('promoBodyFromForm', () => {
     expect(body.key).toBeUndefined()
     expect(body.glofox_plan_code).toBeUndefined()
   })
+  it('a blank Lead source is omitted, never sent as an empty string', () => {
+    const body = promoBodyFromForm({ ...form, lead_source: '   ' }, { platform: 'un1t_online', creating: true })
+    expect('lead_source' in body).toBe(false)
+  })
 })
 
 describe('apiError', () => {

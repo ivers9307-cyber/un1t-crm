@@ -49,8 +49,12 @@ export function promoBodyFromForm(form, { platform, creating }) {
     credits: Number(form.credits),
     expires_in_days: Number(form.expires_in_days),
     tag: form.tag.trim().toLowerCase(),
-    lead_source: form.lead_source.trim().toLowerCase(),
   }
+  // A blank Lead source is left out, not sent as '' (which the slug rule
+  // refuses): on create the route falls back to 'corp_promo', on edit the
+  // stored value stays.
+  const leadSource = form.lead_source.trim().toLowerCase()
+  if (leadSource) body.lead_source = leadSource
   if (creating) body.key = form.key.trim().toLowerCase()
   if (platform === 'glofox') {
     body.glofox_membership_id = form.glofox_membership_id.trim()
