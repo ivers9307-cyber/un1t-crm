@@ -78,12 +78,18 @@ export function computeEditTransition(current, changes) {
     'race_date' in changes &&
     String(changes.race_date || '') !== String(current.race_date || '')
 
-  const waveKey = (waves) =>
-    (Array.isArray(waves) ? waves : [])
-      .map((w) => `${w.id || ''}:${w.start_time || ''}`)
-      .join('|')
-  const waveTimeChanged =
-    'waves' in changes && waveKey(current.waves) !== waveKey(changes.waves)
+  // HOSTSERIES.1 — only an EXISTING session whose start time changes is
+  // customer-material: adding a session or removing one (a removal with live
+  // entries is refused by the sync, 409) harms no booking, so neither
+  // re-reviews. Waves are matched by id; a new one (no id) is ignored here.
+  const byId = (waves) => new Map((Array.isArray(waves) ? waves : []).filter((w) => w?.id).map((w) => [w.id, String(w.start_time || '').slice(0, 5)]))
+  const waveTimeChanged = 'waves' in changes && (() => {
+    const before = byId(current.waves)
+    for (const [id, time] of byId(changes.waves)) {
+      if (before.has(id) && before.get(id) !== time) return true
+    }
+    return false
+  })()
 
   const reReview = priceChanged || dateChanged || waveTimeChanged
   return { status: reReview ? 'pending_review' : 'published', reReview }
@@ -93,6 +99,17 @@ export function computeEditTransition(current, changes) {
 // any extra keys so a host can't smuggle UN1T-only fields (member
 // pricing, Glofox sync, etc.) past validation — those are forced by
 // hostEventDefaults() server-side, never accepted from the client.
+export const MAX_SESSIONS = 12
+
+export const SessionInputSchema = z
+  .object({
+    id: uuidLike.optional(),
+    start_time: z.string().regex(/^\d{2}:\d{2}$/),
+    label: z.string().max(120).optional().nullable(),
+    capacity: z.number().int().min(1).max(100000),
+  })
+  .strict()
+
 export const HostEventSchema = z
   .object({
     kind: z.enum(HOST_EVENT_KINDS),
@@ -103,9 +120,19 @@ export const HostEventSchema = z
     registration_closes_at: z.string().datetime().optional().nullable(),
     allowed_team_sizes: z.array(z.number().int().min(1).max(8)).min(1),
     ticket_price_cents: z.number().int().min(0).max(1_000_000),
-    session_start_time: z.string().regex(/^\d{2}:\d{2}$/),
-    session_capacity: z.number().int().min(1).max(100000),
-    session_label: z.string().max(120).optional().nullable(),
+    // HOSTSERIES.1 — one row per session time (a race_waves row each); an
+    // id names an existing wave being edited. Unique start times.
+    sessions: z.array(SessionInputSchema).min(1).max(MAX_SESSIONS).superRefine((sessions, ctx) => {
+      const seen = new Set()
+      for (const s of sessions) {
+        if (seen.has(s.start_time)) {
+          ctx.addIssue({ code: 'custom', path: [], message: 'Each session needs its own start time.' })
+          return
+        }
+        seen.add(s.start_time)
+      }
+    }),
+    series_id: uuidLike.nullable().optional(),
     hero_image_url: z.string().url().optional().nullable(),
     accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().nullable(),
     venue_name: z.string().trim().min(1).max(200),
