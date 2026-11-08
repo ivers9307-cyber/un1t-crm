@@ -1,13 +1,17 @@
 // WAYSIN.4 — GET/POST /api/locations/[id]/corp-promos: the studio's corporate
 // and partner promos (public.corp_promos, mig 816), edited at /settings/promos.
 //
-//   GET [?live=1] → { promos: Row[], can_edit, platform, public_path }
+//   GET → { promos: Row[], can_edit, platform, public_path }
+//   GET ?live=1 → { promos: LiveRow[] }   LiveRow = { id, key, name, credits, expiresInDays, live }
 //   POST { key, name, credits, expires_in_days, live?, tag, lead_source?,
 //          glofox_membership_id?, glofox_plan_code?, glofox_plan_name? } → 201 { promo }
 //
 // Gate: membership first (another studio is a 404, never a 403 that confirms
-// it exists), then manager+ AT this studio to read, owner or master AT this
-// studio to create (guardMasterOrOwner). The row's platform is the studio's
+// it exists), then manager+ AT this studio to read the full list, owner or
+// master AT this studio to create (guardMasterOrOwner). The live list
+// (?live=1) feeds the landing page editor's promo picker, so it also admits
+// anyone holding the landing_page permission at the studio, and it is trimmed
+// to what the picker needs: no Glofox plan ids, no platform, no can_edit. The row's platform is the studio's
 // membership_source: a Glofox studio's promo must carry its plan binding
 // (glofox_plan_missing), a un1t.online studio's never does, and a studio on
 // neither cannot run a promo (no_platform). The key is unique per studio and
@@ -20,6 +24,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner, hasRoleAtLocation } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, corpPromoCreateSchema } from '@/lib/schemas'
 import { listCorpPromos, promoView, CORP_PROMO_COLUMNS } from '@/lib/corp-promos-db'
@@ -31,6 +36,11 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const fail = (status, error, extra = {}) => NextResponse.json({ success: false, error, ...extra }, { status })
+
+/** The live list's row: what the landing editor's picker needs, nothing more. */
+function liveRowView(p) {
+  return { id: p.id, key: p.key, name: p.name, credits: p.credits, expiresInDays: p.expiresInDays, live: p.live }
+}
 
 async function readStudio(db, locationId) {
   const { data, error } = await db
@@ -47,9 +57,11 @@ export async function GET(request, { params }) {
   const { id: locationId } = await params
   const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
-  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) return fail(403, 'Managers and above can see promos.')
-
   const liveOnly = new URL(request.url).searchParams.get('live') === '1'
+  const isManager = hasRoleAtLocation(user, locationId, MANAGER_ROLES)
+  const mayRead = liveOnly ? (isManager || hasPermissionForLocation(user, locationId, 'landing_page')) : isManager
+  if (!mayRead) return fail(403, 'Managers and above can see promos.')
+
   const db = createServerClient()
   const { location, error } = await readStudio(db, locationId)
   if (error) return fail(500, 'Could not read the studio')
@@ -57,6 +69,9 @@ export async function GET(request, { params }) {
 
   const listed = await listCorpPromos(db, { locationId, liveOnly })
   if (!listed.ok) return fail(500, 'Could not read the promos')
+  if (liveOnly) {
+    return NextResponse.json({ success: true, data: { promos: listed.promos.map(liveRowView) } })
+  }
 
   // Only the claim-link preview: a failed read shows no path, never fails the list.
   let publicPath = null

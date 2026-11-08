@@ -47,6 +47,7 @@ function mockDb({ source = 'glofox', rows = [ROW], promo = ROW, claims = 0, inse
           if (prop === 'update') return (r) => { writes.update.push(r); target._op = 'update'; target._row = r; return chain }
           if (prop === 'delete') return () => { writes.delete += 1; target._op = 'delete'; return chain }
           if (prop === 'select') return (_c, opts) => { if (opts?.head) target._head = true; return chain }
+          if (prop === 'eq') return (col, val) => { (target._eq ||= []).push([col, val]); return chain }
           if (prop === 'maybeSingle' || prop === 'single') return () => { target._one = true; return chain }
           if (prop in target) return target[prop]
           return () => chain
@@ -63,7 +64,9 @@ function mockDb({ source = 'glofox', rows = [ROW], promo = ROW, claims = 0, inse
       if (t._op === 'update') return { data: promo ? { ...promo, ...t._row } : null, error: null }
       if (t._op === 'delete') return { data: promo ? [{ id: promo.id }] : [], error: null }
       if (t._one) return { data: promo, error: null }
-      return { data: rows, error: null }
+      // Honours the reader's filters, so a dropped `.eq('live', true)` shows.
+      const eqs = t._eq || []
+      return { data: rows.filter((r) => eqs.every(([c, v]) => r[c] === v)), error: null }
     }
     return { data: null, error: null }
   }
@@ -79,6 +82,57 @@ const CREATE = {
   key: 'acme-3-free', name: 'Acme corporate', credits: 3, expires_in_days: 7, tag: 'acme_corp', lead_source: '  Acme Corp ',
   glofox_membership_id: 'm9', glofox_plan_code: 'pc9', glofox_plan_name: 'Acme plan',
 }
+
+const OFF_ROW = { ...ROW, id: 'p2', key: 'acme-3-free', name: 'Acme', live: false }
+// A plain staff member whose studio switched the landing page editor on for them.
+const landingEditor = {
+  ...withRole('staff'),
+  assignmentsByLocation: { loc1: { role: 'staff', permissions: { landing_page: true } } },
+}
+const LIVE_URL = 'http://x/api/locations/loc1/corp-promos?live=1'
+
+describe('GET ?live=1 (the landing editor picker)', () => {
+  it('reaches listCorpPromos with liveOnly: only the live rows come back', async () => {
+    getCurrentUser.mockResolvedValue(withRole('manager'))
+    mockDb({ rows: [ROW, OFF_ROW] })
+    const { data } = await (await GET(new Request(LIVE_URL), listProps)).json()
+    expect(data.promos.map((p) => p.key)).toEqual(['stillorgan-newstart'])
+    // Without ?live=1 the same fake returns both, so the filter came from the route.
+    const all = await (await GET(new Request('http://x/api/locations/loc1/corp-promos'), listProps)).json()
+    expect(all.data.promos.map((p) => p.key)).toEqual(['stillorgan-newstart', 'acme-3-free'])
+  })
+  it('returns the trimmed row: no Glofox ids, no platform, no can_edit', async () => {
+    getCurrentUser.mockResolvedValue(owner)
+    mockDb()
+    const { data } = await (await GET(new Request(LIVE_URL), listProps)).json()
+    expect(data.promos).toEqual([{ id: 'p1', key: 'stillorgan-newstart', name: 'New Start', credits: 3, expiresInDays: 7, live: true }])
+    expect(data).not.toHaveProperty('can_edit')
+    expect(data).not.toHaveProperty('platform')
+    expect(JSON.stringify(data)).not.toMatch(/glofox|pc1|m1"/)
+  })
+  it('admits a staff member holding landing_page at the studio', async () => {
+    getCurrentUser.mockResolvedValue(landingEditor)
+    mockDb()
+    const res = await GET(new Request(LIVE_URL), listProps)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.promos[0].key).toBe('stillorgan-newstart')
+  })
+  it('but not to the full list', async () => {
+    getCurrentUser.mockResolvedValue(landingEditor)
+    mockDb()
+    expect((await GET(new Request('http://x/api/locations/loc1/corp-promos'), listProps)).status).toBe(403)
+  })
+  it('refuses plain staff without landing_page', async () => {
+    getCurrentUser.mockResolvedValue(withRole('staff'))
+    mockDb()
+    expect((await GET(new Request(LIVE_URL), listProps)).status).toBe(403)
+  })
+  it('another studio is still a 404', async () => {
+    getCurrentUser.mockResolvedValue(stranger)
+    mockDb()
+    expect((await GET(new Request(LIVE_URL), listProps)).status).toBe(404)
+  })
+})
 
 describe('GET', () => {
   it('another studio is a 404', async () => {
@@ -105,7 +159,7 @@ describe('GET', () => {
   it('an owner may edit', async () => {
     getCurrentUser.mockResolvedValue(owner)
     mockDb()
-    expect((await (await GET(new Request('http://x/api/locations/loc1/corp-promos?live=1'), listProps)).json()).data.can_edit).toBe(true)
+    expect((await (await GET(new Request('http://x/api/locations/loc1/corp-promos'), listProps)).json()).data.can_edit).toBe(true)
   })
 })
 
@@ -194,23 +248,34 @@ describe('PATCH', () => {
 
 describe('DELETE', () => {
   const req = () => new Request('http://x/api/locations/loc1/corp-promos/p1', { method: 'DELETE' })
+  const OFF = { ...ROW, live: false }
+  it('a live promo is 409 still_live and nothing is deleted', async () => {
+    getCurrentUser.mockResolvedValue(owner)
+    const writes = mockDb({ claims: 0 })
+    const res = await DELETE(req(), itemProps)
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.code).toBe('still_live')
+    expect(body.error).toBe('Switch this promo off first.')
+    expect(writes.delete).toBe(0)
+  })
   it('a promo with claims is 409 has_claims and nothing is deleted', async () => {
     getCurrentUser.mockResolvedValue(owner)
-    const writes = mockDb({ claims: 2 })
+    const writes = mockDb({ promo: OFF, claims: 2 })
     const res = await DELETE(req(), itemProps)
     expect(res.status).toBe(409)
     expect((await res.json()).code).toBe('has_claims')
     expect(writes.delete).toBe(0)
   })
-  it('a promo without claims is deleted', async () => {
+  it('a switched-off promo without claims is deleted', async () => {
     getCurrentUser.mockResolvedValue(owner)
-    const writes = mockDb({ claims: 0 })
+    const writes = mockDb({ promo: OFF, claims: 0 })
     expect((await DELETE(req(), itemProps)).status).toBe(200)
     expect(writes.delete).toBe(1)
   })
   it('a failed claims count refuses the delete', async () => {
     getCurrentUser.mockResolvedValue(owner)
-    const writes = mockDb({ claims: null })
+    const writes = mockDb({ promo: OFF, claims: null })
     expect((await DELETE(req(), itemProps)).status).toBe(500)
     expect(writes.delete).toBe(0)
   })

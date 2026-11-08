@@ -6,8 +6,10 @@
 //
 // Managers see the list; owners and masters (can_edit) create, edit, switch on
 // and off and delete. A promo's key is its claim link and cannot change after
-// it is created; a promo that has claims can only be switched off (the API's
-// 409 has_claims disables its Delete). The Glofox plan fields show only at a
+// it is created; Delete shows only on a switched-off promo (the API refuses a
+// live one: 409 still_live), and a promo that has claims can only be switched
+// off (the API's 409 has_claims disables its Delete). A refused save names the
+// field in words (FIELD_MESSAGES), never the validator's raw text. The Glofox plan fields show only at a
 // Glofox studio, where they are required.
 //
 // No server-only import: this is a client module, so it never touches
@@ -58,9 +60,37 @@ export function promoBodyFromForm(form, { platform, creating }) {
   return body
 }
 
-function apiError(j, status) {
-  if (j?.issues?.length) return j.issues.map((i) => i.message).join(' ')
+// A refused field in words. The route's issues carry a path (validateBody);
+// the zod message behind it never reaches the operator.
+export const FIELD_MESSAGES = Object.freeze({
+  key: 'Check the Key: 3 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit.',
+  name: 'Enter a name, up to 80 characters.',
+  credits: 'Credits must be a whole number from 1 to 50.',
+  expires_in_days: 'Expiry must be a whole number of days from 1 to 365.',
+  tag: 'Check the Tag: 2 to 40 lowercase letters, digits, - or _.',
+  lead_source: 'Check the Lead source: up to 80 characters.',
+  glofox_membership_id: 'Check the Glofox membership id.',
+  glofox_plan_code: 'Check the Glofox plan code.',
+  glofox_plan_name: 'Check the Glofox plan name.',
+  live: 'Check the Live switch.',
+})
+const UNKNOWN_FIELD = 'Some of the details are not valid. Check the form and try again.'
+
+/** The words for a refused request: each named field once, else the API's own error. */
+export function apiError(j, status) {
+  if (Array.isArray(j?.issues) && j.issues.length) {
+    const fields = [...new Set(j.issues.map((i) => String(i?.path || '').split('.')[0]))]
+    return [...new Set(fields.map((f) => FIELD_MESSAGES[f] || UNKNOWN_FIELD))].join(' ')
+  }
   return j?.error || `Request failed (${status})`
+}
+
+/** What is missing before a save is sent, in words; null when nothing is. */
+export function missingField(form) {
+  if (!form.name.trim()) return 'Enter a name.'
+  if (!String(form.credits).trim()) return 'Enter the credits.'
+  if (!String(form.expires_in_days).trim()) return 'Enter the expiry in days.'
+  return null
 }
 
 function TextInput({ id, label, hint, value, onChange, disabled, maxLength = 80, inputMode, required }) {
@@ -83,6 +113,8 @@ function PromoForm({ initial, creating, platform, publicPath, onCancel, onSaved,
 
   async function submit(e) {
     e.preventDefault()
+    const missing = missingField(form)
+    if (missing) { setError(missing); return }
     setSaving(true); setError(null)
     try {
       const url = creating
@@ -245,8 +277,10 @@ export default function CorpPromosCard({ locationId }) {
                       <Button type="button" variant="secondary" size="sm" icon={Power} loading={busy === p.id}
                         onClick={() => toggle(p)}>{p.live ? 'Switch off' : 'Switch on'}</Button>
                       <Button type="button" variant="ghost" size="sm" icon={Pencil} onClick={() => setEditing(p.id)}>Edit</Button>
-                      <Button type="button" variant="danger" size="sm" icon={Trash2} disabled={hasClaims[p.id] || busy === p.id}
-                        onClick={() => remove(p)}>{hasClaims[p.id] ? 'Delete (has claims)' : 'Delete'}</Button>
+                      {!p.live && (
+                        <Button type="button" variant="danger" size="sm" icon={Trash2} disabled={hasClaims[p.id] || busy === p.id}
+                          onClick={() => remove(p)}>{hasClaims[p.id] ? 'Delete (has claims)' : 'Delete'}</Button>
+                      )}
                     </div>
                   )}
                   {hasClaims[p.id] && (

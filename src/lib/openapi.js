@@ -7198,9 +7198,9 @@ registry.registerPath({
   path: '/api/locations/{id}/corp-promos',
   tags: ['Locations'],
   security: [{ CookieAuth: [] }],
-  summary: "A studio's corporate and partner promos (manager+ at the studio)",
-  request: { params: z.object({ id: z.string().uuid() }), query: z.object({ live: z.enum(['1']).optional().describe('1 = only the live promos (the landing editor picker)') }) },
-  description: '{ promos: [{ id, locationId, key, name, platform, credits, expiresInDays, live, tag, leadSource, glofox }], can_edit, platform, public_path }. Membership first (another studio is a 404), then manager+ at the studio. can_edit = owner or master at the studio. A failed read is a 500, never an empty list.',
+  summary: "A studio's corporate and partner promos (manager+ at the studio; the live list also landing_page)",
+  request: { params: z.object({ id: z.string().uuid() }), query: z.object({ live: z.enum(['1']).optional().describe('1 = only the live promos, trimmed (the landing editor picker)') }) },
+  description: '{ promos: [{ id, locationId, key, name, platform, credits, expiresInDays, live, tag, leadSource, glofox }], can_edit, platform, public_path }. Membership first (another studio is a 404), then manager+ at the studio. can_edit = owner or master at the studio. With live=1 it admits manager+ OR the landing_page permission at the studio and returns only { promos: [{ id, key, name, credits, expiresInDays, live }] } (no Glofox plan ids, no platform, no can_edit). A failed read is a 500, never an empty list.',
   responses: {
     200: { description: 'The promos' },
     403: { description: 'Not a manager at the studio', content: { 'application/json': { schema: ErrorResponse } } },
@@ -7243,14 +7243,14 @@ registry.registerPath({
   path: '/api/locations/{id}/corp-promos/{promoId}',
   tags: ['Locations'],
   security: [{ CookieAuth: [] }],
-  summary: 'Delete a promo that has no claims (owner / master at the studio)',
+  summary: 'Delete a switched-off promo that has no claims (owner / master at the studio)',
   request: { params: z.object({ id: z.string().uuid(), promoId: z.string().uuid() }) },
-  description: 'A promo with any corp_promo_claims row for its location and key can only be switched off: 409 has_claims. A failed claims count refuses the delete (500).',
+  description: 'A live promo is refused: 409 still_live ("Switch this promo off first."). A promo with any corp_promo_claims row for its location and key can only be switched off: 409 has_claims. A failed claims count refuses the delete (500).',
   responses: {
     200: { description: '{ deleted: true }' },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (or another studio)', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'has_claims', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'still_live or has_claims', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

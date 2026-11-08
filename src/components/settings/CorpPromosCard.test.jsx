@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 
-import CorpPromosCard, { promoBodyFromForm } from './CorpPromosCard'
+import CorpPromosCard, { promoBodyFromForm, apiError } from './CorpPromosCard'
 
 const PROMOS = [
   { id: 'p1', key: 'hatch-3-free', name: 'Corporate trial', platform: 'un1t_online', credits: 3, expiresInDays: 7, live: true, tag: 'hatch-corp-promo', leadSource: 'corp_promo', glofox: null },
@@ -14,7 +14,7 @@ const PROMOS = [
 ]
 
 let calls
-function serve({ canEdit = true, platform = 'un1t_online', deleteAnswer } = {}) {
+function serve({ canEdit = true, platform = 'un1t_online', deleteAnswer, saveAnswer } = {}) {
   calls = []
   globalThis.fetch = vi.fn(async (url, init = {}) => {
     calls.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null })
@@ -26,6 +26,7 @@ function serve({ canEdit = true, platform = 'un1t_online', deleteAnswer } = {}) 
       const body = JSON.parse(init.body)
       return { ok: true, status: 200, json: async () => ({ success: true, data: { promo: { ...PROMOS[0], ...('live' in body ? { live: body.live } : {}) } } }) }
     }
+    if (saveAnswer) return saveAnswer()
     return { ok: true, status: 201, json: async () => ({ success: true, data: { promo: { ...PROMOS[0], id: 'p3', key: 'new-one', name: 'New one' } } }) }
   })
 }
@@ -42,7 +43,56 @@ describe('CorpPromosCard', () => {
     expect(screen.getByText('Live').className).toContain('bg-green-500/10 text-green-700')
     expect(screen.getByText('Off').className).toContain('text-gray-700')
     expect(screen.getByRole('button', { name: 'New promo' })).toBeTruthy()
-    expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(2)
+    // Delete only on the switched-off row: a live promo must be switched off first.
+    expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(1)
+  })
+
+  it('shows Delete only on Off rows', async () => {
+    serve()
+    render(<CorpPromosCard locationId="loc-h" />)
+    const live = (await screen.findByText('Corporate trial')).closest('li')
+    const off = screen.getByText('Old promo').closest('li')
+    expect([...live.querySelectorAll('button')].some((b) => b.textContent.includes('Delete'))).toBe(false)
+    expect([...off.querySelectorAll('button')].some((b) => b.textContent.includes('Delete'))).toBe(true)
+  })
+
+  it('a still_live refusal shows the route\'s words', async () => {
+    serve({ deleteAnswer: () => ({ ok: false, status: 409, json: async () => ({ success: false, code: 'still_live', error: 'Switch this promo off first.' }) }) })
+    render(<CorpPromosCard locationId="loc-h" />)
+    await screen.findByText('Old promo')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Delete' })) })
+    expect(screen.getByRole('alert').textContent).toBe('Switch this promo off first.')
+    expect(screen.getByText('Old promo')).toBeTruthy()
+  })
+
+  it('a blank Credits field is a plain message and nothing is sent', async () => {
+    serve()
+    render(<CorpPromosCard locationId="loc-h" />)
+    await screen.findByText('Corporate trial')
+    fireEvent.click(screen.getByRole('button', { name: 'New promo' }))
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Acme' } })
+    fireEvent.change(screen.getByLabelText(/^Credits/), { target: { value: '' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Create promo' })) })
+    expect(screen.getByRole('alert').textContent).toBe('Enter the credits.')
+    fireEvent.change(screen.getByLabelText(/^Credits/), { target: { value: '3' } })
+    fireEvent.change(screen.getByLabelText(/^Expiry/), { target: { value: ' ' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Create promo' })) })
+    expect(screen.getByRole('alert').textContent).toBe('Enter the expiry in days.')
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+  })
+
+  it('a refused save names the field in words, never the validator\'s text', async () => {
+    serve({ saveAnswer: () => ({ ok: false, status: 400, json: async () => ({ success: false, error: 'Invalid request body', issues: [{ path: 'credits', message: 'Number must be less than or equal to 50' }] }) }) })
+    render(<CorpPromosCard locationId="loc-h" />)
+    await screen.findByText('Corporate trial')
+    fireEvent.click(screen.getByRole('button', { name: 'New promo' }))
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Acme' } })
+    fireEvent.change(screen.getByLabelText(/^Key/), { target: { value: 'acme' } })
+    fireEvent.change(screen.getByLabelText(/^Tag/), { target: { value: 'acme' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Create promo' })) })
+    const alert = screen.getByRole('alert').textContent
+    expect(alert).toBe('Credits must be a whole number from 1 to 50.')
+    expect(alert).not.toContain('less than or equal')
   })
 
   it('hides every write button without can_edit', async () => {
@@ -59,10 +109,10 @@ describe('CorpPromosCard', () => {
     serve({ deleteAnswer: () => ({ ok: false, status: 409, json: async () => ({ success: false, code: 'has_claims', error: 'x' }) }) })
     render(<CorpPromosCard locationId="loc-h" />)
     await screen.findByText('Corporate trial')
-    await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Delete' })) })
     const btn = screen.getByRole('button', { name: 'Delete (has claims)' })
     expect(btn.matches(':disabled')).toBe(true)
-    expect(screen.getByText('Corporate trial')).toBeTruthy()
+    expect(screen.getByText('Old promo')).toBeTruthy()
   })
 
   it('Switch off PATCHes live:false only', async () => {
@@ -115,5 +165,19 @@ describe('promoBodyFromForm', () => {
     const body = promoBodyFromForm(form, { platform: 'un1t_online', creating: false })
     expect(body.key).toBeUndefined()
     expect(body.glofox_plan_code).toBeUndefined()
+  })
+})
+
+describe('apiError', () => {
+  it('maps each issue path to its field words, once per field', () => {
+    expect(apiError({ issues: [{ path: 'key', message: 'Key: 3-40 …' }, { path: 'tag', message: 'x' }, { path: 'tag', message: 'y' }] }, 400))
+      .toBe('Check the Key: 3 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit. Check the Tag: 2 to 40 lowercase letters, digits, - or _.')
+  })
+  it('an unknown or empty path is a plain sentence, never zod text', () => {
+    expect(apiError({ issues: [{ path: '', message: 'Nothing to change' }] }, 400)).toBe('Some of the details are not valid. Check the form and try again.')
+  })
+  it('without issues it is the route\'s error', () => {
+    expect(apiError({ error: 'Switch this promo off first.' }, 409)).toBe('Switch this promo off first.')
+    expect(apiError({}, 502)).toBe('Request failed (502)')
   })
 })

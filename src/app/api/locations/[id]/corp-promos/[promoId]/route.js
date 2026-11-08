@@ -10,7 +10,8 @@
 // promo id is a 404 too. `key` is the claim link and immutable: a PATCH that
 // names it is a 400 (corpPromoPatchSchema). A promo with claims
 // (corp_promo_claims rows for its location_id + key) can only be switched off,
-// never deleted: 409 has_claims.
+// never deleted: 409 has_claims. A live promo is never deleted either: switch
+// it off first (409 still_live), so a claim link cannot vanish under a visitor.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -89,6 +90,7 @@ export async function DELETE(request, { params }) {
   const { row, error: readError } = await readPromoRow(db, locationId, promoId)
   if (readError) return fail(500, 'Could not read the promo')
   if (!row) return fail(404, 'Not found')
+  if (row.live === true) return fail(409, 'Switch this promo off first.', { code: 'still_live' })
 
   // A failed count is never "no claims": it refuses the delete.
   const { count, error: countError } = await db
