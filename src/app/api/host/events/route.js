@@ -101,6 +101,7 @@ export async function POST(request) {
       reminder_email_intro: input.reminder_email_intro ?? null,
       series_id: input.series_id ?? null,
       pricing_tiers: input.pricing_tiers ?? null,
+      registration_questions: input.registration_questions ?? null,
       ...defaults,
     })
     .select('id, slug')

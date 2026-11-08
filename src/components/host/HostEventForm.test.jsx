@@ -120,3 +120,20 @@ describe('HostEventForm pricing tiers', () => {
     expect(JSON.parse(init.body).pricing_tiers).toEqual(tiers)
   })
 })
+
+// QUESTIONS.1 — the Questions section; the body carries registration_questions.
+describe('HostEventForm registration questions', () => {
+  it('hydrates questions and posts them; none posts null', async () => {
+    const qs = [{ id: 'q-diet', label: 'Dietary needs', type: 'text', required: false, per: 'person' }]
+    const fetchMock = vi.fn(async (url) => (String(url) === '/api/host/series'
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<HostEventForm mode="edit" eventId="E1" initial={{ ...initial, registration_questions: qs }} brandName="UN1T" />)
+    expect(screen.getByLabelText(/Question 1 label/).value).toBe('Dietary needs')
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/host/events/E1')).toBe(true))
+    const [, init] = fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events/E1')
+    expect(JSON.parse(init.body).registration_questions).toEqual(qs)
+  })
+})

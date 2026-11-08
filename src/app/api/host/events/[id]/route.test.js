@@ -56,6 +56,14 @@ describe('GET /api/host/events/[id]', () => {
     row.host_id = 'h2'
     expect((await GET(new Request('https://crm.test'), props())).status).toBe(404)
   })
+  it('returns registration_questions, and PUT writes them without re-review', async () => {
+    row.registration_questions = [{ id: 'q-diet', label: 'Dietary needs', type: 'text', required: false, per: 'person' }]
+    const j = await (await GET(new Request('https://crm.test'), props())).json()
+    expect(j.data.registration_questions).toEqual(row.registration_questions)
+    const res = await put({ ...BODY, registration_questions: [{ id: 'q-size', label: 'Size', type: 'text', required: false, per: 'entry' }] })
+    expect(await res.json()).toEqual({ success: true, data: { id: E1, status: 'published', reReview: false } })
+    expect(db.queries.find((q) => q.table === 'race_events' && q.action === 'update').payload.registration_questions).toEqual([{ id: 'q-size', label: 'Size', type: 'text', required: false, per: 'entry' }])
+  })
   it('returns pricing_tiers', async () => {
     row.pricing_tiers = [{ id: 'a', name: 'Early bird', price_cents: 2500, capacity: 20 }]
     const j = await (await GET(new Request('https://crm.test'), props())).json()

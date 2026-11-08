@@ -111,6 +111,11 @@ describe('computeEditTransition', () => {
     const t = computeEditTransition({ ...published, pricing_tiers: fromDb }, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], pricing_tiers: fromForm })
     expect(t).toEqual({ status: 'published', reReview: false })
   })
+  // QUESTIONS.1 — a questions change is not price or time: never a re-review.
+  it('changing the registration questions never re-reviews', () => {
+    const t = computeEditTransition({ ...published, registration_questions: null }, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], registration_questions: [{ id: 'q-1', label: 'Size', type: 'text', required: false, per: 'entry' }] })
+    expect(t).toEqual({ status: 'published', reReview: false })
+  })
   it('draft/rejected edits never trigger re-review and keep their status', () => {
     expect(computeEditTransition({ status: 'draft', non_member_fee_cents: 2500 }, { non_member_fee_cents: 9999 })).toEqual({ status: 'draft', reReview: false })
     expect(computeEditTransition({ status: 'rejected', non_member_fee_cents: 2500 }, { non_member_fee_cents: 9999 })).toEqual({ status: 'rejected', reReview: false })
@@ -250,6 +255,11 @@ describe('HostEventSchema sessions', () => {
     expect(ok.success).toBe(true)
     expect(HostEventSchema.safeParse({ ...base, sessions: two, pricing_tiers: null }).success).toBe(true)
     expect(HostEventSchema.safeParse({ ...base, sessions: two, pricing_tiers: [{ id: 'a', name: '', price_cents: -1 }] }).success).toBe(false)
+  })
+  it('accepts registration_questions and rejects a malformed one', () => {
+    expect(HostEventSchema.safeParse({ ...base, sessions: two, registration_questions: [{ id: 'q-1', label: 'Size', type: 'choice', options: ['S', 'M'], required: true, per: 'person' }] }).success).toBe(true)
+    expect(HostEventSchema.safeParse({ ...base, sessions: two, registration_questions: null }).success).toBe(true)
+    expect(HostEventSchema.safeParse({ ...base, sessions: two, registration_questions: [{ id: 'q-1', label: 'Size', type: 'choice', options: ['S'] }] }).success).toBe(false)
   })
   it('accepts an optional nullable series_id', () => {
     expect(HostEventSchema.safeParse({ ...base, sessions: two, series_id: null }).success).toBe(true)
