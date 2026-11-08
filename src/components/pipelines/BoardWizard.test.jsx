@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import BoardWizard from './BoardWizard.jsx'
 import StagesStep from './wizard/StagesStep.jsx'
+import { NO_WHATSAPP_NOTICE, NO_WHATSAPP_LINK_TEXT } from './NoWhatsappNotice'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -166,5 +167,41 @@ describe('BoardWizard', () => {
     render(<BoardWizard {...props} initialRecipe="nope" />)
     next()
     expect(screen.getByText('Pick a recipe.')).toBeTruthy()
+  })
+
+  // RAILS.5 — drive the real finish (no onCreate) against a stubbed API.
+  async function finishWith(hasWhatsapp) {
+    const fetchMock = vi.fn(async (url, opts = {}) => {
+      const method = opts.method || 'GET'
+      if (method === 'POST') return { ok: true, json: async () => ({ success: true, data: { board: { id: 'nb', name: 'Spring reset', enabled: false, stages: [] } } }) }
+      if (method === 'PUT') return { ok: true, json: async () => ({ success: true, data: { followup: {} } }) }
+      return { ok: true, json: async () => ({ success: true, data: { options: OPTIONS } }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<BoardWizard {...props} {...(hasWhatsapp === undefined ? {} : { hasWhatsapp })} />)
+    fireEvent.click(screen.getByRole('button', { name: /Paid trial/ }))
+    next()
+    fireEvent.change(screen.getByLabelText(/Board name/), { target: { value: 'Spring reset' } })
+    next()
+    fireEvent.click(await screen.findByLabelText(/14 Day Reset/))
+    for (let i = 0; i < 4; i += 1) next()
+    fireEvent.click(screen.getByRole('button', { name: 'Create board (switched off)' }))
+    await screen.findByText(/is created and switched off/)
+    return fetchMock
+  }
+  const sent = (fetchMock, method) => fetchMock.mock.calls.filter(([, o]) => o?.method === method)
+
+  it('noWhatsappCreatesTheBoardSkipsInstallsAndSaysSo', async () => {
+    const fetchMock = await finishWith(false)
+    expect(sent(fetchMock, 'POST')).toHaveLength(1)
+    expect(sent(fetchMock, 'PUT')).toHaveLength(0)
+    expect(screen.getAllByText(new RegExp(NO_WHATSAPP_NOTICE.slice(0, 40))).length).toBeGreaterThan(0)
+    expect(screen.getByRole('link', { name: NO_WHATSAPP_LINK_TEXT }).getAttribute('href')).toBe('/settings/integrations-hub?manage=whatsapp-numbers')
+  })
+
+  it.each([[true], [undefined], [null]])('with whatsapp %s the notice is absent and the flow is today\'s', async (v) => {
+    const fetchMock = await finishWith(v)
+    expect(screen.queryByText(new RegExp(NO_WHATSAPP_NOTICE.slice(0, 40)))).toBeNull()
+    await waitFor(() => expect(sent(fetchMock, 'POST')).toHaveLength(1))
   })
 })

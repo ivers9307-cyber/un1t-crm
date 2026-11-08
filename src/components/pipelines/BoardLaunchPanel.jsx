@@ -3,9 +3,14 @@
 import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button, Card, Modal } from '@/components/ui'
-import { followupChip } from './BoardList'
+import { followupChip, placementCadence } from './BoardList'
 
-export const TURN_ON_CONFIRM = 'People who already qualify are placed tonight without any messages. From tomorrow, new people get the follow-ups.'
+// RAILS.4 — keyed by the board's placement cadence (placementCadence).
+export const TURN_ON_CONFIRM = {
+  nightly: 'People who already qualify are placed tonight without any messages. From tomorrow, new people get the follow-ups.',
+  hourly: 'People who already qualify are placed within the hour without any messages. After that, new people get the follow-ups.',
+}
+export const DRY_RUN_ERRORS_NOTE = (n) => `Some people could not be checked (${n}). The first placement is held until this is clear.`
 
 /** "3 people now on the €39 Trial board would move here". */
 export function overlapLine(row) {
@@ -35,10 +40,11 @@ async function postJson(url) {
  * @param {(key: string) => void} [props.onRetry]
  * @param {boolean} [props.installing]  an install is still running: Turn on waits
  * @param {string[]|null} [props.expectedKeys]  pack keys that must each have a row or an issue first
+ * @param {boolean|null} [props.hasWhatsapp]  false: the studio has no WhatsApp number on, and the note says so (BoardSettings passes it; the wizard does not, its own notice card already says so)
  * @param {(board: object) => void} [props.onEnabled]
  * @param {boolean} [props.showBoardLink]
  */
-export default function BoardLaunchPanel({ board, followups, issues = [], onRetry, retryDisabled = false, installing = false, expectedKeys = null, onEnabled, showBoardLink = false }) {
+export default function BoardLaunchPanel({ board, followups, issues = [], onRetry, retryDisabled = false, installing = false, expectedKeys = null, hasWhatsapp = null, onEnabled, showBoardLink = false }) {
   const [dry, setDry] = useState(null)
   const [dryBusy, setDryBusy] = useState(false)
   const [dryError, setDryError] = useState(null)
@@ -53,6 +59,8 @@ export default function BoardLaunchPanel({ board, followups, issues = [], onRetr
   const settled = !installing && (expectedKeys == null
     || expectedKeys.every((k) => (followups || []).some((f) => f.pack_key === k) || issues.some((i) => i.key === k)))
   const canTurnOn = !!dry && hasFollowup && settled && !enabled
+  // The dry run answers a count, or (older shape) the list of errors.
+  const dryErrors = dry ? (Array.isArray(dry.errors) ? dry.errors.length : Number(dry.errors) || 0) : 0
 
   async function runDry() {
     if (inFlight.current) return
@@ -110,7 +118,7 @@ export default function BoardLaunchPanel({ board, followups, issues = [], onRetr
           </ul>
         )}
         {!hasFollowup && (
-          <p className="mt-3 text-sm text-un1t-subtle">The board needs at least one live follow-up, or one waiting for Meta, before it can be turned on.</p>
+          <p className="mt-3 text-sm text-un1t-subtle">The board needs at least one live follow-up, or one waiting for Meta, before it can be turned on.{hasWhatsapp === false && ' This studio has no WhatsApp number switched on, so a follow-up cannot be submitted yet.'}</p>
         )}
       </Card>
 
@@ -129,7 +137,7 @@ export default function BoardLaunchPanel({ board, followups, issues = [], onRetr
                 {dry.overlap.map((o) => <li key={o.boardKey}>{overlapLine(o)}</li>)}
               </ul>
             )}
-            {dry.errors > 0 && <p className="text-amber-700">Some people could not be checked ({Array.isArray(dry.errors) ? dry.errors.length : dry.errors}).</p>}
+            {dryErrors > 0 && <p className="text-amber-700">{DRY_RUN_ERRORS_NOTE(dryErrors)}</p>}
           </div>
         )}
       </Card>
@@ -154,7 +162,7 @@ export default function BoardLaunchPanel({ board, followups, issues = [], onRetr
           </>
         )}
       >
-        <p className="text-sm text-un1t-text">{TURN_ON_CONFIRM}</p>
+        <p className="text-sm text-un1t-text">{TURN_ON_CONFIRM[placementCadence(board)]}</p>
         {onError && <p className="mt-2 text-sm text-red-700" role="alert">{onError}</p>}
       </Modal>
     </div>

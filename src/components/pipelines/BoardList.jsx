@@ -1,5 +1,6 @@
 'use client'
 
+import NoWhatsappNotice from './NoWhatsappNotice'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Button, Card } from '@/components/ui'
@@ -14,25 +15,74 @@ const CHIPS = {
   draft: { label: 'Off', tone: 'bg-gray-500/10 text-gray-700' },
   off: { label: 'Off', tone: 'bg-gray-500/10 text-gray-700' },
 }
+// RAILS.3 — a row's health (derived by the server from its template's and
+// sequence's status) overrides the state's chip, so "Live" never hides a
+// template WhatsApp paused or rejected. Any other (state, health) pair keeps
+// the state's own chip: an off row is already truthful.
+const PAUSED_BY_WHATSAPP = { label: 'Paused by WhatsApp', tone: 'bg-amber-500/10 text-amber-700' }
+const REJECTED_BY_WHATSAPP = { label: 'Rejected by WhatsApp', tone: 'bg-red-500/10 text-red-700' }
+const HEALTH_CHIPS = {
+  'live:template_paused': PAUSED_BY_WHATSAPP,
+  'live:template_rejected': REJECTED_BY_WHATSAPP,
+  'live:sequence_paused': { label: 'Paused', tone: 'bg-amber-500/10 text-amber-700' },
+  'awaiting_approval:template_rejected': REJECTED_BY_WHATSAPP,
+}
 const NONE_CHIP = { label: 'None', tone: 'bg-gray-500/10 text-gray-700' }
 const PRECEDENCE = ['live', 'awaiting_approval', 'draft', 'rejected', 'off']
+
+/** The health that changes this row's chip, or null. */
+const shownHealth = (row) => (row.health && HEALTH_CHIPS[`${row.state}:${row.health}`] ? row.health : null)
 
 export function followupChip(followups, stageId) {
   const rows = (followups || []).filter((f) => f.stage_id === stageId)
   if (rows.length === 0) return NONE_CHIP
   // An unknown state ranks last, never first (indexOf gives -1).
-  const rank = (st) => { const i = PRECEDENCE.indexOf(st); return i === -1 ? PRECEDENCE.length : i }
-  const best = [...rows].sort((a, b) => rank(a.state) - rank(b.state))[0]
+  const rankIn = (list, v) => { const i = list.indexOf(v); return i === -1 ? list.length : i }
+  // The worst health shown wins a stage: rejected, then either pause, then the state order.
+  const healthRank = (r) => {
+    const h = shownHealth(r)
+    if (h === 'template_rejected') return 0
+    return h ? 1 : 2
+  }
+  const best = [...rows].sort((a, b) => (healthRank(a) - healthRank(b)) || (rankIn(PRECEDENCE, a.state) - rankIn(PRECEDENCE, b.state)))[0]
+  const health = shownHealth(best)
+  if (health) return HEALTH_CHIPS[`${best.state}:${health}`]
   return CHIPS[best.state] || NONE_CHIP
 }
+
+// RAILS.4 — a board's first placement runs on its studio's clock: nightly
+// (03:30 UTC) at a Glofox/contacts studio, hourly at a un1t.online studio.
+export const placementCadence = (board) => board?.baseline_pending?.cadence
+  || (board?.module === 'offer_un1t' ? 'hourly' : 'nightly')
+
+// A run's day as a short date, in the browser's own zone (staff UI; the server
+// does not send the studio's zone with the board).
+export function runDateLabel(iso) {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })
+}
+
+export const HEALTH_UNREAD_NOTICE = 'Could not check whether WhatsApp has paused or rejected a follow-up just now. Reload the page to try again.'
 
 export function boardStatus(board) {
   if (!board.enabled) return 'Off'
   // A built-in board has no baseline_at (it never went through the builder's
   // silent switch-on) and has been placing people and sending all along.
   if (!board.board_type) return 'On'
-  if (!board.baseline_at) return 'On — first placement tonight, no messages'
-  return 'On'
+  if (board.baseline_at) return 'On'
+  const pending = board.baseline_pending
+  if (pending?.held && pending.last_run && !pending.unread) {
+    const n = Number(pending.last_run.errors) || 0
+    const date = runDateLabel(pending.last_run.started_at)
+    const when = date ? ` (${date})` : ''
+    if (n > 0) return `On — first placement held: ${n} ${n === 1 ? 'person' : 'people'} could not be checked${when}`
+    // A run that failed outright (or whose exclusion read failed) skipped
+    // nobody by count: never "0 people".
+    return `On — first placement held: the last run could not complete${when}`
+  }
+  return placementCadence(board) === 'hourly'
+    ? 'On — first placement within the hour, no messages'
+    : 'On — first placement tonight, no messages'
 }
 
 function Chip({ chip }) {
@@ -72,6 +122,7 @@ function BoardCard({ board, coverageStages }) {
         )}
       </div>
       {builtIn && <p className="text-xs text-un1t-subtle mt-1">Built in code — read only</p>}
+      {board.health_unread && <p className="text-xs text-amber-700 mt-1">{HEALTH_UNREAD_NOTICE}</p>}
       <ul className="mt-3 space-y-1">
         {stages.map((st) => (
           <li key={st.id} className="flex items-center gap-2 text-sm text-un1t-text">
@@ -86,8 +137,6 @@ function BoardCard({ board, coverageStages }) {
   )
 }
 
-const NO_WHATSAPP_NOTICE = "This studio has no WhatsApp number switched on yet. You can build the board now; its follow-ups can't be submitted until a number is on."
-
 // PIPEBUILD.6-5 — a studio with no offer boards starts from a recipe.
 function RecipeCards({ hasWhatsapp }) {
   return (
@@ -98,7 +147,7 @@ function RecipeCards({ hasWhatsapp }) {
           <Card key={r.key}>
             <h3 className="text-sm font-semibold text-un1t-text">{r.name}</h3>
             <p className="text-sm text-un1t-subtle mt-1">{r.description}</p>
-            {hasWhatsapp === false && <p className="text-xs text-amber-700 mt-2">{NO_WHATSAPP_NOTICE}</p>}
+            {hasWhatsapp === false && <NoWhatsappNotice className="text-xs text-amber-700 mt-2" />}
             <Link href={`/settings/pipelines/new?recipe=${encodeURIComponent(r.key)}`} className="inline-block mt-2 text-sm text-un1t-accent">
               Set up
             </Link>

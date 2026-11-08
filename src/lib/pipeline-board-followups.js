@@ -58,7 +58,8 @@ const FOLLOWUP_COLUMNS = 'id, location_id, pipeline_id, stage_id, sequence_id, w
 // The installer returns a row in one of these states as it stands (after its
 // recovery recheck) instead of installing over it.
 const CURRENT_STATES = new Set(['draft', 'awaiting_approval', 'live'])
-const SPENT_STATES = new Set(['rejected', 'off'])
+// Spent: installing over one of these is a fresh install, owner work (RAILS.1).
+export const SPENT_STATES = new Set(['rejected', 'off'])
 // Submitted to Meta or live: the installer returns these as they stand.
 const INSTALLED_STATES = new Set(['awaiting_approval', 'live'])
 
