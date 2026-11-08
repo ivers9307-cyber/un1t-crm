@@ -5,6 +5,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The photo-URL check pins the project Supabase host (security review).
+process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://cdn.test'
+
 const mocks = vi.hoisted(() => ({ getCurrentHost: vi.fn(), createServerClient: vi.fn() }))
 vi.mock('@/lib/host-auth', () => ({ getCurrentHost: mocks.getCurrentHost }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: mocks.createServerClient }))

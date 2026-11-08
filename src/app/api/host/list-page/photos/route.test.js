@@ -3,6 +3,9 @@
 // branding bucket; a delete only touches a URL the host's own list holds.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The photo-URL check pins the project Supabase host (security review).
+process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://cdn.test'
+
 let session
 let hostRow
 let updateError

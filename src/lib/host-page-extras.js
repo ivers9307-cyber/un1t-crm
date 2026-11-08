@@ -69,14 +69,24 @@ export function pastEventCards(rows, today, { max = HOST_PAST_EVENTS_MAX } = {})
 /** The branding-bucket folder a host's uploaded photos live in. */
 export const hostPhotosFolder = (hostId) => `host-photos/${hostId}/`
 
-/** The branding-bucket path a public URL points at, or null when it is not a branding URL. */
+/**
+ * The branding-bucket path a public URL points at, or null. Pinned (security
+ * review of HOSTPAGE.2): the URL must be https on the project's own Supabase
+ * host (NEXT_PUBLIC_SUPABASE_URL) with the full public-branding prefix, and
+ * the path may carry no `.`/`..` segment or backslash. A marker found in the
+ * middle of a foreign URL is not a bucket path. No project URL → null (fail
+ * closed: nothing counts as the host's own).
+ */
 export function hostPhotoPathOf(url) {
   try {
+    const project = new URL(String(process.env.NEXT_PUBLIC_SUPABASE_URL || ''))
     const u = new URL(String(url))
-    const marker = '/object/public/branding/'
-    const i = u.pathname.indexOf(marker)
-    if (i < 0) return null
-    return decodeURIComponent(u.pathname.slice(i + marker.length))
+    if (u.protocol !== 'https:' || u.hostname.toLowerCase() !== project.hostname.toLowerCase()) return null
+    const prefix = '/storage/v1/object/public/branding/'
+    if (!u.pathname.startsWith(prefix)) return null
+    const path = decodeURIComponent(u.pathname.slice(prefix.length))
+    if (!path || path.includes('\\') || path.split('/').some((seg) => seg === '.' || seg === '..' || seg === '')) return null
+    return path
   } catch { return null }
 }
 
