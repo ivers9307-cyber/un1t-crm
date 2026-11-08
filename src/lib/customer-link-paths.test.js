@@ -30,7 +30,6 @@ const SITES = [
   'src/lib/campaign-web-view.js', // buildCampaignViewUrl
   // W1.L3b — events, booking, host and Mia:
   'src/app/api/public/events/[slug]/register/route.js',
-  'src/app/api/public/races/[slug]/register/route.js',
   'src/lib/race-register-solo.js',
   'src/app/api/event-registrations/[id]/moves/[moveId]/gap-link/route.js',
   'src/lib/race-gap-payment.js',
@@ -101,7 +100,7 @@ describe('W1.L3a/b — minted customer links land on paths the tenant-domain tie
     // /race/:slug is a next.config rewrite on the CRM host only; a tenant host
     // rewrites it to /welcome, so a /race/ link there loses the customer.
     expect(admitted('/race/')).toBe(false)
-    for (const f of ['src/lib/agent/event-tools.js', 'src/lib/race-register-solo.js', 'src/app/api/public/races/[slug]/register/route.js']) {
+    for (const f of ['src/lib/agent/event-tools.js', 'src/lib/race-register-solo.js', 'src/app/api/public/events/[slug]/register/route.js']) {
       expect(found[f].some((p) => p.startsWith('/race/')), f).toBe(false)
     }
   })

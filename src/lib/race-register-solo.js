@@ -12,6 +12,7 @@
 // stay on the page (Richard's call: captain/solo only via chat).
 
 import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
+import { applyTierPricing } from '@/lib/pricing-tiers'
 import { createRacePayment } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
@@ -40,7 +41,7 @@ import { holdingPlaces } from '@/lib/entry-policy'
  *   { ok: true, registrationId }
  *   { ok: false, reason: 'closed'|'not_open_yet'|'past'|'inactive'|'bad_wave'|
  *     'wave_full'|'need_email'|'members_only'|'requires_payment'|
- *     'already_registered'|'db_error', totalCents?, message? }
+ *     'pricing_unavailable'|'already_registered'|'db_error', totalCents?, message? }
  */
 export async function registerSoloEventEntry(db, { race, waveId, contact, memberOverride = false }) {
   if (!race || !contact?.id) return { ok: false, reason: 'db_error', message: 'missing args' }
@@ -97,7 +98,11 @@ export async function registerSoloEventEntry(db, { race, waveId, contact, member
   if (race.members_only && validatedRoster.some((m) => !m.is_member)) {
     return { ok: false, reason: 'members_only' }
   }
-  const pricing = computeTeamPricing({ validatedRoster, race })
+  // TIERS.1 — the same tier the public route would charge; a failed read
+  // never prices blind.
+  const priced = await applyTierPricing(db, { race, headcount: validatedRoster.length })
+  if (!priced.ok) return { ok: false, reason: 'pricing_unavailable', message: 'Pricing is unavailable right now.' }
+  const pricing = computeTeamPricing({ validatedRoster, race: priced.race })
   if (pricing.total_cents > 0) {
     return { ok: false, reason: 'requires_payment', totalCents: pricing.total_cents }
   }
@@ -156,6 +161,8 @@ export async function registerSoloEventEntry(db, { race, waveId, contact, member
       contact_id: contact.id,
       wave_id: wave?.id || null,
       status: 'confirmed',
+      // TIERS.1 — a free tier is still the tier this entry took.
+      pricing_tier_id: priced.tier?.id ?? null,
     })
     .select('id, registered_at')
     .single()

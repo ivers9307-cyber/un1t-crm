@@ -172,7 +172,6 @@ const SWEPT = [
   'src/app/event/[slug]/page.js',
   'src/app/embed/event/[slug]/page.js',
   'src/app/api/public/events/[slug]/register/route.js',
-  'src/app/api/public/races/[slug]/register/route.js',
   'src/app/(members)/challenges/page.js',
   'src/app/api/challenges/route.js',
   'src/app/tv/layout.js',
