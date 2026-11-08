@@ -85,3 +85,17 @@ describe('HostAttendeeTable', () => {
     expect(screen.queryByRole('table')).toBeNull()
   })
 })
+
+// QUESTIONS.1 — answers show under the entry and under each person.
+describe('HostAttendeeTable answers', () => {
+  it('shows entry answers and a person\'s answers', () => {
+    const withAnswers = [{
+      ...entries[1],
+      answers: [{ label: 'OK to be photographed?', value: 'Yes' }],
+      people: [{ name: 'Mark Kelly', email: 'm@x.ie', answers: [{ label: 'Dietary needs', value: 'vegan' }] }],
+    }]
+    render(<HostAttendeeTable entries={withAnswers} movedOut={[]} />)
+    expect(screen.getByText(/OK to be photographed\?/)).toBeTruthy()
+    expect(screen.getByText(/vegan/)).toBeTruthy()
+  })
+})

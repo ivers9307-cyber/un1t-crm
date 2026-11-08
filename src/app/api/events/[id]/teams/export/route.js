@@ -11,6 +11,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { fetchEventAttendees, attendeeCsvResponse } from '@/lib/attendee-export'
+import { resolveRegistrationQuestions } from '@/lib/registration-questions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -26,7 +27,7 @@ export async function GET(_request, props) {
   const db = createServerClient()
   const { data: race, error: raceErr } = await db
     .from('race_events')
-    .select('id, location_id, name, slug, race_date')
+    .select('id, location_id, name, slug, race_date, registration_questions')
     .eq('id', params.id)
     .single()
   if (raceErr || !race) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
@@ -39,7 +40,7 @@ export async function GET(_request, props) {
 
   try {
     const regs = await fetchEventAttendees(db, params.id)
-    return attendeeCsvResponse(race, regs)
+    return attendeeCsvResponse(race, regs, { questions: resolveRegistrationQuestions(race) })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message }, { status: 500 })
   }

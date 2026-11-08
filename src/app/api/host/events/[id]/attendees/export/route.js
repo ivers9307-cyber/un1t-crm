@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { fetchEventAttendees, attendeeCsvResponse } from '@/lib/attendee-export'
+import { resolveRegistrationQuestions } from '@/lib/registration-questions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -22,7 +23,7 @@ export async function GET(_request, props) {
   const db = createServerClient()
   const { data: race } = await db
     .from('race_events')
-    .select('id, host_id, name, slug, race_date')
+    .select('id, host_id, name, slug, race_date, registration_questions')
     .eq('id', params.id)
     .maybeSingle()
   // host_id must equal the caller's host. A null host_id (internal event) never
@@ -34,7 +35,7 @@ export async function GET(_request, props) {
   try {
     const regs = await fetchEventAttendees(db, params.id)
     // Drop the UN1T-membership column — internal CRM data an external host doesn't need.
-    return attendeeCsvResponse(race, regs, { includeMembership: false })
+    return attendeeCsvResponse(race, regs, { includeMembership: false, questions: resolveRegistrationQuestions(race) })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message }, { status: 500 })
   }

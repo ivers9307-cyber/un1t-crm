@@ -14,6 +14,7 @@ import { createServerClient } from '@/lib/supabase'
 import { fetchEventAttendees } from '@/lib/attendee-export'
 import { loadMoveHistory } from '@/lib/registration-move-history'
 import { entryLabel } from '@/lib/registration-entry'
+import { resolveRegistrationQuestions, answersForDisplay } from '@/lib/registration-questions'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostAttendeeTable from '@/components/host/HostAttendeeTable'
 import HostPromoCodes from '@/components/host/HostPromoCodes'
@@ -32,7 +33,7 @@ export default async function HostEventDetail(props) {
   const db = createServerClient()
   const { data: race } = await db
     .from('race_events')
-    .select('id, host_id, status, name, slug, race_date, series_id, series:event_series ( id, name, slug )')
+    .select('id, host_id, status, name, slug, race_date, series_id, registration_questions, series:event_series ( id, name, slug )')
     .eq('id', params.id)
     .maybeSingle()
   if (!race || race.host_id !== session.host.id) notFound()
@@ -41,6 +42,10 @@ export default async function HostEventDetail(props) {
   const regs = await fetchEventAttendees(db, params.id)
   const { lastMoveByReg, movedOut } = await loadMoveHistory(db, { eventId: params.id, regIds: regs.map((r) => r.id) })
 
+  // QUESTIONS.1 — answers as label/value rows for the table.
+  const questions = resolveRegistrationQuestions(race)
+  const entryQuestions = questions.filter((q) => q.per !== 'person')
+  const personQuestions = questions.filter((q) => q.per === 'person')
   // One row per ENTRY (a team or a single person), people listed in a cell.
   // Only JSON-safe plain objects cross into the client table.
   const entries = regs.map((reg) => {
@@ -50,7 +55,8 @@ export default async function HostEventDetail(props) {
       id: reg.id,
       status: reg.status,
       label: entryLabel(reg),
-      people: members.map((m) => ({ name: m.name || '', email: m.email || '' })),
+      people: members.map((m) => ({ name: m.name || '', email: m.email || '', answers: answersForDisplay(personQuestions, null, m.answers) })),
+      answers: answersForDisplay(entryQuestions, reg.answers, null),
       wave: reg.wave?.label || (reg.wave?.start_time || '').slice(0, 5) || '',
       phone: reg.payment?.contact_phone || '',
       last_move: moveIn

@@ -18,6 +18,7 @@ import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { addEventAttendeesToHostList } from '@/lib/host-contact-list'
 import { logError } from '@/lib/log'
 import { loadMoveHistory } from '@/lib/registration-move-history'
+import { resolveRegistrationQuestions, answersForDisplay } from '@/lib/registration-questions'
 import { entryLeadName } from '@/lib/registration-entry'
 import { pendingLapsed } from '@/lib/entry-policy'
 
@@ -38,7 +39,7 @@ const CreateTeamSchema = z.object({
 async function loadRaceForAccess(db, raceId) {
   return db
     .from('race_events')
-    .select('id, location_id, allowed_team_sizes, entry_policy, waves:race_waves ( id )')
+    .select('id, location_id, allowed_team_sizes, entry_policy, registration_questions, waves:race_waves ( id )')
     .eq('id', raceId)
     .single()
 }
@@ -64,13 +65,13 @@ export async function GET(_request, props) {
   const { data: registrations, error } = await db
     .from('race_registrations')
     .select(`
-      id, status, registered_at, team_composition, wave_id,
+      id, status, registered_at, team_composition, wave_id, answers,
       race_started_at, race_finished_at,
       looking_for_team, placed_into_registration_id, placed_at,
       contact:contact_id ( first_name, last_name, email, phone ),
       teams:team_id (
         id, name, size, captain_contact_id,
-        team_members ( id, name, email, role, is_member, member_validation_status )
+        team_members ( id, name, email, role, is_member, member_validation_status, answers )
       ),
       wave:wave_id ( id, start_time, label )
     `)
@@ -119,6 +120,12 @@ export async function GET(_request, props) {
 
   const { lastMoveByReg, movedOut } = await loadMoveHistory(db, { eventId: params.id, regIds })
   for (const r of regs) r.last_move = lastMoveByReg[r.id] || null
+  // QUESTIONS.1 — answers as label/value rows: the entry's and each person's.
+  const questions = resolveRegistrationQuestions(race)
+  for (const r of regs) {
+    r.answers_display = answersForDisplay(questions.filter((q) => q.per !== 'person'), r.answers, null)
+    for (const m of r.teams?.team_members || []) m.answers_display = answersForDisplay(questions.filter((q) => q.per === 'person'), null, m.answers)
+  }
   // ENTRYPOLICY.1 — an unpaid entry past the event's hold no longer holds its
   // place; the Teams page shows it as "Lapsed (unpaid)". The row stays: staff
   // may still confirm it by hand or delete it.

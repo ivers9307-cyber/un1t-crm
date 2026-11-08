@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from 'react'
 import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, Download, ArrowRightCircle, UserPlus, Link2 } from 'lucide-react'
+import AnswerList from '@/components/AnswerList'
 import MoveEntryDialog from './MoveEntryDialog'
 import EventWaitlistPanel from './EventWaitlistPanel'
 
@@ -948,6 +949,8 @@ function TeamCard({ registration, placedIntoName = null, waves, onChanged, onErr
 
       {!isPlaced && (
         <div className="mt-3 pt-3 border-t border-un1t-border/50 space-y-1.5">
+          {/* QUESTIONS.1 — the entry's answers. */}
+          <AnswerList answers={registration.answers_display} className="text-un1t-subtle" />
           {members.map((m) => (
             <MemberRow key={m.id} member={m} onChanged={onChanged} onError={onError} />
           ))}
@@ -1072,6 +1075,8 @@ function MemberRow({ member, onChanged, onError }) {
         {member.role === 'captain' && <Star size={10} className="text-amber-700" />}
         {member.is_member && <BadgeCheck size={11} className="text-emerald-700" />}
         {member.email && <span className="text-[11px] text-un1t-muted">· {member.email}</span>}
+        {/* QUESTIONS.1 — this person's answers. */}
+        <AnswerList answers={member.answers_display} className="text-un1t-subtle" />
       </div>
       <div className="flex items-center gap-1">
         <button

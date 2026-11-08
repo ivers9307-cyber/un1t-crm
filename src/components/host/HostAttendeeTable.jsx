@@ -19,6 +19,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import MoveEntryDialog, { NOT_EMAILED_MESSAGE } from '@/components/MoveEntryDialog'
+import AnswerList from '@/components/AnswerList'
 
 const STATUS_LABEL = { confirmed: 'Confirmed', pending_payment: 'Awaiting payment', cancelled: 'Cancelled', no_show: 'No-show' }
 const th = 'px-3 py-2 font-medium'
@@ -71,6 +72,8 @@ export default function HostAttendeeTable({ entries, movedOut }) {
                         time changed {fmtDate(e.last_move.created_at)}
                       </span>
                     )}
+                    {/* QUESTIONS.1 — the entry's answers. */}
+                    <AnswerList answers={e.answers} className="text-white/60 mt-0.5" />
                     {e.last_move && !e.last_move.time_change && (
                       <span className="ml-2 text-[11px] text-sky-300" title={`Moved in from ${e.last_move.from_event?.name || 'another event'} on ${fmtDate(e.last_move.created_at)} by ${e.last_move.actor_name || 'staff'}${e.last_move.forced ? ' (time was full)' : ''}`}>
                         moved in from {e.last_move.from_event?.name || 'another event'} {fmtDate(e.last_move.created_at)}
@@ -85,6 +88,7 @@ export default function HostAttendeeTable({ entries, movedOut }) {
                       <div key={i}>
                         {p.name || '—'}
                         {p.email && <span className="text-white/55 text-xs"> · {p.email}</span>}
+                        <AnswerList answers={p.answers} className="text-white/55" />
                       </div>
                     ))}
                   </td>

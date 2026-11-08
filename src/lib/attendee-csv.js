@@ -1,7 +1,10 @@
 // Attendee CSV export (EVENTS-EXPORT.1). One row per team member, with the
 // booking/team columns repeated. Pure — the route feeds it the same shape the
 // /api/events/[id]/teams route returns (registration → teams.team_members +
-// the attached payment's contact_phone).
+// the attached payment's contact_phone). QUESTIONS.1: one column per
+// registration question, the entry's answers repeated on every person row.
+
+import { formatAnswer } from './registration-questions'
 
 const HEADER = [
   'Event', 'Date', 'Team', 'Wave', 'Booking status', 'Registered at',
@@ -28,12 +31,18 @@ export function csvCell(value) {
  * know which of their attendees are UN1T members (that's internal CRM data).
  * @param {{name?:string, race_date?:string}} event
  * @param {Array<object>} registrations  race_registrations with teams.team_members + payment
- * @param {{includeMembership?:boolean}} [opts]
+ * @param {{includeMembership?:boolean, questions?: Array}} [opts]  questions: the
+ *   event's registration questions (QUESTIONS.1), one column each, in order
  * @returns {string} CSV text (CRLF line endings, header first)
  */
-export function buildAttendeeCsv(event, registrations, { includeMembership = true } = {}) {
-  const header = includeMembership ? HEADER : HEADER.filter((h) => h !== 'Membership')
+export function buildAttendeeCsv(event, registrations, { includeMembership = true, questions = [] } = {}) {
+  const qs = Array.isArray(questions) ? questions : []
+  const base_header = includeMembership ? HEADER : HEADER.filter((h) => h !== 'Membership')
+  const header = [...base_header, ...qs.map((q) => q.label)]
   const rows = [header]
+  // A person's cells for the questions: their own answer for a per-person
+  // question, the entry's for a per-entry one; a vanished id is just blank.
+  const answerCells = (reg, person) => qs.map((q) => formatAnswer(q, q.per === 'person' ? person?.answers?.[q.id] : reg?.answers?.[q.id]))
   for (const reg of (registrations || [])) {
     const team = reg?.teams || {}
     const wave = reg?.wave || {}
@@ -49,14 +58,14 @@ export function buildAttendeeCsv(event, registrations, { includeMembership = tru
     ]
     const members = Array.isArray(team.team_members) ? team.team_members : []
     if (members.length === 0) {
-      rows.push(includeMembership ? [...base, '', '', '', '', phone] : [...base, '', '', '', phone])
+      rows.push([...(includeMembership ? [...base, '', '', '', '', phone] : [...base, '', '', '', phone]), ...answerCells(reg, null)])
       continue
     }
     for (const m of members) {
       const person = includeMembership
         ? [m?.name || '', m?.email || '', m?.role || '', m?.is_member ? 'Member' : 'Non-member', phone]
         : [m?.name || '', m?.email || '', m?.role || '', phone]
-      rows.push([...base, ...person])
+      rows.push([...base, ...person, ...answerCells(reg, m)])
     }
   }
   return rows.map((r) => r.map(csvCell).join(',')).join('\r\n')
