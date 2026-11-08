@@ -99,6 +99,7 @@ describe('placeSoloIntoTeam — happy path', () => {
     expect(w[0].payload).toEqual({
       team_id: 't-team', contact_id: 'c-solo', name: 'Sarah Byrne', email: 'sarah@x.ie', role: 'member',
       is_member: true, member_validation_status: 'verified', member_contact_id: 'c-solo', member_validated_at: '2026-10-20T09:00:00Z',
+      answers: null,
     })
     expect(w[1].payload).toEqual({ size: 4 })
     expect(eqOf(w[1], 'id')).toBe('t-team')
@@ -106,6 +107,12 @@ describe('placeSoloIntoTeam — happy path', () => {
     expect(eqOf(w[2], 'id')).toBe('r-team')
     expect(w[2].ops.some((o) => o[0] === 'select')).toBe(true)
     expect(w[3].payload).toEqual({ status: 'placed', placed_into_registration_id: 'r-team', placed_at: AT, placed_by: 'p-staff' })
+  })
+  // QUESTIONS.1 — the solo's answers travel onto the team row.
+  it('copies the solo\'s registration answers onto their new member row', async () => {
+    const db = placeDb({ solo: soloRow({ teams: { id: 't-solo', team_members: [captain({ answers: { 'q-diet': 'vegan' } })] } }) })
+    await place(db)
+    expect(writes(db)[0].payload.answers).toEqual({ 'q-diet': 'vegan' })
   })
   it('a non-member placed into an all_members team makes it mixed', async () => {
     const db = placeDb({ solo: soloRow({ teams: { id: 't-solo', team_members: [captain({ is_member: false, member_validation_status: 'not_applicable' })] } }) })
@@ -306,8 +313,8 @@ describe('pairSolos — happy path', () => {
     ])
     expect(w[0].payload).toEqual({ location_id: 'L1', name: 'Team Solo', size: 2, captain_contact_id: 'c1' })
     expect(w[1].payload).toEqual([
-      { team_id: 't-new', contact_id: 'c1', name: 'Solo 1', email: 's1@x.ie', role: 'captain', is_member: true, member_validation_status: 'verified', member_contact_id: null, member_validated_at: '2026-10-20T09:00:00Z' },
-      { team_id: 't-new', contact_id: 'c2', name: 'Solo 2', email: 's2@x.ie', role: 'member', is_member: true, member_validation_status: 'verified', member_contact_id: null, member_validated_at: '2026-10-20T09:00:00Z' },
+      { team_id: 't-new', contact_id: 'c1', name: 'Solo 1', email: 's1@x.ie', role: 'captain', is_member: true, member_validation_status: 'verified', member_contact_id: null, member_validated_at: '2026-10-20T09:00:00Z', answers: null },
+      { team_id: 't-new', contact_id: 'c2', name: 'Solo 2', email: 's2@x.ie', role: 'member', is_member: true, member_validation_status: 'verified', member_contact_id: null, member_validated_at: '2026-10-20T09:00:00Z', answers: null },
     ])
     expect(w[2].payload).toEqual({
       race_event_id: 'e1', team_id: 't-new', contact_id: 'c1', status: 'confirmed', wave_id: 'w1',

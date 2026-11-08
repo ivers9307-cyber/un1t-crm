@@ -81,3 +81,35 @@ describe('csvCell', () => {
     expect(csvCell(undefined)).toBe('')
   })
 })
+
+// QUESTIONS.1 — one column per registration question; entry answers repeat
+// on every person row; a stored answer for a removed question is ignored.
+describe('buildAttendeeCsv with questions', () => {
+  const diet = { id: 'q-diet', label: 'Dietary needs', type: 'text', required: false, per: 'person' }
+  const photos = { id: 'q-photos', label: 'OK to be photographed?', type: 'yes_no', required: true, per: 'entry' }
+  const answered = {
+    ...reg,
+    answers: { 'q-photos': true, 'q-gone': 'stale' },
+    teams: { name: 'Team A', team_members: [
+      { name: 'Jane', email: 'jane@x.ie', role: 'captain', is_member: true, answers: { 'q-diet': 'vegan' } },
+      { name: 'Bob', email: 'bob@x.ie', role: 'member', is_member: false, answers: null },
+    ] },
+  }
+  it('appends a column per question with the right cell per row', () => {
+    const lines = buildAttendeeCsv(event, [answered], { questions: [diet, photos] }).split('\r\n')
+    expect(lines[0]).toBe('Event,Date,Team,Wave,Booking status,Registered at,Name,Email,Role,Membership,Booking phone,Dietary needs,OK to be photographed?')
+    expect(lines[1]).toMatch(/,vegan,Yes$/)
+    expect(lines[2]).toMatch(/,,Yes$/)
+  })
+  it('an answer for a removed question is ignored; a member-less booking row still has the columns', () => {
+    const lines = buildAttendeeCsv(event, [{ ...answered, teams: { name: 'Team A', team_members: [] } }], { questions: [diet, photos] }).split('\r\n')
+    expect(lines[1].split(',')).toHaveLength(13)
+    expect(lines[1]).toMatch(/,,Yes$/)
+    expect(lines[1]).not.toContain('stale')
+  })
+  it('includeMembership:false still places the question columns last', () => {
+    const lines = buildAttendeeCsv(event, [answered], { includeMembership: false, questions: [diet] }).split('\r\n')
+    expect(lines[0]).toBe('Event,Date,Team,Wave,Booking status,Registered at,Name,Email,Role,Booking phone,Dietary needs')
+    expect(lines[1]).toMatch(/,vegan$/)
+  })
+})

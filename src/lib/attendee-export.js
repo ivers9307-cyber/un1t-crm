@@ -45,9 +45,9 @@ export async function fetchEventAttendees(db, eventId) {
     const { data, error } = await db
       .from('race_registrations')
       .select(`
-        id, status, registered_at, wave_id,
+        id, status, registered_at, wave_id, answers,
         contact:contact_id ( first_name, last_name ),
-        teams:team_id ( id, name, size, team_members ( id, name, email, role, is_member ) ),
+        teams:team_id ( id, name, size, team_members ( id, name, email, role, is_member, answers ) ),
         wave:wave_id ( id, start_time, label )
       `)
       .eq('race_event_id', eventId)

@@ -36,6 +36,7 @@ import { PLATFORM_NAME } from '@/lib/brand-name'
 import { CHARITY_DEFAULTS, CharitySettingsSchema, formatCents } from '@/lib/charity-donations'
 import { FIND_TEAM_DEFAULTS } from '@/lib/find-team'
 import PricingTiersEditor from '@/components/PricingTiersEditor'
+import RegistrationQuestionsEditor from '@/components/RegistrationQuestionsEditor'
 import { ENTRY_POLICY_DEFAULTS, ENTRY_POLICY_TEXT_KEYS, ENTRY_POLICY_HOURS_MAX } from '@/lib/entry-policy'
 import { useLocationBrand } from './use-location-brand'
 
@@ -338,6 +339,8 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
   // held as form strings and converted (euros -> cents) on save.
   // TIERS.1 (mig 818) — early bird / capacity / group tiers.
   const [pricingTiers, setPricingTiers] = useState(Array.isArray(race?.pricing_tiers) ? race.pricing_tiers : [])
+  // QUESTIONS.1 (mig 819) — asked at signup.
+  const [registrationQuestions, setRegistrationQuestions] = useState(Array.isArray(race?.registration_questions) ? race.registration_questions : [])
   const [charityEnabled, setCharityEnabled] = useState(!!race?.charity_enabled)
   const [charityForm, setCharityForm] = useState(() => charityToForm(race?.charity))
   const setCharityField = (key, value) => setCharityForm((f) => ({ ...f, [key]: value }))
@@ -633,6 +636,7 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       member_fee_cents: memberPricingEnabled ? memberFeeCents : null,
       non_member_fee_cents: nonMemberFeeCents,
       pricing_tiers: pricingTiers.length > 0 ? pricingTiers : null,
+      registration_questions: registrationQuestions.length > 0 ? registrationQuestions : null,
       // TV logos: race-only. For non-race kinds we send an empty
       // array so any historical slots (shouldn't exist, since the
       // upload UI is gated) get cleared.
@@ -1243,6 +1247,12 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
         <div>
           <label className="block text-sm text-un1t-subtle mb-1">Pricing tiers <span className="text-un1t-muted">(optional)</span></label>
           <PricingTiersEditor value={pricingTiers} onChange={setPricingTiers} />
+        </div>
+
+        {/* QUESTIONS.1 — asked at signup; answers appear on the Teams page and in the export. */}
+        <div>
+          <label className="block text-sm text-un1t-subtle mb-1">Questions at signup <span className="text-un1t-muted">(optional)</span></label>
+          <RegistrationQuestionsEditor value={registrationQuestions} onChange={setRegistrationQuestions} />
         </div>
 
         <div className="flex items-center justify-between gap-3 pt-2 border-t border-un1t-border">

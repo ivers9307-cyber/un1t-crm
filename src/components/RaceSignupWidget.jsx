@@ -34,6 +34,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, BadgeEuro, Info } from 'lucide-react'
 import { timePickerWaves, initialWaveId, formatTimeChoices } from '@/lib/event-time-slots'
 import { tierPriceLabel, groupPriceLabel, effectiveNonMemberFee } from '@/lib/pricing-tiers'
+import { resolveRegistrationQuestions, validateAnswers } from '@/lib/registration-questions'
 import EventWaitlistForm from './EventWaitlistForm.jsx'
 import DonateCard, { CharityRaisedStrip, OrDivider } from './DonateCard.jsx'
 
@@ -191,6 +192,44 @@ function DonateCardFromUrl(props) {
   )
 }
 
+// QUESTIONS.1 — one registration question: text, a select of options, or a
+// yes/no pair. Labelled for the screen reader and the tests; the error sits
+// under the field with the same key the server answers with.
+function QuestionField({ q, fieldKey, value, onChange, error, inputCls, errCls }) {
+  const id = `rq-${fieldKey}`
+  const label = `${q.label}${q.required ? ' *' : ''}`
+  return (
+    <div>
+      {q.type === 'yes_no' ? (
+        <fieldset>
+          <legend className="text-[12px] text-white/70 mb-1">{label}</legend>
+          <div className="flex items-center gap-4 text-sm text-white/85">
+            <label className="inline-flex items-center gap-1.5">
+              <input type="radio" name={id} checked={value === true} onChange={() => onChange(true)} /> Yes
+            </label>
+            <label className="inline-flex items-center gap-1.5">
+              <input type="radio" name={id} checked={value === false} onChange={() => onChange(false)} /> No
+            </label>
+          </div>
+        </fieldset>
+      ) : (
+        <>
+          <label htmlFor={id} className="block text-[12px] text-white/70 mb-1">{label}</label>
+          {q.type === 'choice' ? (
+            <select id={id} value={value ?? ''} onChange={(e) => onChange(e.target.value || undefined)} className={inputCls(!!error)}>
+              <option value="">Choose…</option>
+              {(q.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          ) : (
+            <input id={id} type="text" maxLength={500} value={value ?? ''} onChange={(e) => onChange(e.target.value)} className={inputCls(!!error)} />
+          )}
+        </>
+      )}
+      {error && <p className={errCls}>{error}</p>}
+    </div>
+  )
+}
+
 export default function RaceSignupWidget({ slug, embedded = false }) {
   // When embedded in a cross-site iframe, post-submit navigation must
   // break OUT of the iframe (otherwise the confirmation / payment page
@@ -213,6 +252,8 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // Form state
   const [teamName, setTeamName] = useState('')
   const [teamSize, setTeamSize] = useState(1)
+  // QUESTIONS.1 — answers keyed by question id: entry once, people by roster index.
+  const [answers, setAnswers] = useState({ entry: {}, people: [] })
   // FINDTEAM.4 — a solo entrant who wants staff to place them in a team. Never
   // preselected; picking it forces teamSize 1, picking a size clears it.
   const [findTeam, setFindTeam] = useState(false)
@@ -404,6 +445,16 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
 
   const kind = race?.kind || 'race'
   const copy = copyFor(kind)
+  // QUESTIONS.1 — the event's questions (public copy); answers travel with the body.
+  const questions = resolveRegistrationQuestions(race)
+  const entryQuestions = questions.filter((q) => q.per !== 'person')
+  const personQuestions = questions.filter((q) => q.per === 'person')
+  const setEntryAnswer = (id, value) => setAnswers((prev) => ({ ...prev, entry: { ...prev.entry, [id]: value } }))
+  const setPersonAnswer = (i, id, value) => setAnswers((prev) => {
+    const people = [...prev.people]
+    people[i] = { ...(people[i] || {}), [id]: value }
+    return { ...prev, people }
+  })
   const isLeadGen = kind === 'lead_gen'
   // FINDTEAM.4 — offered on races only; the server already omits the block elsewhere.
   const findTeamEnabled = kind === 'race' && !!race?.find_team?.enabled
@@ -428,6 +479,10 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
       if (!m.name.trim()) errors[`member_${i}_name`] = 'Name required'
       if (m.email && !validateEmail(m.email)) errors[`member_${i}_email`] = 'Invalid email'
     })
+    // QUESTIONS.1 — the same check the server runs, so a missing required
+    // answer is caught here with the same field key and wording.
+    const answerCheck = validateAnswers(questions, answers, { peopleCount: liveRoster.length })
+    if (!answerCheck.ok) for (const issue of answerCheck.issues) errors[issue.path] = issue.message
 
     if (race?.members_only) {
       const unverified = liveRoster.filter((m) => !isVerifiedMember(m.email))
@@ -475,6 +530,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         }),
         source: 'race_signup_widget',
         marketing_consent: marketingConsent,
+        ...(questions.length > 0 ? { answers: { entry: answers.entry, people: liveRoster.map((_, i) => answers.people[i] || {}) } } : {}),
         ...(promoCode.trim() ? { promo_code: promoCode.trim() } : {}),
         ...(waitlistToken ? { waitlist_token: waitlistToken } : {}),
       }),
@@ -488,6 +544,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
       // registration failure.
       if (res.status === 400 && json.code === 'invalid_promo_code') {
         setPromoError(json.error || 'That code isn’t valid.')
+        return
+      }
+      // QUESTIONS.1 — the server's answer issues land on their fields.
+      if (res.status === 400 && json.code === 'invalid_answers' && Array.isArray(json.issues)) {
+        setFieldErrors(Object.fromEntries(json.issues.map((i) => [i.path, i.message])))
         return
       }
       setSubmitError(json.error || `Registration failed (${res.status})`)
@@ -954,6 +1015,13 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                   className={inputCls(!!fieldErrors.captain_phone)}
                 />
                 {fieldErrors.captain_phone && <p className={errCls}>{fieldErrors.captain_phone}</p>}
+                {/* QUESTIONS.1 — the captain's person questions, then the entry questions. */}
+                {personQuestions.map((q) => (
+                  <QuestionField key={q.id} q={q} fieldKey={`member_0_${q.id}`} value={answers.people[0]?.[q.id]} onChange={(v) => setPersonAnswer(0, q.id, v)} error={fieldErrors[`member_0_${q.id}`]} inputCls={inputCls} errCls={errCls} />
+                ))}
+                {entryQuestions.map((q) => (
+                  <QuestionField key={q.id} q={q} fieldKey={`q_${q.id}`} value={answers.entry[q.id]} onChange={(v) => setEntryAnswer(q.id, v)} error={fieldErrors[`q_${q.id}`]} inputCls={inputCls} errCls={errCls} />
+                ))}
               </div>
             </div>
           </div>
@@ -1002,6 +1070,10 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                       onRetry={() => scheduleMemberCheck(m.email)}
                       brand={race.organization_name || ''}
                     />
+                    {/* QUESTIONS.1 — this person's questions (roster index i + 1: the captain is 0). */}
+                    {personQuestions.map((q) => (
+                      <QuestionField key={q.id} q={q} fieldKey={`member_${i + 1}_${q.id}`} value={answers.people[i + 1]?.[q.id]} onChange={(v) => setPersonAnswer(i + 1, q.id, v)} error={fieldErrors[`member_${i + 1}_${q.id}`]} inputCls={inputCls} errCls={errCls} />
+                    ))}
                   </div>
                 ))}
               </div>

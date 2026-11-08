@@ -15,6 +15,7 @@ import { HOST_EVENT_KINDS, MAX_SESSIONS } from '@/lib/host-events'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 import PricingTiersEditor from '@/components/PricingTiersEditor'
+import RegistrationQuestionsEditor from '@/components/RegistrationQuestionsEditor'
 
 const KIND_LABELS = {
   workshop: 'Workshop',
@@ -94,6 +95,8 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   const [description, setDescription] = useState(initial?.description || '')
   // TIERS.1 — early bird / capacity / group tiers.
   const [pricingTiers, setPricingTiers] = useState(Array.isArray(initial?.pricing_tiers) ? initial.pricing_tiers : [])
+  // QUESTIONS.1 — asked at signup.
+  const [questions, setQuestions] = useState(Array.isArray(initial?.registration_questions) ? initial.registration_questions : [])
   const [heroImageUrl, setHeroImageUrl] = useState(initial?.hero_image_url || '')
   // HOST-PORTAL.11 — direct hero upload (edit mode only; the upload route
   // namespaces storage by event id, which doesn't exist until first save).
@@ -201,6 +204,8 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     }
     if (teamSizes.length === 0) return 'Pick at least one team size.'
     if (pricingTiers.some((t) => !String(t.name || '').trim())) return 'Give every pricing tier a name.'
+    if (questions.some((q) => !String(q.label || '').trim())) return 'Give every question a label.'
+    if (questions.some((q) => q.type === 'choice' && (q.options || []).length < 2)) return 'A choice question needs at least two options.'
     if (accentHex.trim() && !ACCENT_RE.test(accentHex.trim())) {
       return 'Accent colour must be a hex like #1a2b3c (or leave it blank).'
     }
@@ -222,6 +227,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       allowed_team_sizes: [...teamSizes].sort((a, b) => a - b),
       ticket_price_cents: Math.round((parseFloat(priceEuros) || 0) * 100),
       pricing_tiers: pricingTiers.length > 0 ? pricingTiers : null,
+      registration_questions: questions.length > 0 ? questions : null,
       sessions: sessions.map((s) => ({
         ...(s.id ? { id: s.id } : {}),
         start_time: s.start_time,
@@ -497,6 +503,12 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
           <span className={labelCls}>Pricing tiers <span className="text-white/30 normal-case">(optional)</span></span>
           <PricingTiersEditor value={pricingTiers} onChange={setPricingTiers} dark />
         </div>
+      </section>
+
+      {/* QUESTIONS.1 — asked at signup; answers travel with the attendees. */}
+      <section>
+        <h2 className={sectionCls}>Questions at signup</h2>
+        <RegistrationQuestionsEditor value={questions} onChange={setQuestions} dark />
       </section>
 
       {/* Presentation */}

@@ -65,7 +65,8 @@ export const PLACEMENT_ERROR_MESSAGES = Object.freeze({
   write_failed: 'The change could not be saved in full. Reload and check the teams before trying again.',
 })
 
-const MEMBER_COLUMNS = 'id, contact_id, name, email, role, is_member, member_validation_status, member_contact_id, member_validated_at'
+// QUESTIONS.1 — `answers` rides along so a placed solo keeps theirs.
+const MEMBER_COLUMNS = 'id, contact_id, name, email, role, is_member, member_validation_status, member_contact_id, member_validated_at, answers'
 const SOLO_SELECT = `id, race_event_id, team_id, contact_id, status, wave_id, looking_for_team, placed_into_registration_id, marketing_consent, teams:team_id ( id, team_members ( ${MEMBER_COLUMNS} ) )`
 const TARGET_SELECT = 'id, race_event_id, team_id, status, looking_for_team, teams:team_id ( id )'
 const WAVE_LOAD_SELECT = 'id, status, looking_for_team, team:teams!team_id ( size )'
@@ -110,6 +111,8 @@ function memberRowFor(teamId, reg, person, role) {
     member_validation_status: person.member_validation_status || 'not_applicable',
     member_contact_id: person.member_contact_id ?? null,
     member_validated_at: person.member_validated_at ?? null,
+    // QUESTIONS.1 — the person's registration answers travel with them.
+    answers: person.answers ?? null,
   }
 }
 

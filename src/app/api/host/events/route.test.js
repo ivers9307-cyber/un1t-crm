@@ -85,6 +85,11 @@ describe('POST /api/host/events', () => {
     await post(BODY)
     expect(db.queries.find((q) => q.table === 'race_events' && q.action === 'insert').payload.pricing_tiers).toBeNull()
   })
+  it('writes registration_questions (null when absent)', async () => {
+    const qs = [{ id: 'q-diet', label: 'Dietary needs', type: 'text', required: false, per: 'person' }]
+    await post({ ...BODY, registration_questions: qs })
+    expect(db.queries.find((q) => q.table === 'race_events' && q.action === 'insert').payload.registration_questions).toEqual(qs)
+  })
   it('400 on the retired single-session keys', async () => {
     const res = await post({ ...BODY, session_start_time: '10:00' })
     expect(res.status).toBe(400)

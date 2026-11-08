@@ -16,6 +16,7 @@
 import { z } from 'zod'
 import { uuidLike } from '@/lib/schemas'
 import { PricingTiersSchema, canonicalTiers } from '@/lib/pricing-tiers'
+import { RegistrationQuestionsSchema } from '@/lib/registration-questions'
 
 // The four lifecycle states a host event moves through.
 export const HOST_EVENT_STATUSES = ['draft', 'pending_review', 'published', 'rejected']
@@ -141,6 +142,8 @@ export const HostEventSchema = z
     series_id: uuidLike.nullable().optional(),
     // TIERS.1 — early bird / capacity / group tiers (race_events.pricing_tiers).
     pricing_tiers: PricingTiersSchema.nullable().optional(),
+    // QUESTIONS.1 — asked at signup (race_events.registration_questions); never a re-review.
+    registration_questions: RegistrationQuestionsSchema.nullable().optional(),
     hero_image_url: z.string().url().optional().nullable(),
     accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().nullable(),
     venue_name: z.string().trim().min(1).max(200),

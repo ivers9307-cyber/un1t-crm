@@ -16,6 +16,7 @@ import { z } from 'zod'
 import { uuidLike } from './schemas.js'
 import { CharitySettingsSchema } from './charity-donations'
 import { PricingTiersSchema } from './pricing-tiers'
+import { RegistrationQuestionsSchema } from './registration-questions'
 import { FindTeamSettingsSchema } from './find-team'
 import { EntryPolicySettingsSchema } from './entry-policy'
 
@@ -121,6 +122,8 @@ export const EventCreateFields = z.object({
   find_team: FindTeamSettingsSchema.nullable().optional(),
   // TIERS.1 (mig 818) — early bird / capacity / group tiers (race_events.pricing_tiers).
   pricing_tiers: PricingTiersSchema.nullable().optional(),
+  // QUESTIONS.1 (mig 819) — asked at signup (race_events.registration_questions).
+  registration_questions: RegistrationQuestionsSchema.nullable().optional(),
   // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
   // (race_events.entry_policy, mig 767).
   entry_policy: EntryPolicySettingsSchema.nullable().optional(),
@@ -211,6 +214,8 @@ export const EventUpdateFields = z.object({
   find_team: FindTeamSettingsSchema.nullable().optional(),
   // TIERS.1 (mig 818) — early bird / capacity / group tiers (race_events.pricing_tiers).
   pricing_tiers: PricingTiersSchema.nullable().optional(),
+  // QUESTIONS.1 (mig 819) — asked at signup (race_events.registration_questions).
+  registration_questions: RegistrationQuestionsSchema.nullable().optional(),
   // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
   // (race_events.entry_policy, mig 767).
   entry_policy: EntryPolicySettingsSchema.nullable().optional(),
