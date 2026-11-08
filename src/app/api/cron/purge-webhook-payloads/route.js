@@ -4,6 +4,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logError, logInfo, logWarn } from '@/lib/log'
 import { CLAIMED_ERROR_MARKER, EXHAUSTED_PROVIDER, MAX_ATTEMPTS } from '@/lib/postmark-queue'
 import { escapeLikePattern } from '@/lib/like-escape'
+import { runEventPageViewsPurgeArm } from '@/lib/event-page-views-purge'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -171,7 +172,19 @@ export async function GET(request) {
     if (result.error) errors[name] = result.error
   }
 
-  const outcome = { cutoff, retention_days: RETENTION_DAYS, deleted, pages, cap_reached: capReached, kept_no_twin: keptNoTwin }
+  // HOSTSTATS.1 — the event_page_views retention arm (180 days) rides this
+  // run with its OWN heartbeat row (mig 822), stamped inside the arm. Its
+  // result is reported here and never decides this cron's stamp or status:
+  // a thrown arm is a field, not a failed run (its own row goes stale).
+  let eventPageViews
+  try {
+    eventPageViews = await runEventPageViewsPurgeArm(db)
+  } catch (err) {
+    logError('cron.purge-webhook-payloads', 'event_page_views arm threw', { err })
+    eventPageViews = { ok: false, error: err?.message || String(err) }
+  }
+
+  const outcome = { cutoff, retention_days: RETENTION_DAYS, deleted, pages, cap_reached: capReached, kept_no_twin: keptNoTwin, event_page_views: eventPageViews }
 
   const failedTables = Object.keys(errors)
   if (failedTables.length > 0) {

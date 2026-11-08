@@ -28,10 +28,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
+// HOSTSTATS.1 — the page-view retention arm has its own tests; here it is a stub.
+vi.mock('@/lib/event-page-views-purge', () => ({ runEventPageViewsPurgeArm: vi.fn(async () => ({ ok: true, deleted: 0, pages: 0, cutoff: '2026-05-12T10:00:00.000Z' })) }))
 
 import { GET, RETENTION_DAYS, PURGE_PAGE_SIZE, retentionCutoff } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { runEventPageViewsPurgeArm } from '@/lib/event-page-views-purge'
 import { CLAIMED_ERROR_MARKER, EXHAUSTED_ERROR_PREFIX, MAX_ATTEMPTS } from '@/lib/postmark-queue'
 import { EXHAUSTED_PROVIDER } from '@/lib/postmark-queue'
 import { makeDb, deletesFrom } from '../../email/tickets/_test-db'
@@ -479,5 +482,27 @@ describe('postmark_webhook_queue — exhausted rows (PURGEEXHAUSTED.1)', () => {
     expect(body.data.errors).toMatchObject({ postmark_webhook_queue_exhausted: 'statement timeout' })
     expect(ids(db._state.webhookQueue)).toEqual(['q-ex'])
     expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+})
+
+// HOSTSTATS.1 — the page-view retention arm rides this cron with its own
+// heartbeat row; its result is reported, and its failure never changes the
+// parent's stamp or status.
+describe('event_page_views arm (HOSTSTATS.1)', () => {
+  it('runs the arm and reports its result in the response', async () => {
+    setupDb({ deadLetters: [], webhookQueue: [] })
+    runEventPageViewsPurgeArm.mockResolvedValueOnce({ ok: true, deleted: 42, pages: 1, cutoff: '2026-05-12T10:00:00.000Z' })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(runEventPageViewsPurgeArm).toHaveBeenCalledWith(db)
+    expect((await res.json()).data.event_page_views).toEqual({ ok: true, deleted: 42, pages: 1, cutoff: '2026-05-12T10:00:00.000Z' })
+  })
+  it('an arm that throws does not stop the parent from stamping purge-webhook-payloads', async () => {
+    setupDb({ deadLetters: [], webhookQueue: [] })
+    runEventPageViewsPurgeArm.mockRejectedValueOnce(new Error('arm down'))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampHeartbeat).toHaveBeenCalledWith('purge-webhook-payloads', expect.anything())
+    expect((await res.json()).data.event_page_views).toEqual({ ok: false, error: 'arm down' })
   })
 })

@@ -68,6 +68,16 @@
 //                       parent's stamp. Seeded by mig 806, applied RIGHT AFTER
 //                       the deploy.
 //
+// HOSTSTATS.1 adds a tenth, on the daily purge-webhook-payloads cron:
+//
+//   'purge-event-page-views' — runEventPageViewsPurgeArm
+//                       (src/lib/event-page-views-purge.js), the 180-day
+//                       retention arm for event_page_views. Stamps its own
+//                       row only when its run returned ok (an idle run is
+//                       clean); the parent never reads its result for its
+//                       own stamp. Seeded by mig 822, applied RIGHT AFTER
+//                       the deploy.
+//
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
 // fault in the arm's own machinery. A run with nothing to send is healthy (a
@@ -85,6 +95,9 @@ export const REPLACE_NOTICES_HEARTBEAT = 'replace-notices'
 // REPLACE.1b — the shift-offer arm (src/lib/shift-offer-server.js
 // runShiftOfferSweep) of the */5 send-push-reminders cron. Seeded by mig 642.
 export const SHIFT_OFFER_SWEEP_HEARTBEAT = 'shift-offer-sweep'
+// HOSTSTATS.1 — the event_page_views retention arm of the daily
+// purge-webhook-payloads cron (src/lib/event-page-views-purge.js). Seeded by mig 822.
+export const PURGE_EVENT_PAGE_VIEWS_HEARTBEAT = 'purge-event-page-views'
 
 // runShiftReminders' counters that mean the ARM went wrong, not a device:
 //   shift_claim_failed — a ledger claim insert failed; that reminder was NOT sent.
