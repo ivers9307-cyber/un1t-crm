@@ -18,6 +18,7 @@ import { duplicateEvent } from './event-duplicate'
 import { getLocationZone, DEFAULT_TZ } from './location-time'
 import { todayIsoIn } from '@shared/events'
 import { logError, logWarn } from './log'
+import { isEventSoldOut, toBrowseCard } from './public-events'
 
 export const SERIES_ERRORS = Object.freeze({
   NOT_FOUND: 'not_found',
@@ -232,4 +233,32 @@ export async function listHostSeries(db, { hostId, today }) {
     counts.set(e.series_id, (counts.get(e.series_id) || 0) + 1)
   }
   return series.map((s) => ({ id: s.id, name: s.name, slug: s.slug, headline: s.headline ?? null, blurb: s.blurb ?? null, upcoming_count: counts.get(s.id) || 0 }))
+}
+
+// ─── The public page (/event/series/<slug>) ────────────────────────────────
+
+/** Operator copy with defaults (customer-facing copy is operator-editable). */
+export function seriesPageCopy(series) {
+  const headline = String(series?.headline || '').trim()
+  const blurb = String(series?.blurb || '').trim()
+  return { headline: headline || String(series?.name || '').trim() || 'Upcoming dates', blurb: blurb || 'Pick a date' }
+}
+
+/**
+ * The cards of a series page: PUBLISHED, active, upcoming dates in date
+ * order, each a browse card (toBrowseCard) plus `href` to its own signup page
+ * (null when registration has closed; a sold-out date still links, as on
+ * /h/<slug>). Pure; the loader already filters, this re-applies the rule so a
+ * caller can never show a draft.
+ * @param {Array} dates  rows shaped by SERIES_DATE_COLS (+ status, active)
+ * @param {{ now: number, zone: string, today: string }} args  today: YYYY-MM-DD on the studio clock
+ */
+export function seriesCards(dates, { now, zone, today }) {
+  return (Array.isArray(dates) ? dates : [])
+    .filter((e) => (e.status == null || e.status === 'published') && e.active !== false && e.race_date && String(e.race_date).slice(0, 10) >= today)
+    .sort((a, b) => String(a.race_date).localeCompare(String(b.race_date)))
+    .map((e) => {
+      const card = toBrowseCard(e, { soldOut: isEventSoldOut(e.waves, e.registrations, e.capacity_mode), now, zone })
+      return { ...card, href: card.closed ? null : `/event/${e.slug}` }
+    })
 }
