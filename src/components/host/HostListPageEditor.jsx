@@ -143,7 +143,6 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
             <ul className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3">
               {values.photos.map((p, i) => (
                 <li key={p.url} className="rounded-lg border border-white/10 p-2">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={p.url} alt={p.caption || `Photo ${i + 1}`} className="h-24 w-full rounded object-cover" />
                   <input value={p.caption} maxLength={120} placeholder="Caption (optional)" aria-label={`Caption for photo ${i + 1}`}
                     onChange={(e) => updateCaption(i, e.target.value)} className={`${INPUT} mt-2 text-xs`} />

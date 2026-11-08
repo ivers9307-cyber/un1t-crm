@@ -264,11 +264,12 @@ function renderOperatorIntro(text, contact, extras) {
  *
  * @param {object} args
  * @param {import('@supabase/supabase-js').SupabaseClient} [args.db]
- * @param {'confirmation'|'reminder'|'moved'|'gap'|'waitlist'} args.kind  ('gap' = the
+ * @param {'confirmation'|'reminder'|'moved'|'gap'|'waitlist'|'rating'} args.kind  ('gap' = the
  *   price-difference payment-link email, race_events.gap_email_subject/intro,
  *   mig 710; the receipt passes the race with that copy cleared; 'waitlist' =
  *   the "a spot opened up" offer, race_events.waitlist_email_subject/intro,
- *   mig 713)
+ *   mig 713; 'rating' = the post-event "How was <event>?" request,
+ *   race_events.rating_email_subject/intro, mig 823)
  * @param {object} args.race     the race_events row (new EVENTS-EMAILCFG columns + accent_hex/hero_image_url)
  * @param {object} args.contact  merge contact ({ first_name, name, email, ... })
  * @param {object} args.extras   { event_name, team_name, when, location, old_event_name?, old_when?, difference?, pay_url?, manage_url?, claim_url? }

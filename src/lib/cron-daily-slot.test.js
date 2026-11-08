@@ -30,6 +30,8 @@ const LEGACY_SCHEDULE = {
   'run-challenge-events': [0, 8, null],
   'receipt-coverage-weekly': 'friday-08-dublin', // 0 7 * * 5 + 0 8 * * 5, Dublin-hour gate
   'event-reminders': [0, 9, null],
+  // HOSTPAGE.2 — the rating-request arm rides event-reminders' 09:00 slot.
+  'event-rating-requests': [0, 9, null],
   'notify-winback': [0, 10, null],
   'notify-onboarding-pace': [30, 10, null],
   'notify-streak-at-risk': [0, 11, null],
@@ -89,7 +91,7 @@ describe('TZ.6 slot table', () => {
     const { readFileSync } = await import('node:fs')
     const crons = JSON.parse(readFileSync(new URL('../../vercel.json', import.meta.url), 'utf8')).crons
     const arms = Object.entries(DAILY_SLOTS).filter(([, slot]) => slot.rides)
-    expect(arms.map(([cron]) => cron).sort()).toEqual(['qualification-digest', 'roster-runway'])
+    expect(arms.map(([cron]) => cron).sort()).toEqual(['event-rating-requests', 'qualification-digest', 'roster-runway'])
     for (const [cron, slot] of arms) {
       const host = DAILY_SLOTS[slot.rides]
       expect(host, cron).toBeTruthy()
