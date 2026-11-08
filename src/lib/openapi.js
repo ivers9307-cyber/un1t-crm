@@ -1675,6 +1675,47 @@ registry.registerPath({
   },
 })
 
+// HOSTSTATS.1 — one event's signup numbers.
+const EventStatsSource = z.object({ source: z.string(), label: z.string(), views: z.number().int(), registrations: z.number().int() })
+const EventStats = z.object({
+  views: z.number().int(), unique_visitors: z.number().int(), registrations: z.number().int(), confirmed: z.number().int(),
+  conversion_pct: z.number().nullable().openapi({ description: 'confirmed / unique visitors, one decimal; null with no visitors' }),
+  by_source: z.array(EventStatsSource), waitlist: z.object({ waiting: z.number().int(), offered: z.number().int(), claimed: z.number().int() }),
+  capped: z.boolean(),
+})
+const EventStatsResponse = z.object({ success: z.literal(true), data: EventStats })
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/events/{id}/stats',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Signup numbers for one of the host's own events",
+  description: 'Host session (getCurrentHost). Page views and unique visitors (the public beacon, deduped per session per day), registrations and confirmed bookings, conversion, views and bookings by source (host_email, a utm_source, a referrer label, direct, unknown), and the waitlist\'s waiting/offered/claimed counts. Another host\'s event is 404.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The stats', content: { 'application/json': { schema: EventStatsResponse } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Stats read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'get',
+  path: '/api/events/{id}/stats',
+  tags: ['Events'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Signup numbers for an event (manager+ holding races at its studio)',
+  description: 'The same numbers as the host route. An event outside the caller\'s studios is 404; a member without a manager role or the races permission at the studio is 403.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The stats', content: { 'application/json': { schema: EventStatsResponse } } },
+    401: { description: 'Unauthorised', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Stats read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // HOSTSERIES.1 — copy an event to a new date as a draft (fields, waves, a
 // shifted registration window, its own hero file; never registrations or
 // promo codes). Host: own event only; staff: manager+ holding races at the

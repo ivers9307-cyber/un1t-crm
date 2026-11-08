@@ -10,6 +10,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import RaceTeamsManager from '@/components/RaceTeamsManager'
+import EventSignupsCard from '@/components/EventSignupsCard'
+import { loadEventStats } from '@/lib/event-stats'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
@@ -46,6 +48,9 @@ export default async function RaceTeamsPage(props) {
   let customerOrigin = ''
   try { customerOrigin = new URL(await resolveCustomerBaseUrl(db, race.location_id)).origin } catch { customerOrigin = '' }
 
+  // HOSTSTATS.1 — the same Signups card the host sees, for staff.
+  const statsRes = await loadEventStats(db, race.id)
+
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <Link href="/events" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-3">
@@ -60,6 +65,9 @@ export default async function RaceTeamsPage(props) {
           })}
         </p>
       </header>
+      <div className="mb-6">
+        <EventSignupsCard stats={statsRes.ok ? statsRes.stats : null} />
+      </div>
       {/* GATES-2 — Cancel entry calls POST /api/registrations/[id]/cancel,
           which requires MANAGER_ROLES at the event's studio. EVENT-MOVE.1 —
           Move to event calls POST /api/event-registrations/[id]/move, same

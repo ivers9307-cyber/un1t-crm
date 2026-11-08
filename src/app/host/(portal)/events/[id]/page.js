@@ -22,6 +22,8 @@ import HostEventActions from '@/components/host/HostEventActions'
 import DuplicateEventButton from '@/components/DuplicateEventButton'
 import HostSeriesActions from '@/components/host/HostSeriesActions'
 import EventWaitlistPanel from '@/components/EventWaitlistPanel'
+import EventSignupsCard from '@/components/EventSignupsCard'
+import { loadEventStats } from '@/lib/event-stats'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,6 +42,9 @@ export default async function HostEventDetail(props) {
   const brand = await resolveHostOrgBrand(db, session.host)
 
   const regs = await fetchEventAttendees(db, params.id)
+  // HOSTSTATS.1 — views, visitors, bookings, sources, waitlist. A failed read
+  // shows the card's unavailable copy; the rest of the page still renders.
+  const statsRes = await loadEventStats(db, params.id)
   const { lastMoveByReg, movedOut } = await loadMoveHistory(db, { eventId: params.id, regIds: regs.map((r) => r.id) })
 
   // QUESTIONS.1 — answers as label/value rows for the table.
@@ -110,6 +115,9 @@ export default async function HostEventDetail(props) {
           <HostEventActions eventId={race.id} status={race.status} hasRegistrations={regs.length > 0} brandName={brand.name} />
         </div>
       </div>
+
+      {/* HOSTSTATS.1 — how the signup page is doing. */}
+      <EventSignupsCard stats={statsRes.ok ? statsRes.stats : null} dark />
 
       {/* HOSTSERIES.1 — make this event a series, or show the series it is in. */}
       <div className="mt-4">
