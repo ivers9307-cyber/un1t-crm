@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import BoardWizard from './BoardWizard.jsx'
 import StagesStep from './wizard/StagesStep.jsx'
+import EntryStep from './wizard/EntryStep.jsx'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -166,5 +167,32 @@ describe('BoardWizard', () => {
     render(<BoardWizard {...props} initialRecipe="nope" />)
     next()
     expect(screen.getByText('Pick a recipe.')).toBeTruthy()
+  })
+
+  describe('where ways in come from', () => {
+    const entryState = (type) => ({ entry: { type, values: [] }, studio: { name: 'UN1T Hatch Street' } })
+
+    it('noPromosSaysWhereToAddOne', async () => {
+      stubOptions([])
+      render(<EntryStep state={entryState('corp_promo')} dispatch={vi.fn()} locationId="loc1" entryTypes={['corp_promo', 'lead_source']} />)
+      const link = await screen.findByRole('link', { name: 'No promos yet. Add one in Settings → Promos.' })
+      expect(link.getAttribute('href')).toBe('/settings/promos')
+      expect(screen.queryByText('Nothing to pick from at this studio yet.')).toBeNull()
+    })
+
+    it('leadSourceHelpSaysWhereToAddMore', async () => {
+      stubOptions([{ value: 'website', label: 'Website' }])
+      render(<EntryStep state={entryState('lead_source')} dispatch={vi.fn()} locationId="loc1" entryTypes={['corp_promo', 'lead_source']} />)
+      await screen.findByLabelText(/Website/)
+      const link = screen.getByRole('link', { name: 'Studios can add their own lead sources under Settings → Locations → UN1T Hatch Street → Lead sources.' })
+      expect(link.getAttribute('href')).toBe('/settings/locations/loc1')
+    })
+
+    it('anotherTypeKeepsTheGenericEmptyState', async () => {
+      stubOptions([])
+      render(<EntryStep state={entryState('tag')} dispatch={vi.fn()} locationId="loc1" entryTypes={['tag']} />)
+      expect(await screen.findByText('Nothing to pick from at this studio yet.')).toBeTruthy()
+      expect(screen.queryByRole('link')).toBeNull()
+    })
   })
 })

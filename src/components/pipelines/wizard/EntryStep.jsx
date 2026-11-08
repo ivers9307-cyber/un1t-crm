@@ -1,9 +1,23 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { Field, Loading } from '@/components/ui'
 import { TRIAL_MATCHES } from '@shared/pipelines/offer-config.js'
-import { entryDescription, TRIAL_MATCH_LABELS, ENTRY_TYPE_LABELS, ENTRY_TYPE_HELP } from '@/lib/pipeline-wizard'
+import {
+  entryDescription, entryTypeHelp, TRIAL_MATCH_LABELS, ENTRY_TYPE_LABELS, ENTRY_EMPTY_STATE, ENTRY_EMPTY_DEFAULT,
+} from '@/lib/pipeline-wizard'
+
+// The help under "Who enters". A lead source's help links to the studio's
+// Lead sources card (Settings → Locations → <studio>) when the studio is known.
+function EntryHelp({ type, studioName, locationId }) {
+  const text = entryTypeHelp(type, studioName)
+  if (!text) return null
+  if (type === 'lead_source' && locationId) {
+    return <Link href={`/settings/locations/${locationId}`} className="underline">{text}</Link>
+  }
+  return text
+}
 
 // Step 3: who enters. The entry type comes from the recipe; the values are
 // the studio's own (GET /api/locations/[id]/pipeline-entry-options).
@@ -44,10 +58,15 @@ export default function EntryStep({ state, dispatch, locationId, entryTypes, dis
   const options = [...opts.options, ...entry.values.filter((v) => !listed.has(v)).map((v) => ({ value: v, label: v }))]
 
   const types = entryTypes || state.studio?.entryTypes
+  const showTypes = Boolean(types && types.length > 0)
+  const help = entryTypeHelp(type, state.studio?.name)
+    ? <EntryHelp type={type} studioName={state.studio?.name} locationId={locationId} />
+    : undefined
+  const empty = ENTRY_EMPTY_STATE[type]
   return (
     <div className="space-y-4">
-      {types && types.length > 0 && (
-        <Field id="wiz-entry-type" label="Who enters" hint={ENTRY_TYPE_HELP[type]}>
+      {showTypes && (
+        <Field id="wiz-entry-type" label="Who enters" hint={help}>
           {(p) => (
             <select {...p} disabled={disabled} value={type || ''} onChange={(e) => dispatch({ type: 'setEntryType', entryType: e.target.value })}
               className="rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text">
@@ -58,6 +77,7 @@ export default function EntryStep({ state, dispatch, locationId, entryTypes, dis
           )}
         </Field>
       )}
+      {!showTypes && help && <p className="text-xs text-un1t-subtle">{help}</p>}
       {type === 'trial_purchase' && (
         <Field id="wiz-match" label="Match on">
           {(p) => (
@@ -73,7 +93,11 @@ export default function EntryStep({ state, dispatch, locationId, entryTypes, dis
         {opts.loading && <Loading inline label="Loading options" />}
         {!opts.loading && opts.error && <p className="text-sm text-red-700" role="alert">{opts.error}</p>}
         {!opts.loading && !opts.error && options.length === 0 && (
-          <p className="text-sm text-un1t-subtle">Nothing to pick from at this studio yet.</p>
+          <p className="text-sm text-un1t-subtle">
+            {empty
+              ? <Link href={empty.href} className="underline">{empty.text}</Link>
+              : ENTRY_EMPTY_DEFAULT}
+          </p>
         )}
         {!opts.loading && options.length > 0 && (
           <ul className="space-y-2">

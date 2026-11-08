@@ -32,7 +32,22 @@ export const ENTRY_TYPE_LABELS = Object.freeze({
 })
 export const ENTRY_TYPE_HELP = Object.freeze({
   un1t_product: 'People who buy this product enter the board.',
+  corp_promo: 'People who claim this promo enter the board. Promos are set up in Settings → Promos.',
+  // `<studio>` is filled in with the studio's name (entryTypeHelp below).
+  lead_source: 'Studios can add their own lead sources under Settings → Locations → <studio> → Lead sources.',
 })
+// Where each entry type's values come from, said when the studio has none yet.
+export const ENTRY_EMPTY_STATE = Object.freeze({
+  corp_promo: { text: 'No promos yet. Add one in Settings → Promos.', href: '/settings/promos' },
+})
+export const ENTRY_EMPTY_DEFAULT = 'Nothing to pick from at this studio yet.'
+
+/** ENTRY_TYPE_HELP for a type with the studio's name filled in. */
+export function entryTypeHelp(type, studioName) {
+  const help = ENTRY_TYPE_HELP[type]
+  if (!help) return undefined
+  return help.replace('<studio>', studioName || 'your studio')
+}
 
 export const OWNER_ONLY_NOTICE = 'Only owners can build boards.'
 export const DEFAULT_PRIORITY = 100
