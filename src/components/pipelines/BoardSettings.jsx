@@ -15,7 +15,8 @@ import FollowupsStep from './wizard/FollowupsStep'
 import MiaNotesStep from './wizard/MiaNotesStep'
 import BoardLaunchPanel from './BoardLaunchPanel'
 import BoardReport from './BoardReport'
-import { boardStatus, followupChip } from './BoardList'
+import NoWhatsappNotice from './NoWhatsappNotice'
+import { boardStatus, followupChip, placementCadence, HEALTH_UNREAD_NOTICE } from './BoardList'
 
 export const SWITCH_OFF_NOTE = 'Switch the board off to change this.'
 export const REPLACE_CONFIRM = 'The current message stops now. The new wording starts once Meta approves it, usually within a few hours.'
@@ -30,8 +31,17 @@ export const TURN_OFF_CONFIRM = 'While the board is off, nobody new is placed an
 // Meta, so a later change to the offer name, sign-off or offer length does not
 // reach it on its own.
 export const FILLED_IN_NOTE = 'These messages were filled in when they were sent to Meta. If you change the offer name, sign-off or offer length, change the wording of each message too.'
+// RAILS.1 — installing afresh is owner work; the server refuses it too.
+export const OWNER_ONLY_INSTALL_NOTE = 'Only an owner can install this follow-up. Ask an owner, or change the wording once it is set up.'
+export const OWNER_ONLY_REJECTED_NOTE = 'Meta rejected this wording. Ask an owner to install it again.'
+// RAILS.2 — switching off retires the sequence and a later install goes back to Meta.
+export const FOLLOWUP_OFF_CONFIRM = 'This stops the follow-up for everyone now, including people part-way through it, and archives its sequence. Switching it on again sends the message to WhatsApp for approval again, which can take hours.'
 export const START_FROM_STANDARD = 'Start from the standard wording'
-export const BASELINE_NOTE = 'Switching a board on never messages people who already qualify. They are placed that night without any messages; only people who qualify after that get the follow-ups.'
+// RAILS.4 — keyed by the board's placement cadence (placementCadence).
+export const BASELINE_NOTE = {
+  nightly: 'Switching a board on never messages people who already qualify. They are placed that night without any messages; only people who qualify after that get the follow-ups.',
+  hourly: 'Switching a board on never messages people who already qualify. They are placed within the hour without any messages; only people who qualify after that get the follow-ups.',
+}
 
 // The board's own sections: their checks decide whether Save may go.
 const BOARD_STEPS = ['Name and offer', 'Who enters', 'Stages', 'Notes for Mia']
@@ -42,6 +52,9 @@ const STOPPABLE = new Set(['live', 'awaiting_approval', 'draft', 'rejected'])
 // Install (as it stands) only where nothing was refused: a rejected row's
 // wording is changed first, never resent.
 const INSTALLABLE = new Set(['off', 'draft'])
+// No row, or a spent one: installing it is a fresh install, owner work.
+const OWNER_ONLY_INSTALL = new Set(['rejected', 'off'])
+const isOwnerOnlyInstall = (row) => !row || OWNER_ONLY_INSTALL.has(row.state)
 
 // The wizard's reducer, plus 'reset' to load a board the server returned.
 function settingsReducer(state, action) {
@@ -130,8 +143,9 @@ function rowFor(board, stageId, packKey) {
  * @param {string} [props.studioName]
  * @param {string} [props.bookingFlowId]
  * @param {{ iosUrl: string, androidUrl: string }} [props.appLinks]
+ * @param {boolean|null} [props.hasWhatsapp]  false: no number is on at this studio (RAILS.5), so no follow-up can be installed or reworded
  */
-export default function BoardSettings({ boardId, locationId, studioName = '', bookingFlowId, appLinks }) {
+export default function BoardSettings({ boardId, locationId, studioName = '', bookingFlowId, appLinks, hasWhatsapp = null }) {
   const studio = useMemo(() => ({ studioName, bookingFlowId, appLinks }), [studioName, bookingFlowId, appLinks])
   const [load, setLoad] = useState({ loading: true, error: null })
   const [board, setBoard] = useState(null)
@@ -148,6 +162,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
 
   const [editing, setEditing] = useState(null)        // { packKey, stageId, before }
   const [confirm, setConfirm] = useState(null)        // { stage, pack }
+  const [confirmOffRow, setConfirmOffRow] = useState(null) // { stage, pack }
   const [fuBusy, setFuBusy] = useState(null)          // stage id
   const [fuNotes, setFuNotes] = useState({})          // stage id -> { error?, info? }
   const [stale, setStale] = useState(null)            // { labels, stageIds } after a save changed filled-in values
@@ -233,6 +248,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
   }
 
   const { canEdit, canEditWording } = flags
+  const noWa = hasWhatsapp === false
   const on = !!board.enabled
   const structureLocked = !canEdit || on
   const lockNote = canEdit && on ? SWITCH_OFF_NOTE : null
@@ -341,6 +357,7 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
 
   async function saveWording(stage, pack, row) {
     if (row && SENDING.has(row.state)) { setConfirm({ stage, pack }); return }
+    if (!canEdit && isOwnerOnlyInstall(row)) return
     const done = await followupAction(stage, pack, 'install', packBodies(state, pack.key))
     if (done) { setEditing(null); clearStale(stage.id) }
   }
@@ -351,6 +368,14 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
     const done = await followupAction(stage, pack, 'replace', packBodies(state, pack.key))
     setConfirm(null)
     if (done) { setEditing(null); clearStale(stage.id) }
+  }
+
+  async function confirmFollowupOff() {
+    if (!confirmOffRow) return
+    const { stage, pack } = confirmOffRow
+    const done = await followupAction(stage, pack, 'off')
+    setConfirmOffRow(null)
+    if (done) clearStale(stage.id)
   }
 
   const staleNames = stale
@@ -383,13 +408,13 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
             <Button type="button" variant="secondary" size="sm" className="ml-auto" onClick={() => { setOffError(null); setConfirmOff(true) }}>Turn off</Button>
           )}
         </div>
-        <p className="mt-2 text-sm text-un1t-subtle">{BASELINE_NOTE}</p>
+        <p className="mt-2 text-sm text-un1t-subtle">{BASELINE_NOTE[placementCadence(board)]}</p>
       </Section>
 
       {board.board_type === 'offer' && <BoardReport boardId={boardId} stages={board.stages || []} />}
 
       {canEdit && !on && (
-        <BoardLaunchPanel board={board} followups={board.followups || []} onEnabled={() => refresh()} />
+        <BoardLaunchPanel board={board} followups={board.followups || []} hasWhatsapp={hasWhatsapp} onEnabled={() => refresh()} />
       )}
 
       <Section title="Name, offer and signer">
@@ -441,8 +466,12 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
       )}
 
       <Section title="Follow-ups">
+        {noWa && <div className="mb-3"><NoWhatsappNotice /></div>}
         {board.wording_unread && (
           <p className="mb-3 text-sm text-amber-700">Could not read the current wording just now. Reload the page to try again.</p>
+        )}
+        {board.health_unread && (
+          <p className="mb-3 text-sm text-amber-700">{HEALTH_UNREAD_NOTICE}</p>
         )}
         <ul className="space-y-4">
           {stages.map((stage) => {
@@ -465,6 +494,8 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
             // only through Change wording, which says it starts from standard.
             const offUnreadable = unreadable && rowState === 'off'
             const canInstall = !row || INSTALLABLE.has(rowState)
+            const ownerOnlyInstall = isOwnerOnlyInstall(row)
+            const installBlocked = !canEdit && ownerOnlyInstall
             const rejected = rowState === 'rejected'
             const unchanged = isEditing && editing && pack
               && Object.entries(editing.before).every(([ref, body]) => state.bodies[pack.key]?.[ref] === body)
@@ -501,35 +532,38 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
                     <FollowupsStep state={state} dispatch={dispatch} packKeys={[pack.key]} />
                     {dirty && <p className="text-sm text-amber-700">Save the board first: the preview and Meta use the saved offer name and sign-off.</p>}
                     <div className="flex flex-wrap gap-2">
-                      <Button type="button" size="sm" loading={busy} disabled={wErrors.length > 0 || dirty || (rejected && unchanged)}
+                      <Button type="button" size="sm" loading={busy} disabled={installBlocked || wErrors.length > 0 || dirty || (rejected && unchanged)}
                         onClick={() => saveWording(stage, pack, row)}>
                         Save wording
                       </Button>
                       <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={cancelEditing}>Cancel</Button>
                     </div>
+                    {installBlocked && <p className="text-sm text-amber-700">{OWNER_ONLY_INSTALL_NOTE}</p>}
                   </div>
                 )}
-                {pack && rejected && <p className="mt-2 text-sm text-red-700">{REJECTED_NOTE}</p>}
+                {pack && rejected && <p className="mt-2 text-sm text-red-700">{canEdit ? REJECTED_NOTE : OWNER_ONLY_REJECTED_NOTE}</p>}
                 {pack && wordingUnknown && canEditWording && <p className="mt-2 text-sm text-amber-700">{WORDING_UNKNOWN_NOTE}</p>}
                 {note.error && <p className="mt-2 text-sm text-red-700" role="alert">{note.error}</p>}
                 {pack && canEditWording && !isEditing && (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Button type="button" size="sm" variant="secondary" disabled={!!fuBusy || !!editing || wordingUnknown} onClick={() => startEditing(stage, pack, offUnreadable)}>
-                      Change wording
-                    </Button>
-                    {row && STOPPABLE.has(rowState) && (
+                    {!noWa && (
+                      <Button type="button" size="sm" variant="secondary" disabled={!!fuBusy || !!editing || wordingUnknown} onClick={() => startEditing(stage, pack, offUnreadable)}>
+                        Change wording
+                      </Button>
+                    )}
+                    {canEdit && row && STOPPABLE.has(rowState) && (
                       <Button type="button" size="sm" variant="secondary" loading={busy} disabled={!!fuBusy && !busy}
-                        onClick={async () => { if (await followupAction(stage, pack, 'off')) clearStale(stage.id) }}>
+                        onClick={() => setConfirmOffRow({ stage, pack })}>
                         Switch off
                       </Button>
                     )}
-                    {canInstall && (
+                    {!noWa && canInstall && (canEdit || !ownerOnlyInstall) && (
                       <Button type="button" size="sm" loading={busy} disabled={(!!fuBusy && !busy) || dirty || wordingUnknown || offUnreadable}
                         onClick={() => followupAction(stage, pack, 'install', packBodies(state, pack.key))}>
                         Install
                       </Button>
                     )}
-                    {rowState === 'awaiting_approval' && (
+                    {!noWa && rowState === 'awaiting_approval' && (
                       <Button type="button" size="sm" variant="ghost" loading={busy} disabled={!!fuBusy && !busy}
                         onClick={() => followupAction(stage, pack, 'install')}>
                         Publish now if Meta has approved it
@@ -556,6 +590,20 @@ export default function BoardSettings({ boardId, locationId, studioName = '', bo
       >
         <p className="text-sm text-un1t-text">{TURN_OFF_CONFIRM}</p>
         {offError && <p className="mt-2 text-sm text-red-700" role="alert">{offError}</p>}
+      </Modal>
+
+      <Modal
+        open={!!confirmOffRow}
+        onClose={() => { if (!fuBusy) setConfirmOffRow(null) }}
+        title="Switch off this follow-up"
+        footer={(
+          <>
+            <Button type="button" variant="secondary" disabled={!!fuBusy} onClick={() => setConfirmOffRow(null)}>Cancel</Button>
+            <Button type="button" loading={!!fuBusy} onClick={confirmFollowupOff}>Switch off</Button>
+          </>
+        )}
+      >
+        <p className="text-sm text-un1t-text">{FOLLOWUP_OFF_CONFIRM}</p>
       </Modal>
 
       <Modal

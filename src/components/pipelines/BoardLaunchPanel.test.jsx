@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
-import BoardLaunchPanel, { TURN_ON_CONFIRM } from './BoardLaunchPanel.jsx'
+import BoardLaunchPanel, { TURN_ON_CONFIRM, DRY_RUN_ERRORS_NOTE } from './BoardLaunchPanel.jsx'
 import BoardWizard from './BoardWizard.jsx'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -17,6 +17,15 @@ describe('BoardLaunchPanel', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<BoardLaunchPanel board={board} followups={live} />)
     expect(screen.getByRole('button', { name: 'Turn on' }).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Check who would enter' }))
+    await screen.findByText(/would enter this board/)
+    expect(screen.getByRole('button', { name: 'Turn on' }).disabled).toBe(false)
+  })
+
+  it('a live follow-up WhatsApp rejected says so; the Turn on gating is unchanged', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok(DRY)))
+    render(<BoardLaunchPanel board={board} followups={[{ stage_id: 's1', state: 'live', health: 'template_rejected' }]} />)
+    expect(screen.getByText('Rejected by WhatsApp').className).toContain('text-red-700')
     fireEvent.click(screen.getByRole('button', { name: 'Check who would enter' }))
     await screen.findByText(/would enter this board/)
     expect(screen.getByRole('button', { name: 'Turn on' }).disabled).toBe(false)
@@ -48,11 +57,30 @@ describe('BoardLaunchPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Check who would enter' }))
     await screen.findByText(/would enter this board/)
     fireEvent.click(screen.getByRole('button', { name: 'Turn on' }))
-    expect(screen.getByText(TURN_ON_CONFIRM)).toBeTruthy()
-    expect(TURN_ON_CONFIRM).toBe('People who already qualify are placed tonight without any messages. From tomorrow, new people get the follow-ups.')
+    expect(screen.getByText(TURN_ON_CONFIRM.nightly)).toBeTruthy()
+    expect(TURN_ON_CONFIRM.nightly).toBe('People who already qualify are placed tonight without any messages. From tomorrow, new people get the follow-ups.')
     fireEvent.click(screen.getAllByRole('button', { name: 'Turn on' }).pop())
     await waitFor(() => expect(onEnabled).toHaveBeenCalledTimes(1))
     expect(fetchMock.mock.calls[1][0]).toBe('/api/pipelines/b1/enable')
+  })
+
+  // RAILS.4 — the confirm says when the first placement happens at this studio.
+  it('a un1t.online board is placed within the hour', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok(DRY)))
+    render(<BoardLaunchPanel board={{ ...board, module: 'offer_un1t' }} followups={live} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Check who would enter' }))
+    await screen.findByText(/would enter this board/)
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on' }))
+    expect(screen.getByText(TURN_ON_CONFIRM.hourly)).toBeTruthy()
+    expect(TURN_ON_CONFIRM.hourly).toBe('People who already qualify are placed within the hour without any messages. After that, new people get the follow-ups.')
+  })
+
+  it('a dry run that could not check people says the first placement is held', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok({ ...DRY, errors: 2 })))
+    render(<BoardLaunchPanel board={board} followups={live} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Check who would enter' }))
+    expect((await screen.findByText(DRY_RUN_ERRORS_NOTE(2))).className).toContain('text-amber-700')
+    expect(DRY_RUN_ERRORS_NOTE(2)).toBe('Some people could not be checked (2). The first placement is held until this is clear.')
   })
 
   async function dryRun() {
@@ -203,5 +231,14 @@ describe('BoardWizard finish', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull())
     const last = fetchMock.mock.calls.filter(([u]) => u.includes('/followups/')).pop()
     expect(JSON.parse(last[1].body).action).toBe('install')
+  })
+
+  it('the no-follow-up note names WhatsApp only when the studio has no number on', () => {
+    render(<BoardLaunchPanel board={board} followups={[]} hasWhatsapp={false} />)
+    expect(screen.getByText(/no WhatsApp number switched on/)).toBeTruthy()
+    cleanup()
+    render(<BoardLaunchPanel board={board} followups={[]} />)
+    expect(screen.queryByText(/no WhatsApp number switched on/)).toBeNull()
+    expect(screen.getByText(/needs at least one live follow-up/)).toBeTruthy()
   })
 })

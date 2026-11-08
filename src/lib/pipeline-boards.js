@@ -184,6 +184,7 @@ function shapeBoard(b, stages, followups, counts) {
         version: f.version,
         sequence_id: f.sequence_id,
         whatsapp_template_id: f.whatsapp_template_id,
+        health: null,
       })),
   }
 }
@@ -234,20 +235,151 @@ async function loadBoards(db, locationId, boardId = null) {
   const counts = await openDealCounts(db, locationId, stageRows.map((s) => s.id))
   if (!counts.ok) return unreadable('the deal counts')
 
-  return { ok: true, boards: rows.map((b) => shapeBoard(b, stageRows, followups || [], counts.counts)) }
+  const shaped = rows.map((b) => shapeBoard(b, stageRows, followups || [], counts.counts))
+  const pending = await withBaselinePending(db, locationId, rows, shaped)
+  return { ok: true, boards: await withBoardsHealth(db, locationId, pending) }
 }
 
-/** Every board at the studio, enabled or not, with its stages and follow-ups. */
+// ---------------------------------------------------------------------------
+// RAILS.4 — a held first placement
+// ---------------------------------------------------------------------------
+//
+// A board switched on and not yet baselined is waiting for its first silent
+// placement: tonight (03:30 UTC) at a Glofox/contacts studio, within the hour
+// at a un1t.online studio (module offer_un1t). The placement pass stamps
+// baseline_at only after a real run that ended with no errors, so a run since
+// switch-on that failed or skipped people HOLDS the board: no follow-ups
+// start. baseline_pending says which, from the studio's latest real run.
+// Derived at read time, never stored. A failed runs read is `unread` (and
+// never "held"); it never fails the board read.
+
+const RUN_COLUMNS = 'status, errors, error_message, started_at, finished_at'
+
+export const placementCadence = (board) => (board?.module === 'offer_un1t' ? 'hourly' : 'nightly')
+
+const isPendingBaseline = (b) => !!(b.enabled && b.board_type && !b.baseline_at)
+
+/** Is this board's first placement held by this run? Only a run that started after switch-on counts. */
+export function baselineHeld(lastRun, boardUpdatedAt) {
+  if (!lastRun) return false
+  const started = Date.parse(lastRun.started_at)
+  const switched = Date.parse(boardUpdatedAt)
+  if (!Number.isFinite(started) || !Number.isFinite(switched) || started <= switched) return false
+  // A run still in flight has not decided anything yet: pending, not held.
+  if (lastRun.status === 'running') return false
+  // A clean count with an error_message is the exclusion read failing, which
+  // refuses the baseline stamp too.
+  return lastRun.status !== 'success' || (Number(lastRun.errors) || 0) > 0 || !!lastRun.error_message
+}
+
+async function withBaselinePending(db, locationId, rawRows, boards) {
+  if (!boards.some(isPendingBaseline)) return boards
+  const updatedAt = new Map(rawRows.map((r) => [r.id, r.updated_at]))
+  const { data, error } = await db
+    .from('pipeline_classification_runs')
+    .select(RUN_COLUMNS)
+    .eq('location_id', locationId)
+    .eq('dry_run', false)
+    .order('started_at', { ascending: false })
+    .limit(1)
+  if (error) logError(MODULE, 'classification runs read failed', { locationId, err: error.message })
+  const row = !error && Array.isArray(data) ? data[0] ?? null : null
+  const lastRun = row
+    ? { status: row.status, errors: Number(row.errors) || 0, started_at: row.started_at, finished_at: row.finished_at }
+    : null
+  return boards.map((b) => {
+    if (!isPendingBaseline(b)) return b
+    const cadence = placementCadence(b)
+    if (error) return { ...b, baseline_pending: { cadence, last_run: null, held: false, unread: true } }
+    const held = baselineHeld(row && { ...lastRun, error_message: row.error_message }, updatedAt.get(b.id))
+    return { ...b, baseline_pending: { cadence, last_run: lastRun, held } }
+  })
+}
+
+/** Every board at the studio, enabled or not, with its stages and follow-ups (each with its health). */
 export async function listBoards(db, locationId) {
   return loadBoards(db, locationId)
 }
 
-/** One board at the studio (404 when it is not there), with each follow-up's current wording. */
+/** One board at the studio (404 when it is not there), with each follow-up's health and current wording. */
 export async function getBoard(db, locationId, boardId) {
   const res = await loadBoards(db, locationId, boardId)
   if (!res.ok) return res
   if (res.boards.length === 0) return fail(404, 'Board not found')
   return { ok: true, board: await withFollowupWording(db, locationId, res.boards[0]) }
+}
+
+// ---------------------------------------------------------------------------
+// RAILS.3 — follow-up health
+// ---------------------------------------------------------------------------
+//
+// A row's `state` says what the builder did; `health` says whether WhatsApp
+// or the sequence has since stopped it sending, so a "Live" chip never hides
+// a template Meta paused or rejected. Derived at read time, never stored: a
+// template Meta reinstates (the webhook stores REINSTATED as APPROVED) is
+// healthy again with no write. Only rows in `live` or `awaiting_approval`
+// carry a non-null health (an off, rejected or draft row is already
+// truthful). Precedence: template_rejected, template_paused, sequence_paused
+// (that last one only for a live row). A failed read sets `health_unread` on
+// the board and leaves every row's health null; it never fails the read.
+
+const HEALTH_STATES = new Set(['live', 'awaiting_approval'])
+const TEMPLATE_REJECTED_STATUSES = new Set(['REJECTED', 'DISABLED'])
+const HEALTH_CHUNK = 200
+
+/** A follow-up's health from its template's and sequence's status (either may be undefined). */
+export function followupHealth(state, templateStatus, sequenceStatus) {
+  if (!HEALTH_STATES.has(state)) return null
+  const t = typeof templateStatus === 'string' ? templateStatus.toUpperCase() : null
+  if (t && TEMPLATE_REJECTED_STATUSES.has(t)) return 'template_rejected'
+  if (t === 'PAUSED') return 'template_paused'
+  if (state === 'live' && sequenceStatus === 'paused') return 'sequence_paused'
+  return null
+}
+
+/** id -> status for the given ids at this studio, chunked; { ok: false } on any failed read. */
+async function statusesById(db, table, locationId, ids) {
+  const out = new Map()
+  for (let i = 0; i < ids.length; i += HEALTH_CHUNK) {
+    const { data, error } = await db
+      .from(table)
+      .select('id, status')
+      .eq('location_id', locationId)
+      .in('id', ids.slice(i, i + HEALTH_CHUNK))
+    if (error) {
+      logError(MODULE, 'follow-up health read failed', { locationId, table, err: error.message })
+      return { ok: false }
+    }
+    for (const r of data || []) out.set(r.id, r.status)
+  }
+  return { ok: true, statuses: out }
+}
+
+/** Every board's follow-ups with their health, from one template read and one sequence read. */
+async function withBoardsHealth(db, locationId, boards) {
+  const candidates = boards.flatMap((b) => (b.followups || []).filter((f) => HEALTH_STATES.has(f.state)))
+  if (candidates.length === 0) return boards
+  const templateIds = [...new Set(candidates.map((f) => f.whatsapp_template_id).filter(Boolean))]
+  const sequenceIds = [...new Set(candidates.filter((f) => f.state === 'live').map((f) => f.sequence_id).filter(Boolean))]
+
+  const templates = await statusesById(db, 'whatsapp_templates', locationId, templateIds)
+  const sequences = templates.ok ? await statusesById(db, 'email_sequences', locationId, sequenceIds) : { ok: false }
+  if (!templates.ok || !sequences.ok) {
+    return boards.map((b) => ((b.followups || []).some((f) => HEALTH_STATES.has(f.state))
+      ? { ...b, health_unread: true, followups: b.followups.map((f) => ({ ...f, health: null })) }
+      : b))
+  }
+  return boards.map((b) => ({
+    ...b,
+    followups: (b.followups || []).map((f) => ({
+      ...f,
+      health: followupHealth(
+        f.state,
+        f.whatsapp_template_id ? templates.statuses.get(f.whatsapp_template_id) : undefined,
+        f.sequence_id ? sequences.statuses.get(f.sequence_id) : undefined,
+      ),
+    })),
+  }))
 }
 
 const bodyTextOf = (components) => {
@@ -287,7 +419,7 @@ async function withFollowupWording(db, locationId, board) {
 
   const { data: firsts, error } = await db
     .from('whatsapp_templates')
-    .select('id, name, components')
+    .select('id, name, status, components')
     .eq('location_id', locationId)
     .in('id', linked.map((f) => f.whatsapp_template_id))
   if (error) {
@@ -315,7 +447,7 @@ async function withFollowupWording(db, locationId, board) {
   if (names.length) {
     const { data: others, error: othersError } = await db
       .from('whatsapp_templates')
-      .select('id, name, components')
+      .select('id, name, status, components')
       .eq('location_id', locationId)
       .in('name', names)
     if (othersError) {

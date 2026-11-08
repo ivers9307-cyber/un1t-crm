@@ -2,7 +2,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import { RECIPES } from '@shared/pipelines/recipes.js'
-import BoardList, { followupChip } from './BoardList.jsx'
+import BoardList, { followupChip, boardStatus } from './BoardList.jsx'
+import { NO_WHATSAPP_NOTICE, NO_WHATSAPP_LINK_TEXT } from './NoWhatsappNotice'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -66,6 +67,45 @@ describe('BoardList', () => {
     expect(container.querySelector('a button')).toBeNull()
     expect(screen.getByRole('link', { name: 'New board' })).toBeTruthy()
   })
+  // RAILS.3 — Live says when WhatsApp has paused or rejected the template.
+  it('healthTurnsLiveIntoWhatWhatsAppDid', () => {
+    const chip = (rows) => followupChip(rows.map((r) => ({ stage_id: 's', ...r })), 's')
+    const paused = chip([{ state: 'live', health: 'template_paused' }])
+    expect(paused.label).toBe('Paused by WhatsApp')
+    expect(paused.tone).toContain('text-amber-700')
+    const rejected = chip([{ state: 'live', health: 'template_rejected' }])
+    expect(rejected.label).toBe('Rejected by WhatsApp')
+    expect(rejected.tone).toContain('text-red-700')
+    const seq = chip([{ state: 'live', health: 'sequence_paused' }])
+    expect(seq.label).toBe('Paused')
+    expect(seq.tone).toContain('text-amber-700')
+    expect(chip([{ state: 'awaiting_approval', health: 'template_rejected' }]).label).toBe('Rejected by WhatsApp')
+    expect(chip([{ state: 'awaiting_approval', health: 'template_paused' }]).label).toBe('Waiting for Meta')
+    expect(chip([{ state: 'live', health: null }]).label).toBe('Live')
+    expect(chip([{ state: 'off', health: 'template_paused' }]).label).toBe('Off')
+  })
+  it('theWorstHealthWinsAStagesChip', () => {
+    const chip = (rows) => followupChip(rows.map((r) => ({ stage_id: 's', ...r })), 's')
+    expect(chip([{ state: 'live', health: null }, { state: 'live', health: 'template_paused' }]).label).toBe('Paused by WhatsApp')
+    expect(chip([{ state: 'live', health: 'template_paused' }, { state: 'awaiting_approval', health: 'template_rejected' }]).label).toBe('Rejected by WhatsApp')
+    expect(chip([{ state: 'off', health: 'template_rejected' }, { state: 'live', health: null }]).label).toBe('Live')
+  })
+  it('listShowsHealthChips', async () => {
+    const boards = [{ ...BOARDS[0], followups: [
+      { id: 'f1', stage_id: 's1', state: 'live', health: 'template_paused' },
+      { id: 'f2', stage_id: 's2', state: 'live', health: 'template_rejected' },
+      { id: 'f3', stage_id: 's3', state: 'live', health: 'sequence_paused' },
+      { id: 'f4', stage_id: 's4', state: 'off', health: 'template_paused' },
+    ] }]
+    stub({ boards, can_edit: true })
+    render(<BoardList locationId="loc1" />)
+    await screen.findByText('Summer offer')
+    expect(screen.getByText('Paused by WhatsApp').className).toContain('text-amber-700')
+    expect(screen.getByText('Rejected by WhatsApp').className).toContain('text-red-700')
+    expect(screen.getByText('Paused').className).toContain('text-amber-700')
+    expect(screen.getByText('Off')).toBeTruthy()
+    expect(screen.queryByText('Live')).toBeNull()
+  })
   it('an unknown follow-up state ranks below a known one', () => {
     const chip = followupChip([{ stage_id: 's', state: 'mystery' }, { stage_id: 's', state: 'off' }], 's')
     expect(chip.label).toBe('Off')
@@ -87,6 +127,35 @@ describe('BoardList', () => {
     id: 'b9', key: 'acquisition', name: 'Acquisition', board_type: null, enabled: true, baseline_at: null, priority: 0,
     stages: [stage('k1', 'New Leads', 1), stage('k2', '1st Class', 2), stage('k3', 'Converted', 3)], followups: [],
   }
+  // RAILS.4 — a held first placement says so, on the studio's own clock.
+  it('pendingBoardsSayWhenTheirFirstPlacementIsAndWhenItIsHeld', () => {
+    const offer = { board_type: 'offer', enabled: true, baseline_at: null }
+    const run = { status: 'partial', errors: 3, started_at: '2026-11-06T12:00:00Z', finished_at: null }
+    expect(boardStatus({ ...offer, baseline_pending: { cadence: 'nightly', last_run: null, held: false } }))
+      .toBe('On — first placement tonight, no messages')
+    expect(boardStatus({ ...offer, module: 'offer_un1t', baseline_pending: { cadence: 'hourly', last_run: null, held: false } }))
+      .toBe('On — first placement within the hour, no messages')
+    expect(boardStatus({ ...offer, baseline_pending: { cadence: 'nightly', last_run: run, held: true } }))
+      .toBe('On — first placement held: 3 people could not be checked (6 Nov)')
+    // An unreadable runs read is never "held".
+    expect(boardStatus({ ...offer, baseline_pending: { cadence: 'hourly', last_run: null, held: false, unread: true } }))
+      .toBe('On — first placement within the hour, no messages')
+    // A run with no count that failed outright never reads "0 people".
+    expect(boardStatus({ ...offer, baseline_pending: { cadence: 'nightly', last_run: { ...run, status: 'failed', errors: 0 }, held: true } }))
+      .toBe('On — first placement held: the last run could not complete (6 Nov)')
+    // A run still in flight is pending, not held.
+    expect(boardStatus({ ...offer, baseline_pending: { cadence: 'nightly', last_run: { ...run, status: 'running', errors: 0 }, held: false } }))
+      .toBe('On — first placement tonight, no messages')
+    // A board from before RAILS.4's field: by its module.
+    expect(boardStatus({ ...offer, module: 'offer_un1t' })).toBe('On — first placement within the hour, no messages')
+  })
+  it('anUnreadableHealthReadSaysSoOnTheBoardCard', async () => {
+    stub({ boards: [{ ...BOARDS[0], health_unread: true }], can_edit: true })
+    render(<BoardList locationId="loc1" />)
+    await screen.findByText('Summer offer')
+    const line = screen.getByText('Could not check whether WhatsApp has paused or rejected a follow-up just now. Reload the page to try again.')
+    expect(line.className).toContain('text-amber-700')
+  })
   it('a built-in board with no baseline reads On, never "first placement tonight"', async () => {
     stubBoth({ boards: [BUILT], can_edit: false }, [])
     render(<BoardList locationId="loc1" />)
@@ -144,6 +213,7 @@ describe('BoardList', () => {
     stub({ boards: [], can_edit: true, has_whatsapp: false })
     render(<BoardList locationId="loc1" />)
     await screen.findByText('Start from a recipe')
-    expect(screen.getAllByText("This studio has no WhatsApp number switched on yet. You can build the board now; its follow-ups can't be submitted until a number is on.")).toHaveLength(Object.keys(RECIPES).length)
+    expect(screen.getAllByText(new RegExp(NO_WHATSAPP_NOTICE.slice(0, 40)))).toHaveLength(Object.keys(RECIPES).length)
+    expect(screen.getAllByRole('link', { name: NO_WHATSAPP_LINK_TEXT })).toHaveLength(Object.keys(RECIPES).length)
   })
 })

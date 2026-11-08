@@ -213,7 +213,8 @@ describe('listBoards / getBoard', () => {
     const offer = res.boards[1]
     expect(offer.config.entry.values).toEqual(['TRIAL39'])
     expect(stageBySlug(offer, 'o_reset_39_new').deal_count).toBe(1)
-    expect(offer.followups).toEqual([{ id: 'f1', stage_id: newStage.id, pack_key: 'book_first_class', state: 'live', want_live: true, version: 1, sequence_id: 's1', whatsapp_template_id: 't1' }])
+    expect(offer.followups).toEqual([{ id: 'f1', stage_id: newStage.id, pack_key: 'book_first_class', state: 'live', want_live: true, version: 1, sequence_id: 's1', whatsapp_template_id: 't1', health: null }])
+    expect(offer.health_unread).toBeUndefined()
   })
 
   it('getBoardIs404AtAnotherStudio', async () => {
@@ -231,11 +232,11 @@ describe('listBoards / getBoard', () => {
     const newStage = stageBySlug(board, 'o_reset_39_new')
     const body = (text) => [{ type: 'BODY', text }, { type: 'FOOTER', text: 'Reply STOP to unsubscribe' }]
     db.tables.whatsapp_templates = [
-      { id: 't1', location_id: LOC, name: 'un1t_stillorgan_o_reset_39_halfway_main_v2', components: body('Hi {{1}}, halfway. Karl') },
-      { id: 't2', location_id: LOC, name: 'un1t_stillorgan_o_reset_39_halfway_nudge_v2', components: body('Hi {{1}}, book a class. Karl') },
+      { id: 't1', location_id: LOC, name: 'un1t_stillorgan_o_reset_39_halfway_main_v2', status: 'APPROVED', components: body('Hi {{1}}, halfway. Karl') },
+      { id: 't2', location_id: LOC, name: 'un1t_stillorgan_o_reset_39_halfway_nudge_v2', status: 'APPROVED', components: body('Hi {{1}}, book a class. Karl') },
       // Same name at another studio: never read.
-      { id: 't3', location_id: OTHER, name: 'un1t_stillorgan_o_reset_39_book_first_class_main', components: body('Hi {{1}}, other studio.') },
-      { id: 't4', location_id: LOC, name: 'un1t_stillorgan_o_reset_39_halfway_nudge', components: body('Hi {{1}}, the old v1 nudge.') },
+      { id: 't3', location_id: OTHER, name: 'un1t_stillorgan_o_reset_39_book_first_class_main', status: 'APPROVED', components: body('Hi {{1}}, other studio.') },
+      { id: 't4', location_id: LOC, name: 'un1t_stillorgan_o_reset_39_halfway_nudge', status: 'APPROVED', components: body('Hi {{1}}, the old v1 nudge.') },
     ]
     db.tables.pipeline_stage_followups.push(
       { id: 'f1', location_id: LOC, pipeline_id: board.id, stage_id: day7.id, pack_key: 'halfway', state: 'live', want_live: true, version: 2, sequence_id: 's1', whatsapp_template_id: 't1' },
@@ -258,7 +259,7 @@ describe('listBoards / getBoard', () => {
     const board = await createdBoard(db)
     const day7 = stageBySlug(board, 'o_reset_39_day_7')
     db.tables.whatsapp_templates = [
-      { id: 't1', location_id: LOC, name: 'renamed_template', components: [{ type: 'BODY', text: 'Hi {{1}}, halfway.' }] },
+      { id: 't1', location_id: LOC, name: 'renamed_template', status: 'APPROVED', components: [{ type: 'BODY', text: 'Hi {{1}}, halfway.' }] },
     ]
     db.tables.pipeline_stage_followups.push({ id: 'f1', location_id: LOC, pipeline_id: board.id, stage_id: day7.id, pack_key: 'halfway', state: 'live', want_live: true, version: 1, sequence_id: 's1', whatsapp_template_id: 't1' })
     const res = await getBoard(db, LOC, board.id)
@@ -294,6 +295,207 @@ describe('listBoards / getBoard', () => {
     expect(res.ok).toBe(true)
     expect(res.board.wording_unread).toBe(true)
     expect(res.board.followups[0].body_text).toBeUndefined()
+  })
+
+  // RAILS.3 — a follow-up's health: WhatsApp paused or rejected its template,
+  // or its sequence is paused. Derived at read time, never stored.
+  describe('follow-up health', () => {
+    async function boardWithRows(rows, { templates = [], sequences = [] } = {}) {
+      const db = seedDb()
+      const board = await createdBoard(db)
+      const stages = ['o_reset_39_new', 'o_reset_39_first_class', 'o_reset_39_day_7', 'o_reset_39_done'].map((sl) => stageBySlug(board, sl))
+      db.tables.whatsapp_templates = templates.map((t) => ({ location_id: LOC, name: `n_${t.id}`, components: [], ...t }))
+      db.tables.email_sequences = sequences.map((q) => ({ location_id: LOC, ...q }))
+      rows.forEach((r, i) => db.tables.pipeline_stage_followups.push({
+        location_id: LOC, pipeline_id: board.id, stage_id: stages[i].id, pack_key: 'book_first_class', want_live: true, version: 1, ...r,
+      }))
+      return { db, board }
+    }
+    const healthOf = (b, id) => b.followups.find((f) => f.id === id).health
+
+    it('derivesEachHealthFromTheTemplateAndSequence', async () => {
+      const { db, board } = await boardWithRows([
+        { id: 'f1', state: 'live', sequence_id: 'q1', whatsapp_template_id: 't1' },
+        { id: 'f2', state: 'live', sequence_id: 'q2', whatsapp_template_id: 't2' },
+        { id: 'f3', state: 'live', sequence_id: 'q3', whatsapp_template_id: 't3' },
+        { id: 'f4', state: 'live', sequence_id: 'q4', whatsapp_template_id: 't4' },
+      ], {
+        templates: [{ id: 't1', status: 'PAUSED' }, { id: 't2', status: 'DISABLED' }, { id: 't3', status: 'APPROVED' }, { id: 't4', status: 'APPROVED' }],
+        sequences: [{ id: 'q1', status: 'active' }, { id: 'q2', status: 'paused' }, { id: 'q3', status: 'paused' }, { id: 'q4', status: 'active' }],
+      })
+      const res = await getBoard(db, LOC, board.id)
+      expect(res.ok).toBe(true)
+      expect(healthOf(res.board, 'f1')).toBe('template_paused')
+      expect(healthOf(res.board, 'f2')).toBe('template_rejected')   // template beats the paused sequence
+      expect(healthOf(res.board, 'f3')).toBe('sequence_paused')
+      expect(healthOf(res.board, 'f4')).toBeNull()
+      expect(res.board.health_unread).toBeUndefined()
+    })
+
+    it('rejectedWhileAwaitingApprovalButAPausedSequenceIsOnlyALiveRowsHealth', async () => {
+      const { db, board } = await boardWithRows([
+        { id: 'f1', state: 'awaiting_approval', sequence_id: 'q1', whatsapp_template_id: 't1' },
+        { id: 'f2', state: 'awaiting_approval', sequence_id: 'q2', whatsapp_template_id: 't2' },
+        { id: 'f3', state: 'off', sequence_id: 'q3', whatsapp_template_id: 't3' },
+      ], {
+        templates: [{ id: 't1', status: 'REJECTED' }, { id: 't2', status: 'PENDING' }, { id: 't3', status: 'PAUSED' }],
+        sequences: [{ id: 'q1', status: 'draft' }, { id: 'q2', status: 'paused' }, { id: 'q3', status: 'paused' }],
+      })
+      const res = await getBoard(db, LOC, board.id)
+      expect(healthOf(res.board, 'f1')).toBe('template_rejected')
+      expect(healthOf(res.board, 'f2')).toBeNull()
+      expect(healthOf(res.board, 'f3')).toBeNull()        // an off row is already truthful
+    })
+
+    it('readsOnlyThisStudiosTemplatesAndSequences', async () => {
+      const { db, board } = await boardWithRows([
+        { id: 'f1', state: 'live', sequence_id: 'q1', whatsapp_template_id: 't1' },
+      ], {
+        templates: [{ id: 't1', location_id: OTHER, status: 'PAUSED' }],
+        sequences: [{ id: 'q1', location_id: OTHER, status: 'paused' }],
+      })
+      const res = await getBoard(db, LOC, board.id)
+      expect(healthOf(res.board, 'f1')).toBeNull()
+    })
+
+    it('aFailedTemplateReadIsHealthUnreadAndKeepsTheBoard', async () => {
+      const { db, board } = await boardWithRows([
+        { id: 'f1', state: 'live', sequence_id: 'q1', whatsapp_template_id: 't1' },
+      ], { templates: [{ id: 't1', status: 'PAUSED' }], sequences: [{ id: 'q1', status: 'paused' }] })
+      db.failures['whatsapp_templates:select'] = { message: 'down' }
+      const res = await getBoard(db, LOC, board.id)
+      expect(res.ok).toBe(true)
+      expect(res.board.health_unread).toBe(true)
+      expect(res.board.followups[0]).toMatchObject({ id: 'f1', state: 'live', health: null })
+      expect(res.board.stages).toHaveLength(4)
+
+      const listed = await listBoards(db, LOC)
+      expect(listed.ok).toBe(true)
+      const offer = listed.boards.find((b) => b.id === board.id)
+      expect(offer.health_unread).toBe(true)
+      expect(offer.followups[0].health).toBeNull()
+    })
+
+    it('aFailedSequenceReadIsHealthUnread', async () => {
+      const { db, board } = await boardWithRows([
+        { id: 'f1', state: 'live', sequence_id: 'q1', whatsapp_template_id: 't1' },
+      ], { templates: [{ id: 't1', status: 'PAUSED' }], sequences: [{ id: 'q1', status: 'active' }] })
+      db.failures['email_sequences:select'] = { message: 'down' }
+      const res = await getBoard(db, LOC, board.id)
+      expect(res.ok).toBe(true)
+      expect(res.board.health_unread).toBe(true)
+      expect(res.board.followups[0].health).toBeNull()
+    })
+
+    it('listBoardsCarriesTheSameHealth', async () => {
+      const { db, board } = await boardWithRows([
+        { id: 'f1', state: 'live', sequence_id: 'q1', whatsapp_template_id: 't1' },
+      ], { templates: [{ id: 't1', status: 'PAUSED' }], sequences: [{ id: 'q1', status: 'active' }] })
+      const res = await listBoards(db, LOC)
+      const offer = res.boards.find((b) => b.id === board.id)
+      expect(offer.followups[0].health).toBe('template_paused')
+      expect(res.boards.find((b) => b.key === 'acquisition').health_unread).toBeUndefined()
+    })
+
+    it('aReinstatedTemplateIsHealthyAgainWithNoWrite', async () => {
+      const { db, board } = await boardWithRows([
+        { id: 'f1', state: 'live', sequence_id: 'q1', whatsapp_template_id: 't1' },
+      ], { templates: [{ id: 't1', status: 'PAUSED' }], sequences: [{ id: 'q1', status: 'active' }] })
+      expect(healthOf((await getBoard(db, LOC, board.id)).board, 'f1')).toBe('template_paused')
+      db.tables.whatsapp_templates[0].status = 'APPROVED'   // the webhook stores REINSTATED as APPROVED
+      expect(healthOf((await getBoard(db, LOC, board.id)).board, 'f1')).toBeNull()
+      expect(db.calls.updates.filter((u) => u.table === 'pipeline_stage_followups')).toHaveLength(0)
+    })
+  })
+
+  // RAILS.4 — a held first placement says so.
+  describe('baseline pending', () => {
+    const SWITCHED = '2026-11-06T12:00:00.000Z'
+    async function pendingBoard(runs = []) {
+      const db = seedDb()
+      const created = await createdBoard(db)
+      const row = db.tables.pipelines.find((p) => p.id === created.id)
+      Object.assign(row, { enabled: true, baseline_at: null, updated_at: SWITCHED })
+      db.tables.pipeline_classification_runs = runs.map((r) => ({
+        location_id: LOC, dry_run: false, status: 'success', errors: 0, error_message: null, finished_at: null, ...r,
+      }))
+      return { db, id: created.id }
+    }
+    const pendingOf = async (db, id) => (await getBoard(db, LOC, id)).board.baseline_pending
+
+    it('aFailedRunAfterSwitchOnHoldsTheBoardWithItsCounts', async () => {
+      const { db, id } = await pendingBoard([
+        { started_at: '2026-11-07T03:30:00.000Z', finished_at: '2026-11-07T03:31:00.000Z', status: 'partial', errors: 3 },
+        { started_at: '2026-11-05T03:30:00.000Z', status: 'success', errors: 0 },
+        { started_at: '2026-11-07T09:00:00.000Z', status: 'success', errors: 0, dry_run: true },   // a dry run never counts
+        { started_at: '2026-11-07T10:00:00.000Z', status: 'success', errors: 0, location_id: OTHER },
+      ])
+      expect(await pendingOf(db, id)).toEqual({
+        cadence: 'nightly',
+        last_run: { status: 'partial', errors: 3, started_at: '2026-11-07T03:30:00.000Z', finished_at: '2026-11-07T03:31:00.000Z' },
+        held: true,
+      })
+      const listed = (await listBoards(db, LOC)).boards
+      expect(listed.find((b) => b.id === id).baseline_pending.held).toBe(true)
+      expect(listed.find((b) => b.key === 'acquisition').baseline_pending).toBeUndefined()
+    })
+
+    it('aCleanRunIsNotHeld', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-07T03:30:00.000Z', status: 'success', errors: 0 }])
+      expect((await pendingOf(db, id)).held).toBe(false)
+    })
+
+    it('aFailedRunFromBeforeSwitchOnIsNotHeld', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-06T03:30:00.000Z', status: 'failed', errors: 9 }])
+      const pending = await pendingOf(db, id)
+      expect(pending.held).toBe(false)
+      expect(pending.last_run.status).toBe('failed')
+    })
+
+    it('aRunningRunAfterSwitchOnIsPendingNotHeld', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-07T03:30:00.000Z', status: 'running', errors: 0 }])
+      const pending = await pendingOf(db, id)
+      expect(pending.held).toBe(false)
+      expect(pending.last_run.status).toBe('running')
+    })
+
+    it('aCleanCountWithAnExclusionFailureIsHeld', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-07T03:30:00.000Z', status: 'success', errors: 0, error_message: 'other-studio members unavailable: x' }])
+      const pending = await pendingOf(db, id)
+      expect(pending.held).toBe(true)
+      expect(pending.last_run).toEqual({ status: 'success', errors: 0, started_at: '2026-11-07T03:30:00.000Z', finished_at: null })
+    })
+
+    it('noRunIsLastRunNull', async () => {
+      const { db, id } = await pendingBoard([])
+      expect(await pendingOf(db, id)).toEqual({ cadence: 'nightly', last_run: null, held: false })
+    })
+
+    it('aUn1tOnlineBoardIsPlacedHourly', async () => {
+      const { db, id } = await pendingBoard([])
+      db.tables.pipelines.find((p) => p.id === id).module = 'offer_un1t'
+      expect((await pendingOf(db, id)).cadence).toBe('hourly')
+    })
+
+    it('aFailedRunsReadIsUnreadAndKeepsTheBoard', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-07T03:30:00.000Z', status: 'failed', errors: 2 }])
+      db.failures['pipeline_classification_runs:select'] = { message: 'down' }
+      const res = await getBoard(db, LOC, id)
+      expect(res.ok).toBe(true)
+      expect(res.board.baseline_pending).toEqual({ cadence: 'nightly', last_run: null, held: false, unread: true })
+    })
+
+    it('aBaselinedOrOffBoardCarriesNoBaselinePendingAndReadsNoRuns', async () => {
+      const { db, id } = await pendingBoard([{ started_at: '2026-11-07T03:30:00.000Z', status: 'failed', errors: 2 }])
+      const row = db.tables.pipelines.find((p) => p.id === id)
+      row.baseline_at = '2026-11-07T03:31:00.000Z'
+      expect((await getBoard(db, LOC, id)).board.baseline_pending).toBeUndefined()
+      row.baseline_at = null
+      row.enabled = false
+      db.failures['pipeline_classification_runs:select'] = { message: 'down' }
+      const res = await getBoard(db, LOC, id)
+      expect(res.board.baseline_pending).toBeUndefined()
+    })
   })
 
   it('unreadableDealsIs503NotZero', async () => {
