@@ -63,12 +63,14 @@ export function promoBodyFromForm(form, { platform, creating }) {
 // A refused field in words. The route's issues carry a path (validateBody);
 // the zod message behind it never reaches the operator.
 export const FIELD_MESSAGES = Object.freeze({
-  key: 'Check the Key: 3 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit.',
+  // Create refuses a malformed key; an edit refuses any key at all (it is the
+  // promo's claim link), so the message covers both.
+  key: 'Check the Key: 3 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit. A promo\'s key cannot be changed after it is created.',
   name: 'Enter a name, up to 80 characters.',
   credits: 'Credits must be a whole number from 1 to 50.',
   expires_in_days: 'Expiry must be a whole number of days from 1 to 365.',
   tag: 'Check the Tag: 2 to 40 lowercase letters, digits, - or _.',
-  lead_source: 'Check the Lead source: up to 80 characters.',
+  lead_source: 'Check the Lead source: letters, digits, _ or - (no spaces), up to 80 characters.',
   glofox_membership_id: 'Check the Glofox membership id.',
   glofox_plan_code: 'Check the Glofox plan code.',
   glofox_plan_name: 'Check the Glofox plan name.',
@@ -118,8 +120,8 @@ function PromoForm({ initial, creating, platform, publicPath, onCancel, onSaved,
     setSaving(true); setError(null)
     try {
       const url = creating
-        ? `/api/locations/${locationId}/corp-promos`
-        : `/api/locations/${locationId}/corp-promos/${promoId}`
+        ? `/api/locations/${encodeURIComponent(locationId)}/corp-promos`
+        : `/api/locations/${encodeURIComponent(locationId)}/corp-promos/${encodeURIComponent(promoId)}`
       const res = await fetch(url, {
         method: creating ? 'POST' : 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -146,7 +148,7 @@ function PromoForm({ initial, creating, platform, publicPath, onCancel, onSaved,
         <TextInput id="promo-credits" label="Credits" value={form.credits} onChange={(v) => set({ credits: v })} maxLength={2} inputMode="numeric" hint="1 to 50 free classes." required />
         <TextInput id="promo-expiry" label="Expiry (days)" value={form.expires_in_days} onChange={(v) => set({ expires_in_days: v })} maxLength={3} inputMode="numeric" hint="How long the credits last, 1 to 365 days." required />
         <TextInput id="promo-tag" label="Tag" value={form.tag} onChange={(v) => set({ tag: v })} maxLength={40} hint="Put on every claimant. Lowercase letters, digits, - or _." required />
-        <TextInput id="promo-lead-source" label="Lead source" value={form.lead_source} onChange={(v) => set({ lead_source: v })} hint="What the reports carry. Stored in lowercase." />
+        <TextInput id="promo-lead-source" label="Lead source" value={form.lead_source} onChange={(v) => set({ lead_source: v })} hint="What the reports carry: letters, digits, _ or -, no spaces. Stored in lowercase." />
       </div>
       {platform === 'glofox' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 border-t border-un1t-border">
@@ -179,7 +181,7 @@ export default function CorpPromosCard({ locationId }) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetch(`/api/locations/${locationId}/corp-promos`, { cache: 'no-store' })
+    fetch(`/api/locations/${encodeURIComponent(locationId)}/corp-promos`, { cache: 'no-store' })
       .then(async (r) => ({ r, j: await r.json().catch(() => ({})) }))
       .then(({ r, j }) => {
         if (cancelled) return
@@ -205,7 +207,7 @@ export default function CorpPromosCard({ locationId }) {
   async function toggle(promo) {
     setBusy(promo.id); setRowError(null)
     try {
-      const res = await fetch(`/api/locations/${locationId}/corp-promos/${promo.id}`, {
+      const res = await fetch(`/api/locations/${encodeURIComponent(locationId)}/corp-promos/${encodeURIComponent(promo.id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ live: !promo.live }),
       })
       const j = await res.json().catch(() => ({}))
@@ -222,7 +224,7 @@ export default function CorpPromosCard({ locationId }) {
     if (!window.confirm(`Delete ${promo.name}? Its claim link stops working.`)) return
     setBusy(promo.id); setRowError(null)
     try {
-      const res = await fetch(`/api/locations/${locationId}/corp-promos/${promo.id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/locations/${encodeURIComponent(locationId)}/corp-promos/${encodeURIComponent(promo.id)}`, { method: 'DELETE' })
       const j = await res.json().catch(() => ({}))
       if (res.status === 409 && j.code === 'has_claims') { setHasClaims((m) => ({ ...m, [promo.id]: true })); return }
       if (!res.ok || j.success === false) { setRowError(apiError(j, res.status)); return }

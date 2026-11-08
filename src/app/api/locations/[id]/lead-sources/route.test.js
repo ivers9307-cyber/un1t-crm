@@ -45,6 +45,7 @@ function mockDb(settings = {}, { contacts = [], contactsError = null } = {}) {
       select: () => {
         const q = {
           eq: () => q,
+          or: () => q,
           order: () => q,
           range: () => Promise.resolve(contactsError ? { data: null, error: contactsError } : { data: contacts, error: null }),
           maybeSingle: locationRow,
@@ -87,10 +88,10 @@ describe('GET', () => {
     expect((await GET(getReq(), props)).status).toBe(403)
     expect(hasPermissionForLocation).toHaveBeenCalledWith(expect.anything(), 'loc1', 'contacts')
   })
-  it('a non-member is refused', async () => {
+  it('a non-member is refused with a 404, so studio ids cannot be enumerated', async () => {
     getCurrentUser.mockResolvedValue({ ...owner, locations: [{ id: 'other' }], rolesByLocation: { other: 'owner' } })
     mockDb({})
-    expect((await GET(getReq(), props)).status).toBe(403)
+    expect((await GET(getReq(), props)).status).toBe(404)
   })
   it('a failed contacts read is a 503, never the defaults alone', async () => {
     getCurrentUser.mockResolvedValue(owner)

@@ -22,7 +22,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { leadSourceSchema } from '@/lib/schemas'
@@ -43,7 +43,7 @@ export async function GET(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   const { id: locationId } = await params
-  const guard = assertLocationAccess(user, locationId)
+  const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
   if (!hasPermissionForLocation(user, locationId, 'contacts')) {
     return NextResponse.json({ success: false, error: 'You need Contacts at this studio.' }, { status: 403 })
@@ -63,7 +63,7 @@ export async function PUT(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   const { id: locationId } = await params
-  const guard = assertLocationAccess(user, locationId)
+  const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
   const roleGuard = guardMasterOrOwner(user, locationId)
   if (roleGuard) {

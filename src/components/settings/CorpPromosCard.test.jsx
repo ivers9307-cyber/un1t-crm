@@ -154,10 +154,10 @@ describe('CorpPromosCard', () => {
 })
 
 describe('promoBodyFromForm', () => {
-  const form = { key: ' Acme-1 ', name: ' Acme ', credits: '3', expires_in_days: '7', tag: ' Acme_Tag ', lead_source: ' Corp Promo ', glofox_membership_id: ' m ', glofox_plan_code: 'c', glofox_plan_name: 'n' }
+  const form = { key: ' Acme-1 ', name: ' Acme ', credits: '3', expires_in_days: '7', tag: ' Acme_Tag ', lead_source: ' Corp_Promo ', glofox_membership_id: ' m ', glofox_plan_code: 'c', glofox_plan_name: 'n' }
   it('create at a Glofox studio: key and plan fields, lowercased tag and source', () => {
     expect(promoBodyFromForm(form, { platform: 'glofox', creating: true })).toEqual({
-      key: 'acme-1', name: 'Acme', credits: 3, expires_in_days: 7, tag: 'acme_tag', lead_source: 'corp promo',
+      key: 'acme-1', name: 'Acme', credits: 3, expires_in_days: 7, tag: 'acme_tag', lead_source: 'corp_promo',
       glofox_membership_id: 'm', glofox_plan_code: 'c', glofox_plan_name: 'n',
     })
   })
@@ -171,7 +171,7 @@ describe('promoBodyFromForm', () => {
 describe('apiError', () => {
   it('maps each issue path to its field words, once per field', () => {
     expect(apiError({ issues: [{ path: 'key', message: 'Key: 3-40 …' }, { path: 'tag', message: 'x' }, { path: 'tag', message: 'y' }] }, 400))
-      .toBe('Check the Key: 3 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit. Check the Tag: 2 to 40 lowercase letters, digits, - or _.')
+      .toBe('Check the Key: 3 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit. A promo\'s key cannot be changed after it is created. Check the Tag: 2 to 40 lowercase letters, digits, - or _.')
   })
   it('an unknown or empty path is a plain sentence, never zod text', () => {
     expect(apiError({ issues: [{ path: '', message: 'Nothing to change' }] }, 400)).toBe('Some of the details are not valid. Check the form and try again.')

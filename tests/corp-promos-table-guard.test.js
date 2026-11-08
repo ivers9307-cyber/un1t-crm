@@ -9,12 +9,14 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { CORP_PROMO_SEEDS } from '../src/lib/corp-promos.js'
 import { SEED_GLOFOX_PLANS } from '../src/lib/corp-promo-glofox-plans.js'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const FILE = path.join(ROOT, 'supabase/migrations/816_corp_promos.sql')
 
-// Line comments out, so a mention in the header never satisfies a check.
-const code = () => readFileSync(FILE, 'utf8').replace(/--[^\n]*/g, '')
+// Comments out (quote-aware, GUARDSTRIP.1), so a mention in the header never
+// satisfies a check. String literals stay: the seed checks read them.
+const code = () => sqlCode(readFileSync(FILE, 'utf8'))
 
 /** The statement starting at the first match of `re`, up to its `;`. */
 function statement(sql, re) {

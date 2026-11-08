@@ -24,6 +24,7 @@ function makeDb(tables) {
         eq(c, v) { entry.filters[c] = v; return q },
         in(c, v) { entry.filters[c] = v; return q },
         is(c, v) { entry.filters[c] = v; return q },
+        or(f) { entry.or = f; return q },
         order() { return q },
         range(a, b) { entry.range = [a, b]; return q },
         maybeSingle() { entry.single = true; return q },

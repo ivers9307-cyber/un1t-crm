@@ -79,7 +79,7 @@ const json = (method, body, url = 'http://x/api/locations/loc1/corp-promos') => 
   method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
 })
 const CREATE = {
-  key: 'acme-3-free', name: 'Acme corporate', credits: 3, expires_in_days: 7, tag: 'acme_corp', lead_source: '  Acme Corp ',
+  key: 'acme-3-free', name: 'Acme corporate', credits: 3, expires_in_days: 7, tag: 'acme_corp', lead_source: '  Acme_Corp ',
   glofox_membership_id: 'm9', glofox_plan_code: 'pc9', glofox_plan_name: 'Acme plan',
 }
 
@@ -181,7 +181,7 @@ describe('POST', () => {
     const writes = mockDb()
     const res = await POST(json('POST', CREATE), listProps)
     expect(res.status).toBe(201)
-    expect(writes.insert[0]).toMatchObject({ location_id: 'loc1', key: 'acme-3-free', platform: 'glofox', lead_source: 'acme corp', live: false, created_by: 'u1' })
+    expect(writes.insert[0]).toMatchObject({ location_id: 'loc1', key: 'acme-3-free', platform: 'glofox', lead_source: 'acme_corp', live: false, created_by: 'u1' })
     expect((await res.json()).data.promo.key).toBe('acme-3-free')
   })
   it('a Glofox studio without a plan binding is glofox_plan_missing', async () => {

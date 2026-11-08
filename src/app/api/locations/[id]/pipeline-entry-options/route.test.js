@@ -4,7 +4,27 @@ vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
 })
-vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
+// leadSourceVocabulary reads the studio's locations row and pages its
+// contacts (eq → or → order → range); this studio has no list and no contacts.
+function fakeDb() {
+  return {
+    from() {
+      const q = {
+        select: () => q,
+        eq: () => q,
+        or: () => q,
+        in: () => q,
+        is: () => q,
+        order: () => q,
+        range: () => Promise.resolve({ data: [], error: null }),
+        maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        then(resolve, reject) { return Promise.resolve({ data: [], error: null }).then(resolve, reject) },
+      }
+      return q
+    },
+  }
+}
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => fakeDb()) }))
 vi.mock('@/lib/sequence-access', () => ({ canBuildSequencesAt: vi.fn() }))
 vi.mock('@/lib/pipeline-entry-options', async () => {
   const actual = await vi.importActual('@/lib/pipeline-entry-options')

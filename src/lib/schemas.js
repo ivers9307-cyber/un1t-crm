@@ -602,7 +602,9 @@ const corpPromoName = z.string().trim().min(1).max(80)
 const corpPromoCredits = z.number().int().min(1).max(50)
 const corpPromoExpires = z.number().int().min(1).max(365)
 const corpPromoTag = z.string().trim().toLowerCase().regex(/^[a-z0-9_-]{2,40}$/, 'Tag: 2-40 lowercase letters, digits, - or _')
-const corpPromoLeadSource = z.string().trim().toLowerCase().min(1).max(80)
+// WAYSIN.7 — the same slug rule as every other lead source: written onto
+// contacts, so a value with a space would 400 on the ContactForm later.
+const corpPromoLeadSource = leadSourceSchema
 const corpPromoGlofoxText = z.string().trim().max(200)
 export const CORP_PROMO_KEY_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/
 export const corpPromoCreateSchema = z.object({
