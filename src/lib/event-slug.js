@@ -77,7 +77,7 @@ export function shouldRederiveSlug(status) {
  * which Next matches before /event/[slug].
  */
 // HOSTSERIES.1 — 'series': /event/series/<slug> is the series page, not an event.
-export const RESERVED_EVENT_SLUGS = Object.freeze(new Set(['entry', 'series']))
+export const RESERVED_EVENT_SLUGS = Object.freeze(new Set(['entry', 'series', 'rate']))
 
 /**
  * Does any event hold `slug` today, or did one hold it before a rename
