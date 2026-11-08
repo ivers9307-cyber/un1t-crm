@@ -1655,6 +1655,38 @@ registry.registerPath({
   },
 })
 
+// HOSTPAGE.2 — the post-event rating page's API (token = credential).
+const RatingToken = z.string().min(20).openapi({ description: 'HMAC rating token naming one registration and one event; 30 days' })
+const RatingGiven = z.object({ rating: z.number().int().min(1).max(5), comment: z.string().nullable() })
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/event-rating/{token}',
+  tags: ['Public'],
+  summary: 'The event a rating link is for, and the rating already given (if any)',
+  description: 'Anonymous; the token is the credential. 404 for a bad or expired token, a token whose event does not match the entry, a UN1T event (no host), an inactive event, or a missing entry. Rate limited: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: RatingToken }) },
+  responses: {
+    200: { description: 'The event and any existing rating', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ event: z.object({ name: z.string(), date_label: z.string(), host_name: z.string() }), existing: RatingGiven.nullable() }) }) } } },
+    404: { description: 'Bad or expired link', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/event-rating/{token}',
+  tags: ['Public'],
+  summary: 'Rate the event (once per booking)',
+  description: 'Stores one rating (1–5, optional comment ≤600) for the token\'s registration, carrying the event\'s host. A second rating is 409 already_rated.',
+  request: { params: z.object({ token: RatingToken }), body: { content: { 'application/json': { schema: z.object({ rating: z.number().int().min(1).max(5), comment: z.string().max(600).optional().nullable() }) } } } },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: RatingGiven }) } } },
+    400: { description: 'Bad rating or comment', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Bad or expired link', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'already_rated', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // HOSTSTATS.1 — the signup page's page-view beacon.
 const EventViewBody = z.object({
   session_id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).openapi({ description: 'The tab\'s random session id (sessionStorage; no cookie)' }),
