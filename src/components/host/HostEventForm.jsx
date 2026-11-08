@@ -110,12 +110,17 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   const [confirmIntro, setConfirmIntro] = useState(initial?.confirmation_email_intro || '')
   const [reminderSubject, setReminderSubject] = useState(initial?.reminder_email_subject || '')
   const [reminderIntro, setReminderIntro] = useState(initial?.reminder_email_intro || '')
+  // HOSTPAGE.2 — the post-event rating request's copy (null = defaults).
+  const [ratingSubject, setRatingSubject] = useState(initial?.rating_email_subject || '')
+  const [ratingIntro, setRatingIntro] = useState(initial?.rating_email_intro || '')
 
   const hasEmailCopy = !!(
     initial?.confirmation_email_subject ||
     initial?.confirmation_email_intro ||
     initial?.reminder_email_subject ||
-    initial?.reminder_email_intro
+    initial?.reminder_email_intro ||
+    initial?.rating_email_subject ||
+    initial?.rating_email_intro
   )
   const [showEmail, setShowEmail] = useState(hasEmailCopy)
 
@@ -252,6 +257,8 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       confirmation_email_intro: trimmedText(confirmIntro),
       reminder_email_subject: trimmedText(reminderSubject),
       reminder_email_intro: trimmedText(reminderIntro),
+      rating_email_subject: trimmedText(ratingSubject),
+      rating_email_intro: trimmedText(ratingIntro),
     }
   }
 
@@ -664,7 +671,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         {showEmail && (
           <div className="mt-4 space-y-4 border-l border-white/10 pl-4">
             <p className="text-xs text-white/40">
-              Customise the confirmation and reminder emails attendees receive. Leave blank to use {brandName} defaults.
+              Customise the confirmation, reminder and post-event rating emails attendees receive. Leave blank to use {brandName} defaults.
             </p>
             <div>
               <label htmlFor="he-csub" className={labelCls}>Confirmation subject</label>
@@ -702,6 +709,28 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 id="he-rintro"
                 value={reminderIntro}
                 onChange={(e) => setReminderIntro(e.target.value)}
+                rows={3}
+                className={`${input} resize-y`}
+              />
+            </div>
+            {/* HOSTPAGE.2 — the "How was <event>?" email sent the morning after. */}
+            <div>
+              <label htmlFor="he-ratsub" className={labelCls}>Rating request subject</label>
+              <input
+                id="he-ratsub"
+                type="text"
+                value={ratingSubject}
+                onChange={(e) => setRatingSubject(e.target.value)}
+                placeholder="Default: How was {{event_name}}?"
+                className={input}
+              />
+            </div>
+            <div>
+              <label htmlFor="he-ratintro" className={labelCls}>Rating request intro</label>
+              <textarea
+                id="he-ratintro"
+                value={ratingIntro}
+                onChange={(e) => setRatingIntro(e.target.value)}
                 rows={3}
                 className={`${input} resize-y`}
               />

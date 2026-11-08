@@ -1655,6 +1655,38 @@ registry.registerPath({
   },
 })
 
+// HOSTPAGE.2 — the post-event rating page's API (token = credential).
+const RatingToken = z.string().min(20).openapi({ description: 'HMAC rating token naming one registration and one event; 30 days' })
+const RatingGiven = z.object({ rating: z.number().int().min(1).max(5), comment: z.string().nullable() })
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/event-rating/{token}',
+  tags: ['Public'],
+  summary: 'The event a rating link is for, and the rating already given (if any)',
+  description: 'Anonymous; the token is the credential. 404 for a bad or expired token, a token whose event does not match the entry, an event with no host (a studio-run event), an inactive event, or a missing entry. Rate limited: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: RatingToken }) },
+  responses: {
+    200: { description: 'The event and any existing rating', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ event: z.object({ name: z.string(), date_label: z.string(), host_name: z.string() }), existing: RatingGiven.nullable() }) }) } } },
+    404: { description: 'Bad or expired link', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/event-rating/{token}',
+  tags: ['Public'],
+  summary: 'Rate the event (once per booking)',
+  description: 'Stores one rating (1–5, optional comment ≤600) for the token\'s registration, carrying the event\'s host. A second rating is 409 already_rated.',
+  request: { params: z.object({ token: RatingToken }), body: { content: { 'application/json': { schema: z.object({ rating: z.number().int().min(1).max(5), comment: z.string().max(600).optional().nullable() }) } } } },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: RatingGiven }) } } },
+    400: { description: 'Bad rating or comment', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Bad or expired link', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'already_rated', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // HOSTSTATS.1 — the signup page's page-view beacon.
 const EventViewBody = z.object({
   session_id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).openapi({ description: 'The tab\'s random session id (sessionStorage; no cookie)' }),
@@ -1672,6 +1704,40 @@ registry.registerPath({
     400: { description: 'Bad session id', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// HOSTPAGE.2 — a host's event ratings (list + hide/show).
+const HostRating = z.object({ id: uuidLike, rating: z.number().int().min(1).max(5), comment: z.string().nullable(), is_public: z.boolean(), created_at: z.string(), author: z.string().openapi({ description: 'first name only' }) })
+const RatingSummary = z.object({ average: z.number(), count: z.number().int(), comments: z.array(z.object({ rating: z.number().int(), comment: z.string(), author: z.string(), created_at: z.string() })) }).nullable()
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/events/{id}/ratings',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Every rating of one of the host's own events (hidden ones included), with the public summary",
+  description: 'Host session (getCurrentHost). Another host\'s event is 404. `summary` is null under three public ratings.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Ratings + summary', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ ratings: z.array(HostRating), summary: RatingSummary }) }) } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Ratings read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'patch',
+  path: '/api/host/events/{id}/ratings/{ratingId}',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Hide or show one rating of the host\'s own event',
+  description: 'The update is pinned to the event; a rating on another event is 404.',
+  request: { params: z.object({ id: uuidLike, ratingId: uuidLike }), body: { content: { 'application/json': { schema: z.object({ is_public: z.boolean() }) } } } },
+  responses: {
+    200: { description: 'The flag as written', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, is_public: z.boolean() }) }) } } },
+    400: { description: 'Bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -12244,6 +12310,12 @@ const HostListPageCopy = z.object({
   events_blurb: z.string().max(500).nullable().optional(),
   hero_image_url: z.string().max(2000).nullable().optional(),
   accent_hex: z.string().max(7).nullable().optional(),
+  // HOSTPAGE.2
+  about_text: z.string().max(2000).nullable().optional(),
+  photos: z.array(z.object({ url: z.string(), caption: z.string().max(120).nullable().optional() })).max(12).nullable().optional(),
+  testimonials: z.array(z.object({ quote: z.string().max(400), author: z.string().max(80).nullable().optional() })).max(6).nullable().optional(),
+  show_past_events: z.boolean().optional(),
+  show_ratings: z.boolean().optional(),
 }).openapi('HostListPageCopy')
 
 const HostListPageUpdate = z.object({
@@ -12255,7 +12327,44 @@ const HostListPageUpdate = z.object({
   events_blurb: z.string().max(500).optional(),
   hero_image_url: z.string().max(2000).optional(),
   accent_hex: z.string().max(7).optional(),
+  // HOSTPAGE.2
+  about_text: z.string().max(2000).optional(),
+  photos: z.array(z.object({ url: z.string().url(), caption: z.string().max(120).nullable().optional() })).max(12).optional(),
+  testimonials: z.array(z.object({ quote: z.string().min(1).max(400), author: z.string().max(80).nullable().optional() })).max(6).optional(),
+  show_past_events: z.boolean().optional(),
+  show_ratings: z.boolean().optional(),
 }).openapi('HostListPageUpdate')
+
+// HOSTPAGE.2 — host page photos.
+const HostPhotosResponse = z.object({ success: z.literal(true), url: z.string().optional(), data: z.object({ url: z.string().optional(), photos: z.array(z.object({ url: z.string(), caption: z.string().nullable().optional() })) }) })
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/list-page/photos',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Add a photo to the host's public page (multipart file; PNG/JPEG/WebP ≤5 MB; at most 12)",
+  description: 'Host session (getCurrentHost). Stored in the public branding bucket under host-photos/<host id>/ and appended to event_hosts.photos with no caption (set it with PATCH /api/host/list-page). 400 photos_full at twelve.',
+  request: { body: { content: { 'multipart/form-data': { schema: z.object({ file: z.string().openapi({ format: 'binary' }) }) } } } },
+  responses: {
+    200: { description: 'The new URL and the full list', content: { 'application/json': { schema: HostPhotosResponse } } },
+    400: { description: 'No file, wrong type, too large, or photos_full', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'delete',
+  path: '/api/host/list-page/photos',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Remove one of the host\'s page photos (?url=)',
+  description: 'The URL must be in the host\'s own photos AND point under host-photos/<host id>/, else 404. The object removal is best-effort; the list entry always goes.',
+  request: { query: z.object({ url: z.string().url() }) },
+  responses: {
+    200: { description: 'The remaining list', content: { 'application/json': { schema: HostPhotosResponse } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of this host\'s photos', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
 
 const HostSendTestBody = z.object({
   to: z.string().email().optional(),

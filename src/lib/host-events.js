@@ -154,6 +154,9 @@ export const HostEventSchema = z
     confirmation_email_intro: z.string().max(5000).optional().nullable(),
     reminder_email_subject: z.string().max(300).optional().nullable(),
     reminder_email_intro: z.string().max(5000).optional().nullable(),
+    // HOSTPAGE.2 — the post-event rating request (mig 823).
+    rating_email_subject: z.string().max(300).optional().nullable(),
+    rating_email_intro: z.string().max(5000).optional().nullable(),
   })
   .strict()
 

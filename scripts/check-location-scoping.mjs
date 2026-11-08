@@ -393,6 +393,10 @@ export const EXEMPT = {
   'src/app/api/public/events/[slug]/calendar.ics/route.js': {
     race_events: 'CALENDAR.1 add-to-calendar file: race_events row resolved by published slug + active/published flags (the same row the public event page serves); reads one row, writes nothing, rate-limited per IP.',
   },
+  'src/app/api/public/event-rating/[token]/route.js': {
+    race_registrations: 'HOSTPAGE.2 — the post-event rating page. The entry is reached ONLY through the HMAC rating token (src/lib/event-ratings.js) that names exactly one (registration, event) pair, signed with the service-role key, 30 days; the capability IS the scoping, the same argument as /api/public/entry/[token]. The read returns the event name/date and the host name; a UN1T event or an inactive one is 404.',
+    event_ratings: 'HOSTPAGE.2 — read and written by the token-named registration_id only (UNIQUE), carrying the event\'s own host_id.',
+  },
   'src/app/api/public/events/[slug]/view/route.js': {
     race_events: 'HOSTSTATS.1 page-view beacon: race_events row resolved by published slug + active/published (the same row the public event page serves); writes one event_page_views row keyed by that event id and reads nothing else about it.',
   },

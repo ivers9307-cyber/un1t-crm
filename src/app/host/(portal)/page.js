@@ -3,6 +3,7 @@
 // same host_id (getHostRevenue). Read-only.
 
 import Link from 'next/link'
+import { hostPageExtras } from '@/lib/host-page-extras'
 import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { getHostRevenue } from '@/lib/host-revenue'
@@ -74,7 +75,7 @@ export default async function HostDashboard() {
   try {
     const { data: hostRow } = await db
       .from('event_hosts')
-      .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb, anchor_location_id')
+      .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb, anchor_location_id, about_text, photos, testimonials, show_past_events, show_ratings')
       .eq('id', session.host.id)
       .maybeSingle()
     if (hostRow) {
@@ -100,6 +101,12 @@ export default async function HostDashboard() {
         events_blurb: hostRow.events_blurb,
         hero_image_url: hostRow.hero_image_url,
         accent_hex: hostRow.accent_hex,
+        // HOSTPAGE.2 — the page extras, re-validated so a bad row never breaks the editor.
+        about_text: hostRow.about_text,
+        photos: hostPageExtras(hostRow).photos,
+        testimonials: hostPageExtras(hostRow).testimonials,
+        show_past_events: hostRow.show_past_events !== false,
+        show_ratings: hostRow.show_ratings !== false,
       }
     }
   } catch (e) {

@@ -78,6 +78,16 @@
 //                       own stamp. Seeded by mig 822, applied RIGHT AFTER
 //                       the deploy.
 //
+// HOSTPAGE.2 adds an eleventh, on the hourly event-reminders cron:
+//
+//   'event-rating-requests' — runRatingRequests (src/lib/event-rating-requests.js),
+//                       the "How was <event>?" arm, on its own daily slot
+//                       (DAILY_SLOTS['event-rating-requests'], 09:00 on each
+//                       studio's clock, riding event-reminders). Stamped only
+//                       on a tick that took one of ITS slots and returned an
+//                       outcome with no read or claim fault. Seeded by mig
+//                       824, applied RIGHT AFTER the deploy.
+//
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
 // fault in the arm's own machinery. A run with nothing to send is healthy (a
@@ -98,6 +108,13 @@ export const SHIFT_OFFER_SWEEP_HEARTBEAT = 'shift-offer-sweep'
 // HOSTSTATS.1 — the event_page_views retention arm of the daily
 // purge-webhook-payloads cron (src/lib/event-page-views-purge.js). Seeded by mig 822.
 export const PURGE_EVENT_PAGE_VIEWS_HEARTBEAT = 'purge-event-page-views'
+// HOSTPAGE.2 — the rating-request arm of the hourly event-reminders cron
+// (src/lib/event-rating-requests.js). Seeded by mig 824.
+export const EVENT_RATING_REQUESTS_HEARTBEAT = 'event-rating-requests'
+/** Clean when the arm returned an outcome with no read fault and no failed claim (a quiet morning is clean). */
+export function ratingRequestsArmHealthy(outcome) {
+  return isOutcome(outcome) && (outcome.request_read_failed || 0) === 0 && (outcome.claim_failed || 0) === 0
+}
 
 // runShiftReminders' counters that mean the ARM went wrong, not a device:
 //   shift_claim_failed — a ledger claim insert failed; that reminder was NOT sent.

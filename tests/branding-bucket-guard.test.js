@@ -101,6 +101,8 @@ const WRITERS = {
   // race-video/<event id>/.
   'src/app/api/events/[id]/video/signed-upload/route.js': 'getCurrentUser',
   'src/app/api/host/events/[id]/hero/route.js': 'getCurrentHost',
+  // HOSTPAGE.2 — a host's public-page photos; own host only, writes under host-photos/<host id>/.
+  'src/app/api/host/list-page/photos/route.js': 'getCurrentHost',
   'src/app/api/me/signature-photo/route.js': 'getCurrentUser',
   'src/app/api/staff/[id]/permanent/route.js': 'getCurrentUser',
 }

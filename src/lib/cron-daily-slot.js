@@ -105,6 +105,8 @@ export const DAILY_SLOTS = Object.freeze({
   'run-challenge-events': Object.freeze({ hour: 8 }),
   'receipt-coverage-weekly': Object.freeze({ hour: 8, weekday: 5, anchor: 'local' }),
   'event-reminders': Object.freeze({ hour: 9 }),
+  // HOSTPAGE.2 — the rating-request arm rides event-reminders' 09:00 slot.
+  'event-rating-requests': Object.freeze({ hour: 9, rides: 'event-reminders' }),
   'notify-winback': Object.freeze({ hour: 10 }),
   'notify-onboarding-pace': Object.freeze({ hour: 10 }),
   'notify-streak-at-risk': Object.freeze({ hour: 11 }),

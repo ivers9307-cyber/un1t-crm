@@ -157,6 +157,7 @@ describe('redirectTargetForSlug', () => {
 describe('reserved event slugs', () => {
   it('"entry" is reserved', () => {
     expect(RESERVED_EVENT_SLUGS.has('entry')).toBe(true)
+    expect(RESERVED_EVENT_SLUGS.has('rate')).toBe(true) // HOSTPAGE.2: /event/rate/<token>
   })
   it('a new event never takes it: "entry" becomes "entry-2"', async () => {
     expect(await uniqueEventSlug(fakeDb(), 'entry')).toBe('entry-2')
