@@ -50,6 +50,12 @@ describe('PATCH /api/host/series/[id]', () => {
     expect(upd.payload).toEqual({ headline: 'Pick your month', blurb: null })
     expect(upd.ops).toContainEqual(['eq', 'id', S1])
   })
+  it('a rename alone writes only the name: headline and blurb are untouched', async () => {
+    const res = await patch({ name: 'Monthly Mobility' })
+    expect(res.status).toBe(200)
+    const upd = db.queries.find((q) => q.action === 'update')
+    expect(upd.payload).toEqual({ name: 'Monthly Mobility' })
+  })
   it('400 for an over-long headline or an empty name', async () => {
     expect((await patch({ headline: 'x'.repeat(121) })).status).toBe(400)
     expect((await patch({ name: '' })).status).toBe(400)

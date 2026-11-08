@@ -14,9 +14,9 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 vi.mock('@/lib/event-slug', async (importOriginal) => ({ ...(await importOriginal()), uniqueEventSlug: vi.fn(async (_db, base) => base) }))
 vi.mock('@/lib/host-org-brand', () => ({ resolveHostOrgBrand: vi.fn(async () => ({ name: 'UN1T' })) }))
-vi.mock('@/lib/event-sessions', async (importOriginal) => ({ ...(await importOriginal()), syncEventSessions: vi.fn() }))
+vi.mock('@/lib/event-sessions', async (importOriginal) => ({ ...(await importOriginal()), syncEventSessions: vi.fn(), judgeSessions: vi.fn() }))
 
-const { syncEventSessions } = await import('@/lib/event-sessions')
+const { syncEventSessions, judgeSessions } = await import('@/lib/event-sessions')
 const { GET, PUT } = await import('./route.js')
 
 const props = () => ({ params: Promise.resolve({ id: E1 }) })
@@ -41,6 +41,7 @@ beforeEach(() => {
     return { data: null, error: null }
   })
   syncEventSessions.mockResolvedValue({ ok: true, waves: [] })
+  judgeSessions.mockResolvedValue({ ok: true })
 })
 
 describe('GET /api/host/events/[id]', () => {
@@ -90,13 +91,21 @@ describe('PUT /api/host/events/[id]', () => {
     expect(db.queries.some((q) => q.action === 'update')).toBe(false)
     expect(syncEventSessions).not.toHaveBeenCalled()
   })
-  it('a refused sync is 409 with the lib\'s message', async () => {
-    syncEventSessions.mockResolvedValue({ ok: false, error: 'session_has_entries', session_time: '10:00', message: 'The 10:00 session has bookings, so it cannot be removed.' })
+  it('a refused sync is 409 with the lib\'s message, and the event row is NOT written (no review stamp)', async () => {
+    judgeSessions.mockResolvedValue({ ok: false, error: 'session_has_entries', session_time: '10:00', message: 'The 10:00 session has bookings, so it cannot be removed.' })
     const res = await put({ ...BODY, sessions: [{ start_time: '12:00', capacity: 5 }] })
     expect(res.status).toBe(409)
     const j = await res.json()
     expect(j).toMatchObject({ success: false, error: 'session_has_entries' })
     expect(j.message).toMatch(/10:00/)
+    expect(db.queries.some((q) => q.table === 'race_events' && q.action === 'update')).toBe(false)
+    expect(syncEventSessions).not.toHaveBeenCalled()
+  })
+  it('a swap refused by the judge never stamps a published event back to review', async () => {
+    judgeSessions.mockResolvedValue({ ok: false, error: 'duplicate_session_time', message: 'Two sessions would share a start time.' })
+    const res = await put({ ...BODY, sessions: [{ id: W1, start_time: '14:00', capacity: 20 }, { start_time: '10:00', capacity: 5 }] })
+    expect(res.status).toBe(409)
+    expect(db.queries.some((q) => q.table === 'race_events' && q.action === 'update')).toBe(false)
   })
   it('400 on the retired single-session keys', async () => {
     const res = await put({ ...BODY, session_capacity: 20 })

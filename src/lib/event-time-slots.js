@@ -17,10 +17,16 @@ import { windowedWaves } from '@/lib/wave-window'
 
 const hhmm = (t) => (typeof t === 'string' ? t.slice(0, 5) : '')
 
-/** Waves the public picker offers; [] = no picker. */
-export function timePickerWaves(kind, waves) {
+/**
+ * Waves the public picker offers; [] = no picker.
+ * HOSTSERIES.1 (design decision 6): a HOST event's sessions are a plain list
+ * whatever the kind — the 90-minute release window exists for UN1T's
+ * generated Hyrox waves, and a host race at 10:00 and 14:00 must show both.
+ * @param {{ hosted?: boolean }} [opts]
+ */
+export function timePickerWaves(kind, waves, { hosted = false } = {}) {
   const arr = Array.isArray(waves) ? waves : []
-  if (isRaceKind(kind)) return windowedWaves(arr)
+  if (isRaceKind(kind)) return hosted ? arr : windowedWaves(arr)
   if (kind === 'lead_gen') return []
   return arr.length > 1 ? arr : []
 }

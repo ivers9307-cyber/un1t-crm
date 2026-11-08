@@ -9,7 +9,7 @@ import { createServerClient } from '@/lib/supabase'
 import { HostEventSchema, computeEditTransition } from '@/lib/host-events'
 import { eventSlug, uniqueEventSlug, shouldRederiveSlug } from '@/lib/event-slug'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
-import { syncEventSessions, sessionsFromWaves } from '@/lib/event-sessions'
+import { syncEventSessions, judgeSessions, sessionsFromWaves } from '@/lib/event-sessions'
 import { hostOwnsSeries } from '@/lib/event-series'
 
 export const runtime = 'nodejs'
@@ -78,6 +78,15 @@ export async function PUT(request, props) {
   }
   const transition = computeEditTransition(currentForDiff, changes)
 
+  // HOSTSERIES.1 — judge the session change BEFORE the event row is written:
+  // a refused swap or removal must not leave a published event stamped back
+  // to review with its times unchanged.
+  const judged = await judgeSessions(db, { eventId: current.id, sessions: input.sessions, currentWaves: current.race_waves || [] })
+  if (!judged.ok) {
+    const status = judged.error === 'write_failed' ? 500 : 409
+    return NextResponse.json({ success: false, error: judged.error, message: judged.message, session_time: judged.session_time ?? null }, { status })
+  }
+
   // EVENT-SLUG.1 — a draft's URL follows its venue/date/time; once
   // published the slug is frozen (the link may be out).
   const slugPatch = shouldRederiveSlug(current.status)
@@ -108,8 +117,7 @@ export async function PUT(request, props) {
   }).eq('id', current.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  // HOSTSERIES.1 — sessions after the event row (the event's own fields are
-  // saved even when a session change is refused, which the 409 then says).
+  // HOSTSERIES.1 — the writes (judged above; a write that still fails is 500).
   const synced = await syncEventSessions(db, { eventId: current.id, sessions: input.sessions, currentWaves: current.race_waves || [] })
   if (!synced.ok) {
     const status = synced.error === 'write_failed' ? 500 : 409

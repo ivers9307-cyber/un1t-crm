@@ -3,7 +3,7 @@
 // swap of two times is refused whole (UNIQUE (race_event_id, start_time)).
 import { describe, it, expect } from 'vitest'
 import { fakeDb } from './event-waitlist.test-helpers'
-import { syncEventSessions, sessionsFromWaves } from './event-sessions.js'
+import { syncEventSessions, judgeSessions, sessionsFromWaves } from './event-sessions.js'
 
 const E1 = 'e0000000-0000-4000-8000-0000000000e1'
 const W1 = 'f0000000-0000-4000-8000-0000000000f1'
@@ -46,6 +46,23 @@ describe('sessionsFromWaves', () => {
   })
   it('is empty for no waves', () => {
     expect(sessionsFromWaves(null)).toEqual([])
+  })
+})
+
+describe('judgeSessions', () => {
+  it('passes a clean change with only the count reads', async () => {
+    const d = db()
+    const r = await judgeSessions(d, { eventId: E1, sessions: [{ id: W1, start_time: '10:30', capacity: 25 }], currentWaves: current })
+    expect(r).toEqual({ ok: true })
+    expect(wavesQueries(d)).toHaveLength(0)
+    expect(d.queries.filter((q) => q.table === 'race_registrations')).toHaveLength(1)
+  })
+  it('refuses a swap and a removal with entries, writing nothing', async () => {
+    const swap = await judgeSessions(db(), { eventId: E1, sessions: [{ id: W1, start_time: '14:00', capacity: 20 }, { id: W2, start_time: '10:00', capacity: 15 }], currentWaves: current })
+    expect(swap).toMatchObject({ ok: false, error: 'duplicate_session_time' })
+    expect(swap.message).toMatch(/different time first/)
+    const busy = await judgeSessions(db({ counts: { [W2]: 3 } }), { eventId: E1, sessions: [{ id: W1, start_time: '10:00', capacity: 20 }], currentWaves: current })
+    expect(busy).toMatchObject({ ok: false, error: 'session_has_entries', session_time: '14:00' })
   })
 })
 

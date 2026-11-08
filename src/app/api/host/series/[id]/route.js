@@ -12,12 +12,13 @@ import { validateBody } from '@/lib/validate'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const nullable = (max) => z.string().trim().max(max).nullable().optional().transform((v) => (v == null || v === '' ? null : v))
-
+// No .transform here: on Zod 4 a transform on an optional key runs for an
+// ABSENT key too and would set it (a rename alone wiped the page copy). The
+// route normalises only the keys the body carries ('' → NULL = the default).
 export const SeriesPatchSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
-  headline: nullable(120),
-  blurb: nullable(500),
+  headline: z.string().trim().max(120).nullable().optional(),
+  blurb: z.string().trim().max(500).nullable().optional(),
 }).strict()
 
 export async function PATCH(request, props) {
@@ -33,7 +34,9 @@ export async function PATCH(request, props) {
   if (!validation.ok) return validation.response
   const patch = {}
   for (const key of ['name', 'headline', 'blurb']) {
-    if (key in validation.data && validation.data[key] !== undefined) patch[key] = validation.data[key]
+    if (!(key in validation.data) || validation.data[key] === undefined) continue
+    const v = validation.data[key]
+    patch[key] = key === 'name' ? v : (v == null || v === '' ? null : v)
   }
   if (Object.keys(patch).length === 0) return NextResponse.json({ success: true, data: { unchanged: true } })
 

@@ -544,7 +544,8 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // later waves release as the window slides). EVENT-MULTITIME.1 —
   // other kinds show every time once there's more than one; [] = no
   // picker. Every operator surface still sees the full schedule.
-  const pickerWaves = timePickerWaves(kind, wavesArr)
+  // HOSTSERIES.1 — a hosted event (host_name set) lists every session plainly.
+  const pickerWaves = timePickerWaves(kind, wavesArr, { hosted: !!race.host_name })
 
   // ── Render-only derived values (no behaviour change) ──────────────
   // Human label for the event kind, used in the hero eyebrow.
