@@ -8,7 +8,7 @@
 // editable here — they're passed through unchanged (normalized to ISO) so an
 // edit never silently wipes a reg window.
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { ImagePlus, Loader2, X } from 'lucide-react'
 import { HOST_EVENT_KINDS, MAX_SESSIONS } from '@/lib/host-events'
@@ -66,7 +66,22 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       capacity: s.capacity != null ? String(s.capacity) : '',
     }))
   })
-  const [seriesId] = useState(initial?.series_id ?? null)
+  // HOSTSERIES.1 — the host's series, for the Series select (hidden when none).
+  const [seriesId, setSeriesId] = useState(initial?.series_id ?? null)
+  const [seriesOptions, setSeriesOptions] = useState([])
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const r = await fetch('/api/host/series', { cache: 'no-store' })
+        const j = await r.json()
+        if (alive && j?.success && Array.isArray(j.data)) setSeriesOptions(j.data)
+      } catch {
+        // No series list: the select stays hidden; the form still saves.
+      }
+    })()
+    return () => { alive = false }
+  }, [])
   const [teamSizes, setTeamSizes] = useState(
     Array.isArray(initial?.allowed_team_sizes) && initial.allowed_team_sizes.length
       ? [...initial.allowed_team_sizes].sort((a, b) => a - b)
@@ -208,7 +223,9 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         label: trimmedText(s.label),
         capacity: parseInt(s.capacity, 10),
       })),
-      ...(seriesId ? { series_id: seriesId } : {}),
+      // A series pick travels; clearing it sends null (so an edit can leave a
+      // series); with no series at all the key is absent.
+      ...(seriesId ? { series_id: seriesId } : (initial?.series_id ? { series_id: null } : {})),
       hero_image_url: trimmedText(heroImageUrl),
       accent_hex: trimmedText(accentHex),
       venue_name: venueName.trim(),
@@ -334,6 +351,23 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
             />
           </div>
         </div>
+
+        {(seriesOptions.length > 0 || seriesId) && (
+          <div className="mt-4">
+            <label htmlFor="he-series" className={labelCls}>Series <span className="text-white/30 normal-case">(optional)</span></label>
+            <select
+              id="he-series"
+              value={seriesId || ''}
+              onChange={(e) => setSeriesId(e.target.value || null)}
+              className={`${input} sm:max-w-md [color-scheme:dark]`}
+            >
+              <option value="">Not part of a series</option>
+              {seriesOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {seriesId && !seriesOptions.some((s) => s.id === seriesId) && <option value={seriesId}>Current series</option>}
+            </select>
+            <p className="mt-1.5 text-xs text-white/35">A series is one link that lists every published date.</p>
+          </div>
+        )}
 
         {/* HOSTSERIES.1 — sessions: one row per start time, each with its own
             capacity and optional label. The only row cannot be removed. */}

@@ -42,3 +42,26 @@ describe('HostPublicEvents', () => {
     expect(html).toContain('href="/event/b"')
   })
 })
+
+// HOSTSERIES.1 — cards grouped under their series, with an "All dates" link.
+describe('HostPublicEvents series groups', () => {
+  const renderGroups = (groups) => renderToStaticMarkup(
+    <HostPublicEvents hostName="Host" headline="Upcoming events" blurb={null} heroUrl={null} accentHex={null} groups={groups} />,
+  )
+  it('a series group shows its name and a link to the series page; the null group is plain cards', () => {
+    const html = renderGroups([
+      { seriesName: null, seriesSlug: null, cards: [card({ slug: 'solo', title: 'One-off' })] },
+      { seriesName: 'Monthly Mobility', seriesSlug: 'monthly-mobility', cards: [card({ slug: 'm1', title: 'Mobility' }), card({ slug: 'm2', title: 'Mobility' })] },
+    ])
+    expect(html).toContain('One-off')
+    expect(html).toContain('Monthly Mobility')
+    expect(html).toContain('href="/event/series/monthly-mobility"')
+    expect(html).toContain('All dates')
+    expect(html).toContain('href="/event/m1"')
+    expect(html).toContain('href="/event/m2"')
+  })
+  it('with no series anywhere, nothing says "All dates"', () => {
+    const html = renderGroups([{ seriesName: null, seriesSlug: null, cards: [card({ slug: 'solo' })] }])
+    expect(html).not.toContain('All dates')
+  })
+})

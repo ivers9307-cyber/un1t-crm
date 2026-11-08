@@ -21,7 +21,11 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); push.mockClear() })
 
 describe('HostEventForm sessions', () => {
   it('hydrates two sessions, adds a third, and submits sessions[] without the retired keys', async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }))
+    // The form also fetches /api/host/series on mount (HOSTSERIES.1): answer
+    // it empty and find the save call by its URL.
+    const fetchMock = vi.fn(async (url) => (String(url) === '/api/host/series'
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }))
     vi.stubGlobal('fetch', fetchMock)
     render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" />)
 
@@ -33,8 +37,8 @@ describe('HostEventForm sessions', () => {
     fireEvent.change(screen.getAllByLabelText(/^Capacity/)[2], { target: { value: '8' } })
 
     fireEvent.click(screen.getByRole('button', { name: /Save changes|Save event|Create event/ }))
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
-    const [url, init] = fetchMock.mock.calls[0]
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/host/events/E1')).toBe(true))
+    const [url, init] = fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events/E1')
     expect(url).toBe('/api/host/events/E1')
     const body = JSON.parse(init.body)
     expect(body.sessions).toEqual([
@@ -63,6 +67,39 @@ describe('HostEventForm sessions', () => {
     // enforces it too); submit the form directly to exercise clientValidate.
     fireEvent.submit(container.querySelector('form'))
     expect(await screen.findByText(/Please set a start time for session 1/)).toBeTruthy()
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/host/events/E1')).toBe(false)
+  })
+})
+
+// HOSTSERIES.1 — a Series select appears when the host has series; the pick
+// travels as series_id.
+describe('HostEventForm series select', () => {
+  it('lists the host\'s series and sends the chosen id', async () => {
+    const fetchMock = vi.fn(async (url) => {
+      if (String(url) === '/api/host/series') return { ok: true, status: 200, json: async () => ({ success: true, data: [{ id: 'd0000000-0000-4000-8000-0000000000d1', name: 'Monthly Mobility', slug: 'monthly-mobility', upcoming_count: 2 }] }) }
+      return { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" />)
+    const select = await screen.findByLabelText(/^Series/)
+    fireEvent.change(select, { target: { value: 'd0000000-0000-4000-8000-0000000000d1' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/host/events/E1')).toBe(true))
+    const [, init] = fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events/E1')
+    expect(JSON.parse(init.body).series_id).toBe('d0000000-0000-4000-8000-0000000000d1')
+  })
+  it('with no series the select is absent and the body carries no series_id', async () => {
+    const fetchMock = vi.fn(async (url) => {
+      if (String(url) === '/api/host/series') return { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      return { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" />)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/host/series')).toBe(true))
+    expect(screen.queryByLabelText(/^Series/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/host/events/E1')).toBe(true))
+    const [, init] = fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events/E1')
+    expect(JSON.parse(init.body)).not.toHaveProperty('series_id')
   })
 })

@@ -74,3 +74,28 @@ export function hostPageMetadata({ host, events, orgName, path, page }) {
     twitter: { card: 'summary_large_image' },
   }
 }
+
+/**
+ * HOSTSERIES.1 — cards grouped under their series: the one-offs first (in
+ * the order given, which is date order), then each series in order of its
+ * first date. `makeCard(row)` builds the card. A row with no series goes in
+ * the null group; no one-offs means no null group.
+ * @returns {Array<{ seriesName: string|null, seriesSlug: string|null, cards: Array }>}
+ */
+export function groupHostCards(rows, makeCard) {
+  const groups = new Map()
+  const firstDate = new Map()
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const key = row?.series_id && row?.series ? row.series.id : null
+    if (!groups.has(key)) groups.set(key, { seriesName: key ? row.series.name : null, seriesSlug: key ? row.series.slug : null, cards: [] })
+    groups.get(key).cards.push(makeCard(row))
+    const d = String(row?.race_date || '')
+    if (!firstDate.has(key) || d < firstDate.get(key)) firstDate.set(key, d)
+  }
+  const out = []
+  if (groups.has(null)) out.push(groups.get(null))
+  const series = [...groups.entries()].filter(([key]) => key !== null)
+  series.sort((a, b) => firstDate.get(a[0]).localeCompare(firstDate.get(b[0])))
+  for (const [, g] of series) out.push(g)
+  return out
+}

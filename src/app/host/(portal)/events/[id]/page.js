@@ -19,6 +19,7 @@ import HostAttendeeTable from '@/components/host/HostAttendeeTable'
 import HostPromoCodes from '@/components/host/HostPromoCodes'
 import HostEventActions from '@/components/host/HostEventActions'
 import DuplicateEventButton from '@/components/DuplicateEventButton'
+import HostSeriesActions from '@/components/host/HostSeriesActions'
 import EventWaitlistPanel from '@/components/EventWaitlistPanel'
 
 export const dynamic = 'force-dynamic'
@@ -31,7 +32,7 @@ export default async function HostEventDetail(props) {
   const db = createServerClient()
   const { data: race } = await db
     .from('race_events')
-    .select('id, host_id, status, name, slug, race_date')
+    .select('id, host_id, status, name, slug, race_date, series_id, series:event_series ( id, name, slug )')
     .eq('id', params.id)
     .maybeSingle()
   if (!race || race.host_id !== session.host.id) notFound()
@@ -102,6 +103,18 @@ export default async function HostEventDetail(props) {
           />
           <HostEventActions eventId={race.id} status={race.status} hasRegistrations={regs.length > 0} brandName={brand.name} />
         </div>
+      </div>
+
+      {/* HOSTSERIES.1 — make this event a series, or show the series it is in. */}
+      <div className="mt-4">
+        <HostSeriesActions
+          eventId={race.id}
+          eventName={race.name}
+          raceDate={race.race_date}
+          seriesId={race.series_id || null}
+          seriesName={race.series?.name || ''}
+          seriesSlug={race.series?.slug || ''}
+        />
       </div>
 
       <HostAttendeeTable entries={entries} movedOut={movedOut} />
