@@ -51,6 +51,8 @@ function registerDb() {
     if (q.table === 'race_registrations') {
       if (q.action === 'insert') return { data: { id: 'reg1', registered_at: '2026-11-15T12:00:00Z', wave_id: W1, contact_id: 'c1' }, error: null }
       if (q.ops.some((o) => o[0] === 'select' && o[2]?.head)) return { data: null, count: 0, error: null }
+      // The lead-gen "already captured?" probe is a maybeSingle: no row.
+      if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'contact_id')) return { data: null, error: null }
       return { data: [], error: null }
     }
     return { data: null, error: null }
@@ -88,6 +90,21 @@ describe('register route: registration questions', () => {
     expect(res.status).toBe(200)
     expect(inserted('team_members').payload.map((m) => m.answers)).toEqual([{ 'q-level': 'Beginner' }])
     expect(inserted('race_registrations').payload.answers).toEqual({ 'q-photos': false })
+  })
+  // A lead-gen form (name/email/phone, no team or wave) asks and stores too.
+  it('a lead_gen event validates and stores the lead\'s answers', async () => {
+    race = { ...RACE, kind: 'lead_gen', race_date: null, waves: [], registration_questions: [photos, level] }
+    const lead = { captain_name: 'Aoife Byrne', captain_email: 'aoife@example.test', captain_phone: '0870000000' }
+    const refused = await post({ ...lead, answers: { entry: {}, people: [{}] } })
+    const refusedBody = await refused.clone().json().catch(() => null)
+    expect([refused.status, refusedBody?.code]).toEqual([400, 'invalid_answers'])
+    expect((await refused.json()).issues.map((i) => i.path).sort()).toEqual(['member_0_q-level', 'q_q-photos'])
+    expect(inserted('race_registrations')).toBeUndefined()
+    db = registerDb()
+    const res = await post({ ...lead, answers: { entry: { 'q-photos': true }, people: [{ 'q-level': 'Beginner' }] } })
+    expect(res.status).toBe(200)
+    expect(inserted('race_registrations').payload.answers).toEqual({ 'q-photos': true })
+    expect(inserted('team_members').payload.answers).toEqual({ 'q-level': 'Beginner' })
   })
   it('an event without questions stores null answers whatever the body sends', async () => {
     race = { ...RACE, registration_questions: null }

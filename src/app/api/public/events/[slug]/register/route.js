@@ -338,16 +338,24 @@ export async function POST(request, props) {
       } else { teamId = ins.id }
     }
 
+    // QUESTIONS.1 — a lead-gen form asks too: the lead is the one person.
+    const leadAnswers = validateAnswers(resolveRegistrationQuestions(race), body.answers, { peopleCount: 1 })
+    if (!leadAnswers.ok) {
+      return NextResponse.json({ success: false, error: 'Please answer the required questions.', code: 'invalid_answers', issues: leadAnswers.issues }, { status: 400 })
+    }
+
     // Roster = just the lead.
     await db.from('team_members').delete().eq('team_id', teamId)
     await db.from('team_members').insert({
       team_id: teamId, contact_id: contactId, name: leadName, email: leadEmail,
       role: 'captain', is_member: false, member_validation_status: 'not_applicable',
+      answers: leadAnswers.people[0] ?? null,
     })
 
     const { data: reg, error: regErr } = await db.from('race_registrations').insert({
       race_event_id: race.id, team_id: teamId, contact_id: contactId,
       status: 'confirmed', wave_id: null, team_composition: 'all_non_members',
+      answers: leadAnswers.entry,
       // HOST-CONSENT.1 — persisted so the attendee sync can grant HOST consent.
       marketing_consent: body.marketing_consent !== false,
     }).select('id, registered_at').single()

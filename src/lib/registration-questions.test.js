@@ -81,6 +81,10 @@ describe('display and CSV helpers', () => {
     expect(formatAnswer(diet, 'vegan')).toBe('vegan')
     expect(formatAnswer(level, undefined)).toBe('')
   })
+  it('a stored answer outlives a type change: a boolean reads Yes/No under any type, a string shows as text under yes_no', () => {
+    expect(formatAnswer(diet, true)).toBe('Yes')
+    expect(formatAnswer(photos, 'vegan')).toBe('vegan')
+  })
   it('answersForDisplay merges entry and person answers, skips blanks, ignores a removed question\'s answer', () => {
     const rows = answersForDisplay(Q, { 'q-photos': true, 'q-gone': 'old' }, { 'q-level': 'Beginner' })
     expect(rows).toEqual([{ label: 'Experience', value: 'Beginner' }, { label: 'OK to be photographed?', value: 'Yes' }])

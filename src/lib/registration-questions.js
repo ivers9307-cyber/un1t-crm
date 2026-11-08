@@ -6,7 +6,9 @@
 // One pure module validates and normalises what the form sent against the
 // event's questions, so the register route stores exactly what it returns
 // and the widget renders exactly the issues it names (paths q_<id> for an
-// entry question, member_<i>_q_<id> for person i, 0 = the captain). Rosters
+// entry question, member_<i>_<id> for person i, 0 = the captain; ids are
+// minted `q-…` by the editor, so they never collide with the form's own
+// member_<i>_name / member_<i>_email keys). Rosters
 // and the CSV read answers back by id, so a question edited or removed after
 // signups keeps old answers readable (a vanished id is simply skipped).
 
@@ -105,10 +107,13 @@ export function answerColumns(questions) {
   return (Array.isArray(questions) ? questions : []).map((q) => ({ id: q.id, label: q.label }))
 }
 
-/** A stored answer as text: Yes/No, the option, the text; '' for none. */
+/** A stored answer as text: Yes/No for a boolean (whatever the question's
+ * type is NOW: a type change after signups must not hide old answers), the
+ * option, the text; '' for none. */
 export function formatAnswer(question, value) {
   if (value == null || value === '') return ''
-  if (question?.type === 'yes_no') return value === true || value === 'true' ? 'Yes' : value === false || value === 'false' ? 'No' : ''
+  if (value === true || value === 'true') return 'Yes'
+  if (value === false || value === 'false') return 'No'
   return String(value)
 }
 
