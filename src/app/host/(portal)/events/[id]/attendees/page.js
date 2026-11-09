@@ -7,7 +7,7 @@
 import { notFound, redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
-import { loadHostEvent } from '@/lib/host-portal'
+import { loadHostEvent, attendeeCounts } from '@/lib/host-portal'
 import { fetchEventAttendees } from '@/lib/attendee-export'
 import { loadMoveHistory } from '@/lib/registration-move-history'
 import { entryLabel } from '@/lib/registration-entry'
@@ -61,16 +61,13 @@ export default async function HostEventAttendees(props) {
       },
     }
   })
-  const confirmed = regs.filter((r) => r.status === 'confirmed').length
-  // People, as the old one-row-per-person table counted them: a member-less
-  // entry still counts as one.
-  const people = entries.reduce((n, e) => n + Math.max(1, e.people.length), 0)
+  const { bookings, confirmed, people } = attendeeCounts(regs)
 
   return (
     <div>
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <p className="text-white/55 text-sm">
-          {regs.length} booking{regs.length === 1 ? '' : 's'} · {confirmed} confirmed · {people} attendee{people === 1 ? '' : 's'}
+          {bookings} booking{bookings === 1 ? '' : 's'} · {confirmed} confirmed · {people} attendee{people === 1 ? '' : 's'}
         </p>
         {regs.length > 0 && (
           <a

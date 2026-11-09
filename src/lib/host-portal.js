@@ -138,3 +138,17 @@ export async function loadPublicRatingAverages(db, eventIds) {
   for (const [id, s] of sums) out.set(id, { average: Number((s.sum / s.count).toFixed(1)), count: s.count })
   return out
 }
+
+/**
+ * The three counts the Attendees tab and the Overview Bookings tile share:
+ * bookings (every registration returned), confirmed, and people (a member-less
+ * entry still counts as one).
+ */
+export function attendeeCounts(regs) {
+  const list = Array.isArray(regs) ? regs : []
+  const people = list.reduce((n, r) => {
+    const members = Array.isArray(r?.teams?.team_members) ? r.teams.team_members : []
+    return n + Math.max(1, members.length)
+  }, 0)
+  return { bookings: list.length, confirmed: list.filter((r) => r?.status === 'confirmed').length, people }
+}

@@ -8,7 +8,7 @@ import { getLocationZone } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 import {
   groupHostEvents, eventLandingHref, loadHostEvent, moneyLabel, eventMoneyCents,
-  loadPublicRatingAverages, loadHostToday, HOST_STATUS_CHIP, formatHostMoney, hostEventDetail,
+  loadPublicRatingAverages, loadHostToday, HOST_STATUS_CHIP, formatHostMoney, hostEventDetail, attendeeCounts,
 } from './host-portal'
 
 // Chainable, thenable supabase stub. `results` is consumed one per awaited query.
@@ -180,5 +180,19 @@ describe('hostEventDetail', () => {
   it('appends the rating suffix only when a rating is given', () => {
     expect(hostEventDetail(stripe, event, row, 'EUR', { rating: { average: 4.8, count: 19 } })).toBe('2026-12-05 · run · 3 sold · €80.00 net · ★ 4.8 (19)')
     expect(hostEventDetail(stripe, event, row, 'EUR', { rating: null })).not.toContain('★')
+  })
+})
+
+describe('attendeeCounts', () => {
+  const reg = (status, members) => ({ status, teams: members == null ? null : { team_members: Array.from({ length: members }, () => ({ name: 'x' })) } })
+  it('counts bookings, confirmed and people; a member-less entry is one person', () => {
+    expect(attendeeCounts([reg('confirmed', 3), reg('confirmed', null), reg('pending_payment', 0), reg('cancelled', 2)]))
+      .toEqual({ bookings: 4, confirmed: 2, people: 3 + 1 + 1 + 2 })
+  })
+  it('is all zero for no registrations', () => {
+    expect(attendeeCounts([])).toEqual({ bookings: 0, confirmed: 0, people: 0 })
+  })
+  it('tolerates a non-array team_members', () => {
+    expect(attendeeCounts([{ status: 'confirmed', teams: { team_members: null } }])).toEqual({ bookings: 1, confirmed: 1, people: 1 })
   })
 })
