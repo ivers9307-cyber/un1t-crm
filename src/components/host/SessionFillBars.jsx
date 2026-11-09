@@ -11,16 +11,16 @@ export default function SessionFillBars({ sessions }) {
         return (
           <li key={s.id}>
             <div className="flex items-baseline justify-between gap-3 text-sm">
-              <span className="min-w-0 truncate text-white/80">{s.label ? `${s.time} · ${s.label}` : s.time}</span>
-              <span className="shrink-0 tabular-nums text-white/60">
+              <span className="min-w-0 truncate text-host-label">{s.label ? `${s.time} · ${s.label}` : s.time}</span>
+              <span className="shrink-0 tabular-nums text-host-hint">
                 {s.capacity == null ? `${s.booked} booked` : `${s.booked} / ${s.capacity}${s.full ? ' · full' : ''}`}
               </span>
             </div>
             {s.capacity != null && (
-              <div className="mt-1.5 h-1.5 rounded-full bg-white/10 overflow-hidden">
+              <div className="mt-1.5 h-1.5 rounded-full border border-host-border bg-host-well overflow-hidden">
                 <div
                   data-fill
-                  className={`h-full rounded-full ${s.full ? 'bg-amber-400' : 'bg-emerald-400'}`}
+                  className={`h-full rounded-full ${s.full ? 'bg-host-warn' : 'bg-host-accent'}`}
                   style={{ width: `${pct}%` }}
                 />
               </div>

@@ -17,6 +17,7 @@ import { loadSoldByTier, resolvePricingTiers } from '@/lib/pricing-tiers'
 import { hostPriceLine } from '@/lib/host-price-line'
 import { logWarn } from '@/lib/log'
 import SessionFillBars from '@/components/host/SessionFillBars'
+import { HOST_EYEBROW } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,10 +35,10 @@ async function safely(label, fn) {
 
 function tile(label, value, sub) {
   return (
-    <div key={label} className="rounded-xl border border-white/10 bg-white/[0.02] p-4 min-w-0">
-      <p className="text-xs uppercase tracking-[0.15em] text-white/45">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-white break-words">{value}</p>
-      {sub && <p className="mt-1 text-xs text-white/50">{sub}</p>}
+    <div key={label} className="rounded-xl border border-host-border bg-host-panel p-4 min-w-0">
+      <p className={HOST_EYEBROW}>{label}</p>
+      <p className="mt-2 text-2xl font-semibold text-host-text break-words">{value}</p>
+      {sub && <p className="mt-1 text-xs text-host-hint">{sub}</p>}
     </div>
   )
 }
@@ -98,23 +99,23 @@ export default async function HostEventOverview(props) {
         {tile(label === 'net' ? 'Net to you' : 'Gross', moneyValue, moneySub)}
       </div>
 
-      <section aria-label="Sessions" className="mt-6 rounded-xl border border-white/10 bg-white/[0.02] p-4">
-        <h2 className="text-xs uppercase tracking-[0.15em] text-white/45">Sessions</h2>
+      <section aria-label="Sessions" className="mt-6 rounded-xl border border-host-border bg-host-panel p-4">
+        <h2 className={HOST_EYEBROW}>Sessions</h2>
         <div className="mt-3">
           {sessions
             ? (sessions.length > 0
               ? <SessionFillBars sessions={sessions} />
-              : <p className="text-sm text-white/50">No sessions yet.</p>)
-            : <p className="text-sm text-white/50">Session numbers unavailable right now.</p>}
+              : <p className="text-sm text-host-hint">No sessions yet.</p>)
+            : <p className="text-sm text-host-hint">Session numbers unavailable right now.</p>}
         </div>
       </section>
 
-      <section aria-label="Price right now" className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+      <section aria-label="Price right now" className="mt-4 rounded-xl border border-host-border bg-host-panel p-4">
         <div className="flex items-start justify-between gap-3 flex-wrap">
-          <h2 className="text-xs uppercase tracking-[0.15em] text-white/45">Price right now</h2>
-          <a href={`/host/events/${race.id}/setup`} className="text-xs text-white/60 hover:text-white">Change in Set up →</a>
+          <h2 className={HOST_EYEBROW}>Price right now</h2>
+          <a href={`/host/events/${race.id}/setup`} className="text-xs text-host-hint hover:text-host-text">Change in Set up →</a>
         </div>
-        <p className="mt-2 text-sm text-white break-words">{priceLine ?? 'Price unavailable right now.'}</p>
+        <p className="mt-2 text-sm text-host-text break-words">{priceLine ?? 'Price unavailable right now.'}</p>
       </section>
     </div>
   )

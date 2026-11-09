@@ -6,13 +6,15 @@
 // literals are fine. `stats` null = the lib could not read: say so rather
 // than show zeros that look like an answer.
 
+import { HOST_EYEBROW } from '@/components/host/host-ui'
+
 export default function EventSignupsCard({ stats, dark = false }) {
   const shell = dark
-    ? 'rounded-xl border border-white/10 bg-white/[0.02] p-4 text-white'
+    ? 'rounded-xl border border-host-border bg-host-panel p-4 text-host-text'
     : 'rounded-lg border border-un1t-border bg-un1t-surface p-4 text-un1t-text'
-  const heading = dark ? 'text-xs uppercase tracking-[0.15em] text-white/45' : 'text-[11px] uppercase tracking-wider text-un1t-subtle'
-  const muted = dark ? 'text-white/50' : 'text-un1t-subtle'
-  const figure = dark ? 'text-2xl font-semibold text-white' : 'text-2xl font-semibold text-un1t-text'
+  const heading = dark ? HOST_EYEBROW : 'text-[11px] uppercase tracking-wider text-un1t-subtle'
+  const muted = dark ? 'text-host-hint' : 'text-un1t-subtle'
+  const figure = dark ? 'text-2xl font-semibold text-host-text' : 'text-2xl font-semibold text-un1t-text'
 
   if (!stats) {
     return (

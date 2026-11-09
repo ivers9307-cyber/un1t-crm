@@ -10,10 +10,11 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { CalendarRange, Loader2, X } from 'lucide-react'
 import { weeklyDates, monthlyDates } from '@/lib/series-dates'
+import { HOST_BTN_PRIMARY, HOST_NOTICE, HOST_NOTICE_TONE } from '@/components/host/host-ui'
 
-const input = 'bg-white/[0.04] border border-white/12 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/30 [color-scheme:dark]'
-const label = 'block text-xs uppercase tracking-wide text-white/45 mb-1'
-const ghost = 'rounded-lg border border-white/20 text-white text-sm px-3 py-1.5 hover:bg-white/5'
+const input = 'bg-host-input border border-host-edge rounded-lg px-3 py-2 text-sm text-host-text placeholder:text-host-faint focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-host-accent'
+const label = 'block text-[13.5px] font-medium text-host-label mb-1'
+const ghost = 'rounded-lg border border-host-edge bg-host-panel text-host-text text-sm px-3 py-1.5 hover:bg-host-hover'
 
 export default function HostSeriesActions({ eventId, eventName, raceDate, seriesId, seriesName = '', seriesSlug = '' }) {
   const router = useRouter()
@@ -26,9 +27,9 @@ export default function HostSeriesActions({ eventId, eventName, raceDate, series
 
   if (seriesId) {
     return (
-      <p className="text-sm text-white/60 inline-flex items-center gap-2">
-        <CalendarRange size={14} className="text-white/40" />
-        <span>Part of series <a href={`/event/series/${seriesSlug}`} target="_blank" rel="noopener noreferrer" className="text-white underline underline-offset-2 hover:text-white/80">{seriesName || 'series'}</a></span>
+      <p className="text-sm text-host-hint inline-flex items-center gap-2">
+        <CalendarRange size={14} className="text-host-hint" />
+        <span>Part of series <a href={`/event/series/${seriesSlug}`} target="_blank" rel="noopener noreferrer" className="text-host-text underline underline-offset-2 hover:text-host-label">{seriesName || 'series'}</a></span>
       </p>
     )
   }
@@ -67,9 +68,9 @@ export default function HostSeriesActions({ eventId, eventName, raceDate, series
 
   if (done) {
     return (
-      <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+      <div className={`${HOST_NOTICE} ${HOST_NOTICE_TONE.ok}`}>
         Series created: {done.count} {done.count === 1 ? 'date' : 'dates'} created as drafts. Submit each one for review when it is ready.{' '}
-        <a href={`/event/series/${done.slug}`} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white">Open the series page →</a>
+        <a href={`/event/series/${done.slug}`} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:opacity-80">Open the series page →</a>
       </div>
     )
   }
@@ -83,7 +84,7 @@ export default function HostSeriesActions({ eventId, eventName, raceDate, series
   }
 
   return (
-    <form onSubmit={submit} className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-4 w-full">
+    <form onSubmit={submit} className="rounded-xl border border-host-border bg-host-panel p-4 space-y-4 w-full">
       <div>
         <label htmlFor="series-name" className={label}>Series name</label>
         <input id="series-name" type="text" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} required className={`${input} w-full sm:max-w-md`} />
@@ -96,25 +97,25 @@ export default function HostSeriesActions({ eventId, eventName, raceDate, series
           <button type="button" onClick={() => append(monthlyDates(raceDate, 3))} className={ghost}>+ monthly ×3</button>
           <button type="button" onClick={() => append([''])} className={ghost}>+ a date</button>
         </div>
-        {dates.length === 0 && <p className="text-xs text-white/40">No dates yet. Use a helper or add one.</p>}
+        {dates.length === 0 && <p className="text-xs text-host-hint">No dates yet. Use a helper or add one.</p>}
         <ul className="space-y-2">
           {dates.map((d, i) => (
             <li key={i} className="flex items-center gap-2">
               <label htmlFor={`series-date-${i}`} className="sr-only">Date {i + 1}</label>
               <input id={`series-date-${i}`} type="date" value={d} onChange={(e) => setDate(i, e.target.value)} required className={input} />
-              <button type="button" onClick={() => removeDate(i)} aria-label={`Remove date ${i + 1}`} className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/5"><X size={14} /></button>
+              <button type="button" onClick={() => removeDate(i)} aria-label={`Remove date ${i + 1}`} className="p-1.5 rounded-md text-host-hint hover:text-host-text hover:bg-host-hover"><X size={14} /></button>
             </li>
           ))}
         </ul>
       </div>
-      {error && <p role="alert" className="text-sm text-amber-200">{error}</p>}
+      {error && <p role="alert" className="text-sm text-host-warn">{error}</p>}
       <div className="flex items-center gap-3">
-        <button type="submit" disabled={busy} className="rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90 disabled:opacity-60 inline-flex items-center gap-1.5">
+        <button type="submit" disabled={busy} className={`${HOST_BTN_PRIMARY} gap-1.5`}>
           {busy && <Loader2 size={13} className="animate-spin" />} Create series
         </button>
-        <button type="button" onClick={() => { setOpen(false); setError(null) }} className="text-xs text-white/50 hover:text-white">Cancel</button>
+        <button type="button" onClick={() => { setOpen(false); setError(null) }} className="text-xs text-host-hint hover:text-host-text">Cancel</button>
       </div>
-      <p className="text-xs text-white/35">Each date becomes a draft copy of this event (same sessions, price and copy). One link lists every published date.</p>
+      <p className="text-xs text-host-hint">Each date becomes a draft copy of this event (same sessions, price and copy). One link lists every published date.</p>
     </form>
   )
 }

@@ -34,13 +34,13 @@ export default function DuplicateEventButton({ eventId, raceDate, apiUrl, editHr
   const [error, setError] = useState(null)
 
   const btn = dark
-    ? 'rounded-lg border border-white/20 text-white text-sm px-4 py-2 hover:bg-white/5'
+    ? 'rounded-lg border border-host-edge bg-host-panel text-host-text text-sm px-4 py-2 hover:bg-host-hover'
     : 'rounded-lg border border-un1t-border text-un1t-text text-sm px-3 py-1.5 hover:bg-un1t-bg'
   const input = dark
-    ? 'bg-white/[0.04] border border-white/12 rounded-lg px-3 py-2 text-sm text-white [color-scheme:dark]'
+    ? 'bg-host-input border border-host-edge rounded-lg px-3 py-2 text-sm text-host-text'
     : 'bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
-  const label = dark ? 'text-xs uppercase tracking-wide text-white/45' : 'text-xs text-un1t-subtle'
-  const errCls = dark ? 'text-sm text-amber-200' : 'text-sm text-amber-700'
+  const label = dark ? 'text-[13.5px] font-medium text-host-label' : 'text-xs text-un1t-subtle'
+  const errCls = dark ? 'text-sm text-host-warn' : 'text-sm text-amber-700'
 
   async function submit(e) {
     e.preventDefault()
@@ -82,7 +82,7 @@ export default function DuplicateEventButton({ eventId, raceDate, apiUrl, editHr
       <button type="submit" disabled={busy || !date} className={`${btn} inline-flex items-center gap-1.5 disabled:opacity-50`}>
         {busy ? <Loader2 size={13} className="animate-spin" /> : <Copy size={13} />} Create copy
       </button>
-      <button type="button" onClick={() => { setOpen(false); setError(null) }} className={dark ? 'text-xs text-white/50 hover:text-white' : 'text-xs text-un1t-subtle hover:text-un1t-text'}>
+      <button type="button" onClick={() => { setOpen(false); setError(null) }} className={dark ? 'text-xs text-host-hint hover:text-host-text' : 'text-xs text-un1t-subtle hover:text-un1t-text'}>
         Cancel
       </button>
       {error && <p role="alert" className={`basis-full ${errCls}`}>{error}</p>}

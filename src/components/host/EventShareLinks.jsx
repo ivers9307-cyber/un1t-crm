@@ -6,8 +6,9 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { SHARE_SOURCES, taggedEventUrl } from '@/lib/event-share-links'
+import { HOST_EYEBROW } from '@/components/host/host-ui'
 
-const BTN = 'rounded-lg border border-white/15 text-white/80 text-xs font-semibold px-3 py-1.5 hover:bg-white/10 hover:text-white'
+const BTN = 'rounded-lg border border-host-edge bg-host-panel text-host-text text-xs font-semibold px-3 py-1.5 hover:bg-host-hover'
 
 export default function EventShareLinks({ url, eventId, onSale }) {
   const [copied, setCopied] = useState(null)
@@ -32,7 +33,7 @@ export default function EventShareLinks({ url, eventId, onSale }) {
 
   return (
     <div className="mt-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-white/50">Copy a link for</p>
+      <p className={HOST_EYEBROW}>Copy a link for</p>
       <div className="mt-2 flex flex-wrap gap-2">
         {SHARE_SOURCES.map(({ token, label }) => (
           <button key={token} type="button" onClick={() => copy(token)} className={BTN}>
@@ -43,19 +44,19 @@ export default function EventShareLinks({ url, eventId, onSale }) {
       </div>
       {fallback && (
         <div className="mt-2">
-          <label htmlFor="share-link-fallback" className="text-xs text-white/60">Copy this link:</label>
+          <label htmlFor="share-link-fallback" className="text-xs text-host-hint">Copy this link:</label>
           <input
             id="share-link-fallback"
             readOnly
             value={fallback}
             onFocus={(e) => e.target.select()}
-            className="mt-1 w-full rounded-lg border border-white/15 bg-transparent px-3 py-1.5 text-xs text-white/80"
+            className="mt-1 w-full rounded-lg border border-host-edge bg-host-input px-3 py-1.5 text-xs text-host-text"
           />
         </div>
       )}
-      <p className="mt-2 text-xs text-white/50">Bookings from each link show up by source on the Insights tab.</p>
+      <p className="mt-2 text-xs text-host-hint">Bookings from each link show up by source on the Insights tab.</p>
       {!onSale && (
-        <p className="mt-2 text-xs text-white/60">This event is not on sale yet, so these links will not open for the public.</p>
+        <p className="mt-2 text-xs text-host-hint">This event is not on sale yet, so these links will not open for the public.</p>
       )}
     </div>
   )

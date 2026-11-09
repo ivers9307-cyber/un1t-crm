@@ -7,6 +7,7 @@
 import { useEffect, useRef } from 'react'
 import { usePathname } from 'next/navigation'
 import GuardedLink from '@/components/host/GuardedLink'
+import { HOST_TAB, HOST_TAB_ACTIVE } from '@/components/host/host-ui'
 
 export const EVENT_TABS = [
   { key: 'overview', label: 'Overview', path: '' },
@@ -34,8 +35,8 @@ export default function HostEventTabs({ eventId, attendeeCount = null }) {
     activeRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }, [pathname])
   return (
-    <nav aria-label="Event sections" className="mt-5 border-b border-white/10 overflow-x-auto">
-      <ul className="flex gap-1 min-w-max">
+    <nav aria-label="Event sections" className="mt-5 border-b border-host-border overflow-x-auto">
+      <ul className="flex gap-1 min-w-max pb-2">
         {EVENT_TABS.map((t) => {
           const active = t.key === current
           return (
@@ -44,11 +45,11 @@ export default function HostEventTabs({ eventId, attendeeCount = null }) {
                 ref={active ? activeRef : undefined}
                 href={`/host/events/${eventId}${t.path}`}
                 aria-current={active ? 'page' : undefined}
-                className={`block px-4 py-2.5 text-sm whitespace-nowrap border-b-2 -mb-px ${active ? 'border-white text-white font-semibold' : 'border-transparent text-white/55 hover:text-white'}`}
+                className={`block whitespace-nowrap ${active ? HOST_TAB_ACTIVE : HOST_TAB}`}
               >
                 {t.label}
                 {t.key === 'attendees' && typeof attendeeCount === 'number' && (
-                  <span className="ml-1.5 text-xs text-white/45">{attendeeCount}</span>
+                  <span className="ml-1.5 text-xs text-host-hint">{attendeeCount}</span>
                 )}
               </GuardedLink>
             </li>
