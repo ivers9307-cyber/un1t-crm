@@ -23,6 +23,7 @@ import {
   formatHostMoney,
   moneyLabel,
   eventMoneyCents,
+  hostEventDetail,
 } from '@/lib/host-portal'
 import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
 import HostEventRow from '@/components/host/HostEventRow'
@@ -117,13 +118,6 @@ export default async function HostOverviewPage() {
     stats = s
   }
 
-  function detailFor(e) {
-    let d = `${e.race_date || '—'} · ${e.kind}${e.active ? '' : ' · inactive'}`
-    const rev = revenueByEvent.get(e.id)
-    if (rev) d += ` · ${rev.paidCount} sold · ${formatHostMoney(eventMoneyCents(host, rev), cur)} ${label}`
-    return d
-  }
-
   function nextUpCard(e) {
     const chip = HOST_STATUS_CHIP[e.status] || 'bg-white/10 text-white/70'
     const times = (fill?.ok ? fill.sessions : [...(e.race_waves || [])].sort((a, b) => String(a.start_time).localeCompare(String(b.start_time))).map((w) => ({ time: String(w.start_time || '').slice(0, 5) })))
@@ -159,7 +153,7 @@ export default async function HostOverviewPage() {
           {tile({ label: 'Booked', value: booked, sub: bookedSub })}
           {tile({ label: 'Waitlist', value: statsOk ? st.waitlist.waiting : 'unavailable' })}
           {tile({ label: 'Page views', value: statsOk ? st.views : 'unavailable', sub: statsOk && st.conversion_pct !== null && st.conversion_pct !== undefined ? `${st.conversion_pct}% booked` : null })}
-          {tile({ label: `${label === 'net' ? 'Net' : 'Gross'} so far`, value: rev ? formatHostMoney(eventMoneyCents(host, rev), cur) : '—', sub: rev ? `${rev.paidCount} sold` : null })}
+          {tile({ label: `${label === 'net' ? 'Net' : 'Gross'} so far`, value: rev ? formatHostMoney(eventMoneyCents(host, rev), cur) : revenue === null ? 'unavailable' : '—', sub: rev ? `${rev.paidCount} sold` : null })}
         </div>
       </div>
     )
@@ -209,7 +203,7 @@ export default async function HostOverviewPage() {
           <h2 className={H2}>Coming up</h2>
           <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
             {comingUp.map((e) => (
-              <HostEventRow key={e.id} event={e} detail={detailFor(e)} />
+              <HostEventRow key={e.id} event={e} detail={hostEventDetail(host, e, revenueByEvent.get(e.id), cur)} />
             ))}
           </ul>
           <p className="mt-3 text-xs">

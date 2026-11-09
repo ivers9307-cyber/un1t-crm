@@ -15,9 +15,7 @@ import {
   loadHostToday,
   groupHostEvents,
   eventLandingHref,
-  formatHostMoney,
-  moneyLabel,
-  eventMoneyCents,
+  hostEventDetail,
   loadPublicRatingAverages,
 } from '@/lib/host-portal'
 import HostEventRow from '@/components/host/HostEventRow'
@@ -52,7 +50,6 @@ export default async function HostEventsPage() {
   }
   const revenueByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
   const cur = revenue?.currency || 'EUR'
-  const label = moneyLabel(host)
 
   if (error) {
     return (
@@ -82,12 +79,7 @@ export default async function HostEventsPage() {
   }
 
   function detailFor(e, withRating) {
-    let d = `${e.race_date || '—'} · ${e.kind}${e.active ? '' : ' · inactive'}`
-    const rev = revenueByEvent.get(e.id)
-    if (rev) d += ` · ${rev.paidCount} sold · ${formatHostMoney(eventMoneyCents(host, rev), cur)} ${label}`
-    const rating = withRating ? ratings?.get(e.id) : null
-    if (rating) d += ` · ★ ${rating.average} (${rating.count})`
-    return d
+    return hostEventDetail(host, e, revenueByEvent.get(e.id), cur, { rating: withRating ? ratings?.get(e.id) : null })
   }
 
   function renderRows(title, rows) {

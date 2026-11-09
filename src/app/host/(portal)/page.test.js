@@ -179,8 +179,16 @@ describe('host overview page', () => {
   it('shows a dash for the money tile when the event has no revenue row', async () => {
     state.events = [ev('u1', 'published', '2026-12-05')]
     const t = text(await Page())
-    expect(t).toContain('Net so far')
-    expect(t).toContain('—')
+    expect(t).toMatch(/Net so far—/)
+    expect(t).not.toMatch(/Net so farunavailable/)
+  })
+
+  it('reads unavailable, not a dash, on the money tile when the revenue read fails', async () => {
+    state.events = [ev('u1', 'published', '2026-12-05')]
+    state.revenueThrows = true
+    const t = text(await Page())
+    expect(t).toMatch(/Net so farunavailable/)
+    expect(t).not.toMatch(/Net so far—/)
   })
 
   it('lists the first three of needs-action and upcoming by date under Coming up, with All events', async () => {

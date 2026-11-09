@@ -8,7 +8,7 @@ import { getLocationZone } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 import {
   groupHostEvents, eventLandingHref, loadHostEvent, moneyLabel, eventMoneyCents,
-  loadPublicRatingAverages, loadHostToday, HOST_STATUS_CHIP, formatHostMoney,
+  loadPublicRatingAverages, loadHostToday, HOST_STATUS_CHIP, formatHostMoney, hostEventDetail,
 } from './host-portal'
 
 // Chainable, thenable supabase stub. `results` is consumed one per awaited query.
@@ -156,5 +156,29 @@ describe('loadPublicRatingAverages', () => {
     expect(m).toBeInstanceOf(Map)
     expect(m.size).toBe(0)
     expect(none.db.from).not.toHaveBeenCalled()
+  })
+})
+
+describe('hostEventDetail', () => {
+  const stripe = { payment_provider: 'stripe_connect' }
+  const direct = { payment_provider: 'revolut' }
+  const event = { race_date: '2026-12-05', kind: 'run', active: true }
+  const row = { paidCount: 3, gross_cents: 9000, net_to_host_cents: 8000 }
+
+  it('is the date and kind only with no revenue row', () => {
+    expect(hostEventDetail(stripe, event, null, 'EUR')).toBe('2026-12-05 · run')
+    expect(hostEventDetail(stripe, { ...event, race_date: null, active: false }, undefined, 'EUR')).toBe('— · run · inactive')
+  })
+  it('shows sold and net for a Stripe host', () => {
+    expect(hostEventDetail(stripe, event, row, 'EUR')).toBe('2026-12-05 · run · 3 sold · €80.00 net')
+  })
+  it('shows gross, never net, for a non-Stripe host', () => {
+    const d = hostEventDetail(direct, event, row, 'EUR')
+    expect(d).toBe('2026-12-05 · run · 3 sold · €90.00 gross')
+    expect(d).not.toContain('net')
+  })
+  it('appends the rating suffix only when a rating is given', () => {
+    expect(hostEventDetail(stripe, event, row, 'EUR', { rating: { average: 4.8, count: 19 } })).toBe('2026-12-05 · run · 3 sold · €80.00 net · ★ 4.8 (19)')
+    expect(hostEventDetail(stripe, event, row, 'EUR', { rating: null })).not.toContain('★')
   })
 })

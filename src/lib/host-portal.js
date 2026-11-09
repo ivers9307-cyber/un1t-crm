@@ -34,6 +34,18 @@ export function eventMoneyCents(host, perEventRow) {
 }
 
 /**
+ * The detail line under an event's name in a host list row: date, kind,
+ * inactive flag, then sold + money when the event has a revenue row, then the
+ * public rating when one is given. Pure; revenueRow and rating may be null.
+ */
+export function hostEventDetail(host, event, revenueRow, currency, { rating = null } = {}) {
+  let d = `${event.race_date || '—'} · ${event.kind}${event.active ? '' : ' · inactive'}`
+  if (revenueRow) d += ` · ${revenueRow.paidCount} sold · ${formatHostMoney(eventMoneyCents(host, revenueRow), currency)} ${moneyLabel(host)}`
+  if (rating) d += ` · ★ ${rating.average} (${rating.count})`
+  return d
+}
+
+/**
  * "Today" on the host's anchor studio clock. Any failure (unreadable host row
  * or zone) logs and falls back to the platform default zone.
  */
