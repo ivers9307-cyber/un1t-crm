@@ -174,4 +174,35 @@ describe('HostEventForm rating request copy', () => {
     expect(body.rating_email_subject).toBe('Tell us about {{event_name}}')
     expect(body.rating_email_intro).toBe('Two minutes, we promise.')
   })
+
+  // RATINGCOPY.1 — the edit page's own mapping feeds the form: a save that
+  // touches nothing must send back the copy the row already holds. Before the
+  // fix the page dropped the two rating fields, so this body carried null for
+  // both and the PUT wiped them.
+  it('an untouched save of a row with saved copy sends every copy field back unchanged', async () => {
+    const { hostEventFormInitial } = await import('@/lib/host-event-form-initial')
+    const row = {
+      ...initial,
+      confirmation_email_subject: 'You are in', confirmation_email_intro: 'See you there.',
+      reminder_email_subject: 'Tomorrow', reminder_email_intro: 'Bring water.',
+      rating_email_subject: 'How was {{event_name}}?', rating_email_intro: 'Two minutes, we promise.',
+      race_waves: [{ id: W1, start_time: '10:00:00', label: null, capacity: 20, display_order: 0 }],
+    }
+    delete row.sessions
+    const fetchMock = vi.fn(async (url) => (String(url) === '/api/host/series'
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<HostEventForm mode="edit" eventId="E1" initial={hostEventFormInitial(row)} brandName="UN1T" />)
+    // Saved copy opens the Email copy section by itself.
+    expect(screen.getByLabelText(/Rating request subject/).value).toBe('How was {{event_name}}?')
+    fireEvent.click(screen.getByRole('button', { name: /Save changes|Save event|Create event/ }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/host/events/E1')).toBe(true))
+    const body = JSON.parse(fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events/E1')[1].body)
+    expect(body).toMatchObject({
+      confirmation_email_subject: 'You are in', confirmation_email_intro: 'See you there.',
+      reminder_email_subject: 'Tomorrow', reminder_email_intro: 'Bring water.',
+      rating_email_subject: 'How was {{event_name}}?', rating_email_intro: 'Two minutes, we promise.',
+    })
+  })
 })
