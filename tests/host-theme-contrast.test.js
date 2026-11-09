@@ -42,8 +42,12 @@ const allRules = rules(css)
 const hostRules = allRules.filter((r) => r.selector.includes('data-host-theme'))
 const selectors = (r) => r.selector.split(',').map((s) => s.trim())
 const ruleFor = (sel) => hostRules.find((r) => selectors(r).includes(sel))
-const mediaStart = css.indexOf('@media (prefers-color-scheme: light)')
-const mediaBody = bodyAt(css, css.indexOf('{', mediaStart))
+// The media query is found by CONTENT (the one that targets the system wrapper), not by position.
+const mediaStarts = [...css.matchAll(/@media \(prefers-color-scheme: light\)\s*\{/g)].map((m) => m.index)
+const hostMedia = mediaStarts
+  .map((start) => ({ start, body: bodyAt(css, css.indexOf('{', start)) }))
+  .find((m) => m.body.includes("[data-host-theme='system']"))
+const mediaBody = hostMedia.body
 const mediaRule = rules(mediaBody).find((r) => selectors(r).includes("[data-host-theme='system']"))
 
 const themes = {
@@ -70,7 +74,7 @@ function check(theme, fg, bg, min, failures) {
   if (r < min) failures.push(`${theme}: ${fg} ${t[fg]} on ${bg} ${t[bg]} = ${r.toFixed(2)} (< ${min})`)
 }
 
-const TEXT_ON = { text: ['bg', 'panel', 'well', 'input'], label: ['bg', 'panel', 'well'], hint: ['bg', 'panel', 'well'] }
+const TEXT_ON = { text: ['bg', 'panel', 'well', 'input', 'hover'], label: ['bg', 'panel', 'well', 'hover'], hint: ['bg', 'panel', 'well', 'hover'] }
 
 describe('host theme contrast (WCAG)', () => {
   it('every token is a six-digit hex so the parser stays honest', () => {
@@ -101,6 +105,12 @@ describe('host theme contrast (WCAG)', () => {
     check(theme, 'edge', 'input', 3, failures)
     expect(failures).toEqual([])
   })
+  it.each(['dark', 'light'])('%s: star meets 3:1 on panel and on bg', (theme) => {
+    const failures = []
+    check(theme, 'star', 'panel', 3, failures)
+    check(theme, 'star', 'bg', 3, failures)
+    expect(failures).toEqual([])
+  })
   it('the contrast helper agrees with known WCAG values', () => {
     expect(ratio('#000000', '#FFFFFF')).toBeCloseTo(21, 1)
     expect(ratio('#777777', '#FFFFFF')).toBeCloseTo(4.48, 1)
@@ -124,6 +134,9 @@ describe('host theme token completeness', () => {
     expect(mediaRule, 'system rule inside the media query').toBeTruthy()
     expect(vars(mediaRule.body)).toEqual(tokens.light)
     expect(colorScheme(mediaRule.body)).toBe('light')
+  })
+  it('the light media block comes after the dark/system rule, so it wins at equal specificity', () => {
+    expect(hostMedia.start).toBeGreaterThan(css.indexOf(themes.dark.body))
   })
   it('each theme sets color-scheme to its own name', () => {
     expect(colorScheme(themes.dark.body)).toBe('dark')

@@ -19,27 +19,41 @@ export const HOST_META = 'text-[12.5px] text-host-hint'
 export const HOST_PANEL = 'rounded-xl border border-host-border bg-host-panel p-5'
 export const HOST_WELL = 'rounded-lg border border-host-border bg-host-well p-4'
 export const HOST_LIST = 'divide-y divide-host-border rounded-xl border border-host-border bg-host-panel'
-export const HOST_ROW = 'px-4 py-3'
+export const HOST_ROW = 'px-4 py-3 hover:bg-host-hover'
 
 // Controls
 export const HOST_INPUT =
   'h-11 w-full rounded-lg border border-host-edge bg-host-input px-3 text-[15px] text-host-text placeholder:text-host-faint focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-host-accent disabled:opacity-60'
+export const HOST_TEXTAREA =
+  'min-h-[6rem] w-full resize-y rounded-lg border border-host-edge bg-host-input px-3 py-2.5 text-[15px] text-host-text placeholder:text-host-faint focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-host-accent disabled:opacity-60'
 export const HOST_BTN =
-  'inline-flex items-center justify-center gap-2 rounded-lg border border-host-edge bg-host-panel px-4 py-2 text-sm font-medium text-host-text hover:bg-host-well disabled:opacity-50 disabled:cursor-not-allowed'
+  'inline-flex items-center justify-center gap-2 rounded-lg border border-host-edge bg-host-panel px-4 py-2 text-sm font-medium text-host-text hover:bg-host-hover disabled:opacity-50 disabled:cursor-not-allowed'
 export const HOST_BTN_PRIMARY =
   'inline-flex items-center justify-center gap-2 rounded-lg bg-host-accent px-4 py-2 text-sm font-semibold text-host-on-accent hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'
 export const HOST_BTN_DANGER =
   'inline-flex items-center justify-center gap-2 rounded-lg bg-host-danger px-4 py-2 text-sm font-semibold text-host-on-danger hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'
+export const HOST_BTN_GHOST =
+  'inline-flex items-center justify-center gap-2 text-sm font-medium text-host-hint hover:text-host-text disabled:opacity-50 disabled:cursor-not-allowed'
 export const HOST_LINK = 'text-host-text underline underline-offset-2 hover:text-host-label'
+
+// Choices, tabs and tables
+export const HOST_CHOICE =
+  'inline-flex items-center justify-center rounded-lg border border-host-edge px-3 py-1.5 text-sm text-host-text hover:bg-host-hover'
+export const HOST_CHOICE_ON =
+  'inline-flex items-center justify-center rounded-lg border border-host-accent bg-host-accent px-3 py-1.5 text-sm font-semibold text-host-on-accent'
+export const HOST_TAB = 'rounded-lg px-3 py-1.5 text-sm text-host-hint hover:text-host-text'
+export const HOST_TAB_ACTIVE = 'rounded-lg px-3 py-1.5 text-sm bg-host-hover text-host-text font-semibold'
+export const HOST_TH = 'bg-host-well px-3 py-2 text-left text-[12.5px] font-medium text-host-hint'
+export const HOST_TD = 'px-3 py-2 border-b border-host-border'
 
 // Status
 export const HOST_CHIP = 'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium'
 export const HOST_CHIP_TONE = {
-  neutral: 'bg-host-well text-host-hint',
-  ok: 'bg-host-ok-bg text-host-ok',
-  warn: 'bg-host-warn-bg text-host-warn',
-  bad: 'bg-host-bad-bg text-host-bad',
-  info: 'bg-host-info-bg text-host-info',
+  neutral: 'border border-host-border bg-host-well text-host-hint',
+  ok: 'border border-host-ok-edge bg-host-ok-bg text-host-ok',
+  warn: 'border border-host-warn-edge bg-host-warn-bg text-host-warn',
+  bad: 'border border-host-bad-edge bg-host-bad-bg text-host-bad',
+  info: 'border border-host-info-edge bg-host-info-bg text-host-info',
 }
 export const HOST_NOTICE = 'rounded-lg border px-4 py-3 text-sm'
 export const HOST_NOTICE_TONE = {
@@ -47,4 +61,5 @@ export const HOST_NOTICE_TONE = {
   ok: 'border-host-ok-edge bg-host-ok-bg text-host-ok',
   warn: 'border-host-warn-edge bg-host-warn-bg text-host-warn',
   bad: 'border-host-bad-edge bg-host-bad-bg text-host-bad',
+  info: 'border-host-info-edge bg-host-info-bg text-host-info',
 }

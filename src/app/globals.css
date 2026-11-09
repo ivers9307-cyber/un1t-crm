@@ -274,6 +274,7 @@ body {
   --host-bg: #0C0D0F;
   --host-panel: #17181B;
   --host-well: #121316;
+  --host-hover: #22242A;
   --host-input: #0F1012;
   --host-border: #2A2B2F;
   --host-edge: #686A70;
@@ -294,6 +295,7 @@ body {
   --host-bad-edge: #6B2424;
   --host-info: #7DD3FC;
   --host-info-bg: #0F2430;
+  --host-info-edge: #1F4A61;
   --host-star: #FDE047;
   --host-danger: #DC2626;
   --host-on-danger: #FFFFFF;
@@ -303,6 +305,7 @@ body {
   --host-bg: #F7F8FA;
   --host-panel: #FFFFFF;
   --host-well: #F7F8FA;
+  --host-hover: #F1F5F9;
   --host-input: #FFFFFF;
   --host-border: #E2E5E9;
   --host-edge: #8493A6;
@@ -323,7 +326,8 @@ body {
   --host-bad-edge: #FECACA;
   --host-info: #0369A1;
   --host-info-bg: #F0F9FF;
-  --host-star: #CA8A04;
+  --host-info-edge: #BAE6FD;
+  --host-star: #B77F03;
   --host-danger: #DC2626;
   --host-on-danger: #FFFFFF;
 }
@@ -333,6 +337,7 @@ body {
     --host-bg: #F7F8FA;
     --host-panel: #FFFFFF;
     --host-well: #F7F8FA;
+    --host-hover: #F1F5F9;
     --host-input: #FFFFFF;
     --host-border: #E2E5E9;
     --host-edge: #8493A6;
@@ -353,7 +358,8 @@ body {
     --host-bad-edge: #FECACA;
     --host-info: #0369A1;
     --host-info-bg: #F0F9FF;
-    --host-star: #CA8A04;
+    --host-info-edge: #BAE6FD;
+    --host-star: #B77F03;
     --host-danger: #DC2626;
     --host-on-danger: #FFFFFF;
   }
@@ -364,6 +370,10 @@ body {
     outline-color: var(--host-accent);
   }
 }
+/* The global scrollbar colours are light; inside the portal they follow the theme. */
+[data-host-theme] ::-webkit-scrollbar-track { background: var(--host-bg); }
+[data-host-theme] ::-webkit-scrollbar-thumb { background: var(--host-edge); }
+[data-host-theme] ::-webkit-scrollbar-thumb:hover { background: var(--host-hint); }
 
 /* ── Gallery mosaic — first tile spans 2×2 (pure CSS, no data) ───── */
 @media (min-width: 768px) {

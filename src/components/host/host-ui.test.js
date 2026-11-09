@@ -13,9 +13,9 @@ describe('host-ui class kit', () => {
   it('exports every constant the spec names', () => {
     for (const n of ['HOST_H1', 'HOST_SECTION', 'HOST_SECTION_DESC', 'HOST_EYEBROW', 'HOST_LABEL', 'HOST_HINT', 'HOST_META',
       'HOST_PANEL', 'HOST_WELL', 'HOST_LIST', 'HOST_ROW', 'HOST_INPUT', 'HOST_BTN', 'HOST_BTN_PRIMARY', 'HOST_BTN_DANGER',
-      'HOST_LINK', 'HOST_CHIP', 'HOST_CHIP_TONE', 'HOST_NOTICE', 'HOST_NOTICE_TONE']) expect(ui[n], n).toBeTruthy()
+      'HOST_LINK', 'HOST_TEXTAREA', 'HOST_CHOICE', 'HOST_CHOICE_ON', 'HOST_TAB', 'HOST_TAB_ACTIVE', 'HOST_BTN_GHOST', 'HOST_TH', 'HOST_TD', 'HOST_CHIP', 'HOST_CHIP_TONE', 'HOST_NOTICE', 'HOST_NOTICE_TONE']) expect(ui[n], n).toBeTruthy()
     expect(Object.keys(ui.HOST_CHIP_TONE).sort()).toEqual(['bad', 'info', 'neutral', 'ok', 'warn'])
-    expect(Object.keys(ui.HOST_NOTICE_TONE).sort()).toEqual(['bad', 'neutral', 'ok', 'warn'])
+    expect(Object.keys(ui.HOST_NOTICE_TONE).sort()).toEqual(['bad', 'info', 'neutral', 'ok', 'warn'])
   })
   it('uses no raw white, black or palette colour in any constant', () => {
     const raw = /(^|[\s:])(?:[a-z-]+:)*(?:text|bg|border|divide|ring|outline|placeholder|fill|stroke)-(?:white|black|(?:red|amber|emerald|green|sky|blue|yellow|slate|gray|zinc|neutral|stone|orange|rose|indigo|violet|purple|pink|teal|cyan|lime|fuchsia)-\d)/
@@ -24,8 +24,23 @@ describe('host-ui class kit', () => {
     expect(strings.length).toBeGreaterThan(20)
   })
   it('never puts an opacity modifier on a host colour', () => {
-    const bad = strings.filter(([, s]) => /host-[a-z-]+\/\d/.test(s)).map(([n]) => n)
+    const bad = strings.filter(([, s]) => /host-[a-z-]+\/[\d[]/.test(s)).map(([n]) => n)
     expect(bad).toEqual([])
+  })
+  it('the opacity guard catches an arbitrary opacity too', () => {
+    const re = /host-[a-z-]+\/[\d[]/
+    expect(re.test('bg-host-panel/[0.5]')).toBe(true)
+    expect(re.test('bg-host-panel/50')).toBe(true)
+    expect(re.test('bg-host-panel border-host-edge')).toBe(false)
+  })
+  it('the textarea has no fixed height and the input keeps its 44px', () => {
+    expect(ui.HOST_TEXTAREA).not.toMatch(/(^|\s)h-/)
+    expect(ui.HOST_TEXTAREA).toContain('min-h-[6rem]')
+    expect(ui.HOST_TEXTAREA).toContain('resize-y')
+    expect(ui.HOST_INPUT).toContain('h-11')
+  })
+  it('hover states use the hover token, never well', () => {
+    for (const [n, s] of strings) expect(s, n).not.toMatch(/hover:bg-host-well/)
   })
   it('has no imports, so server and client code can both use it', () => {
     expect(readFileSync(new URL('./host-ui.js', import.meta.url), 'utf8')).not.toMatch(/^\s*import\s/m)
