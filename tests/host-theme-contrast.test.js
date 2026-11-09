@@ -2,8 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { stripComments } from '../scripts/lib/strip-comments.mjs'
+
 const root = join(__dirname, '..')
-const css = readFileSync(join(root, 'src/app/globals.css'), 'utf8')
+// Comments are blanked ONCE, with the shared scanner (GUARDSTRIP.1: never a regex,
+// which fails open). CSS block comments share JS's syntax; a brace or a selector
+// inside a comment can then never be read as a rule.
+const css = stripComments(readFileSync(join(root, 'src/app/globals.css'), 'utf8'))
 const tailwindConfig = require('../tailwind.config.js')
 
 // Balanced-brace body of the first block that starts at `open` (index of '{').
@@ -23,7 +28,7 @@ function rules(text) {
   while (i < text.length) {
     const open = text.indexOf('{', i)
     if (open === -1) break
-    const selector = text.slice(i, open).replace(/\/\*[\s\S]*?\*\//g, '').trim()
+    const selector = text.slice(i, open).trim()
     const body = bodyAt(text, open)
     out.push({ selector, body })
     i = open + body.length + 2
