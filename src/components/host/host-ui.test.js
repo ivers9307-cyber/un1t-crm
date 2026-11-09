@@ -13,7 +13,7 @@ describe('host-ui class kit', () => {
   it('exports every constant the spec names', () => {
     for (const n of ['HOST_H1', 'HOST_SECTION', 'HOST_SECTION_DESC', 'HOST_EYEBROW', 'HOST_LABEL', 'HOST_HINT', 'HOST_META',
       'HOST_PANEL', 'HOST_WELL', 'HOST_LIST', 'HOST_ROW', 'HOST_INPUT', 'HOST_BTN', 'HOST_BTN_PRIMARY', 'HOST_BTN_DANGER',
-      'HOST_LINK', 'HOST_TEXTAREA', 'HOST_CHOICE', 'HOST_CHOICE_ON', 'HOST_TAB', 'HOST_TAB_ACTIVE', 'HOST_BTN_GHOST', 'HOST_TH', 'HOST_TD', 'HOST_CHIP', 'HOST_CHIP_TONE', 'HOST_NOTICE', 'HOST_NOTICE_TONE']) expect(ui[n], n).toBeTruthy()
+      'HOST_LINK', 'HOST_TEXTAREA', 'HOST_CHOICE', 'HOST_CHOICE_ON', 'HOST_TAB', 'HOST_TAB_ACTIVE', 'HOST_BTN_GHOST', 'HOST_TH', 'HOST_TR', 'HOST_TD', 'HOST_BTN_SM', 'HOST_BTN_PRIMARY_SM', 'HOST_CHIP', 'HOST_CHIP_TONE', 'HOST_NOTICE', 'HOST_NOTICE_TONE']) expect(ui[n], n).toBeTruthy()
     expect(Object.keys(ui.HOST_CHIP_TONE).sort()).toEqual(['bad', 'info', 'neutral', 'ok', 'warn'])
     expect(Object.keys(ui.HOST_NOTICE_TONE).sort()).toEqual(['bad', 'info', 'neutral', 'ok', 'warn'])
   })
@@ -38,6 +38,23 @@ describe('host-ui class kit', () => {
     expect(ui.HOST_TEXTAREA).toContain('min-h-[6rem]')
     expect(ui.HOST_TEXTAREA).toContain('resize-y')
     expect(ui.HOST_INPUT).toContain('h-11')
+  })
+  it('the table hairline is on the row, with the last-row rule in the right variant order', () => {
+    // `last:[&>td]:border-0` would target the last CELL of every row; the rule
+    // belongs on the <tr> itself.
+    expect(ui.HOST_TR).toBe('border-b border-host-border last:border-0')
+    expect(ui.HOST_TD).not.toMatch(/border/)
+  })
+  it('the active tab is a filled pill with an edge, not a tint', () => {
+    expect(ui.HOST_TAB_ACTIVE).toContain('bg-host-panel')
+    expect(ui.HOST_TAB_ACTIVE).toContain('ring-1 ring-host-edge')
+  })
+  it('the small buttons carry the same states as the full-size ones', () => {
+    for (const n of ['HOST_BTN_SM', 'HOST_BTN_PRIMARY_SM']) {
+      expect(ui[n], n).toContain('text-xs')
+      expect(ui[n], n).toContain('px-3 py-1.5')
+      expect(ui[n], n).toContain('disabled:opacity-50 disabled:cursor-not-allowed')
+    }
   })
   it('hover states use the hover token, never well', () => {
     for (const [n, s] of strings) expect(s, n).not.toMatch(/hover:bg-host-well/)

@@ -55,7 +55,7 @@ export default async function HostEventLayout({ children, params }) {
         <div className="min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className={`${HOST_H1} break-words`}>{race.name}</h1>
-            <span className={`${HOST_STATUS_CHIP[race.status] || HOST_STATUS_CHIP.draft}`}>
+            <span className={HOST_STATUS_CHIP[race.status] || HOST_STATUS_CHIP.draft}>
               {HOST_EVENT_STATUS_LABEL[race.status] || race.status}
             </span>
           </div>

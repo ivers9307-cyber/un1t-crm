@@ -277,7 +277,7 @@ body {
   --host-hover: #22242A;
   --host-input: #0F1012;
   --host-border: #2A2B2F;
-  --host-edge: #686A70;
+  --host-edge: #6C6E74;
   --host-text: #EDEDEE;
   --host-label: #C4C4C6;
   --host-hint: #A9AAAC;
@@ -308,7 +308,7 @@ body {
   --host-hover: #F1F5F9;
   --host-input: #FFFFFF;
   --host-border: #E2E5E9;
-  --host-edge: #8493A6;
+  --host-edge: #808FA2;
   --host-text: #111827;
   --host-label: #334155;
   --host-hint: #5B6779;
@@ -340,7 +340,7 @@ body {
     --host-hover: #F1F5F9;
     --host-input: #FFFFFF;
     --host-border: #E2E5E9;
-    --host-edge: #8493A6;
+    --host-edge: #808FA2;
     --host-text: #111827;
     --host-label: #334155;
     --host-hint: #5B6779;

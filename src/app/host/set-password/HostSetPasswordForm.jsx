@@ -5,7 +5,7 @@
 // page via `@/lib/recovery-link` (hardened against CVE-internal 2026-05-13, the
 // 2026-06 session-race and the 2026-07-31 PKCE-verifier bug). It used to be a
 // verbatim copy, which meant it carried the same bug — keep it shared. Only the
-// styling (dark host brand) and the success redirect (/host) differ. Lives
+// styling (the host theme, light or dark) and the success redirect (/host) differ. Lives
 // OUTSIDE the (portal) gate.
 //
 // W1.S1c: page.js (server) resolves the request host's organisation brand and
@@ -16,7 +16,7 @@ import { useRouter } from 'next/navigation'
 import { Check, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { passwordRequirements, validatePasswordComplexity } from '@/lib/schemas'
-import { HOST_BTN_PRIMARY, HOST_EYEBROW, HOST_HINT, HOST_INPUT, HOST_NOTICE, HOST_NOTICE_TONE, HOST_SECTION } from '@/components/host/host-ui'
+import { HOST_BTN_PRIMARY, HOST_EYEBROW, HOST_HINT, HOST_INPUT, HOST_LABEL, HOST_NOTICE, HOST_NOTICE_TONE, HOST_SECTION } from '@/components/host/host-ui'
 import { parseRecoveryLink, establishRecoverySession } from '@/lib/recovery-link'
 
 export default function HostSetPasswordForm({ brand }) {
@@ -115,7 +115,8 @@ export default function HostSetPasswordForm({ brand }) {
           )}
 
           <div>
-            <input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password" autoComplete="new-password" className={HOST_INPUT} />
+            <label htmlFor="host-new-password" className={`${HOST_LABEL} mb-1.5`}>New password</label>
+            <input id="host-new-password" type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password" autoComplete="new-password" className={HOST_INPUT} />
             <ul className="mt-2 space-y-1">
               {passwordRequirements.map((r) => {
                 const ok = r.test(password || '')
@@ -128,7 +129,10 @@ export default function HostSetPasswordForm({ brand }) {
             </ul>
           </div>
 
-          <input type="password" required minLength={8} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirm password" autoComplete="new-password" className={HOST_INPUT} />
+          <div>
+            <label htmlFor="host-confirm-password" className={`${HOST_LABEL} mb-1.5`}>Confirm password</label>
+            <input id="host-confirm-password" type="password" required minLength={8} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirm password" autoComplete="new-password" className={HOST_INPUT} />
+          </div>
 
           {error && <p className="text-sm text-host-bad">{error}</p>}
 

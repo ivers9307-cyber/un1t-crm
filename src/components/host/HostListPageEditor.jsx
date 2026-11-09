@@ -8,7 +8,7 @@
 
 import { useState } from 'react'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
-import { HOST_LABEL, HOST_SECTION, HOST_EYEBROW } from '@/components/host/host-ui'
+import { HOST_EYEBROW, HOST_INPUT, HOST_LABEL, HOST_SECTION, HOST_TEXTAREA } from '@/components/host/host-ui'
 import { HOST_ABOUT_MAX, HOST_PHOTOS_MAX, HOST_TESTIMONIALS_MAX } from '@/lib/host-page-extras'
 
 const FIELDS = [
@@ -23,9 +23,6 @@ const FIELDS = [
   { key: 'accent_hex', label: 'Accent colour (#rrggbb)', max: 7, multiline: false, placeholder: 'Default: white' },
 ]
 
-const INPUT_BASE = 'w-full rounded-lg border border-host-edge bg-host-input px-3 py-2 text-host-text placeholder:text-host-faint focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-host-accent'
-const INPUT = `${INPUT_BASE} text-sm`
-const INPUT_XS = `${INPUT_BASE} text-xs`
 // Small secondary buttons and quiet text actions in this editor.
 const BTN_SM = 'rounded-lg border border-host-edge bg-host-panel px-3 py-1.5 text-xs text-host-text hover:bg-host-hover'
 const TEXT_ACTION = 'text-xs text-host-hint hover:text-host-text'
@@ -123,10 +120,10 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
         </label>
         {f.multiline ? (
           <textarea id={`lp-${f.key}`} rows={3} maxLength={f.max} value={values[f.key]} placeholder={f.placeholder}
-            onChange={(e) => edit((v) => ({ ...v, [f.key]: e.target.value }))} className={INPUT} />
+            onChange={(e) => edit((v) => ({ ...v, [f.key]: e.target.value }))} className={HOST_TEXTAREA} />
         ) : (
           <input id={`lp-${f.key}`} maxLength={f.max} value={values[f.key]} placeholder={f.placeholder}
-            onChange={(e) => edit((v) => ({ ...v, [f.key]: e.target.value }))} className={INPUT} />
+            onChange={(e) => edit((v) => ({ ...v, [f.key]: e.target.value }))} className={HOST_INPUT} />
         )}
       </div>
     )
@@ -138,7 +135,7 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
         About <span className="text-host-hint">({values.about_text.length}/{HOST_ABOUT_MAX})</span>
       </label>
       <textarea id="lp-about" rows={4} maxLength={HOST_ABOUT_MAX} value={values.about_text} placeholder="Who you are and what your events are like. Blank lines make paragraphs."
-        onChange={(e) => setExtra('about_text', e.target.value)} className={INPUT} />
+        onChange={(e) => setExtra('about_text', e.target.value)} className={HOST_TEXTAREA} />
     </div>
   )
 
@@ -160,7 +157,7 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
             <li key={p.url} className="rounded-lg border border-host-border p-2">
               <img src={p.url} alt={p.caption || `Photo ${i + 1}`} className="h-24 w-full rounded object-cover" />
               <input value={p.caption} maxLength={120} placeholder="Caption (optional)" aria-label={`Caption for photo ${i + 1}`}
-                onChange={(e) => updateCaption(i, e.target.value)} className={`${INPUT_XS} mt-2`} />
+                onChange={(e) => updateCaption(i, e.target.value)} className={`${HOST_INPUT} mt-2`} />
               <button type="button" onClick={() => removePhoto(p.url)} className={`mt-1 ${REMOVE_ACTION}`} aria-label={`Remove photo ${i + 1}`}>Remove photo</button>
             </li>
           ))}
@@ -181,11 +178,11 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
       {values.testimonials.map((t, i) => (
         <div key={i} className="mt-2 rounded-lg border border-host-border p-2 space-y-2">
           <label className={HOST_LABEL}>Quote {i + 1}
-            <textarea rows={2} maxLength={400} value={t.quote} onChange={(e) => updateTestimonial(i, { quote: e.target.value })} className={`${INPUT} mt-1`} />
+            <textarea rows={2} maxLength={400} value={t.quote} onChange={(e) => updateTestimonial(i, { quote: e.target.value })} className={`${HOST_TEXTAREA} mt-1`} />
           </label>
           <div className="flex items-center gap-2">
             <label className={`flex-1 ${HOST_LABEL}`}>Author {i + 1}
-              <input maxLength={80} value={t.author} onChange={(e) => updateTestimonial(i, { author: e.target.value })} className={`${INPUT} mt-1`} />
+              <input maxLength={80} value={t.author} onChange={(e) => updateTestimonial(i, { author: e.target.value })} className={`${HOST_INPUT} mt-1`} />
             </label>
             <button type="button" onClick={() => setExtra('testimonials', values.testimonials.filter((_, j) => j !== i))} className={REMOVE_ACTION}>Remove</button>
           </div>

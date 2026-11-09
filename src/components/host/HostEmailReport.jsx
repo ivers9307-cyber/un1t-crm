@@ -30,8 +30,8 @@
 // host-ui.js, so it reads in both the light and the dark host theme.
 
 import { useEffect, useState } from 'react'
-import { HOST_CHIP_TONE, HOST_EYEBROW, HOST_TD, HOST_TH } from '@/components/host/host-ui'
 import { useRouter } from 'next/navigation'
+import { HOST_CHIP, HOST_CHIP_TONE, HOST_EYEBROW, HOST_H1, HOST_HINT, HOST_META, HOST_TD, HOST_TH, HOST_TR } from '@/components/host/host-ui'
 import { scheduleLabelIn, scheduleErrorCopy } from '@/lib/host-schedule-time'
 import { formatRecordTime, needsZoneSuffix, zoneAbbreviation } from '@/lib/record-time'
 import { useViewerZone } from '@/lib/use-viewer-zone'
@@ -152,6 +152,9 @@ export function filterRecipients(recipients, filter) {
   }
 }
 
+// A sent or delivered message reads a step brighter than one still queued.
+const NEUTRAL_DONE = 'border border-host-border bg-host-well text-host-label'
+
 const OUTCOME_CHIP = {
   failed: HOST_CHIP_TONE.bad,
   bounced: HOST_CHIP_TONE.bad,
@@ -159,8 +162,8 @@ const OUTCOME_CHIP = {
   unsubscribed: HOST_CHIP_TONE.warn,
   clicked: HOST_CHIP_TONE.ok,
   opened: HOST_CHIP_TONE.info,
-  delivered: HOST_CHIP_TONE.neutral,
-  sent: HOST_CHIP_TONE.neutral,
+  delivered: NEUTRAL_DONE,
+  sent: NEUTRAL_DONE,
   queued: HOST_CHIP_TONE.neutral,
 }
 
@@ -173,7 +176,7 @@ export function outcomeChipClass(outcome) {
   return OUTCOME_CHIP[outcome] || HOST_CHIP_TONE.neutral
 }
 
-const chipCls = (o) => `rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${outcomeChipClass(o)}`
+const chipCls = (o) => `${HOST_CHIP} ${outcomeChipClass(o)}`
 
 /**
  * Header button label. A known count reads "Resend to 44 who missed it"; an
@@ -353,7 +356,7 @@ export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME 
     <div>
       <div className="mt-3">
         <div className="flex items-start justify-between gap-3 flex-wrap">
-          <h1 className="text-2xl font-bold">{campaign?.subject || ''}</h1>
+          <h1 className={HOST_H1}>{campaign?.subject || ''}</h1>
           <div className="flex items-center gap-2 shrink-0">
             {canResend && (
               <button
@@ -381,7 +384,7 @@ export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME 
         <p className="text-host-hint text-sm mt-1 flex items-center gap-2 flex-wrap">
           <span>{headerBits.join(' · ')}</span>
           {campaign?.email_type === 'utility' && (
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${HOST_CHIP_TONE.info}`}>
+            <span className={`${HOST_CHIP} ${HOST_CHIP_TONE.info}`}>
               Utility
             </span>
           )}
@@ -400,9 +403,9 @@ export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME 
         <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
           {tiles.map((t) => (
             <div key={t.key} className="rounded-xl border border-host-border bg-host-panel px-4 py-3">
-              <p className="text-[11px] uppercase tracking-wide text-host-hint">{t.label}</p>
+              <p className={HOST_META}>{t.label}</p>
               <p className="text-lg font-semibold mt-1 tabular-nums">{t.value}</p>
-              {t.sub && <p className="text-[11px] text-host-hint mt-0.5">{t.sub}</p>}
+              {t.sub && <p className={`${HOST_HINT} mt-0.5`}>{t.sub}</p>}
             </div>
           ))}
         </div>
@@ -426,7 +429,7 @@ export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME 
               </thead>
               <tbody>
                 {links.map((l) => (
-                  <tr key={l.url} className="last:[&>td]:border-0">
+                  <tr key={l.url} className={HOST_TR}>
                     <td className={`${HOST_TD} max-w-[28rem] truncate text-host-label`} title={l.url}>{l.is_unsubscribe ? 'Unsubscribe link' : l.url}</td>
                     <td className={`${HOST_TD} text-right tabular-nums`}>{l.clicks}</td>
                     <td className={`${HOST_TD} text-right tabular-nums`}>{l.people}</td>
@@ -435,7 +438,7 @@ export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME 
               </tbody>
             </table>
           </div>
-          <p className="text-[11px] text-host-hint mt-1">Security scanners open every link within seconds of delivery, so counts include them.</p>
+          <p className={`${HOST_HINT} mt-1`}>Security scanners open every link within seconds of delivery, so counts include them.</p>
         </section>
       )}
 
@@ -471,7 +474,7 @@ export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME 
               </thead>
               <tbody>
                 {filtered.map((r) => (
-                  <tr key={r.contact_id} className="last:[&>td]:border-0 align-top">
+                  <tr key={r.contact_id} className={`${HOST_TR} align-top`}>
                     <td className={HOST_TD}>{r.name || ''}</td>
                     <td className={`${HOST_TD} text-host-label`}>{r.email}</td>
                     <td className={HOST_TD}>

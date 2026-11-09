@@ -10,7 +10,7 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { fetchHostContactRows } from '@/lib/host-contact-list'
 import { failureCopy } from '@/lib/host-campaign-outcome'
-import { HOST_BTN_PRIMARY, HOST_CHIP, HOST_CHIP_TONE, HOST_H1, HOST_HINT, HOST_META, HOST_TD, HOST_TH } from '@/components/host/host-ui'
+import { HOST_BTN_PRIMARY, HOST_CHIP, HOST_CHIP_TONE, HOST_H1, HOST_HINT, HOST_META, HOST_TD, HOST_TH, HOST_TR } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -67,7 +67,7 @@ export default async function HostContacts() {
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.contact_id}>
+                  <tr key={r.contact_id} className={HOST_TR}>
                     <td className={td}>{r.name || '—'}</td>
                     <td className={`${td} text-host-hint`}>{r.email || '—'}</td>
                     <td className={`${td} text-host-label`}>{SOURCE_LABEL[r.source] || r.source}</td>

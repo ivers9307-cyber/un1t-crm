@@ -21,10 +21,10 @@
 // HOSTTHEME.1 — styled from the `host-*` theme tokens and the kit in
 // host-ui.js, so it reads in both the light and the dark host theme.
 
-import { HOST_CHIP_TONE, HOST_EYEBROW, HOST_LABEL, HOST_LIST, HOST_NOTICE, HOST_NOTICE_TONE, HOST_PANEL, HOST_SECTION, HOST_BTN_PRIMARY } from '@/components/host/host-ui'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { HOST_BTN_PRIMARY, HOST_BTN_PRIMARY_SM, HOST_BTN_SM, HOST_CHIP, HOST_CHIP_TONE, HOST_EYEBROW, HOST_HINT, HOST_LABEL, HOST_LIST, HOST_NOTICE, HOST_NOTICE_TONE, HOST_PANEL, HOST_SECTION } from '@/components/host/host-ui'
 import {
   nextQuarterHour, isoToZonedInputs, zonedLocalToIso, scheduleLabelIn, scheduleZoneLabel, scheduleErrorCopy, TIME_OPTIONS,
 } from '@/lib/host-schedule-time'
@@ -157,8 +157,8 @@ const STATUS_CHIP = {
   failed: HOST_CHIP_TONE.bad,
 }
 
-// The chip's own size and case (the tone carries every colour).
-const CHIP_BASE = 'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide'
+// The kit's chip, kept from shrinking in the subject line (the tone carries every colour).
+const CHIP_BASE = `shrink-0 ${HOST_CHIP}`
 
 const STATUS_LABEL = {
   draft: 'Draft',
@@ -170,7 +170,7 @@ const STATUS_LABEL = {
 
 // The editor follows the host theme the portal wrapper carries (data-host-theme:
 // light | dark | system). Read once when the designer starts.
-function unlayerThemeFor(el) {
+export function unlayerThemeFor(el) {
   const host = el?.closest?.('[data-host-theme]')?.getAttribute('data-host-theme')
   if (host === 'light') return 'light'
   if (host === 'system' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: light)').matches) return 'light'
@@ -730,11 +730,8 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
     'rounded-lg border border-host-edge bg-host-input px-3 py-2 text-sm text-host-text ' +
     'placeholder:text-host-faint focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-host-accent'
   const input = `w-full ${inputBase}`
-  const btnSecondary =
-    'rounded-lg border border-host-edge text-host-text text-xs font-semibold px-3 py-1.5 ' +
-    'hover:bg-host-hover disabled:opacity-50'
-  const btnPrimary =
-    'rounded-lg bg-host-accent text-host-on-accent text-xs font-semibold px-3 py-1.5 hover:opacity-90 disabled:opacity-50'
+  const btnSecondary = HOST_BTN_SM
+  const btnPrimary = HOST_BTN_PRIMARY_SM
 
   return (
     <div>
@@ -788,7 +785,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                     aria-describedby="host-email-audience-note"
                     className={input}
                   />
-                  <p id="host-email-audience-note" className="text-[11px] text-host-hint mt-0.5">Resolved when you send: anyone who has opened since then is left out. Duplicate this email to pick a different audience.</p>
+                  <p id="host-email-audience-note" className={`${HOST_HINT} mt-0.5`}>Resolved when you send: anyone who has opened since then is left out. Duplicate this email to pick a different audience.</p>
                 </>
               ) : (
                 <select
@@ -822,7 +819,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                 className={`flex-1 rounded-lg border px-3 py-2 text-left ${emailType === 'marketing' ? 'border-host-accent bg-host-hover' : 'border-host-edge hover:bg-host-hover'}`}
               >
                 <span className="block text-sm font-semibold">Marketing</span>
-                <span className="block text-[11px] text-host-hint mt-0.5">Promotions and news. Only goes to contacts opted in to marketing.</span>
+                <span className={`block ${HOST_HINT} mt-0.5`}>Promotions and news. Only goes to contacts opted in to marketing.</span>
               </button>
               <button
                 type="button"
@@ -830,7 +827,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                 className={`flex-1 rounded-lg border px-3 py-2 text-left ${emailType === 'utility' ? 'border-host-accent bg-host-hover' : 'border-host-edge hover:bg-host-hover'}`}
               >
                 <span className="block text-sm font-semibold">Utility</span>
-                <span className="block text-[11px] text-host-hint mt-0.5">Operational info for attendees — time changes, instructions. Reaches people regardless of marketing opt-in, so only use it for messages about their booking.</span>
+                <span className={`block ${HOST_HINT} mt-0.5`}>Operational info for attendees — time changes, instructions. Reaches people regardless of marketing opt-in, so only use it for messages about their booking.</span>
               </button>
             </div>
           </div>
@@ -843,14 +840,14 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                   type="button"
                   onClick={() => setMode('design')}
                   disabled={!unlayerReady}
-                  className={`rounded px-2 py-0.5 ${mode === 'design' ? 'bg-host-hover text-host-text font-semibold' : 'text-host-hint hover:text-host-text'} disabled:opacity-40`}
+                  className={`rounded px-2 py-0.5 ${mode === 'design' ? 'bg-host-panel text-host-text font-semibold ring-1 ring-host-edge' : 'text-host-hint hover:text-host-text'} disabled:opacity-40`}
                 >
                   Design
                 </button>
                 <button
                   type="button"
                   onClick={() => ((pendingDesignRef.current || (hasDesign && mode === 'design' && !designDropped)) ? dropDesign() : setMode('text'))}
-                  className={`rounded px-2 py-0.5 ${mode === 'text' ? 'bg-host-hover text-host-text font-semibold' : 'text-host-hint hover:text-host-text'}`}
+                  className={`rounded px-2 py-0.5 ${mode === 'text' ? 'bg-host-panel text-host-text font-semibold ring-1 ring-host-edge' : 'text-host-hint hover:text-host-text'}`}
                 >
                   Plain text
                 </button>
@@ -885,7 +882,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                 className={input}
               />
             )}
-            <p className="text-[11px] text-host-hint mt-1">
+            <p className={`${HOST_HINT} mt-1`}>
               Sent with your sender name and an unsubscribe link added automatically.
               {' '}Personalise with variables: {'{{first_name}}'}, {'{{last_name}}'}, {'{{name}}'}, {'{{email}}'} — in the designer they&apos;re under the text toolbar&apos;s merge-tags menu.
             </p>
@@ -918,7 +915,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
               const actions = rowActions(c.status)
               return (
                 <li key={c.id} className="px-4 py-3">
-                  <div className="flex items-center justify-between gap-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <div className="min-w-0">
                       <p className="flex items-center gap-2 font-medium">
                         {c.status === 'draft' || c.status === 'scheduled' ? (
@@ -958,7 +955,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                         )}
                       </p>
                     </div>
-                    <div className="shrink-0 flex items-center gap-3">
+                    <div className="shrink-0 flex flex-wrap items-center gap-2 sm:gap-3">
                       {c.status === 'draft' && (
                         <div className="shrink-0 flex items-center gap-2">
                           <button
@@ -1093,7 +1090,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                       >
                         Close
                       </button>
-                      <p className="basis-full text-[11px] text-host-hint mt-1">
+                      <p className={`basis-full ${HOST_HINT} mt-1`}>
                         Starts sending within a few minutes of this time. Every check (sender, list, daily limit) runs again then.
                       </p>
                     </div>

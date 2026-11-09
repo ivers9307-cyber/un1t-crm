@@ -47,8 +47,8 @@ const mediaStarts = [...css.matchAll(/@media \(prefers-color-scheme: light\)\s*\
 const hostMedia = mediaStarts
   .map((start) => ({ start, body: bodyAt(css, css.indexOf('{', start)) }))
   .find((m) => m.body.includes("[data-host-theme='system']"))
-const mediaBody = hostMedia.body
-const mediaRule = rules(mediaBody).find((r) => selectors(r).includes("[data-host-theme='system']"))
+// Missing block: the tests below fail with a named assertion, not a TypeError here.
+const mediaRule = hostMedia ? rules(hostMedia.body).find((r) => selectors(r).includes("[data-host-theme='system']")) : undefined
 
 const themes = {
   dark: ruleFor("[data-host-theme='dark']"),
@@ -93,16 +93,22 @@ describe('host theme contrast (WCAG)', () => {
     check(theme, 'on-danger', 'danger', 4.5, failures)
     expect(failures).toEqual([])
   })
-  it.each(['dark', 'light'])('%s: each status text meets 4.5:1 on its own -bg and on panel', (theme) => {
+  it.each(['dark', 'light'])('%s: each status text meets 4.5:1 on its own -bg, panel, bg, well and hover', (theme) => {
     const failures = []
-    for (const s of ['ok', 'warn', 'bad', 'info']) { check(theme, s, `${s}-bg`, 4.5, failures); check(theme, s, 'panel', 4.5, failures) }
+    for (const s of ['ok', 'warn', 'bad', 'info']) {
+      for (const bg of [`${s}-bg`, 'panel', 'bg', 'well', 'hover']) check(theme, s, bg, 4.5, failures)
+    }
     expect(failures).toEqual([])
   })
-  it.each(['dark', 'light'])('%s: faint on input, and edge on panel and on input, meet 3:1', (theme) => {
+  it.each(['dark', 'light'])('%s: faint on input meets 3:1', (theme) => {
     const failures = []
     check(theme, 'faint', 'input', 3, failures)
-    check(theme, 'edge', 'panel', 3, failures)
-    check(theme, 'edge', 'input', 3, failures)
+    expect(failures).toEqual([])
+  })
+  // A control's edge and the selected tab's ring sit on every surface.
+  it.each(['dark', 'light'])('%s: edge meets 3:1 on bg, panel, well, input and hover', (theme) => {
+    const failures = []
+    for (const bg of ['bg', 'panel', 'well', 'input', 'hover']) check(theme, 'edge', bg, 3, failures)
     expect(failures).toEqual([])
   })
   it.each(['dark', 'light'])('%s: star meets 3:1 on panel and on bg', (theme) => {
@@ -131,12 +137,27 @@ describe('host theme token completeness', () => {
   })
   it('the system theme sets the dark values and switches every token to light under prefers-color-scheme: light', () => {
     expect(selectors(themes.dark)).toContain("[data-host-theme='system']")
+    expect(hostMedia, "a @media (prefers-color-scheme: light) block targeting [data-host-theme='system']").toBeTruthy()
     expect(mediaRule, 'system rule inside the media query').toBeTruthy()
     expect(vars(mediaRule.body)).toEqual(tokens.light)
     expect(colorScheme(mediaRule.body)).toBe('light')
   })
   it('the light media block comes after the dark/system rule, so it wins at equal specificity', () => {
+    expect(hostMedia, "a @media (prefers-color-scheme: light) block targeting [data-host-theme='system']").toBeTruthy()
     expect(hostMedia.start).toBeGreaterThan(css.indexOf(themes.dark.body))
+  })
+  // A nested explicit theme (the attendee table wraps the CRM's light Move
+  // dialog in data-host-theme="light" inside a dark portal) wins because every
+  // rule that sets a token matches a wrapper by ITS OWN attribute: the inner
+  // element's declared values beat the inherited ones whatever the order. A
+  // descendant selector here (e.g. "[data-host-theme='system'] *") would let an
+  // outer wrapper reach into a nested one.
+  it('every rule that sets a host token selects a wrapper by its own attribute only', () => {
+    const tokenRules = [...hostRules, ...(mediaRule ? [mediaRule] : [])].filter((r) => /--host-[a-z-]+\s*:/.test(r.body))
+    expect(tokenRules.length).toBeGreaterThanOrEqual(3)
+    for (const r of tokenRules) {
+      for (const sel of selectors(r)) expect(sel).toMatch(/^\[data-host-theme='(?:dark|light|system)'\]$/)
+    }
   })
   it('each theme sets color-scheme to its own name', () => {
     expect(colorScheme(themes.dark.body)).toBe('dark')

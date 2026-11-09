@@ -1,7 +1,7 @@
 'use client'
 
-// HOST-PORTAL.3 — host self-serve event create/edit form. Dark UN1T host-portal
-// styling (HOSTTHEME.1: the host theme tokens and class kit, light and dark). Builds the exact strict
+// HOST-PORTAL.3 — host self-serve event create/edit form. Styled from the host
+// theme tokens and class kit (HOSTTHEME.1, light and dark). Builds the exact strict
 // HostEventSchema body (only the schema keys) and POSTs (create) / PUTs (edit)
 // the host-scoped /api/host/events routes. Ticket price is entered in EUROS and
 // converted to integer cents on submit. registration_opens_at/closes_at are not
@@ -556,7 +556,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
               type="date"
               value={raceDate}
               onChange={(e) => setRaceDate(e.target.value)}
-              className={`${input}`}
+              className={input}
               required
             />
           </div>
@@ -608,7 +608,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                   type="time"
                   value={sess.start_time}
                   onChange={(e) => updateSession(sess.key, { start_time: e.target.value })}
-                  className={`${input}`}
+                  className={input}
                   required
                 />
               </div>
@@ -843,11 +843,11 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
 
       {/* Email copy (secondary, collapsed) */}
       <section id="setup-emails" className={panelCls}>
-        <h2>
+        <h2 className={HOST_SECTION}>
           <button
             type="button"
             onClick={() => setShowEmail((v) => !v)}
-            className={`flex items-center gap-2 ${HOST_SECTION}`}
+            className="flex items-center gap-2"
           >
             <span>{showEmail ? '▾' : '▸'}</span>
             Emails (optional)

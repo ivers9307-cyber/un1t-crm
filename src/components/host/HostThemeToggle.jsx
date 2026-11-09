@@ -1,6 +1,6 @@
 'use client'
-// HOSTTHEME.1 — the light/dark switch in the host portal header (the login
-// and set-password pages get it in a later task). A click writes the one-year `host_theme` cookie and flips
+// HOSTTHEME.1 — the light/dark switch in the host portal header and on the
+// login and set-password pages. A click writes the one-year `host_theme` cookie and flips
 // data-host-theme on the nearest themed wrapper at once, no reload.
 
 import { useEffect, useRef, useState } from 'react'
@@ -43,7 +43,7 @@ export default function HostThemeToggle({ initial }) {
 
   const base = 'inline-flex h-8 w-8 items-center justify-center rounded-md'
   const on = 'bg-host-accent text-host-on-accent'
-  const off = 'text-host-hint hover:bg-host-well hover:text-host-text'
+  const off = 'text-host-hint hover:bg-host-hover hover:text-host-text'
   return (
     <div ref={root} className="inline-flex items-center gap-0.5 rounded-lg border border-host-edge bg-host-panel p-0.5">
       <button

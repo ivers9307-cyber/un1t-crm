@@ -1,6 +1,7 @@
 // HOSTSTATS.1 — the Signups card: how many saw the page, how many booked,
 // where they came from, and how the waitlist is going. Pure render (server
-// or client); `dark` for the host portal's black theme, light for staff.
+// or client); `dark` for the host portal (its theme tokens, light or dark),
+// the CRM's light classes for staff.
 //
 // The figures are operator-facing (a host or a staff member), so plain
 // literals are fine. `stats` null = the lib could not read: say so rather
@@ -42,7 +43,7 @@ export default function EventSignupsCard({ stats, dark = false }) {
       {sources.length > 0 && (
         <div className="mt-4">
           <h3 className={`text-xs ${muted}`}>Where they came from</h3>
-          <ul className="mt-1.5 divide-y divide-current/10 text-sm">
+          <ul className={`mt-1.5 divide-y ${dark ? 'divide-host-border' : 'divide-current/10'} text-sm`}>
             {sources.map((s) => (
               <li key={s.source} className="flex items-center justify-between gap-3 py-1.5">
                 <span className="truncate">{s.label || s.source}</span>

@@ -8,8 +8,9 @@
 import { useEffect, useState } from 'react'
 import HostListPageEditor from '@/components/host/HostListPageEditor'
 import CopyLinkButton from '@/components/host/CopyLinkButton'
+import { HOST_BTN_SM } from '@/components/host/host-ui'
 
-const BTN = 'rounded-lg border border-host-edge bg-host-panel text-host-text text-xs font-semibold px-3 py-1.5 hover:bg-host-hover'
+const BTN = HOST_BTN_SM
 
 const WIDE = '(min-width: 1024px)'
 const PREVIEW_ID = 'host-page-preview'

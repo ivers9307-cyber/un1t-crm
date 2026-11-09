@@ -1,7 +1,7 @@
 'use client'
 // HostPastEvents — HOSTPORTAL.1. The Past group on /host/events: the newest 20
 // rows, with a "Show all" button for the rest. `rows` is plain data
-// ({ id, name, status, statusLabel, href, detail }); the server page builds it.
+// ({ id, name, status, statusLabel, href, detail, chip }); the server page builds it.
 
 import { useState } from 'react'
 import Link from 'next/link'

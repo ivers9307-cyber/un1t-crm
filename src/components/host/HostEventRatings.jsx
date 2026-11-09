@@ -4,7 +4,7 @@
 // Hide/Show toggle that calls PATCH /api/host/events/<id>/ratings/<rating id>.
 
 import { useEffect, useState } from 'react'
-import { HOST_HINT, HOST_SECTION, HOST_SECTION_DESC } from '@/components/host/host-ui'
+import { HOST_CHIP, HOST_CHIP_TONE, HOST_HINT, HOST_SECTION, HOST_SECTION_DESC } from '@/components/host/host-ui'
 
 const stars = (n) => '★'.repeat(n) + '☆'.repeat(5 - n)
 const when = (iso) => { try { return new Date(iso).toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' }) } catch { return '' } }
@@ -64,13 +64,13 @@ export default function HostEventRatings({ eventId }) {
           )}
           <ul className="space-y-2">
             {state.ratings.map((r) => (
-              <li key={r.id} className={`flex items-start justify-between gap-4 rounded-lg border border-host-border px-4 py-3 ${r.is_public ? 'bg-host-panel' : 'bg-host-well opacity-70'}`}>
+              <li key={r.id} className={`flex items-start justify-between gap-4 rounded-lg border border-host-border px-4 py-3 ${r.is_public ? 'bg-host-panel' : 'bg-host-well'}`}>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 text-sm">
                     <span className="text-host-star tracking-tight" aria-label={`${r.rating} out of 5`}>{stars(r.rating)}</span>
                     {r.author && <span className="text-host-label">{r.author}</span>}
                     <span className="text-host-hint text-xs">{when(r.created_at)}</span>
-                    {!r.is_public && <span className="rounded-full bg-host-well px-2 py-0.5 text-[11px] text-host-hint">Hidden</span>}
+                    {!r.is_public && <span className={`${HOST_CHIP} ${HOST_CHIP_TONE.neutral}`}>Hidden</span>}
                   </div>
                   {r.comment && <p className="mt-1 text-sm text-host-label">{r.comment}</p>}
                 </div>

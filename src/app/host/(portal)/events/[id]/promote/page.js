@@ -17,7 +17,7 @@ import EventShareLinks from '@/components/host/EventShareLinks'
 import AnnounceEventButton from '@/components/host/AnnounceEventButton'
 import HostPromoCodes from '@/components/host/HostPromoCodes'
 import HostSeriesActions from '@/components/host/HostSeriesActions'
-import { HOST_SECTION } from '@/components/host/host-ui'
+import { HOST_BTN_SM, HOST_SECTION } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -71,7 +71,7 @@ export default async function HostEventPromote(props) {
                 href={eventUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-lg border border-host-edge bg-host-panel text-host-text text-xs font-semibold px-3 py-1.5 hover:bg-host-hover"
+                className={HOST_BTN_SM}
               >
                 Open
               </a>

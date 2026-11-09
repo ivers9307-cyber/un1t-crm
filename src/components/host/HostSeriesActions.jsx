@@ -110,7 +110,7 @@ export default function HostSeriesActions({ eventId, eventName, raceDate, series
       </div>
       {error && <p role="alert" className="text-sm text-host-warn">{error}</p>}
       <div className="flex items-center gap-3">
-        <button type="submit" disabled={busy} className={`${HOST_BTN_PRIMARY} gap-1.5`}>
+        <button type="submit" disabled={busy} className={HOST_BTN_PRIMARY}>
           {busy && <Loader2 size={13} className="animate-spin" />} Create series
         </button>
         <button type="button" onClick={() => { setOpen(false); setError(null) }} className="text-xs text-host-hint hover:text-host-text">Cancel</button>

@@ -6,9 +6,9 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { SHARE_SOURCES, taggedEventUrl } from '@/lib/event-share-links'
-import { HOST_EYEBROW } from '@/components/host/host-ui'
+import { HOST_BTN_SM, HOST_EYEBROW } from '@/components/host/host-ui'
 
-const BTN = 'rounded-lg border border-host-edge bg-host-panel text-host-text text-xs font-semibold px-3 py-1.5 hover:bg-host-hover'
+const BTN = HOST_BTN_SM
 
 export default function EventShareLinks({ url, eventId, onSale }) {
   const [copied, setCopied] = useState(null)

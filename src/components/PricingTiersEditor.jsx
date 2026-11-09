@@ -74,7 +74,7 @@ export default function PricingTiersEditor({ value, onChange, dark = false }) {
               <button type="button" onClick={() => remove(i)} aria-label={`Remove tier ${i + 1}`} className={`p-1.5 ${ghost}`}><X size={14} /></button>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2 mt-2">
+          <div className={dark ? 'grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2' : 'grid grid-cols-2 gap-2 mt-2'}>
             <div>
               <label htmlFor={`${t.id}-from`} className={label}>Tier {i + 1} from</label>
               <input id={`${t.id}-from`} type="datetime-local" value={isoToLocal(t.starts_at)} onChange={(e) => update(i, { starts_at: localToIso(e.target.value) })} className={input} />

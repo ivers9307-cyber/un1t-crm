@@ -1,5 +1,5 @@
 // HOSTPORTAL.2 — how full each session of an event is, one row per session.
-// Pure render of loadSessionFill's `sessions` (dark host theme); no hooks, so
+// Pure render of loadSessionFill's `sessions` (host theme tokens); no hooks, so
 // it renders on the server. No capacity: a count and no bar.
 
 export default function SessionFillBars({ sessions }) {

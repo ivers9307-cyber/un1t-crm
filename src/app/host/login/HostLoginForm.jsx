@@ -11,7 +11,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { HOST_BTN_PRIMARY, HOST_EYEBROW, HOST_INPUT, HOST_META } from '@/components/host/host-ui'
+import { HOST_BTN_PRIMARY, HOST_EYEBROW, HOST_INPUT, HOST_LABEL, HOST_META } from '@/components/host/host-ui'
 
 export default function HostLoginForm({ brand }) {
   const router = useRouter()
@@ -45,24 +45,32 @@ export default function HostLoginForm({ brand }) {
           <p className={`${HOST_EYEBROW} mt-2`}>Host portal</p>
         </div>
         <form onSubmit={submit} className="space-y-3">
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Email"
-            autoComplete="email"
-            required
-            className={HOST_INPUT}
-          />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            autoComplete="current-password"
-            required
-            className={HOST_INPUT}
-          />
+          <div>
+            <label htmlFor="host-login-email" className={`${HOST_LABEL} mb-1.5`}>Email</label>
+            <input
+              id="host-login-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email"
+              autoComplete="email"
+              required
+              className={HOST_INPUT}
+            />
+          </div>
+          <div>
+            <label htmlFor="host-login-password" className={`${HOST_LABEL} mb-1.5`}>Password</label>
+            <input
+              id="host-login-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              autoComplete="current-password"
+              required
+              className={HOST_INPUT}
+            />
+          </div>
           {error && <p className="text-sm text-host-bad">{error}</p>}
           <button
             type="submit"

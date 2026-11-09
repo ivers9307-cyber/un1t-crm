@@ -41,8 +41,8 @@ export default function RegistrationQuestionsEditor({ value, onChange, dark = fa
     <div className="space-y-3">
       {qs.map((q, i) => (
         <div key={q.id} className={card}>
-          <div className="grid grid-cols-2 sm:grid-cols-[2fr_1fr_1fr_auto] gap-2 items-end">
-            <div className="col-span-2 sm:col-span-1">
+          <div className={dark ? 'grid grid-cols-1 sm:grid-cols-[2fr_1fr_1fr_auto] gap-2 items-end' : 'grid grid-cols-2 sm:grid-cols-[2fr_1fr_1fr_auto] gap-2 items-end'}>
+            <div className={dark ? undefined : 'col-span-2 sm:col-span-1'}>
               <label htmlFor={`${q.id}-label`} className={label}>Question {i + 1} label</label>
               <input id={`${q.id}-label`} type="text" maxLength={120} value={q.label || ''} onChange={(e) => update(i, { label: e.target.value })} placeholder="Dietary needs" className={input} />
             </div>

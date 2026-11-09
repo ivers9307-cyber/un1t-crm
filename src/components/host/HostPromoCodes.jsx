@@ -1,7 +1,7 @@
 'use client'
 
-// HOST-PORTAL.9 — host self-serve promo codes for ONE event. Dark UN1T host-
-// portal styling (matches HostEventForm). Lists the event's codes with
+// HOST-PORTAL.9 — host self-serve promo codes for ONE event. Styled from the
+// host-portal theme kit (host-ui.js; light and dark), like HostEventForm. Lists the event's codes with
 // activate/deactivate + delete, and a create form below. Talks only to the
 // host-scoped /api/host/events/[id]/promo-codes routes — event_id/location_id
 // are server-set there, so this form never sends scoping fields. Fixed
@@ -10,6 +10,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   HOST_BTN_PRIMARY,
+  HOST_CHIP,
+  HOST_CHIP_TONE,
   HOST_HINT,
   HOST_INPUT,
   HOST_LABEL,
@@ -194,9 +196,7 @@ export default function HostPromoCodes({ eventId }) {
                 <span className="text-xs text-host-hint">expires {expiryLabel(row.expires_at)}</span>
               )}
               <span
-                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                  row.active ? 'bg-host-ok-bg text-host-ok' : 'bg-host-well text-host-hint'
-                }`}
+                className={`${HOST_CHIP} ${row.active ? HOST_CHIP_TONE.ok : HOST_CHIP_TONE.neutral}`}
               >
                 {row.active ? 'Active' : 'Inactive'}
               </span>
@@ -284,7 +284,7 @@ export default function HostPromoCodes({ eventId }) {
           </div>
           <div>
             <label htmlFor="hpc-max" className={labelCls}>
-              Max uses <span className="text-host-faint">(optional)</span>
+              Max uses <span className="font-normal text-host-hint">(optional)</span>
             </label>
             <input
               id="hpc-max"
@@ -299,14 +299,14 @@ export default function HostPromoCodes({ eventId }) {
           </div>
           <div>
             <label htmlFor="hpc-expiry" className={labelCls}>
-              Expires <span className="text-host-faint">(optional)</span>
+              Expires <span className="font-normal text-host-hint">(optional)</span>
             </label>
             <input
               id="hpc-expiry"
               type="date"
               value={expiresDate}
               onChange={(e) => setExpiresDate(e.target.value)}
-              className={`${input}`}
+              className={input}
             />
           </div>
         </div>

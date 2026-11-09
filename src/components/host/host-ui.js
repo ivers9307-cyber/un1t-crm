@@ -30,6 +30,11 @@ export const HOST_BTN =
   'inline-flex items-center justify-center gap-2 rounded-lg border border-host-edge bg-host-panel px-4 py-2 text-sm font-medium text-host-text hover:bg-host-hover disabled:opacity-50 disabled:cursor-not-allowed'
 export const HOST_BTN_PRIMARY =
   'inline-flex items-center justify-center gap-2 rounded-lg bg-host-accent px-4 py-2 text-sm font-semibold text-host-on-accent hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'
+// The small pair: row actions, copy-link and share buttons (12px, 30px tall).
+export const HOST_BTN_SM =
+  'inline-flex items-center justify-center gap-2 rounded-lg border border-host-edge bg-host-panel px-3 py-1.5 text-xs font-semibold text-host-text hover:bg-host-hover disabled:opacity-50 disabled:cursor-not-allowed'
+export const HOST_BTN_PRIMARY_SM =
+  'inline-flex items-center justify-center gap-2 rounded-lg bg-host-accent px-3 py-1.5 text-xs font-semibold text-host-on-accent hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'
 export const HOST_BTN_DANGER =
   'inline-flex items-center justify-center gap-2 rounded-lg bg-host-danger px-4 py-2 text-sm font-semibold text-host-on-danger hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'
 export const HOST_BTN_GHOST =
@@ -42,9 +47,14 @@ export const HOST_CHOICE =
 export const HOST_CHOICE_ON =
   'inline-flex items-center justify-center rounded-lg border border-host-accent bg-host-accent px-3 py-1.5 text-sm font-semibold text-host-on-accent'
 export const HOST_TAB = 'rounded-lg px-3 py-1.5 text-sm text-host-hint hover:text-host-text'
-export const HOST_TAB_ACTIVE = 'rounded-lg px-3 py-1.5 text-sm bg-host-hover text-host-text font-semibold'
+// A filled pill with an edge: the ring is >= 3:1 on the page in both themes
+// (tests/host-theme-contrast.test.js), so the selected tab never relies on a tint.
+export const HOST_TAB_ACTIVE = 'rounded-lg px-3 py-1.5 text-sm bg-host-panel text-host-text font-semibold ring-1 ring-host-edge'
 export const HOST_TH = 'bg-host-well px-3 py-2 text-left text-[12.5px] font-medium text-host-hint'
-export const HOST_TD = 'px-3 py-2 border-b border-host-border'
+// The hairline sits on the row (not the cell) so it spans every column and the
+// last row draws none against the container's own border.
+export const HOST_TR = 'border-b border-host-border last:border-0'
+export const HOST_TD = 'px-3 py-2'
 
 // Status
 export const HOST_CHIP = 'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium'

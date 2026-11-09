@@ -1,8 +1,8 @@
 'use client'
 // HostAttendeeTable — EVENT-MOVE.2. The host event page's roster, one row per
 // ENTRY (a team or a single person), with a Move action for paid entries.
-// Dark host-portal styling like HostPromoCodes; the move dialog itself keeps
-// its light panel (the shared Modal primitive). An entry awaiting payment
+// Styled from the host theme kit like HostPromoCodes; the move dialog itself
+// keeps its light panel (the shared Modal primitive), in a nested light scope. An entry awaiting payment
 // shows "Pay first": a host cannot collect or waive money, and the host route
 // refuses it anyway.
 //
@@ -20,7 +20,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import MoveEntryDialog, { NOT_EMAILED_MESSAGE } from '@/components/MoveEntryDialog'
 import AnswerList from '@/components/AnswerList'
-import { HOST_HINT, HOST_NOTICE, HOST_NOTICE_TONE, HOST_TD, HOST_TH } from '@/components/host/host-ui'
+import { HOST_HINT, HOST_NOTICE, HOST_NOTICE_TONE, HOST_TD, HOST_TH, HOST_TR } from '@/components/host/host-ui'
 
 const STATUS_LABEL = { confirmed: 'Confirmed', pending_payment: 'Awaiting payment', cancelled: 'Cancelled', no_show: 'No-show' }
 const th = HOST_TH
@@ -65,7 +65,7 @@ export default function HostAttendeeTable({ entries, movedOut }) {
             </thead>
             <tbody>
               {rows.map((e) => (
-                <tr key={e.id} className="last:[&>td]:border-b-0">
+                <tr key={e.id} className={HOST_TR}>
                   <td className={td}>
                     <span className="text-host-text">{e.label}</span>
                     {e.last_move && e.last_move.time_change && (
@@ -74,7 +74,7 @@ export default function HostAttendeeTable({ entries, movedOut }) {
                       </span>
                     )}
                     {/* QUESTIONS.1 — the entry's answers. */}
-                    <AnswerList answers={e.answers} className="text-host-hint mt-0.5" />
+                    <AnswerList answers={e.answers} className="text-host-label mt-0.5" />
                     {e.last_move && !e.last_move.time_change && (
                       <span className="ml-2 text-[11px] text-host-info" title={`Moved in from ${e.last_move.from_event?.name || 'another event'} on ${fmtDate(e.last_move.created_at)} by ${e.last_move.actor_name || 'staff'}${e.last_move.forced ? ' (time was full)' : ''}`}>
                         moved in from {e.last_move.from_event?.name || 'another event'} {fmtDate(e.last_move.created_at)}
@@ -89,7 +89,7 @@ export default function HostAttendeeTable({ entries, movedOut }) {
                       <div key={i}>
                         {p.name || '—'}
                         {p.email && <span className="text-host-hint text-xs"> · {p.email}</span>}
-                        <AnswerList answers={p.answers} className="text-host-hint" />
+                        <AnswerList answers={p.answers} className="text-host-label" />
                       </div>
                     ))}
                   </td>
@@ -124,15 +124,20 @@ export default function HostAttendeeTable({ entries, movedOut }) {
         // `moving` is captured by these closures, so the notice can name the
         // entry even though onMoved clears it right after: the moved row
         // leaves this event's list on refresh.
-        <MoveEntryDialog
-          open
-          registration={moving.registration}
-          targetsUrl={`/api/host/registrations/${moving.id}/move-targets`}
-          moveUrl={`/api/host/registrations/${moving.id}/move`}
-          onClose={() => setMoving(null)}
-          onNotice={(msg) => setNotice(`${moving.label}: ${msg || NOT_EMAILED_MESSAGE}`)}
-          onMoved={() => { setMoving(null); router.refresh() }}
-        />
+        // The dialog is the CRM's own light component: a nested light scope
+        // gives it the light focus ring, native controls and scrollbar inside
+        // a dark portal. It is fixed-position, so the wrapper adds no layout.
+        <div data-host-theme="light">
+          <MoveEntryDialog
+            open
+            registration={moving.registration}
+            targetsUrl={`/api/host/registrations/${moving.id}/move-targets`}
+            moveUrl={`/api/host/registrations/${moving.id}/move`}
+            onClose={() => setMoving(null)}
+            onNotice={(msg) => setNotice(`${moving.label}: ${msg || NOT_EMAILED_MESSAGE}`)}
+            onMoved={() => { setMoving(null); router.refresh() }}
+          />
+        </div>
       )}
     </section>
   )

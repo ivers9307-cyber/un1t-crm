@@ -31,12 +31,20 @@
 // an `if (dark)` would be missed; a class assembled from fragments at runtime
 // is invisible. A floor, not proof.
 //
-// Forbidden: raw white/black text/bg/border/divide/ring/placeholder classes
-// (any /NN, any variant prefix), text-/bg-/border-/divide-/ring- classes on the
-// red/amber/emerald/green/sky/blue/yellow palettes, `[color-scheme:dark]`, and
-// an opacity modifier on a host-* colour (tokens are complete colours).
-// Matching is on class-token boundaries, so `bg-black` inside another word
-// does not match and `host-*` classes never trip the palette rule.
+// Forbidden, on every colour-utility family (text bg border[-side] divide
+// ring ring-offset outline fill stroke from via to accent caret decoration
+// shadow placeholder; any /NN, any variant prefix):
+//   - white and black;
+//   - every Tailwind palette (slate gray zinc neutral stone red orange amber
+//     yellow lime green emerald teal cyan sky blue indigo violet purple fuchsia
+//     pink rose);
+//   - the CRM's own `un1t-*` colours, which are light-only: pasted staff markup
+//     gives dark text on the dark theme;
+//   - an arbitrary colour (`bg-[#111]`, `text-[rgb(…)]`, `bg-[hsl(…)]`);
+// plus `[color-scheme:dark]` and an opacity modifier on a host-* colour
+// (tokens are complete colours). Matching is on class-token boundaries, so
+// `bg-black` inside another word does not match and `host-*` classes never
+// trip the palette rule.
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -61,15 +69,23 @@ const SHARED_DARK_PROP_FILES = [
 const ALLOWLIST = [
   { file: 'src/components/host/HostEmailPreviewModal.jsx', class: 'bg-black/60', reason: 'modal scrim stays black in both themes' },
   { file: 'src/components/host/OffSaleConfirmDialog.jsx', class: 'bg-black/60', reason: 'modal scrim stays black in both themes' },
+  { file: 'src/components/host/HostEmailPreviewModal.jsx', class: 'bg-[#f4f4f5]', reason: 'mat behind the rendered email: an email is white-backed by design, so the mat stays light in both themes' },
 ]
 
 const ALPHA = String.raw`(?:\/(?:\d+|\[[\d.]+\]))?`
+const VARIANTS = String.raw`(?:[\w-]+:)*`
+const FAMILY = String.raw`(?:text|bg|border(?:-[xytblrse])?|divide|ring(?:-offset)?|outline|fill|stroke|from|via|to|accent|caret|decoration|shadow|placeholder)`
+const PALETTE = String.raw`(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)`
 const FORBIDDEN_RES = [
-  new RegExp(String.raw`(?<![\w-])((?:[\w-]+:)*(?:text|bg|border(?:-[xytblrse])?|divide|ring|placeholder)-(?:white|black)${ALPHA})(?![\w-]|\/)`, 'g'),
-  new RegExp(String.raw`(?<![\w-])((?:[\w-]+:)*(?:text|bg|border(?:-[xytblrse])?|divide|ring)-(?:red|amber|emerald|green|sky|blue|yellow)-\d{2,3}${ALPHA})(?![\w-]|\/)`, 'g'),
+  new RegExp(String.raw`(?<![\w-])(${VARIANTS}${FAMILY}-(?:white|black)${ALPHA})(?![\w-]|\/)`, 'g'),
+  new RegExp(String.raw`(?<![\w-])(${VARIANTS}${FAMILY}-${PALETTE}-\d{2,3}${ALPHA})(?![\w-]|\/)`, 'g'),
+  // The CRM's light-only tokens.
+  new RegExp(String.raw`(?<![\w-])(${VARIANTS}${FAMILY}-un1t-[\w-]+${ALPHA})(?![\w-]|\/)`, 'g'),
+  // An arbitrary colour value.
+  new RegExp(String.raw`(?<![\w-])(${VARIANTS}${FAMILY}-\[(?:#|rgba?\(|hsla?\()[^\]\s]*\]${ALPHA})(?![\w-]|\/)`, 'g'),
   /(?<![\w-])((?:[\w-]+:)*\[color-scheme:dark\])/g,
   // A host-* colour with an opacity modifier.
-  /(?<![\w-])((?:[\w-]+:)*(?:text|bg|border(?:-[xytblrse])?|divide|ring|placeholder)-host-[\w-]+\/(?:\d+|\[[\d.]+\]))(?![\w-])/g,
+  new RegExp(String.raw`(?<![\w-])(${VARIANTS}${FAMILY}-host-[\w-]+\/(?:\d+|\[[\d.]+\]))(?![\w-])`, 'g'),
 ]
 
 /** Forbidden class tokens in `text`, as [{ index, cls }]. */
@@ -264,6 +280,20 @@ describe('the matcher', () => {
       'placeholder:text-white/30', 'text-red-300', 'bg-amber-500/10', 'border-emerald-400/30',
       'text-green-700', 'text-sky-300', 'bg-blue-600', 'text-yellow-300', 'hover:bg-red-500',
       '[color-scheme:dark]', 'bg-host-panel/50', 'hover:text-host-text/80', 'border-host-border/[0.5]',
+      // every palette
+      'text-slate-500', 'bg-gray-100', 'border-zinc-800', 'text-neutral-400', 'bg-stone-50', 'text-orange-600',
+      'bg-lime-200', 'text-teal-700', 'border-cyan-300', 'bg-indigo-600', 'text-violet-500', 'bg-purple-100',
+      'text-fuchsia-400', 'border-pink-200', 'text-rose-600/80',
+      // every family
+      'outline-white', 'focus:outline-black', 'fill-black', 'stroke-red-500', 'from-black', 'via-white/50',
+      'to-indigo-600', 'accent-white', 'caret-black', 'decoration-sky-400', 'shadow-black/20', 'ring-offset-white',
+      'placeholder-white', 'border-x-white/10',
+      // the CRM's own tokens
+      'text-un1t-text', 'bg-un1t-surface', 'hover:border-un1t-border', 'ring-un1t-accent/40',
+      // arbitrary colours
+      'bg-[#111]', 'text-[#fff]', 'hover:bg-[#1a1a1a]', 'bg-[rgb(0,0,0)]', 'text-[rgba(255,255,255,0.5)]', 'border-[hsl(0,0%,100%)]',
+      // an opacity modifier on a host colour, in a new family
+      'outline-host-accent/50',
     ]) {
       expect(classes(`className="a ${c} b"`), c).toEqual([c])
     }
@@ -272,8 +302,10 @@ describe('the matcher', () => {
   it('lets allowed classes and look-alikes through', () => {
     for (const c of [
       'bg-host-panel', 'text-host-text', 'hover:bg-host-hover', 'border-host-border', 'placeholder:text-host-faint',
-      'text-un1t-text', 'bg-un1t-surface', 'blackboard', 'bg-blackish', 'text-whitespace', 'my-bg-black',
+      'blackboard', 'bg-blackish', 'text-whitespace', 'my-bg-black',
       'text-redacted', 'bg-bluey-300', 'opacity-50', 'bg-host-accent text-host-on-accent',
+      'ring-1 ring-host-edge', 'focus:outline-host-accent', 'outline-offset-2', 'text-[13px]', 'text-[12.5px]',
+      'shadow-sm', 'decoration-2', 'stroke-2', 'from-host-panel', 'bg-[url(/x.png)]', 'min-h-[6rem]',
     ]) {
       expect(classes(`className="${c}"`), c).toEqual([])
     }
