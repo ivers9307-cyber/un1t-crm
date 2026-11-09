@@ -14,7 +14,7 @@ const { default: HostLayout } = await import('./layout.js')
 afterEach(cleanup)
 
 describe('HostLayout theme wrapper', () => {
-  it.each([['light', 'light'], ['dark', 'dark'], [undefined, 'system'], ['nonsense', 'system']])(
+  it.each([['light', 'light'], ['dark', 'dark'], [undefined, 'light'], ['nonsense', 'light']])(
     'cookie %s renders data-host-theme=%s', async (cookie, attr) => {
       jar.value = cookie
       const { container } = render(await HostLayout({ children: <p>child</p> }))

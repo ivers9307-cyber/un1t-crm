@@ -4,9 +4,13 @@
 export const HOST_THEME_COOKIE = 'host_theme'
 export const HOST_THEMES = ['light', 'dark']
 
-// 'system' = the host has not chosen; the CSS follows the device.
+// The look a host gets before they have chosen one (HOSTTHEME.2: light, whatever
+// the device prefers). The wrapper, the CSS and the toggle still understand
+// 'system' (follow the device), but nothing hands it out any more.
+export const HOST_THEME_DEFAULT = 'light'
+
 export function hostThemeFromCookie(value) {
-  return value === 'light' || value === 'dark' ? value : 'system'
+  return value === 'light' || value === 'dark' ? value : HOST_THEME_DEFAULT
 }
 
 export function hostThemeCookieString(theme) {
