@@ -38,11 +38,11 @@ export default async function HostEmailsPage() {
 
   return (
     <div>
-      <a href="/host" className="text-xs text-white/45 hover:text-white">← Back</a>
+      <a href="/host" className="text-xs text-host-hint hover:text-host-text">← Back</a>
 
       <div className="mt-3">
         <h1 className="text-2xl font-bold">Emails</h1>
-        <p className="text-white/55 text-sm mt-1">
+        <p className="text-host-hint text-sm mt-1">
           Email your contacts — everyone who attended your events or joined your mailing list and has opted in.
         </p>
       </div>

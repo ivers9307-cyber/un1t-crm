@@ -26,11 +26,11 @@
 // "Sent <first sent_at>" and, after a resend has drained, "Resent
 // <resent_at>" (mig 593). Resent rows keep their own sent_at in the table.
 //
-// Dark UN1T host-portal styling (bg-black page; chips use the -300 dark-chip
-// ramp, tiles are the `rounded-xl border border-white/10 bg-white/[0.03]`
-// recipe used across the portal).
+// HOSTTHEME.1 — styled from the `host-*` theme tokens and the kit in
+// host-ui.js, so it reads in both the light and the dark host theme.
 
 import { useEffect, useState } from 'react'
+import { HOST_CHIP_TONE, HOST_EYEBROW, HOST_TD, HOST_TH } from '@/components/host/host-ui'
 import { useRouter } from 'next/navigation'
 import { scheduleLabelIn, scheduleErrorCopy } from '@/lib/host-schedule-time'
 import { formatRecordTime, needsZoneSuffix, zoneAbbreviation } from '@/lib/record-time'
@@ -153,15 +153,15 @@ export function filterRecipients(recipients, filter) {
 }
 
 const OUTCOME_CHIP = {
-  failed: 'bg-red-500/15 text-red-300',
-  bounced: 'bg-red-500/15 text-red-300',
-  complained: 'bg-red-500/15 text-red-300',
-  unsubscribed: 'bg-amber-500/15 text-amber-300',
-  clicked: 'bg-emerald-500/15 text-emerald-300',
-  opened: 'bg-sky-500/15 text-sky-300',
-  delivered: 'bg-white/10 text-white/70',
-  sent: 'bg-white/10 text-white/70',
-  queued: 'bg-white/5 text-white/40',
+  failed: HOST_CHIP_TONE.bad,
+  bounced: HOST_CHIP_TONE.bad,
+  complained: HOST_CHIP_TONE.bad,
+  unsubscribed: HOST_CHIP_TONE.warn,
+  clicked: HOST_CHIP_TONE.ok,
+  opened: HOST_CHIP_TONE.info,
+  delivered: HOST_CHIP_TONE.neutral,
+  sent: HOST_CHIP_TONE.neutral,
+  queued: HOST_CHIP_TONE.neutral,
 }
 
 /**
@@ -170,7 +170,7 @@ const OUTCOME_CHIP = {
  * @param {string} outcome
  */
 export function outcomeChipClass(outcome) {
-  return OUTCOME_CHIP[outcome] || 'bg-white/5 text-white/40'
+  return OUTCOME_CHIP[outcome] || HOST_CHIP_TONE.neutral
 }
 
 const chipCls = (o) => `rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${outcomeChipClass(o)}`
@@ -322,9 +322,9 @@ export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME 
     }
   }
 
-  if (state === 'loading') return <p className="text-white/40 text-sm mt-6">Loading…</p>
-  if (state === 'not_found') return <p className="text-white/50 text-sm mt-6">This email was not found.</p>
-  if (state === 'error') return <p className="text-white/50 text-sm mt-6">Could not load this email.</p>
+  if (state === 'loading') return <p className="text-host-hint text-sm mt-6">Loading…</p>
+  if (state === 'not_found') return <p className="text-host-hint text-sm mt-6">This email was not found.</p>
+  if (state === 'error') return <p className="text-host-hint text-sm mt-6">Could not load this email.</p>
 
   const hasStats = campaign?.stats != null
   const tiles = hasStats ? statTiles(campaign.stats) : null
@@ -360,7 +360,7 @@ export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME 
                 type="button"
                 onClick={resendMissed}
                 disabled={resending}
-                className="shrink-0 rounded-full bg-white text-black px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+                className="shrink-0 rounded-full bg-host-accent text-host-on-accent px-3 py-1.5 text-xs font-medium hover:opacity-90 disabled:opacity-50"
               >
                 {resending ? 'Queueing…' : resendLabel(campaign.missed_count)}
               </button>
@@ -370,72 +370,72 @@ export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME 
                 type="button"
                 onClick={createReminder}
                 disabled={reminding || navigating}
-                className="shrink-0 rounded-full border border-white/25 text-white px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+                className="shrink-0 rounded-full border border-host-edge text-host-text px-3 py-1.5 text-xs font-medium hover:bg-host-hover disabled:opacity-50"
               >
                 {reminding ? 'Creating…' : reminderLabel(campaign.non_openers_count)}
               </button>
             )}
           </div>
         </div>
-        {actionError && <p className="text-red-300 text-xs mt-2">{actionError}</p>}
-        <p className="text-white/55 text-sm mt-1 flex items-center gap-2 flex-wrap">
+        {actionError && <p className="text-host-bad text-xs mt-2">{actionError}</p>}
+        <p className="text-host-hint text-sm mt-1 flex items-center gap-2 flex-wrap">
           <span>{headerBits.join(' · ')}</span>
           {campaign?.email_type === 'utility' && (
-            <span className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-sky-500/15 text-sky-300">
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${HOST_CHIP_TONE.info}`}>
               Utility
             </span>
           )}
         </p>
         {campaign?.status === 'sending' && (
-          <p className="text-amber-300 text-xs mt-2">
+          <p className="text-host-warn text-xs mt-2">
             {campaign.paused_reason ? pausedCopy(campaign.paused_reason, brandName) : 'Still sending, numbers update as it goes.'}
           </p>
         )}
         {staleNoDelivery && (
-          <p className="text-red-300 text-xs mt-2">Nothing delivered yet. If this persists, contact {brandName}.</p>
+          <p className="text-host-bad text-xs mt-2">Nothing delivered yet. If this persists, contact {brandName}.</p>
         )}
       </div>
 
       {hasStats ? (
         <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
           {tiles.map((t) => (
-            <div key={t.key} className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-              <p className="text-[11px] uppercase tracking-wide text-white/40">{t.label}</p>
+            <div key={t.key} className="rounded-xl border border-host-border bg-host-panel px-4 py-3">
+              <p className="text-[11px] uppercase tracking-wide text-host-hint">{t.label}</p>
               <p className="text-lg font-semibold mt-1 tabular-nums">{t.value}</p>
-              {t.sub && <p className="text-[11px] text-white/40 mt-0.5">{t.sub}</p>}
+              {t.sub && <p className="text-[11px] text-host-hint mt-0.5">{t.sub}</p>}
             </div>
           ))}
         </div>
       ) : (
-        <p className="mt-6 text-white/50 text-sm">
+        <p className="mt-6 text-host-hint text-sm">
           Counts are unavailable right now. The recipient list below is still complete.
         </p>
       )}
 
       {links.length > 0 && (
         <section className="mt-6">
-          <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-2">Links</h2>
-          <div className="rounded-xl border border-white/10 overflow-hidden">
+          <h2 className={`${HOST_EYEBROW} mb-2`}>Links</h2>
+          <div className="rounded-xl border border-host-border bg-host-panel overflow-hidden">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-white/40 border-b border-white/10">
-                  <th className="px-3 py-2 font-medium">Link</th>
-                  <th className="px-3 py-2 font-medium text-right">Clicks</th>
-                  <th className="px-3 py-2 font-medium text-right">People</th>
+                <tr>
+                  <th className={HOST_TH}>Link</th>
+                  <th className="bg-host-well px-3 py-2 text-right text-[12.5px] font-medium text-host-hint">Clicks</th>
+                  <th className="bg-host-well px-3 py-2 text-right text-[12.5px] font-medium text-host-hint">People</th>
                 </tr>
               </thead>
               <tbody>
                 {links.map((l) => (
-                  <tr key={l.url} className="border-b border-white/5 last:border-0">
-                    <td className="px-3 py-2 max-w-[28rem] truncate text-white/80" title={l.url}>{l.is_unsubscribe ? 'Unsubscribe link' : l.url}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{l.clicks}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{l.people}</td>
+                  <tr key={l.url} className="last:[&>td]:border-0">
+                    <td className={`${HOST_TD} max-w-[28rem] truncate text-host-label`} title={l.url}>{l.is_unsubscribe ? 'Unsubscribe link' : l.url}</td>
+                    <td className={`${HOST_TD} text-right tabular-nums`}>{l.clicks}</td>
+                    <td className={`${HOST_TD} text-right tabular-nums`}>{l.people}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="text-[11px] text-white/35 mt-1">Security scanners open every link within seconds of delivery, so counts include them.</p>
+          <p className="text-[11px] text-host-hint mt-1">Security scanners open every link within seconds of delivery, so counts include them.</p>
         </section>
       )}
 
@@ -447,7 +447,7 @@ export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME 
             aria-pressed={filter === f.key}
             onClick={() => setFilter(f.key)}
             className={`rounded-full px-3 py-1 text-xs font-medium ${
-              filter === f.key ? 'bg-white text-black' : 'border border-white/20 text-white/70'
+              filter === f.key ? 'bg-host-accent text-host-on-accent' : 'border border-host-edge text-host-label hover:bg-host-hover'
             }`}
           >
             {f.label} ({counts[f.key]})
@@ -457,47 +457,47 @@ export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME 
 
       <section className="mt-4">
         {filtered.length === 0 ? (
-          <p className="text-white/50 text-sm mt-4">No recipients.</p>
+          <p className="text-host-hint text-sm mt-4">No recipients.</p>
         ) : (
-          <div className="rounded-xl border border-white/10 overflow-hidden">
+          <div className="rounded-xl border border-host-border bg-host-panel overflow-hidden">
             <table className="hidden sm:table w-full text-sm">
               <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-white/40 border-b border-white/10">
-                  <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Email</th>
-                  <th className="px-3 py-2 font-medium">Outcome</th>
-                  <th className="px-3 py-2 font-medium">When</th>
+                <tr>
+                  <th className={HOST_TH}>Name</th>
+                  <th className={HOST_TH}>Email</th>
+                  <th className={HOST_TH}>Outcome</th>
+                  <th className={HOST_TH}>When</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((r) => (
-                  <tr key={r.contact_id} className="border-b border-white/5 last:border-0 align-top">
-                    <td className="px-3 py-2">{r.name || ''}</td>
-                    <td className="px-3 py-2 text-white/70">{r.email}</td>
-                    <td className="px-3 py-2">
+                  <tr key={r.contact_id} className="last:[&>td]:border-0 align-top">
+                    <td className={HOST_TD}>{r.name || ''}</td>
+                    <td className={`${HOST_TD} text-host-label`}>{r.email}</td>
+                    <td className={HOST_TD}>
                       <span className={chipCls(r.outcome)}>{r.outcome}</span>
                       {r.outcome === 'failed' && r.failure_copy && (
-                        <p className="text-xs text-white/45 mt-1">{r.failure_copy}</p>
+                        <p className="text-xs text-host-hint mt-1">{r.failure_copy}</p>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-white/55">{formatWhen(r.outcome_at, zone, viewerZone)}</td>
+                    <td className={`${HOST_TD} text-host-hint`}>{formatWhen(r.outcome_at, zone, viewerZone)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
 
-            <ul className="sm:hidden divide-y divide-white/10">
+            <ul className="sm:hidden divide-y divide-host-border">
               {filtered.map((r) => (
                 <li key={r.contact_id} className="px-4 py-3">
                   <p className="flex items-center justify-between gap-2">
                     <span className="truncate">{r.name || r.email || ''}</span>
                     <span className={chipCls(r.outcome)}>{r.outcome}</span>
                   </p>
-                  <p className="text-xs text-white/45 mt-0.5">{r.email}</p>
+                  <p className="text-xs text-host-hint mt-0.5">{r.email}</p>
                   {r.outcome === 'failed' && r.failure_copy && (
-                    <p className="text-xs text-white/45 mt-1">{r.failure_copy}</p>
+                    <p className="text-xs text-host-hint mt-1">{r.failure_copy}</p>
                   )}
-                  <p className="text-xs text-white/40 mt-1">{formatWhen(r.outcome_at, zone, viewerZone)}</p>
+                  <p className="text-xs text-host-hint mt-1">{formatWhen(r.outcome_at, zone, viewerZone)}</p>
                 </li>
               ))}
             </ul>
