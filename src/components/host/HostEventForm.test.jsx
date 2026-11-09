@@ -346,3 +346,124 @@ describe('HostEventForm actions', () => {
     expect(screen.getByRole('link', { name: 'Cancel' }).getAttribute('href')).toBe('/host/events')
   })
 })
+
+
+// HOSTPORTAL.2 fix round 1.
+function deferredFetch() {
+  let release
+  const gate = new Promise((r) => { release = r })
+  const fn = vi.fn(async (url) => {
+    if (String(url) === '/api/host/series') return { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+    await gate
+    return { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }
+  })
+  return { fn, release }
+}
+const saveCalls = (fn) => fn.mock.calls.filter(([u]) => String(u) === '/api/host/events/E1')
+const W3 = 'f0000000-0000-4000-8000-0000000000f3'
+
+describe('HostEventForm session ids after a save', () => {
+  async function addAndSave() {
+    const fetchMock = okFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const view = render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="published" />)
+    fireEvent.click(screen.getByRole('button', { name: /Add a session/ }))
+    fireEvent.change(screen.getAllByLabelText(/Start time/)[2], { target: { value: '18:00' } })
+    fireEvent.change(screen.getAllByLabelText(/^Capacity/)[2], { target: { value: '8' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await screen.findByText('Saved.')
+    const withId = { ...initial, sessions: [...initial.sessions, { id: W3, start_time: '18:00:00', label: null, capacity: 8 }] }
+    return { fetchMock, view, withId }
+  }
+
+  it('a second save sends the id the first save created, with no id-less session', async () => {
+    const { fetchMock, view, withId } = await addAndSave()
+    view.rerender(<HostEventForm mode="edit" eventId="E1" initial={withId} brandName="UN1T" status="published" />)
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(saveCalls(fetchMock)).toHaveLength(2))
+    const body = JSON.parse(saveCalls(fetchMock)[1][1].body)
+    expect(body.sessions).toEqual([
+      { id: W1, start_time: '10:00', label: null, capacity: 20 },
+      { id: W2, start_time: '14:00', label: 'Afternoon', capacity: 15 },
+      { id: W3, start_time: '18:00', label: null, capacity: 8 },
+    ])
+  })
+
+  it('the merge alone leaves the form clean and keeps Saved.', async () => {
+    const { view, withId } = await addAndSave()
+    setUnsaved.mockClear()
+    view.rerender(<HostEventForm mode="edit" eventId="E1" initial={withId} brandName="UN1T" status="published" />)
+    expect(setUnsaved.mock.calls.every(([f]) => f === false)).toBe(true)
+    expect(screen.getByText('Saved.')).toBeTruthy()
+  })
+
+  it('an edit typed before the refresh arrives stays dirty and is kept', async () => {
+    const { fetchMock, view, withId } = await addAndSave()
+    fireEvent.change(screen.getAllByLabelText(/^Capacity/)[2], { target: { value: '9' } })
+    view.rerender(<HostEventForm mode="edit" eventId="E1" initial={withId} brandName="UN1T" status="published" />)
+    expect(setUnsaved.mock.calls.at(-1)[0]).toBe(true)
+    expect(screen.getAllByLabelText(/^Capacity/)[2].value).toBe('9')
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(saveCalls(fetchMock)).toHaveLength(2))
+    expect(JSON.parse(saveCalls(fetchMock)[1][1].body).sessions[2]).toEqual({ id: W3, start_time: '18:00', label: null, capacity: 9 })
+  })
+})
+
+describe('HostEventForm Submit for review vs unsaved edits', () => {
+  it('shows the button when clean, the save-first line when dirty, the button again after a save', async () => {
+    vi.stubGlobal('fetch', okFetch())
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    expect(screen.getByRole('button', { name: 'Submit for review' })).toBeTruthy()
+    expect(screen.queryByText('Save your changes before submitting.')).toBeNull()
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Other' } })
+    expect(screen.queryByRole('button', { name: 'Submit for review' })).toBeNull()
+    expect(screen.getByText('Save your changes before submitting.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await screen.findByText('Saved.')
+    expect(screen.getByRole('button', { name: 'Submit for review' })).toBeTruthy()
+    expect(screen.queryByText('Save your changes before submitting.')).toBeNull()
+  })
+})
+
+describe('HostEventForm save edge cases', () => {
+  it('an edit typed while the save is in flight is not reported as saved', async () => {
+    const { fn, release } = deferredFetch()
+    vi.stubGlobal('fetch', fn)
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="published" />)
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'First' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(saveCalls(fn)).toHaveLength(1))
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Second' } })
+    release()
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
+    expect(setUnsaved.mock.calls.at(-1)[0]).toBe(true)
+    expect(screen.queryByText('Saved.')).toBeNull()
+  })
+
+  it('a failed save keeps the form dirty, shows the error and no Saved.', async () => {
+    const fn = vi.fn(async (url) => (String(url) === '/api/host/series'
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      : { ok: false, status: 400, json: async () => ({ success: false, error: 'Nope, try again.' }) }))
+    vi.stubGlobal('fetch', fn)
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="published" />)
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Other' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    expect(await screen.findByText('Nope, try again.')).toBeTruthy()
+    expect(screen.queryByText('Saved.')).toBeNull()
+    expect(setUnsaved.mock.calls.at(-1)[0]).toBe(true)
+    expect(refresh).not.toHaveBeenCalled()
+  })
+})
+
+describe('HostEventForm section headings match the jump bar', () => {
+  it.each(['Basics', 'Schedule & sessions', 'Tickets & pricing', 'Questions at signup', 'Page look'])('has a %s heading', (h) => {
+    vi.stubGlobal('fetch', okFetch())
+    render(<HostEventForm mode="create" brandName="UN1T" />)
+    expect(screen.getByRole('heading', { name: h })).toBeTruthy()
+  })
+  it('the email toggle reads Emails (optional)', () => {
+    vi.stubGlobal('fetch', okFetch())
+    render(<HostEventForm mode="create" brandName="UN1T" />)
+    expect(screen.getByRole('button', { name: /Emails \(optional\)/ })).toBeTruthy()
+  })
+})

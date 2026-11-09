@@ -19,7 +19,6 @@ vi.mock('@/lib/supabase', () => ({
     },
   }),
 }))
-vi.mock('@/lib/host-org-brand', () => ({ resolveHostOrgBrand: vi.fn(async () => ({ name: 'Brand X' })) }))
 
 const { default: Page } = await import('./page.js')
 

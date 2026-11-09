@@ -309,10 +309,13 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       if (isEdit) {
         // Stay on the page: the saved body is the new baseline, and the
         // refresh re-renders the layout so the header's status chip updates.
+        // An edit typed while the save was in flight is not saved: judge the
+        // body as it is NOW against the one that was sent.
         baseline.current = JSON.stringify(sentBody)
-        setDirty(false)
-        setUnsaved(false)
-        setSaved(true)
+        const stillDirty = latestBody.current !== baseline.current
+        setDirty(stillDirty)
+        setUnsaved(stillDirty)
+        setSaved(!stillDirty)
         setSubmitting(false)
         router.refresh()
         return
@@ -331,7 +334,15 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   // does not carry); a save moves it to the body that was saved.
   const currentBody = JSON.stringify(buildBody())
   const baseline = useRef(null)
+  const latestBody = useRef(currentBody)
+  function rebaseSessions(mapSessions) {
+    if (!baseline.current) return
+    const base = JSON.parse(baseline.current)
+    base.sessions = mapSessions(base.sessions || [])
+    baseline.current = JSON.stringify(base)
+  }
   const [dirty, setDirty] = useState(false)
+  useEffect(() => { latestBody.current = currentBody }, [currentBody])
   useEffect(() => {
     if (baseline.current === null) baseline.current = currentBody
     const isDirty = currentBody !== baseline.current
@@ -340,6 +351,34 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     if (isDirty) setSaved(false)
   }, [currentBody])
   useEffect(() => () => setUnsaved(false), [])
+
+  // A save that added sessions leaves their rows id-less in this mounted form;
+  // router.refresh() then hands down a fresh `initial` carrying the new ids.
+  // Give each id-less row the id of the server session at the same start time
+  // (never touching what was typed) and move the baseline the same way, so the
+  // merge alone never changes dirty-ness. Without it the next save would
+  // delete and re-create those sessions.
+  const serverSessions = initial?.sessions
+  useEffect(() => {
+    if (!Array.isArray(serverSessions)) return
+    const hhmm = (t) => String(t || '').slice(0, 5)
+    const idByTime = new Map(serverSessions.filter((s) => s.id).map((s) => [hhmm(s.start_time), s.id]))
+    const taken = new Set(sessions.map((s) => s.id).filter(Boolean))
+    const fill = (time) => {
+      const id = idByTime.get(hhmm(time))
+      return id && !taken.has(id) ? id : null
+    }
+    if (!sessions.some((s) => !s.id && fill(s.start_time))) return
+    setSessions((prev) => prev.map((s) => {
+      const id = s.id ? null : fill(s.start_time)
+      return id ? { ...s, id } : s
+    }))
+    rebaseSessions((list) => list.map((s) => {
+      const id = s.id ? null : fill(s.start_time)
+      return id ? { id, ...s } : s
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverSessions])
   useEffect(() => {
     if (!dirty) return undefined
     const warn = (e) => { e.preventDefault(); e.returnValue = '' }
@@ -429,7 +468,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
 
       {/* Schedule */}
       <section id="setup-schedule" className="scroll-mt-24">
-        <h2 className={sectionCls}>Schedule</h2>
+        <h2 className={sectionCls}>Schedule &amp; sessions</h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label htmlFor="he-date" className={labelCls}>Date</label>
@@ -548,7 +587,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
 
       {/* Tickets & teams */}
       <section id="setup-tickets" className="scroll-mt-24">
-        <h2 className={sectionCls}>Tickets &amp; teams</h2>
+        <h2 className={sectionCls}>Tickets &amp; pricing</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label htmlFor="he-price" className={labelCls}>Standard price (EUR)</label>
@@ -610,7 +649,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
 
       {/* Presentation */}
       <section id="setup-look" className="scroll-mt-24">
-        <h2 className={sectionCls}>Presentation</h2>
+        <h2 className={sectionCls}>Page look</h2>
         <div>
           <label htmlFor="he-desc" className={labelCls}>Description <span className="text-white/30 normal-case">(optional)</span></label>
           <textarea
@@ -733,7 +772,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
           className="flex items-center gap-2 text-xs uppercase tracking-[0.15em] text-white/45 hover:text-white/70 transition"
         >
           <span>{showEmail ? '▾' : '▸'}</span>
-          Email copy (optional)
+          Emails (optional)
         </button>
         {showEmail && (
           <div className="mt-4 space-y-4 border-l border-white/10 pl-4">
@@ -835,7 +874,9 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
             : isEdit ? 'Save changes' : 'Create event'}
         </button>
         {isEdit && (status === 'draft' || status === 'rejected') && (
-          <span className="text-sm"><HostSubmitButton eventId={eventId} /></span>
+          dirty
+            ? <span className="text-sm text-white/50">Save your changes before submitting.</span>
+            : <span className="text-sm"><HostSubmitButton eventId={eventId} /></span>
         )}
         <GuardedLink href={cancelHref} className="text-sm text-white/50 hover:text-white transition">
           Cancel
