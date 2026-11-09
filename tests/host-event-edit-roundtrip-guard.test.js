@@ -30,7 +30,7 @@ import { DUPLICATE_COLUMNS } from '../src/lib/event-duplicate.js'
 const ROOT = path.resolve(import.meta.dirname, '..')
 const PUT_ROUTE = 'src/app/api/host/events/[id]/route.js'
 const POST_ROUTE = 'src/app/api/host/events/route.js'
-const EDIT_PAGE = 'src/app/host/(portal)/events/[id]/edit/page.js'
+const EDIT_PAGE = 'src/app/host/(portal)/events/[id]/setup/page.js'
 const code = (rel) => stripCommentsOfFile(path.join(ROOT, rel))
 
 /**
@@ -91,9 +91,12 @@ describe('host event edit round trip (RATINGCOPY.1)', () => {
     const page = code(EDIT_PAGE)
     expect(page).toMatch(/const initial = hostEventFormInitial\(event\)/)
     expect(page).toMatch(/<HostEventForm[^>]*\binitial=\{initial\}/)
-    // The select's argument: everything between `.select(` and the `.eq('id'` after it.
-    const from = page.indexOf('.select(')
-    const select = page.slice(from, page.indexOf(".eq('id'", from))
+    // The select's columns are loadHostEvent's last argument (HOSTPORTAL.2:
+    // the page no longer spells the query): everything between the call and
+    // the `if (!event) notFound()` that follows it.
+    const from = page.indexOf('loadHostEvent(\n')
+    expect(from, 'the page reads its event through loadHostEvent').toBeGreaterThan(-1)
+    const select = page.slice(from, page.indexOf('if (!event) notFound()', from))
     expect(select.length).toBeGreaterThan(100)
     const unselected = formColumns.filter((c) => !new RegExp(`\\b${c}\\b`).test(select))
     expect(unselected, 'columns the form needs that the page does not select').toEqual([])

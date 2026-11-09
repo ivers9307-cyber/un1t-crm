@@ -6,6 +6,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
+import GuardedLink from '@/components/host/GuardedLink'
 import HostEventForm from '@/components/host/HostEventForm'
 
 export const dynamic = 'force-dynamic'
@@ -17,7 +18,7 @@ export default async function HostNewEventPage() {
 
   return (
     <div>
-      <a href="/host" className="text-xs text-white/45 hover:text-white">← Back</a>
+      <GuardedLink href="/host/events" className="text-xs text-white/45 hover:text-white">← Back</GuardedLink>
       <h1 className="mt-3 text-2xl font-bold">Create an event</h1>
       <p className="text-white/60 mt-1 text-sm">
         Draft your event, then submit it to {brand.name} for review before it goes live.

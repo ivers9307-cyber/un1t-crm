@@ -1,12 +1,12 @@
 'use client'
 // DuplicateEventButton — HOSTSERIES.1. "Duplicate" opens a small date form
 // (default: a week after the source) and posts to `apiUrl`; on success the
-// copy's edit page opens. Shared by the host event page (dark) and the staff
+// copy's Set up tab opens. Shared by the host event page (dark) and the staff
 // events list (light): only the endpoint, the destination and the surface
 // colour differ, so they are props.
 //
 // `editHref` is a URL TEMPLATE string with an `{id}` placeholder
-// ('/host/events/{id}/edit'), NOT a function: this button is rendered by
+// ('/host/events/{id}/setup'), NOT a function: this button is rendered by
 // Server Components, and a function prop cannot cross the server→client
 // boundary (React throws at render). The first cut took `editHrefFor`, a
 // function, and /host/events/[id] crashed for every host from the 8 Nov 2026
@@ -16,6 +16,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Copy, Loader2 } from 'lucide-react'
+import { confirmLeave } from '@/lib/unsaved-guard'
 
 /** YYYY-MM-DD plus `days`, on the calendar (no zone maths: a date, not an instant). */
 export function addDays(isoDate, days) {
@@ -44,6 +45,10 @@ export default function DuplicateEventButton({ eventId, raceDate, apiUrl, editHr
   async function submit(e) {
     e.preventDefault()
     if (busy || !date) return
+    // HOSTPORTAL.2: ask about unsaved edits BEFORE the copy exists, so a host
+    // who declines is not left with a silent draft copy (true when nothing is
+    // unsaved, so the staff events list is unaffected).
+    if (!confirmLeave()) return
     setBusy(true)
     setError(null)
     try {

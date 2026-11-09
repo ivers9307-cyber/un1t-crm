@@ -8,14 +8,18 @@
 // editable here — they're passed through unchanged (normalized to ISO) so an
 // edit never silently wipes a reg window.
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { ImagePlus, Loader2, X } from 'lucide-react'
-import { HOST_EVENT_KINDS, MAX_SESSIONS } from '@/lib/host-events'
+import { HOST_EVENT_KINDS, MAX_SESSIONS, RE_REVIEW_REASONS, RE_REVIEW_REASON_LABEL, reReviewReasons, editChangesFromInput } from '@/lib/host-events'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 import PricingTiersEditor from '@/components/PricingTiersEditor'
 import RegistrationQuestionsEditor from '@/components/RegistrationQuestionsEditor'
+import GuardedLink from '@/components/host/GuardedLink'
+import HostSubmitButton from '@/components/host/HostSubmitButton'
+import OffSaleConfirmDialog, { joinLabels } from '@/components/host/OffSaleConfirmDialog'
+import { hasUnsaved, setUnsaved } from '@/lib/unsaved-guard'
 
 const KIND_LABELS = {
   workshop: 'Workshop',
@@ -44,10 +48,31 @@ function centsToEuros(cents) {
 const input =
   'w-full bg-white/[0.04] border border-white/12 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/30'
 const labelCls = 'block text-xs uppercase tracking-wide text-white/45 mb-1.5'
+// HOSTPORTAL.2 — the jump bar: pill label, section id (the ids live on the
+// <section>s below).
+const JUMPS = [
+  { id: 'setup-basics', label: 'Basics' },
+  { id: 'setup-schedule', label: 'Schedule & sessions' },
+  { id: 'setup-tickets', label: 'Tickets & pricing' },
+  { id: 'setup-questions', label: 'Questions at signup' },
+  { id: 'setup-look', label: 'Page look' },
+  { id: 'setup-emails', label: 'Emails' },
+]
+
 const sectionCls = 'text-xs uppercase tracking-[0.15em] text-white/45 mb-3'
 
+// The off-sale rule's view of a body: the server trims a tier's name before it
+// compares, so the form does too (a rename by spaces alone is not a change).
+function predictedChanges(body) {
+  const changes = editChangesFromInput(body)
+  if (Array.isArray(changes.pricing_tiers)) {
+    changes.pricing_tiers = changes.pricing_tiers.map((t) => ({ ...t, name: String(t.name ?? '').trim() }))
+  }
+  return changes
+}
+
 // brandName (W1.S1c): the host's organisation, resolved by the server page.
-export default function HostEventForm({ mode = 'create', initial = null, eventId = null, brandName = PLATFORM_NAME }) {
+export default function HostEventForm({ mode = 'create', initial = null, eventId = null, brandName = PLATFORM_NAME, status = null }) {
   const router = useRouter()
   const isEdit = mode === 'edit'
 
@@ -127,6 +152,25 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
   const [issues, setIssues] = useState([])
+  const [saved, setSaved] = useState(false)
+  // HOSTPORTAL.2 — the server took the last save off sale; the reasons the
+  // confirm dialog is asking about (null = closed).
+  const [offSale, setOffSale] = useState(false)
+  const [confirmReasons, setConfirmReasons] = useState(null)
+  // The last save sent the event to review, but the `status` prop still reads
+  // published until the refresh lands: it is already off sale, so no second
+  // dialog and no standing notice. Cleared when the status prop moves.
+  const [wentOffSale, setWentOffSale] = useState(false)
+  useEffect(() => { setWentOffSale(false) }, [status])
+  const onSale = status === 'published' && !wentOffSale
+  // What the SERVER holds, as far as the off-sale rule can tell. Starts as the
+  // loaded event and moves to the body each save sent.
+  const serverHolds = useRef({
+    non_member_fee_cents: initial?.non_member_fee_cents,
+    race_date: initial?.race_date,
+    pricing_tiers: initial?.pricing_tiers,
+    waves: (initial?.sessions || []).map((s) => ({ id: s.id, start_time: s.start_time })),
+  })
 
   // Reg window isn't editable here — preserve whatever the event already has.
   const regOpensAt = initial?.registration_opens_at ?? null
@@ -246,9 +290,11 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         label: trimmedText(s.label),
         capacity: parseInt(s.capacity, 10),
       })),
-      // A series pick travels; clearing it sends null (so an edit can leave a
-      // series); with no series at all the key is absent.
-      ...(seriesId ? { series_id: seriesId } : (initial?.series_id ? { series_id: null } : {})),
+      // An edit always states its series (null leaves it), from state alone:
+      // reading the live `initial` prop here made the body change when the
+      // refresh handed down the saved value, which read as an unsaved edit.
+      // A create sends the key only when a series is picked.
+      ...(isEdit ? { series_id: seriesId || null } : (seriesId ? { series_id: seriesId } : {})),
       hero_image_url: trimmedText(heroImageUrl),
       accent_hex: trimmedText(accentHex),
       venue_name: venueName.trim(),
@@ -262,11 +308,16 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     }
   }
 
-  async function handleSubmit(e) {
+  // The check at the moment of submitting (button or Enter): a published
+  // event whose edit would be sent back to review asks first and sends
+  // nothing until the host confirms.
+  function handleSubmit(e) {
     e.preventDefault()
     if (submitting) return
     setError(null)
     setIssues([])
+    setSaved(false)
+    setOffSale(false)
 
     const clientErr = clientValidate()
     if (clientErr) {
@@ -274,24 +325,58 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       return
     }
 
+    if (isEdit && onSale) {
+      const reasons = reReviewReasons(
+        { status, ...serverHolds.current },
+        predictedChanges(buildBody()),
+      )
+      if (reasons.length > 0) {
+        setConfirmReasons(reasons)
+        return
+      }
+    }
+    performSave()
+  }
+
+  async function performSave() {
     setSubmitting(true)
     try {
       const url = isEdit ? `/api/host/events/${eventId}` : '/api/host/events'
       const method = isEdit ? 'PUT' : 'POST'
+      const sentBody = buildBody()
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildBody()),
+        body: JSON.stringify(sentBody),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) {
-        setError(json.error || 'Something went wrong. Please try again.')
+        setError(json.message || json.error || 'Something went wrong. Please try again.')
         setIssues(Array.isArray(json.issues) ? json.issues : [])
         setSubmitting(false)
         return
       }
-      const id = isEdit ? eventId : json.data?.id
-      router.push(`/host/events/${id}`)
+      if (isEdit) {
+        // Stay on the page: the saved body is the new baseline, and the
+        // refresh re-renders the layout so the header's status chip updates.
+        // An edit typed while the save was in flight is not saved: judge the
+        // body as it is NOW against the one that was sent.
+        baseline.current = JSON.stringify(sentBody)
+        const sent = predictedChanges(sentBody)
+        serverHolds.current = sent
+        const nowOffSale = json.data?.reReview === true || wentOffSale
+        if (nowOffSale) setWentOffSale(true)
+        setOffSale(nowOffSale)
+        const stillDirty = latestBody.current !== baseline.current
+        setDirty(stillDirty)
+        setUnsaved(stillDirty)
+        setSaved(!stillDirty)
+        setSubmitting(false)
+        router.refresh()
+        return
+      }
+      setUnsaved(false)
+      router.push(`/host/events/${json.data?.id}/setup`)
       router.refresh()
     } catch (err) {
       setError(err?.message || 'Network error. Please try again.')
@@ -299,12 +384,101 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     }
   }
 
-  const cancelHref = isEdit && eventId ? `/host/events/${eventId}` : '/host'
+  // HOSTPORTAL.2 — unsaved-changes tracking. The baseline is the body as first
+  // rendered (the series fetch only fills the select's options, which the body
+  // does not carry); a save moves it to the body that was saved.
+  const currentBody = JSON.stringify(buildBody())
+  const baseline = useRef(null)
+  const latestBody = useRef(currentBody)
+  function rebaseSessions(mapSessions) {
+    if (!baseline.current) return
+    const base = JSON.parse(baseline.current)
+    base.sessions = mapSessions(base.sessions || [])
+    baseline.current = JSON.stringify(base)
+  }
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => { latestBody.current = currentBody }, [currentBody])
+  useEffect(() => {
+    if (baseline.current === null) baseline.current = currentBody
+    const isDirty = currentBody !== baseline.current
+    setDirty(isDirty)
+    setUnsaved(isDirty)
+    if (isDirty) setSaved(false)
+  }, [currentBody])
+  useEffect(() => () => setUnsaved(false), [])
+
+  // A save that added sessions leaves their rows id-less in this mounted form;
+  // router.refresh() then hands down a fresh `initial` carrying the new ids.
+  // Give each id-less row the id of the server session at the same start time
+  // (never touching what was typed) and move the baseline the same way, so the
+  // merge alone never changes dirty-ness. Without it the next save would
+  // delete and re-create those sessions.
+  const serverSessions = initial?.sessions
+  useEffect(() => {
+    if (!Array.isArray(serverSessions)) return
+    // The refreshed event is what the server holds now, new session ids included.
+    serverHolds.current = { ...serverHolds.current, waves: serverSessions.map((s) => ({ id: s.id, start_time: s.start_time })) }
+    const hhmm = (t) => String(t || '').slice(0, 5)
+    const idByTime = new Map(serverSessions.filter((s) => s.id).map((s) => [hhmm(s.start_time), s.id]))
+    const taken = new Set(sessions.map((s) => s.id).filter(Boolean))
+    const fill = (time) => {
+      const id = idByTime.get(hhmm(time))
+      return id && !taken.has(id) ? id : null
+    }
+    if (!sessions.some((s) => !s.id && fill(s.start_time))) return
+    setSessions((prev) => prev.map((s) => {
+      const id = s.id ? null : fill(s.start_time)
+      return id ? { ...s, id } : s
+    }))
+    rebaseSessions((list) => list.map((s) => {
+      const id = s.id ? null : fill(s.start_time)
+      return id ? { id, ...s } : s
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverSessions])
+  useEffect(() => {
+    if (!dirty) return undefined
+    // Consult the shared flag: an action that already cleared it (Take off
+    // sale, Delete) must not raise the browser's prompt on its way out.
+    const warn = (e) => {
+      if (!hasUnsaved()) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+
+  function jumpTo(id) {
+    if (id === 'setup-emails') setShowEmail(true)
+    document.getElementById(id)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+  }
+
+  const cancelHref = isEdit && eventId ? `/host/events/${eventId}` : '/host/events'
 
   return (
     <form onSubmit={handleSubmit} className="space-y-10">
+      {isEdit && onSale && (
+        <div role="note" className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          This event is on sale. Changing {joinLabels(RE_REVIEW_REASONS.map((r) => RE_REVIEW_REASON_LABEL[r]), 'or')} takes it <strong>off sale</strong> until {brandName} approves it again: the public page goes offline and new bookings stop. Existing bookings are kept. Everything else saves straight away.
+        </div>
+      )}
+      {isEdit && (
+        <nav aria-label="Jump to a section" className="-mt-2 flex gap-2 overflow-x-auto pb-1">
+          {JUMPS.map((j) => (
+            <button
+              key={j.id}
+              type="button"
+              onClick={() => jumpTo(j.id)}
+              className="shrink-0 rounded-full border border-white/12 px-3 py-1.5 text-xs text-white/70 hover:border-white/30 hover:text-white"
+            >
+              {j.label}
+            </button>
+          ))}
+        </nav>
+      )}
       {/* Basics */}
-      <section>
+      <section id="setup-basics" className="scroll-mt-24">
         <h2 className={sectionCls}>Basics</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
@@ -361,8 +535,8 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       </section>
 
       {/* Schedule */}
-      <section>
-        <h2 className={sectionCls}>Schedule</h2>
+      <section id="setup-schedule" className="scroll-mt-24">
+        <h2 className={sectionCls}>Schedule &amp; sessions</h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label htmlFor="he-date" className={labelCls}>Date</label>
@@ -474,14 +648,14 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
             </button>
           )}
           <p className="text-xs text-white/35">
-            Each session is its own start time with its own places. A session with bookings cannot be removed; changing an existing session&apos;s time on a live event sends it back for approval.
+            Each session is its own start time with its own places. A session with bookings cannot be removed; changing an existing session&apos;s time on a live event takes it off sale until {brandName} approves it again.
           </p>
         </div>
       </section>
 
-      {/* Tickets & teams */}
-      <section>
-        <h2 className={sectionCls}>Tickets &amp; teams</h2>
+      {/* Tickets & pricing */}
+      <section id="setup-tickets" className="scroll-mt-24">
+        <h2 className={sectionCls}>Tickets &amp; pricing</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label htmlFor="he-price" className={labelCls}>Standard price (EUR)</label>
@@ -536,14 +710,14 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       </section>
 
       {/* QUESTIONS.1 — asked at signup; answers travel with the attendees. */}
-      <section>
+      <section id="setup-questions" className="scroll-mt-24">
         <h2 className={sectionCls}>Questions at signup</h2>
         <RegistrationQuestionsEditor value={questions} onChange={setQuestions} dark />
       </section>
 
-      {/* Presentation */}
-      <section>
-        <h2 className={sectionCls}>Presentation</h2>
+      {/* Page look */}
+      <section id="setup-look" className="scroll-mt-24">
+        <h2 className={sectionCls}>Page look</h2>
         <div>
           <label htmlFor="he-desc" className={labelCls}>Description <span className="text-white/30 normal-case">(optional)</span></label>
           <textarea
@@ -659,14 +833,14 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       </section>
 
       {/* Email copy (secondary, collapsed) */}
-      <section>
+      <section id="setup-emails" className="scroll-mt-24">
         <button
           type="button"
           onClick={() => setShowEmail((v) => !v)}
           className="flex items-center gap-2 text-xs uppercase tracking-[0.15em] text-white/45 hover:text-white/70 transition"
         >
           <span>{showEmail ? '▾' : '▸'}</span>
-          Email copy (optional)
+          Emails (optional)
         </button>
         {showEmail && (
           <div className="mt-4 space-y-4 border-l border-white/10 pl-4">
@@ -757,7 +931,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       )}
 
       {/* Actions */}
-      <div className="flex items-center gap-3 pt-2">
+      <div className="flex flex-wrap items-center gap-3 pt-2">
         <button
           type="submit"
           disabled={submitting}
@@ -767,10 +941,28 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
             ? isEdit ? 'Saving…' : 'Creating…'
             : isEdit ? 'Save changes' : 'Create event'}
         </button>
-        <a href={cancelHref} className="text-sm text-white/50 hover:text-white transition">
+        {isEdit && (status === 'draft' || status === 'rejected') && (
+          dirty
+            ? <span className="text-sm text-white/50">Save your changes before submitting.</span>
+            : <span className="text-sm"><HostSubmitButton eventId={eventId} /></span>
+        )}
+        <GuardedLink href={cancelHref} className="text-sm text-white/50 hover:text-white transition">
           Cancel
-        </a>
+        </GuardedLink>
+        {saved && (
+          <span role="status" className="text-sm text-emerald-300/90">
+            {offSale ? `Saved. This event is off sale until ${brandName} approves it again.` : 'Saved.'}
+          </span>
+        )}
       </div>
+      <OffSaleConfirmDialog
+        open={confirmReasons !== null}
+        reasons={confirmReasons || []}
+        brandName={brandName}
+        busy={submitting}
+        onConfirm={() => { setConfirmReasons(null); performSave() }}
+        onKeepEditing={() => setConfirmReasons(null)}
+      />
     </form>
   )
 }
