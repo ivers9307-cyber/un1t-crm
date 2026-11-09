@@ -256,8 +256,10 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const [teamSize, setTeamSize] = useState(1)
   // QUESTIONS.1 — answers keyed by question id: entry once, people by roster index.
   const [answers, setAnswers] = useState({ entry: {}, people: [] })
-  // FINDTEAM.4 — a solo entrant who wants staff to place them in a team. Never
-  // preselected; picking it forces teamSize 1, picking a size clears it.
+  // FINDTEAM.4 — a solo entrant who wants staff to place them in a team.
+  // Picking it forces teamSize 1, picking a size clears it. FINDTEAMDEFAULT.1 —
+  // it is the selected option on load when the event offers it (set in the
+  // load effect below), so the form opens short: no team name, no teammates.
   const [findTeam, setFindTeam] = useState(false)
   const [waveId, setWaveId] = useState('')
   const [members, setMembers] = useState([])
@@ -330,7 +332,13 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         setRace(j.data)
         const sizes = j.data.allowed_team_sizes || [1]
         const initial = [...sizes].sort((a, b) => a - b)[0]
-        setTeamSize(initial)
+        // FINDTEAMDEFAULT.1 — same test as findTeamEnabled further down.
+        if ((j.data.kind || 'race') === 'race' && j.data.find_team?.enabled) {
+          setFindTeam(true)
+          setTeamSize(1)
+        } else {
+          setTeamSize(initial)
+        }
         // Auto-select only when exactly one time has space; with two
         // open times (races or EVENT-MULTITIME.1 classes) the customer
         // chooses. A single-time event is still auto-selected.

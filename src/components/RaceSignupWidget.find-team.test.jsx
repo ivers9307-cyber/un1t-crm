@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // FINDTEAM.4 — "Find me a team" is the FIRST option in a race's size selector
-// when the event has it on. Choosing it hides the team-name and teammate fields,
+// when the event has it on, and the selected one on load (FINDTEAMDEFAULT.1). Choosing it hides the team-name and teammate fields,
 // shows the blurb, prices one person, and registers a solo entry (find_team: true,
 // no team_name / team_size / members). With the option off the selector is unchanged.
 
@@ -60,17 +60,19 @@ const submitLabels = () => [...new Set(
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('RaceSignupWidget — Find me a team', () => {
-  it('offers the option first, then the sizes, and never preselects it', async () => {
+  // FINDTEAMDEFAULT.1 — the option is the selected one on load.
+  it('offers the option first, then the sizes, and opens with it selected', async () => {
     await renderWidget(RACE)
     expect(selectorTexts()).toEqual(['Find me a team', '2-people', '4-people'])
-    // The smallest size stays the default: the teammate rows for a team of 2 show.
-    expect(screen.getByText('Team name *')).toBeTruthy()
-    expect(await screen.findByText('Your teammates')).toBeTruthy()
-    expect(screen.queryByText(BLURB)).toBeNull()
+    expect(screen.queryByText('Team name *')).toBeNull()
+    expect(screen.queryByText('Your teammates')).toBeNull()
+    expect(screen.getByText(BLURB)).toBeTruthy()
+    expect(submitLabels()).toEqual(['Register and pay €50.00'])
   })
 
   it('choosing it hides the team name and teammates, shows the blurb and prices one person', async () => {
     await renderWidget(RACE)
+    fireEvent.click(screen.getByRole('button', { name: '2-people' }))
     await screen.findByText('Your teammates')
     fireEvent.click(screen.getByRole('button', { name: 'Find me a team' }))
     expect(screen.queryByText('Team name *')).toBeNull()
@@ -81,6 +83,7 @@ describe('RaceSignupWidget — Find me a team', () => {
 
   it('choosing a size afterwards brings the team fields back and drops the blurb', async () => {
     await renderWidget(RACE)
+    fireEvent.click(screen.getByRole('button', { name: '2-people' }))
     await screen.findByText('Your teammates')
     fireEvent.click(screen.getByRole('button', { name: 'Find me a team' }))
     fireEvent.click(screen.getByRole('button', { name: '4-people' }))
@@ -130,6 +133,7 @@ describe('RaceSignupWidget — Find me a team', () => {
 
   it('a team registration still sends its team_name, team_size and members', async () => {
     const fetchMock = await renderWidget(RACE)
+    fireEvent.click(screen.getByRole('button', { name: '2-people' }))
     await screen.findByText('Your teammates')
     const form = document.getElementById('event-signup-form-hatch-relay')
     for (const el of form.querySelectorAll('input')) {
