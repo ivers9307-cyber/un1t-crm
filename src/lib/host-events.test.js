@@ -3,6 +3,10 @@ import {
   eventIsPublic,
   hostEventDefaults,
   computeEditTransition,
+  reReviewReasons,
+  editChangesFromInput,
+  RE_REVIEW_REASONS,
+  RE_REVIEW_REASON_LABEL,
   HOST_EVENT_KINDS,
   HostEventSchema,
 } from './host-events'
@@ -269,5 +273,70 @@ describe('HostEventSchema sessions', () => {
   it('accepts an optional nullable series_id', () => {
     expect(HostEventSchema.safeParse({ ...base, sessions: two, series_id: null }).success).toBe(true)
     expect(HostEventSchema.safeParse({ ...base, sessions: two, series_id: 'd0000000-0000-4000-8000-0000000000d1' }).success).toBe(true)
+  })
+})
+
+describe('reReviewReasons', () => {
+  const tiersA = [{ label: 'Early', price_cents: 2000, ends_at: '2026-08-01T10:00:00.000Z' }]
+  const tiersB = [{ label: 'Early', price_cents: 2200, ends_at: '2026-08-01T10:00:00.000Z' }]
+  const published = { status: 'published', race_date: '2026-09-01', non_member_fee_cents: 2500, pricing_tiers: tiersA, waves: [{ id: 'w1', start_time: '10:00:00' }] }
+  const same = { race_date: '2026-09-01', non_member_fee_cents: 2500, pricing_tiers: tiersA, waves: [{ id: 'w1', start_time: '10:00' }] }
+  const cases = [
+    ['date', { ...same, race_date: '2026-09-08' }],
+    ['price', { ...same, non_member_fee_cents: 3000 }],
+    ['tiers', { ...same, pricing_tiers: tiersB }],
+    ['session_time', { ...same, waves: [{ id: 'w1', start_time: '11:00' }] }],
+  ]
+  const quiet = [
+    ['cosmetic', { ...same, description: 'new copy' }],
+    ['added session', { ...same, waves: [...same.waves, { start_time: '14:00' }] }],
+    ['removed session', { ...same, waves: [] }],
+  ]
+
+  it('returns each reason alone for each of the four edits', () => {
+    for (const [reason, changes] of cases) expect(reReviewReasons(published, changes)).toEqual([reason])
+  })
+  it('returns every reason in RE_REVIEW_REASONS order when all four change', () => {
+    const all = { race_date: '2026-09-08', non_member_fee_cents: 3000, pricing_tiers: tiersB, waves: [{ id: 'w1', start_time: '11:00' }] }
+    expect(reReviewReasons(published, all)).toEqual(['date', 'price', 'tiers', 'session_time'])
+    expect(reReviewReasons(published, all)).toEqual(RE_REVIEW_REASONS)
+  })
+  it('returns [] for a cosmetic edit, an added session and a removed session', () => {
+    for (const [, changes] of quiet) expect(reReviewReasons(published, changes)).toEqual([])
+  })
+  it('returns [] for any edit to a draft, in-review or rejected event', () => {
+    for (const status of ['draft', 'pending_review', 'rejected']) {
+      for (const [, changes] of cases) expect(reReviewReasons({ ...published, status }, changes)).toEqual([])
+    }
+  })
+  it('agrees with computeEditTransition on every case above', () => {
+    for (const [, changes] of [...cases, ...quiet]) {
+      expect(computeEditTransition(published, changes).reReview).toBe(reReviewReasons(published, changes).length > 0)
+    }
+  })
+  it('has a label for every reason and no label without a reason', () => {
+    expect(Object.keys(RE_REVIEW_REASON_LABEL).sort()).toEqual([...RE_REVIEW_REASONS].sort())
+    expect(RE_REVIEW_REASON_LABEL.session_time).toBe("an existing session's start time")
+  })
+})
+
+describe('editChangesFromInput', () => {
+  it('maps a validated body to the DB-column shape the transition compares', () => {
+    const input = {
+      race_date: '2026-09-01',
+      ticket_price_cents: 2500,
+      pricing_tiers: undefined,
+      sessions: [{ id: 'w1', start_time: '10:00', capacity: 5 }, { start_time: '14:00', capacity: 5 }],
+      description: 'ignored',
+    }
+    expect(editChangesFromInput(input)).toEqual({
+      race_date: '2026-09-01',
+      non_member_fee_cents: 2500,
+      pricing_tiers: null,
+      waves: [{ id: 'w1', start_time: '10:00' }],
+    })
+  })
+  it('tolerates a body with no sessions array', () => {
+    expect(editChangesFromInput({ race_date: '2026-09-01', ticket_price_cents: 0 }).waves).toEqual([])
   })
 })
