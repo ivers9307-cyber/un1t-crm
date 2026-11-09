@@ -8,7 +8,7 @@
 // Client component only for usePathname and the scroll: no data fetching.
 
 import { useEffect, useRef } from 'react'
-import Link from 'next/link'
+import GuardedLink from './GuardedLink'
 import { usePathname } from 'next/navigation'
 
 export const LINKS = [
@@ -38,7 +38,7 @@ export default function HostNav() {
       {LINKS.map((l) => {
         const active = isNavActive(pathname, l)
         return (
-          <Link
+          <GuardedLink
             key={l.href}
             ref={active ? activeRef : undefined}
             href={l.href}
@@ -50,7 +50,7 @@ export default function HostNav() {
             }`}
           >
             {l.label}
-          </Link>
+          </GuardedLink>
         )
       })}
     </nav>

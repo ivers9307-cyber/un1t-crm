@@ -3,7 +3,6 @@
 // redirect to /host/login. The login page sits OUTSIDE this group so it isn't
 // gated. This is the host analog of the staff AppShell gate.
 
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
@@ -11,6 +10,7 @@ import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostSignOut from '@/components/host/HostSignOut'
 import HostImpersonationBanner from '@/components/host/HostImpersonationBanner'
 import HostNav from '@/components/host/HostNav'
+import GuardedLink from '@/components/host/GuardedLink'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,12 +35,12 @@ export default async function HostPortalLayout({ children }) {
           </div>
           <HostNav />
           <div className="ml-auto flex items-center gap-3 text-sm">
-            <Link
+            <GuardedLink
               href="/host/events/new"
               className="rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90 whitespace-nowrap"
             >
               + Create event
-            </Link>
+            </GuardedLink>
             <span className="text-white/70 hidden sm:inline truncate max-w-[16rem]">{session.host.name}</span>
             {/* SAFEGUARD: HostSignOut calls supabase.auth.signOut(), which would
                 destroy the admin's real staff session. An admin viewing-as must
