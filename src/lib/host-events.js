@@ -60,13 +60,6 @@ export function hostEventDefaults() {
 // EVENT-SLUG.1 — slugs come from `@/lib/event-slug` (place-date-time);
 // the name-based deriveSlug that lived here is gone.
 
-// Decide what an edit does to a host event's status.
-//
-// Edits to a draft or rejected event never change status and never
-// need review — the host is still working on it. Only a *published*
-// event can be knocked back into review, and only when a
-// customer-material field changes: price, date, or a wave start time.
-// Cosmetic edits (description, copy, images) leave it published.
 export const RE_REVIEW_REASONS = ['date', 'price', 'tiers', 'session_time']
 
 export const RE_REVIEW_REASON_LABEL = {
@@ -76,7 +69,7 @@ export const RE_REVIEW_REASON_LABEL = {
   session_time: "an existing session's start time",
 }
 
-// HOSTPORTAL.3 — the ONE rule for "this edit takes a published event off
+// HOSTPORTAL.2 — the ONE rule for "this edit takes a published event off
 // sale", shared by the PUT route and the edit form's warning. Returns the
 // reasons, in RE_REVIEW_REASONS order; [] for anything that is not a
 // published event or not a customer-material edit.
@@ -127,6 +120,13 @@ export function editChangesFromInput(input) {
   }
 }
 
+// Decide what an edit does to a host event's status.
+//
+// Edits to a draft or rejected event never change status and never
+// need review — the host is still working on it. Only a *published*
+// event can be knocked back into review, and only when a
+// customer-material field changes: price, date, or a wave start time.
+// Cosmetic edits (description, copy, images) leave it published.
 export function computeEditTransition(current, changes) {
   if (current.status !== 'published') {
     return { status: current.status, reReview: false }

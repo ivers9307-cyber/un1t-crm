@@ -11,13 +11,14 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { ImagePlus, Loader2, X } from 'lucide-react'
-import { HOST_EVENT_KINDS, MAX_SESSIONS } from '@/lib/host-events'
+import { HOST_EVENT_KINDS, MAX_SESSIONS, RE_REVIEW_REASONS, RE_REVIEW_REASON_LABEL, reReviewReasons, editChangesFromInput } from '@/lib/host-events'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 import PricingTiersEditor from '@/components/PricingTiersEditor'
 import RegistrationQuestionsEditor from '@/components/RegistrationQuestionsEditor'
 import GuardedLink from '@/components/host/GuardedLink'
 import HostSubmitButton from '@/components/host/HostSubmitButton'
+import OffSaleConfirmDialog, { joinLabels } from '@/components/host/OffSaleConfirmDialog'
 import { hasUnsaved, setUnsaved } from '@/lib/unsaved-guard'
 
 const KIND_LABELS = {
@@ -142,6 +143,18 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   const [error, setError] = useState(null)
   const [issues, setIssues] = useState([])
   const [saved, setSaved] = useState(false)
+  // HOSTPORTAL.2 — the server took the last save off sale; the reasons the
+  // confirm dialog is asking about (null = closed).
+  const [offSale, setOffSale] = useState(false)
+  const [confirmReasons, setConfirmReasons] = useState(null)
+  // What the SERVER holds, as far as the off-sale rule can tell. Starts as the
+  // loaded event and moves to the body each save sent.
+  const serverHolds = useRef({
+    non_member_fee_cents: initial?.non_member_fee_cents,
+    race_date: initial?.race_date,
+    pricing_tiers: initial?.pricing_tiers,
+    waves: (initial?.sessions || []).map((s) => ({ id: s.id, start_time: s.start_time })),
+  })
 
   // Reg window isn't editable here — preserve whatever the event already has.
   const regOpensAt = initial?.registration_opens_at ?? null
@@ -279,12 +292,16 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     }
   }
 
-  async function handleSubmit(e) {
+  // The check at the moment of submitting (button or Enter): a published
+  // event whose edit would be sent back to review asks first and sends
+  // nothing until the host confirms.
+  function handleSubmit(e) {
     e.preventDefault()
     if (submitting) return
     setError(null)
     setIssues([])
     setSaved(false)
+    setOffSale(false)
 
     const clientErr = clientValidate()
     if (clientErr) {
@@ -292,6 +309,20 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       return
     }
 
+    if (isEdit && status === 'published') {
+      const reasons = reReviewReasons(
+        { status, ...serverHolds.current },
+        editChangesFromInput(buildBody()),
+      )
+      if (reasons.length > 0) {
+        setConfirmReasons(reasons)
+        return
+      }
+    }
+    performSave()
+  }
+
+  async function performSave() {
     setSubmitting(true)
     try {
       const url = isEdit ? `/api/host/events/${eventId}` : '/api/host/events'
@@ -315,6 +346,9 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         // An edit typed while the save was in flight is not saved: judge the
         // body as it is NOW against the one that was sent.
         baseline.current = JSON.stringify(sentBody)
+        const sent = editChangesFromInput(sentBody)
+        serverHolds.current = sent
+        setOffSale(json.data?.reReview === true)
         const stillDirty = latestBody.current !== baseline.current
         setDirty(stillDirty)
         setUnsaved(stillDirty)
@@ -364,6 +398,8 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   const serverSessions = initial?.sessions
   useEffect(() => {
     if (!Array.isArray(serverSessions)) return
+    // The refreshed event is what the server holds now, new session ids included.
+    serverHolds.current = { ...serverHolds.current, waves: serverSessions.map((s) => ({ id: s.id, start_time: s.start_time })) }
     const hhmm = (t) => String(t || '').slice(0, 5)
     const idByTime = new Map(serverSessions.filter((s) => s.id).map((s) => [hhmm(s.start_time), s.id]))
     const taken = new Set(sessions.map((s) => s.id).filter(Boolean))
@@ -404,6 +440,11 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
 
   return (
     <form onSubmit={handleSubmit} className="space-y-10">
+      {isEdit && status === 'published' && (
+        <div role="note" className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          This event is on sale. Changing {joinLabels(RE_REVIEW_REASONS.map((r) => RE_REVIEW_REASON_LABEL[r]), 'or')} takes it <strong>off sale</strong> until {brandName} approves it again: the public page goes offline and new bookings stop. Existing bookings are kept. Everything else saves straight away.
+        </div>
+      )}
       {isEdit && (
         <nav aria-label="Jump to a section" className="-mt-2 flex gap-2 overflow-x-auto pb-1">
           {JUMPS.map((j) => (
@@ -589,7 +630,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
             </button>
           )}
           <p className="text-xs text-white/35">
-            Each session is its own start time with its own places. A session with bookings cannot be removed; changing an existing session&apos;s time on a live event sends it back for approval.
+            Each session is its own start time with its own places. A session with bookings cannot be removed; changing an existing session&apos;s time on a live event takes it off sale until {brandName} approves it again.
           </p>
         </div>
       </section>
@@ -890,8 +931,20 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         <GuardedLink href={cancelHref} className="text-sm text-white/50 hover:text-white transition">
           Cancel
         </GuardedLink>
-        {saved && <span role="status" className="text-sm text-emerald-300/90">Saved.</span>}
+        {saved && (
+          <span role="status" className="text-sm text-emerald-300/90">
+            {offSale ? `Saved. This event is off sale until ${brandName} approves it again.` : 'Saved.'}
+          </span>
+        )}
       </div>
+      <OffSaleConfirmDialog
+        open={confirmReasons !== null}
+        reasons={confirmReasons || []}
+        brandName={brandName}
+        busy={submitting}
+        onConfirm={() => { setConfirmReasons(null); performSave() }}
+        onKeepEditing={() => setConfirmReasons(null)}
+      />
     </form>
   )
 }

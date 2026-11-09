@@ -3,6 +3,7 @@
 // "Add a session" adds a row, and the body carries sessions[] only.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
+import { RE_REVIEW_REASONS, RE_REVIEW_REASON_LABEL } from '@/lib/host-events'
 
 const push = vi.fn()
 const refresh = vi.fn()
@@ -544,5 +545,162 @@ describe('HostEventForm section headings match the jump bar', () => {
     vi.stubGlobal('fetch', okFetch())
     render(<HostEventForm mode="create" brandName="UN1T" />)
     expect(screen.getByRole('button', { name: /Emails \(optional\)/ })).toBeTruthy()
+  })
+})
+
+// HOSTPORTAL.2 — Set up warns before, asks during, and tells after a save
+// that takes a published event off sale.
+describe('HostEventForm off-sale warning', () => {
+  const tiers = [{ id: 't1', name: 'Early bird', price_cents: 1500 }]
+  const base = { ...initial, pricing_tiers: tiers }
+
+  function stubSave(reReview = false) {
+    const fetchMock = vi.fn(async (url) => (String(url) === '/api/host/series'
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1', status: reReview ? 'pending_review' : 'published', reReview } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+  const saves = (fetchMock) => fetchMock.mock.calls.filter(([u]) => String(u) === '/api/host/events/E1')
+  const renderForm = (props = {}) => render(<HostEventForm mode="edit" eventId="E1" initial={base} brandName="UN1T" status="published" {...props} />)
+  const clickSave = () => fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+  // The single edit that triggers each reason.
+  const EDITS = {
+    date: () => fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-12-06' } }),
+    price: () => fireEvent.change(screen.getByLabelText(/Standard price/), { target: { value: '30.00' } }),
+    tiers: () => fireEvent.change(screen.getByLabelText('Tier 1 name'), { target: { value: 'Early bird 2' } }),
+    session_time: () => fireEvent.change(screen.getAllByLabelText(/Start time/)[0], { target: { value: '11:00' } }),
+  }
+
+  it('shows the notice on a published event only, listing every label', () => {
+    stubSave()
+    renderForm()
+    const notice = screen.getByRole('note')
+    for (const reason of RE_REVIEW_REASONS) {
+      expect(notice.textContent).toContain(RE_REVIEW_REASON_LABEL[reason])
+    }
+    expect(notice.textContent).toContain('This event is on sale.')
+    expect(notice.textContent).toContain('takes it off sale until UN1T approves it again')
+    cleanup()
+    renderForm({ status: 'draft' })
+    expect(screen.queryByRole('note')).toBeNull()
+    cleanup()
+    render(<HostEventForm mode="create" brandName="UN1T" />)
+    expect(screen.queryByRole('note')).toBeNull()
+  })
+
+  it('the sessions help text says the form takes the event off sale', () => {
+    stubSave()
+    renderForm()
+    expect(document.body.textContent).toContain("changing an existing session's time on a live event takes it off sale until UN1T approves it again.")
+  })
+
+  it('saves a description change on a published event with no dialog', async () => {
+    const fetchMock = stubSave()
+    renderForm()
+    fireEvent.change(screen.getByLabelText(/Description/), { target: { value: 'New words' } })
+    clickSave()
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(await screen.findByText('Saved.')).toBeTruthy()
+  })
+
+  for (const reason of RE_REVIEW_REASONS) {
+    it(`asks before saving a ${reason} change, naming it, and sends nothing until confirmed`, async () => {
+      const fetchMock = stubSave(true)
+      renderForm()
+      EDITS[reason]()
+      clickSave()
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog.textContent).toContain(`You changed ${RE_REVIEW_REASON_LABEL[reason]}.`)
+      expect(saves(fetchMock)).toHaveLength(0)
+    })
+  }
+
+  it('pressing Enter in a field goes through the same check', async () => {
+    const fetchMock = stubSave(true)
+    const { container } = renderForm()
+    EDITS.date()
+    fireEvent.submit(container.querySelector('form'))
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    expect(saves(fetchMock)).toHaveLength(0)
+  })
+
+  it('Keep editing closes the dialog, sends nothing and keeps the edit and the dirty state', async () => {
+    const fetchMock = stubSave(true)
+    renderForm()
+    EDITS.date()
+    clickSave()
+    fireEvent.click(await screen.findByRole('button', { name: 'Keep editing' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(saves(fetchMock)).toHaveLength(0)
+    expect(screen.getByLabelText('Date').value).toBe('2026-12-06')
+    expect(flag).toBe(true)
+    expect(screen.queryByText('Saved.')).toBeNull()
+  })
+
+  it('Save and send for review performs the PUT, closes the dialog and says off sale', async () => {
+    const fetchMock = stubSave(true)
+    renderForm()
+    EDITS.date()
+    clickSave()
+    fireEvent.click(await screen.findByRole('button', { name: 'Save and send for review' }))
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1))
+    expect(JSON.parse(saves(fetchMock)[0][1].body).race_date).toBe('2026-12-06')
+    expect(await screen.findByText('Saved. This event is off sale until UN1T approves it again.')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('never asks on a draft, whatever changed', async () => {
+    const fetchMock = stubSave()
+    renderForm({ status: 'draft' })
+    for (const reason of RE_REVIEW_REASONS) EDITS[reason]()
+    clickSave()
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('says off sale after a save the server marks reReview, even with no dialog', async () => {
+    const fetchMock = stubSave(true)
+    renderForm()
+    fireEvent.change(screen.getByLabelText(/Description/), { target: { value: 'New words' } })
+    clickSave()
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(await screen.findByText('Saved. This event is off sale until UN1T approves it again.')).toBeTruthy()
+  })
+
+  it('compares the next edit against what the last save sent, not the original', async () => {
+    const fetchMock = stubSave(false)
+    renderForm()
+    // Date changes are confirmed first time; here the server says no re-review.
+    EDITS.date()
+    clickSave()
+    fireEvent.click(await screen.findByRole('button', { name: 'Save and send for review' }))
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1))
+    await screen.findByText('Saved.')
+    // An unrelated edit now must not ask: the date is already what the server holds.
+    fireEvent.change(screen.getByLabelText(/Description/), { target: { value: 'More words' } })
+    clickSave()
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(2))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    // Going back to the original date is a change again.
+    EDITS.date = () => fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-12-05' } })
+    EDITS.date()
+    clickSave()
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    expect(saves(fetchMock)).toHaveLength(2)
+  })
+
+  it('stops asking once the status prop is no longer published', async () => {
+    const fetchMock = stubSave(true)
+    const { rerender } = renderForm()
+    EDITS.date()
+    rerender(<HostEventForm mode="edit" eventId="E1" initial={base} brandName="UN1T" status="pending_review" />)
+    expect(screen.queryByRole('note')).toBeNull()
+    clickSave()
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1))
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 })
