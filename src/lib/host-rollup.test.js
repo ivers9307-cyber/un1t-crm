@@ -1,6 +1,6 @@
 // HOSTPORTAL.3 — the Overview's "Last 30 days" counts.
 import { describe, it, expect } from 'vitest'
-import { loadHostRollup } from './host-rollup.js'
+import { loadHostRollup, loadRecentRatingCounts } from './host-rollup.js'
 
 // A db stub that records every call and answers per table. A table listed in
 // `fail` answers with an error; `counts` gives its count.
@@ -83,5 +83,76 @@ describe('loadHostRollup', () => {
     const r = await loadHostRollup(db, { ...args, eventIds: ids })
     expect(r.views).toBeNull()
     expect(r.bookings).toBe(0)
+  })
+})
+
+// HOSTPORTAL.4 — new ratings per event since a boundary.
+function makeRatingsDb({ rows = [], failOnCall = null } = {}) {
+  const calls = []
+  const db = {
+    from(table) {
+      const call = { table, select: null, filters: [], orders: [], range: null }
+      calls.push(call)
+      const idx = calls.length
+      const b = {}
+      b.select = (cols) => { call.select = cols; return b }
+      b.in = (...a) => { call.filters.push(['in', ...a]); return b }
+      b.gte = (...a) => { call.filters.push(['gte', ...a]); return b }
+      b.order = (...a) => { call.orders.push(a); return b }
+      b.range = (from, to) => { call.range = [from, to]; return b }
+      b.then = (res, rej) => {
+        if (failOnCall === idx) return Promise.resolve({ data: null, error: { message: 'boom' } }).then(res, rej)
+        const ids = call.filters.find((f) => f[0] === 'in')[2]
+        const [from, to] = call.range
+        const mine = rows.filter((r) => ids.includes(r.race_event_id))
+        return Promise.resolve({ data: mine.slice(from, to + 1), error: null }).then(res, rej)
+      }
+      return b
+    },
+  }
+  return { db, calls }
+}
+
+describe('loadRecentRatingCounts', () => {
+  const since = '2026-11-02T00:00:00.000Z'
+
+  it('counts ratings per event since the boundary, hidden and public alike', async () => {
+    const rows = [
+      ...Array.from({ length: 3 }, () => ({ race_event_id: 'e1' })),
+      { race_event_id: 'e2' },
+    ]
+    const { db, calls } = makeRatingsDb({ rows })
+    const m = await loadRecentRatingCounts(db, { eventIds: ['e1', 'e2', 'e3'], sinceIso: since })
+    expect(m).toBeInstanceOf(Map)
+    expect([...m.entries()]).toEqual([['e1', 3], ['e2', 1]])
+    const c = calls[0]
+    expect(c.table).toBe('event_ratings')
+    expect(c.select).toBe('race_event_id')
+    expect(c.filters).toEqual(expect.arrayContaining([['gte', 'created_at', since], ['in', 'race_event_id', ['e1', 'e2', 'e3']]]))
+    expect(c.filters.some((f) => f[1] === 'is_public')).toBe(false)
+    expect(c.orders).toEqual([['created_at', { ascending: true }], ['id', { ascending: true }]])
+  })
+
+  it('pages past 1,000 rows and chunks ids by 100', async () => {
+    const rows = Array.from({ length: 1500 }, () => ({ race_event_id: 'e1' }))
+    const { db, calls } = makeRatingsDb({ rows })
+    const m = await loadRecentRatingCounts(db, { eventIds: ['e1'], sinceIso: since })
+    expect(m.get('e1')).toBe(1500)
+    expect(calls.map((c) => c.range)).toEqual([[0, 999], [1000, 1999]])
+
+    const ids = Array.from({ length: 150 }, (_, i) => `x${i}`)
+    const second = makeRatingsDb({ rows: [] })
+    await loadRecentRatingCounts(second.db, { eventIds: ids, sinceIso: since })
+    expect(second.calls.map((c) => c.filters.find((f) => f[0] === 'in')[2].length)).toEqual([100, 50])
+  })
+
+  it('returns null when a page fails and an empty map for no ids', async () => {
+    const { db } = makeRatingsDb({ rows: [{ race_event_id: 'e1' }], failOnCall: 1 })
+    expect(await loadRecentRatingCounts(db, { eventIds: ['e1'], sinceIso: since })).toBeNull()
+
+    const none = makeRatingsDb()
+    const m = await loadRecentRatingCounts(none.db, { eventIds: [], sinceIso: since })
+    expect(m).toEqual(new Map())
+    expect(none.calls).toHaveLength(0)
   })
 })

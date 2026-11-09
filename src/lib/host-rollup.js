@@ -60,3 +60,38 @@ export async function loadHostRollup(db, { hostId, eventIds, sinceIso, sinceDay 
   })
   return { bookings, views, signups, contacts }
 }
+
+const PAGE = 1000
+
+/**
+ * HOSTPORTAL.4 — ratings received since a boundary, counted per event (hidden
+ * and public alike). Paged with a stable order past the 1,000-row cap, ids
+ * chunked by 100. null when any read failed; an empty map for no ids.
+ * @returns {Promise<Map<string, number>|null>}
+ */
+export async function loadRecentRatingCounts(db, { eventIds, sinceIso }) {
+  const ids = [...new Set((eventIds || []).filter(Boolean))]
+  const counts = new Map()
+  if (ids.length === 0) return counts
+  const ok = await guarded('recent ratings', async () => {
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK)
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await db
+          .from('event_ratings')
+          .select('race_event_id')
+          .in('race_event_id', chunk)
+          .gte('created_at', sinceIso)
+          .order('created_at', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, from + PAGE - 1)
+        if (error) throw new Error(error.message)
+        const rows = Array.isArray(data) ? data : []
+        for (const r of rows) counts.set(r.race_event_id, (counts.get(r.race_event_id) || 0) + 1)
+        if (rows.length < PAGE) break
+      }
+    }
+    return true
+  })
+  return ok ? counts : null
+}
