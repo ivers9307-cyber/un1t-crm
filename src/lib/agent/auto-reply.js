@@ -83,6 +83,7 @@ import { logWarn, logError } from '@/lib/log'
 import { isVoiceTrigger, splitForVoice, voiceKindFor, toolResultSucceeded, memberVoiceLocationIds, buttonsBodyFor } from '@/lib/wa-voice/reply-rules'
 import { maybeSendVoiceReply, voiceReplyPossible, waitForVoiceNoteDelivery } from '@/lib/wa-voice/reply'
 import { studiosOfContact } from '@/lib/contact-studios'
+import { isBsuid } from '@/lib/whatsapp-address'
 
 // MIA-SONNET5 — Claude Sonnet 5. Reaches previous Opus-tier quality on
 // agentic work, and Mia was unusually cheap to migrate: she never sent
@@ -811,7 +812,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // anyway (person-accounts.js), so the acting id only has to be the ANCHOR.
     let preverifiedContactId = null
     let phoneMatches = null
-    if (adapter.trustsSenderIdentity && conv?.contact_id && recipient) {
+    // WA-BSUID.2 — `recipient` is a business-scoped user id, not a phone, for
+    // a sender who hides their number: there is no phone to match on, so the
+    // ordinary verification questions stand (as on Instagram).
+    if (adapter.trustsSenderIdentity && conv?.contact_id && recipient && !isBsuid(recipient)) {
       const bare = String(recipient).replace(/^\+/, '')
       const { data: matches } = await db.from('contacts')
         .select('id')

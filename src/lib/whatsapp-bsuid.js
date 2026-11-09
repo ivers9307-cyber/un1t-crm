@@ -53,10 +53,13 @@ export function bsuidStampAction(existing, incoming) {
  * today's payloads (no user_id → immediate return).
  *
  * @param {object} db  service-role supabase client
- * @param {{ contacts?: Array, senderPhone: string, conversationId?: string|null, contactId?: string|null }} args
+ * @param {{ contacts?: Array, senderPhone?: string|null, bsuid?: string|null, conversationId?: string|null, contactId?: string|null }} args
  */
-export async function captureInboundBsuid(db, { contacts, senderPhone, conversationId, contactId }) {
-  const bsuid = extractInboundBsuid(contacts, senderPhone)
+export async function captureInboundBsuid(db, { contacts, senderPhone, bsuid: knownBsuid = null, conversationId, contactId }) {
+  // WA-BSUID.2 — the webhook now reads the id off the message itself
+  // (`from_user_id`, the only identifier a hidden-number sender has) and
+  // passes it; the contacts[] read stays as the fallback.
+  const bsuid = knownBsuid || extractInboundBsuid(contacts, senderPhone)
   if (!bsuid) return
 
   try {

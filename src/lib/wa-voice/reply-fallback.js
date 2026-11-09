@@ -9,6 +9,7 @@
 // (no number switched on, a send error) is logged and staff are pushed, as for
 // any reply Mia could not deliver. Never throws.
 
+import { conversationAddress } from '@/lib/whatsapp-address'
 import { sendTextMessage } from '@/lib/whatsapp'
 import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { sendPushToRolesAtLocation } from '@/lib/push'
@@ -50,14 +51,15 @@ export async function resendVoiceReplyAsText(db, msg, deps = {}) {
     if (!Array.isArray(claimed) || claimed.length === 0) return { resent: false, reason: 'already_sent' }
 
     const { data: conv } = await db.from('whatsapp_conversations')
-      .select('wa_phone')
+      .select('wa_phone, wa_bsuid')
       .eq('id', msg.conversation_id)
       .maybeSingle()
-    if (!conv?.wa_phone) return await tellStaff('no_phone')
+    const to = conversationAddress(conv)
+    if (!to) return await tellStaff('no_phone')
 
     let sent
     try {
-      sent = await sendText(conv.wa_phone, msg.body, { locationId: msg.location_id, replyInConversation: msg.conversation_id })
+      sent = await sendText(to, msg.body, { locationId: msg.location_id, replyInConversation: msg.conversation_id })
     } catch (err) {
       return await tellStaff(isWhatsAppNumberMissing(err) ? 'no_number' : 'send_failed')
     }

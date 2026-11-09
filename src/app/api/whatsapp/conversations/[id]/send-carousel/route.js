@@ -31,7 +31,7 @@ export async function POST(request, props) {
 
   const db = createServerClient()
   const { data: conversation } = await db.from('whatsapp_conversations')
-    .select('id, location_id, contact_id, wa_phone')
+    .select('id, location_id, contact_id, wa_phone, wa_bsuid')
     .eq('id', params.id)
     .maybeSingle()
   if (!conversation) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })

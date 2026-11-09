@@ -46,7 +46,51 @@ beforeEach(() => {
   updates.length = 0
   updateError = null
   numbers = [NUMBER]
-  fetchNumberHealth.mockResolvedValue({ quality_rating: 'YELLOW', messaging_limit_tier: null, name_status: 'APPROVED' })
+  fetchNumberHealth.mockResolvedValue({ quality_rating: 'YELLOW', messaging_limit_tier: 'TIER_250', name_status: 'APPROVED', limit_error: null })
+})
+
+// WA-LIMIT.1 — Meta deprecated the field the limit was read from. "Meta did
+// not say" used to be written over the stored tier as NULL, and a NULL tier
+// switches the blast/drip budget gate off.
+describe('refresh-whatsapp-health — a messaging limit Meta did not give (WA-LIMIT.1)', () => {
+  const tierWritten = () => updates.find((u) => 'messaging_limit_tier' in u.patch)?.patch.messaging_limit_tier
+
+  it('stores the tier Meta names', async () => {
+    sendPushToRolesAtLocation.mockResolvedValue({ sent: 1, skipped: 0, invalidated: 0, failed: 0 })
+    fetchNumberHealth.mockResolvedValue({ quality_rating: 'GREEN', messaging_limit_tier: 'TIER_2K', name_status: 'APPROVED', limit_error: null })
+    const body = await (await GET(req())).json()
+    expect(tierWritten()).toBe('TIER_2K')
+    expect(body.limit_unknown).toBe(0)
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('keeps the last known tier, as a warning, when Meta gives none', async () => {
+    numbers = [{ ...NUMBER, messaging_limit_tier: 'TIER_10K' }]
+    fetchNumberHealth.mockResolvedValue({ quality_rating: 'GREEN', messaging_limit_tier: null, name_status: 'APPROVED', limit_error: '(#100) nonexisting field' })
+    const body = await (await GET(req())).json()
+    expect(tierWritten()).toBe('TIER_10K')
+    expect(body).toMatchObject({ checked: 1, alerted: 0, limit_unknown: 1 })
+    expect(logError).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('wa-health', expect.stringMatching(/keeping the last known/), expect.objectContaining({ kept: 'TIER_10K', err: '(#100) nonexisting field' }))
+    // An unread limit is not a downgrade: nobody is paged about it.
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+  })
+
+  it('says at error level that the gate is off when no tier is stored either', async () => {
+    fetchNumberHealth.mockResolvedValue({ quality_rating: 'GREEN', messaging_limit_tier: null, name_status: 'APPROVED', limit_error: 'field absent' })
+    const body = await (await GET(req())).json()
+    expect(tierWritten()).toBeNull()
+    expect(body.limit_unknown).toBe(1)
+    expect(logError).toHaveBeenCalledWith('wa-health', expect.stringMatching(/gate is off/), expect.objectContaining({ number_id: 'n1', kept: null, err: 'field absent' }))
+  })
+
+  it('stores a tier it does not know as Meta sent it, and says so', async () => {
+    fetchNumberHealth.mockResolvedValue({ quality_rating: 'GREEN', messaging_limit_tier: 'TIER_1M', name_status: 'APPROVED', limit_error: null })
+    const body = await (await GET(req())).json()
+    expect(tierWritten()).toBe('TIER_1M')
+    expect(body.limit_unknown).toBe(1)
+    expect(logError).toHaveBeenCalledWith('wa-health', expect.stringMatching(/does not know/), expect.objectContaining({ tier: 'TIER_1M' }))
+  })
 })
 
 describe('refresh-whatsapp-health — alerts that reached nobody (C21 PUSHDONE.1)', () => {

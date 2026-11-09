@@ -7,10 +7,40 @@ import { META_API_URL } from './whatsapp-config'
 // Quality: GREEN (best) > YELLOW > RED (worst). UNKNOWN / null = not ranked.
 export const QUALITY_RANK = Object.freeze({ RED: 1, YELLOW: 2, GREEN: 3 })
 
-// Messaging limit tiers, worst → best (business-initiated conversations per 24h).
+// Messaging limit tiers, worst → best (unique people a business can open a
+// conversation with in a rolling 24h). WA-LIMIT.1 — since Meta moved the limit
+// to the business portfolio the ladder is 250 → 2,000 → 10,000 → 100,000 →
+// unlimited; TIER_50 and TIER_1K are the older per-number values and stay so a
+// stored one still ranks.
 export const TIER_RANK = Object.freeze({
-  TIER_50: 0, TIER_250: 1, TIER_1K: 2, TIER_10K: 3, TIER_100K: 4, UNLIMITED: 5,
+  TIER_50: 0, TIER_250: 1, TIER_1K: 2, TIER_2K: 3, TIER_10K: 4, TIER_100K: 5, UNLIMITED: 6,
 })
+
+// WA-LIMIT.1 — Meta reports the limit three ways depending on the surface: a
+// tier string on the phone-number node (TIER_250 … TIER_UNLIMITED), the same
+// strings on the v24+ capability webhook, and a bare number on older webhooks
+// and in Meta's own webhook example (250, 2000, …, -1 for unlimited). All of
+// them are stored as ONE spelling, the keys of TIER_RANK, so the budget gate,
+// the downgrade alert and the dashboard read a single vocabulary. A value this
+// table does not know is kept as Meta sent it (upper-cased): it shows on the
+// dashboard and the gate treats it as unknown, rather than being dropped.
+const LIMIT_BY_NUMBER = Object.freeze({
+  50: 'TIER_50', 250: 'TIER_250', 1000: 'TIER_1K', 2000: 'TIER_2K', 10000: 'TIER_10K', 100000: 'TIER_100K', '-1': 'UNLIMITED',
+})
+
+export function normalizeMessagingLimit(raw) {
+  if (raw == null) return null
+  const text = String(raw).trim().toUpperCase()
+  if (!text) return null
+  if (/^-?\d+$/.test(text)) return LIMIT_BY_NUMBER[text] || text
+  if (text === 'TIER_UNLIMITED') return 'UNLIMITED'
+  return text
+}
+
+// True when a stored or freshly-read tier is one the budget gate can act on.
+export function isKnownTier(tier) {
+  return tier != null && Object.prototype.hasOwnProperty.call(TIER_RANK, tier)
+}
 
 // True only when both values are known ranks and `next` is strictly worse.
 export function qualityDowngraded(prev, next) {
@@ -31,6 +61,7 @@ export function tierLabel(tier) {
     case 'TIER_50': return '50 / day'
     case 'TIER_250': return '250 / day'
     case 'TIER_1K': return '1,000 / day'
+    case 'TIER_2K': return '2,000 / day'
     case 'TIER_10K': return '10,000 / day'
     case 'TIER_100K': return '100,000 / day'
     case 'UNLIMITED': return 'Unlimited'
@@ -115,6 +146,16 @@ export function tokenRecoveredNotification(label) {
 // the caller stores null + logs, so a bad token degrades to "unavailable").
 // The thrown error carries Meta's code/type (metaCode/metaType) so the poll
 // can classify token deaths (isMetaAuthError) instead of lumping them in.
+//
+// WA-LIMIT.1 — the messaging limit is read SEPARATELY. Meta deprecated the
+// phone-number field `messaging_limit_tier` (it stopped coming back: prod held
+// NULL from a poll that had just succeeded, which silently switched the
+// blast/drip budget gate off) and replaced it with
+// `whatsapp_business_manager_messaging_limit` on the same node. The new field
+// goes in its own request so that a refusal of it (an older Graph version, a
+// renamed field) can never cost the quality rating and the token check the
+// first request carries. `messaging_limit_tier` is the normalised tier, or
+// null when neither field answered; `limit_error` then says why.
 export async function fetchNumberHealth({ phoneNumberId, token }) {
   const url = `${META_API_URL}/${phoneNumberId}?fields=quality_rating,messaging_limit_tier,name_status,display_phone_number,verified_name`
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
@@ -125,9 +166,36 @@ export async function fetchNumberHealth({ phoneNumberId, token }) {
     err.metaType = json.error.type || null
     throw err
   }
+  const limit = await fetchMessagingLimit({ phoneNumberId, token })
   return {
     quality_rating: json.quality_rating || null,
-    messaging_limit_tier: json.messaging_limit_tier || null,
+    messaging_limit_tier: limit.tier || normalizeMessagingLimit(json.messaging_limit_tier),
     name_status: json.name_status || null,
+    limit_error: limit.tier ? null : limit.error,
+  }
+}
+
+// The Graph version the limit field is read on. Meta documents the field on
+// the current API; the rest of the WhatsApp integration is still pinned to an
+// older version (META_API_URL), where it may not exist.
+const MESSAGING_LIMIT_API_URL = 'https://graph.facebook.com/v25.0'
+export const MESSAGING_LIMIT_FIELD = 'whatsapp_business_manager_messaging_limit'
+
+/**
+ * The business portfolio's messaging limit, read off the phone-number node.
+ * Never throws: `{ tier }` on an answer, `{ tier: null, error }` otherwise
+ * (Meta's own message, an HTTP status, or "field absent").
+ */
+export async function fetchMessagingLimit({ phoneNumberId, token }) {
+  try {
+    const res = await fetch(`${MESSAGING_LIMIT_API_URL}/${phoneNumberId}?fields=${MESSAGING_LIMIT_FIELD}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const json = await res.json()
+    if (json?.error) return { tier: null, error: json.error.message || `Meta error ${json.error.code ?? ''}`.trim() }
+    const tier = normalizeMessagingLimit(json?.[MESSAGING_LIMIT_FIELD])
+    return tier ? { tier, error: null } : { tier: null, error: `${MESSAGING_LIMIT_FIELD} absent from Meta's answer` }
+  } catch (e) {
+    return { tier: null, error: e?.message || String(e) }
   }
 }
