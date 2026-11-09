@@ -41,7 +41,7 @@ const SITES = [
   'src/app/(members)/events/page.js',
   'src/lib/agent/event-tools.js',
   'src/lib/class-booking-payments.js',
-  'src/app/host/(portal)/page.js',
+  'src/app/host/(portal)/page/page.js',
   'src/app/api/host/signup-qr/route.js',
   'src/app/api/hosts/[id]/onboarding-link/route.js',
   'src/app/api/hosts/[id]/onboarding-link/send/route.js',

@@ -8,6 +8,7 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { getHostRevenue } from '@/lib/host-revenue'
 import { createServerClient } from '@/lib/supabase'
 import { PLATFORM_NAME } from '@/lib/brand-name'
+import { logWarn } from '@/lib/log'
 import { formatHostMoney, eventMoneyCents, moneyLabel } from '@/lib/host-portal'
 import { HostPayoutsProvider, HostBalance, HostPayoutList } from '@/components/host/HostPayouts'
 import HostStatements from '@/components/host/HostStatements'
@@ -22,7 +23,8 @@ export default async function HostEarningsPage() {
   let revenue = null
   try {
     revenue = await getHostRevenue(db, session.host.id)
-  } catch {
+  } catch (e) {
+    logWarn('host-earnings', 'revenue read failed', { err: e })
     revenue = null
   }
   const cur = revenue?.currency || 'EUR'

@@ -1,9 +1,10 @@
 // HOSTPORTAL.1 — /host: the short Overview.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('next/navigation', () => ({ notFound: vi.fn(() => { throw new Error('NOT_FOUND') }), redirect: vi.fn() }))
+vi.mock('next/navigation', () => ({ notFound: vi.fn(() => { throw new Error('NOT_FOUND') }), redirect: vi.fn((url) => { throw new Error(`REDIRECT:${url}`) }) }))
 
 const state = {
+  signedOut: false,
   host: { id: 'h1', name: 'Host One', payment_provider: 'stripe_connect', charges_enabled: true },
   events: [], eventsError: null, revenue: null, revenueThrows: false,
   fill: { ok: true, sessions: [], booked: 0, capacity: null },
@@ -11,7 +12,7 @@ const state = {
 }
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
-vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn(async () => ({ host: state.host })) }))
+vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn(async () => (state.signedOut ? null : { host: state.host })) }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from: () => {
@@ -68,6 +69,7 @@ const ev = (id, status, race_date, extra = {}) => ({
 })
 
 beforeEach(() => {
+  state.signedOut = false
   state.host = { id: 'h1', name: 'Host One', payment_provider: 'stripe_connect', charges_enabled: true }
   state.events = []
   state.eventsError = null
@@ -78,6 +80,35 @@ beforeEach(() => {
 })
 
 describe('host overview page', () => {
+  it('redirects to login when signed out', async () => {
+    state.signedOut = true
+    await expect(Page()).rejects.toThrow('REDIRECT:/host/login')
+  })
+
+  it('skips a published event that is off sale for the next on-sale one', async () => {
+    state.events = [
+      ev('off', 'published', '2026-11-20', { active: false }),
+      ev('on', 'published', '2026-12-05'),
+    ]
+    const next = text(await Page()).split('Next up')[1].split('Coming up')[0]
+    expect(next).toContain('Event on')
+    expect(next).not.toContain('Event off')
+  })
+
+  it('shows the create line when the only published upcoming event is off sale', async () => {
+    state.events = [ev('off', 'published', '2026-11-20', { active: false })]
+    expect(text(await Page())).toContain('Nothing on sale yet — create an event.')
+  })
+
+  it('keeps the Stripe warning above the unavailable line when the events read fails', async () => {
+    state.host = { ...state.host, charges_enabled: false }
+    state.eventsError = { message: 'boom' }
+    const t = text(await Page())
+    expect(t).toContain("Your Stripe account isn't fully connected yet")
+    expect(t).toContain('Your events are unavailable right now.')
+    expect(t.indexOf("Your Stripe account")).toBeLessThan(t.indexOf('Your events are unavailable'))
+  })
+
   it('shows the reviewer note for a needs-changes event with a link to it', async () => {
     state.events = [ev('r1', 'rejected', '2026-12-01', { rejected_reason: 'Add a venue' })]
     const el = await Page()

@@ -1,12 +1,12 @@
 // HOSTPORTAL.1 — /host/events: needs action, upcoming, series, past.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('next/navigation', () => ({ notFound: vi.fn(() => { throw new Error('NOT_FOUND') }), redirect: vi.fn() }))
+vi.mock('next/navigation', () => ({ notFound: vi.fn(() => { throw new Error('NOT_FOUND') }), redirect: vi.fn((url) => { throw new Error(`REDIRECT:${url}`) }) }))
 
-const state = { host: { id: 'h1', payment_provider: 'stripe_connect' }, events: [], eventsError: null, revenue: null, revenueThrows: false, ratings: new Map(), series: [] }
+const state = { signedOut: false, host: { id: 'h1', payment_provider: 'stripe_connect' }, events: [], eventsError: null, revenue: null, revenueThrows: false, ratings: new Map(), series: [] }
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
-vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn(async () => ({ host: state.host })) }))
+vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn(async () => (state.signedOut ? null : { host: state.host })) }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from: () => {
@@ -65,6 +65,7 @@ const ev = (id, status, race_date, extra = {}) => ({ id, name: `Event ${id}`, sl
 const revRow = (id, paidCount, gross, net) => ({ event_id: id, paidCount, gross_cents: gross, net_to_host_cents: net })
 
 beforeEach(() => {
+  state.signedOut = false
   state.host = { id: 'h1', payment_provider: 'stripe_connect' }
   state.events = []
   state.eventsError = null
@@ -75,6 +76,18 @@ beforeEach(() => {
 })
 
 describe('host events page', () => {
+  it('redirects to login when signed out', async () => {
+    state.signedOut = true
+    await expect(Page()).rejects.toThrow('REDIRECT:/host/login')
+  })
+
+  it('shows the series count only when there is a series', async () => {
+    state.events = [ev('u1', 'published', '2026-12-05')]
+    state.series = []
+    expect(text(await Page())).toContain('1 event')
+    expect(text(await Page())).not.toContain('series')
+  })
+
   it('renders the four groups in order, each only when it has rows', async () => {
     state.events = [
       ev('d1', 'draft', '2026-12-01'),

@@ -114,7 +114,7 @@ export default async function HostEventsPage() {
     <div>
       <h1 className="text-2xl font-bold">Events</h1>
       <p className="text-white/60 mt-1 text-sm">
-        {list.length} event{list.length === 1 ? '' : 's'} · {series.length} series
+        {list.length} event{list.length === 1 ? '' : 's'}{series.length > 0 ? ` · ${series.length} series` : ''}
       </p>
 
       {list.length === 0 && (

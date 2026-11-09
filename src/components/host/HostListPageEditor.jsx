@@ -40,9 +40,13 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  // 'sections' layout only: the confirmation that stands in for the drawer closing.
+  const [saved, setSaved] = useState(false)
   const [uploading, setUploading] = useState(false)
 
-  const setExtra = (key, val) => setValues((v) => ({ ...v, [key]: val }))
+  // Every edit clears the "Saved." confirmation.
+  const edit = (updater) => { setSaved(false); setValues(updater) }
+  const setExtra = (key, val) => edit((v) => ({ ...v, [key]: val }))
   const updateTestimonial = (i, patch) => setExtra('testimonials', values.testimonials.map((t, j) => (j === i ? { ...t, ...patch } : t)))
   const updateCaption = (i, caption) => setExtra('photos', values.photos.map((p, j) => (j === i ? { ...p, caption } : p)))
 
@@ -79,6 +83,7 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
   async function save() {
     setSaving(true)
     setError(null)
+    setSaved(false)
     try {
       const res = await fetch('/api/host/list-page', {
         method: 'PATCH',
@@ -92,6 +97,8 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
       // reflects the server's canonical copy, not the raw client input.
       const canonical = { ...values }
       if (j.data) for (const k of Object.keys(j.data)) canonical[k] = EXTRA_KEYS.includes(k) ? (j.data[k] ?? canonical[k]) : (j.data[k] ?? '')
+      // The sections layout has no drawer to close: show the server's copy and say so.
+      if (layout === 'sections') { setValues(canonical); setSaved(true) }
       onSaved(canonical)
     } catch (e) {
       setError(e.message)
@@ -109,10 +116,10 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
         </label>
         {f.multiline ? (
           <textarea id={`lp-${f.key}`} rows={3} maxLength={f.max} value={values[f.key]} placeholder={f.placeholder}
-            onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))} className={INPUT} />
+            onChange={(e) => edit((v) => ({ ...v, [f.key]: e.target.value }))} className={INPUT} />
         ) : (
           <input id={`lp-${f.key}`} maxLength={f.max} value={values[f.key]} placeholder={f.placeholder}
-            onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))} className={INPUT} />
+            onChange={(e) => edit((v) => ({ ...v, [f.key]: e.target.value }))} className={INPUT} />
         )}
       </div>
     )
@@ -221,6 +228,7 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
         {error && <p className="text-sm text-red-300">{error}</p>}
         <div className="flex items-center gap-2">
           {saveButton}
+          {saved && <span role="status" className="text-xs text-emerald-300">Saved.</span>}
           {previewLink}
         </div>
       </div>

@@ -23,6 +23,7 @@ vi.mock('@/components/host/HostPayouts', () => ({
 vi.mock('@/components/host/HostStatements', () => ({ default: function HostStatements() { return null } }))
 
 const { default: Page } = await import('./page.js')
+const { logWarn } = await import('@/lib/log')
 const { HostPayoutsProvider, HostBalance, HostPayoutList } = await import('@/components/host/HostPayouts')
 const { default: HostStatements } = await import('@/components/host/HostStatements')
 
@@ -61,6 +62,7 @@ const perEvent = [
 
 beforeEach(() => {
   redirect.mockClear()
+  logWarn.mockClear()
   state.session = { host: { id: 'h1', payment_provider: 'stripe_connect', stripe_connected_account_id: 'acct_1' } }
   state.revenue = { currency: 'EUR', totals, perEvent }
   state.revenueThrows = false
@@ -129,6 +131,12 @@ describe('host earnings page', () => {
     const t = text(el)
     expect(t).toContain('€300.00')
     expect(t).not.toContain('€285.00')
+  })
+
+  it('logs a warning when the revenue read throws', async () => {
+    state.revenueThrows = true
+    await Page()
+    expect(logWarn).toHaveBeenCalledWith('host-earnings', 'revenue read failed', { err: expect.any(Error) })
   })
 
   it('shows the unavailable line when revenue throws', async () => {

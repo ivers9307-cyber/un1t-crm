@@ -37,13 +37,15 @@ export default async function HostYourPageRoute() {
       const baseUrl = new URL(await resolveCustomerBaseUrl(db, hostRow.anchor_location_id)).origin
       signupUrl = `${baseUrl}/h/${slug}`
       joinUrl = `${signupUrl}/join`
+      // A failed count only hides the signup line (null); the editor stays.
       const { count, error: countErr } = await db
         .from('host_contacts')
         .select('*', { count: 'exact', head: true })
         .eq('host_id', session.host.id)
         .eq('source', 'mailing_list')
-      if (countErr) throw countErr
-      signupCount = count ?? 0
+      if (countErr) logWarn('host-page', 'signup count failed', { err: countErr })
+      signupCount = countErr ? null : (count ?? 0)
+      const { photos, testimonials } = hostPageExtras(hostRow)
       signupCopy = {
         list_headline: hostRow.list_headline,
         list_blurb: hostRow.list_blurb,
@@ -55,8 +57,8 @@ export default async function HostYourPageRoute() {
         accent_hex: hostRow.accent_hex,
         // The page extras, re-validated so a bad row never breaks the editor.
         about_text: hostRow.about_text,
-        photos: hostPageExtras(hostRow).photos,
-        testimonials: hostPageExtras(hostRow).testimonials,
+        photos,
+        testimonials,
         show_past_events: hostRow.show_past_events !== false,
         show_ratings: hostRow.show_ratings !== false,
       }

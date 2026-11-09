@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const redirect = vi.fn((url) => { throw new Error(`REDIRECT:${url}`) })
 vi.mock('next/navigation', () => ({ notFound: vi.fn(), redirect }))
 
-const state = { session: null, hostRow: null, hostErr: null, count: 4, slugThrows: false, baseThrows: false, base: 'https://tenant.test/anything?x=1' }
+const state = { session: null, hostRow: null, hostErr: null, count: 4, countErr: null, slugThrows: false, baseThrows: false, base: 'https://tenant.test/anything?x=1' }
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn(async () => state.session) }))
@@ -22,7 +22,7 @@ vi.mock('@/lib/supabase', () => ({
         const c = { select: () => c, eq: () => c, maybeSingle: async () => ({ data: state.hostRow, error: state.hostErr }) }
         return c
       }
-      const c = { select: () => c, eq: () => c, then: (res) => res({ count: state.count, error: null }) }
+      const c = { select: () => c, eq: () => c, then: (res) => res({ count: state.countErr ? null : state.count, error: state.countErr }) }
       return c
     },
   }),
@@ -62,6 +62,7 @@ beforeEach(() => {
   }
   state.hostErr = null
   state.count = 4
+  state.countErr = null
   state.slugThrows = false
   state.baseThrows = false
 })
@@ -105,5 +106,15 @@ describe('host page', () => {
     state.hostErr = null
     state.hostRow = null
     expect(text(await Page())).toContain('Your page is unavailable right now.')
+  })
+  it('keeps the editor, with no count, when the signup count read fails', async () => {
+    state.countErr = { message: 'boom' }
+    const el = await Page()
+    const node = find(el, HostYourPage)
+    expect(node).not.toBeNull()
+    expect(node.props.signupCount).toBeNull()
+    expect(node.props.url).toBe('https://tenant.test/h/acme')
+    expect(node.props.copyValues.about_text).toBe('Hi')
+    expect(text(el)).not.toContain('unavailable')
   })
 })

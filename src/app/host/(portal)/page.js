@@ -25,7 +25,7 @@ import {
   eventMoneyCents,
   hostEventDetail,
 } from '@/lib/host-portal'
-import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
+import { HOST_EVENT_STATUS_LABEL, eventIsPublic } from '@/lib/host-events'
 import HostEventRow from '@/components/host/HostEventRow'
 
 export const dynamic = 'force-dynamic'
@@ -73,11 +73,17 @@ export default async function HostOverviewPage() {
       <p className="text-white/60 mt-1 text-sm">{todayLabel}</p>
     </>
   )
+  const stripeWarning = needsStripe && (
+    <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+      Your Stripe account isn&apos;t fully connected yet — ticket payments can&apos;t be taken until it is.
+    </div>
+  )
 
   if (error) {
     return (
       <div>
         {header}
+        {stripeWarning && <div className="mt-6">{stripeWarning}</div>}
         <p className="mt-6 text-white/50 text-sm">Your events are unavailable right now.</p>
       </div>
     )
@@ -105,8 +111,9 @@ export default async function HostOverviewPage() {
   const cur = revenue?.currency || 'EUR'
   const label = moneyLabel(host)
 
-  // Next up: the soonest published event that has not happened yet.
-  const next = upcoming.find((e) => e.status === 'published') || null
+  // Next up: the soonest upcoming event that is actually on sale (published
+  // AND active; one the host took off sale is not "next").
+  const next = upcoming.find((e) => eventIsPublic(e)) || null
   let fill = null
   let stats = null
   if (next) {
@@ -173,11 +180,7 @@ export default async function HostOverviewPage() {
         <section className="mt-8">
           <h2 className={H2}>Needs your attention</h2>
           <div className="space-y-2">
-            {needsStripe && (
-              <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-                Your Stripe account isn&apos;t fully connected yet — ticket payments can&apos;t be taken until it is.
-              </div>
-            )}
+            {stripeWarning}
             {rejected.map((e) => (
               <div key={e.id} className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200 break-words">
                 <strong>{e.name}</strong> needs changes.

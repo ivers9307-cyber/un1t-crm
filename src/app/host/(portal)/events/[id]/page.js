@@ -108,6 +108,14 @@ export default async function HostEventDetail(props) {
               View event page
             </a>
           )}
+          {race.status !== 'published' && (
+            <a
+              href={`/host/events/${race.id}/edit`}
+              className="rounded-lg border border-white/15 text-white/80 text-sm font-medium px-4 py-2 hover:bg-white/5"
+            >
+              Edit
+            </a>
+          )}
           {regs.length > 0 && (
             <a
               href={`/api/host/events/${race.id}/attendees/export`}
