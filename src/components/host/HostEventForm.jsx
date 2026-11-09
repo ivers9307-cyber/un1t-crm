@@ -61,6 +61,16 @@ const JUMPS = [
 
 const sectionCls = 'text-xs uppercase tracking-[0.15em] text-white/45 mb-3'
 
+// The off-sale rule's view of a body: the server trims a tier's name before it
+// compares, so the form does too (a rename by spaces alone is not a change).
+function predictedChanges(body) {
+  const changes = editChangesFromInput(body)
+  if (Array.isArray(changes.pricing_tiers)) {
+    changes.pricing_tiers = changes.pricing_tiers.map((t) => ({ ...t, name: String(t.name ?? '').trim() }))
+  }
+  return changes
+}
+
 // brandName (W1.S1c): the host's organisation, resolved by the server page.
 export default function HostEventForm({ mode = 'create', initial = null, eventId = null, brandName = PLATFORM_NAME, status = null }) {
   const router = useRouter()
@@ -147,6 +157,12 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   // confirm dialog is asking about (null = closed).
   const [offSale, setOffSale] = useState(false)
   const [confirmReasons, setConfirmReasons] = useState(null)
+  // The last save sent the event to review, but the `status` prop still reads
+  // published until the refresh lands: it is already off sale, so no second
+  // dialog and no standing notice. Cleared when the status prop moves.
+  const [wentOffSale, setWentOffSale] = useState(false)
+  useEffect(() => { setWentOffSale(false) }, [status])
+  const onSale = status === 'published' && !wentOffSale
   // What the SERVER holds, as far as the off-sale rule can tell. Starts as the
   // loaded event and moves to the body each save sent.
   const serverHolds = useRef({
@@ -309,10 +325,10 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       return
     }
 
-    if (isEdit && status === 'published') {
+    if (isEdit && onSale) {
       const reasons = reReviewReasons(
         { status, ...serverHolds.current },
-        editChangesFromInput(buildBody()),
+        predictedChanges(buildBody()),
       )
       if (reasons.length > 0) {
         setConfirmReasons(reasons)
@@ -346,9 +362,11 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         // An edit typed while the save was in flight is not saved: judge the
         // body as it is NOW against the one that was sent.
         baseline.current = JSON.stringify(sentBody)
-        const sent = editChangesFromInput(sentBody)
+        const sent = predictedChanges(sentBody)
         serverHolds.current = sent
-        setOffSale(json.data?.reReview === true)
+        const nowOffSale = json.data?.reReview === true || wentOffSale
+        if (nowOffSale) setWentOffSale(true)
+        setOffSale(nowOffSale)
         const stillDirty = latestBody.current !== baseline.current
         setDirty(stillDirty)
         setUnsaved(stillDirty)
@@ -440,7 +458,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
 
   return (
     <form onSubmit={handleSubmit} className="space-y-10">
-      {isEdit && status === 'published' && (
+      {isEdit && onSale && (
         <div role="note" className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           This event is on sale. Changing {joinLabels(RE_REVIEW_REASONS.map((r) => RE_REVIEW_REASON_LABEL[r]), 'or')} takes it <strong>off sale</strong> until {brandName} approves it again: the public page goes offline and new bookings stop. Existing bookings are kept. Everything else saves straight away.
         </div>
