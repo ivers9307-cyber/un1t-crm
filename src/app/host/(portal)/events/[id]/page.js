@@ -97,6 +97,17 @@ export default async function HostEventDetail(props) {
           </p>
         </div>
         <div className="shrink-0 flex items-center gap-2 flex-wrap">
+          {/* HOSTPORTAL.1 — the events list's View link moved here. */}
+          {race.slug && (
+            <a
+              href={`/event/${race.slug}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg border border-white/15 text-white/80 text-sm font-medium px-4 py-2 hover:bg-white/5"
+            >
+              View event page
+            </a>
+          )}
           {regs.length > 0 && (
             <a
               href={`/api/host/events/${race.id}/attendees/export`}
