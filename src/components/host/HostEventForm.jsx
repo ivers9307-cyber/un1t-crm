@@ -8,7 +8,7 @@
 // editable here — they're passed through unchanged (normalized to ISO) so an
 // edit never silently wipes a reg window.
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { ImagePlus, Loader2, X } from 'lucide-react'
 import { HOST_EVENT_KINDS, MAX_SESSIONS } from '@/lib/host-events'
@@ -16,6 +16,9 @@ import { PLATFORM_NAME } from '@/lib/brand-name'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 import PricingTiersEditor from '@/components/PricingTiersEditor'
 import RegistrationQuestionsEditor from '@/components/RegistrationQuestionsEditor'
+import GuardedLink from '@/components/host/GuardedLink'
+import HostSubmitButton from '@/components/host/HostSubmitButton'
+import { setUnsaved } from '@/lib/unsaved-guard'
 
 const KIND_LABELS = {
   workshop: 'Workshop',
@@ -44,10 +47,21 @@ function centsToEuros(cents) {
 const input =
   'w-full bg-white/[0.04] border border-white/12 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/30'
 const labelCls = 'block text-xs uppercase tracking-wide text-white/45 mb-1.5'
+// HOSTPORTAL.2 — the jump bar: pill label, section id (the ids live on the
+// <section>s below).
+const JUMPS = [
+  { id: 'setup-basics', label: 'Basics' },
+  { id: 'setup-schedule', label: 'Schedule & sessions' },
+  { id: 'setup-tickets', label: 'Tickets & pricing' },
+  { id: 'setup-questions', label: 'Questions at signup' },
+  { id: 'setup-look', label: 'Page look' },
+  { id: 'setup-emails', label: 'Emails' },
+]
+
 const sectionCls = 'text-xs uppercase tracking-[0.15em] text-white/45 mb-3'
 
 // brandName (W1.S1c): the host's organisation, resolved by the server page.
-export default function HostEventForm({ mode = 'create', initial = null, eventId = null, brandName = PLATFORM_NAME }) {
+export default function HostEventForm({ mode = 'create', initial = null, eventId = null, brandName = PLATFORM_NAME, status = null }) {
   const router = useRouter()
   const isEdit = mode === 'edit'
 
@@ -127,6 +141,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
   const [issues, setIssues] = useState([])
+  const [saved, setSaved] = useState(false)
 
   // Reg window isn't editable here — preserve whatever the event already has.
   const regOpensAt = initial?.registration_opens_at ?? null
@@ -278,10 +293,11 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     try {
       const url = isEdit ? `/api/host/events/${eventId}` : '/api/host/events'
       const method = isEdit ? 'PUT' : 'POST'
+      const sentBody = buildBody()
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildBody()),
+        body: JSON.stringify(sentBody),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) {
@@ -290,8 +306,19 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         setSubmitting(false)
         return
       }
-      const id = isEdit ? eventId : json.data?.id
-      router.push(`/host/events/${id}`)
+      if (isEdit) {
+        // Stay on the page: the saved body is the new baseline, and the
+        // refresh re-renders the layout so the header's status chip updates.
+        baseline.current = JSON.stringify(sentBody)
+        setDirty(false)
+        setUnsaved(false)
+        setSaved(true)
+        setSubmitting(false)
+        router.refresh()
+        return
+      }
+      setUnsaved(false)
+      router.push(`/host/events/${json.data?.id}/setup`)
       router.refresh()
     } catch (err) {
       setError(err?.message || 'Network error. Please try again.')
@@ -299,12 +326,52 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     }
   }
 
-  const cancelHref = isEdit && eventId ? `/host/events/${eventId}` : '/host'
+  // HOSTPORTAL.2 — unsaved-changes tracking. The baseline is the body as first
+  // rendered (the series fetch only fills the select's options, which the body
+  // does not carry); a save moves it to the body that was saved.
+  const currentBody = JSON.stringify(buildBody())
+  const baseline = useRef(null)
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => {
+    if (baseline.current === null) baseline.current = currentBody
+    const isDirty = currentBody !== baseline.current
+    setDirty(isDirty)
+    setUnsaved(isDirty)
+    if (isDirty) setSaved(false)
+  }, [currentBody])
+  useEffect(() => () => setUnsaved(false), [])
+  useEffect(() => {
+    if (!dirty) return undefined
+    const warn = (e) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+
+  function jumpTo(id) {
+    if (id === 'setup-emails') setShowEmail(true)
+    document.getElementById(id)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+  }
+
+  const cancelHref = isEdit && eventId ? `/host/events/${eventId}` : '/host/events'
 
   return (
     <form onSubmit={handleSubmit} className="space-y-10">
+      {isEdit && (
+        <nav aria-label="Jump to a section" className="-mt-2 flex gap-2 overflow-x-auto pb-1">
+          {JUMPS.map((j) => (
+            <button
+              key={j.id}
+              type="button"
+              onClick={() => jumpTo(j.id)}
+              className="shrink-0 rounded-full border border-white/12 px-3 py-1.5 text-xs text-white/70 hover:border-white/30 hover:text-white"
+            >
+              {j.label}
+            </button>
+          ))}
+        </nav>
+      )}
       {/* Basics */}
-      <section>
+      <section id="setup-basics" className="scroll-mt-24">
         <h2 className={sectionCls}>Basics</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
@@ -361,7 +428,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       </section>
 
       {/* Schedule */}
-      <section>
+      <section id="setup-schedule" className="scroll-mt-24">
         <h2 className={sectionCls}>Schedule</h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
@@ -480,7 +547,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       </section>
 
       {/* Tickets & teams */}
-      <section>
+      <section id="setup-tickets" className="scroll-mt-24">
         <h2 className={sectionCls}>Tickets &amp; teams</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
@@ -536,13 +603,13 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       </section>
 
       {/* QUESTIONS.1 — asked at signup; answers travel with the attendees. */}
-      <section>
+      <section id="setup-questions" className="scroll-mt-24">
         <h2 className={sectionCls}>Questions at signup</h2>
         <RegistrationQuestionsEditor value={questions} onChange={setQuestions} dark />
       </section>
 
       {/* Presentation */}
-      <section>
+      <section id="setup-look" className="scroll-mt-24">
         <h2 className={sectionCls}>Presentation</h2>
         <div>
           <label htmlFor="he-desc" className={labelCls}>Description <span className="text-white/30 normal-case">(optional)</span></label>
@@ -659,7 +726,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       </section>
 
       {/* Email copy (secondary, collapsed) */}
-      <section>
+      <section id="setup-emails" className="scroll-mt-24">
         <button
           type="button"
           onClick={() => setShowEmail((v) => !v)}
@@ -757,7 +824,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       )}
 
       {/* Actions */}
-      <div className="flex items-center gap-3 pt-2">
+      <div className="flex flex-wrap items-center gap-3 pt-2">
         <button
           type="submit"
           disabled={submitting}
@@ -767,9 +834,13 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
             ? isEdit ? 'Saving…' : 'Creating…'
             : isEdit ? 'Save changes' : 'Create event'}
         </button>
-        <a href={cancelHref} className="text-sm text-white/50 hover:text-white transition">
+        {isEdit && (status === 'draft' || status === 'rejected') && (
+          <span className="text-sm"><HostSubmitButton eventId={eventId} /></span>
+        )}
+        <GuardedLink href={cancelHref} className="text-sm text-white/50 hover:text-white transition">
           Cancel
-        </a>
+        </GuardedLink>
+        {saved && <span role="status" className="text-sm text-emerald-300/90">Saved.</span>}
       </div>
     </form>
   )

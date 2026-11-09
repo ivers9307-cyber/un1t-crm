@@ -95,9 +95,9 @@ export function groupHostEvents(events, today) {
   return { needsAction, upcoming, past }
 }
 
-/** Where an event's row link goes: drafts and rejected events open the edit form. */
+/** Where an event's row link goes: drafts and rejected events open the Set up tab. */
 export function eventLandingHref(event) {
-  return NEEDS_ACTION.has(event.status) ? `/host/events/${event.id}/edit` : `/host/events/${event.id}`
+  return NEEDS_ACTION.has(event.status) ? `/host/events/${event.id}/setup` : `/host/events/${event.id}`
 }
 
 const PAGE = 1000

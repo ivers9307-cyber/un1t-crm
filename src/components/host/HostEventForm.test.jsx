@@ -5,7 +5,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
 
 const push = vi.fn()
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh: vi.fn() }) }))
+const refresh = vi.fn()
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh }) }))
+// HOSTPORTAL.2 — spy on the unsaved flag the form raises and clears.
+const setUnsaved = vi.fn()
+vi.mock('@/lib/unsaved-guard', () => ({ setUnsaved: (f) => setUnsaved(f), hasUnsaved: () => false, confirmLeave: () => true }))
 
 const { default: HostEventForm } = await import('./HostEventForm.jsx')
 
@@ -17,7 +21,7 @@ const initial = {
   sessions: [{ id: W1, start_time: '10:00', label: null, capacity: 20 }, { id: W2, start_time: '14:00', label: 'Afternoon', capacity: 15 }],
 }
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); push.mockClear() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); push.mockClear(); refresh.mockClear(); setUnsaved.mockClear() })
 
 describe('HostEventForm sessions', () => {
   it('hydrates two sessions, adds a third, and submits sessions[] without the retired keys', async () => {
@@ -204,5 +208,141 @@ describe('HostEventForm rating request copy', () => {
       reminder_email_subject: 'Tomorrow', reminder_email_intro: 'Bring water.',
       rating_email_subject: 'How was {{event_name}}?', rating_email_intro: 'Two minutes, we promise.',
     })
+  })
+})
+
+
+// HOSTPORTAL.2 — the Set up tab: jump bar, unsaved guard, stay-on-page save.
+function okFetch(extra = {}) {
+  return vi.fn(async (url) => (String(url) === '/api/host/series'
+    ? { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+    : { ok: true, status: 200, json: async () => ({ success: true, data: { id: extra.newId || 'E1' } }) }))
+}
+const PILLS = ['Basics', 'Schedule & sessions', 'Tickets & pricing', 'Questions at signup', 'Page look', 'Emails']
+
+describe('HostEventForm jump bar', () => {
+  it('renders the six jump pills in edit mode and none in create mode', () => {
+    vi.stubGlobal('fetch', okFetch())
+    const { unmount } = render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    for (const label of PILLS) {
+      const pill = screen.getByRole('button', { name: label })
+      expect(pill.getAttribute('type')).toBe('button')
+    }
+    unmount()
+    render(<HostEventForm mode="create" brandName="UN1T" />)
+    for (const label of PILLS) expect(screen.queryByRole('button', { name: label })).toBeNull()
+  })
+
+  it('gives each section its anchor id', () => {
+    vi.stubGlobal('fetch', okFetch())
+    const { container } = render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    for (const id of ['setup-basics', 'setup-schedule', 'setup-tickets', 'setup-questions', 'setup-look', 'setup-emails']) {
+      expect(container.querySelector(`section#${id}`), id).toBeTruthy()
+    }
+  })
+
+  it('a pill scrolls its section into view', () => {
+    vi.stubGlobal('fetch', okFetch())
+    const { container } = render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    const target = container.querySelector('section#setup-tickets')
+    target.scrollIntoView = vi.fn()
+    fireEvent.click(screen.getByRole('button', { name: 'Tickets & pricing' }))
+    expect(target.scrollIntoView).toHaveBeenCalledTimes(1)
+  })
+
+  it('the Emails pill opens the email copy section', () => {
+    vi.stubGlobal('fetch', okFetch())
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    expect(screen.queryByLabelText(/Rating request subject/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Emails' }))
+    expect(screen.getByLabelText(/Rating request subject/)).toBeTruthy()
+  })
+})
+
+describe('HostEventForm unsaved guard', () => {
+  it('is not dirty on mount (even after the series fetch settles) and is dirty after an edit', async () => {
+    const fetchMock = okFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(setUnsaved.mock.calls.length).toBeGreaterThan(0)
+    expect(setUnsaved.mock.calls.every(([f]) => f === false)).toBe(true)
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Mobility 2' } })
+    expect(setUnsaved.mock.calls.at(-1)[0]).toBe(true)
+  })
+
+  it('goes clean again when the edit is undone, and clears the flag on unmount', () => {
+    vi.stubGlobal('fetch', okFetch())
+    const { unmount } = render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    const name = screen.getByLabelText(/Event name/)
+    fireEvent.change(name, { target: { value: 'Other' } })
+    expect(setUnsaved.mock.calls.at(-1)[0]).toBe(true)
+    fireEvent.change(name, { target: { value: 'Mobility' } })
+    expect(setUnsaved.mock.calls.at(-1)[0]).toBe(false)
+    fireEvent.change(name, { target: { value: 'Other' } })
+    unmount()
+    expect(setUnsaved.mock.calls.at(-1)[0]).toBe(false)
+  })
+
+  it('asks the browser before unloading while dirty, and not otherwise', () => {
+    vi.stubGlobal('fetch', okFetch())
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    const clean = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(clean)
+    expect(clean.defaultPrevented).toBe(false)
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Other' } })
+    const dirty = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(dirty)
+    expect(dirty.defaultPrevented).toBe(true)
+  })
+})
+
+describe('HostEventForm save behaviour', () => {
+  it('stays on the page after an edit save, shows Saved., refreshes, and is clean again', async () => {
+    vi.stubGlobal('fetch', okFetch())
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Other' } })
+    expect(setUnsaved.mock.calls.at(-1)[0]).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    expect(await screen.findByText('Saved.')).toBeTruthy()
+    expect(push).not.toHaveBeenCalled()
+    expect(refresh).toHaveBeenCalled()
+    expect(setUnsaved.mock.calls.at(-1)[0]).toBe(false)
+    // Editing again clears the Saved. note and raises the flag.
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Third' } })
+    expect(screen.queryByText('Saved.')).toBeNull()
+    expect(setUnsaved.mock.calls.at(-1)[0]).toBe(true)
+  })
+
+  it('sends create to the new event\'s setup tab', async () => {
+    vi.stubGlobal('fetch', okFetch({ newId: 'new-id' }))
+    render(<HostEventForm mode="create" brandName="UN1T" />)
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Brand new' } })
+    fireEvent.change(screen.getByLabelText(/Venue name/), { target: { value: 'Studio' } })
+    fireEvent.change(screen.getByLabelText(/^Date/), { target: { value: '2026-12-05' } })
+    fireEvent.change(screen.getAllByLabelText(/Start time/)[0], { target: { value: '10:00' } })
+    fireEvent.change(screen.getAllByLabelText(/^Capacity/)[0], { target: { value: '10' } })
+    fireEvent.click(screen.getByRole('button', { name: /Create event/ }))
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/host/events/new-id/setup'))
+  })
+})
+
+describe('HostEventForm actions', () => {
+  it('shows Submit for review on a draft and a rejected event only', () => {
+    vi.stubGlobal('fetch', okFetch())
+    for (const [status, shown] of [['draft', true], ['rejected', true], ['pending_review', false], ['published', false]]) {
+      const { unmount } = render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status={status} />)
+      expect(!!screen.queryByRole('button', { name: 'Submit for review' }), status).toBe(shown)
+      unmount()
+    }
+  })
+
+  it('Cancel goes to the event page in edit mode and the events list in create mode', () => {
+    vi.stubGlobal('fetch', okFetch())
+    const { unmount } = render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    expect(screen.getByRole('link', { name: 'Cancel' }).getAttribute('href')).toBe('/host/events/E1')
+    unmount()
+    render(<HostEventForm mode="create" brandName="UN1T" />)
+    expect(screen.getByRole('link', { name: 'Cancel' }).getAttribute('href')).toBe('/host/events')
   })
 })

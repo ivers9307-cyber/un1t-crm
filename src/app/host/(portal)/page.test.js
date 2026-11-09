@@ -117,7 +117,7 @@ describe('host overview page', () => {
     expect(t).toContain('Event r1')
     expect(t).toContain('needs changes.')
     expect(t).toContain('Brand X asked: "Add a venue"')
-    expect(hrefs(el)).toContain('/host/events/r1/edit')
+    expect(hrefs(el)).toContain('/host/events/r1/setup')
   })
 
   it('renders no Needs your attention heading when nothing needs attention', async () => {

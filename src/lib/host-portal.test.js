@@ -60,9 +60,9 @@ describe('groupHostEvents', () => {
 })
 
 describe('eventLandingHref', () => {
-  it('opens a draft and a rejected event on the edit form', () => {
-    expect(eventLandingHref({ id: 'e1', status: 'draft' })).toBe('/host/events/e1/edit')
-    expect(eventLandingHref({ id: 'e1', status: 'rejected' })).toBe('/host/events/e1/edit')
+  it('opens a draft and a rejected event on the Set up tab', () => {
+    expect(eventLandingHref({ id: 'e1', status: 'draft' })).toBe('/host/events/e1/setup')
+    expect(eventLandingHref({ id: 'e1', status: 'rejected' })).toBe('/host/events/e1/setup')
   })
   it('opens every other status on the event page', () => {
     expect(eventLandingHref({ id: 'e1', status: 'published' })).toBe('/host/events/e1')
