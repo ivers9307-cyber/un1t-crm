@@ -16,6 +16,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Copy, Loader2 } from 'lucide-react'
+import { confirmLeave } from '@/lib/unsaved-guard'
 
 /** YYYY-MM-DD plus `days`, on the calendar (no zone maths: a date, not an instant). */
 export function addDays(isoDate, days) {
@@ -53,6 +54,9 @@ export default function DuplicateEventButton({ eventId, raceDate, apiUrl, editHr
         setError(json.error || 'The event could not be copied. Try again.')
         return
       }
+      // HOSTPORTAL.2: the copy exists by now; only the navigation asks first
+      // (true when nothing is unsaved, so the staff events list is unaffected).
+      if (!confirmLeave()) return
       router.push(String(editHref || '').replace('{id}', encodeURIComponent(json.data.id)))
     } catch (err) {
       setError(err?.message || 'Network error. Try again.')
