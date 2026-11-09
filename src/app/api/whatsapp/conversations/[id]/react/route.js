@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { conversationAddress } from '@/lib/whatsapp-address'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
@@ -33,7 +34,7 @@ export async function POST(request, props) {
 
   const db = createServerClient()
   const { data: conversation, error: convErr } = await db.from('whatsapp_conversations')
-    .select('id, location_id, contact_id, wa_phone')
+    .select('id, location_id, contact_id, wa_phone, wa_bsuid')
     .eq('id', params.id)
     .maybeSingle()
   // CHECKINRISKS.1 — a failed read is not "no such conversation".
@@ -52,7 +53,7 @@ export async function POST(request, props) {
   try {
     // WAREPLYNUMBER.1 (C86) — Meta accepts a reaction only from the number
     // holding the message: the one this thread was written to.
-    sendResult = await sendReaction(conversation.wa_phone, message_id, emoji, { locationId: conversation.location_id, replyInConversation: conversation.id })
+    sendResult = await sendReaction(conversationAddress(conversation), message_id, emoji, { locationId: conversation.location_id, replyInConversation: conversation.id })
   } catch (e) {
     // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
     // 409 with the resolver's message (it used to send from the env number).

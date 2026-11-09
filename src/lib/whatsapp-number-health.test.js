@@ -3,6 +3,7 @@ import {
   qualityDowngraded, tierDowngraded, tierLabel, healthDowngradeReason,
   pollQualityPauseReason, isMetaAuthError, tokenTransition,
   tokenInvalidNotification, tokenRecoveredNotification, fetchNumberHealth,
+  normalizeMessagingLimit, isKnownTier, fetchMessagingLimit, MESSAGING_LIMIT_FIELD,
 } from './whatsapp-number-health.js'
 
 describe('qualityDowngraded', () => {
@@ -146,5 +147,91 @@ describe('fetchNumberHealth — Meta error metadata', () => {
     } finally {
       globalThis.fetch = realFetch
     }
+  })
+})
+
+// WA-LIMIT.1 — Meta deprecated `messaging_limit_tier` on the phone-number node
+// and stopped returning it; the limit now comes from
+// `whatsapp_business_manager_messaging_limit`.
+describe('normalizeMessagingLimit', () => {
+  it('stores one spelling for every form Meta sends', () => {
+    expect(normalizeMessagingLimit('TIER_250')).toBe('TIER_250')
+    expect(normalizeMessagingLimit('TIER_2K')).toBe('TIER_2K')
+    expect(normalizeMessagingLimit('tier_10k')).toBe('TIER_10K')
+    expect(normalizeMessagingLimit('TIER_UNLIMITED')).toBe('UNLIMITED')
+    expect(normalizeMessagingLimit('UNLIMITED')).toBe('UNLIMITED')
+    expect(normalizeMessagingLimit(250)).toBe('TIER_250')
+    expect(normalizeMessagingLimit(2000)).toBe('TIER_2K')
+    expect(normalizeMessagingLimit('100000')).toBe('TIER_100K')
+    expect(normalizeMessagingLimit(-1)).toBe('UNLIMITED')
+  })
+  it('is null for nothing, and keeps an unknown value visible', () => {
+    for (const v of [null, undefined, '', '  ']) expect(normalizeMessagingLimit(v)).toBeNull()
+    expect(normalizeMessagingLimit('TIER_1M')).toBe('TIER_1M')
+    expect(normalizeMessagingLimit(500)).toBe('500')
+  })
+})
+
+describe('the 2,000 tier', () => {
+  it('ranks between 1,000 and 10,000 and is labelled', () => {
+    expect(tierDowngraded('TIER_10K', 'TIER_2K')).toBe(true)
+    expect(tierDowngraded('TIER_2K', 'TIER_250')).toBe(true)
+    expect(tierDowngraded('TIER_250', 'TIER_2K')).toBe(false)
+    expect(tierLabel('TIER_2K')).toBe('2,000 / day')
+  })
+  it('isKnownTier separates a usable tier from an unknown one', () => {
+    expect(isKnownTier('TIER_2K')).toBe(true)
+    expect(isKnownTier('UNLIMITED')).toBe(true)
+    for (const v of [null, undefined, '', 'TIER_1M', 'toString']) expect(isKnownTier(v)).toBe(false)
+  })
+})
+
+describe('fetchNumberHealth — the messaging limit (WA-LIMIT.1)', () => {
+  const realFetch = globalThis.fetch
+  const answers = (core, limit) => {
+    const calls = []
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url: String(url), init })
+      return { json: async () => (String(url).includes(MESSAGING_LIMIT_FIELD) ? limit : core) }
+    }
+    return calls
+  }
+  const restore = () => { globalThis.fetch = realFetch }
+
+  it('reads the limit from the new field, in its own request, with the token in the header', async () => {
+    const calls = answers({ quality_rating: 'GREEN', name_status: 'APPROVED' }, { [MESSAGING_LIMIT_FIELD]: 'TIER_2K', id: 'p1' })
+    try {
+      const health = await fetchNumberHealth({ phoneNumberId: 'p1', token: 't' })
+      expect(health).toEqual({ quality_rating: 'GREEN', messaging_limit_tier: 'TIER_2K', name_status: 'APPROVED', limit_error: null })
+      expect(calls).toHaveLength(2)
+      expect(calls[1].url).toBe(`https://graph.facebook.com/v25.0/p1?fields=${MESSAGING_LIMIT_FIELD}`)
+      expect(calls[1].init.headers.Authorization).toBe('Bearer t')
+      expect(calls[1].url).not.toContain('access_token')
+    } finally { restore() }
+  })
+
+  it('a refusal of the new field costs only the limit, never the quality rating', async () => {
+    answers({ quality_rating: 'YELLOW', name_status: 'APPROVED' }, { error: { message: '(#100) Tried accessing nonexisting field', code: 100 } })
+    try {
+      const health = await fetchNumberHealth({ phoneNumberId: 'p1', token: 't' })
+      expect(health.quality_rating).toBe('YELLOW')
+      expect(health.messaging_limit_tier).toBeNull()
+      expect(health.limit_error).toBe('(#100) Tried accessing nonexisting field')
+    } finally { restore() }
+  })
+
+  it('falls back to the old field while Meta still returns it', async () => {
+    answers({ quality_rating: 'GREEN', messaging_limit_tier: 'TIER_1K' }, { id: 'p1' })
+    try {
+      const health = await fetchNumberHealth({ phoneNumberId: 'p1', token: 't' })
+      expect(health.messaging_limit_tier).toBe('TIER_1K')
+    } finally { restore() }
+  })
+
+  it('fetchMessagingLimit never throws', async () => {
+    globalThis.fetch = async () => { throw new Error('socket hang up') }
+    try {
+      expect(await fetchMessagingLimit({ phoneNumberId: 'p1', token: 't' })).toEqual({ tier: null, error: 'socket hang up' })
+    } finally { restore() }
   })
 })

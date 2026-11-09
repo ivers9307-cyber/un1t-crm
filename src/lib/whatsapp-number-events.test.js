@@ -58,7 +58,21 @@ describe('numberNotification', () => {
   })
   it('capability update lists the new caps', () => {
     const n = numberNotification('business_capability_update', { max_daily_conversation_per_phone: 1000 })
-    expect(n.body).toContain('1000')
+    expect(n.body).toContain('1,000 / day')
+  })
+  // WA-LIMIT.1 — Meta renamed the property from v24 (the limit is the
+  // business portfolio's now) and sends a tier string or a bare number.
+  it('capability update reads the renamed per-business limit, in either form', () => {
+    expect(numberNotification('business_capability_update', { max_daily_conversations_per_business: 'TIER_2K' }).body).toContain('2,000 / day')
+    expect(numberNotification('business_capability_update', { max_daily_conversations_per_business: 2000 }).body).toContain('2,000 / day')
+    expect(numberNotification('business_capability_update', { max_daily_conversations_per_business: 'TIER_UNLIMITED' }).body).toContain('Unlimited')
+    expect(numberNotification('business_capability_update', { max_daily_conversations_per_business: -1 }).body).toContain('Unlimited')
+  })
+  it('a limit change stores ONE spelling of the tier', () => {
+    expect(numberColumnUpdate('phone_number_quality_update', { event: 'UPGRADE', current_limit: 'TIER_UNLIMITED' }))
+      .toEqual({ messaging_limit_tier: 'UNLIMITED' })
+    expect(numberColumnUpdate('phone_number_quality_update', { event: 'UPGRADE', current_limit: 'TIER_2K' }))
+      .toEqual({ messaging_limit_tier: 'TIER_2K' })
   })
 })
 

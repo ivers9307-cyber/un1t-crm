@@ -21,7 +21,7 @@ describe('tierDailyLimit', () => {
   })
   it('limits stay consistent with the tier map', () => {
     expect(Object.keys(TIER_DAILY_LIMITS).sort()).toEqual(
-      ['TIER_100K', 'TIER_10K', 'TIER_1K', 'TIER_250', 'TIER_50'].sort()
+      ['TIER_100K', 'TIER_10K', 'TIER_1K', 'TIER_250', 'TIER_2K', 'TIER_50'].sort()
     )
   })
 })
@@ -288,5 +288,14 @@ describe('getSendBudget', () => {
     const db = usageDb([{ id: 1, contact_id: 'a' }, { id: 2, contact_id: 'b' }])
     expect(await getSendBudget(db, { numberId: null, locationId: 'loc1', tier: 'TIER_250' }))
       .toEqual({ tier: 'TIER_250', limit: 250, used: 2, remaining: 248 })
+  })
+})
+
+// WA-LIMIT.1 — the rung Meta's portfolio-level ladder added. Without it a
+// 2,000 limit read as "unknown" and the gate stood down.
+describe('the 2,000 tier is gated', () => {
+  it('has a daily limit and a budget', () => {
+    expect(tierDailyLimit('TIER_2K')).toBe(2000)
+    expect(budgetSnapshot({ tier: 'TIER_2K', usedContacts: 1500 })).toEqual({ tier: 'TIER_2K', limit: 2000, used: 1500, remaining: 500 })
   })
 })

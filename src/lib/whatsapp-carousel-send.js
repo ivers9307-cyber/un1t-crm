@@ -11,6 +11,7 @@
 // row is best-effort: a logging failure never fails a send that Meta
 // already accepted.
 
+import { conversationAddress } from './whatsapp-address.js'
 import { sendMediaCarousel } from '@/lib/whatsapp'
 
 /**
@@ -18,7 +19,7 @@ import { sendMediaCarousel } from '@/lib/whatsapp'
  * @param {import('@supabase/supabase-js').SupabaseClient} db
  * @param {object} args
  * @param {{name:string, body_text?:string, cards:Array}} args.set  a locations.settings.wa_card_sets entry
- * @param {{id:string, contact_id?:string|null, wa_phone:string}} args.conversation
+ * @param {{id:string, contact_id?:string|null, wa_phone?:string|null, wa_bsuid?:string|null}} args.conversation
  * @param {string} args.locationId
  * @param {string} [args.source]  whatsapp_messages.source stamp (e.g. 'agent'); omitted = staff send
  * @param {string} [args.sentBy]  the acting staff member's profile id (inbox path) → whatsapp_messages.sent_by
@@ -26,7 +27,7 @@ import { sendMediaCarousel } from '@/lib/whatsapp'
  */
 export async function sendCardSetToConversation(db, { set, conversation, locationId, source, sentBy }) {
   const sendResult = await sendMediaCarousel(
-    conversation.wa_phone,
+    conversationAddress(conversation),
     { bodyText: set.body_text || set.name, cards: set.cards },
     // WAREPLYNUMBER.1 (C86) — from the number this thread was written to
     // (staff's send-carousel and Mia's send_card_set both come through here).

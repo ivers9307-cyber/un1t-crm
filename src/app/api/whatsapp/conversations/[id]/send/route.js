@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { conversationAddress } from '@/lib/whatsapp-address'
 import { z } from 'zod'
 import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, headerComponentFor } from '@/lib/whatsapp'
 import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
@@ -79,7 +80,9 @@ export async function POST(request, props) {
   if (permHere) return permHere
 
   const contact = conversation.contacts
-  const phone = contact?.wa_phone || conversation.wa_phone
+  // WA-BSUID.2 — a thread with a sender who hides their number has no phone:
+  // it is answered at its business-scoped user id (Meta's `recipient` field).
+  const phone = conversationAddress(conversation, contact)
 
   if (!phone) {
     return NextResponse.json({ success: false, error: 'No WhatsApp number for this contact' }, { status: 400 })
