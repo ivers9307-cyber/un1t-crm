@@ -2,7 +2,7 @@
 // HOSTPORTAL.1 — /host/page client component: both links with their own QR
 // hrefs, copy-link feedback, and the editor wired in the sections layout.
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, cleanup, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 
 vi.mock('@/lib/landing-media-upload', async (orig) => ({ ...(await orig()), compressImageForUpload: vi.fn(async (f) => f) }))
 const { default: HostYourPage } = await import('./HostYourPage.jsx')
@@ -61,5 +61,120 @@ describe('HostYourPage', () => {
     // editor stays mounted after a save (no drawer to close) and keeps the saved value
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy())
     expect(screen.getByLabelText(/^Headline/).value).toBe('Changed')
+  })
+
+  describe('preview', () => {
+    const PATH_URL = 'https://tenant.test/h/demo-host'
+    const mockMedia = (matches) => {
+      const listeners = new Set()
+      const mql = {
+        matches,
+        addEventListener: (_t, fn) => listeners.add(fn),
+        removeEventListener: (_t, fn) => listeners.delete(fn),
+      }
+      vi.stubGlobal('matchMedia', vi.fn(() => mql))
+      return { mql, change: (m) => { mql.matches = m; listeners.forEach((fn) => fn({ matches: m })) } }
+    }
+    const withUrl = (url) => ({ ...props, url })
+
+    it('renders an iframe of the page\'s own path with a title', () => {
+      mockMedia(true)
+      render(<HostYourPage {...withUrl(PATH_URL)} />)
+      const frame = screen.getByTitle('Preview of your public page')
+      expect(frame.tagName).toBe('IFRAME')
+      expect(frame.getAttribute('src')).toBe('/h/demo-host')
+      expect(frame.getAttribute('loading')).toBe('lazy')
+      expect(screen.getByText('This shows your saved page. Save to update it.')).toBeTruthy()
+      expect(document.querySelectorAll('iframe').length).toBe(1)
+    })
+    it('reloads the preview after a successful save', async () => {
+      mockMedia(true)
+      vi.stubGlobal('fetch', vi.fn(async (_u, init) => ({ ok: true, status: 200, json: async () => ({ success: true, data: JSON.parse(init.body) }) })))
+      render(<HostYourPage {...withUrl(PATH_URL)} />)
+      const before = screen.getByTitle('Preview of your public page')
+      fireEvent.change(screen.getByLabelText(/^Headline/), { target: { value: 'Changed' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(screen.getByTitle('Preview of your public page')).not.toBe(before))
+      expect(before.isConnected).toBe(false)
+      expect(document.querySelectorAll('iframe').length).toBe(1)
+    })
+    it('renders no preview when the url is not a /h/ page', () => {
+      mockMedia(true)
+      for (const bad of ['https://tenant.test/', 'https://tenant.test/h/', 'https://tenant.test/h/a/join', 'not a url', '']) {
+        const { unmount } = render(<HostYourPage {...withUrl(bad)} />)
+        expect(document.querySelector('iframe')).toBeNull()
+        expect(screen.queryByRole('button', { name: /preview/i })).toBeNull()
+        unmount()
+      }
+    })
+    it('keeps the preview closed behind Show preview until asked, then toggles', () => {
+      mockMedia(false)
+      render(<HostYourPage {...withUrl(PATH_URL)} />)
+      const toggle = screen.getByRole('button', { name: 'Show preview' })
+      expect(toggle.getAttribute('type')).toBe('button')
+      expect(toggle.getAttribute('aria-expanded')).toBe('false')
+      expect(toggle.className).toContain('lg:hidden')
+      expect(document.getElementById(toggle.getAttribute('aria-controls'))).toBeTruthy()
+      expect(document.querySelector('iframe')).toBeNull()
+      fireEvent.click(toggle)
+      const open = screen.getByRole('button', { name: 'Hide preview' })
+      expect(open.getAttribute('aria-expanded')).toBe('true')
+      expect(document.querySelectorAll('iframe').length).toBe(1)
+      expect(screen.getByTitle('Preview of your public page').getAttribute('src')).toBe('/h/demo-host')
+      fireEvent.click(open)
+      expect(document.querySelector('iframe')).toBeNull()
+      expect(screen.getByRole('button', { name: 'Show preview' }).getAttribute('aria-expanded')).toBe('false')
+    })
+    it('shows the preview without the toggle opened on a wide screen, and follows media changes', async () => {
+      const media = mockMedia(true)
+      render(<HostYourPage {...withUrl(PATH_URL)} />)
+      expect(document.querySelectorAll('iframe').length).toBe(1)
+      const { act } = await import('@testing-library/react')
+      act(() => media.change(false))
+      expect(document.querySelector('iframe')).toBeNull()
+      act(() => media.change(true))
+      expect(document.querySelectorAll('iframe').length).toBe(1)
+    })
+    it('uses addListener/removeListener when the MediaQueryList has no addEventListener', () => {
+      const listeners = new Set()
+      const mql = { matches: true, addListener: (fn) => listeners.add(fn), removeListener: (fn) => listeners.delete(fn) }
+      vi.stubGlobal('matchMedia', vi.fn(() => mql))
+      const { unmount } = render(<HostYourPage {...withUrl(PATH_URL)} />)
+      expect(document.querySelectorAll('iframe').length).toBe(1)
+      expect(listeners.size).toBe(1)
+      act(() => { mql.matches = false; listeners.forEach((fn) => fn({ matches: false })) })
+      expect(document.querySelector('iframe')).toBeNull()
+      unmount()
+      expect(listeners.size).toBe(0)
+    })
+    it('removes the addEventListener listener on unmount', () => {
+      const media = mockMedia(true)
+      const remove = vi.spyOn(media.mql, 'removeEventListener')
+      const { unmount } = render(<HostYourPage {...withUrl(PATH_URL)} />)
+      unmount()
+      expect(remove).toHaveBeenCalledWith('change', expect.any(Function))
+    })
+    it('sizes the frame to fit a short screen and keeps the gap off the always-present container', () => {
+      mockMedia(true)
+      render(<HostYourPage {...withUrl(PATH_URL)} />)
+      const frame = screen.getByTitle('Preview of your public page')
+      expect(frame.className).toContain('h-[min(640px,calc(100vh-6rem))]')
+      const container = document.getElementById('host-page-preview')
+      expect(container.className).not.toMatch(/\bmt-4\b/)
+      expect(container.firstElementChild.className).toMatch(/\bmt-4\b/)
+    })
+    it('leaves the container empty (no content, no margin) while the preview is closed', () => {
+      mockMedia(false)
+      render(<HostYourPage {...withUrl(PATH_URL)} />)
+      const container = document.getElementById('host-page-preview')
+      expect(container.childElementCount).toBe(0)
+      expect(container.className).not.toMatch(/\bmt-/)
+    })
+    it('does not crash and starts closed when matchMedia is unavailable', () => {
+      vi.stubGlobal('matchMedia', undefined)
+      render(<HostYourPage {...withUrl(PATH_URL)} />)
+      expect(document.querySelector('iframe')).toBeNull()
+      expect(screen.getByRole('button', { name: 'Show preview' })).toBeTruthy()
+    })
   })
 })

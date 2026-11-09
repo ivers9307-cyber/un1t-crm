@@ -106,6 +106,7 @@ const LABELS = {
   host_email: 'Host email', direct: 'Direct', unknown: 'Unknown', other: 'Other',
   instagram: 'Instagram', facebook: 'Facebook', google: 'Google', whatsapp: 'WhatsApp',
   strava: 'Strava', linkedin: 'LinkedIn', tiktok: 'TikTok', x: 'X', youtube: 'YouTube',
+  qr: 'QR code',
 }
 
 /** Operator-facing label for a source word. (Not `sourceLabel`: shared/format.js owns that name.) */

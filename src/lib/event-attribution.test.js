@@ -88,6 +88,7 @@ describe('sourceOf / referrerSourceLabel / attributionSourceLabel', () => {
     expect(attributionSourceLabel('host_email')).toBe('Host email')
     expect(attributionSourceLabel('direct')).toBe('Direct')
     expect(attributionSourceLabel('whatsapp')).toBe('WhatsApp')
+    expect(attributionSourceLabel('qr')).toBe('QR code')
     expect(attributionSourceLabel('example.org')).toBe('example.org')
   })
 })

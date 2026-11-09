@@ -42,7 +42,7 @@ const SITES = [
   'src/lib/agent/event-tools.js',
   'src/lib/class-booking-payments.js',
   'src/app/host/(portal)/page/page.js',
-  'src/app/host/(portal)/events/[id]/promote/page.js',
+  'src/lib/host-event-url.js', // hostEventPublicUrl: the Promote page, the event QR and the announce draft build through it
   'src/app/api/host/signup-qr/route.js',
   'src/app/api/hosts/[id]/onboarding-link/route.js',
   'src/app/api/hosts/[id]/onboarding-link/send/route.js',

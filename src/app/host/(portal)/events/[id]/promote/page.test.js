@@ -8,15 +8,19 @@ vi.mock('next/navigation', () => ({
 }))
 vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn(async () => ({ host: { id: 'h1' } })) }))
 vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://studio.test/some/path') }))
+vi.mock('@/lib/host-portal', async (orig) => ({ ...(await orig()), loadHostToday: vi.fn(async () => ({ zone: 'Europe/Dublin', today: state.today })) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
-const state = { event: null, hostRow: null }
+const state = { event: null, hostRow: null, count: 7, countError: null, today: '2026-11-09' }
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from: (table) => {
       const b = {}
       b.select = () => b
       b.eq = () => b
+      b.then = (res, rej) => Promise.resolve(table === 'host_contacts'
+        ? { count: state.count, error: state.countError }
+        : { data: null, error: null }).then(res, rej)
       b.maybeSingle = async () => (table === 'race_events'
         ? { data: state.event, error: null }
         : { data: state.hostRow, error: null })
@@ -25,6 +29,8 @@ vi.mock('@/lib/supabase', () => ({
   }),
 }))
 vi.mock('@/components/host/CopyLinkButton', () => ({ default: function CopyLinkButton() { return null } }))
+vi.mock('@/components/host/EventShareLinks', () => ({ default: function EventShareLinks() { return null } }))
+vi.mock('@/components/host/AnnounceEventButton', () => ({ default: function AnnounceEventButton() { return null } }))
 vi.mock('@/components/host/HostPromoCodes', () => ({ default: function HostPromoCodes() { return null } }))
 vi.mock('@/components/host/HostSeriesActions', () => ({ default: function HostSeriesActions() { return null } }))
 
@@ -32,6 +38,8 @@ const { default: Page } = await import('./page.js')
 const { getCurrentHost } = await import('@/lib/host-auth')
 const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
 const { default: CopyLinkButton } = await import('@/components/host/CopyLinkButton')
+const { default: EventShareLinks } = await import('@/components/host/EventShareLinks')
+const { default: AnnounceEventButton } = await import('@/components/host/AnnounceEventButton')
 const { default: HostPromoCodes } = await import('@/components/host/HostPromoCodes')
 const { default: HostSeriesActions } = await import('@/components/host/HostSeriesActions')
 
@@ -49,7 +57,7 @@ function text(el) {
 }
 
 const EVENT = {
-  id: 'e1', host_id: 'h1', name: 'Summer Run', slug: 'summer-run', race_date: '2026-12-01',
+  id: 'e1', host_id: 'h1', name: 'Summer Run', slug: 'summer-run', race_date: '2026-12-01', status: 'published', active: true,
   series_id: 's1', series: { id: 's1', name: 'The Series', slug: 'the-series' },
 }
 const params = { params: Promise.resolve({ id: 'e1' }) }
@@ -57,6 +65,9 @@ const params = { params: Promise.resolve({ id: 'e1' }) }
 beforeEach(() => {
   state.event = { ...EVENT }
   state.hostRow = { anchor_location_id: 'loc1' }
+  state.count = 7
+  state.countError = null
+  state.today = '2026-11-09'
   getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
   resolveCustomerBaseUrl.mockResolvedValue('https://studio.test/some/path')
 })
@@ -92,6 +103,52 @@ describe('host event Promote tab', () => {
     expect(t).toContain('Series')
   })
 
+  it('renders the tagged share links with plain props only, on sale for a published active event', async () => {
+    const el = await Page(params)
+    expect(find(el, EventShareLinks).props).toEqual({ url: 'https://studio.test/event/summer-run', eventId: 'e1', onSale: true })
+  })
+
+  it('renders Email your list between Share and Promo codes, with plain props only', async () => {
+    const el = await Page(params)
+    const t = text(el)
+    expect(t.indexOf('Share')).toBeLessThan(t.indexOf('Email your list'))
+    expect(t.indexOf('Email your list')).toBeLessThan(t.indexOf('Series'))
+    const props = find(el, AnnounceEventButton).props
+    expect(props).toEqual({ eventId: 'e1', blockedReason: null, contactCount: 7 })
+    for (const v of Object.values(props)) expect(typeof v).not.toBe('function')
+    const kids = el.props.children
+    const at = kids.findIndex((k) => k?.type === 'section' && text(k).includes('Email your list'))
+    expect(at).toBeGreaterThan(kids.findIndex((k) => k?.type === 'section' && text(k).includes('Share')))
+    expect(at).toBeLessThan(kids.findIndex((k) => k?.type === HostPromoCodes))
+  })
+
+  it('passes a null count when the count fails, never 0, and still offers the button', async () => {
+    state.countError = { message: 'boom' }
+    state.count = null
+    expect(find(await Page(params), AnnounceEventButton).props).toEqual({ eventId: 'e1', blockedReason: null, contactCount: null })
+  })
+
+  it('passes the button a plain-string reason that fits the event, never a function', async () => {
+    const reason = async (patch, today) => {
+      state.event = { ...EVENT, ...patch }
+      if (today) state.today = today
+      const r = find(await Page(params), AnnounceEventButton).props.blockedReason
+      expect(typeof r === 'string' || r === null).toBe(true)
+      return r
+    }
+    expect(await reason({ status: 'draft' })).toBe('Publish this event before emailing your list about it.')
+    expect(await reason({ status: 'pending_review' })).toBe('This event is waiting for approval. You can email your list once it is on sale.')
+    expect(await reason({ status: 'published', active: false })).toBe('This event is off sale. Put it back on sale before emailing your list about it.')
+    expect(await reason({ status: 'published', active: true }, '2026-12-02')).toBe('This event has already taken place.')
+  })
+
+  it('marks the event not on sale when it is a draft or inactive', async () => {
+    state.event = { ...EVENT, status: 'draft' }
+    expect(find(await Page(params), EventShareLinks).props.onSale).toBe(false)
+    state.event = { ...EVENT, active: false }
+    expect(find(await Page(params), EventShareLinks).props.onSale).toBe(false)
+  })
+
   it('passes null/empty series props for a standalone event', async () => {
     state.event = { ...EVENT, series_id: null, series: null }
     const el = await Page(params)
@@ -103,6 +160,7 @@ describe('host event Promote tab', () => {
     const el = await Page(params)
     expect(text(el)).toContain('The link is unavailable right now.')
     expect(find(el, CopyLinkButton)).toBeNull()
+    expect(find(el, EventShareLinks)).toBeNull()
     expect(find(el, HostPromoCodes)).toBeTruthy()
     expect(find(el, HostSeriesActions)).toBeTruthy()
   })

@@ -8,6 +8,7 @@ const state = {
   host: { id: 'h1', name: 'Host One', payment_provider: 'stripe_connect', charges_enabled: true },
   events: [], eventsError: null, revenue: null, revenueThrows: false,
   rollup: { bookings: 0, views: 0, signups: 0, contacts: 0 }, windowRevenue: null, windowThrows: false,
+  recent: new Map(),
   fill: { ok: true, sessions: [], booked: 0, capacity: null },
   stats: { ok: true, stats: { views: 0, unique_visitors: 0, confirmed: 0, conversion_pct: null, waitlist: { waiting: 0, offered: 0, claimed: 0 } } },
 }
@@ -36,7 +37,10 @@ vi.mock('@/lib/host-revenue', () => ({
     return state.revenue
   }),
 }))
-vi.mock('@/lib/host-rollup', () => ({ loadHostRollup: vi.fn(async () => state.rollup) }))
+vi.mock('@/lib/host-rollup', () => ({
+  loadHostRollup: vi.fn(async () => state.rollup),
+  loadRecentRatingCounts: vi.fn(async () => state.recent),
+}))
 vi.mock('@/lib/host-org-brand', () => ({ resolveHostOrgBrand: vi.fn(async () => ({ name: 'Brand X', shortName: 'BX' })) }))
 vi.mock('@/lib/host-session-fill', () => ({ loadSessionFill: vi.fn(async () => state.fill) }))
 vi.mock('@/lib/event-stats', () => ({ loadEventStats: vi.fn(async () => state.stats) }))
@@ -84,6 +88,7 @@ beforeEach(() => {
   state.rollup = { bookings: 0, views: 0, signups: 0, contacts: 0 }
   state.windowRevenue = { currency: 'EUR', totals: { gross_cents: 0, net_to_host_cents: 0 }, perEvent: [] }
   state.windowThrows = false
+  state.recent = new Map()
   state.fill = { ok: true, sessions: [], booked: 0, capacity: null }
   state.stats = { ok: true, stats: { views: 0, unique_visitors: 0, confirmed: 0, conversion_pct: null, waitlist: { waiting: 0, offered: 0, claimed: 0 } } }
 })
@@ -333,6 +338,60 @@ describe('host overview page', () => {
     it('is absent when the events read fails', async () => {
       state.eventsError = { message: 'boom' }
       expect(headings(await Page())).not.toContain('Last 30 days')
+    })
+  })
+
+  describe('new ratings', () => {
+    it('shows a singular and a plural line linking to Insights, at most three, newest event first', async () => {
+      state.events = [
+        ev('a', 'published', '2026-10-01'), ev('b', 'published', '2026-10-05'),
+        ev('c', 'published', '2026-10-09'), ev('d', 'published', '2026-10-03'),
+      ]
+      state.recent = new Map([['a', 4], ['b', 1], ['c', 3], ['d', 2]])
+      const el = await Page()
+      const t = text(el)
+      expect(headings(el)).toContain('Needs your attention')
+      expect(t).toContain('3 new ratings on Event c this week. Read them →')
+      expect(t).toContain('1 new rating on Event b this week. Read them →')
+      expect(t).toContain('2 new ratings on Event d this week. Read them →')
+      expect(t).not.toContain('on Event a this week')
+      expect(t.indexOf('on Event c')).toBeLessThan(t.indexOf('on Event b'))
+      expect(t.indexOf('on Event b')).toBeLessThan(t.indexOf('on Event d'))
+      const h = hrefs(el)
+      expect(h).toContain('/host/events/c/insights')
+      expect(h).toContain('/host/events/b/insights')
+      expect(h.filter((x) => x.endsWith('/insights'))).toHaveLength(3)
+    })
+
+    it('asks for the counts from seven days before today at local midnight', async () => {
+      const { loadRecentRatingCounts } = await import('@/lib/host-rollup')
+      state.events = [ev('u1', 'published', '2026-12-05')]
+      await Page()
+      expect(loadRecentRatingCounts).toHaveBeenLastCalledWith(expect.anything(), { eventIds: ['u1'], sinceIso: '2026-11-02T00:00:00.000Z' })
+    })
+
+    it('shows the attention heading for a rating line alone', async () => {
+      state.events = [ev('u1', 'published', '2026-12-05')]
+      state.recent = new Map([['u1', 2]])
+      const el = await Page()
+      expect(headings(el)).toContain('Needs your attention')
+      expect(text(el)).toContain('2 new ratings on Event u1')
+    })
+
+    it('shows no rating line, and no heading, when the read failed', async () => {
+      const { logWarn } = await import('@/lib/log')
+      state.events = [ev('u1', 'published', '2026-12-05')]
+      state.recent = null
+      const el = await Page()
+      expect(headings(el)).not.toContain('Needs your attention')
+      expect(text(el)).not.toContain('new rating')
+      expect(logWarn).toHaveBeenCalledWith('host-overview', 'recent ratings unavailable')
+    })
+
+    it('shows no rating line when the events read failed', async () => {
+      state.eventsError = { message: 'boom' }
+      state.recent = new Map([['u1', 2]])
+      expect(text(await Page())).not.toContain('new rating')
     })
   })
 })

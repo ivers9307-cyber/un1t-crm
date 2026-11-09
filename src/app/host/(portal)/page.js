@@ -13,7 +13,7 @@ import { loadEventStats } from '@/lib/event-stats'
 import { loadSessionFill } from '@/lib/host-session-fill'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import { formatInZone, zonedWallClockToInstant, addDaysISO } from '@/lib/location-time'
-import { loadHostRollup } from '@/lib/host-rollup'
+import { loadHostRollup, loadRecentRatingCounts } from '@/lib/host-rollup'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { logWarn } from '@/lib/log'
 import {
@@ -33,6 +33,7 @@ export const dynamic = 'force-dynamic'
 
 const H2 = 'text-xs uppercase tracking-[0.15em] text-white/45 mb-3'
 const COMING_UP_MAX = 3
+const RATING_LINES_MAX = 3
 
 function tile({ label, value, sub }) {
   return (
@@ -122,6 +123,25 @@ export default async function HostOverviewPage() {
     }
     rollup = await loadHostRollup(db, { hostId: host.id, eventIds: list.map((e) => e.id), sinceIso, sinceDay })
   }
+  // New ratings this week: a notice, not a figure, so a failed read is no line.
+  const ratingSinceDay = addDaysISO(today, -7)
+  const ratingSinceMs = zonedWallClockToInstant(ratingSinceDay, '00:00', zone)
+  let ratingLines = []
+  if (Number.isFinite(ratingSinceMs)) {
+    const counts = await loadRecentRatingCounts(db, {
+      eventIds: list.map((e) => e.id),
+      sinceIso: new Date(ratingSinceMs).toISOString(),
+    })
+    if (counts === null) {
+      logWarn('host-overview', 'recent ratings unavailable')
+    } else {
+      ratingLines = list
+        .filter((e) => (counts.get(e.id) || 0) > 0)
+        .sort((a, b) => (b.race_date || '').localeCompare(a.race_date || ''))
+        .slice(0, RATING_LINES_MAX)
+        .map((e) => ({ id: e.id, name: e.name, n: counts.get(e.id) }))
+    }
+  }
   const unavailable = (n) => (n === null || n === undefined ? 'unavailable' : n)
   const revenueByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
   const cur = revenue?.currency || 'EUR'
@@ -186,7 +206,7 @@ export default async function HostOverviewPage() {
     .sort((a, b) => (a.race_date || '').localeCompare(b.race_date || ''))
     .slice(0, COMING_UP_MAX)
 
-  const hasAttention = needsStripe || rejected.length > 0
+  const hasAttention = needsStripe || rejected.length > 0 || ratingLines.length > 0
 
   return (
     <div>
@@ -202,6 +222,12 @@ export default async function HostOverviewPage() {
                 <strong>{e.name}</strong> needs changes.
                 {e.rejected_reason ? ` ${brandName} asked: "${e.rejected_reason}"` : ''}{' '}
                 <Link href={eventLandingHref(e)} className="underline underline-offset-2 whitespace-nowrap">Open →</Link>
+              </div>
+            ))}
+            {ratingLines.map((r) => (
+              <div key={r.id} className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white/80 break-words">
+                {r.n} new rating{r.n === 1 ? '' : 's'} on <strong>{r.name}</strong> this week.{' '}
+                <Link href={`/host/events/${r.id}/insights`} className="underline underline-offset-2 whitespace-nowrap">Read them →</Link>
               </div>
             ))}
           </div>
