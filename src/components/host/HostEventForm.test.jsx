@@ -554,10 +554,15 @@ describe('HostEventForm off-sale warning', () => {
   const tiers = [{ id: 't1', name: 'Early bird', price_cents: 1500 }]
   const base = { ...initial, pricing_tiers: tiers }
 
+  // reReview: a boolean for every save, or an array answered one per save
+  // (the last entry repeats).
   function stubSave(reReview = false) {
-    const fetchMock = vi.fn(async (url) => (String(url) === '/api/host/series'
-      ? { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
-      : { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1', status: reReview ? 'pending_review' : 'published', reReview } }) }))
+    let n = 0
+    const fetchMock = vi.fn(async (url) => {
+      if (String(url) === '/api/host/series') return { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      const rr = Array.isArray(reReview) ? reReview[Math.min(n++, reReview.length - 1)] : reReview
+      return { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1', status: rr ? 'pending_review' : 'published', reReview: rr } }) }
+    })
     vi.stubGlobal('fetch', fetchMock)
     return fetchMock
   }
@@ -714,7 +719,7 @@ describe('HostEventForm off-sale warning', () => {
   })
 
   it('once a save has taken the event off sale, a further trigger edit saves with no dialog and no notice, and still says off sale', async () => {
-    const fetchMock = stubSave(true)
+    const fetchMock = stubSave([true, false])
     renderForm()
     EDITS.date()
     clickSave()
@@ -727,6 +732,28 @@ describe('HostEventForm off-sale warning', () => {
     await waitFor(() => expect(saves(fetchMock)).toHaveLength(2))
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(await screen.findByText('Saved. This event is off sale until UN1T approves it again.')).toBeTruthy()
+  })
+
+  it('the normal rule resumes when the status prop returns to published', async () => {
+    const fetchMock = stubSave(true)
+    const props = { mode: 'edit', eventId: 'E1', initial: base, brandName: 'UN1T' }
+    const { rerender } = render(<HostEventForm {...props} status="published" />)
+    EDITS.date()
+    clickSave()
+    fireEvent.click(await screen.findByRole('button', { name: 'Save and send for review' }))
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1))
+    rerender(<HostEventForm {...props} status="pending_review" />)
+    expect(screen.queryByRole('note')).toBeNull()
+    EDITS.price()
+    clickSave()
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(2))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    rerender(<HostEventForm {...props} status="published" />)
+    expect(screen.getByRole('note')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-12-09' } })
+    clickSave()
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    expect(saves(fetchMock)).toHaveLength(2)
   })
 
   it('a session added by a save can be re-timed after the refresh, and that asks', async () => {
