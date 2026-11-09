@@ -25,6 +25,7 @@ vi.mock('@/lib/supabase', () => ({
   }),
 }))
 vi.mock('@/components/host/CopyLinkButton', () => ({ default: function CopyLinkButton() { return null } }))
+vi.mock('@/components/host/EventShareLinks', () => ({ default: function EventShareLinks() { return null } }))
 vi.mock('@/components/host/HostPromoCodes', () => ({ default: function HostPromoCodes() { return null } }))
 vi.mock('@/components/host/HostSeriesActions', () => ({ default: function HostSeriesActions() { return null } }))
 
@@ -32,6 +33,7 @@ const { default: Page } = await import('./page.js')
 const { getCurrentHost } = await import('@/lib/host-auth')
 const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
 const { default: CopyLinkButton } = await import('@/components/host/CopyLinkButton')
+const { default: EventShareLinks } = await import('@/components/host/EventShareLinks')
 const { default: HostPromoCodes } = await import('@/components/host/HostPromoCodes')
 const { default: HostSeriesActions } = await import('@/components/host/HostSeriesActions')
 
@@ -49,7 +51,7 @@ function text(el) {
 }
 
 const EVENT = {
-  id: 'e1', host_id: 'h1', name: 'Summer Run', slug: 'summer-run', race_date: '2026-12-01',
+  id: 'e1', host_id: 'h1', name: 'Summer Run', slug: 'summer-run', race_date: '2026-12-01', status: 'published', active: true,
   series_id: 's1', series: { id: 's1', name: 'The Series', slug: 'the-series' },
 }
 const params = { params: Promise.resolve({ id: 'e1' }) }
@@ -92,6 +94,18 @@ describe('host event Promote tab', () => {
     expect(t).toContain('Series')
   })
 
+  it('renders the tagged share links with plain props only, on sale for a published active event', async () => {
+    const el = await Page(params)
+    expect(find(el, EventShareLinks).props).toEqual({ url: 'https://studio.test/event/summer-run', eventId: 'e1', onSale: true })
+  })
+
+  it('marks the event not on sale when it is a draft or inactive', async () => {
+    state.event = { ...EVENT, status: 'draft' }
+    expect(find(await Page(params), EventShareLinks).props.onSale).toBe(false)
+    state.event = { ...EVENT, active: false }
+    expect(find(await Page(params), EventShareLinks).props.onSale).toBe(false)
+  })
+
   it('passes null/empty series props for a standalone event', async () => {
     state.event = { ...EVENT, series_id: null, series: null }
     const el = await Page(params)
@@ -103,6 +117,7 @@ describe('host event Promote tab', () => {
     const el = await Page(params)
     expect(text(el)).toContain('The link is unavailable right now.')
     expect(find(el, CopyLinkButton)).toBeNull()
+    expect(find(el, EventShareLinks)).toBeNull()
     expect(find(el, HostPromoCodes)).toBeTruthy()
     expect(find(el, HostSeriesActions)).toBeTruthy()
   })

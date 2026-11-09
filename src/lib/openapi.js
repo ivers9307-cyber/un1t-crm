@@ -1752,6 +1752,21 @@ const EventStats = z.object({
 const EventStatsResponse = z.object({ success: z.literal(true), data: EventStats })
 registry.registerPath({
   method: 'get',
+  path: '/api/host/events/{id}/qr',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "QR code PNG of one of the host's own event pages",
+  description: 'Host session (getCurrentHost). An 800x800 PNG of the public event URL on the host\'s tenant host with utm_source=qr, so poster scans appear as "QR code" in Insights; sent as an attachment named <slug>-qr.png. Another host\'s event is 404, and so is an event with no slug.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The PNG', content: { 'image/png': { schema: z.string() } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, not this host's event, or no public link yet", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Public URL or QR generation failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'get',
   path: '/api/host/events/{id}/stats',
   tags: ['Host Portal'],
   security: [{ CookieAuth: [] }],

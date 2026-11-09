@@ -10,7 +10,9 @@ import { createServerClient } from '@/lib/supabase'
 import { loadHostEvent } from '@/lib/host-portal'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { logWarn } from '@/lib/log'
+import { eventIsPublic } from '@/lib/host-events'
 import CopyLinkButton from '@/components/host/CopyLinkButton'
+import EventShareLinks from '@/components/host/EventShareLinks'
 import HostPromoCodes from '@/components/host/HostPromoCodes'
 import HostSeriesActions from '@/components/host/HostSeriesActions'
 
@@ -26,7 +28,7 @@ export default async function HostEventPromote(props) {
     db,
     session.host.id,
     params.id,
-    'id, host_id, name, slug, race_date, series_id, series:event_series ( id, name, slug )'
+    'id, host_id, name, slug, status, active, race_date, series_id, series:event_series ( id, name, slug )'
   )
   if (!event) notFound()
 
@@ -53,6 +55,7 @@ export default async function HostEventPromote(props) {
       <section>
         <h2 className="text-lg font-semibold">Share</h2>
         {eventUrl ? (
+          <>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <p className="min-w-0 text-sm text-white/60 break-all">{eventUrl}</p>
             <div className="shrink-0 flex items-center gap-2">
@@ -67,6 +70,8 @@ export default async function HostEventPromote(props) {
               <CopyLinkButton url={eventUrl} />
             </div>
           </div>
+          <EventShareLinks url={eventUrl} eventId={event.id} onSale={eventIsPublic(event)} />
+          </>
         ) : (
           <p className="mt-3 text-white/40 text-sm">The link is unavailable right now.</p>
         )}

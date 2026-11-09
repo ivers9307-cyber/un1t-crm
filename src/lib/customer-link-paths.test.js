@@ -44,6 +44,7 @@ const SITES = [
   'src/app/host/(portal)/page/page.js',
   'src/app/host/(portal)/events/[id]/promote/page.js',
   'src/app/api/host/signup-qr/route.js',
+  'src/app/api/host/events/[id]/qr/route.js',
   'src/app/api/hosts/[id]/onboarding-link/route.js',
   'src/app/api/hosts/[id]/onboarding-link/send/route.js',
   'src/app/api/public/host-connect/[token]/start/route.js',
