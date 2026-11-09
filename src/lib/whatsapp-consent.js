@@ -453,6 +453,8 @@ async function loadAckLocation(db, locationId) {
  * @param {object} args
  * @param {object} args.db            service-role client
  * @param {{id: string, wa_phone?: string}} args.contact  must have id
+ * @param {string|null} [args.replyTo]  the address to acknowledge at when the
+ *   sender has no visible number (their BSUID); defaults to the phone
  * @param {string|null} [args.waPhone]  the sender's number — pass this
  *   explicitly from the webhook (its contact lookup is a minimal
  *   `select('id, location_id')`, so contact.wa_phone is usually absent;
@@ -470,7 +472,7 @@ async function loadAckLocation(db, locationId) {
  *   means it landed on at least one gate but not every one — still loud, and
  *   still the caller's business to report.
  */
-export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locationId, conversationId, keyword }) {
+export async function applyWhatsappConsentKeyword({ db, contact, waPhone, replyTo = null, locationId, conversationId, keyword }) {
   if (!contact?.id || !['stop', 'start'].includes(keyword)) return { applied: false }
 
   const optingOut = keyword === 'stop'
@@ -513,7 +515,10 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
     const ack = outcome.scope === 'studio'
       ? consentAckText(await loadAckLocation(db, locationId), optingOut)
       : (optingOut ? ACK_STOP : ACK_START)
-    const to = waPhone || contact.wa_phone
+    // WA-BSUID.2 — `replyTo` is where the acknowledgement goes when the sender
+    // hides their number (a business-scoped user id). It is never used to find
+    // other contacts: that match stays on a real phone number (waPhone).
+    const to = replyTo || waPhone || contact.wa_phone
     if (!to) {
       console.warn(`[wa-consent] no phone for contact ${contact.id} — consent applied but ack skipped`)
     }

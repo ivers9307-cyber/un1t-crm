@@ -35,7 +35,7 @@ import { pushOutcome } from '@/lib/push-outcome'
 import { logWarn, logError } from '@/lib/log'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import {
-  fetchNumberHealth, healthDowngradeReason, pollQualityPauseReason,
+  fetchNumberHealth, healthDowngradeReason, pollQualityPauseReason, isKnownTier,
   isMetaAuthError, tokenTransition, tokenInvalidNotification, tokenRecoveredNotification,
 } from '@/lib/whatsapp-number-health'
 import { pauseLocationDrips, dripPauseNote, studiosForNumbers } from '@/lib/whatsapp-number-events'
@@ -97,7 +97,7 @@ export async function GET(request) {
     .select('id, location_id, label, access_token, phone_number_id, quality_rating, messaging_limit_tier, token_invalid_at')
     .eq('is_active', true)
 
-  let checked = 0, alerted = 0, alertFailed = 0, errors = 0, pausedDrips = 0
+  let checked = 0, alerted = 0, alertFailed = 0, errors = 0, pausedDrips = 0, limitUnknown = 0
   const tally = (outcome) => {
     if (outcome === 'delivered') alerted++
     else if (outcome === 'failed') alertFailed++
@@ -106,6 +106,29 @@ export async function GET(request) {
     if (!n.access_token || !n.phone_number_id) continue
     try {
       const health = await fetchNumberHealth({ phoneNumberId: n.phone_number_id, token: n.access_token })
+
+      // WA-LIMIT.1 — "Meta did not say" is UNKNOWN, never "no limit". The poll
+      // used to write the null straight over the stored tier, and a null tier
+      // switches the blast/drip budget gate off (whatsapp-budget.js), so one
+      // unanswered field ungated every bulk send. The last known tier now
+      // stands until Meta names a new one. With a tier still in hand the gate
+      // holds, so that is a warning; with none the gate is OFF, which is said
+      // at error level (with Meta's own words) on every poll until it is
+      // fixed. Both are counted in `limit_unknown`. A tier this code does not
+      // know is stored as Meta sent it, so it shows on the dashboard.
+      const limitRead = health.messaging_limit_tier != null
+      if (!limitRead) {
+        limitUnknown++
+        health.messaging_limit_tier = n.messaging_limit_tier ?? null
+        const meta = { number_id: n.id, kept: n.messaging_limit_tier ?? null, err: health.limit_error || null }
+        if (isKnownTier(n.messaging_limit_tier)) logWarn('wa-health', 'Meta gave no messaging limit; keeping the last known one', meta)
+        else logError('wa-health', 'Meta gave no messaging limit and none is stored; the send budget gate is off for the number', meta)
+      } else if (!isKnownTier(health.messaging_limit_tier)) {
+        limitUnknown++
+        logError('wa-health', 'Meta named a messaging limit this code does not know; the send budget gate is off for the number', {
+          number_id: n.id, tier: health.messaging_limit_tier,
+        })
+      }
       const reason = healthDowngradeReason(n, health)
 
       // A successful Graph call proves the token works — clear any invalid stamp.
@@ -193,5 +216,5 @@ export async function GET(request) {
   }
 
   await stampHeartbeat('refresh-whatsapp-health').catch(() => {})
-  return NextResponse.json({ ok: true, checked, alerted, alert_failed: alertFailed, errors, pausedDrips })
+  return NextResponse.json({ ok: true, checked, alerted, alert_failed: alertFailed, errors, pausedDrips, limit_unknown: limitUnknown })
 }

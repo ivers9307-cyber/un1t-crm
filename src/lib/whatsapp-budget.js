@@ -44,8 +44,11 @@ import { studiosUsingNumbers } from './whatsapp-config'
 
 // Meta messaging-limit tier → business-initiated conversations per rolling 24h.
 // UNLIMITED (and unknown/null) carry no numeric limit → ungated.
+// WA-LIMIT.1 — TIER_2K is the rung Meta's portfolio-level ladder added
+// (250 → 2,000 → 10,000 → 100,000 → unlimited); without it a 2,000 limit
+// read as "unknown" and went ungated.
 export const TIER_DAILY_LIMITS = Object.freeze({
-  TIER_50: 50, TIER_250: 250, TIER_1K: 1000, TIER_10K: 10000, TIER_100K: 100000,
+  TIER_50: 50, TIER_250: 250, TIER_1K: 1000, TIER_2K: 2000, TIER_10K: 10000, TIER_100K: 100000,
 })
 
 // Daily unique-contact limit for a tier, or null when the tier is ungated.
