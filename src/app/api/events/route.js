@@ -318,6 +318,7 @@ export async function POST(request) {
       pricing_tiers: body.pricing_tiers ?? null,
       registration_questions: body.registration_questions ?? null,
       duration_minutes: body.duration_minutes ?? null,
+      wave_window_minutes: body.wave_window_minutes ?? null,
       entry_policy: body.entry_policy ?? null,
     })
     .select()

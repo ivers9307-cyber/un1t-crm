@@ -33,6 +33,18 @@ describe('timePickerWaves', () => {
     expect(timePickerWaves('race', [w('a', '10:00:00')]).map((x) => x.id)).toEqual(['a'])
   })
 
+  // WAVEWIN.2 — the window is the event's own setting (mig 825).
+  it('a race with a wider window opens more waves at once', () => {
+    const waves = [w('a', '10:00:00'), w('b', '11:00:00'), w('c', '14:00:00'), w('d', '16:30:00')]
+    expect(timePickerWaves('race', waves, { windowMinutes: 240 }).map((x) => x.id)).toEqual(['a', 'b', 'c'])
+    expect(timePickerWaves('race', waves, { windowMinutes: 1440 }).map((x) => x.id)).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('the window never applies to a non-race kind', () => {
+    const waves = [w('a', '08:00:00'), w('b', '18:00:00')]
+    expect(timePickerWaves('workshop', waves, { windowMinutes: 30 }).map((x) => x.id)).toEqual(['a', 'b'])
+  })
+
   // HOSTSERIES.1 (design decision 6) — a HOST event's sessions are a plain
   // list, race kind included: the release window is for UN1T's generated waves.
   it('a host race shows every session, no release window', () => {

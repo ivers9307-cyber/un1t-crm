@@ -43,10 +43,12 @@ function jsonRes(body) {
   }
 }
 
+let race = RACE
 beforeEach(() => {
+  race = RACE
   vi.stubGlobal('fetch', vi.fn((url) => {
     if (String(url).includes('/api/public/events/')) {
-      return Promise.resolve(jsonRes({ success: true, data: RACE }))
+      return Promise.resolve(jsonRes({ success: true, data: race }))
     }
     return Promise.resolve(jsonRes({ success: false }))
   }))
@@ -78,5 +80,16 @@ describe('RaceSignupWidget — 90-minute wave window', () => {
     // is the time surface. It shows the per-person price instead.
     expect(document.body.textContent).not.toContain('5 waves')
     expect(document.body.textContent).toContain('€25.00 per person')
+  })
+
+  // WAVEWIN.2 — the event's own window (race_events.wave_window_minutes).
+  it('a wider window on the event opens the later waves too', async () => {
+    race = { ...RACE, wave_window_minutes: 240 }
+    render(<RaceSignupWidget slug="test-race" />)
+    await screen.findByText('Pick your wave *')
+
+    // 10:00 anchor + 4 hours → 14:00 is now offered; nothing is held back.
+    expect(screen.getByRole('button', { name: /^14:00$/ }).disabled).toBe(false)
+    expect(screen.queryByText(/released as these waves fill/i)).toBeNull()
   })
 })

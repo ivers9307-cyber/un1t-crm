@@ -57,4 +57,13 @@ describe('event save schemas (OPENAPI-EVENTS.1)', () => {
     expect(EventCreateSchema.safeParse({ ...race, entry_policy: { cutoff_hours: 9999 } }).success).toBe(false)
     expect(EventUpdateSchema.safeParse({ entry_policy: null }).success).toBe(true)
   })
+
+  // WAVEWIN.2 (mig 825) — the range the column's CHECK accepts, null = the default.
+  it('wave_window_minutes: a whole number from 15 minutes to a day, or null', () => {
+    for (const schema of [EventCreateSchema, EventUpdateSchema]) {
+      const base = schema === EventCreateSchema ? race : {}
+      for (const ok of [null, 15, 90, 180, 1440]) expect(schema.safeParse({ ...base, wave_window_minutes: ok }).success).toBe(true)
+      for (const bad of [0, 14, 1441, 90.5, '180']) expect(schema.safeParse({ ...base, wave_window_minutes: bad }).success).toBe(false)
+    }
+  })
 })

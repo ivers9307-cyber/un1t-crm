@@ -9,7 +9,10 @@
 // "release" as the window slides forward when earlier waves fill.
 
 import { describe, it, expect } from 'vitest'
-import { windowedWaves, WAVE_WINDOW_MINUTES } from './wave-window'
+import {
+  windowedWaves, WAVE_WINDOW_MINUTES, WAVE_WINDOW_ALL_MINUTES, WAVE_WINDOW_MIN_MINUTES,
+  WAVE_WINDOW_CHOICES, resolveWaveWindowMinutes, waveWindowLabel,
+} from './wave-window'
 
 const w = (id, start_time, is_full = false) => ({ id, start_time, is_full })
 
@@ -90,5 +93,45 @@ describe('windowedWaves', () => {
 
   it('exports a 90-minute default', () => {
     expect(WAVE_WINDOW_MINUTES).toBe(90)
+  })
+})
+
+// WAVEWIN.2 — the window is a per-event setting (race_events.wave_window_minutes,
+// mig 825); NULL or anything unreadable falls back to the 90-minute default.
+describe('resolveWaveWindowMinutes', () => {
+  it('reads the event\'s own window', () => {
+    expect(resolveWaveWindowMinutes({ wave_window_minutes: 180 })).toBe(180)
+    expect(resolveWaveWindowMinutes({ wave_window_minutes: WAVE_WINDOW_ALL_MINUTES })).toBe(1440)
+    expect(resolveWaveWindowMinutes({ wave_window_minutes: WAVE_WINDOW_MIN_MINUTES })).toBe(15)
+  })
+
+  it('falls back to the default for a missing, null or out-of-range value', () => {
+    for (const v of [undefined, null, '', 'abc', 0, -30, 14, 1441, 90.5, NaN]) {
+      expect(resolveWaveWindowMinutes({ wave_window_minutes: v })).toBe(WAVE_WINDOW_MINUTES)
+    }
+    expect(resolveWaveWindowMinutes(null)).toBe(WAVE_WINDOW_MINUTES)
+    expect(resolveWaveWindowMinutes(undefined)).toBe(WAVE_WINDOW_MINUTES)
+  })
+
+  it('a whole-day window shows every wave from the first signup', () => {
+    const waves = [w('a', '08:00:00'), w('b', '12:30:00'), w('c', '21:45:00')]
+    expect(windowedWaves(waves, WAVE_WINDOW_ALL_MINUTES)).toEqual(waves)
+  })
+})
+
+describe('wave window choices', () => {
+  it('offers the default first and "all at once" last, in rising order', () => {
+    expect(WAVE_WINDOW_CHOICES[0]).toBe(WAVE_WINDOW_MINUTES)
+    expect(WAVE_WINDOW_CHOICES[WAVE_WINDOW_CHOICES.length - 1]).toBe(WAVE_WINDOW_ALL_MINUTES)
+    expect([...WAVE_WINDOW_CHOICES].sort((a, b) => a - b)).toEqual([...WAVE_WINDOW_CHOICES])
+  })
+
+  it('labels a window in plain words', () => {
+    expect(waveWindowLabel(90)).toBe('90 minutes')
+    expect(waveWindowLabel(120)).toBe('2 hours')
+    expect(waveWindowLabel(150)).toBe('2 hours 30 minutes')
+    expect(waveWindowLabel(45)).toBe('45 minutes')
+    expect(waveWindowLabel(60)).toBe('1 hour')
+    expect(waveWindowLabel(WAVE_WINDOW_ALL_MINUTES)).toBe('the whole day')
   })
 })
