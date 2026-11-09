@@ -134,13 +134,3 @@ export function HostPayoutList() {
     </section>
   )
 }
-
-// Default export kept until the dashboard stops importing it (Task 7).
-export default function HostPayouts() {
-  return (
-    <HostPayoutsProvider>
-      <HostBalance />
-      <HostPayoutList />
-    </HostPayoutsProvider>
-  )
-}
