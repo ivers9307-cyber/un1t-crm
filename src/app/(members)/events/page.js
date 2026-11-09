@@ -333,7 +333,7 @@ export default async function EventsIndexPage(props) {
                             eventId={r.id}
                             raceDate={r.race_date}
                             apiUrl={`/api/events/${r.id}/duplicate`}
-                            editHrefFor={(id) => `/events/${id}/edit`}
+                            editHref="/events/{id}/edit"
                           />
                         </div>
                       </td>
@@ -433,7 +433,7 @@ export default async function EventsIndexPage(props) {
                       eventId={r.id}
                       raceDate={r.race_date}
                       apiUrl={`/api/events/${r.id}/duplicate`}
-                      editHrefFor={(id) => `/events/${id}/edit`}
+                      editHref="/events/{id}/edit"
                     />
                     <a
                       href={publicUrl}

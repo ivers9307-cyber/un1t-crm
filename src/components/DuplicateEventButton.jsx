@@ -4,6 +4,14 @@
 // copy's edit page opens. Shared by the host event page (dark) and the staff
 // events list (light): only the endpoint, the destination and the surface
 // colour differ, so they are props.
+//
+// `editHref` is a URL TEMPLATE string with an `{id}` placeholder
+// ('/host/events/{id}/edit'), NOT a function: this button is rendered by
+// Server Components, and a function prop cannot cross the server→client
+// boundary (React throws at render). The first cut took `editHrefFor`, a
+// function, and /host/events/[id] crashed for every host from the 8 Nov 2026
+// deploy until the hotfix. tests/server-to-client-function-props.test.js
+// guards the class.
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -17,7 +25,7 @@ export function addDays(isoDate, days) {
   return d.toISOString().slice(0, 10)
 }
 
-export default function DuplicateEventButton({ eventId, raceDate, apiUrl, editHrefFor, dark = false }) {
+export default function DuplicateEventButton({ eventId, raceDate, apiUrl, editHref, dark = false }) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [date, setDate] = useState(() => addDays(raceDate, 7))
@@ -45,7 +53,7 @@ export default function DuplicateEventButton({ eventId, raceDate, apiUrl, editHr
         setError(json.error || 'The event could not be copied. Try again.')
         return
       }
-      router.push(editHrefFor(json.data.id))
+      router.push(String(editHref || '').replace('{id}', encodeURIComponent(json.data.id)))
     } catch (err) {
       setError(err?.message || 'Network error. Try again.')
     } finally {
