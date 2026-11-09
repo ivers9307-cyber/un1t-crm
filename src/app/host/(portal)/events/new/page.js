@@ -8,6 +8,7 @@ import { createServerClient } from '@/lib/supabase'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import GuardedLink from '@/components/host/GuardedLink'
 import HostEventForm from '@/components/host/HostEventForm'
+import { HOST_H1 } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,9 +19,9 @@ export default async function HostNewEventPage() {
 
   return (
     <div>
-      <GuardedLink href="/host/events" className="text-xs text-white/45 hover:text-white">← Back</GuardedLink>
-      <h1 className="mt-3 text-2xl font-bold">Create an event</h1>
-      <p className="text-white/60 mt-1 text-sm">
+      <GuardedLink href="/host/events" className="text-xs text-host-hint hover:text-host-text">← Back</GuardedLink>
+      <h1 className={`mt-3 ${HOST_H1}`}>Create an event</h1>
+      <p className="text-host-hint mt-1 text-sm">
         Draft your event, then submit it to {brand.name} for review before it goes live.
       </p>
 

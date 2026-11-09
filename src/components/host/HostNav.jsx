@@ -10,6 +10,7 @@
 import { useEffect, useRef } from 'react'
 import GuardedLink from './GuardedLink'
 import { usePathname } from 'next/navigation'
+import { HOST_TAB, HOST_TAB_ACTIVE } from './host-ui'
 
 export const LINKS = [
   { href: '/host', label: 'Overview', exact: true },
@@ -43,11 +44,7 @@ export default function HostNav() {
             ref={active ? activeRef : undefined}
             href={l.href}
             aria-current={active ? 'page' : undefined}
-            className={`shrink-0 rounded-lg px-3 py-1.5 text-sm ${
-              active
-                ? 'bg-white/10 text-white font-semibold'
-                : 'text-white/60 hover:text-white hover:bg-white/5'
-            }`}
+            className={`shrink-0 ${active ? HOST_TAB_ACTIVE : HOST_TAB}`}
           >
             {l.label}
           </GuardedLink>

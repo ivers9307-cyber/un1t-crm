@@ -14,6 +14,7 @@ import HostNav from '@/components/host/HostNav'
 import GuardedLink from '@/components/host/GuardedLink'
 import HostThemeToggle from '@/components/host/HostThemeToggle'
 import { HOST_THEME_COOKIE, hostThemeFromCookie } from '@/lib/host-theme'
+import { HOST_BTN_PRIMARY, HOST_EYEBROW } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,21 +33,21 @@ export default async function HostPortalLayout({ children }) {
           header. Present only when an admin is impersonating; it carries the
           only exit affordance in that mode (see the header safeguard below). */}
       {session.impersonatedBy && <HostImpersonationBanner hostName={session.host.name} />}
-      <header className="border-b border-white/10">
+      <header className="border-b border-host-border">
         <div className="max-w-4xl mx-auto px-4 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex items-baseline gap-3 shrink-0">
             <span className="font-bold tracking-[0.2em]">{brand.shortName}</span>
-            <span className="text-xs uppercase tracking-[0.15em] text-white/45">Hosts</span>
+            <span className={HOST_EYEBROW}>Hosts</span>
           </div>
           <HostNav />
           <div className="ml-auto flex items-center gap-3 text-sm">
             <GuardedLink
               href="/host/events/new"
-              className="rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90 whitespace-nowrap"
+              className={`${HOST_BTN_PRIMARY} whitespace-nowrap`}
             >
               + Create event
             </GuardedLink>
-            <span className="text-white/70 hidden sm:inline truncate max-w-[16rem]">{session.host.name}</span>
+            <span className="text-host-label hidden sm:inline truncate max-w-[16rem]">{session.host.name}</span>
             <HostThemeToggle initial={theme} />
             {/* SAFEGUARD: HostSignOut calls supabase.auth.signOut(), which would
                 destroy the admin's real staff session. An admin viewing-as must

@@ -12,6 +12,7 @@ import { logWarn } from '@/lib/log'
 import { formatHostMoney, eventMoneyCents, moneyLabel } from '@/lib/host-portal'
 import { HostPayoutsProvider, HostBalance, HostPayoutList } from '@/components/host/HostPayouts'
 import HostStatements from '@/components/host/HostStatements'
+import { HOST_EYEBROW, HOST_H1, HOST_HINT, HOST_LIST, HOST_META, HOST_ROW } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -59,10 +60,10 @@ export default async function HostEarningsPage() {
 
   return (
     <HostPayoutsProvider>
-      <h1 className="text-2xl font-bold">Earnings</h1>
+      <h1 className={HOST_H1}>Earnings</h1>
 
       {hasSales && (
-        <p className="text-xs text-white/40 mt-2">
+        <p className={`${HOST_META} mt-2`}>
           {revenue.totals.paidCount} paid booking{revenue.totals.paidCount === 1 ? '' : 's'} ·{' '}
           {formatHostMoney(revenue.totals.net_collected_cents, cur)} collected after refunds
         </p>
@@ -70,23 +71,23 @@ export default async function HostEarningsPage() {
       {isStripe && session.host.stripe_connected_account_id && (
         <p className="mt-3">
           <a href="https://dashboard.stripe.com" target="_blank" rel="noopener noreferrer"
-             className="text-xs text-white/40 hover:text-white">Stripe dashboard →</a>
+             className="text-xs text-host-hint hover:text-host-text">Stripe dashboard →</a>
         </p>
       )}
 
       <HostBalance />
 
       <section className="mt-8">
-        <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">All time</h2>
+        <h2 className={`${HOST_EYEBROW} mb-3`}>All time</h2>
         {revenue === null ? (
-          <p className="text-white/40 text-sm">Revenue is unavailable right now.</p>
+          <p className={HOST_HINT}>Revenue is unavailable right now.</p>
         ) : !hasSales ? (
-          <p className="text-white/50 text-sm">No ticket sales yet.</p>
+          <p className={HOST_HINT}>No ticket sales yet.</p>
         ) : (
           <div className={tilesGridCls}>
             {tiles.map((t) => (
-              <div key={t.label} className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-                <p className="text-[11px] uppercase tracking-wide text-white/40">{t.label}</p>
+              <div key={t.label} className="rounded-xl border border-host-border bg-host-panel px-4 py-3">
+                <p className={HOST_META}>{t.label}</p>
                 <p className="text-lg font-semibold mt-1 tabular-nums">{t.value}</p>
               </div>
             ))}
@@ -96,15 +97,15 @@ export default async function HostEarningsPage() {
 
       {perEvent.length > 0 && (
         <section className="mt-8">
-          <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">By event</h2>
-          <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
+          <h2 className={`${HOST_EYEBROW} mb-3`}>By event</h2>
+          <ul className={`${HOST_LIST} overflow-hidden`}>
             {perEvent.map((r) => (
               <li key={r.event_id}>
                 <Link href={`/host/events/${r.event_id}`}
-                      className="px-4 py-3 flex items-center justify-between gap-4 hover:bg-white/[0.02]">
+                      className={`${HOST_ROW} flex items-center justify-between gap-4`}>
                   <span className="min-w-0">
                     <span className="block font-medium truncate">{r.name}</span>
-                    <span className="block text-xs text-white/45">{r.race_date || '—'} · {r.paidCount} sold</span>
+                    <span className={`block ${HOST_META}`}>{r.race_date || '—'} · {r.paidCount} sold</span>
                   </span>
                   <span className="shrink-0 text-sm tabular-nums" title={label}>
                     {formatHostMoney(eventMoneyCents(session.host, r), cur)}

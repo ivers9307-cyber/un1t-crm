@@ -11,6 +11,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
+import { HOST_BTN_PRIMARY, HOST_EYEBROW, HOST_INPUT, HOST_META } from '@/components/host/host-ui'
 
 export default function HostLoginForm({ brand }) {
   const router = useRouter()
@@ -37,11 +38,11 @@ export default function HostLoginForm({ brand }) {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white flex items-center justify-center px-4">
+    <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <div className="font-bold tracking-[0.3em] text-2xl">{brand.shortName}</div>
-          <p className="text-[11px] uppercase tracking-[0.2em] text-white/45 mt-2">Host portal</p>
+          <p className={`${HOST_EYEBROW} mt-2`}>Host portal</p>
         </div>
         <form onSubmit={submit} className="space-y-3">
           <input
@@ -51,7 +52,7 @@ export default function HostLoginForm({ brand }) {
             placeholder="Email"
             autoComplete="email"
             required
-            className="w-full bg-white/[0.04] border border-white/12 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/30"
+            className={HOST_INPUT}
           />
           <input
             type="password"
@@ -60,18 +61,18 @@ export default function HostLoginForm({ brand }) {
             placeholder="Password"
             autoComplete="current-password"
             required
-            className="w-full bg-white/[0.04] border border-white/12 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/30"
+            className={HOST_INPUT}
           />
-          {error && <p className="text-sm text-red-400">{error}</p>}
+          {error && <p className="text-sm text-host-bad">{error}</p>}
           <button
             type="submit"
             disabled={busy}
-            className="w-full bg-white text-black font-semibold rounded-lg px-3 py-2.5 text-sm disabled:opacity-60"
+            className={`${HOST_BTN_PRIMARY} w-full`}
           >
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-        <p className="text-center text-xs text-white/40 mt-6">
+        <p className={`text-center ${HOST_META} mt-6`}>
           Access is set up by {brand.name}. Contact them if you need a login.
         </p>
       </div>

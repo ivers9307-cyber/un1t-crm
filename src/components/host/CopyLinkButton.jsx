@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-const BTN = 'rounded-lg border border-white/15 text-white/80 text-xs font-semibold px-3 py-1.5 hover:bg-white/10 hover:text-white'
+const BTN = 'rounded-lg border border-host-edge bg-host-panel text-host-text text-xs font-semibold px-3 py-1.5 hover:bg-host-hover'
 
 export default function CopyLinkButton({ url }) {
   const [copied, setCopied] = useState(false)

@@ -1,5 +1,6 @@
 // HOSTPORTAL.1 — /host/events: needs action, upcoming, series, past.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { HOST_CHIP, HOST_CHIP_TONE } from '@/components/host/host-ui'
 
 vi.mock('next/navigation', () => ({ notFound: vi.fn(() => { throw new Error('NOT_FOUND') }), redirect: vi.fn((url) => { throw new Error(`REDIRECT:${url}`) }) }))
 
@@ -188,7 +189,7 @@ describe('host events page', () => {
     state.events = [ev('p1', 'published', '2026-10-01')]
     const el = await Page()
     const row = all(el, HostPastEvents)[0].props.rows[0]
-    expect(row).toEqual({ id: 'p1', name: 'Event p1', status: 'published', statusLabel: 'Published', href: '/host/events/p1', detail: expect.any(String) })
+    expect(row).toEqual({ id: 'p1', name: 'Event p1', status: 'published', statusLabel: 'Published', href: '/host/events/p1', chip: `${HOST_CHIP} ${HOST_CHIP_TONE.ok}`, detail: expect.any(String) })
     expect(Object.values(row).every((v) => typeof v !== 'function')).toBe(true)
   })
 

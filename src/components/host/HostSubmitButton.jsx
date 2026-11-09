@@ -37,11 +37,11 @@ export default function HostSubmitButton({ eventId }) {
         type="button"
         onClick={submit}
         disabled={busy}
-        className="text-emerald-300/90 hover:text-emerald-200 disabled:opacity-60"
+        className="text-host-ok hover:opacity-80 disabled:opacity-60"
       >
         {busy ? 'Submitting…' : 'Submit for review'}
       </button>
-      {error && <span className="text-red-400">{error}</span>}
+      {error && <span className="text-host-bad">{error}</span>}
     </span>
   )
 }

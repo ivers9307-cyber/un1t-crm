@@ -1,5 +1,6 @@
 // HOSTPORTAL.1 — /host/earnings: balance, all time, by event, payouts, statements.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { HOST_META } from '@/components/host/host-ui'
 
 const redirect = vi.fn((url) => { throw new Error(`REDIRECT:${url}`) })
 vi.mock('next/navigation', () => ({ notFound: vi.fn(), redirect }))
@@ -48,7 +49,7 @@ function text(el) {
 function tileLabels(el) {
   const out = []
   walk(el, (n) => {
-    if (n.type === 'p' && String(n.props?.className || '').includes('uppercase tracking-wide')) out.push(text(n))
+    if (n.type === 'p' && n.props?.className === HOST_META) out.push(text(n))
   })
   return out
 }

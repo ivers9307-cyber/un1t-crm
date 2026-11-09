@@ -5,15 +5,12 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { HOST_CHIP, HOST_CHIP_TONE, HOST_LIST, HOST_ROW, HOST_META, HOST_BTN_GHOST } from './host-ui'
 
-// Same recipe as HOST_STATUS_CHIP in @/lib/host-portal, copied because that
-// module reads the database and must not enter a client bundle.
-const HOST_STATUS_CHIP = {
-  draft: 'bg-white/10 text-white/70',
-  pending_review: 'bg-amber-500/15 text-amber-300',
-  published: 'bg-emerald-500/15 text-emerald-300',
-  rejected: 'bg-red-500/15 text-red-300',
-}
+// The server page passes each row's chip class string (r.chip, from
+// HOST_STATUS_CHIP in @/lib/host-portal, which reads the database and must not
+// enter a client bundle); an unknown status falls back to the neutral chip.
+const NEUTRAL_CHIP = `${HOST_CHIP} ${HOST_CHIP_TONE.neutral}`
 
 const FIRST = 20
 
@@ -23,25 +20,25 @@ export default function HostPastEvents({ rows }) {
   const shown = all ? list : list.slice(0, FIRST)
   return (
     <>
-      <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
+      <ul className={`${HOST_LIST} overflow-hidden`}>
         {shown.map((r) => (
-          <li key={r.id} className="px-4 py-3 hover:bg-white/[0.02]">
+          <li key={r.id} className={HOST_ROW}>
             <Link href={r.href} className="block min-w-0">
               <p className="flex items-center gap-2 font-medium">
                 <span className="truncate">{r.name}</span>
                 {r.status && (
-                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${HOST_STATUS_CHIP[r.status] || 'bg-white/10 text-white/70'}`}>
+                  <span className={`shrink-0 ${r.chip || NEUTRAL_CHIP}`}>
                     {r.statusLabel || r.status}
                   </span>
                 )}
               </p>
-              <p className="text-xs text-white/45 break-words">{r.detail}</p>
+              <p className={`${HOST_META} break-words`}>{r.detail}</p>
             </Link>
           </li>
         ))}
       </ul>
       {!all && list.length > FIRST && (
-        <button type="button" onClick={() => setAll(true)} className="mt-2 text-xs text-white/50 hover:text-white">
+        <button type="button" onClick={() => setAll(true)} className={`mt-2 ${HOST_BTN_GHOST}`}>
           Show all {list.length}
         </button>
       )}

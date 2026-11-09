@@ -10,6 +10,7 @@ import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { hostPageExtras } from '@/lib/host-page-extras'
 import { logWarn } from '@/lib/log'
 import HostYourPage from '@/components/host/HostYourPage'
+import { HOST_H1, HOST_HINT } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -70,13 +71,13 @@ export default async function HostYourPageRoute() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold">Your page</h1>
+      <h1 className={HOST_H1}>Your page</h1>
       {signupUrl ? (
         <div className="mt-6">
           <HostYourPage url={signupUrl} joinUrl={joinUrl} signupCount={signupCount} copyValues={signupCopy} />
         </div>
       ) : (
-        <p className="mt-6 text-white/40 text-sm">Your page is unavailable right now.</p>
+        <p className={`mt-6 ${HOST_HINT}`}>Your page is unavailable right now.</p>
       )}
     </div>
   )

@@ -17,15 +17,17 @@ import {
   eventLandingHref,
   hostEventDetail,
   loadPublicRatingAverages,
+  HOST_STATUS_CHIP,
 } from '@/lib/host-portal'
 import HostEventRow from '@/components/host/HostEventRow'
 import HostPastEvents from '@/components/host/HostPastEvents'
 import HostSubmitButton from '@/components/host/HostSubmitButton'
 import HostSeriesList from '@/components/host/HostSeriesList'
+import { HOST_EYEBROW, HOST_H1, HOST_HINT, HOST_LINK, HOST_LIST } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
-const H2 = 'text-xs uppercase tracking-[0.15em] text-white/45 mb-3'
+const H2 = `${HOST_EYEBROW} mb-3`
 
 export default async function HostEventsPage() {
   const session = await getCurrentHost()
@@ -54,8 +56,8 @@ export default async function HostEventsPage() {
   if (error) {
     return (
       <div>
-        <h1 className="text-2xl font-bold">Events</h1>
-        <p className="mt-6 text-white/50 text-sm">Your events are unavailable right now.</p>
+        <h1 className={HOST_H1}>Events</h1>
+        <p className={`mt-6 ${HOST_HINT}`}>Your events are unavailable right now.</p>
       </div>
     )
   }
@@ -87,7 +89,7 @@ export default async function HostEventsPage() {
     return (
       <section className="mt-8" key={title}>
         <h2 className={H2}>{title}</h2>
-        <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
+        <ul className={`${HOST_LIST} overflow-hidden`}>
           {rows.map((e) => (
             <HostEventRow
               key={e.id}
@@ -106,20 +108,22 @@ export default async function HostEventsPage() {
     name: e.name,
     status: e.status,
     statusLabel: HOST_EVENT_STATUS_LABEL[e.status] || e.status,
+    // The chip's classes, as a plain string: the client list cannot import host-portal.
+    chip: HOST_STATUS_CHIP[e.status] || null,
     href: eventLandingHref(e),
     detail: detailFor(e, true),
   }))
 
   return (
     <div>
-      <h1 className="text-2xl font-bold">Events</h1>
-      <p className="text-white/60 mt-1 text-sm">
+      <h1 className={HOST_H1}>Events</h1>
+      <p className="text-host-hint mt-1 text-sm">
         {list.length} event{list.length === 1 ? '' : 's'}{series.length > 0 ? ` · ${series.length} series` : ''}
       </p>
 
       {list.length === 0 && (
-        <p className="mt-8 text-white/50 text-sm">
-          No events yet — <Link href="/host/events/new" className="text-white underline underline-offset-2 hover:text-white/80">create your first one</Link>.
+        <p className={`mt-8 ${HOST_HINT}`}>
+          No events yet — <Link href="/host/events/new" className={HOST_LINK}>create your first one</Link>.
         </p>
       )}
 

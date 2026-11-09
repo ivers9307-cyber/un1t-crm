@@ -28,19 +28,20 @@ import {
 } from '@/lib/host-portal'
 import { HOST_EVENT_STATUS_LABEL, eventIsPublic } from '@/lib/host-events'
 import HostEventRow from '@/components/host/HostEventRow'
+import { HOST_CHIP, HOST_CHIP_TONE, HOST_EYEBROW, HOST_H1, HOST_HINT, HOST_LINK, HOST_LIST, HOST_META, HOST_NOTICE, HOST_NOTICE_TONE } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
-const H2 = 'text-xs uppercase tracking-[0.15em] text-white/45 mb-3'
+const H2 = `${HOST_EYEBROW} mb-3`
 const COMING_UP_MAX = 3
 const RATING_LINES_MAX = 3
 
 function tile({ label, value, sub }) {
   return (
-    <div key={label} className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-      <p className="text-[11px] uppercase tracking-wide text-white/40">{label}</p>
+    <div key={label} className="rounded-xl border border-host-border bg-host-panel px-4 py-3">
+      <p className={HOST_META}>{label}</p>
       <p className="text-lg font-semibold mt-1 tabular-nums">{value}</p>
-      {sub ? <p className="text-xs text-white/40 mt-0.5">{sub}</p> : null}
+      {sub ? <p className={`${HOST_META} mt-0.5`}>{sub}</p> : null}
     </div>
   )
 }
@@ -71,12 +72,12 @@ export default async function HostOverviewPage() {
 
   const header = (
     <>
-      <h1 className="text-2xl font-bold">Welcome, {host.name}.</h1>
-      <p className="text-white/60 mt-1 text-sm">{todayLabel}</p>
+      <h1 className={HOST_H1}>Welcome, {host.name}.</h1>
+      <p className="text-host-hint mt-1 text-sm">{todayLabel}</p>
     </>
   )
   const stripeWarning = needsStripe && (
-    <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+    <div className={`${HOST_NOTICE} ${HOST_NOTICE_TONE.warn}`}>
       Your Stripe account isn&apos;t fully connected yet — ticket payments can&apos;t be taken until it is.
     </div>
   )
@@ -86,7 +87,7 @@ export default async function HostOverviewPage() {
       <div>
         {header}
         {stripeWarning && <div className="mt-6">{stripeWarning}</div>}
-        <p className="mt-6 text-white/50 text-sm">Your events are unavailable right now.</p>
+        <p className={`mt-6 ${HOST_HINT}`}>Your events are unavailable right now.</p>
       </div>
     )
   }
@@ -162,7 +163,7 @@ export default async function HostOverviewPage() {
   }
 
   function nextUpCard(e) {
-    const chip = HOST_STATUS_CHIP[e.status] || 'bg-white/10 text-white/70'
+    const chip = HOST_STATUS_CHIP[e.status] || `${HOST_CHIP} ${HOST_CHIP_TONE.neutral}`
     const times = (fill?.ok ? fill.sessions : [...(e.race_waves || [])].sort((a, b) => String(a.start_time).localeCompare(String(b.start_time))).map((w) => ({ time: String(w.start_time || '').slice(0, 5) })))
       .map((s) => s.time).filter(Boolean)
     const rev = revenueByEvent.get(e.id)
@@ -178,19 +179,19 @@ export default async function HostOverviewPage() {
     const st = statsOk ? stats.stats : null
 
     return (
-      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+      <div className="rounded-xl border border-host-border bg-host-panel p-4">
         <p className="flex items-center gap-2 font-medium">
           <span className="truncate">{e.name}</span>
-          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
+          <span className={`shrink-0 ${chip}`}>
             {HOST_EVENT_STATUS_LABEL[e.status] || e.status}
           </span>
         </p>
-        <p className="text-xs text-white/45 mt-1 break-words">
+        <p className={`${HOST_META} mt-1 break-words`}>
           {[e.race_date || '—', times.length > 0 ? times.join(', ') : null, e.venue_name || null].filter(Boolean).join(' · ')}
         </p>
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
-          <Link href={`/host/events/${e.id}/attendees`} className="rounded-lg border border-white/15 px-3 py-1.5 hover:bg-white/10">Attendees</Link>
-          <a href={`/event/${e.slug}`} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-white/15 px-3 py-1.5 text-white/70 hover:bg-white/10">Event page</a>
+          <Link href={`/host/events/${e.id}/attendees`} className="rounded-lg border border-host-edge px-3 py-1.5 text-host-text hover:bg-host-hover">Attendees</Link>
+          <a href={`/event/${e.slug}`} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-host-edge px-3 py-1.5 text-host-hint hover:bg-host-hover">Event page</a>
         </div>
         <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
           {tile({ label: 'Booked', value: booked, sub: bookedSub })}
@@ -218,14 +219,14 @@ export default async function HostOverviewPage() {
           <div className="space-y-2">
             {stripeWarning}
             {rejected.map((e) => (
-              <div key={e.id} className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200 break-words">
+              <div key={e.id} className={`${HOST_NOTICE} ${HOST_NOTICE_TONE.warn} break-words`}>
                 <strong>{e.name}</strong> needs changes.
                 {e.rejected_reason ? ` ${brandName} asked: "${e.rejected_reason}"` : ''}{' '}
                 <Link href={eventLandingHref(e)} className="underline underline-offset-2 whitespace-nowrap">Open →</Link>
               </div>
             ))}
             {ratingLines.map((r) => (
-              <div key={r.id} className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white/80 break-words">
+              <div key={r.id} className={`${HOST_NOTICE} ${HOST_NOTICE_TONE.neutral} break-words`}>
                 {r.n} new rating{r.n === 1 ? '' : 's'} on <strong>{r.name}</strong> this week.{' '}
                 <Link href={`/host/events/${r.id}/insights`} className="underline underline-offset-2 whitespace-nowrap">Read them →</Link>
               </div>
@@ -237,8 +238,8 @@ export default async function HostOverviewPage() {
       <section className="mt-8">
         <h2 className={H2}>Next up</h2>
         {next ? nextUpCard(next) : (
-          <p className="text-white/50 text-sm">
-            <Link href="/host/events/new" className="text-white underline underline-offset-2 hover:text-white/80">Nothing on sale yet — create an event.</Link>
+          <p className={HOST_HINT}>
+            <Link href="/host/events/new" className={HOST_LINK}>Nothing on sale yet — create an event.</Link>
           </p>
         )}
       </section>
@@ -261,13 +262,13 @@ export default async function HostOverviewPage() {
       {comingUp.length > 0 && (
         <section className="mt-8">
           <h2 className={H2}>Coming up</h2>
-          <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
+          <ul className={`${HOST_LIST} overflow-hidden`}>
             {comingUp.map((e) => (
               <HostEventRow key={e.id} event={e} detail={hostEventDetail(host, e, revenueByEvent.get(e.id), cur)} />
             ))}
           </ul>
           <p className="mt-3 text-xs">
-            <Link href="/host/events" className="text-white/60 hover:text-white">All events →</Link>
+            <Link href="/host/events" className="text-host-hint hover:text-host-text">All events →</Link>
           </p>
         </section>
       )}
