@@ -20,6 +20,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
+import { stripComments, isClientFile } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const APP = path.join(ROOT, 'src/app')
@@ -34,11 +35,10 @@ function walk(dir, out = []) {
   return out
 }
 
-/** Does the module open with the 'use client' directive (after comments/blank lines)? */
-export function isClientModule(source) {
-  const body = String(source).replace(/^(?:\s+|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*/, '')
-  return /^['"]use client['"]/.test(body)
-}
+// Comments are blanked with the repo's parser-based helper (never a regex:
+// tests/comment-strip-meta-guard.test.js), which also answers "is this a
+// client module?" from the directive, wherever a header comment puts it.
+const isClientModule = (source) => isClientFile(source)
 
 function resolveImport(fromFile, spec) {
   let base
@@ -73,8 +73,11 @@ function importsOf(file, source) {
 const FUNCTION_ATTR = /([A-Za-z_$][\w$]*)=\{\s*(?:async\s+)?(?:(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>|function\b)/g
 
 /** Every `<ClientComponent attr={fn}>` in one server entry file. */
-export function functionPropsToClient(file, source) {
-  if (isClientModule(source)) return []
+export function functionPropsToClient(file, rawSource) {
+  if (isClientModule(rawSource)) return []
+  // Same length and line numbers as the raw text, comments blanked: a
+  // commented-out attribute is not a finding.
+  const source = stripComments(rawSource, file)
   const imports = importsOf(file, source)
   const out = []
   for (let m; (m = FUNCTION_ATTR.exec(source));) {
