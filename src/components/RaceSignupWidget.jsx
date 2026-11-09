@@ -38,7 +38,7 @@ import { tierPriceLabel, groupPriceLabel, effectiveNonMemberFee } from '@/lib/pr
 import { resolveRegistrationQuestions, validateAnswers } from '@/lib/registration-questions'
 import { rememberEventAttribution, readEventAttribution } from '@/lib/event-attribution'
 import EventWaitlistForm from './EventWaitlistForm.jsx'
-import DonateCard, { CharityRaisedStrip, OrDivider } from './DonateCard.jsx'
+import DonateCard, { CharityRaisedStrip, DonateJumpLink, OrDivider } from './DonateCard.jsx'
 
 // Kind-keyed copy. Adding a new kind = one entry. The 'race' entry
 // holds the original strings so the operator-visible UX for races
@@ -1246,7 +1246,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
       </section>
       )}
       {!embedded && !hasHeroImage && (
-      <section className="relative min-h-[58svh] flex items-end overflow-hidden lp-grain">
+      <section className="relative min-h-[44svh] md:min-h-[58svh] flex items-end overflow-hidden lp-grain">
         {/* monochrome poster gradient + grid-lines, slow ken-burns zoom */}
         <div className="absolute inset-0 overflow-hidden">
           <div className="absolute inset-[-4%] lp-kenburns" style={{ background: heroBg }} />
@@ -1288,7 +1288,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           <CharityRaisedStrip charity={race.charity} currency={race.payment_currency || 'EUR'} brand={race.organization_name || ''} />
           {/* CHARITY.13 — items-start so the donate card hugs its content instead of
               stretching to the taller signup card; the OR rule still spans the row. */}
-          <div className="grid gap-6 md:gap-5 md:grid-cols-[1fr_auto_1fr] md:items-start">
+          <DonateJumpLink charity={race.charity} brand={race.organization_name || ''} />
+          {/* EVENTMOBILE.1 — on a phone the cards stack, and the signup (what
+              most visitors came for) goes first: flex-col-reverse shows signup,
+              OR, donate. The DOM order (and so the desktop row) is unchanged. */}
+          <div className="flex flex-col-reverse gap-6 md:grid md:gap-5 md:grid-cols-[1fr_auto_1fr] md:items-start">
             <Suspense fallback={null}>
               <DonateCardFromUrl
                 slug={slug}
@@ -1378,7 +1382,12 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
             type="submit"
             form={formId}
             disabled={submitting}
-            className="lp-btn flex-1 disabled:opacity-50 disabled:pointer-events-none"
+            // EVENTMOBILE.1 — min-w-0 lets the label truncate instead of pushing
+            // the button off the right edge; the tighter padding and type (inline,
+            // since .lp-btn's own rules outrank a utility) keep the whole label
+            // on a 375px phone.
+            className="lp-btn flex-1 min-w-0 disabled:opacity-50 disabled:pointer-events-none"
+            style={{ paddingLeft: '0.75rem', paddingRight: '0.75rem', fontSize: '0.875rem', gap: '0.4rem' }}
           >
             {submitting && <Loader2 size={16} className="animate-spin" />}
             <span className="truncate">{submitLabel}</span>

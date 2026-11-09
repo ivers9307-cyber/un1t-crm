@@ -38,7 +38,10 @@ const inputCls = (invalid) =>
   `w-full bg-white/5 border rounded-xl px-3.5 py-3 text-[15px] text-white placeholder-white/35 focus:outline-none focus:bg-white/10 transition-colors ${invalid ? 'border-red-400/70 focus:border-red-400' : 'border-white/15 focus:border-white/45'}`
 const labelCls = 'block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/55 mb-2'
 const errCls = 'text-[11px] text-red-400 mt-1'
-const cardCls = 'lp-card-glow rounded-2xl p-6'
+// EVENTMOBILE.2 — scroll-mt keeps the card's top edge off the screen edge when
+// the phone jump link lands on it.
+const cardCls = 'lp-card-glow rounded-2xl p-6 scroll-mt-4'
+const DONATE_ANCHOR_ID = 'donate'
 
 // '€25' on a chip, '€12.50' when there are cents.
 const chipLabel = (cents, currency) => formatCents(cents, currency).replace(/\.00$/, '')
@@ -227,7 +230,7 @@ export default function DonateCard({ slug, charity, currency = 'EUR', brand = ''
     const vars = { ...copyVars(cents, mult, firstName), amount: formatCents(cents, cur), matched: formatCents(matchedOf(cents, mult), cur) }
     const bodyTpl = mult > 1 ? charity?.thank_you_body : charity?.thank_you_body_unmatched
     return (
-      <div ref={cardRef} className={cardCls} role="status">
+      <div ref={cardRef} id={DONATE_ANCHOR_ID} className={cardCls} role="status">
         <div className="w-11 h-11 rounded-full bg-white/10 border border-white/20 grid place-items-center mb-4">
           <Check size={20} className="text-white" />
         </div>
@@ -242,7 +245,7 @@ export default function DonateCard({ slug, charity, currency = 'EUR', brand = ''
 
   if (step === 'confirming' || step === 'done') {
     return (
-      <div ref={cardRef} className={`${cardCls} text-center`} role="status">
+      <div ref={cardRef} id={DONATE_ANCHOR_ID} className={`${cardCls} text-center`} role="status">
         {!slow && <Loader2 size={22} className="mx-auto mb-3 animate-spin text-white/60" />}
         <h2 className="text-lg font-semibold text-white">Confirming your donation</h2>
         <p className="mt-1 text-[13px] text-white/55">
@@ -261,7 +264,7 @@ export default function DonateCard({ slug, charity, currency = 'EUR', brand = ''
 
   if (step === 'payment' && payment) {
     return (
-      <div ref={cardRef} className={cardCls}>
+      <div ref={cardRef} id={DONATE_ANCHOR_ID} className={cardCls}>
         <ClassFunnelCheckout
           paymentId={payment.id}
           checkout={payment.checkout}
@@ -282,7 +285,7 @@ export default function DonateCard({ slug, charity, currency = 'EUR', brand = ''
     `py-3 rounded-xl border text-[15px] font-semibold tabular-nums transition-colors ${selected ? 'border-white bg-white text-black' : 'border-white/15 bg-white/5 text-white hover:border-white/40'}`
 
   return (
-    <div ref={cardRef} className={cardCls}>
+    <div ref={cardRef} id={DONATE_ANCHOR_ID} className={cardCls}>
       {heading && <h2 className="text-lg font-semibold text-white">{heading}</h2>}
       {blurb && <p className="text-[13px] text-white/55 mt-1 mb-5">{blurb}</p>}
 
@@ -396,6 +399,24 @@ export function CharityRaisedStrip({ charity, currency = 'EUR', brand = '' }) {
       )}
       {sub && <div className="text-[12px] text-white/60 whitespace-nowrap">{sub}</div>}
     </div>
+  )
+}
+
+// EVENTMOBILE.2 — phones only. The signup card goes first there, which leaves
+// the donate card a full form below; this link jumps to it. Its words are the
+// operator's own donate-card heading, so there is no new copy to maintain, and
+// with no heading there is no link.
+export function DonateJumpLink({ charity, brand = '' }) {
+  const text = renderCharityCopy(charity?.heading || '', { charity: charity?.name || '', brand: brand || '', first_name: '', amount: '', matched: '' }).trim()
+  if (!text) return null
+  return (
+    <a
+      href={`#${DONATE_ANCHOR_ID}`}
+      className="md:hidden mb-5 flex items-center justify-between gap-3 rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-[14px] font-medium text-white/85"
+    >
+      <span>{text}</span>
+      <span aria-hidden="true">↓</span>
+    </a>
   )
 }
 
