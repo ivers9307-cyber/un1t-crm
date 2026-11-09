@@ -1,18 +1,21 @@
 // HOSTSTATS.1 — the Signups card: how many saw the page, how many booked,
 // where they came from, and how the waitlist is going. Pure render (server
-// or client); `dark` for the host portal's black theme, light for staff.
+// or client); `dark` for the host portal (its theme tokens, light or dark),
+// the CRM's light classes for staff.
 //
 // The figures are operator-facing (a host or a staff member), so plain
 // literals are fine. `stats` null = the lib could not read: say so rather
 // than show zeros that look like an answer.
 
+import { HOST_EYEBROW } from '@/components/host/host-ui'
+
 export default function EventSignupsCard({ stats, dark = false }) {
   const shell = dark
-    ? 'rounded-xl border border-white/10 bg-white/[0.02] p-4 text-white'
+    ? 'rounded-xl border border-host-border bg-host-panel p-4 text-host-text'
     : 'rounded-lg border border-un1t-border bg-un1t-surface p-4 text-un1t-text'
-  const heading = dark ? 'text-xs uppercase tracking-[0.15em] text-white/45' : 'text-[11px] uppercase tracking-wider text-un1t-subtle'
-  const muted = dark ? 'text-white/50' : 'text-un1t-subtle'
-  const figure = dark ? 'text-2xl font-semibold text-white' : 'text-2xl font-semibold text-un1t-text'
+  const heading = dark ? HOST_EYEBROW : 'text-[11px] uppercase tracking-wider text-un1t-subtle'
+  const muted = dark ? 'text-host-hint' : 'text-un1t-subtle'
+  const figure = dark ? 'text-2xl font-semibold text-host-text' : 'text-2xl font-semibold text-un1t-text'
 
   if (!stats) {
     return (
@@ -40,7 +43,7 @@ export default function EventSignupsCard({ stats, dark = false }) {
       {sources.length > 0 && (
         <div className="mt-4">
           <h3 className={`text-xs ${muted}`}>Where they came from</h3>
-          <ul className="mt-1.5 divide-y divide-current/10 text-sm">
+          <ul className={`mt-1.5 divide-y ${dark ? 'divide-host-border' : 'divide-current/10'} text-sm`}>
             {sources.map((s) => (
               <li key={s.source} className="flex items-center justify-between gap-3 py-1.5">
                 <span className="truncate">{s.label || s.source}</span>

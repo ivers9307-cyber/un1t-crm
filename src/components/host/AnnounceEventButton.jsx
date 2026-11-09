@@ -6,13 +6,14 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { HOST_BTN_PRIMARY } from '@/components/host/host-ui'
 
 export default function AnnounceEventButton({ eventId, blockedReason, contactCount }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  if (blockedReason) return <p className="text-sm text-white/50">{blockedReason}</p>
+  if (blockedReason) return <p className="text-sm text-host-hint">{blockedReason}</p>
 
   async function create() {
     if (busy) return
@@ -37,7 +38,7 @@ export default function AnnounceEventButton({ eventId, blockedReason, contactCou
   return (
     <div>
       {typeof contactCount === 'number' && (
-        <p className="text-sm text-white/60">
+        <p className="text-sm text-host-hint">
           {contactCount === 1 ? 'You have 1 contact on your list.' : `You have ${contactCount} contacts on your list.`}
         </p>
       )}
@@ -45,12 +46,12 @@ export default function AnnounceEventButton({ eventId, blockedReason, contactCou
         type="button"
         onClick={create}
         disabled={busy}
-        className="mt-3 rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90 disabled:opacity-50"
+        className={`mt-3 ${HOST_BTN_PRIMARY}`}
       >
         Write an email about this event
       </button>
-      <p className="mt-2 text-xs text-white/50">This only creates a draft. Nothing is sent until you send or schedule it.</p>
-      {error && <p role="alert" className="mt-2 text-sm text-red-400">{error}</p>}
+      <p className="mt-2 text-xs text-host-hint">This only creates a draft. Nothing is sent until you send or schedule it.</p>
+      {error && <p role="alert" className="mt-2 text-sm text-host-bad">{error}</p>}
     </div>
   )
 }

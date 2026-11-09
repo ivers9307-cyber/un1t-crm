@@ -1,12 +1,13 @@
 'use client'
 
 // HOSTPORTAL.2 — "Take this event off sale?": the confirm step before a save
-// that sends a published event back to review. A small dark modal in the
-// style of HostEmailPreviewModal. Escape and a click on the overlay mean
+// that sends a published event back to review. A small modal on the
+// host theme tokens (the scrim is dark in both themes). Escape and a click on the overlay mean
 // "Keep editing"; focus starts on "Keep editing" (the safe choice).
 
 import { useEffect, useId, useRef } from 'react'
 import { RE_REVIEW_REASON_LABEL } from '@/lib/host-events'
+import { HOST_PANEL, HOST_BTN, HOST_BTN_PRIMARY } from '@/components/host/host-ui'
 
 // "A", "A or B", "A, B or C" (conjunction 'or' / 'and').
 export function joinLabels(labels, conjunction) {
@@ -44,15 +45,15 @@ export default function OffSaleConfirmDialog({ open, reasons, brandName, busy, o
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
       onClick={(e) => { if (e.target === e.currentTarget) onKeepEditing() }}
     >
-      <div className="bg-[#111] border border-white/15 rounded-xl w-full max-w-md p-5">
-        <h2 id={titleId} className="text-base font-semibold text-white">Take this event off sale?</h2>
-        <p className="mt-3 text-sm text-white/70">
+      <div className={`${HOST_PANEL} w-full max-w-md shadow-xl`}>
+        <h2 id={titleId} className="text-base font-semibold text-host-text">Take this event off sale?</h2>
+        <p className="mt-3 text-sm text-host-label">
           You changed {joinLabels(labels, 'and')}. Saving sends the event to {brandName} for review. Until it is approved the public page is offline and nobody can book. Existing bookings are kept.
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-end gap-3">
@@ -60,7 +61,7 @@ export default function OffSaleConfirmDialog({ open, reasons, brandName, busy, o
             ref={keepRef}
             type="button"
             onClick={onKeepEditing}
-            className="rounded-lg border border-white/15 px-4 py-2 text-sm text-white/80 hover:text-white hover:border-white/30"
+            className={HOST_BTN}
           >
             Keep editing
           </button>
@@ -68,7 +69,7 @@ export default function OffSaleConfirmDialog({ open, reasons, brandName, busy, o
             type="button"
             onClick={onConfirm}
             disabled={busy}
-            className="rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90 disabled:opacity-60"
+            className={HOST_BTN_PRIMARY}
           >
             Save and send for review
           </button>

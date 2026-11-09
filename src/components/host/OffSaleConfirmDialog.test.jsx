@@ -80,3 +80,15 @@ describe('joinLabels', () => {
     expect(joinLabels(['A', 'B', 'C'], 'and')).toBe('A, B and C')
   })
 })
+
+describe('OffSaleConfirmDialog theme (HOSTTHEME.1)', () => {
+  it('keeps a dark scrim and puts the panel and buttons on the kit', () => {
+    setup()
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.className).toContain('bg-black/60')
+    expect(dialog.firstElementChild.className).toContain('bg-host-panel')
+    expect(screen.getByRole('button', { name: 'Keep editing' }).className).toContain('border-host-edge')
+    expect(screen.getByRole('button', { name: 'Save and send for review' }).className).toContain('bg-host-accent')
+    expect(dialog.innerHTML).not.toMatch(/(text|bg|border)-(white|black)/)
+  })
+})

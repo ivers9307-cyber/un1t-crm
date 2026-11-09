@@ -17,6 +17,7 @@ import EventShareLinks from '@/components/host/EventShareLinks'
 import AnnounceEventButton from '@/components/host/AnnounceEventButton'
 import HostPromoCodes from '@/components/host/HostPromoCodes'
 import HostSeriesActions from '@/components/host/HostSeriesActions'
+import { HOST_BTN_SM, HOST_SECTION } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -60,17 +61,17 @@ export default async function HostEventPromote(props) {
   return (
     <div className="space-y-8">
       <section>
-        <h2 className="text-lg font-semibold">Share</h2>
+        <h2 className={HOST_SECTION}>Share</h2>
         {eventUrl ? (
           <>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <p className="min-w-0 text-sm text-white/60 break-all">{eventUrl}</p>
+            <p className="min-w-0 text-sm text-host-hint break-all">{eventUrl}</p>
             <div className="shrink-0 flex items-center gap-2">
               <a
                 href={eventUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-lg border border-white/15 text-white/80 text-xs font-semibold px-3 py-1.5 hover:bg-white/10 hover:text-white"
+                className={HOST_BTN_SM}
               >
                 Open
               </a>
@@ -80,12 +81,12 @@ export default async function HostEventPromote(props) {
           <EventShareLinks url={eventUrl} eventId={event.id} onSale={eventIsPublic(event)} />
           </>
         ) : (
-          <p className="mt-3 text-white/40 text-sm">The link is unavailable right now.</p>
+          <p className="mt-3 text-host-hint text-sm">The link is unavailable right now.</p>
         )}
       </section>
 
       <section>
-        <h2 className="text-lg font-semibold">Email your list</h2>
+        <h2 className={HOST_SECTION}>Email your list</h2>
         <div className="mt-3">
           <AnnounceEventButton
             eventId={event.id}
@@ -98,7 +99,7 @@ export default async function HostEventPromote(props) {
       <HostPromoCodes eventId={event.id} />
 
       <section>
-        <h2 className="text-lg font-semibold">Series</h2>
+        <h2 className={HOST_SECTION}>Series</h2>
         <div className="mt-3">
           <HostSeriesActions
             eventId={event.id}

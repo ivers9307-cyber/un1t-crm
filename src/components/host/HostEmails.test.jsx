@@ -12,7 +12,7 @@ import HostEmailPreviewModal from './HostEmailPreviewModal.jsx'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import {
   buildTestSendBody, statsLine, rowSubline, schedulePanelDefaults, audienceSummary, sendConfirmCopy, rowActions,
-  designStateForDraft,
+  designStateForDraft, unlayerThemeFor,
 } from './HostEmails.jsx'
 import HostEmails from './HostEmails.jsx'
 
@@ -352,5 +352,40 @@ describe('HostEmails ?open and ?notice=event', () => {
     stubApi()
     render(<HostEmails />)
     await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+  })
+})
+
+// HOSTTHEME.1 — the email designer follows the portal's theme attribute.
+describe('unlayerThemeFor', () => {
+  function inside(theme) {
+    const wrap = document.createElement('div')
+    if (theme) wrap.setAttribute('data-host-theme', theme)
+    const el = document.createElement('div')
+    wrap.appendChild(el)
+    return el
+  }
+  const prefersLight = (matches) => vi.stubGlobal('matchMedia', vi.fn((q) => ({ matches: q === '(prefers-color-scheme: light)' && matches })))
+
+  it('is dark for a null element', () => {
+    expect(unlayerThemeFor(null)).toBe('dark')
+  })
+  it('is dark when no ancestor carries the theme', () => {
+    expect(unlayerThemeFor(inside(null))).toBe('dark')
+  })
+  it('follows an explicit light or dark choice', () => {
+    prefersLight(false)
+    expect(unlayerThemeFor(inside('light'))).toBe('light')
+    prefersLight(true)
+    expect(unlayerThemeFor(inside('dark'))).toBe('dark')
+  })
+  it('follows the device under system', () => {
+    prefersLight(true)
+    expect(unlayerThemeFor(inside('system'))).toBe('light')
+    prefersLight(false)
+    expect(unlayerThemeFor(inside('system'))).toBe('dark')
+  })
+  it('is dark under system when matchMedia is absent', () => {
+    vi.stubGlobal('matchMedia', undefined)
+    expect(unlayerThemeFor(inside('system'))).toBe('dark')
   })
 })

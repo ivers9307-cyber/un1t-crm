@@ -11,6 +11,7 @@
 import { useState } from 'react'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { confirmLeave, setUnsaved } from '@/lib/unsaved-guard'
+import { HOST_BTN } from '@/components/host/host-ui'
 
 // Which actions exist for an event: Take off sale while published; Delete only
 // when not published and nothing is registered. The ⋯ menu uses it to hide
@@ -79,7 +80,7 @@ export default function HostEventActions({ eventId, status, hasRegistrations, br
           type="button"
           onClick={takeOffSale}
           disabled={busy}
-          className="rounded-lg border border-white/15 text-white/80 text-sm font-medium px-4 py-2 hover:bg-white/5 hover:text-white disabled:opacity-60"
+          className={HOST_BTN}
         >
           {busy ? 'Working…' : 'Take off sale'}
         </button>
@@ -89,12 +90,12 @@ export default function HostEventActions({ eventId, status, hasRegistrations, br
           type="button"
           onClick={deleteEvent}
           disabled={busy}
-          className="rounded-lg border border-red-500/30 bg-red-500/10 text-red-300 text-sm font-medium px-4 py-2 hover:bg-red-500/20 hover:text-red-200 disabled:opacity-60"
+          className="inline-flex items-center justify-center gap-2 rounded-lg border border-host-bad-edge bg-host-bad-bg text-host-bad text-sm font-medium px-4 py-2 hover:opacity-80 disabled:opacity-60"
         >
           {busy ? 'Working…' : 'Delete event'}
         </button>
       )}
-      {error && <span className="basis-full text-sm text-red-400">{error}</span>}
+      {error && <span className="basis-full text-sm text-host-bad">{error}</span>}
     </div>
   )
 }

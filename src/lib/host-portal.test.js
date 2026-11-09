@@ -10,6 +10,7 @@ import {
   groupHostEvents, eventLandingHref, loadHostEvent, moneyLabel, eventMoneyCents,
   loadPublicRatingAverages, loadHostToday, HOST_STATUS_CHIP, formatHostMoney, hostEventDetail, attendeeCounts,
 } from './host-portal'
+import { HOST_CHIP, HOST_CHIP_TONE } from '@/components/host/host-ui'
 
 // Chainable, thenable supabase stub. `results` is consumed one per awaited query.
 function stub(results) {
@@ -106,6 +107,13 @@ describe('formatHostMoney / HOST_STATUS_CHIP', () => {
     expect(formatHostMoney(12345)).toContain('123.45')
     expect(formatHostMoney(undefined, 'EUR')).toContain('0.00')
     expect(Object.keys(HOST_STATUS_CHIP).sort()).toEqual(['draft', 'pending_review', 'published', 'rejected'])
+  })
+  it('builds each status chip from the themed kit: draft neutral, review warn, published ok, rejected bad', () => {
+    expect(HOST_STATUS_CHIP.draft).toBe(`${HOST_CHIP} ${HOST_CHIP_TONE.neutral}`)
+    expect(HOST_STATUS_CHIP.pending_review).toBe(`${HOST_CHIP} ${HOST_CHIP_TONE.warn}`)
+    expect(HOST_STATUS_CHIP.published).toBe(`${HOST_CHIP} ${HOST_CHIP_TONE.ok}`)
+    expect(HOST_STATUS_CHIP.rejected).toBe(`${HOST_CHIP} ${HOST_CHIP_TONE.bad}`)
+    for (const v of Object.values(HOST_STATUS_CHIP)) expect(typeof v).toBe('string')
   })
 })
 

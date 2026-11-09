@@ -11,6 +11,7 @@ import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostEmails from '@/components/host/HostEmails'
+import { HOST_H1 } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,11 +39,11 @@ export default async function HostEmailsPage() {
 
   return (
     <div>
-      <a href="/host" className="text-xs text-white/45 hover:text-white">← Back</a>
+      <a href="/host" className="text-xs text-host-hint hover:text-host-text">← Back</a>
 
       <div className="mt-3">
-        <h1 className="text-2xl font-bold">Emails</h1>
-        <p className="text-white/55 text-sm mt-1">
+        <h1 className={HOST_H1}>Emails</h1>
+        <p className="text-host-hint text-sm mt-1">
           Email your contacts — everyone who attended your events or joined your mailing list and has opted in.
         </p>
       </div>

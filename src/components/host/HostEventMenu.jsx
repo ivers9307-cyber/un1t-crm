@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import HostEventActions, { hasHostEventActions } from '@/components/host/HostEventActions'
+import { HOST_BTN } from '@/components/host/host-ui'
 
 export default function HostEventMenu({ eventId, status, hasRegistrations, brandName }) {
   const [open, setOpen] = useState(false)
@@ -35,12 +36,12 @@ export default function HostEventMenu({ eventId, status, hasRegistrations, brand
         aria-label="More actions"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="rounded-lg border border-white/15 text-white/80 text-sm px-3 py-2 hover:bg-white/5"
+        className={HOST_BTN}
       >
         ⋯
       </button>
       {open && (
-        <div className="absolute left-0 sm:left-auto sm:right-0 z-20 mt-2 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-white/15 bg-black p-3 shadow-xl">
+        <div className="absolute left-0 sm:left-auto sm:right-0 z-20 mt-2 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-host-border bg-host-panel p-3 shadow-xl">
           <HostEventActions eventId={eventId} status={status} hasRegistrations={hasRegistrations} brandName={brandName} />
         </div>
       )}

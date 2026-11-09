@@ -16,13 +16,22 @@
 // one sits above it and only contributes metadata, so both the gated and the
 // ungated host pages are covered.
 
-import { headers } from 'next/headers'
+import { headers, cookies } from 'next/headers'
 import { customerFacingMetadata } from '@/lib/default-site-name'
+import { HOST_THEME_COOKIE, hostThemeFromCookie } from '@/lib/host-theme'
 
 export async function generateMetadata() {
   return customerFacingMetadata({ host: (await headers()).get('host') })
 }
 
-export default function HostLayout({ children }) {
-  return children
+// HOSTTHEME.1: the theme wrapper. The cookie is read on the server so the first
+// paint is already the host's choice; with no choice ('system') the CSS follows
+// the device. The same wrapper covers login, set-password and the portal.
+export default async function HostLayout({ children }) {
+  const theme = hostThemeFromCookie((await cookies()).get(HOST_THEME_COOKIE)?.value)
+  return (
+    <div data-host-theme={theme} className="min-h-screen bg-host-bg text-host-text">
+      {children}
+    </div>
+  )
 }

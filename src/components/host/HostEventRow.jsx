@@ -6,21 +6,22 @@
 import Link from 'next/link'
 import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
 import { HOST_STATUS_CHIP, eventLandingHref } from '@/lib/host-portal'
+import { HOST_CHIP, HOST_CHIP_TONE, HOST_ROW, HOST_META } from './host-ui'
 
 export default function HostEventRow({ event, detail, action = null }) {
-  const chip = HOST_STATUS_CHIP[event.status] || 'bg-white/10 text-white/70'
+  const chip = HOST_STATUS_CHIP[event.status] || `${HOST_CHIP} ${HOST_CHIP_TONE.neutral}`
   return (
-    <li className="px-4 py-3 flex items-center justify-between gap-4 hover:bg-white/[0.02]">
+    <li className={`${HOST_ROW} flex items-center justify-between gap-4`}>
       <Link href={eventLandingHref(event)} className="min-w-0 flex-1">
         <p className="flex items-center gap-2 font-medium">
           <span className="truncate">{event.name}</span>
           {event.status && (
-            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
+            <span className={`shrink-0 ${chip}`}>
               {HOST_EVENT_STATUS_LABEL[event.status] || event.status}
             </span>
           )}
         </p>
-        <p className="text-xs text-white/45 break-words">{detail}</p>
+        <p className={`${HOST_META} break-words`}>{detail}</p>
       </Link>
       {action ? <div className="shrink-0 text-xs">{action}</div> : null}
     </li>

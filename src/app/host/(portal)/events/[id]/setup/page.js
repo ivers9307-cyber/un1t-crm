@@ -14,6 +14,7 @@ import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import { loadHostEvent } from '@/lib/host-portal'
 import HostEventForm from '@/components/host/HostEventForm'
 import { hostEventFormInitial } from '@/lib/host-event-form-initial'
+import { HOST_NOTICE, HOST_NOTICE_TONE } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,7 +42,7 @@ export default async function HostEventSetup(props) {
   return (
     <div>
       {event.status === 'rejected' && event.rejected_reason && (
-        <div className="mb-6 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+        <div className={`mb-6 ${HOST_NOTICE} ${HOST_NOTICE_TONE.warn}`}>
           <span className="font-semibold">{brand.name} asked for changes:</span> {event.rejected_reason}
         </div>
       )}

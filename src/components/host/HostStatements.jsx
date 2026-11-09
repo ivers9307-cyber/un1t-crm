@@ -7,9 +7,10 @@
 // fetch error, or still loading → render NOTHING — the dashboard never gains
 // a broken/empty section.
 //
-// Dark UN1T host-portal styling (bg-black page).
+// Themed with the host class kit (host-ui.js).
 
 import { useEffect, useState } from 'react'
+import { HOST_EYEBROW, HOST_LIST, HOST_BTN_GHOST } from './host-ui'
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -47,14 +48,14 @@ export default function HostStatements() {
 
   return (
     <section className="mt-8">
-      <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Statements</h2>
-      <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
+      <h2 className={`${HOST_EYEBROW} mb-3`}>Statements</h2>
+      <ul className={`${HOST_LIST} overflow-hidden`}>
         {months.map((m) => (
           <li key={m} className="px-4 py-2.5 flex items-center justify-between gap-4 text-sm">
-            <span className="text-white/60">{monthLabel(m)}</span>
+            <span className="text-host-hint">{monthLabel(m)}</span>
             <a
               href={`/api/host/statements?month=${encodeURIComponent(m)}`}
-              className="text-xs text-white/50 hover:text-white"
+              className={HOST_BTN_GHOST}
             >
               Download CSV
             </a>

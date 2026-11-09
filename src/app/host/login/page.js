@@ -7,11 +7,22 @@
 // no organisation and reads the platform name. The client body is
 // HostLoginForm.
 
-import { headers } from 'next/headers'
+import { headers, cookies } from 'next/headers'
 import { resolveRequestHostOrgBrand } from '@/lib/host-org-brand'
 import HostLoginForm from './HostLoginForm'
+import HostThemeToggle from '@/components/host/HostThemeToggle'
+import { HOST_THEME_COOKIE, hostThemeFromCookie } from '@/lib/host-theme'
 
 export default async function HostLoginPage() {
   const brand = await resolveRequestHostOrgBrand((await headers()).get('host'))
-  return <HostLoginForm brand={{ name: brand.name, shortName: brand.shortName }} />
+  // HOSTTHEME.1: a string only, never a function, to the client toggle.
+  const theme = hostThemeFromCookie((await cookies()).get(HOST_THEME_COOKIE)?.value)
+  return (
+    <>
+      <div className="fixed right-4 top-4 z-10">
+        <HostThemeToggle initial={theme} />
+      </div>
+      <HostLoginForm brand={{ name: brand.name, shortName: brand.shortName }} />
+    </>
+  )
 }

@@ -25,7 +25,7 @@ export default async function HostEmailReportPage(props) {
           src/app in this plugin version and matches /host/emails against
           this [id] route's regex (empty capture), so a raw
           <a href="/host/emails"> errors. See CLAUDE.md. */}
-      <Link href="/host/emails" className="text-xs text-white/45 hover:text-white">← Back to emails</Link>
+      <Link href="/host/emails" className="text-xs text-host-hint hover:text-host-text">← Back to emails</Link>
 
       <HostEmailReport campaignId={params.id} brandName={brand.name} />
     </div>

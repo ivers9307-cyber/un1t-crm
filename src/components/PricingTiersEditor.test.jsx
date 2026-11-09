@@ -52,3 +52,23 @@ describe('PricingTiersEditor', () => {
     expect(screen.queryByRole('button', { name: /Add a tier/ })).toBeNull()
   })
 })
+
+// HOSTTHEME.1 — the host form's (dark) arm uses the theme tokens only.
+describe('PricingTiersEditor dark arm (HOSTTHEME.1)', () => {
+  it('renders no raw colour class and rows are wells', () => {
+    const { container } = render(<PricingTiersEditor value={[{ id: 't1', name: 'Early bird', price_cents: 1500 }]} onChange={() => {}} dark />)
+    const bad = []
+    for (const el of container.querySelectorAll('[class]')) {
+      for (const tok of String(el.getAttribute('class')).split(/\s+/).filter(Boolean)) {
+        if (/^(?:[a-z-]+:)*(?:text|bg|border|divide|ring)-(?:white|black)/.test(tok) || /placeholder:text-white/.test(tok) || /^(?:[a-z-]+:)*(?:text|bg|border)-(?:red|amber|emerald|green|sky|blue|yellow)-\d/.test(tok) || /color-scheme:dark/.test(tok)) bad.push(tok)
+      }
+    }
+    expect(bad).toEqual([])
+    expect(container.querySelector('.bg-host-well')).toBeTruthy()
+  })
+  it('the light arm keeps the staff classes', () => {
+    const { container } = render(<PricingTiersEditor value={[{ id: 't1', name: 'Early bird', price_cents: 1500 }]} onChange={() => {}} />)
+    expect(container.querySelector('.bg-un1t-surface')).toBeTruthy()
+    expect(container.innerHTML).not.toContain('host-')
+  })
+})

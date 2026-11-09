@@ -6,6 +6,7 @@
 // form (dark) and the staff RaceEventForm (light): only the surface differs.
 
 import { ArrowDown, ArrowUp, X } from 'lucide-react'
+import { HOST_LABEL, HOST_WELL, HOST_HINT, HOST_INPUT } from '@/components/host/host-ui'
 import { MAX_TIERS } from '@/lib/pricing-tiers'
 
 const blank = () => ({ id: `tier-${Math.random().toString(36).slice(2, 10)}`, name: '', price_cents: 0, capacity: null, starts_at: null, ends_at: null, min_people: null })
@@ -29,12 +30,12 @@ const intOrNull = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) 
 export default function PricingTiersEditor({ value, onChange, dark = false }) {
   const tiers = Array.isArray(value) ? value : []
   const input = dark
-    ? 'w-full bg-white/[0.04] border border-white/12 rounded-lg px-2.5 py-2 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/30 [color-scheme:dark]'
+    ? HOST_INPUT
     : 'w-full bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-2 text-sm text-un1t-text'
-  const label = dark ? 'block text-[11px] uppercase tracking-wide text-white/45 mb-1' : 'block text-[11px] text-un1t-subtle mb-1'
-  const ghost = dark ? 'text-white/60 hover:text-white' : 'text-un1t-subtle hover:text-un1t-text'
-  const card = dark ? 'rounded-xl border border-white/10 bg-white/[0.02] p-3' : 'rounded-md border border-un1t-border bg-un1t-surface p-3'
-  const hint = dark ? 'text-xs text-white/35' : 'text-[11px] text-un1t-muted'
+  const label = dark ? `${HOST_LABEL} mb-1` : 'block text-[11px] text-un1t-subtle mb-1'
+  const ghost = dark ? 'text-host-hint hover:text-host-text' : 'text-un1t-subtle hover:text-un1t-text'
+  const card = dark ? HOST_WELL : 'rounded-md border border-un1t-border bg-un1t-surface p-3'
+  const hint = dark ? HOST_HINT : 'text-[11px] text-un1t-muted'
 
   const update = (i, patch) => onChange(tiers.map((t, j) => (j === i ? { ...t, ...patch } : t)))
   const remove = (i) => onChange(tiers.filter((_, j) => j !== i))
@@ -73,7 +74,7 @@ export default function PricingTiersEditor({ value, onChange, dark = false }) {
               <button type="button" onClick={() => remove(i)} aria-label={`Remove tier ${i + 1}`} className={`p-1.5 ${ghost}`}><X size={14} /></button>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2 mt-2">
+          <div className={dark ? 'grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2' : 'grid grid-cols-2 gap-2 mt-2'}>
             <div>
               <label htmlFor={`${t.id}-from`} className={label}>Tier {i + 1} from</label>
               <input id={`${t.id}-from`} type="datetime-local" value={isoToLocal(t.starts_at)} onChange={(e) => update(i, { starts_at: localToIso(e.target.value) })} className={input} />

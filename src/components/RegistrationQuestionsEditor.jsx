@@ -6,6 +6,7 @@
 // (light): only the surface differs.
 
 import { ArrowDown, ArrowUp, X } from 'lucide-react'
+import { HOST_LABEL, HOST_WELL, HOST_HINT, HOST_INPUT } from '@/components/host/host-ui'
 import { MAX_QUESTIONS } from '@/lib/registration-questions'
 
 const blank = () => ({ id: `q-${Math.random().toString(36).slice(2, 10)}`, label: '', type: 'text', required: false, per: 'entry' })
@@ -14,12 +15,12 @@ const parseOptions = (text) => String(text || '').split(',').map((s) => s.trim()
 export default function RegistrationQuestionsEditor({ value, onChange, dark = false }) {
   const qs = Array.isArray(value) ? value : []
   const input = dark
-    ? 'w-full bg-white/[0.04] border border-white/12 rounded-lg px-2.5 py-2 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/30 [color-scheme:dark]'
+    ? HOST_INPUT
     : 'w-full bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-2 text-sm text-un1t-text'
-  const label = dark ? 'block text-[11px] uppercase tracking-wide text-white/45 mb-1' : 'block text-[11px] text-un1t-subtle mb-1'
-  const ghost = dark ? 'text-white/60 hover:text-white' : 'text-un1t-subtle hover:text-un1t-text'
-  const card = dark ? 'rounded-xl border border-white/10 bg-white/[0.02] p-3' : 'rounded-md border border-un1t-border bg-un1t-surface p-3'
-  const hint = dark ? 'text-xs text-white/35' : 'text-[11px] text-un1t-muted'
+  const label = dark ? `${HOST_LABEL} mb-1` : 'block text-[11px] text-un1t-subtle mb-1'
+  const ghost = dark ? 'text-host-hint hover:text-host-text' : 'text-un1t-subtle hover:text-un1t-text'
+  const card = dark ? HOST_WELL : 'rounded-md border border-un1t-border bg-un1t-surface p-3'
+  const hint = dark ? HOST_HINT : 'text-[11px] text-un1t-muted'
 
   const update = (i, patch) => onChange(qs.map((q, j) => {
     if (j !== i) return q
@@ -40,8 +41,8 @@ export default function RegistrationQuestionsEditor({ value, onChange, dark = fa
     <div className="space-y-3">
       {qs.map((q, i) => (
         <div key={q.id} className={card}>
-          <div className="grid grid-cols-2 sm:grid-cols-[2fr_1fr_1fr_auto] gap-2 items-end">
-            <div className="col-span-2 sm:col-span-1">
+          <div className={dark ? 'grid grid-cols-1 sm:grid-cols-[2fr_1fr_1fr_auto] gap-2 items-end' : 'grid grid-cols-2 sm:grid-cols-[2fr_1fr_1fr_auto] gap-2 items-end'}>
+            <div className={dark ? undefined : 'col-span-2 sm:col-span-1'}>
               <label htmlFor={`${q.id}-label`} className={label}>Question {i + 1} label</label>
               <input id={`${q.id}-label`} type="text" maxLength={120} value={q.label || ''} onChange={(e) => update(i, { label: e.target.value })} placeholder="Dietary needs" className={input} />
             </div>
@@ -73,7 +74,7 @@ export default function RegistrationQuestionsEditor({ value, onChange, dark = fa
                 <input id={`${q.id}-options`} type="text" value={(q.options || []).join(', ')} onChange={(e) => update(i, { options: parseOptions(e.target.value) })} placeholder="S, M, L, XL" className={input} />
               </div>
             ) : <div />}
-            <label className={`inline-flex items-center gap-2 text-sm ${dark ? 'text-white/80' : 'text-un1t-text'}`}>
+            <label className={`inline-flex items-center gap-2 text-sm ${dark ? 'text-host-text' : 'text-un1t-text'}`}>
               <input type="checkbox" checked={!!q.required} onChange={(e) => update(i, { required: e.target.checked })} aria-label={`Question ${i + 1} required`} />
               Required
             </label>

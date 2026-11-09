@@ -41,16 +41,16 @@ export default function HostEmailPreviewModal({ html, width, onWidth, onClose })
   }, [])
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Preview as sent">
-      <div className="bg-[#111] border border-white/15 rounded-xl w-full max-w-4xl max-h-[92vh] flex flex-col">
-        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10">
-          <p className="text-sm text-white/70">This is what a recipient gets, including the unsubscribe footer.</p>
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Preview as sent">
+      <div className="bg-host-panel border border-host-border rounded-xl w-full max-w-4xl max-h-[92vh] flex flex-col">
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-host-border">
+          <p className="text-sm text-host-label">This is what a recipient gets, including the unsubscribe footer.</p>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => onWidth(375)}
               aria-pressed={width === 375}
-              className={`rounded px-2 py-1 text-xs ${width === 375 ? 'bg-white text-black' : 'text-white/60'}`}
+              className={`rounded px-2 py-1 text-xs ${width === 375 ? 'bg-host-accent text-host-on-accent' : 'text-host-hint hover:text-host-text'}`}
             >
               Mobile
             </button>
@@ -58,11 +58,11 @@ export default function HostEmailPreviewModal({ html, width, onWidth, onClose })
               type="button"
               onClick={() => onWidth(700)}
               aria-pressed={width === 700}
-              className={`rounded px-2 py-1 text-xs ${width === 700 ? 'bg-white text-black' : 'text-white/60'}`}
+              className={`rounded px-2 py-1 text-xs ${width === 700 ? 'bg-host-accent text-host-on-accent' : 'text-host-hint hover:text-host-text'}`}
             >
               Desktop
             </button>
-            <button ref={closeRef} type="button" onClick={onClose} className="text-xs text-white/60 hover:text-white px-2 py-1">Close</button>
+            <button ref={closeRef} type="button" onClick={onClose} className="text-xs text-host-hint hover:text-host-text px-2 py-1">Close</button>
           </div>
         </div>
         <div className="flex-1 overflow-auto bg-[#f4f4f5] flex justify-center p-4">

@@ -790,3 +790,75 @@ describe('HostEventForm off-sale warning', () => {
     expect(flag).toBe(true)
   })
 })
+
+// HOSTTHEME.1 — the form is one panel per section, each with the spec's
+// one-line description, and carries no raw colour class in either mode.
+const SECTION_DESCRIPTIONS = [
+  ['setup-basics', 'Basics', 'What it is and where.'],
+  ['setup-schedule', 'Schedule & sessions', 'When it runs and how many places each time has.'],
+  ['setup-tickets', 'Tickets & pricing', 'What a place costs and how big a booking can be.'],
+  ['setup-questions', 'Questions at signup', 'Anything you need to know from the people booking.'],
+  ['setup-look', 'Page look', 'How the event page looks.'],
+  ['setup-emails', 'Emails (optional)', 'The confirmation, reminder and rating request, if you want to change the wording.'],
+]
+
+const FORBIDDEN_CLASS = [
+  /^(?:[a-z-]+:)*(?:text|bg|border|divide|ring)-(?:white|black)(?:\/[\w.[\]]+)?$/,
+  /^(?:[a-z-]+:)*placeholder:text-white/,
+  /^(?:[a-z-]+:)*(?:text|bg|border)-(?:red|amber|emerald|green|sky|blue|yellow)-\d/,
+  /color-scheme:dark/,
+]
+function forbiddenClasses(root) {
+  const found = []
+  for (const el of root.querySelectorAll('[class]')) {
+    for (const tok of String(el.getAttribute('class')).split(/\s+/).filter(Boolean)) {
+      if (tok === 'bg-black/60') continue // the modal scrim is dark in both themes
+      if (FORBIDDEN_CLASS.some((re) => re.test(tok))) found.push(tok)
+    }
+  }
+  return found
+}
+
+describe('HostEventForm panels (HOSTTHEME.1)', () => {
+  it.each(SECTION_DESCRIPTIONS)('%s is a panel with its heading and description', (id, heading, desc) => {
+    vi.stubGlobal('fetch', okFetch())
+    const { container } = render(<HostEventForm mode="create" brandName="UN1T" />)
+    const section = container.querySelector(`#${id}`)
+    expect(section.className).toContain('scroll-mt-24')
+    expect(section.className).toContain('bg-host-panel')
+    expect(section.querySelector('h2').textContent.replace(/^[▸▾]\s*/, '')).toBe(heading)
+    expect(Array.from(section.querySelectorAll('p')).some((p) => p.textContent === desc)).toBe(true)
+  })
+
+  it('create mode carries no forbidden class, even with the emails open and an error showing', () => {
+    vi.stubGlobal('fetch', okFetch())
+    const { container } = render(<HostEventForm mode="create" brandName="UN1T" />)
+    fireEvent.click(screen.getByRole('button', { name: /Emails \(optional\)/ }))
+    fireEvent.submit(container.querySelector('form'))
+    expect(container.textContent).toContain('Please give your event a name.')
+    expect(forbiddenClasses(container)).toEqual([])
+  })
+
+  it('edit mode (published) carries no forbidden class, with tiers, questions and a hero', () => {
+    vi.stubGlobal('fetch', okFetch())
+    const full = {
+      ...initial,
+      hero_image_url: 'https://example.com/h.png',
+      pricing_tiers: [{ id: 't1', name: 'Early bird', price_cents: 1500 }],
+      registration_questions: [{ id: 'q1', label: 'Diet', type: 'text', required: false, per: 'entry' }],
+    }
+    const { container } = render(<HostEventForm mode="edit" eventId="E1" initial={full} brandName="UN1T" status="published" />)
+    expect(container.querySelector('[role="note"]')).toBeTruthy()
+    expect(container.querySelectorAll('nav button')).toHaveLength(6)
+    expect(container.querySelector('#he-kind').className).toContain('border-host-edge')
+    expect(forbiddenClasses(container)).toEqual([])
+  })
+
+  it('the selected team sizes use the accent chip and the others the plain chip', () => {
+    vi.stubGlobal('fetch', okFetch())
+    render(<HostEventForm mode="create" brandName="UN1T" />)
+    const chip = (n) => screen.getByText(String(n), { selector: 'label' })
+    expect(chip(1).className).toContain('bg-host-accent')
+    expect(chip(2).className).not.toContain('bg-host-accent')
+  })
+})

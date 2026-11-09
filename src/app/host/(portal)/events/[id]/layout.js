@@ -13,6 +13,7 @@ import GuardedLink from '@/components/host/GuardedLink'
 import HostEventTabs from '@/components/host/HostEventTabs'
 import HostEventMenu from '@/components/host/HostEventMenu'
 import DuplicateEventButton from '@/components/DuplicateEventButton'
+import { HOST_BTN, HOST_H1 } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,23 +49,23 @@ export default async function HostEventLayout({ children, params }) {
 
   return (
     <div>
-      <GuardedLink href="/host/events" className="text-xs text-white/45 hover:text-white">← Events</GuardedLink>
+      <GuardedLink href="/host/events" className="text-xs text-host-hint hover:text-host-text">← Events</GuardedLink>
 
       <div className="mt-3 flex items-start justify-between gap-4 flex-wrap">
         <div className="min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold break-words">{race.name}</h1>
-            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${HOST_STATUS_CHIP[race.status] || HOST_STATUS_CHIP.draft}`}>
+            <h1 className={`${HOST_H1} break-words`}>{race.name}</h1>
+            <span className={HOST_STATUS_CHIP[race.status] || HOST_STATUS_CHIP.draft}>
               {HOST_EVENT_STATUS_LABEL[race.status] || race.status}
             </span>
           </div>
           {(line.length > 0 || race.series) && (
-            <p className="text-white/55 text-sm mt-1">
+            <p className="text-host-hint text-sm mt-1">
               {line.join(' · ')}
               {race.series && (
                 <>
                   {line.length > 0 ? ' · ' : ''}part of series{' '}
-                  <a href={`/event/series/${race.series.slug}`} target="_blank" rel="noopener noreferrer" className="underline hover:text-white">{race.series.name}</a>
+                  <a href={`/event/series/${race.series.slug}`} target="_blank" rel="noopener noreferrer" className="underline hover:text-host-text">{race.series.name}</a>
                 </>
               )}
             </p>
@@ -76,7 +77,7 @@ export default async function HostEventLayout({ children, params }) {
               href={`/event/${race.slug}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="rounded-lg border border-white/15 text-white/80 text-sm font-medium px-4 py-2 hover:bg-white/5"
+              className={HOST_BTN}
             >
               View event page
             </a>

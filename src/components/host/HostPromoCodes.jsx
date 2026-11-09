@@ -1,17 +1,28 @@
 'use client'
 
-// HOST-PORTAL.9 — host self-serve promo codes for ONE event. Dark UN1T host-
-// portal styling (matches HostEventForm). Lists the event's codes with
+// HOST-PORTAL.9 — host self-serve promo codes for ONE event. Styled from the
+// host-portal theme kit (host-ui.js; light and dark), like HostEventForm. Lists the event's codes with
 // activate/deactivate + delete, and a create form below. Talks only to the
 // host-scoped /api/host/events/[id]/promo-codes routes — event_id/location_id
 // are server-set there, so this form never sends scoping fields. Fixed
 // discounts are entered in EUROS and converted to integer cents on submit.
 
 import { useCallback, useEffect, useState } from 'react'
+import {
+  HOST_BTN_PRIMARY,
+  HOST_CHIP,
+  HOST_CHIP_TONE,
+  HOST_HINT,
+  HOST_INPUT,
+  HOST_LABEL,
+  HOST_NOTICE,
+  HOST_NOTICE_TONE,
+  HOST_SECTION,
+  HOST_SECTION_DESC,
+} from '@/components/host/host-ui'
 
-const input =
-  'w-full bg-white/[0.04] border border-white/12 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/30'
-const labelCls = 'block text-xs uppercase tracking-wide text-white/45 mb-1.5'
+const input = HOST_INPUT
+const labelCls = `${HOST_LABEL} mb-1.5`
 
 function discountLabel(code) {
   if (code.discount_type === 'percent') return `${code.discount_value}% off`
@@ -160,34 +171,32 @@ export default function HostPromoCodes({ eventId }) {
 
   return (
     <section className="mt-10">
-      <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-1">Promo codes</h2>
-      <p className="text-xs text-white/35 mb-4">
+      <h2 className={HOST_SECTION}>Promo codes</h2>
+      <p className={`${HOST_SECTION_DESC} mb-4`}>
         Discount codes attendees can enter at checkout. They only work for this event.
       </p>
 
       {loading ? (
-        <p className="text-white/50 text-sm">Loading codes…</p>
+        <p className={HOST_HINT}>Loading codes…</p>
       ) : codes.length === 0 ? (
-        <p className="text-white/50 text-sm">No promo codes yet.</p>
+        <p className={HOST_HINT}>No promo codes yet.</p>
       ) : (
         <ul className="space-y-2">
           {codes.map((row) => (
             <li
               key={row.id}
-              className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3"
+              className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-host-border bg-host-panel px-4 py-3"
             >
-              <span className="font-mono text-sm font-semibold tracking-wide">{row.code}</span>
-              <span className="text-sm text-white/70">{discountLabel(row)}</span>
-              <span className="text-xs text-white/45">
+              <span className="font-mono text-sm font-semibold tracking-wide text-host-text">{row.code}</span>
+              <span className="text-sm text-host-label">{discountLabel(row)}</span>
+              <span className="text-xs text-host-hint">
                 {row.redeemed_count ?? 0}/{row.max_redemptions ?? '∞'} used
               </span>
               {row.expires_at && expiryLabel(row.expires_at) && (
-                <span className="text-xs text-white/45">expires {expiryLabel(row.expires_at)}</span>
+                <span className="text-xs text-host-hint">expires {expiryLabel(row.expires_at)}</span>
               )}
               <span
-                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                  row.active ? 'bg-emerald-500/15 text-emerald-300' : 'bg-white/10 text-white/50'
-                }`}
+                className={`${HOST_CHIP} ${row.active ? HOST_CHIP_TONE.ok : HOST_CHIP_TONE.neutral}`}
               >
                 {row.active ? 'Active' : 'Inactive'}
               </span>
@@ -196,7 +205,7 @@ export default function HostPromoCodes({ eventId }) {
                   type="button"
                   onClick={() => toggleActive(row)}
                   disabled={busyId === row.id}
-                  className="text-xs text-white/60 hover:text-white transition disabled:opacity-50"
+                  className="text-xs text-host-hint hover:text-host-text transition disabled:opacity-50"
                 >
                   {row.active ? 'Deactivate' : 'Activate'}
                 </button>
@@ -204,7 +213,7 @@ export default function HostPromoCodes({ eventId }) {
                   type="button"
                   onClick={() => remove(row)}
                   disabled={busyId === row.id}
-                  className="text-xs text-red-400/80 hover:text-red-300 transition disabled:opacity-50"
+                  className="text-xs text-host-bad hover:opacity-80 transition disabled:opacity-50"
                 >
                   Delete
                 </button>
@@ -215,13 +224,13 @@ export default function HostPromoCodes({ eventId }) {
       )}
 
       {listError && (
-        <div className="mt-3 rounded-lg border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+        <div className={`mt-3 ${HOST_NOTICE} ${HOST_NOTICE_TONE.bad}`}>
           {listError}
         </div>
       )}
 
       {/* Create */}
-      <form onSubmit={handleCreate} className="mt-6 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+      <form onSubmit={handleCreate} className="mt-6 rounded-xl border border-host-border bg-host-panel p-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <div>
             <label htmlFor="hpc-code" className={labelCls}>Code</label>
@@ -244,8 +253,8 @@ export default function HostPromoCodes({ eventId }) {
               onChange={(e) => setDiscountType(e.target.value)}
               className={`${input} appearance-none`}
             >
-              <option value="percent" className="bg-black text-white">% off</option>
-              <option value="fixed" className="bg-black text-white">€ off</option>
+              <option value="percent" className="bg-host-panel text-host-text">% off</option>
+              <option value="fixed" className="bg-host-panel text-host-text">€ off</option>
             </select>
           </div>
           <div>
@@ -254,7 +263,7 @@ export default function HostPromoCodes({ eventId }) {
             </label>
             <div className="relative">
               {discountType === 'fixed' && (
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-white/40">€</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-host-hint">€</span>
               )}
               <input
                 id="hpc-value"
@@ -269,13 +278,13 @@ export default function HostPromoCodes({ eventId }) {
                 required
               />
             </div>
-            <p className="mt-1.5 text-xs text-white/35">
+            <p className="mt-1.5 text-xs text-host-hint">
               {discountType === 'percent' ? 'Up to 99%.' : 'Must be less than the ticket price.'}
             </p>
           </div>
           <div>
             <label htmlFor="hpc-max" className={labelCls}>
-              Max uses <span className="text-white/30 normal-case">(optional)</span>
+              Max uses <span className="font-normal text-host-hint">(optional)</span>
             </label>
             <input
               id="hpc-max"
@@ -290,20 +299,20 @@ export default function HostPromoCodes({ eventId }) {
           </div>
           <div>
             <label htmlFor="hpc-expiry" className={labelCls}>
-              Expires <span className="text-white/30 normal-case">(optional)</span>
+              Expires <span className="font-normal text-host-hint">(optional)</span>
             </label>
             <input
               id="hpc-expiry"
               type="date"
               value={expiresDate}
               onChange={(e) => setExpiresDate(e.target.value)}
-              className={`${input} [color-scheme:dark]`}
+              className={input}
             />
           </div>
         </div>
 
         {formError && (
-          <div className="mt-4 rounded-lg border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <div className={`mt-4 ${HOST_NOTICE} ${HOST_NOTICE_TONE.bad}`}>
             {formError}
           </div>
         )}
@@ -312,7 +321,7 @@ export default function HostPromoCodes({ eventId }) {
           <button
             type="submit"
             disabled={creating}
-            className="rounded-lg bg-white text-black text-sm font-semibold px-5 py-2.5 hover:bg-white/90 disabled:opacity-60"
+            className={HOST_BTN_PRIMARY}
           >
             {creating ? 'Creating…' : 'Create code'}
           </button>

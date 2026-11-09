@@ -14,6 +14,7 @@ import { entryLabel } from '@/lib/registration-entry'
 import { resolveRegistrationQuestions, answersForDisplay } from '@/lib/registration-questions'
 import HostAttendeeTable from '@/components/host/HostAttendeeTable'
 import EventWaitlistPanel from '@/components/EventWaitlistPanel'
+import { HOST_BTN_PRIMARY } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
 
@@ -66,13 +67,13 @@ export default async function HostEventAttendees(props) {
   return (
     <div>
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <p className="text-white/55 text-sm">
+        <p className="text-host-hint text-sm">
           {bookings} booking{bookings === 1 ? '' : 's'} · {confirmed} confirmed · {people} attendee{people === 1 ? '' : 's'}
         </p>
         {regs.length > 0 && (
           <a
             href={`/api/host/events/${race.id}/attendees/export`}
-            className="rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90"
+            className={HOST_BTN_PRIMARY}
           >
             Export CSV
           </a>

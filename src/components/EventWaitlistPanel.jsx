@@ -16,6 +16,7 @@
 //   dark          host-portal styling
 
 import { useEffect, useState } from 'react'
+import { HOST_SECTION } from '@/components/host/host-ui'
 
 const STATUS_LABEL = { waiting: 'Waiting', offered: 'Offered', claimed: 'Booked', expired: 'Expired', removed: 'Removed' }
 
@@ -106,16 +107,16 @@ export default function EventWaitlistPanel({ listUrl, offerUrl, removeUrlFor = n
   const c = dark
     ? {
         section: 'mt-8',
-        heading: 'text-lg font-semibold text-white',
-        sub: 'text-white/55 text-sm',
-        table: 'overflow-x-auto rounded-xl border border-white/10',
-        thead: 'text-left text-xs uppercase tracking-wide text-white/40 border-b border-white/10',
-        row: 'border-b border-white/5 last:border-0',
-        cell: 'px-3 py-2 text-white/75',
-        strong: 'text-white',
-        button: 'rounded-md border border-white/20 text-white text-xs px-2.5 py-1 hover:bg-white/5 disabled:opacity-50',
-        error: 'text-sm text-red-300',
-        notice: 'text-sm text-white/75',
+        heading: HOST_SECTION,
+        sub: 'text-host-hint text-sm',
+        table: 'overflow-x-auto rounded-xl border border-host-border bg-host-panel',
+        thead: 'text-left text-[12.5px] text-host-hint bg-host-well border-b border-host-border',
+        row: 'border-b border-host-border last:border-0',
+        cell: 'px-3 py-2 text-host-label',
+        strong: 'text-host-text',
+        button: 'rounded-md border border-host-edge bg-host-panel text-host-text text-xs px-2.5 py-1 hover:bg-host-hover disabled:opacity-50',
+        error: 'text-sm text-host-bad',
+        notice: 'text-sm text-host-label',
       }
     : {
         section: 'mt-6 pt-4 border-t border-un1t-border',

@@ -4,8 +4,9 @@
 // seconds. Plain data in (a url string).
 
 import { useEffect, useRef, useState } from 'react'
+import { HOST_BTN_SM } from '@/components/host/host-ui'
 
-const BTN = 'rounded-lg border border-white/15 text-white/80 text-xs font-semibold px-3 py-1.5 hover:bg-white/10 hover:text-white'
+const BTN = HOST_BTN_SM
 
 export default function CopyLinkButton({ url }) {
   const [copied, setCopied] = useState(false)

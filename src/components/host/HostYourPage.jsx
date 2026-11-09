@@ -8,8 +8,9 @@
 import { useEffect, useState } from 'react'
 import HostListPageEditor from '@/components/host/HostListPageEditor'
 import CopyLinkButton from '@/components/host/CopyLinkButton'
+import { HOST_BTN_SM } from '@/components/host/host-ui'
 
-const BTN = 'rounded-lg border border-white/15 text-white/80 text-xs font-semibold px-3 py-1.5 hover:bg-white/10 hover:text-white'
+const BTN = HOST_BTN_SM
 
 const WIDE = '(min-width: 1024px)'
 const PREVIEW_ID = 'host-page-preview'
@@ -61,9 +62,9 @@ export default function HostYourPage({ url, joinUrl, signupCount, copyValues }) 
       <div data-testid="your-page-link" className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-medium">Your public page</p>
-          <p className="mt-1 text-xs text-white/50 break-all">{url}</p>
+          <p className="mt-1 text-xs text-host-hint break-all">{url}</p>
           {signupCount != null && (
-            <p className="mt-1 text-xs text-emerald-300">{signupCount} list signup{signupCount === 1 ? '' : 's'}</p>
+            <p className="mt-1 text-xs text-host-ok">{signupCount} list signup{signupCount === 1 ? '' : 's'}</p>
           )}
         </div>
         <div className="shrink-0 flex items-center gap-2">
@@ -97,7 +98,7 @@ export default function HostYourPage({ url, joinUrl, signupCount, copyValues }) 
           <div id={PREVIEW_ID} className="lg:sticky lg:top-4 min-w-0">
             {showPreview && (
               <div className="mt-4 lg:mt-0">
-                <div className="overflow-hidden rounded-lg border border-white/15 bg-white">
+                <div className="overflow-hidden rounded-lg border border-host-edge bg-host-panel">
                   <iframe
                     key={saves}
                     title="Preview of your public page"
@@ -106,7 +107,7 @@ export default function HostYourPage({ url, joinUrl, signupCount, copyValues }) 
                     className="block h-[min(640px,calc(100vh-6rem))] w-full"
                   />
                 </div>
-                <p className="mt-2 text-xs text-white/40">This shows your saved page. Save to update it.</p>
+                <p className="mt-2 text-xs text-host-hint">This shows your saved page. Save to update it.</p>
               </div>
             )}
           </div>
@@ -114,11 +115,11 @@ export default function HostYourPage({ url, joinUrl, signupCount, copyValues }) 
       </div>
 
       {joinUrl && (
-        <div data-testid="signup-form-link" className="mt-8 border-t border-white/10 pt-4 flex flex-wrap items-center justify-between gap-3">
+        <div data-testid="signup-form-link" className="mt-8 border-t border-host-border pt-4 flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-sm font-medium">Signup form only</p>
-            <p className="mt-1 text-xs text-white/50 break-all">{joinUrl}</p>
-            <p className="mt-1 text-xs text-white/40">Just the form, for bios and stories.</p>
+            <p className="mt-1 text-xs text-host-hint break-all">{joinUrl}</p>
+            <p className="mt-1 text-xs text-host-hint">Just the form, for bios and stories.</p>
           </div>
           <div className="shrink-0 flex items-center gap-2">
             <CopyLinkButton url={joinUrl} />
