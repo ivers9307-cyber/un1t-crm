@@ -110,7 +110,7 @@ export default async function HostEventDetail(props) {
             eventId={race.id}
             raceDate={race.race_date}
             apiUrl={`/api/host/events/${race.id}/duplicate`}
-            editHrefFor={(id) => `/host/events/${id}/edit`}
+            editHref="/host/events/{id}/edit"
             dark
           />
           <HostEventActions eventId={race.id} status={race.status} hasRegistrations={regs.length > 0} brandName={brand.name} />
