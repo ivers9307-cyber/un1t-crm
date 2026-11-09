@@ -1,7 +1,7 @@
 // Host revenue aggregation (EVENTS-HOST.8) — pure sums over settled payments.
 
 import { describe, it, expect } from 'vitest'
-import { aggregateHostRevenue } from './host-revenue.js'
+import { aggregateHostRevenue, getHostRevenue } from './host-revenue.js'
 
 const events = [
   { id: 'ev1', name: 'Spring Hyrox', race_date: '2026-03-01' },
@@ -79,5 +79,36 @@ describe('aggregateHostRevenue', () => {
   it('labels an unknown event id gracefully', () => {
     const r = aggregateHostRevenue([paid({ race_event_id: 'ghost' })], events)
     expect(r.perEvent[0].name).toBe('Unknown event')
+  })
+})
+
+describe('getHostRevenue window', () => {
+  function makeDb() {
+    const paymentFilters = []
+    return {
+      paymentFilters,
+      from(table) {
+        const b = {}
+        if (table === 'race_events') {
+          b.select = () => b
+          b.eq = async () => ({ data: [{ id: 'ev1', name: 'A', race_date: '2026-03-01' }], error: null })
+          return b
+        }
+        for (const n of ['select', 'in', 'gte', 'order']) b[n] = (...a) => { paymentFilters.push([n, ...a]); return b }
+        b.range = async () => ({ data: [], error: null })
+        return b
+      },
+    }
+  }
+
+  it('getHostRevenue leaves the payments read unwindowed by default and adds completed_at >= sinceIso when asked', async () => {
+    const plain = makeDb()
+    await getHostRevenue(plain, 'h1')
+    expect(plain.paymentFilters.some((f) => f[0] === 'gte')).toBe(false)
+
+    const windowed = makeDb()
+    await getHostRevenue(windowed, 'h1', { sinceIso: '2026-10-10T00:00:00.000Z' })
+    expect(windowed.paymentFilters).toContainEqual(['gte', 'completed_at', '2026-10-10T00:00:00.000Z'])
+    expect(windowed.paymentFilters).toContainEqual(['in', 'status', ['completed', 'refunded']])
   })
 })
