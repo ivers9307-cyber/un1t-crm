@@ -25,8 +25,9 @@ export async function generateMetadata() {
 }
 
 // HOSTTHEME.1: the theme wrapper. The cookie is read on the server so the first
-// paint is already the host's choice; with no choice ('system') the CSS follows
-// the device. The same wrapper covers login, set-password and the portal.
+// paint is already the host's choice; with no choice it is light (HOSTTHEME.2),
+// whatever the device prefers. The same wrapper covers login, set-password and
+// the portal.
 export default async function HostLayout({ children }) {
   const theme = hostThemeFromCookie((await cookies()).get(HOST_THEME_COOKIE)?.value)
   return (

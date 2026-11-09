@@ -13,7 +13,8 @@ function deviceTheme() {
 }
 
 export default function HostThemeToggle({ initial }) {
-  // 'system' shows dark until mounted (the CSS default), then the device's choice.
+  // The layouts hand in 'light' or 'dark' (light when nothing is chosen, HOSTTHEME.2).
+  // 'system' is still understood: dark until mounted (the CSS default), then the device's choice.
   const [theme, setTheme] = useState(initial === 'light' || initial === 'dark' ? initial : 'dark')
   const root = useRef(null)
   const chosen = useRef(false)
