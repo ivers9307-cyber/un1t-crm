@@ -51,6 +51,23 @@ describe('POST /api/host/events', () => {
     expect(insert.payload).toMatchObject({ status: 'draft', non_member_fee_cents: 2500, host_id: 'h1', location_id: 'L-anchor' })
     expect(insert.payload.slug).toMatch(/1000$/) // the FIRST session's time names the slug
   })
+  // RATINGCOPY.1 — the schema accepted the rating request copy and the insert dropped it.
+  it('inserts the email copy the form sends, the rating request copy included', async () => {
+    const copy = {
+      confirmation_email_subject: 'You are in', confirmation_email_intro: 'See you there.',
+      reminder_email_subject: 'Tomorrow', reminder_email_intro: 'Bring water.',
+      rating_email_subject: 'How was {{event_name}}?', rating_email_intro: 'Two minutes, we promise.',
+    }
+    expect((await post({ ...BODY, ...copy })).status).toBe(200)
+    const insert = db.queries.find((q) => q.table === 'race_events' && q.action === 'insert')
+    expect(insert.payload).toMatchObject(copy)
+  })
+  it('a create with no copy stores null for each (defaults apply)', async () => {
+    await post(BODY)
+    const insert = db.queries.find((q) => q.table === 'race_events' && q.action === 'insert')
+    expect(insert.payload.rating_email_subject).toBeNull()
+    expect(insert.payload.rating_email_intro).toBeNull()
+  })
   it('refuses a series that belongs to another host (400 invalid_series), inserting nothing', async () => {
     db = fakeDb((q) => {
       if (q.table === 'event_hosts') return { data: { id: 'h1', name: 'Run Club', organization_id: 'o1', anchor_location_id: 'L-anchor' }, error: null }

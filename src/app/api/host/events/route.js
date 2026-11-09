@@ -99,6 +99,10 @@ export async function POST(request) {
       confirmation_email_intro: input.confirmation_email_intro ?? null,
       reminder_email_subject: input.reminder_email_subject ?? null,
       reminder_email_intro: input.reminder_email_intro ?? null,
+      // RATINGCOPY.1 — the form sends the rating request copy on create too;
+      // without these two it was accepted by the schema and then dropped.
+      rating_email_subject: input.rating_email_subject ?? null,
+      rating_email_intro: input.rating_email_intro ?? null,
       series_id: input.series_id ?? null,
       pricing_tiers: input.pricing_tiers ?? null,
       registration_questions: input.registration_questions ?? null,
