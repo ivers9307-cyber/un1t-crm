@@ -568,7 +568,7 @@ const config = [
       'src/components/EventWaitlistForm.jsx',
       'src/components/RaceConfirmedPage.jsx',
       'src/components/RaceCheckoutPage.jsx',
-      'src/app/host/**', 'src/components/host/**',
+      'src/app/host/**', 'src/components/host/**', 'src/lib/host-portal.js',
     ],
     plugins: { guardrails },
     rules: {

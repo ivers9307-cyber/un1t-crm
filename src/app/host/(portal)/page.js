@@ -19,29 +19,9 @@ import HostStatements from '@/components/host/HostStatements'
 import HostSignupPageCard from '@/components/host/HostSignupPageCard'
 import HostSeriesList from '@/components/host/HostSeriesList'
 import { listHostSeries } from '@/lib/event-series'
-import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
-import { todayIsoIn } from '@shared/events'
+import { HOST_STATUS_CHIP, formatHostMoney, loadHostToday } from '@/lib/host-portal'
 
 export const dynamic = 'force-dynamic'
-
-function formatMoney(cents, currency) {
-  const n = (Number(cents) || 0) / 100
-  try {
-    return new Intl.NumberFormat('en-IE', { style: 'currency', currency: currency || 'EUR' }).format(n)
-  } catch {
-    return `€${n.toFixed(2)}`
-  }
-}
-
-// Dark-surface status chips — readable light text on translucent dark fills
-// (this is a bg-black host page, so the light-theme -700 chip rule does NOT
-// apply). Unknown/undefined status falls back to a neutral chip.
-const STATUS_CHIP = {
-  draft: 'bg-white/10 text-white/70',
-  pending_review: 'bg-amber-500/15 text-amber-300',
-  published: 'bg-emerald-500/15 text-emerald-300',
-  rejected: 'bg-red-500/15 text-red-300',
-}
 
 export default async function HostDashboard() {
   const session = await getCurrentHost()
@@ -120,10 +100,8 @@ export default async function HostDashboard() {
   // Display only: a failed read shows no section.
   let series = []
   try {
-    const { data: anchor } = await db.from('event_hosts').select('anchor_location_id').eq('id', session.host.id).maybeSingle()
-    let zone = DEFAULT_TZ
-    try { zone = await getLocationZone(db, anchor?.anchor_location_id || null) } catch (e) { logWarn('host-dashboard', 'anchor zone unreadable; series counted on the default zone', { err: e }) }
-    series = await listHostSeries(db, { hostId: session.host.id, today: todayIsoIn(zone) })
+    const { today } = await loadHostToday(db, session.host)
+    series = await listHostSeries(db, { hostId: session.host.id, today })
   } catch (e) {
     logWarn('host-dashboard', 'series section degraded', { err: e })
     series = []
@@ -139,16 +117,16 @@ export default async function HostDashboard() {
     ? []
     : isStripe
       ? [
-          { label: 'Gross collected', value: formatMoney(revenue.totals.gross_cents, cur) },
+          { label: 'Gross collected', value: formatHostMoney(revenue.totals.gross_cents, cur) },
           // W1.S1c: the per-ticket fee is the platform's money rail (Stripe
           // Connect application fee), so it carries the platform name.
-          { label: `${PLATFORM_NAME} booking fees`, value: formatMoney(revenue.totals.fee_cents, cur) },
-          { label: 'Net to you', value: formatMoney(revenue.totals.net_to_host_cents, cur) },
-          { label: 'Refunded', value: formatMoney(revenue.totals.refunded_cents, cur) },
+          { label: `${PLATFORM_NAME} booking fees`, value: formatHostMoney(revenue.totals.fee_cents, cur) },
+          { label: 'Net to you', value: formatHostMoney(revenue.totals.net_to_host_cents, cur) },
+          { label: 'Refunded', value: formatHostMoney(revenue.totals.refunded_cents, cur) },
         ]
       : [
-          { label: 'Gross collected', value: formatMoney(revenue.totals.gross_cents, cur) },
-          { label: 'Refunded', value: formatMoney(revenue.totals.refunded_cents, cur) },
+          { label: 'Gross collected', value: formatHostMoney(revenue.totals.gross_cents, cur) },
+          { label: 'Refunded', value: formatHostMoney(revenue.totals.refunded_cents, cur) },
         ]
   const tilesGridCls = tiles.length === 4
     ? 'grid grid-cols-2 sm:grid-cols-4 gap-3'
@@ -193,7 +171,7 @@ export default async function HostDashboard() {
             </div>
             <p className="text-xs text-white/40 mt-2">
               {revenue.totals.paidCount} paid booking{revenue.totals.paidCount === 1 ? '' : 's'} ·{' '}
-              {formatMoney(revenue.totals.net_collected_cents, cur)} collected after refunds
+              {formatHostMoney(revenue.totals.net_collected_cents, cur)} collected after refunds
             </p>
           </>
         )}
@@ -227,7 +205,7 @@ export default async function HostDashboard() {
           <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
             {list.map((e) => {
               const rev = netByEvent.get(e.id)
-              const chip = STATUS_CHIP[e.status] || 'bg-white/10 text-white/70'
+              const chip = HOST_STATUS_CHIP[e.status] || 'bg-white/10 text-white/70'
               const canEdit = e.status !== 'published'
               const canSubmit = e.status === 'draft' || e.status === 'rejected'
               return (
@@ -243,7 +221,7 @@ export default async function HostDashboard() {
                     </p>
                     <p className="text-xs text-white/45">
                       {e.race_date || '—'} · {e.kind}{e.active ? '' : ' · inactive'}
-                      {rev ? ` · ${rev.paidCount} sold · ${formatMoney(isStripe ? rev.net_to_host_cents : rev.gross_cents, cur)} ${isStripe ? 'net' : 'gross'}` : ''}
+                      {rev ? ` · ${rev.paidCount} sold · ${formatHostMoney(isStripe ? rev.net_to_host_cents : rev.gross_cents, cur)} ${isStripe ? 'net' : 'gross'}` : ''}
                     </p>
                   </a>
                   <div className="shrink-0 flex items-center gap-4 text-xs">
