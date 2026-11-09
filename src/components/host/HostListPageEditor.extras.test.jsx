@@ -61,3 +61,65 @@ describe('HostListPageEditor — page extras', () => {
     await waitFor(() => expect(screen.queryByAltText('Warm up')).toBeNull())
   })
 })
+
+describe('HostListPageEditor — sections layout', () => {
+  const headings = () => screen.getAllByRole('heading').map((h) => h.textContent)
+  const FILLED = { ...INITIAL, list_headline: 'Join us', list_button_label: 'Sign me up' }
+
+  it('renders the seven headings in visitor order', () => {
+    render(<HostListPageEditor layout="sections" initial={INITIAL} previewUrl="https://x/h/acme" onSaved={() => {}} />)
+    expect(headings()).toEqual(['Top of page', 'About you', 'Upcoming events', 'Photos', 'What people say', 'Past events', 'Join the list'])
+  })
+  it('groups the fields under the right headings', () => {
+    render(<HostListPageEditor layout="sections" initial={INITIAL} previewUrl="https://x/h/acme" onSaved={() => {}} />)
+    const within = (name) => screen.getByRole('heading', { name }).closest('section')
+    const has = (name, el) => expect(within(name).contains(el)).toBe(true)
+    has('Top of page', screen.getByLabelText(/^Headline/))
+    has('Top of page', screen.getByLabelText(/Intro text/))
+    has('Top of page', screen.getByLabelText(/Hero image URL/))
+    has('Top of page', screen.getByLabelText(/Accent colour/))
+    has('About you', screen.getByLabelText(/About/))
+    has('Upcoming events', screen.getByLabelText(/Events headline/))
+    has('Upcoming events', screen.getByLabelText(/Events intro/))
+    has('Photos', screen.getByLabelText(/Add photo/))
+    has('What people say', screen.getByRole('button', { name: /Add testimonial/ }))
+    has('What people say', screen.getByLabelText(/Show ratings/))
+    has('Past events', screen.getByLabelText(/Show past events/))
+    has('Join the list', screen.getByLabelText(/Button label/))
+    has('Join the list', screen.getByLabelText(/Success message/))
+  })
+  it('sends the same PATCH body as the drawer layout for the same edits', async () => {
+    const bodies = {}
+    for (const layout of ['drawer', 'sections']) {
+      const fetchMock = vi.fn(async (url, init) => jsonRes({ success: true, data: JSON.parse(init.body) }))
+      vi.stubGlobal('fetch', fetchMock)
+      const onSaved = vi.fn()
+      render(<HostListPageEditor layout={layout} initial={FILLED} previewUrl="https://x/h/acme" onClose={() => {}} onSaved={onSaved} />)
+      fireEvent.change(screen.getByLabelText(/^Headline/), { target: { value: 'New headline' } })
+      fireEvent.change(screen.getByLabelText(/About/), { target: { value: 'Changed.' } })
+      fireEvent.click(screen.getByLabelText(/Show past events/))
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(onSaved).toHaveBeenCalled())
+      bodies[layout] = JSON.parse(fetchMock.mock.calls.find(([u]) => u === '/api/host/list-page')[1].body)
+      expect(fetchMock.mock.calls.find(([u]) => u === '/api/host/list-page')[1].method).toBe('PATCH')
+      cleanup()
+    }
+    expect(bodies.sections).toEqual(bodies.drawer)
+    expect(bodies.sections.list_headline).toBe('New headline')
+    expect(bodies.sections.show_past_events).toBe(false)
+  })
+  it('has no Cancel button, keeps Save and the Preview link', () => {
+    render(<HostListPageEditor layout="sections" initial={INITIAL} previewUrl="https://x/h/acme" onSaved={() => {}} />)
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+    const preview = screen.getByRole('link', { name: /Preview/ })
+    expect(preview.getAttribute('href')).toBe('https://x/h/acme')
+    expect(preview.getAttribute('target')).toBe('_blank')
+  })
+  it('the default drawer layout still has Cancel and no section headings', () => {
+    render(<HostListPageEditor initial={INITIAL} previewUrl="https://x/h/acme" onClose={() => {}} onSaved={() => {}} />)
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Top of page' })).toBeNull()
+  })
+})
+

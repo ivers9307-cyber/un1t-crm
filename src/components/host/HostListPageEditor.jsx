@@ -27,7 +27,7 @@ const INPUT = 'w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 tex
 // HOSTPAGE.2 — the page extras (mig 823) ride the same editor and PATCH.
 const EXTRA_KEYS = ['about_text', 'photos', 'testimonials', 'show_past_events', 'show_ratings']
 
-export default function HostListPageEditor({ initial, previewUrl, onClose, onSaved }) {
+export default function HostListPageEditor({ initial, previewUrl, onClose, onSaved, layout = 'drawer' }) {
   const [values, setValues] = useState(() => {
     const v = {}
     for (const f of FIELDS) v[f.key] = initial?.[f.key] || ''
@@ -100,98 +100,154 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
     }
   }
 
-  return (
-    <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
-      {FIELDS.map((f) => (
-        <div key={f.key}>
-          <label htmlFor={`lp-${f.key}`} className="block text-xs text-white/50 mb-1">
-            {f.label} <span className="text-white/30">({(values[f.key] || '').length}/{f.max})</span>
+  const field = (key) => {
+    const f = FIELDS.find((x) => x.key === key)
+    return (
+      <div key={f.key}>
+        <label htmlFor={`lp-${f.key}`} className="block text-xs text-white/50 mb-1">
+          {f.label} <span className="text-white/30">({(values[f.key] || '').length}/{f.max})</span>
+        </label>
+        {f.multiline ? (
+          <textarea id={`lp-${f.key}`} rows={3} maxLength={f.max} value={values[f.key]} placeholder={f.placeholder}
+            onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))} className={INPUT} />
+        ) : (
+          <input id={`lp-${f.key}`} maxLength={f.max} value={values[f.key]} placeholder={f.placeholder}
+            onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))} className={INPUT} />
+        )}
+      </div>
+    )
+  }
+
+  const aboutField = (
+    <div>
+      <label htmlFor="lp-about" className="block text-xs text-white/50 mb-1">
+        About <span className="text-white/30">({values.about_text.length}/{HOST_ABOUT_MAX})</span>
+      </label>
+      <textarea id="lp-about" rows={4} maxLength={HOST_ABOUT_MAX} value={values.about_text} placeholder="Who you are and what your events are like. Blank lines make paragraphs."
+        onChange={(e) => setExtra('about_text', e.target.value)} className={INPUT} />
+    </div>
+  )
+
+  const photosBlock = (
+    <div>
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-white/50">Photos <span className="text-white/30">({values.photos.length}/{HOST_PHOTOS_MAX})</span></p>
+        {values.photos.length < HOST_PHOTOS_MAX && (
+          <label className="cursor-pointer rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:bg-white/5">
+            {uploading ? 'Uploading…' : 'Add photo'}
+            <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" aria-label="Add photo" disabled={uploading}
+              onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; uploadPhoto(f) }} />
           </label>
-          {f.multiline ? (
-            <textarea id={`lp-${f.key}`} rows={3} maxLength={f.max} value={values[f.key]} placeholder={f.placeholder}
-              onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))} className={INPUT} />
-          ) : (
-            <input id={`lp-${f.key}`} maxLength={f.max} value={values[f.key]} placeholder={f.placeholder}
-              onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))} className={INPUT} />
-          )}
+        )}
+      </div>
+      {values.photos.length > 0 && (
+        <ul className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {values.photos.map((p, i) => (
+            <li key={p.url} className="rounded-lg border border-white/10 p-2">
+              <img src={p.url} alt={p.caption || `Photo ${i + 1}`} className="h-24 w-full rounded object-cover" />
+              <input value={p.caption} maxLength={120} placeholder="Caption (optional)" aria-label={`Caption for photo ${i + 1}`}
+                onChange={(e) => updateCaption(i, e.target.value)} className={`${INPUT} mt-2 text-xs`} />
+              <button type="button" onClick={() => removePhoto(p.url)} className="mt-1 text-xs text-white/40 hover:text-red-300" aria-label={`Remove photo ${i + 1}`}>Remove photo</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+
+  const testimonialsBlock = (
+    <div>
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-white/50">Testimonials <span className="text-white/30">({values.testimonials.length}/{HOST_TESTIMONIALS_MAX})</span></p>
+        {values.testimonials.length < HOST_TESTIMONIALS_MAX && (
+          <button type="button" onClick={() => setExtra('testimonials', [...values.testimonials, { quote: '', author: '' }])}
+            className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:bg-white/5">Add testimonial</button>
+        )}
+      </div>
+      {values.testimonials.map((t, i) => (
+        <div key={i} className="mt-2 rounded-lg border border-white/10 p-2 space-y-2">
+          <label className="block text-xs text-white/50">Quote {i + 1}
+            <textarea rows={2} maxLength={400} value={t.quote} onChange={(e) => updateTestimonial(i, { quote: e.target.value })} className={`${INPUT} mt-1`} />
+          </label>
+          <div className="flex items-center gap-2">
+            <label className="block flex-1 text-xs text-white/50">Author {i + 1}
+              <input maxLength={80} value={t.author} onChange={(e) => updateTestimonial(i, { author: e.target.value })} className={`${INPUT} mt-1`} />
+            </label>
+            <button type="button" onClick={() => setExtra('testimonials', values.testimonials.filter((_, j) => j !== i))} className="text-xs text-white/40 hover:text-red-300">Remove</button>
+          </div>
         </div>
       ))}
+    </div>
+  )
+
+  const showPastEvents = (
+    <label className="flex items-center gap-2"><input type="checkbox" checked={values.show_past_events} onChange={(e) => setExtra('show_past_events', e.target.checked)} /> Show past events</label>
+  )
+  const showRatings = (
+    <label className="flex items-center gap-2"><input type="checkbox" checked={values.show_ratings} onChange={(e) => setExtra('show_ratings', e.target.checked)} /> Show ratings</label>
+  )
+
+  const previewLink = (
+    <a href={previewUrl} target="_blank" rel="noopener noreferrer" className="ml-auto text-xs text-white/40 hover:text-white">
+      Preview →
+    </a>
+  )
+  const saveButton = (
+    <button type="button" onClick={save} disabled={saving}
+      className="rounded-lg bg-white text-black text-xs font-semibold px-4 py-2 hover:bg-white/90 disabled:opacity-50">
+      {saving ? 'Saving…' : 'Save'}
+    </button>
+  )
+
+  // /host/page: the same fields grouped in the order a visitor meets them.
+  if (layout === 'sections') {
+    // A plain function, not a component: a component declared in render would
+    // remount (and drop focus from) every input on each keystroke.
+    const section = (title, children) => (
+      <section key={title} className="space-y-3">
+        <h2 className="text-xs uppercase tracking-[0.15em] text-white/45">{title}</h2>
+        {children}
+      </section>
+    )
+    return (
+      <div className="mt-4 space-y-6">
+        {section('Top of page', ['list_headline', 'list_blurb', 'hero_image_url', 'accent_hex'].map(field))}
+        {section('About you', aboutField)}
+        {section('Upcoming events', ['events_headline', 'events_blurb'].map(field))}
+        {section('Photos', photosBlock)}
+        {section('What people say', <>{testimonialsBlock}<div className="text-xs text-white/70">{showRatings}</div></>)}
+        {section('Past events', <div className="text-xs text-white/70">{showPastEvents}</div>)}
+        {section('Join the list', ['list_button_label', 'list_success_message'].map(field))}
+        {error && <p className="text-sm text-red-300">{error}</p>}
+        <div className="flex items-center gap-2">
+          {saveButton}
+          {previewLink}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+      {FIELDS.map((f) => field(f.key))}
 
       {/* HOSTPAGE.2 — page extras */}
       <div className="border-t border-white/10 pt-3 space-y-3">
         <h3 className="text-xs uppercase tracking-[0.15em] text-white/45">Page extras</h3>
-        <div>
-          <label htmlFor="lp-about" className="block text-xs text-white/50 mb-1">
-            About <span className="text-white/30">({values.about_text.length}/{HOST_ABOUT_MAX})</span>
-          </label>
-          <textarea id="lp-about" rows={4} maxLength={HOST_ABOUT_MAX} value={values.about_text} placeholder="Who you are and what your events are like. Blank lines make paragraphs."
-            onChange={(e) => setExtra('about_text', e.target.value)} className={INPUT} />
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-white/50">Photos <span className="text-white/30">({values.photos.length}/{HOST_PHOTOS_MAX})</span></p>
-            {values.photos.length < HOST_PHOTOS_MAX && (
-              <label className="cursor-pointer rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:bg-white/5">
-                {uploading ? 'Uploading…' : 'Add photo'}
-                <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" aria-label="Add photo" disabled={uploading}
-                  onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; uploadPhoto(f) }} />
-              </label>
-            )}
-          </div>
-          {values.photos.length > 0 && (
-            <ul className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {values.photos.map((p, i) => (
-                <li key={p.url} className="rounded-lg border border-white/10 p-2">
-                  <img src={p.url} alt={p.caption || `Photo ${i + 1}`} className="h-24 w-full rounded object-cover" />
-                  <input value={p.caption} maxLength={120} placeholder="Caption (optional)" aria-label={`Caption for photo ${i + 1}`}
-                    onChange={(e) => updateCaption(i, e.target.value)} className={`${INPUT} mt-2 text-xs`} />
-                  <button type="button" onClick={() => removePhoto(p.url)} className="mt-1 text-xs text-white/40 hover:text-red-300" aria-label={`Remove photo ${i + 1}`}>Remove photo</button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-white/50">Testimonials <span className="text-white/30">({values.testimonials.length}/{HOST_TESTIMONIALS_MAX})</span></p>
-            {values.testimonials.length < HOST_TESTIMONIALS_MAX && (
-              <button type="button" onClick={() => setExtra('testimonials', [...values.testimonials, { quote: '', author: '' }])}
-                className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:bg-white/5">Add testimonial</button>
-            )}
-          </div>
-          {values.testimonials.map((t, i) => (
-            <div key={i} className="mt-2 rounded-lg border border-white/10 p-2 space-y-2">
-              <label className="block text-xs text-white/50">Quote {i + 1}
-                <textarea rows={2} maxLength={400} value={t.quote} onChange={(e) => updateTestimonial(i, { quote: e.target.value })} className={`${INPUT} mt-1`} />
-              </label>
-              <div className="flex items-center gap-2">
-                <label className="block flex-1 text-xs text-white/50">Author {i + 1}
-                  <input maxLength={80} value={t.author} onChange={(e) => updateTestimonial(i, { author: e.target.value })} className={`${INPUT} mt-1`} />
-                </label>
-                <button type="button" onClick={() => setExtra('testimonials', values.testimonials.filter((_, j) => j !== i))} className="text-xs text-white/40 hover:text-red-300">Remove</button>
-              </div>
-            </div>
-          ))}
-        </div>
-
+        {aboutField}
+        {photosBlock}
+        {testimonialsBlock}
         <div className="flex flex-wrap gap-4 text-xs text-white/70">
-          <label className="flex items-center gap-2"><input type="checkbox" checked={values.show_past_events} onChange={(e) => setExtra('show_past_events', e.target.checked)} /> Show past events</label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={values.show_ratings} onChange={(e) => setExtra('show_ratings', e.target.checked)} /> Show ratings</label>
+          {showPastEvents}
+          {showRatings}
         </div>
       </div>
 
       {error && <p className="text-sm text-red-300">{error}</p>}
       <div className="flex items-center gap-2">
-        <button type="button" onClick={save} disabled={saving}
-          className="rounded-lg bg-white text-black text-xs font-semibold px-4 py-2 hover:bg-white/90 disabled:opacity-50">
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+        {saveButton}
         <button type="button" onClick={onClose} className="text-xs text-white/50 hover:text-white px-2 py-2">Cancel</button>
-        <a href={previewUrl} target="_blank" rel="noopener noreferrer" className="ml-auto text-xs text-white/40 hover:text-white">
-          Preview →
-        </a>
+        {previewLink}
       </div>
     </div>
   )
