@@ -7,23 +7,9 @@
 
 import { useState } from 'react'
 import HostListPageEditor from '@/components/host/HostListPageEditor'
+import CopyLinkButton from '@/components/host/CopyLinkButton'
 
 const BTN = 'rounded-lg border border-white/15 text-white/80 text-xs font-semibold px-3 py-1.5 hover:bg-white/10 hover:text-white'
-
-function CopyLinkButton({ url }) {
-  const [copied, setCopied] = useState(false)
-  async function copyLink() {
-    try {
-      await navigator.clipboard.writeText(url)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard unavailable (permissions/http) — the URL is visible to
-      // select manually, so no error surface needed.
-    }
-  }
-  return <button type="button" onClick={copyLink} className={BTN}>{copied ? 'Copied' : 'Copy link'}</button>
-}
 
 export default function HostYourPage({ url, joinUrl, signupCount, copyValues }) {
   const [copy, setCopy] = useState(copyValues)

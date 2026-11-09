@@ -95,9 +95,9 @@ export function groupHostEvents(events, today) {
   return { needsAction, upcoming, past }
 }
 
-/** Where an event's row link goes: drafts and rejected events open the edit form. */
+/** Where an event's row link goes: drafts and rejected events open the Set up tab. */
 export function eventLandingHref(event) {
-  return NEEDS_ACTION.has(event.status) ? `/host/events/${event.id}/edit` : `/host/events/${event.id}`
+  return NEEDS_ACTION.has(event.status) ? `/host/events/${event.id}/setup` : `/host/events/${event.id}`
 }
 
 const PAGE = 1000
@@ -137,4 +137,18 @@ export async function loadPublicRatingAverages(db, eventIds) {
   }
   for (const [id, s] of sums) out.set(id, { average: Number((s.sum / s.count).toFixed(1)), count: s.count })
   return out
+}
+
+/**
+ * The three counts the Attendees tab and the Overview Bookings tile share:
+ * bookings (every registration returned), confirmed, and people (a member-less
+ * entry still counts as one).
+ */
+export function attendeeCounts(regs) {
+  const list = Array.isArray(regs) ? regs : []
+  const people = list.reduce((n, r) => {
+    const members = Array.isArray(r?.teams?.team_members) ? r.teams.team_members : []
+    return n + Math.max(1, members.length)
+  }, 0)
+  return { bookings: list.length, confirmed: list.filter((r) => r?.status === 'confirmed').length, people }
 }

@@ -10,6 +10,14 @@
 
 import { useState } from 'react'
 import { PLATFORM_NAME } from '@/lib/brand-name'
+import { confirmLeave, setUnsaved } from '@/lib/unsaved-guard'
+
+// Which actions exist for an event: Take off sale while published; Delete only
+// when not published and nothing is registered. The ⋯ menu uses it to hide
+// its button when there is nothing behind it.
+export function hasHostEventActions({ status, hasRegistrations }) {
+  return status === 'published' || !hasRegistrations
+}
 
 // brandName (W1.S1c): the host's organisation, resolved by the server page.
 export default function HostEventActions({ eventId, status, hasRegistrations, brandName = PLATFORM_NAME }) {
@@ -18,6 +26,7 @@ export default function HostEventActions({ eventId, status, hasRegistrations, br
 
   async function takeOffSale() {
     if (busy) return
+    if (!confirmLeave()) return
     if (!window.confirm(`Take this event off sale? Existing attendees keep their tickets; this only stops new sales. Putting it back on sale needs ${brandName} approval again.`)) return
     setBusy(true)
     setError(null)
@@ -29,6 +38,7 @@ export default function HostEventActions({ eventId, status, hasRegistrations, br
         setBusy(false)
         return
       }
+      setUnsaved(false)
       window.location.reload()
     } catch {
       setError('Could not take the event off sale')
@@ -38,6 +48,7 @@ export default function HostEventActions({ eventId, status, hasRegistrations, br
 
   async function deleteEvent() {
     if (busy) return
+    if (!confirmLeave()) return
     if (!window.confirm('Delete this event? This cannot be undone.')) return
     setBusy(true)
     setError(null)
@@ -49,6 +60,7 @@ export default function HostEventActions({ eventId, status, hasRegistrations, br
         setBusy(false)
         return
       }
+      setUnsaved(false)
       window.location.href = '/host'
     } catch {
       setError('Could not delete the event')
@@ -56,9 +68,9 @@ export default function HostEventActions({ eventId, status, hasRegistrations, br
     }
   }
 
+  if (!hasHostEventActions({ status, hasRegistrations })) return null
   const showOffSale = status === 'published'
   const showDelete = status !== 'published' && !hasRegistrations
-  if (!showOffSale && !showDelete) return null
 
   return (
     <div className="shrink-0 flex items-center gap-2 flex-wrap">

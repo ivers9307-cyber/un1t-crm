@@ -6,7 +6,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
-import { HostEventSchema, computeEditTransition } from '@/lib/host-events'
+import { HostEventSchema, computeEditTransition, editChangesFromInput } from '@/lib/host-events'
 import { eventSlug, uniqueEventSlug, shouldRederiveSlug } from '@/lib/event-slug'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import { syncEventSessions, judgeSessions, sessionsFromWaves } from '@/lib/event-sessions'
@@ -65,12 +65,7 @@ export async function PUT(request, props) {
   // compares like-for-like: existing sessions by id (HH:MM on both sides;
   // race_waves.start_time is a Postgres TIME, "HH:MM:SS" from PostgREST), a
   // new session has no id and never re-reviews.
-  const changes = {
-    race_date: input.race_date,
-    non_member_fee_cents: input.ticket_price_cents,
-    pricing_tiers: input.pricing_tiers ?? null,
-    waves: input.sessions.filter((s) => s.id).map((s) => ({ id: s.id, start_time: s.start_time })),
-  }
+  const changes = editChangesFromInput(input)
   const currentForDiff = {
     status: current.status,
     race_date: current.race_date,

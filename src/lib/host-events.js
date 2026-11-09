@@ -60,17 +60,21 @@ export function hostEventDefaults() {
 // EVENT-SLUG.1 — slugs come from `@/lib/event-slug` (place-date-time);
 // the name-based deriveSlug that lived here is gone.
 
-// Decide what an edit does to a host event's status.
-//
-// Edits to a draft or rejected event never change status and never
-// need review — the host is still working on it. Only a *published*
-// event can be knocked back into review, and only when a
-// customer-material field changes: price, date, or a wave start time.
-// Cosmetic edits (description, copy, images) leave it published.
-export function computeEditTransition(current, changes) {
-  if (current.status !== 'published') {
-    return { status: current.status, reReview: false }
-  }
+export const RE_REVIEW_REASONS = ['date', 'price', 'tiers', 'session_time']
+
+export const RE_REVIEW_REASON_LABEL = {
+  date: 'the date',
+  price: 'the standard price',
+  tiers: 'a pricing tier',
+  session_time: "an existing session's start time",
+}
+
+// HOSTPORTAL.2 — the ONE rule for "this edit takes a published event off
+// sale", shared by the PUT route and the edit form's warning. Returns the
+// reasons, in RE_REVIEW_REASONS order; [] for anything that is not a
+// published event or not a customer-material edit.
+export function reReviewReasons(current, changes) {
+  if (current.status !== 'published') return []
 
   const priceChanged =
     'non_member_fee_cents' in changes &&
@@ -98,7 +102,36 @@ export function computeEditTransition(current, changes) {
   const tiersChanged = 'pricing_tiers' in changes
     && JSON.stringify(canonicalTiers(changes.pricing_tiers)) !== JSON.stringify(canonicalTiers(current.pricing_tiers))
 
-  const reReview = priceChanged || dateChanged || waveTimeChanged || tiersChanged
+  const hit = { date: dateChanged, price: priceChanged, tiers: tiersChanged, session_time: waveTimeChanged }
+  return RE_REVIEW_REASONS.filter((r) => hit[r])
+}
+
+// The `changes` object computeEditTransition / reReviewReasons compare,
+// built from a HostEventSchema-shaped body (the validated input on the
+// server, the body about to be sent in the form): DB-column names, existing
+// sessions only (by id, HH:MM), a new session has no id and never re-reviews.
+export function editChangesFromInput(input) {
+  const sessions = Array.isArray(input.sessions) ? input.sessions : []
+  return {
+    race_date: input.race_date,
+    non_member_fee_cents: input.ticket_price_cents,
+    pricing_tiers: input.pricing_tiers ?? null,
+    waves: sessions.filter((s) => s.id).map((s) => ({ id: s.id, start_time: s.start_time })),
+  }
+}
+
+// Decide what an edit does to a host event's status.
+//
+// Edits to a draft or rejected event never change status and never
+// need review — the host is still working on it. Only a *published*
+// event can be knocked back into review, and only when a
+// customer-material field changes: price, date, or a wave start time.
+// Cosmetic edits (description, copy, images) leave it published.
+export function computeEditTransition(current, changes) {
+  if (current.status !== 'published') {
+    return { status: current.status, reReview: false }
+  }
+  const reReview = reReviewReasons(current, changes).length > 0
   return { status: reReview ? 'pending_review' : 'published', reReview }
 }
 

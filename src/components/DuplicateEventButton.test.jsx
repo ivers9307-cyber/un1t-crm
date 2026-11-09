@@ -10,8 +10,9 @@ import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/re
 const push = vi.fn()
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh: vi.fn() }) }))
 const { default: DuplicateEventButton } = await import('./DuplicateEventButton.jsx')
+const { setUnsaved } = await import('@/lib/unsaved-guard')
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); push.mockClear() })
+afterEach(() => { setUnsaved(false); cleanup(); vi.unstubAllGlobals(); push.mockClear() })
 
 describe('DuplicateEventButton', () => {
   it('defaults the date to a week after the source, posts it, and opens the copy', async () => {
@@ -35,5 +36,29 @@ describe('DuplicateEventButton', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create copy/ }))
     expect(await screen.findByText(/could not be saved/)).toBeTruthy()
     expect(push).not.toHaveBeenCalled()
+  })
+  it('declining to leave unsaved changes makes no copy and sends no request', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E-new' } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    setUnsaved(true)
+    render(<DuplicateEventButton eventId="E1" raceDate="2026-11-14" apiUrl="/api/host/events/E1/duplicate" editHref="/host/events/{id}/setup" />)
+    fireEvent.click(screen.getByRole('button', { name: /^Duplicate$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Create copy/ }))
+    await waitFor(() => expect(confirm).toHaveBeenCalled())
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(push).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
+  it('answering yes makes the copy and opens it', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E-new' } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    setUnsaved(true)
+    render(<DuplicateEventButton eventId="E1" raceDate="2026-11-14" apiUrl="/api/host/events/E1/duplicate" editHref="/host/events/{id}/setup" />)
+    fireEvent.click(screen.getByRole('button', { name: /^Duplicate$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Create copy/ }))
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/host/events/E-new/setup'))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
