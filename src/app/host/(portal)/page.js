@@ -153,7 +153,7 @@ export default async function HostOverviewPage() {
           {[e.race_date || '—', times.length > 0 ? times.join(', ') : null, e.venue_name || null].filter(Boolean).join(' · ')}
         </p>
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
-          <Link href={`/host/events/${e.id}`} className="rounded-lg border border-white/15 px-3 py-1.5 hover:bg-white/10">Attendees</Link>
+          <Link href={`/host/events/${e.id}/attendees`} className="rounded-lg border border-white/15 px-3 py-1.5 hover:bg-white/10">Attendees</Link>
           <a href={`/event/${e.slug}`} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-white/15 px-3 py-1.5 text-white/70 hover:bg-white/10">Event page</a>
         </div>
         <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">

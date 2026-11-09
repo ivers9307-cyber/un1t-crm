@@ -162,7 +162,7 @@ describe('host overview page', () => {
     expect(t).toContain('€80.00')
     expect(t).toContain('3 sold')
     const h = hrefs(el)
-    expect(h).toContain('/host/events/u1')
+    expect(h).toContain('/host/events/u1/attendees')
     expect(h).toContain('/event/s-u1')
     // the draft is a Coming up row, never Next up
     const next = text(el).split('Next up')[1].split('Coming up')[0]
