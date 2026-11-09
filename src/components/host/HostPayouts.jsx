@@ -11,8 +11,10 @@
 // `bg-<c>-500/15 text-<c>-300`; host paths are exempt from the light-theme
 // -700 chip rule.
 
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 
+// Kept private: src/lib/host-portal.js imports server-only code (location-time),
+// which must not enter this client bundle.
 function formatMoney(cents, currency) {
   const n = (Number(cents) || 0) / 100
   try {
@@ -49,7 +51,11 @@ const PAYOUT_STATUS_LABEL = {
   canceled: 'Canceled',
 }
 
-export default function HostPayouts() {
+const PayoutsContext = createContext(null)
+
+// Fetches /api/host/stripe/payouts once and shares the result (data|null) with
+// HostBalance and HostPayoutList, so the Earnings page needs a single request.
+export function HostPayoutsProvider({ children }) {
   const [data, setData] = useState(null)
 
   useEffect(() => {
@@ -68,17 +74,18 @@ export default function HostPayouts() {
     return () => { cancelled = true }
   }, [])
 
-  // No data (non-Stripe host, Stripe error, fetch failed, still loading) →
-  // render nothing at all.
+  return <PayoutsContext.Provider value={data}>{children}</PayoutsContext.Provider>
+}
+
+// No data (non-Stripe host, Stripe error, fetch failed, still loading) →
+// each block renders nothing at all, heading included.
+export function HostBalance() {
+  const data = useContext(PayoutsContext)
   if (!data) return null
-
   const cur = data.balance?.currency || 'EUR'
-  const payouts = Array.isArray(data.payouts) ? data.payouts : []
-
   return (
     <section className="mt-8">
-      <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Payouts</h2>
-
+      <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Balance</h2>
       <div className="grid grid-cols-2 gap-3 max-w-md">
         <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
           <p className="text-[11px] uppercase tracking-wide text-white/40">Available</p>
@@ -93,11 +100,21 @@ export default function HostPayouts() {
           </p>
         </div>
       </div>
+    </section>
+  )
+}
 
+export function HostPayoutList() {
+  const data = useContext(PayoutsContext)
+  if (!data) return null
+  const payouts = Array.isArray(data.payouts) ? data.payouts : []
+  return (
+    <section className="mt-8">
+      <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Payouts</h2>
       {payouts.length === 0 ? (
-        <p className="text-white/50 text-sm mt-3">No payouts yet.</p>
+        <p className="text-white/50 text-sm">No payouts yet.</p>
       ) : (
-        <ul className="mt-3 divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
+        <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
           {payouts.map((p) => {
             const chip = PAYOUT_STATUS_CHIP[p.status] || 'bg-white/10 text-white/70'
             return (

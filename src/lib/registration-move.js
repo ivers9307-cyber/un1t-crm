@@ -175,7 +175,7 @@ const WAVE_PAGE = 1000
  * ENTRYPOLICY.1: `registered_at` rides along so the caller can keep only the
  * rows that still hold a place (holdingPlaces, per target event's policy).
  */
-async function loadWaveRegistrations(db, waveIds) {
+export async function loadWaveRegistrations(db, waveIds) {
   const ids = [...new Set((waveIds || []).filter(Boolean))]
   if (ids.length === 0) return { rows: [], error: null }
   const rows = []
@@ -197,7 +197,7 @@ async function loadWaveRegistrations(db, waveIds) {
   return { rows, error: null }
 }
 
-function groupByWave(rows) {
+export function groupByWave(rows) {
   const byWave = new Map()
   for (const r of rows || []) {
     if (!byWave.has(r.wave_id)) byWave.set(r.wave_id, [])

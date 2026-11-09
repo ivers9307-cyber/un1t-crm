@@ -1,267 +1,219 @@
-// Host dashboard (HOST-PORTAL.1). Server-rendered + scoped: getCurrentHost() →
-// the host's own events (.eq('host_id', host.id)) + a revenue rollup over the
-// same host_id (getHostRevenue). Read-only.
+// Host Overview (HOSTPORTAL.1): a short page — what needs the host's attention,
+// the next event on sale with its live numbers, and the next few events. The
+// full lists live on Events, Earnings and Your page. Server-rendered + scoped
+// to host_id. Everything below the events read is display only: a failed read
+// says "unavailable" for that block, never a 0 that looks like an answer.
 
 import Link from 'next/link'
-import { hostPageExtras } from '@/lib/host-page-extras'
 import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { getHostRevenue } from '@/lib/host-revenue'
 import { createServerClient } from '@/lib/supabase'
-import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
-import { ensureHostSlug } from '@/lib/hosts'
-import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
-import { logWarn } from '@/lib/log'
+import { loadEventStats } from '@/lib/event-stats'
+import { loadSessionFill } from '@/lib/host-session-fill'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
+import { formatInZone, zonedWallClockToInstant } from '@/lib/location-time'
 import { PLATFORM_NAME } from '@/lib/brand-name'
-import HostSubmitButton from '@/components/host/HostSubmitButton'
-import HostPayouts from '@/components/host/HostPayouts'
-import HostStatements from '@/components/host/HostStatements'
-import HostSignupPageCard from '@/components/host/HostSignupPageCard'
-import HostSeriesList from '@/components/host/HostSeriesList'
-import { listHostSeries } from '@/lib/event-series'
-import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
-import { todayIsoIn } from '@shared/events'
+import { logWarn } from '@/lib/log'
+import {
+  HOST_STATUS_CHIP,
+  loadHostToday,
+  groupHostEvents,
+  eventLandingHref,
+  formatHostMoney,
+  moneyLabel,
+  eventMoneyCents,
+  hostEventDetail,
+} from '@/lib/host-portal'
+import { HOST_EVENT_STATUS_LABEL, eventIsPublic } from '@/lib/host-events'
+import HostEventRow from '@/components/host/HostEventRow'
 
 export const dynamic = 'force-dynamic'
 
-function formatMoney(cents, currency) {
-  const n = (Number(cents) || 0) / 100
-  try {
-    return new Intl.NumberFormat('en-IE', { style: 'currency', currency: currency || 'EUR' }).format(n)
-  } catch {
-    return `€${n.toFixed(2)}`
-  }
+const H2 = 'text-xs uppercase tracking-[0.15em] text-white/45 mb-3'
+const COMING_UP_MAX = 3
+
+function tile({ label, value, sub }) {
+  return (
+    <div key={label} className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+      <p className="text-[11px] uppercase tracking-wide text-white/40">{label}</p>
+      <p className="text-lg font-semibold mt-1 tabular-nums">{value}</p>
+      {sub ? <p className="text-xs text-white/40 mt-0.5">{sub}</p> : null}
+    </div>
+  )
 }
 
-// Dark-surface status chips — readable light text on translucent dark fills
-// (this is a bg-black host page, so the light-theme -700 chip rule does NOT
-// apply). Unknown/undefined status falls back to a neutral chip.
-const STATUS_CHIP = {
-  draft: 'bg-white/10 text-white/70',
-  pending_review: 'bg-amber-500/15 text-amber-300',
-  published: 'bg-emerald-500/15 text-emerald-300',
-  rejected: 'bg-red-500/15 text-red-300',
-}
-
-export default async function HostDashboard() {
+export default async function HostOverviewPage() {
   const session = await getCurrentHost()
   if (!session) redirect('/host/login')
+  const host = session.host
 
   const db = createServerClient()
-  const { data: events } = await db
+  const { data: events, error } = await db
     .from('race_events')
-    .select('id, name, slug, race_date, kind, active, status')
-    .eq('host_id', session.host.id)
+    .select('id, name, slug, race_date, kind, active, status, rejected_reason, venue_name, capacity_mode, entry_policy, race_waves ( id, start_time, capacity, label, display_order )')
+    .eq('host_id', host.id)
     .order('race_date', { ascending: false })
     .limit(200)
+  if (error) logWarn('host-overview', 'events read failed', { err: error })
   const list = events || []
+
+  const { zone, today } = await loadHostToday(db, host)
+  const todayLabel = formatInZone(
+    zonedWallClockToInstant(today, '12:00', zone),
+    zone,
+    { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' },
+  )
+
+  const needsStripe = host.payment_provider === 'stripe_connect' && !host.charges_enabled
+
+  const header = (
+    <>
+      <h1 className="text-2xl font-bold">Welcome, {host.name}.</h1>
+      <p className="text-white/60 mt-1 text-sm">{todayLabel}</p>
+    </>
+  )
+  const stripeWarning = needsStripe && (
+    <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+      Your Stripe account isn&apos;t fully connected yet — ticket payments can&apos;t be taken until it is.
+    </div>
+  )
+
+  if (error) {
+    return (
+      <div>
+        {header}
+        {stripeWarning && <div className="mt-6">{stripeWarning}</div>}
+        <p className="mt-6 text-white/50 text-sm">Your events are unavailable right now.</p>
+      </div>
+    )
+  }
+
+  const { needsAction, upcoming } = groupHostEvents(list, today)
+  const rejected = list.filter((e) => e.status === 'rejected')
+
+  let brandName = PLATFORM_NAME
+  if (rejected.some((e) => e.rejected_reason)) {
+    try {
+      brandName = (await resolveHostOrgBrand(db, host)).name || PLATFORM_NAME
+    } catch (e) {
+      logWarn('host-overview', 'brand unreadable', { err: e })
+    }
+  }
 
   let revenue = null
   try {
-    revenue = await getHostRevenue(db, session.host.id)
-  } catch {
-    revenue = null
+    revenue = await getHostRevenue(db, host.id)
+  } catch (e) {
+    logWarn('host-overview', 'revenue unavailable', { err: e })
   }
+  const revenueByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
   const cur = revenue?.currency || 'EUR'
+  const label = moneyLabel(host)
 
-  // "Your signup page" (HOST-GROWTH.A) — lazily ensure the /h/[slug] slug
-  // (same derivation the email-domain flow uses) + count mailing-list
-  // signups. Any failure degrades to signupUrl=null (card hides).
-  let signupUrl = null
-  // HOST-JOIN-PAGE.1 — the standalone form at /h/[slug]/join, for socials.
-  let joinUrl = null
-  let signupCount = null
-  let signupCopy = null
-  try {
-    const { data: hostRow } = await db
-      .from('event_hosts')
-      .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb, anchor_location_id, about_text, photos, testimonials, show_past_events, show_ratings')
-      .eq('id', session.host.id)
-      .maybeSingle()
-    if (hostRow) {
-      const slug = await ensureHostSlug(db, hostRow)
-      // W1.L3b — the host's signup page on the tenant host of their ANCHOR
-      // location (NULL anchor → the resolver floors to the CRM host). Origin-
-      // only, as before, so a misconfigured env var can't poison the link.
-      const baseUrl = new URL(await resolveCustomerBaseUrl(db, hostRow.anchor_location_id)).origin
-      signupUrl = `${baseUrl}/h/${slug}`
-      joinUrl = `${signupUrl}/join`
-      const { count } = await db
-        .from('host_contacts')
-        .select('*', { count: 'exact', head: true })
-        .eq('host_id', session.host.id)
-        .eq('source', 'mailing_list')
-      signupCount = count ?? 0
-      signupCopy = {
-        list_headline: hostRow.list_headline,
-        list_blurb: hostRow.list_blurb,
-        list_button_label: hostRow.list_button_label,
-        list_success_message: hostRow.list_success_message,
-        events_headline: hostRow.events_headline,
-        events_blurb: hostRow.events_blurb,
-        hero_image_url: hostRow.hero_image_url,
-        accent_hex: hostRow.accent_hex,
-        // HOSTPAGE.2 — the page extras, re-validated so a bad row never breaks the editor.
-        about_text: hostRow.about_text,
-        photos: hostPageExtras(hostRow).photos,
-        testimonials: hostPageExtras(hostRow).testimonials,
-        show_past_events: hostRow.show_past_events !== false,
-        show_ratings: hostRow.show_ratings !== false,
-      }
-    }
-  } catch (e) {
-    logWarn('host-dashboard', 'signup card degraded', { err: e })
-    signupUrl = null
-    joinUrl = null
-  }
-  const netByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
-
-  // HOSTSERIES.1 — the host's series, counted on the anchor studio's clock.
-  // Display only: a failed read shows no section.
-  let series = []
-  try {
-    const { data: anchor } = await db.from('event_hosts').select('anchor_location_id').eq('id', session.host.id).maybeSingle()
-    let zone = DEFAULT_TZ
-    try { zone = await getLocationZone(db, anchor?.anchor_location_id || null) } catch (e) { logWarn('host-dashboard', 'anchor zone unreadable; series counted on the default zone', { err: e }) }
-    series = await listHostSeries(db, { hostId: session.host.id, today: todayIsoIn(zone) })
-  } catch (e) {
-    logWarn('host-dashboard', 'series section degraded', { err: e })
-    series = []
+  // Next up: the soonest upcoming event that is actually on sale (published
+  // AND active; one the host took off sale is not "next").
+  const next = upcoming.find((e) => eventIsPublic(e)) || null
+  let fill = null
+  let stats = null
+  if (next) {
+    const [f, s] = await Promise.all([
+      loadSessionFill(db, next).catch((e) => { logWarn('host-overview', 'session fill failed', { err: e }); return { ok: false } }),
+      loadEventStats(db, next.id).catch((e) => { logWarn('host-overview', 'event stats failed', { err: e }); return { ok: false } }),
+    ])
+    fill = f
+    stats = s
   }
 
-  // Only Stripe-Connect hosts have a platform booking fee + a settled "net to host"
-  // (mig 381 columns). Revolut/internal hosts collect directly, so those columns
-  // are NULL (→0) and would misrepresent as "€0 net" — show them gross only.
-  const isStripe = session.host.payment_provider === 'stripe_connect'
-  const needsStripe = isStripe && !session.host.charges_enabled
+  function nextUpCard(e) {
+    const chip = HOST_STATUS_CHIP[e.status] || 'bg-white/10 text-white/70'
+    const times = (fill?.ok ? fill.sessions : [...(e.race_waves || [])].sort((a, b) => String(a.start_time).localeCompare(String(b.start_time))).map((w) => ({ time: String(w.start_time || '').slice(0, 5) })))
+      .map((s) => s.time).filter(Boolean)
+    const rev = revenueByEvent.get(e.id)
+    const fullSessions = fill?.ok ? fill.sessions.filter((s) => s.full) : []
 
-  const tiles = !revenue
-    ? []
-    : isStripe
-      ? [
-          { label: 'Gross collected', value: formatMoney(revenue.totals.gross_cents, cur) },
-          // W1.S1c: the per-ticket fee is the platform's money rail (Stripe
-          // Connect application fee), so it carries the platform name.
-          { label: `${PLATFORM_NAME} booking fees`, value: formatMoney(revenue.totals.fee_cents, cur) },
-          { label: 'Net to you', value: formatMoney(revenue.totals.net_to_host_cents, cur) },
-          { label: 'Refunded', value: formatMoney(revenue.totals.refunded_cents, cur) },
-        ]
-      : [
-          { label: 'Gross collected', value: formatMoney(revenue.totals.gross_cents, cur) },
-          { label: 'Refunded', value: formatMoney(revenue.totals.refunded_cents, cur) },
-        ]
-  const tilesGridCls = tiles.length === 4
-    ? 'grid grid-cols-2 sm:grid-cols-4 gap-3'
-    : 'grid grid-cols-2 gap-3 max-w-md'
+    const booked = !fill?.ok
+      ? 'unavailable'
+      : fill.capacity === null ? `${fill.booked}` : `${fill.booked} / ${fill.capacity}`
+    const bookedSub = fill?.ok && fullSessions.length > 0
+      ? `${fullSessions.map((s) => (s.label ? `${s.label} (${s.time})` : s.time)).join(', ')} ${fullSessions.length === 1 ? 'is' : 'are'} full`
+      : null
+    const statsOk = stats?.ok
+    const st = statsOk ? stats.stats : null
+
+    return (
+      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+        <p className="flex items-center gap-2 font-medium">
+          <span className="truncate">{e.name}</span>
+          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
+            {HOST_EVENT_STATUS_LABEL[e.status] || e.status}
+          </span>
+        </p>
+        <p className="text-xs text-white/45 mt-1 break-words">
+          {[e.race_date || '—', times.length > 0 ? times.join(', ') : null, e.venue_name || null].filter(Boolean).join(' · ')}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          <Link href={`/host/events/${e.id}`} className="rounded-lg border border-white/15 px-3 py-1.5 hover:bg-white/10">Attendees</Link>
+          <a href={`/event/${e.slug}`} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-white/15 px-3 py-1.5 text-white/70 hover:bg-white/10">Event page</a>
+        </div>
+        <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {tile({ label: 'Booked', value: booked, sub: bookedSub })}
+          {tile({ label: 'Waitlist', value: statsOk ? st.waitlist.waiting : 'unavailable' })}
+          {tile({ label: 'Page views', value: statsOk ? st.views : 'unavailable', sub: statsOk && st.conversion_pct !== null && st.conversion_pct !== undefined ? `${st.conversion_pct}% booked` : null })}
+          {tile({ label: `${label === 'net' ? 'Net' : 'Gross'} so far`, value: rev ? formatHostMoney(eventMoneyCents(host, rev), cur) : revenue === null ? 'unavailable' : '—', sub: rev ? `${rev.paidCount} sold` : null })}
+        </div>
+      </div>
+    )
+  }
+
+  const comingUp = [...needsAction, ...upcoming]
+    .sort((a, b) => (a.race_date || '').localeCompare(b.race_date || ''))
+    .slice(0, COMING_UP_MAX)
+
+  const hasAttention = needsStripe || rejected.length > 0
 
   return (
     <div>
-      <h1 className="text-2xl font-bold">Welcome, {session.host.name}.</h1>
-      <p className="text-white/60 mt-1 text-sm">Your events and earnings at a glance.</p>
+      {header}
 
-      {needsStripe && (
-        <div className="mt-6 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-          Your Stripe account isn&apos;t fully connected yet — ticket payments can&apos;t be taken until it is.
-        </div>
-      )}
-
-      {signupUrl && (
+      {hasAttention && (
         <section className="mt-8">
-          <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Grow your list</h2>
-          <HostSignupPageCard url={signupUrl} joinUrl={joinUrl} signupCount={signupCount} copyValues={signupCopy} />
-          <p className="mt-2 text-xs text-white/40">
-            Share either link or QR anywhere — the signup form is just the form, for socials; your public page lists your events with the form underneath. Signups land in your Contacts and can be emailed from Emails.
-          </p>
+          <h2 className={H2}>Needs your attention</h2>
+          <div className="space-y-2">
+            {stripeWarning}
+            {rejected.map((e) => (
+              <div key={e.id} className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200 break-words">
+                <strong>{e.name}</strong> needs changes.
+                {e.rejected_reason ? ` ${brandName} asked: "${e.rejected_reason}"` : ''}{' '}
+                <Link href={eventLandingHref(e)} className="underline underline-offset-2 whitespace-nowrap">Open →</Link>
+              </div>
+            ))}
+          </div>
         </section>
       )}
 
       <section className="mt-8">
-        <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Revenue</h2>
-        {revenue === null ? (
-          <p className="text-white/40 text-sm">Revenue is unavailable right now.</p>
-        ) : revenue.totals.paidCount === 0 ? (
-          <p className="text-white/50 text-sm">No ticket sales yet.</p>
-        ) : (
-          <>
-            <div className={tilesGridCls}>
-              {tiles.map((t) => (
-                <div key={t.label} className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-                  <p className="text-[11px] uppercase tracking-wide text-white/40">{t.label}</p>
-                  <p className="text-lg font-semibold mt-1 tabular-nums">{t.value}</p>
-                </div>
-              ))}
-            </div>
-            <p className="text-xs text-white/40 mt-2">
-              {revenue.totals.paidCount} paid booking{revenue.totals.paidCount === 1 ? '' : 's'} ·{' '}
-              {formatMoney(revenue.totals.net_collected_cents, cur)} collected after refunds
-            </p>
-          </>
-        )}
-        {isStripe && session.host.stripe_connected_account_id && (
-          <p className="mt-3">
-            <a href="https://dashboard.stripe.com" target="_blank" rel="noopener noreferrer"
-               className="text-xs text-white/40 hover:text-white">Stripe dashboard →</a>
-          </p>
-        )}
-      </section>
-
-      {/* Actual Stripe settlement (balance + payouts) — self-fetches from
-          /api/host/stripe/payouts and renders nothing for non-Stripe hosts or
-          when Stripe is unavailable (HOST-PORTAL.12). */}
-      <HostPayouts />
-
-      {/* Monthly statement CSV downloads — self-fetches from
-          /api/host/statements and renders nothing until a month has settled
-          ticket activity (HOST-PORTAL.13). */}
-      <HostStatements />
-
-      <HostSeriesList series={series} />
-
-      <section className="mt-8">
-        <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Your events</h2>
-        {list.length === 0 ? (
+        <h2 className={H2}>Next up</h2>
+        {next ? nextUpCard(next) : (
           <p className="text-white/50 text-sm">
-            No events yet — <Link href="/host/events/new" className="text-white underline underline-offset-2 hover:text-white/80">create your first one</Link>.
+            <Link href="/host/events/new" className="text-white underline underline-offset-2 hover:text-white/80">Nothing on sale yet — create an event.</Link>
           </p>
-        ) : (
-          <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
-            {list.map((e) => {
-              const rev = netByEvent.get(e.id)
-              const chip = STATUS_CHIP[e.status] || 'bg-white/10 text-white/70'
-              const canEdit = e.status !== 'published'
-              const canSubmit = e.status === 'draft' || e.status === 'rejected'
-              return (
-                <li key={e.id} className="px-4 py-3 flex items-center justify-between gap-4 hover:bg-white/[0.02]">
-                  <a href={`/host/events/${e.id}`} className="min-w-0 flex-1">
-                    <p className="flex items-center gap-2 font-medium">
-                      <span className="truncate">{e.name}</span>
-                      {e.status && (
-                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
-                          {HOST_EVENT_STATUS_LABEL[e.status] || e.status}
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-xs text-white/45">
-                      {e.race_date || '—'} · {e.kind}{e.active ? '' : ' · inactive'}
-                      {rev ? ` · ${rev.paidCount} sold · ${formatMoney(isStripe ? rev.net_to_host_cents : rev.gross_cents, cur)} ${isStripe ? 'net' : 'gross'}` : ''}
-                    </p>
-                  </a>
-                  <div className="shrink-0 flex items-center gap-4 text-xs">
-                    {canSubmit && <HostSubmitButton eventId={e.id} />}
-                    {canEdit && (
-                      <a href={`/host/events/${e.id}/edit`} className="text-white/50 hover:text-white">Edit</a>
-                    )}
-                    <a href={`/host/events/${e.id}`} className="text-white/50 hover:text-white">Attendees →</a>
-                    <a href={`/event/${e.slug}`} target="_blank" rel="noopener noreferrer" className="text-white/40 hover:text-white">
-                      View
-                    </a>
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
         )}
       </section>
+
+      {comingUp.length > 0 && (
+        <section className="mt-8">
+          <h2 className={H2}>Coming up</h2>
+          <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
+            {comingUp.map((e) => (
+              <HostEventRow key={e.id} event={e} detail={hostEventDetail(host, e, revenueByEvent.get(e.id), cur)} />
+            ))}
+          </ul>
+          <p className="mt-3 text-xs">
+            <Link href="/host/events" className="text-white/60 hover:text-white">All events →</Link>
+          </p>
+        </section>
+      )}
     </div>
   )
 }

@@ -10,6 +10,7 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostEventForm from '@/components/host/HostEventForm'
+import HostSubmitButton from '@/components/host/HostSubmitButton'
 import { hostEventFormInitial } from '@/lib/host-event-form-initial'
 
 export const dynamic = 'force-dynamic'
@@ -47,6 +48,13 @@ export default async function HostEditEventPage(props) {
       {event.status === 'rejected' && event.rejected_reason && (
         <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           <span className="font-semibold">{brand.name} asked for changes:</span> {event.rejected_reason}
+        </div>
+      )}
+
+      {(event.status === 'draft' || event.status === 'rejected') && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+          <p className="text-sm text-white/70">When you have finished your changes, save them, then submit the event for review.</p>
+          <HostSubmitButton eventId={event.id} />
         </div>
       )}
 

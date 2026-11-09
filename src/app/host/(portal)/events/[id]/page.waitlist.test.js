@@ -4,13 +4,14 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('next/navigation', () => ({ notFound: vi.fn(() => { throw new Error('NOT_FOUND') }), redirect: vi.fn() }))
 vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn(async () => ({ host: { id: 'h1' } })) }))
+const race = { status: 'published' }
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from: () => {
       const b = {}
       b.select = () => b
       b.eq = () => b
-      b.maybeSingle = async () => ({ data: { id: 'e1', host_id: 'h1', status: 'published', name: 'Run Club 5k', slug: 'rc-5k', race_date: '2026-10-18' }, error: null })
+      b.maybeSingle = async () => ({ data: { id: 'e1', host_id: 'h1', status: race.status, name: 'Run Club 5k', slug: 'rc-5k', race_date: '2026-10-18' }, error: null })
       return b
     },
   }),
@@ -41,5 +42,30 @@ describe('host event page — waitlist', () => {
     expect(panel).toBeTruthy()
     expect(panel.props).toMatchObject({ dark: true, listUrl: '/api/host/events/e1/waitlist', offerUrl: '/api/host/events/e1/waitlist/offer' })
     expect(panel.props.removeUrlFor).toBeUndefined()
+  })
+})
+
+function hrefs(el) {
+  const out = []
+  const go = (n) => {
+    if (!n || typeof n !== 'object') return
+    if (Array.isArray(n)) { n.forEach(go); return }
+    if (n.props?.href) out.push(n.props.href)
+    go(n.props?.children)
+  }
+  go(el)
+  return out
+}
+
+describe('host event page — Edit link', () => {
+  it.each(['draft', 'pending_review', 'rejected'])('links to the edit page for a %s event', async (status) => {
+    race.status = status
+    const el = await Page({ params: Promise.resolve({ id: 'e1' }) })
+    expect(hrefs(el)).toContain('/host/events/e1/edit')
+  })
+  it('has no Edit link for a published event', async () => {
+    race.status = 'published'
+    const el = await Page({ params: Promise.resolve({ id: 'e1' }) })
+    expect(hrefs(el)).not.toContain('/host/events/e1/edit')
   })
 })
