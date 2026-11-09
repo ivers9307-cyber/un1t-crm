@@ -48,6 +48,9 @@ describe('host-ui class kit', () => {
   it('the active tab is a filled pill with an edge, not a tint', () => {
     expect(ui.HOST_TAB_ACTIVE).toContain('bg-host-panel')
     expect(ui.HOST_TAB_ACTIVE).toContain('ring-1 ring-host-edge')
+    // The nav and the event tabs scroll sideways (overflow-x-auto), which clips an
+    // outset ring on three sides: the ring must be drawn inside the pill.
+    expect(ui.HOST_TAB_ACTIVE).toContain('ring-inset')
   })
   it('the small buttons carry the same states as the full-size ones', () => {
     for (const n of ['HOST_BTN_SM', 'HOST_BTN_PRIMARY_SM']) {

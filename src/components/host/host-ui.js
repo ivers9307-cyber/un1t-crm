@@ -49,7 +49,7 @@ export const HOST_CHOICE_ON =
 export const HOST_TAB = 'rounded-lg px-3 py-1.5 text-sm text-host-hint hover:text-host-text'
 // A filled pill with an edge: the ring is >= 3:1 on the page in both themes
 // (tests/host-theme-contrast.test.js), so the selected tab never relies on a tint.
-export const HOST_TAB_ACTIVE = 'rounded-lg px-3 py-1.5 text-sm bg-host-panel text-host-text font-semibold ring-1 ring-host-edge'
+export const HOST_TAB_ACTIVE = 'rounded-lg px-3 py-1.5 text-sm bg-host-panel text-host-text font-semibold ring-1 ring-host-edge ring-inset'
 export const HOST_TH = 'bg-host-well px-3 py-2 text-left text-[12.5px] font-medium text-host-hint'
 // The hairline sits on the row (not the cell) so it spans every column and the
 // last row draws none against the container's own border.
