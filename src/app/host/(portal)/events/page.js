@@ -54,6 +54,15 @@ export default async function HostEventsPage() {
   const cur = revenue?.currency || 'EUR'
   const label = moneyLabel(host)
 
+  if (error) {
+    return (
+      <div>
+        <h1 className="text-2xl font-bold">Events</h1>
+        <p className="mt-6 text-white/50 text-sm">Your events are unavailable right now.</p>
+      </div>
+    )
+  }
+
   const { today } = await loadHostToday(db, host)
   let series = []
   try {

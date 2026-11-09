@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('next/navigation', () => ({ notFound: vi.fn(() => { throw new Error('NOT_FOUND') }), redirect: vi.fn() }))
 
-const state = { host: { id: 'h1', payment_provider: 'stripe_connect' }, events: [], revenue: null, revenueThrows: false, ratings: new Map(), series: [] }
+const state = { host: { id: 'h1', payment_provider: 'stripe_connect' }, events: [], eventsError: null, revenue: null, revenueThrows: false, ratings: new Map(), series: [] }
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn(async () => ({ host: state.host })) }))
@@ -14,7 +14,7 @@ vi.mock('@/lib/supabase', () => ({
       b.select = () => b
       b.eq = () => b
       b.order = () => b
-      b.limit = async () => ({ data: state.events, error: null })
+      b.limit = async () => ({ data: state.eventsError ? null : state.events, error: state.eventsError })
       return b
     },
   }),
@@ -67,6 +67,7 @@ const revRow = (id, paidCount, gross, net) => ({ event_id: id, paidCount, gross_
 beforeEach(() => {
   state.host = { id: 'h1', payment_provider: 'stripe_connect' }
   state.events = []
+  state.eventsError = null
   state.revenue = { currency: 'EUR', totals: {}, perEvent: [] }
   state.revenueThrows = false
   state.ratings = new Map()
@@ -176,5 +177,19 @@ describe('host events page', () => {
     const row = all(el, HostPastEvents)[0].props.rows[0]
     expect(row).toEqual({ id: 'p1', name: 'Event p1', status: 'published', statusLabel: 'Published', href: '/host/events/p1', detail: expect.any(String) })
     expect(Object.values(row).every((v) => typeof v !== 'function')).toBe(true)
+  })
+
+  it('says unavailable, not "no events", when the events read fails', async () => {
+    state.eventsError = { message: 'db down' }
+    state.events = [ev('u1', 'published', '2026-12-05')]
+    const el = await Page()
+    expect(text(el)).toContain('Your events are unavailable right now.')
+    expect(text(el)).not.toContain('No events yet')
+    expect(text(el)).not.toContain('create your first one')
+    expect(text(el)).not.toMatch(/\d+ events?/)
+    expect(headings(el)).toEqual([])
+    expect(all(el, HostEventRow)).toHaveLength(0)
+    expect(all(el, HostSeriesList)).toHaveLength(0)
+    expect(all(el, HostPastEvents)).toHaveLength(0)
   })
 })
