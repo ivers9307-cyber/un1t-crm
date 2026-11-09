@@ -3,9 +3,10 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, screen, waitFor } from '@testing-library/react'
 import { renderToStaticMarkup } from 'react-dom/server'
 let searchString = ''
-vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams(searchString), useRouter: () => ({ push: vi.fn() }) }))
+const replace = vi.fn()
+vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams(searchString), useRouter: () => ({ push: vi.fn(), replace }) }))
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); replace.mockClear() })
 
 import HostEmailPreviewModal from './HostEmailPreviewModal.jsx'
 import { PLATFORM_NAME } from '@/lib/brand-name'
@@ -238,7 +239,7 @@ describe('the host composer on a New York host', () => {
 // with ?open=<draft id>&notice=event.
 describe('HostEmails ?open and ?notice=event', () => {
   const DRAFT = 'd0000000-0000-4000-8000-0000000000d1'
-  const EVENT_NOTICE = 'Draft created from your event. Edit it, send yourself a test, then send or schedule.'
+  const EVENT_NOTICE = 'Draft created from your event. The short codes in angle brackets keep the layout and the booking link working: change the words between them, then press Preview as sent to see the email as it will arrive.'
 
   function stubApi({ list = [{ id: DRAFT, subject: 'Summer Run', status: 'draft', audience_kind: 'all', email_type: 'marketing' }] } = {}) {
     const calls = []
@@ -305,5 +306,51 @@ describe('HostEmails ?open and ?notice=event', () => {
     stubApi()
     render(<HostEmails />)
     await waitFor(() => expect(screen.getByText(EVENT_NOTICE)).toBeTruthy())
+  })
+
+  it('cleans the URL once with router.replace after the draft is open, and the notice stays on screen', async () => {
+    searchString = `open=${DRAFT}&notice=event`
+    const calls = stubApi()
+    const { rerender } = render(<HostEmails />)
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+    expect(replace).toHaveBeenCalledWith('/host/emails')
+    expect(opens(calls)).toHaveLength(1)
+    // the URL is now clean: the params are gone, and the notice is not cleared
+    searchString = ''
+    rerender(<HostEmails />)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(screen.getByText(EVENT_NOTICE)).toBeTruthy()
+    expect(document.getElementById('host-email-subject').value).toBe('Summer Run')
+    expect(replace).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not clean the URL before the list has loaded and the draft has opened', async () => {
+    searchString = `open=${DRAFT}&notice=event`
+    stubApi()
+    render(<HostEmails />)
+    expect(replace).not.toHaveBeenCalled()
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+    expect(document.getElementById('host-email-subject').value).toBe('Summer Run')
+  })
+
+  it('cleans the URL for ?notice=event with no ?open and for ?notice=reminder, keeping the notice', async () => {
+    searchString = 'notice=event'
+    stubApi()
+    const { unmount } = render(<HostEmails />)
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+    expect(screen.getByText(EVENT_NOTICE)).toBeTruthy()
+    unmount()
+    replace.mockClear()
+    searchString = 'notice=reminder'
+    render(<HostEmails />)
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/host/emails'))
+    expect(screen.getByText('Reminder draft created. Edit it, test it, then send or schedule.')).toBeTruthy()
+  })
+
+  it('cleans the URL when ?open names something that is not a draft of this host', async () => {
+    searchString = 'open=not-mine'
+    stubApi()
+    render(<HostEmails />)
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
   })
 })

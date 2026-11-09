@@ -34,8 +34,16 @@ function useIsWide() {
     const mql = window.matchMedia(WIDE)
     const sync = () => setWide(mql.matches)
     sync()
-    mql.addEventListener('change', sync)
-    return () => mql.removeEventListener('change', sync)
+    // Older Safari only has the deprecated addListener/removeListener.
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', sync)
+      return () => mql.removeEventListener('change', sync)
+    }
+    if (typeof mql.addListener === 'function') {
+      mql.addListener(sync)
+      return () => mql.removeListener(sync)
+    }
+    return undefined
   }, [])
   return wide
 }
@@ -86,20 +94,20 @@ export default function HostYourPage({ url, joinUrl, signupCount, copyValues }) 
           )}
         </div>
         {previewPath && (
-          <div id={PREVIEW_ID} className="mt-4 lg:mt-0 lg:sticky lg:top-4 min-w-0">
+          <div id={PREVIEW_ID} className="lg:sticky lg:top-4 min-w-0">
             {showPreview && (
-              <>
+              <div className="mt-4 lg:mt-0">
                 <div className="overflow-hidden rounded-lg border border-white/15 bg-white">
                   <iframe
                     key={saves}
                     title="Preview of your public page"
                     src={previewPath}
                     loading="lazy"
-                    className="block h-[640px] w-full"
+                    className="block h-[min(640px,calc(100vh-6rem))] w-full"
                   />
                 </div>
                 <p className="mt-2 text-xs text-white/40">This shows your saved page. Save to update it.</p>
-              </>
+              </div>
             )}
           </div>
         )}

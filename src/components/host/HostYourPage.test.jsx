@@ -2,7 +2,7 @@
 // HOSTPORTAL.1 — /host/page client component: both links with their own QR
 // hrefs, copy-link feedback, and the editor wired in the sections layout.
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, cleanup, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 
 vi.mock('@/lib/landing-media-upload', async (orig) => ({ ...(await orig()), compressImageForUpload: vi.fn(async (f) => f) }))
 const { default: HostYourPage } = await import('./HostYourPage.jsx')
@@ -134,6 +134,41 @@ describe('HostYourPage', () => {
       expect(document.querySelector('iframe')).toBeNull()
       act(() => media.change(true))
       expect(document.querySelectorAll('iframe').length).toBe(1)
+    })
+    it('uses addListener/removeListener when the MediaQueryList has no addEventListener', () => {
+      const listeners = new Set()
+      const mql = { matches: true, addListener: (fn) => listeners.add(fn), removeListener: (fn) => listeners.delete(fn) }
+      vi.stubGlobal('matchMedia', vi.fn(() => mql))
+      const { unmount } = render(<HostYourPage {...withUrl(PATH_URL)} />)
+      expect(document.querySelectorAll('iframe').length).toBe(1)
+      expect(listeners.size).toBe(1)
+      act(() => { mql.matches = false; listeners.forEach((fn) => fn({ matches: false })) })
+      expect(document.querySelector('iframe')).toBeNull()
+      unmount()
+      expect(listeners.size).toBe(0)
+    })
+    it('removes the addEventListener listener on unmount', () => {
+      const media = mockMedia(true)
+      const remove = vi.spyOn(media.mql, 'removeEventListener')
+      const { unmount } = render(<HostYourPage {...withUrl(PATH_URL)} />)
+      unmount()
+      expect(remove).toHaveBeenCalledWith('change', expect.any(Function))
+    })
+    it('sizes the frame to fit a short screen and keeps the gap off the always-present container', () => {
+      mockMedia(true)
+      render(<HostYourPage {...withUrl(PATH_URL)} />)
+      const frame = screen.getByTitle('Preview of your public page')
+      expect(frame.className).toContain('h-[min(640px,calc(100vh-6rem))]')
+      const container = document.getElementById('host-page-preview')
+      expect(container.className).not.toMatch(/\bmt-4\b/)
+      expect(container.firstElementChild.className).toMatch(/\bmt-4\b/)
+    })
+    it('leaves the container empty (no content, no margin) while the preview is closed', () => {
+      mockMedia(false)
+      render(<HostYourPage {...withUrl(PATH_URL)} />)
+      const container = document.getElementById('host-page-preview')
+      expect(container.childElementCount).toBe(0)
+      expect(container.className).not.toMatch(/\bmt-/)
     })
     it('does not crash and starts closed when matchMedia is unavailable', () => {
       vi.stubGlobal('matchMedia', undefined)

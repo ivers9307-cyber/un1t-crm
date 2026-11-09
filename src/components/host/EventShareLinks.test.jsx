@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // HOSTPORTAL.4 — per-source copy buttons, the QR link and the not-on-sale line.
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import EventShareLinks from './EventShareLinks.jsx'
 import { SHARE_SOURCES, taggedEventUrl } from '@/lib/event-share-links'
 
@@ -23,11 +23,28 @@ describe('EventShareLinks', () => {
   })
 
   it('shows Copied for two seconds, then the label again', async () => {
+    vi.useFakeTimers()
     vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(async () => {}) } })
     render(<EventShareLinks url={URL_} eventId="e1" onSale />)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'WhatsApp' })) })
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(1900) })
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(screen.getByRole('button', { name: 'WhatsApp' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull()
+  })
+
+  it('shows the tagged link in a read-only field when the clipboard refuses', async () => {
+    vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(async () => { throw new Error('denied') }) } })
+    render(<EventShareLinks url={URL_} eventId="e1" onSale />)
+    expect(screen.queryByText('Copy this link:')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'WhatsApp' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy())
-    await waitFor(() => expect(screen.getByRole('button', { name: 'WhatsApp' })).toBeTruthy(), { timeout: 3000 })
+    await waitFor(() => expect(screen.getByText('Copy this link:')).toBeTruthy())
+    const field = screen.getByLabelText('Copy this link:')
+    expect(field.value).toBe(`${URL_}?utm_source=whatsapp`)
+    expect(field.readOnly).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull()
   })
 
   it('shows the not-on-sale line only when onSale is false', () => {
@@ -38,11 +55,13 @@ describe('EventShareLinks', () => {
     expect(screen.getByText('This event is not on sale yet, so these links will not open for the public.')).toBeTruthy()
   })
 
-  it("links the QR button to the event's QR route, as a download", () => {
+  it("links the QR button to the event's QR route, opening in a new tab rather than saving a file", () => {
     render(<EventShareLinks url={URL_} eventId="e1" onSale />)
     const a = screen.getByRole('link', { name: 'QR code' })
     expect(a.getAttribute('href')).toBe('/api/host/events/e1/qr')
-    expect(a.hasAttribute('download')).toBe(true)
+    expect(a.hasAttribute('download')).toBe(false)
+    expect(a.getAttribute('target')).toBe('_blank')
+    expect(a.getAttribute('rel')).toBe('noopener noreferrer')
   })
 
   it('shows the help line', () => {

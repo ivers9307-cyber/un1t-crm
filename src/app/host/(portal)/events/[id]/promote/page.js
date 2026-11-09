@@ -7,8 +7,9 @@
 import { notFound, redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
-import { loadHostEvent } from '@/lib/host-portal'
-import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
+import { loadHostEvent, loadHostToday } from '@/lib/host-portal'
+import { hostEventPublicUrl } from '@/lib/host-event-url'
+import { announceBlockedReason } from '@/lib/host-announce-draft'
 import { logWarn } from '@/lib/log'
 import { eventIsPublic } from '@/lib/host-events'
 import CopyLinkButton from '@/components/host/CopyLinkButton'
@@ -34,22 +35,19 @@ export default async function HostEventPromote(props) {
   if (!event) notFound()
 
   // The public event page lives on the tenant host of the host's ANCHOR
-  // location, as on Your page. Origin-only, so a misconfigured env var can't
-  // poison the link. A failure hides only the Share block's link.
+  // location, as on Your page (hostEventPublicUrl, origin-only). A failure
+  // hides only the Share block's link.
   let eventUrl = null
   try {
-    if (!event.slug) throw new Error('event has no slug')
-    const { data: hostRow, error } = await db
-      .from('event_hosts')
-      .select('anchor_location_id')
-      .eq('id', session.host.id)
-      .maybeSingle()
-    if (error) throw error
-    const baseUrl = new URL(await resolveCustomerBaseUrl(db, hostRow?.anchor_location_id || null)).origin
-    eventUrl = `${baseUrl}/event/${event.slug}`
+    eventUrl = await hostEventPublicUrl(db, session.host.id, event.slug)
   } catch (e) {
     logWarn('host-portal', 'promote link unavailable', { err: e, eventId: event.id })
   }
+
+  // Why the email shortcut is unavailable (a plain string, or null when it is
+  // available), judged on the host's own clock.
+  const { today } = await loadHostToday(db, session.host)
+  const blockedReason = announceBlockedReason(event, today)
 
   // The host's own list size for the Email your list block. A failed count
   // hides the count line only (null), never reads as 0.
@@ -91,7 +89,7 @@ export default async function HostEventPromote(props) {
         <div className="mt-3">
           <AnnounceEventButton
             eventId={event.id}
-            onSale={eventIsPublic(event)}
+            blockedReason={blockedReason}
             contactCount={!countError && typeof contactCount === 'number' ? contactCount : null}
           />
         </div>

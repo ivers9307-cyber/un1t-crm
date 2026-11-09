@@ -126,6 +126,19 @@ describe('loadHostEvent column lists exist on race_events', () => {
     expect(sites.length).toBeGreaterThanOrEqual(6)
   })
 
+  it('has no aliased import and no namespaced call, either of which would hide a call site from this guard', () => {
+    const hidden = walk(SRC)
+      .filter((f) => f !== HELPER_FILE)
+      .flatMap((f) => {
+        const masked = maskComments(fs.readFileSync(f, 'utf8'))
+        const found = []
+        if (/\bloadHostEvent\s+as\b/.test(masked)) found.push('imports loadHostEvent under another name')
+        if (/\.\s*loadHostEvent\s*\(/.test(masked)) found.push('calls loadHostEvent through a namespace')
+        return found.map((what) => `${path.relative(ROOT, f)} ${what}`)
+      })
+    expect(hidden, hidden.join('\n')).toEqual([])
+  })
+
   it('reads every call site column list', () => {
     const unreadable = sites.filter((s) => !s.columns).map((s) => `${s.file}:${s.line}`)
     expect(unreadable, `column list not resolvable at: ${unreadable.join(', ')}`).toEqual([])
@@ -140,6 +153,12 @@ describe('loadHostEvent column lists exist on race_events', () => {
 })
 
 describe('the checker proves itself', () => {
+  it('the alias and namespace patterns used above match the spellings they are meant to catch', () => {
+    expect(/\bloadHostEvent\s+as\b/.test("import { loadHostEvent as load } from '@/lib/host-portal'")).toBe(true)
+    expect(/\.\s*loadHostEvent\s*\(/.test('await portal.loadHostEvent(db, h, id, cols)')).toBe(true)
+    expect(/\.\s*loadHostEvent\s*\(/.test('await loadHostEvent(db, h, id, cols)')).toBe(false)
+  })
+
   it('reports a made-up top-level column', () => {
     const [call] = findCalls("await loadHostEvent(db, h, id, 'id, host_id, not_a_real_column')")
     expect(columnProblems(call.columns)).toEqual([`${TABLE}.not_a_real_column does not exist`])

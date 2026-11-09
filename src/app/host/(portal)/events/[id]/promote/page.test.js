@@ -8,9 +8,10 @@ vi.mock('next/navigation', () => ({
 }))
 vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn(async () => ({ host: { id: 'h1' } })) }))
 vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://studio.test/some/path') }))
+vi.mock('@/lib/host-portal', async (orig) => ({ ...(await orig()), loadHostToday: vi.fn(async () => ({ zone: 'Europe/Dublin', today: state.today })) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
-const state = { event: null, hostRow: null, count: 7, countError: null }
+const state = { event: null, hostRow: null, count: 7, countError: null, today: '2026-11-09' }
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from: (table) => {
@@ -66,6 +67,7 @@ beforeEach(() => {
   state.hostRow = { anchor_location_id: 'loc1' }
   state.count = 7
   state.countError = null
+  state.today = '2026-11-09'
   getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
   resolveCustomerBaseUrl.mockResolvedValue('https://studio.test/some/path')
 })
@@ -112,7 +114,7 @@ describe('host event Promote tab', () => {
     expect(t.indexOf('Share')).toBeLessThan(t.indexOf('Email your list'))
     expect(t.indexOf('Email your list')).toBeLessThan(t.indexOf('Series'))
     const props = find(el, AnnounceEventButton).props
-    expect(props).toEqual({ eventId: 'e1', onSale: true, contactCount: 7 })
+    expect(props).toEqual({ eventId: 'e1', blockedReason: null, contactCount: 7 })
     for (const v of Object.values(props)) expect(typeof v).not.toBe('function')
     const kids = el.props.children
     const at = kids.findIndex((k) => k?.type === 'section' && text(k).includes('Email your list'))
@@ -123,12 +125,21 @@ describe('host event Promote tab', () => {
   it('passes a null count when the count fails, never 0, and still offers the button', async () => {
     state.countError = { message: 'boom' }
     state.count = null
-    expect(find(await Page(params), AnnounceEventButton).props).toEqual({ eventId: 'e1', onSale: true, contactCount: null })
+    expect(find(await Page(params), AnnounceEventButton).props).toEqual({ eventId: 'e1', blockedReason: null, contactCount: null })
   })
 
-  it('tells the button the event is not on sale for a draft', async () => {
-    state.event = { ...EVENT, status: 'draft' }
-    expect(find(await Page(params), AnnounceEventButton).props.onSale).toBe(false)
+  it('passes the button a plain-string reason that fits the event, never a function', async () => {
+    const reason = async (patch, today) => {
+      state.event = { ...EVENT, ...patch }
+      if (today) state.today = today
+      const r = find(await Page(params), AnnounceEventButton).props.blockedReason
+      expect(typeof r === 'string' || r === null).toBe(true)
+      return r
+    }
+    expect(await reason({ status: 'draft' })).toBe('Publish this event before emailing your list about it.')
+    expect(await reason({ status: 'pending_review' })).toBe('This event is waiting for approval. You can email your list once it is on sale.')
+    expect(await reason({ status: 'published', active: false })).toBe('This event is off sale. Put it back on sale before emailing your list about it.')
+    expect(await reason({ status: 'published', active: true }, '2026-12-02')).toBe('This event has already taken place.')
   })
 
   it('marks the event not on sale when it is a draft or inactive', async () => {

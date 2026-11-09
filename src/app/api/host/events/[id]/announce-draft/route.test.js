@@ -8,9 +8,13 @@ let db
 let session
 let event
 let insertError
+let today
+let existingDrafts
+let lookupError
 vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn(async () => session) }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://studio.test/some/path') }))
+vi.mock('@/lib/host-portal', async (orig) => ({ ...(await orig()), loadHostToday: vi.fn(async () => ({ zone: 'Europe/Dublin', today })) }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 
 const { POST } = await import('./route.js')
@@ -23,6 +27,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   session = { host: { id: 'h1', name: 'Acme' } }
   insertError = null
+  today = '2026-11-01'
+  existingDrafts = []
+  lookupError = null
   event = {
     id: E1, host_id: 'h1', name: 'Summer Run', slug: 'summer-run', status: 'published', active: true,
     race_date: '2026-11-14', venue_name: 'Phoenix Park',
@@ -31,6 +38,7 @@ beforeEach(() => {
   db = fakeDb((q) => {
     if (q.table === 'race_events') return { data: event, error: null }
     if (q.table === 'event_hosts') return { data: { anchor_location_id: 'loc1' }, error: null }
+    if (q.table === 'host_campaigns' && q.action === 'select') return lookupError ? { data: null, error: lookupError } : { data: existingDrafts, error: null }
     if (q.table === 'host_campaigns' && q.action === 'insert') return insertError ? { data: null, error: insertError } : { data: { id: 'c1' }, error: null }
     return { data: null, error: null }
   })
@@ -54,15 +62,31 @@ describe('POST /api/host/events/[id]/announce-draft', () => {
     expect(inserts()).toHaveLength(0)
   })
 
-  it('409s for an event that is not on sale and inserts nothing', async () => {
-    for (const patch of [{ status: 'draft' }, { active: false }, { status: 'pending_review' }]) {
+  it('409s with the reason that fits the event and inserts nothing', async () => {
+    const cases = [
+      [{ status: 'draft' }, 'Publish this event before emailing your list about it.'],
+      [{ status: 'rejected' }, 'Publish this event before emailing your list about it.'],
+      [{ status: 'pending_review' }, 'This event is waiting for approval. You can email your list once it is on sale.'],
+      [{ active: false }, 'This event is off sale. Put it back on sale before emailing your list about it.'],
+    ]
+    for (const [patch, error] of cases) {
       db.queries.length = 0
       event = { ...event, status: 'published', active: true, ...patch }
       const res = await post()
       expect(res.status).toBe(409)
-      expect(await res.json()).toEqual({ success: false, error: 'Publish this event before emailing your list about it.' })
+      expect(await res.json()).toEqual({ success: false, error })
       expect(inserts()).toHaveLength(0)
     }
+  })
+
+  it('409s for an event that has already taken place (race_date before today on the host clock) and inserts nothing', async () => {
+    today = '2026-11-15'
+    const res = await post()
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'This event has already taken place.' })
+    expect(inserts()).toHaveLength(0)
+    today = '2026-11-14'
+    expect((await post()).status).toBe(201)
   })
 
   it('inserts one draft for this host with audience all, type marketing, status draft and no design_json', async () => {
@@ -94,5 +118,32 @@ describe('POST /api/host/events/[id]/announce-draft', () => {
     const res = await post()
     expect(res.status).toBe(500)
     expect(inserts()).toHaveLength(0)
+  })
+
+  it('hands back the first draft and inserts nothing when the same draft already exists', async () => {
+    existingDrafts = [{ id: 'c0' }]
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, data: { id: 'c0' } })
+    expect(inserts()).toHaveLength(0)
+    const lookup = db.queries.find((q) => q.table === 'host_campaigns' && q.action === 'select')
+    expect(lookup.ops).toEqual(expect.arrayContaining([
+      ['select', 'id'], ['eq', 'host_id', 'h1'], ['eq', 'status', 'draft'], ['eq', 'subject', 'Summer Run'], ['limit', 1],
+    ]))
+    expect(lookup.ops.find((o) => o[1] === 'body_html')[2]).toContain('Book your place')
+  })
+
+  it('makes a new draft when the host edited the earlier one (no row matches)', async () => {
+    existingDrafts = []
+    const res = await post()
+    expect(res.status).toBe(201)
+    expect(inserts()).toHaveLength(1)
+  })
+
+  it('inserts as before when the duplicate lookup fails', async () => {
+    lookupError = { message: 'read failed' }
+    const res = await post()
+    expect(res.status).toBe(201)
+    expect(inserts()).toHaveLength(1)
   })
 })

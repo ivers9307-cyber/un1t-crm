@@ -3,15 +3,16 @@
 // Insights (HOSTPORTAL.4). Host session only; another host's event is 404.
 //
 // Mirrors src/app/api/host/signup-qr/route.js on PNG geometry (800×800,
-// margin 2, ECC 'M', black on white) and the origin-only URL build on the
-// host's ANCHOR location's tenant host, the same URL the Promote tab shows.
+// margin 2, ECC 'M', black on white); the URL comes from hostEventPublicUrl,
+// the same one the Promote tab shows.
 
 import { NextResponse } from 'next/server'
 import QRCode from 'qrcode'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { loadHostEvent } from '@/lib/host-portal'
-import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
+import { hostEventPublicUrl } from '@/lib/host-event-url'
+import { logError } from '@/lib/log'
 import { taggedEventUrl, QR_SOURCE } from '@/lib/event-share-links'
 
 export const runtime = 'nodejs'
@@ -29,19 +30,10 @@ export async function GET(request, props) {
 
   let publicUrl
   try {
-    const { data: hostRow, error } = await db
-      .from('event_hosts')
-      .select('anchor_location_id')
-      .eq('id', session.host.id)
-      .maybeSingle()
-    if (error) throw error
-    const baseUrl = new URL(await resolveCustomerBaseUrl(db, hostRow?.anchor_location_id || null)).origin
-    publicUrl = taggedEventUrl(`${baseUrl}/event/${event.slug}`, QR_SOURCE)
+    publicUrl = taggedEventUrl(await hostEventPublicUrl(db, session.host.id, event.slug), QR_SOURCE)
   } catch (e) {
-    return NextResponse.json({
-      success: false,
-      error: `Cannot build public URL — check NEXT_PUBLIC_APP_URL is configured. (${e?.message || 'invalid'})`,
-    }, { status: 500 })
+    logError('host-event-qr', 'public url unavailable', { err: e, eventId: event.id })
+    return NextResponse.json({ success: false, error: 'Could not build the link for this event. Try again shortly.' }, { status: 500 })
   }
 
   let png

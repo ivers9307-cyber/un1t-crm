@@ -7,11 +7,12 @@ const mocks = vi.hoisted(() => ({
   createServerClient: vi.fn(),
   resolveCustomerBaseUrl: vi.fn(),
   toBuffer: vi.fn(),
+  logError: vi.fn(),
 }))
 vi.mock('@/lib/host-auth', () => ({ getCurrentHost: mocks.getCurrentHost }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: mocks.createServerClient }))
 vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: mocks.resolveCustomerBaseUrl }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: mocks.logError }))
 vi.mock('qrcode', () => ({ default: { toBuffer: mocks.toBuffer } }))
 
 import { GET } from './route'
@@ -81,6 +82,9 @@ describe('GET /api/host/events/[id]/qr', () => {
 
   it('500s when the public URL cannot be built', async () => {
     mocks.resolveCustomerBaseUrl.mockRejectedValue(new Error('boom'))
-    expect((await GET(req(), params)).status).toBe(500)
+    const res = await GET(req(), params)
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not build the link for this event. Try again shortly.' })
+    expect(mocks.logError).toHaveBeenCalledWith('host-event-qr', 'public url unavailable', expect.objectContaining({ eventId: 'e1' }))
   })
 })

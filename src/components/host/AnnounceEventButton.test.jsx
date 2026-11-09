@@ -18,7 +18,7 @@ describe('AnnounceEventButton', () => {
     let resolve
     const fetchMock = vi.fn(() => new Promise((r) => { resolve = r }))
     vi.stubGlobal('fetch', fetchMock)
-    render(<AnnounceEventButton eventId="e1" onSale contactCount={42} />)
+    render(<AnnounceEventButton eventId="e1" blockedReason={null} contactCount={42} />)
     const btn = screen.getByRole('button', { name: NAME })
     fireEvent.click(btn)
     fireEvent.click(btn)
@@ -32,15 +32,15 @@ describe('AnnounceEventButton', () => {
   })
 
   it('shows the count line', () => {
-    render(<AnnounceEventButton eventId="e1" onSale contactCount={42} />)
+    render(<AnnounceEventButton eventId="e1" blockedReason={null} contactCount={42} />)
     expect(screen.getByText(/42 contacts/)).toBeTruthy()
   })
 
   it('says 1 contact in the singular and omits the line when the count is unknown', () => {
-    const { unmount } = render(<AnnounceEventButton eventId="e1" onSale contactCount={1} />)
+    const { unmount } = render(<AnnounceEventButton eventId="e1" blockedReason={null} contactCount={1} />)
     expect(screen.getByText(/1 contact\b(?!s)/)).toBeTruthy()
     unmount()
-    render(<AnnounceEventButton eventId="e1" onSale contactCount={null} />)
+    render(<AnnounceEventButton eventId="e1" blockedReason={null} contactCount={null} />)
     expect(screen.queryByText(/contacts?\b.*(list|on your)/i)).toBeNull()
     expect(screen.getByRole('button', { name: NAME })).toBeTruthy()
   })
@@ -48,7 +48,7 @@ describe('AnnounceEventButton', () => {
   it('shows the server error, stays, and lets the host try again', async () => {
     const fetchMock = vi.fn(async () => ({ ok: false, json: async () => ({ success: false, error: 'insert exploded' }) }))
     vi.stubGlobal('fetch', fetchMock)
-    render(<AnnounceEventButton eventId="e1" onSale contactCount={3} />)
+    render(<AnnounceEventButton eventId="e1" blockedReason={null} contactCount={3} />)
     fireEvent.click(screen.getByRole('button', { name: NAME }))
     await waitFor(() => expect(screen.getByText('insert exploded')).toBeTruthy())
     expect(push).not.toHaveBeenCalled()
@@ -57,15 +57,23 @@ describe('AnnounceEventButton', () => {
 
   it('shows a plain error when the request itself fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
-    render(<AnnounceEventButton eventId="e1" onSale contactCount={3} />)
+    render(<AnnounceEventButton eventId="e1" blockedReason={null} contactCount={3} />)
     fireEvent.click(screen.getByRole('button', { name: NAME }))
     await waitFor(() => expect(screen.getByText('Could not create the draft. Try again.')).toBeTruthy())
     expect(push).not.toHaveBeenCalled()
   })
 
-  it('shows the publish-first sentence and no button when not on sale', () => {
-    render(<AnnounceEventButton eventId="e1" onSale={false} contactCount={3} />)
-    expect(screen.getByText('Publish this event before emailing your list about it.')).toBeTruthy()
-    expect(screen.queryByRole('button')).toBeNull()
+  it('shows the given reason and no button when the shortcut is blocked', () => {
+    for (const reason of [
+      'Publish this event before emailing your list about it.',
+      'This event is waiting for approval. You can email your list once it is on sale.',
+      'This event is off sale. Put it back on sale before emailing your list about it.',
+      'This event has already taken place.',
+    ]) {
+      const { unmount } = render(<AnnounceEventButton eventId="e1" blockedReason={reason} contactCount={3} />)
+      expect(screen.getByText(reason)).toBeTruthy()
+      expect(screen.queryByRole('button')).toBeNull()
+      unmount()
+    }
   })
 })
