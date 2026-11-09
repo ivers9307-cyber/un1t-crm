@@ -167,6 +167,8 @@ const STATUS_LABEL = {
 
 const UNLAYER_SRC = 'https://editor.unlayer.com/embed.js'
 const EDITOR_DIV_ID = 'host-email-designer'
+const EVENT_DRAFT_NOTICE = 'Draft created from your event. Edit it, send yourself a test, then send or schedule.'
+
 // How long to wait for the embed script before telling the host it failed.
 const UNLAYER_LOAD_TIMEOUT_MS = 15000
 
@@ -235,7 +237,22 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
   // a non-openers draft.
   useEffect(() => {
     if (searchParams?.get('notice') === 'reminder') setNotice('Reminder draft created. Edit it, test it, then send or schedule.')
+    if (searchParams?.get('notice') === 'event') setNotice(EVENT_DRAFT_NOTICE)
   }, [searchParams])
+
+  // HOSTPORTAL.4 — the Promote tab's "Write an email about this event" lands
+  // on ?open=<draft id>. Open it ONCE, after the list has loaded, through the
+  // same function the row's Edit uses. An id that is not one of this host's
+  // drafts is left alone. editDraft clears the notice, so it is set again after.
+  const openHandledRef = useRef(false)
+  useEffect(() => {
+    const id = searchParams?.get('open')
+    if (!id || openHandledRef.current || campaigns === null) return
+    openHandledRef.current = true
+    if (campaignsById.get(id)?.status !== 'draft') return
+    const wantsNotice = searchParams.get('notice') === 'event'
+    editDraft(id).then((opened) => { if (opened && wantsNotice) setNotice(EVENT_DRAFT_NOTICE) })
+  }, [campaigns, campaignsById, searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load the Unlayer embed script once; fall back to plain text if it never
   // arrives (blocked network, script error) so the host can always write.
@@ -371,7 +388,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) {
         setError(json.error || 'Could not open the draft.')
-        return
+        return false
       }
       const c = json.data
       setEditingId(c.id)
@@ -403,9 +420,11 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
       }
       pendingDesignRef.current = next.pendingDesign
       setDesignerNotice(next.notice)
-      document.getElementById('host-email-subject')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      document.getElementById('host-email-subject')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+      return true
     } catch {
       setError('Could not open the draft.')
+      return false
     } finally {
       setLoadingDraftId(null)
     }

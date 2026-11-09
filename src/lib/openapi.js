@@ -1726,6 +1726,22 @@ registry.registerPath({
   },
 })
 registry.registerPath({
+  method: 'post',
+  path: '/api/host/events/{id}/announce-draft',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Create a draft email about one of the host's own on-sale events (HOSTPORTAL.4)",
+  description: "Host session (getCurrentHost). Creates a `host_campaigns` DRAFT for the whole list (`audience_kind` `all`, `email_type` `marketing`, no design) whose body names the event, its date, session times and venue and links to the public event page. Sends nothing. Another host's event is 404; an event that is not published and active is 409.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    201: { description: 'The new draft id', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike }) }) } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Publish this event before emailing your list about it.', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The event link could not be built, or the insert failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
   method: 'patch',
   path: '/api/host/events/{id}/ratings/{ratingId}',
   tags: ['Host Portal'],

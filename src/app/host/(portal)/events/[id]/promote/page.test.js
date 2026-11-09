@@ -10,13 +10,16 @@ vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn(async () => ({ host: {
 vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://studio.test/some/path') }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
-const state = { event: null, hostRow: null }
+const state = { event: null, hostRow: null, count: 7, countError: null }
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from: (table) => {
       const b = {}
       b.select = () => b
       b.eq = () => b
+      b.then = (res, rej) => Promise.resolve(table === 'host_contacts'
+        ? { count: state.count, error: state.countError }
+        : { data: null, error: null }).then(res, rej)
       b.maybeSingle = async () => (table === 'race_events'
         ? { data: state.event, error: null }
         : { data: state.hostRow, error: null })
@@ -26,6 +29,7 @@ vi.mock('@/lib/supabase', () => ({
 }))
 vi.mock('@/components/host/CopyLinkButton', () => ({ default: function CopyLinkButton() { return null } }))
 vi.mock('@/components/host/EventShareLinks', () => ({ default: function EventShareLinks() { return null } }))
+vi.mock('@/components/host/AnnounceEventButton', () => ({ default: function AnnounceEventButton() { return null } }))
 vi.mock('@/components/host/HostPromoCodes', () => ({ default: function HostPromoCodes() { return null } }))
 vi.mock('@/components/host/HostSeriesActions', () => ({ default: function HostSeriesActions() { return null } }))
 
@@ -34,6 +38,7 @@ const { getCurrentHost } = await import('@/lib/host-auth')
 const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
 const { default: CopyLinkButton } = await import('@/components/host/CopyLinkButton')
 const { default: EventShareLinks } = await import('@/components/host/EventShareLinks')
+const { default: AnnounceEventButton } = await import('@/components/host/AnnounceEventButton')
 const { default: HostPromoCodes } = await import('@/components/host/HostPromoCodes')
 const { default: HostSeriesActions } = await import('@/components/host/HostSeriesActions')
 
@@ -59,6 +64,8 @@ const params = { params: Promise.resolve({ id: 'e1' }) }
 beforeEach(() => {
   state.event = { ...EVENT }
   state.hostRow = { anchor_location_id: 'loc1' }
+  state.count = 7
+  state.countError = null
   getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
   resolveCustomerBaseUrl.mockResolvedValue('https://studio.test/some/path')
 })
@@ -97,6 +104,31 @@ describe('host event Promote tab', () => {
   it('renders the tagged share links with plain props only, on sale for a published active event', async () => {
     const el = await Page(params)
     expect(find(el, EventShareLinks).props).toEqual({ url: 'https://studio.test/event/summer-run', eventId: 'e1', onSale: true })
+  })
+
+  it('renders Email your list between Share and Promo codes, with plain props only', async () => {
+    const el = await Page(params)
+    const t = text(el)
+    expect(t.indexOf('Share')).toBeLessThan(t.indexOf('Email your list'))
+    expect(t.indexOf('Email your list')).toBeLessThan(t.indexOf('Series'))
+    const props = find(el, AnnounceEventButton).props
+    expect(props).toEqual({ eventId: 'e1', onSale: true, contactCount: 7 })
+    for (const v of Object.values(props)) expect(typeof v).not.toBe('function')
+    const kids = el.props.children
+    const at = kids.findIndex((k) => k?.type === 'section' && text(k).includes('Email your list'))
+    expect(at).toBeGreaterThan(kids.findIndex((k) => k?.type === 'section' && text(k).includes('Share')))
+    expect(at).toBeLessThan(kids.findIndex((k) => k?.type === HostPromoCodes))
+  })
+
+  it('passes a null count when the count fails, never 0, and still offers the button', async () => {
+    state.countError = { message: 'boom' }
+    state.count = null
+    expect(find(await Page(params), AnnounceEventButton).props).toEqual({ eventId: 'e1', onSale: true, contactCount: null })
+  })
+
+  it('tells the button the event is not on sale for a draft', async () => {
+    state.event = { ...EVENT, status: 'draft' }
+    expect(find(await Page(params), AnnounceEventButton).props.onSale).toBe(false)
   })
 
   it('marks the event not on sale when it is a draft or inactive', async () => {

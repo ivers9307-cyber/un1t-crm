@@ -13,6 +13,7 @@ import { logWarn } from '@/lib/log'
 import { eventIsPublic } from '@/lib/host-events'
 import CopyLinkButton from '@/components/host/CopyLinkButton'
 import EventShareLinks from '@/components/host/EventShareLinks'
+import AnnounceEventButton from '@/components/host/AnnounceEventButton'
 import HostPromoCodes from '@/components/host/HostPromoCodes'
 import HostSeriesActions from '@/components/host/HostSeriesActions'
 
@@ -50,6 +51,14 @@ export default async function HostEventPromote(props) {
     logWarn('host-portal', 'promote link unavailable', { err: e, eventId: event.id })
   }
 
+  // The host's own list size for the Email your list block. A failed count
+  // hides the count line only (null), never reads as 0.
+  const { count: contactCount, error: countError } = await db
+    .from('host_contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('host_id', session.host.id)
+  if (countError) logWarn('host-portal', 'promote contact count failed', { err: countError, eventId: event.id })
+
   return (
     <div className="space-y-8">
       <section>
@@ -75,6 +84,17 @@ export default async function HostEventPromote(props) {
         ) : (
           <p className="mt-3 text-white/40 text-sm">The link is unavailable right now.</p>
         )}
+      </section>
+
+      <section>
+        <h2 className="text-lg font-semibold">Email your list</h2>
+        <div className="mt-3">
+          <AnnounceEventButton
+            eventId={event.id}
+            onSale={eventIsPublic(event)}
+            contactCount={!countError && typeof contactCount === 'number' ? contactCount : null}
+          />
+        </div>
       </section>
 
       <HostPromoCodes eventId={event.id} />
