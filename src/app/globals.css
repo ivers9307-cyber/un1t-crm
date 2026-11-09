@@ -262,6 +262,109 @@ body {
   html:has(#trial-learn-more) { scroll-behavior: smooth; }
 }
 
+/* ── Host portal themes (HOSTTHEME.1) ────────────────────────────────
+   Tokens live on the wrapper src/app/host/layout.js renders. `system`
+   (the host has not chosen) is the dark set, switched to the light set by
+   the device's own preference; the light values appear twice because CSS
+   has no way to share a declaration list between a rule and a media query
+   (tests/host-theme-contrast.test.js fails if the two copies differ). */
+[data-host-theme='dark'],
+[data-host-theme='system'] {
+  color-scheme: dark;
+  --host-bg: #0C0D0F;
+  --host-panel: #17181B;
+  --host-well: #121316;
+  --host-input: #0F1012;
+  --host-border: #2A2B2F;
+  --host-edge: #686A70;
+  --host-text: #EDEDEE;
+  --host-label: #C4C4C6;
+  --host-hint: #A9AAAC;
+  --host-faint: #7B7C7F;
+  --host-accent: #FFFFFF;
+  --host-on-accent: #000000;
+  --host-ok: #6EE7B7;
+  --host-ok-bg: #10291F;
+  --host-ok-edge: #1F5A44;
+  --host-warn: #FCD34D;
+  --host-warn-bg: #2A2110;
+  --host-warn-edge: #6B4E12;
+  --host-bad: #FCA5A5;
+  --host-bad-bg: #2A1414;
+  --host-bad-edge: #6B2424;
+  --host-info: #7DD3FC;
+  --host-info-bg: #0F2430;
+  --host-star: #FDE047;
+  --host-danger: #DC2626;
+  --host-on-danger: #FFFFFF;
+}
+[data-host-theme='light'] {
+  color-scheme: light;
+  --host-bg: #F7F8FA;
+  --host-panel: #FFFFFF;
+  --host-well: #F7F8FA;
+  --host-input: #FFFFFF;
+  --host-border: #E2E5E9;
+  --host-edge: #8493A6;
+  --host-text: #111827;
+  --host-label: #334155;
+  --host-hint: #5B6779;
+  --host-faint: #8793A6;
+  --host-accent: #1E293B;
+  --host-on-accent: #FFFFFF;
+  --host-ok: #047857;
+  --host-ok-bg: #ECFDF5;
+  --host-ok-edge: #A7F3D0;
+  --host-warn: #92400E;
+  --host-warn-bg: #FFFBEB;
+  --host-warn-edge: #FCD34D;
+  --host-bad: #B91C1C;
+  --host-bad-bg: #FEF2F2;
+  --host-bad-edge: #FECACA;
+  --host-info: #0369A1;
+  --host-info-bg: #F0F9FF;
+  --host-star: #CA8A04;
+  --host-danger: #DC2626;
+  --host-on-danger: #FFFFFF;
+}
+@media (prefers-color-scheme: light) {
+  [data-host-theme='system'] {
+    color-scheme: light;
+    --host-bg: #F7F8FA;
+    --host-panel: #FFFFFF;
+    --host-well: #F7F8FA;
+    --host-input: #FFFFFF;
+    --host-border: #E2E5E9;
+    --host-edge: #8493A6;
+    --host-text: #111827;
+    --host-label: #334155;
+    --host-hint: #5B6779;
+    --host-faint: #8793A6;
+    --host-accent: #1E293B;
+    --host-on-accent: #FFFFFF;
+    --host-ok: #047857;
+    --host-ok-bg: #ECFDF5;
+    --host-ok-edge: #A7F3D0;
+    --host-warn: #92400E;
+    --host-warn-bg: #FFFBEB;
+    --host-warn-edge: #FCD34D;
+    --host-bad: #B91C1C;
+    --host-bad-bg: #FEF2F2;
+    --host-bad-edge: #FECACA;
+    --host-info: #0369A1;
+    --host-info-bg: #F0F9FF;
+    --host-star: #CA8A04;
+    --host-danger: #DC2626;
+    --host-on-danger: #FFFFFF;
+  }
+}
+/* The global focus ring is a dark slate (un1t-accent): invisible on the dark theme. */
+@layer base {
+  [data-host-theme] :focus-visible {
+    outline-color: var(--host-accent);
+  }
+}
+
 /* ── Gallery mosaic — first tile spans 2×2 (pure CSS, no data) ───── */
 @media (min-width: 768px) {
   .lp-mosaic > figure:first-child { grid-column: span 2; grid-row: span 2; }

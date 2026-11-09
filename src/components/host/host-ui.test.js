@@ -1,0 +1,39 @@
+import { describe, it, expect } from 'vitest'
+import * as ui from './host-ui.js'
+import { readFileSync } from 'node:fs'
+
+const strings = []
+function walk(name, v) {
+  if (typeof v === 'string') strings.push([name, v])
+  else for (const [k, x] of Object.entries(v)) walk(`${name}.${k}`, x)
+}
+for (const [k, v] of Object.entries(ui)) walk(k, v)
+
+describe('host-ui class kit', () => {
+  it('exports every constant the spec names', () => {
+    for (const n of ['HOST_H1', 'HOST_SECTION', 'HOST_SECTION_DESC', 'HOST_EYEBROW', 'HOST_LABEL', 'HOST_HINT', 'HOST_META',
+      'HOST_PANEL', 'HOST_WELL', 'HOST_LIST', 'HOST_ROW', 'HOST_INPUT', 'HOST_BTN', 'HOST_BTN_PRIMARY', 'HOST_BTN_DANGER',
+      'HOST_LINK', 'HOST_CHIP', 'HOST_CHIP_TONE', 'HOST_NOTICE', 'HOST_NOTICE_TONE']) expect(ui[n], n).toBeTruthy()
+    expect(Object.keys(ui.HOST_CHIP_TONE).sort()).toEqual(['bad', 'info', 'neutral', 'ok', 'warn'])
+    expect(Object.keys(ui.HOST_NOTICE_TONE).sort()).toEqual(['bad', 'neutral', 'ok', 'warn'])
+  })
+  it('uses no raw white, black or palette colour in any constant', () => {
+    const raw = /(^|[\s:])(?:[a-z-]+:)*(?:text|bg|border|divide|ring|outline|placeholder|fill|stroke)-(?:white|black|(?:red|amber|emerald|green|sky|blue|yellow|slate|gray|zinc|neutral|stone|orange|rose|indigo|violet|purple|pink|teal|cyan|lime|fuchsia)-\d)/
+    const bad = strings.filter(([, s]) => raw.test(s)).map(([n]) => n)
+    expect(bad).toEqual([])
+    expect(strings.length).toBeGreaterThan(20)
+  })
+  it('never puts an opacity modifier on a host colour', () => {
+    const bad = strings.filter(([, s]) => /host-[a-z-]+\/\d/.test(s)).map(([n]) => n)
+    expect(bad).toEqual([])
+  })
+  it('has no imports, so server and client code can both use it', () => {
+    expect(readFileSync(new URL('./host-ui.js', import.meta.url), 'utf8')).not.toMatch(/^\s*import\s/m)
+  })
+  it('every host colour class names a token that exists in the Tailwind host group', () => {
+    const host = Object.keys(require('../../../tailwind.config.js').theme.extend.colors.host)
+    const names = new Set()
+    for (const [, s] of strings) for (const m of s.matchAll(/(?:text|bg|border|divide|ring|outline|placeholder|fill|stroke)-host-([a-z-]+)/g)) names.add(m[1])
+    for (const n of names) expect(host, n).toContain(n)
+  })
+})

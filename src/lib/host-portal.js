@@ -5,14 +5,16 @@
 import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { todayIsoIn } from '@shared/events'
 import { logWarn } from '@/lib/log'
+import { HOST_CHIP, HOST_CHIP_TONE } from '@/components/host/host-ui'
 
-// Dark-surface status chips: light text on translucent dark fills (the host
-// pages are bg-black, so the light-theme -700 chip rule does not apply).
+// Status chips, built on the themed class kit (HOSTTHEME.1): draft neutral,
+// in review warn, published ok, needs changes bad. host-ui.js has no imports, so
+// this stays a plain object of class strings for server pages.
 export const HOST_STATUS_CHIP = {
-  draft: 'bg-white/10 text-white/70',
-  pending_review: 'bg-amber-500/15 text-amber-300',
-  published: 'bg-emerald-500/15 text-emerald-300',
-  rejected: 'bg-red-500/15 text-red-300',
+  draft: `${HOST_CHIP} ${HOST_CHIP_TONE.neutral}`,
+  pending_review: `${HOST_CHIP} ${HOST_CHIP_TONE.warn}`,
+  published: `${HOST_CHIP} ${HOST_CHIP_TONE.ok}`,
+  rejected: `${HOST_CHIP} ${HOST_CHIP_TONE.bad}`,
 }
 
 export function formatHostMoney(cents, currency) {

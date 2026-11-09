@@ -4,6 +4,7 @@
 // gated. This is the host analog of the staff AppShell gate.
 
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
@@ -11,6 +12,8 @@ import HostSignOut from '@/components/host/HostSignOut'
 import HostImpersonationBanner from '@/components/host/HostImpersonationBanner'
 import HostNav from '@/components/host/HostNav'
 import GuardedLink from '@/components/host/GuardedLink'
+import HostThemeToggle from '@/components/host/HostThemeToggle'
+import { HOST_THEME_COOKIE, hostThemeFromCookie } from '@/lib/host-theme'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,9 +23,11 @@ export default async function HostPortalLayout({ children }) {
   // W1.S1c: the wordmark is the host's ORGANISATION (short name: UN1T keeps
   // its bare "UN1T"), never a literal gym and never the host's own name.
   const brand = await resolveHostOrgBrand(createServerClient(), session.host)
+  // HOSTTHEME.1: a string only — a Server Component never hands a function to a client one.
+  const theme = hostThemeFromCookie((await cookies()).get(HOST_THEME_COOKIE)?.value)
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div>
       {/* Admin "view-as-host" strip (HOST-PORTAL.4) — full-width, above the
           header. Present only when an admin is impersonating; it carries the
           only exit affordance in that mode (see the header safeguard below). */}
@@ -42,6 +47,7 @@ export default async function HostPortalLayout({ children }) {
               + Create event
             </GuardedLink>
             <span className="text-white/70 hidden sm:inline truncate max-w-[16rem]">{session.host.name}</span>
+            <HostThemeToggle initial={theme} />
             {/* SAFEGUARD: HostSignOut calls supabase.auth.signOut(), which would
                 destroy the admin's real staff session. An admin viewing-as must
                 exit via the banner's "Exit to CRM", never sign out here. */}
