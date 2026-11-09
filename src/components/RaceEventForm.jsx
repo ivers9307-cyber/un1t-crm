@@ -32,6 +32,7 @@ import Link from 'next/link'
 import { eventSlug } from '@/lib/event-slug'
 import { compressImageForUpload, parseUploadResponse, uploadEventVideo } from '@/lib/landing-media-upload'
 import { generateWaveTimes } from '@/lib/wave-generate'
+import { windowedWaves, resolveWaveWindowMinutes, waveWindowLabel, WAVE_WINDOW_MINUTES, WAVE_WINDOW_ALL_MINUTES, WAVE_WINDOW_CHOICES } from '@/lib/wave-window'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { CHARITY_DEFAULTS, CharitySettingsSchema, formatCents } from '@/lib/charity-donations'
 import { FIND_TEAM_DEFAULTS } from '@/lib/find-team'
@@ -343,6 +344,23 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
   const [registrationQuestions, setRegistrationQuestions] = useState(Array.isArray(race?.registration_questions) ? race.registration_questions : [])
   // CALENDAR.1 (mig 820) — minutes; blank = the kind's default.
   const [durationMinutes, setDurationMinutes] = useState(race?.duration_minutes != null ? String(race.duration_minutes) : '')
+  // WAVEWIN.2 (mig 825) — the public wave picker's release window, in
+  // minutes as a string; '' = the 90-minute default (saved as null).
+  const [waveWindow, setWaveWindow] = useState(() => {
+    const saved = resolveWaveWindowMinutes(race)
+    return race?.wave_window_minutes != null && saved !== WAVE_WINDOW_MINUTES ? String(saved) : ''
+  })
+  const waveWindowMinutes = waveWindow === '' ? WAVE_WINDOW_MINUTES : parseInt(waveWindow, 10)
+  // The presets, plus a saved value that is not one of them (set through the API).
+  const waveWindowOptions = WAVE_WINDOW_CHOICES.includes(waveWindowMinutes)
+    ? WAVE_WINDOW_CHOICES
+    : [...WAVE_WINDOW_CHOICES, waveWindowMinutes].sort((a, b) => a - b)
+  // What the picker shows before anyone has signed up, from the rows in the
+  // editor: the same rule the public page runs, with no wave full yet.
+  const timedWaves = waves.filter((w) => /^\d{1,2}:\d{2}/.test(w.start_time || ''))
+  const waveWindowPreview = timedWaves.length > 1
+    ? { shown: windowedWaves(timedWaves, waveWindowMinutes).length, total: timedWaves.length }
+    : null
   const [charityEnabled, setCharityEnabled] = useState(!!race?.charity_enabled)
   const [charityForm, setCharityForm] = useState(() => charityToForm(race?.charity))
   const setCharityField = (key, value) => setCharityForm((f) => ({ ...f, [key]: value }))
@@ -640,6 +658,8 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       pricing_tiers: pricingTiers.length > 0 ? pricingTiers : null,
       registration_questions: registrationQuestions.length > 0 ? registrationQuestions : null,
       duration_minutes: durationMinutes.trim() === '' ? null : parseInt(durationMinutes, 10),
+      // WAVEWIN.2 — race only; the default and every other kind save null.
+      wave_window_minutes: meta.showWaves && waveWindow !== '' ? parseInt(waveWindow, 10) : null,
       // TV logos: race-only. For non-race kinds we send an empty
       // array so any historical slots (shouldn't exist, since the
       // upload UI is gated) get cleared.
@@ -936,9 +956,38 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
             Multiple start times throughout the race day. Each wave has its own capacity. Teams pick a
             wave at signup. Per-wave capacity is soft-enforced at signup time (a fast-fingered team
             can in theory squeeze in over the cap during a near-simultaneous signup; acceptable for v1).
-            Signup only offers the next 90 minutes of available waves — later times release as earlier
+            Signup only offers the start times inside the window below. Later times release as earlier
             waves fill.
           </p>
+
+          {/* WAVEWIN.2 — how much of the day signup opens with. */}
+          <div className="border border-un1t-border rounded-md p-3 bg-un1t-bg space-y-1.5">
+            <label htmlFor="wave-window" className="block text-[11px] font-semibold uppercase tracking-wider text-un1t-subtle">
+              Start times on offer
+            </label>
+            <select
+              id="wave-window"
+              value={waveWindow}
+              onChange={(e) => setWaveWindow(e.target.value)}
+              className="w-full sm:w-72 bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+            >
+              {waveWindowOptions.map((minutes) => (
+                <option key={minutes} value={minutes === WAVE_WINDOW_MINUTES ? '' : String(minutes)}>
+                  {minutes === WAVE_WINDOW_ALL_MINUTES
+                    ? 'Every start time at once'
+                    : `The next ${waveWindowLabel(minutes)}${minutes === WAVE_WINDOW_MINUTES ? ' (standard)' : ''}`}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-un1t-muted">
+              Counted from the earliest wave that still has space.
+              {waveWindowPreview && (
+                <> Signup opens with {waveWindowPreview.shown === waveWindowPreview.total
+                  ? `all ${waveWindowPreview.total} waves`
+                  : `${waveWindowPreview.shown} of the ${waveWindowPreview.total} waves`}.</>
+              )}
+            </p>
+          </div>
 
           {/* WAVEGEN.1 — generate the whole day in one go. Generated
               rows land in the editable list below, so one-off tweaks

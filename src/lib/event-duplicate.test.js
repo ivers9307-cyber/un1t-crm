@@ -134,6 +134,7 @@ describe('duplicateEvent', () => {
     expect(DUPLICATE_COLUMNS).toContain('pricing_tiers')
     expect(DUPLICATE_COLUMNS).toContain('registration_questions')
     expect(DUPLICATE_COLUMNS).toContain('duration_minutes')
+    expect(DUPLICATE_COLUMNS).toContain('wave_window_minutes') // WAVEWIN.2
   })
   // RATINGCOPY.1 — the copy list carried every other email copy pair but not this one.
   it('DUPLICATE_COLUMNS carries the rating request copy, and a copy keeps it', async () => {

@@ -33,6 +33,7 @@ import { Suspense, useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, BadgeEuro, Info } from 'lucide-react'
 import { timePickerWaves, initialWaveId, formatTimeChoices } from '@/lib/event-time-slots'
+import { resolveWaveWindowMinutes } from '@/lib/wave-window'
 import { tierPriceLabel, groupPriceLabel, effectiveNonMemberFee } from '@/lib/pricing-tiers'
 import { resolveRegistrationQuestions, validateAnswers } from '@/lib/registration-questions'
 import { rememberEventAttribution, readEventAttribution } from '@/lib/event-attribution'
@@ -630,12 +631,14 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const showPricingCard = !!(memberPricing || nonMemberFeeCents != null)
   const wavesArr = Array.isArray(race.waves) ? race.waves : []
   // WAVEWIN.1 — for races the picker only offers the immediately-
-  // available 90-minute window (earlier sold-out waves stay, greyed;
-  // later waves release as the window slides). EVENT-MULTITIME.1 —
+  // available window (earlier sold-out waves stay, greyed; later waves
+  // release as the window slides). WAVEWIN.2 — its length is the event's
+  // own setting, 90 minutes unless the operator chose another.
+  // EVENT-MULTITIME.1 —
   // other kinds show every time once there's more than one; [] = no
   // picker. Every operator surface still sees the full schedule.
   // HOSTSERIES.1 — a hosted event (host_name set) lists every session plainly.
-  const pickerWaves = timePickerWaves(kind, wavesArr, { hosted: !!race.host_name })
+  const pickerWaves = timePickerWaves(kind, wavesArr, { hosted: !!race.host_name, windowMinutes: resolveWaveWindowMinutes(race) })
 
   // ── Render-only derived values (no behaviour change) ──────────────
   // Human label for the event kind, used in the hero eyebrow.

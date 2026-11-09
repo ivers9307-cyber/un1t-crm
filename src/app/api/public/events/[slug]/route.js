@@ -48,7 +48,7 @@ export async function GET(request, props) {
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency,
       hero_image_url, accent_hex, active, status,
-      charity_enabled, charity, find_team, pricing_tiers, registration_questions, duration_minutes,
+      charity_enabled, charity, find_team, pricing_tiers, registration_questions, duration_minutes, wave_window_minutes,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       locations:location_id ( id, name, address, timezone, is_host_anchor, organization_id ),
       host:event_hosts!host_id ( name )

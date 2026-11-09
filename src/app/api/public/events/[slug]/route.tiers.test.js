@@ -93,6 +93,18 @@ describe('GET /api/public/events/[slug] — registration questions', () => {
   })
 })
 
+// WAVEWIN.2 — the widget reads the event's release window off this response.
+describe('GET /api/public/events/[slug] — wave window', () => {
+  it('carries the event\'s wave_window_minutes, null when the event keeps the default', async () => {
+    db = makeDb(race({ pricing_tiers: null, wave_window_minutes: 180 }))
+    expect((await (await get()).json()).data.wave_window_minutes).toBe(180)
+    const sel = db.queries.find((q) => q.table === 'race_events').ops.find((o) => o[0] === 'select')[1]
+    expect(sel).toMatch(/wave_window_minutes/)
+    db = makeDb(race({ pricing_tiers: null, wave_window_minutes: null }))
+    expect((await (await get()).json()).data.wave_window_minutes).toBeNull()
+  })
+})
+
 // CALENDAR.1 — per-session calendar links on the tenant host.
 describe('GET /api/public/events/[slug] — calendar links', () => {
   it('carries the .ics route and Google link per wave, built on the tenant host and the studio zone', async () => {
