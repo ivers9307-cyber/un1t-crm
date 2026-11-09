@@ -106,4 +106,13 @@ describe('host event Promote tab', () => {
     expect(find(el, HostPromoCodes)).toBeTruthy()
     expect(find(el, HostSeriesActions)).toBeTruthy()
   })
+
+  it('shows the unavailable line when the event has no slug, never a link ending in "undefined"', async () => {
+    state.event = { ...EVENT, slug: null }
+    const el = await Page(params)
+    expect(text(el)).toContain('The link is unavailable right now.')
+    expect(text(el)).not.toContain('undefined')
+    expect(text(el)).not.toContain('/event/null')
+    expect(find(el, CopyLinkButton)).toBeNull()
+  })
 })

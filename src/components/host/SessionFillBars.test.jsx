@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 // HOSTPORTAL.2 — per-session fill bars on the Overview tab.
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, afterEach } from 'vitest'
+import { render, screen, cleanup } from '@testing-library/react'
 import SessionFillBars from './SessionFillBars'
+
+afterEach(() => cleanup())
 
 const s = (over) => ({ id: 's1', label: null, time: '10:00', capacity: 30, booked: 8, full: false, ...over })
 const fillOf = (container) => container.querySelector('[data-fill]')

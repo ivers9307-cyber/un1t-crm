@@ -2,7 +2,10 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
 
-vi.mock('@/components/host/HostEventActions', () => ({ default: function HostEventActions(props) { return <div data-testid="actions">{props.eventId}|{props.status}|{String(props.hasRegistrations)}|{props.brandName}</div> } }))
+vi.mock('@/components/host/HostEventActions', () => ({
+  default: function HostEventActions(props) { return <div data-testid="actions">{props.eventId}|{props.status}|{String(props.hasRegistrations)}|{props.brandName}</div> },
+  hasHostEventActions: ({ status, hasRegistrations }) => status === 'published' || !hasRegistrations,
+}))
 const { default: HostEventMenu } = await import('./HostEventMenu.jsx')
 
 afterEach(() => cleanup())
@@ -35,5 +38,18 @@ describe('HostEventMenu', () => {
     fireEvent.mouseDown(screen.getByTestId('outside'))
     expect(screen.queryByTestId('actions')).toBeNull()
     expect(screen.getByRole('button', { name: 'More actions' }).getAttribute('aria-expanded')).toBe('false')
+  })
+  it('renders no button at all when there is no action behind it', () => {
+    render(<HostEventMenu eventId="e1" status="draft" hasRegistrations brandName="Brand" />)
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull()
+  })
+  it('anchors the panel inside the viewport: left-aligned on a phone, right-aligned from sm', () => {
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    const cls = screen.getByTestId('actions').parentElement.className
+    expect(cls).toMatch(/(^|\s)left-0(\s|$)/)
+    expect(cls).toMatch(/(^|\s)sm:right-0(\s|$)/)
+    expect(cls).toMatch(/(^|\s)sm:left-auto(\s|$)/)
+    expect(cls).not.toMatch(/(^|\s)right-0(\s|$)/)
   })
 })

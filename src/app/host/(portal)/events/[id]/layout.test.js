@@ -24,6 +24,7 @@ vi.mock('@/components/host/HostEventMenu', () => ({ default: function HostEventM
 vi.mock('@/components/DuplicateEventButton', () => ({ default: function DuplicateEventButton() { return null } }))
 
 const { default: Layout } = await import('./layout.js')
+const { default: GuardedLink } = await import('@/components/host/GuardedLink')
 const { default: HostEventTabs } = await import('@/components/host/HostEventTabs')
 const { default: HostEventMenu } = await import('@/components/host/HostEventMenu')
 const { default: DuplicateEventButton } = await import('@/components/DuplicateEventButton')
@@ -34,6 +35,14 @@ function find(el, type) {
   if (el.type === type) return el
   return find(el.props?.children, type)
 }
+function walk(el, fn) {
+  if (!el || typeof el !== 'object') return null
+  if (Array.isArray(el)) { for (const c of el) { const f = walk(c, fn); if (f) return f } return null }
+  if (fn(el)) return el
+  return walk(el.props?.children, fn)
+}
+const findByClass = (el, cls, extra = () => true) => walk(el, (n) => typeof n.props?.className === 'string' && n.props.className.split(/\s+/).includes(cls) && extra(n.props.className))
+const findAnchor = (el, href) => walk(el, (n) => n.type === 'a' && n.props?.href === href)
 const EVENT = {
   id: 'e1', host_id: 'h1', status: 'published', name: 'Run Club 5k', slug: 'rc-5k', race_date: '2026-11-21', venue_name: 'The Park',
   series_id: null, series: null,
@@ -73,5 +82,24 @@ describe('event layout', () => {
     const el = await render()
     expect(find(el, HostEventTabs).props.attendeeCount).toBeNull()
     expect(find(el, HostEventMenu).props.hasRegistrations).toBe(true)
+  })
+  it('the back link goes to the events list, not the Overview', async () => {
+    const el = await render()
+    const back = find(el, GuardedLink)
+    expect(back.props.href).toBe('/host/events')
+  })
+  it('lets the actions wrap inside the column instead of overflowing at phone width', async () => {
+    const el = await render()
+    const actions = findByClass(el, 'flex-wrap', (c) => c.includes('gap-2'))
+    expect(actions).toBeTruthy()
+    expect(actions.props.className).not.toMatch(/\bshrink-0\b/)
+    expect(actions.props.className).toMatch(/max-w-full|min-w-0/)
+  })
+  it('opens the series link in a new tab', async () => {
+    loadHostEvent.mockResolvedValue({ ...EVENT, series_id: 's1', series: { id: 's1', name: 'The Series', slug: 'the-series' } })
+    const el = await render()
+    const link = findAnchor(el, '/event/series/the-series')
+    expect(link.props.target).toBe('_blank')
+    expect(link.props.rel).toBe('noopener noreferrer')
   })
 })

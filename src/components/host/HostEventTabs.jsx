@@ -4,6 +4,7 @@
 // tab change asks first when a form is unsaved; the strip scrolls inside
 // itself on a narrow phone. /edit (the old edit route) counts as Set up.
 
+import { useEffect, useRef } from 'react'
 import { usePathname } from 'next/navigation'
 import GuardedLink from '@/components/host/GuardedLink'
 
@@ -25,7 +26,13 @@ export function activeTab(pathname, eventId) {
 }
 
 export default function HostEventTabs({ eventId, attendeeCount = null }) {
-  const current = activeTab(usePathname(), eventId)
+  const pathname = usePathname()
+  const current = activeTab(pathname, eventId)
+  const activeRef = useRef(null)
+  // Keep the active tab visible inside the scrolling strip (as HostNav does).
+  useEffect(() => {
+    activeRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [pathname])
   return (
     <nav aria-label="Event sections" className="mt-5 border-b border-white/10 overflow-x-auto">
       <ul className="flex gap-1 min-w-max">
@@ -34,6 +41,7 @@ export default function HostEventTabs({ eventId, attendeeCount = null }) {
           return (
             <li key={t.key}>
               <GuardedLink
+                ref={active ? activeRef : undefined}
                 href={`/host/events/${eventId}${t.path}`}
                 aria-current={active ? 'page' : undefined}
                 className={`block px-4 py-2.5 text-sm whitespace-nowrap border-b-2 -mb-px ${active ? 'border-white text-white font-semibold' : 'border-transparent text-white/55 hover:text-white'}`}

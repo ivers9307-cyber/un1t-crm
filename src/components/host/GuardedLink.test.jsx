@@ -47,6 +47,26 @@ describe('GuardedLink', () => {
     click()
     expect(onClick).not.toHaveBeenCalled()
   })
+  it.each([
+    ['meta', { metaKey: true }],
+    ['ctrl', { ctrlKey: true }],
+    ['shift', { shiftKey: true }],
+    ['alt', { altKey: true }],
+    ['a non-primary button', { button: 1 }],
+  ])('does not prompt on a %s click, which will not leave the page', (_n, init) => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    setUnsaved(true)
+    render(<GuardedLink href="#events">Go</GuardedLink>)
+    expect(fireEvent.click(screen.getByRole('link', { name: 'Go' }), init)).toBe(true)
+    expect(confirm).not.toHaveBeenCalled()
+  })
+  it('does not prompt for a link that opens a new tab', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    setUnsaved(true)
+    render(<GuardedLink href="#events" target="_blank">Go</GuardedLink>)
+    expect(click()).toBe(true)
+    expect(confirm).not.toHaveBeenCalled()
+  })
   it('passes a ref through to the anchor', () => {
     const ref = { current: null }
     render(<GuardedLink href="#events" ref={ref}>Go</GuardedLink>)

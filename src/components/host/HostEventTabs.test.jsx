@@ -43,3 +43,20 @@ describe('HostEventTabs', () => {
     expect(screen.getByRole('link', { name: /Attendees/ }).textContent).toBe('Attendees')
   })
 })
+
+describe('HostEventTabs scrolling', () => {
+  it('scrolls the active tab into view on mount and when the path changes', () => {
+    const spy = vi.fn()
+    Element.prototype.scrollIntoView = spy
+    pathname = '/host/events/e1/promote'
+    const { rerender } = render(<HostEventTabs eventId="e1" attendeeCount={null} />)
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.instances[0].textContent).toBe('Promote')
+    expect(spy).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' })
+    pathname = '/host/events/e1/insights'
+    rerender(<HostEventTabs eventId="e1" attendeeCount={null} />)
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(spy.mock.instances[1].textContent).toBe('Insights')
+    delete Element.prototype.scrollIntoView
+  })
+})

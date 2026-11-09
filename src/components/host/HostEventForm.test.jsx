@@ -9,7 +9,8 @@ const refresh = vi.fn()
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh }) }))
 // HOSTPORTAL.2 — spy on the unsaved flag the form raises and clears.
 const setUnsaved = vi.fn()
-vi.mock('@/lib/unsaved-guard', () => ({ setUnsaved: (f) => setUnsaved(f), hasUnsaved: () => false, confirmLeave: () => true }))
+let flag = false
+vi.mock('@/lib/unsaved-guard', () => ({ setUnsaved: (f) => { flag = Boolean(f); setUnsaved(f) }, hasUnsaved: () => flag, confirmLeave: () => true }))
 
 const { default: HostEventForm } = await import('./HostEventForm.jsx')
 
@@ -21,7 +22,7 @@ const initial = {
   sessions: [{ id: W1, start_time: '10:00', label: null, capacity: 20 }, { id: W2, start_time: '14:00', label: 'Afternoon', capacity: 15 }],
 }
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); push.mockClear(); refresh.mockClear(); setUnsaved.mockClear() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); push.mockClear(); refresh.mockClear(); setUnsaved.mockClear(); flag = false })
 
 describe('HostEventForm sessions', () => {
   it('hydrates two sessions, adds a third, and submits sessions[] without the retired keys', async () => {
@@ -92,7 +93,7 @@ describe('HostEventForm series select', () => {
     const [, init] = fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events/E1')
     expect(JSON.parse(init.body).series_id).toBe('d0000000-0000-4000-8000-0000000000d1')
   })
-  it('with no series the select is absent and the body carries no series_id', async () => {
+  it('with no series the select is absent and an edit sends series_id null (create sends no key)', async () => {
     const fetchMock = vi.fn(async (url) => {
       if (String(url) === '/api/host/series') return { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
       return { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }
@@ -104,7 +105,39 @@ describe('HostEventForm series select', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
     await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u) === '/api/host/events/E1')).toBe(true))
     const [, init] = fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events/E1')
+    expect(JSON.parse(init.body).series_id).toBeNull()
+  })
+  it('create mode sends no series_id key when no series is picked', async () => {
+    const fetchMock = okFetch({ newId: 'new-id' })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<HostEventForm mode="create" brandName="UN1T" />)
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Brand new' } })
+    fireEvent.change(screen.getByLabelText(/Venue name/), { target: { value: 'Studio' } })
+    fireEvent.change(screen.getByLabelText(/^Date/), { target: { value: '2026-12-05' } })
+    fireEvent.change(screen.getAllByLabelText(/Start time/)[0], { target: { value: '10:00' } })
+    fireEvent.change(screen.getAllByLabelText(/^Capacity/)[0], { target: { value: '10' } })
+    fireEvent.click(screen.getByRole('button', { name: /Create event/ }))
+    await waitFor(() => expect(push).toHaveBeenCalled())
+    const [, init] = fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events')
     expect(JSON.parse(init.body)).not.toHaveProperty('series_id')
+  })
+  it('leaving a series: after the save and the refresh the form is still clean and still says Saved.', async () => {
+    const SID = 'd0000000-0000-4000-8000-0000000000d1'
+    const fetchMock = vi.fn(async (url) => (String(url) === '/api/host/series'
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: [{ id: SID, name: 'Monthly Mobility', slug: 'm', upcoming_count: 1 }] }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const inSeries = { ...initial, series_id: SID }
+    const view = render(<HostEventForm mode="edit" eventId="E1" initial={inSeries} brandName="UN1T" status="draft" />)
+    fireEvent.change(await screen.findByLabelText(/^Series/), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await screen.findByText('Saved.')
+    const [, init] = fetchMock.mock.calls.find(([u]) => String(u) === '/api/host/events/E1')
+    expect(JSON.parse(init.body).series_id).toBeNull()
+    setUnsaved.mockClear()
+    view.rerender(<HostEventForm mode="edit" eventId="E1" initial={{ ...initial, series_id: null }} brandName="UN1T" status="draft" />)
+    expect(setUnsaved.mock.calls.every(([f]) => f === false)).toBe(true)
+    expect(screen.getByText('Saved.')).toBeTruthy()
   })
 })
 
@@ -452,6 +485,52 @@ describe('HostEventForm save edge cases', () => {
     expect(screen.queryByText('Saved.')).toBeNull()
     expect(setUnsaved.mock.calls.at(-1)[0]).toBe(true)
     expect(refresh).not.toHaveBeenCalled()
+  })
+})
+
+describe('HostEventForm refused saves and the saved notice', () => {
+  it('shows the readable sentence, not the code, when a save is refused', async () => {
+    const fn = vi.fn(async (url) => (String(url) === '/api/host/series'
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      : { ok: false, status: 409, json: async () => ({ success: false, error: 'session_has_entries', message: 'That session has bookings, so it cannot be removed.' }) }))
+    vi.stubGlobal('fetch', fn)
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="published" />)
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Other' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    expect(await screen.findByText('That session has bookings, so it cannot be removed.')).toBeTruthy()
+    expect(screen.queryByText('session_has_entries')).toBeNull()
+  })
+
+  it('a second save that fails does not leave Saved. beside the error', async () => {
+    let fail = false
+    const fn = vi.fn(async (url) => {
+      if (String(url) === '/api/host/series') return { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }
+      if (fail) return { ok: false, status: 500, json: async () => ({ success: false, error: 'write_failed', message: 'Could not save.' }) }
+      return { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'E1' } }) }
+    })
+    vi.stubGlobal('fetch', fn)
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Other' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await screen.findByText('Saved.')
+    fail = true
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    expect(await screen.findByText('Could not save.')).toBeTruthy()
+    expect(screen.queryByText('Saved.')).toBeNull()
+  })
+
+  it('does not raise the browser leave prompt once the flag has been cleared elsewhere', () => {
+    vi.stubGlobal('fetch', okFetch())
+    render(<HostEventForm mode="edit" eventId="E1" initial={initial} brandName="UN1T" status="draft" />)
+    fireEvent.change(screen.getByLabelText(/Event name/), { target: { value: 'Other' } })
+    const dirtyEvent = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(dirtyEvent)
+    expect(dirtyEvent.defaultPrevented).toBe(true)
+    // e.g. Take off sale / Delete succeeded and cleared the flag before navigating.
+    flag = false
+    const after = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(after)
+    expect(after.defaultPrevented).toBe(false)
   })
 })
 

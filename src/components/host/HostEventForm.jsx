@@ -18,7 +18,7 @@ import PricingTiersEditor from '@/components/PricingTiersEditor'
 import RegistrationQuestionsEditor from '@/components/RegistrationQuestionsEditor'
 import GuardedLink from '@/components/host/GuardedLink'
 import HostSubmitButton from '@/components/host/HostSubmitButton'
-import { setUnsaved } from '@/lib/unsaved-guard'
+import { hasUnsaved, setUnsaved } from '@/lib/unsaved-guard'
 
 const KIND_LABELS = {
   workshop: 'Workshop',
@@ -261,9 +261,11 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         label: trimmedText(s.label),
         capacity: parseInt(s.capacity, 10),
       })),
-      // A series pick travels; clearing it sends null (so an edit can leave a
-      // series); with no series at all the key is absent.
-      ...(seriesId ? { series_id: seriesId } : (initial?.series_id ? { series_id: null } : {})),
+      // An edit always states its series (null leaves it), from state alone:
+      // reading the live `initial` prop here made the body change when the
+      // refresh handed down the saved value, which read as an unsaved edit.
+      // A create sends the key only when a series is picked.
+      ...(isEdit ? { series_id: seriesId || null } : (seriesId ? { series_id: seriesId } : {})),
       hero_image_url: trimmedText(heroImageUrl),
       accent_hex: trimmedText(accentHex),
       venue_name: venueName.trim(),
@@ -282,6 +284,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     if (submitting) return
     setError(null)
     setIssues([])
+    setSaved(false)
 
     const clientErr = clientValidate()
     if (clientErr) {
@@ -301,7 +304,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) {
-        setError(json.error || 'Something went wrong. Please try again.')
+        setError(json.message || json.error || 'Something went wrong. Please try again.')
         setIssues(Array.isArray(json.issues) ? json.issues : [])
         setSubmitting(false)
         return
@@ -381,7 +384,13 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   }, [serverSessions])
   useEffect(() => {
     if (!dirty) return undefined
-    const warn = (e) => { e.preventDefault(); e.returnValue = '' }
+    // Consult the shared flag: an action that already cleared it (Take off
+    // sale, Delete) must not raise the browser's prompt on its way out.
+    const warn = (e) => {
+      if (!hasUnsaved()) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [dirty])
@@ -585,7 +594,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         </div>
       </section>
 
-      {/* Tickets & teams */}
+      {/* Tickets & pricing */}
       <section id="setup-tickets" className="scroll-mt-24">
         <h2 className={sectionCls}>Tickets &amp; pricing</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -647,7 +656,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         <RegistrationQuestionsEditor value={questions} onChange={setQuestions} dark />
       </section>
 
-      {/* Presentation */}
+      {/* Page look */}
       <section id="setup-look" className="scroll-mt-24">
         <h2 className={sectionCls}>Page look</h2>
         <div>

@@ -5,7 +5,7 @@
 // Escape and on a press outside.
 
 import { useEffect, useRef, useState } from 'react'
-import HostEventActions from '@/components/host/HostEventActions'
+import HostEventActions, { hasHostEventActions } from '@/components/host/HostEventActions'
 
 export default function HostEventMenu({ eventId, status, hasRegistrations, brandName }) {
   const [open, setOpen] = useState(false)
@@ -23,8 +23,13 @@ export default function HostEventMenu({ eventId, status, hasRegistrations, brand
     }
   }, [open])
 
+  if (!hasHostEventActions({ status, hasRegistrations })) return null
+
+  // Below sm the panel anchors to the header's actions row (which is `relative`
+  // and full width there), so it opens at the left edge and stays on screen
+  // wherever the ⋯ button wrapped to; from sm it hangs off the button's right.
   return (
-    <div ref={root} className="relative">
+    <div ref={root} className="sm:relative">
       <button
         type="button"
         aria-label="More actions"
@@ -35,7 +40,7 @@ export default function HostEventMenu({ eventId, status, hasRegistrations, brand
         ⋯
       </button>
       {open && (
-        <div className="absolute right-0 z-20 mt-2 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-white/15 bg-black p-3 shadow-xl">
+        <div className="absolute left-0 sm:left-auto sm:right-0 z-20 mt-2 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-white/15 bg-black p-3 shadow-xl">
           <HostEventActions eventId={eventId} status={status} hasRegistrations={hasRegistrations} brandName={brandName} />
         </div>
       )}

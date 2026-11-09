@@ -1,4 +1,4 @@
-// EVENT-WAITLIST.1 — the host event page carries the waitlist panel for its
+// EVENT-WAITLIST.1 — the Attendees tab of a host event carries the waitlist panel for its
 // own event: host URLs, dark styling, and no Remove (read-only for hosts).
 import { describe, it, expect, vi } from 'vitest'
 

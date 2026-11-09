@@ -35,6 +35,7 @@ export default async function HostEventPromote(props) {
   // poison the link. A failure hides only the Share block's link.
   let eventUrl = null
   try {
+    if (!event.slug) throw new Error('event has no slug')
     const { data: hostRow, error } = await db
       .from('event_hosts')
       .select('anchor_location_id')

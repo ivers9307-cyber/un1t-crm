@@ -48,7 +48,7 @@ export default async function HostEventLayout({ children, params }) {
 
   return (
     <div>
-      <GuardedLink href="/host" className="text-xs text-white/45 hover:text-white">← Events</GuardedLink>
+      <GuardedLink href="/host/events" className="text-xs text-white/45 hover:text-white">← Events</GuardedLink>
 
       <div className="mt-3 flex items-start justify-between gap-4 flex-wrap">
         <div className="min-w-0">
@@ -64,13 +64,13 @@ export default async function HostEventLayout({ children, params }) {
               {race.series && (
                 <>
                   {line.length > 0 ? ' · ' : ''}part of series{' '}
-                  <a href={`/event/series/${race.series.slug}`} className="underline hover:text-white">{race.series.name}</a>
+                  <a href={`/event/series/${race.series.slug}`} target="_blank" rel="noopener noreferrer" className="underline hover:text-white">{race.series.name}</a>
                 </>
               )}
             </p>
           )}
         </div>
-        <div className="shrink-0 flex items-center gap-2 flex-wrap">
+        <div className="relative max-w-full flex items-center gap-2 flex-wrap">
           {race.slug && (
             <a
               href={`/event/${race.slug}`}

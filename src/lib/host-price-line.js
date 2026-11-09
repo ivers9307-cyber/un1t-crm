@@ -29,12 +29,13 @@ export function hostPriceLine({ race, soldByTier, nowMs }) {
       const left = Math.max(0, tier.capacity - (Number(soldByTier?.[tier.id]) || 0))
       parts.push(`${left} of ${tier.capacity} left`)
     }
-    if (base != null) parts.push(`then standard ${euro(base)}`)
+    if (pricing.next) parts.push(`then ${pricing.next.name} ${euro(pricing.next.price_cents)}`)
+    else if (base === 0) parts.push('then free')
+    else if (base != null) parts.push(`then standard ${euro(base)}`)
   } else {
     parts.push(base ? `${euro(base)} per person` : 'Free')
   }
-  for (const t of tiers) {
-    if (t.min_people != null) parts.push(`${t.min_people} or more people ${euro(t.price_cents)} each`)
-  }
+  // Only the group tier that is open right now (an ended or full one is not offered).
+  if (pricing.group) parts.push(`${pricing.group.min_people} or more people ${euro(pricing.group.price_cents)} each`)
   return parts.join(' · ')
 }

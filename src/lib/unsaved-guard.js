@@ -16,7 +16,8 @@ export function hasUnsaved() {
 export function confirmLeave() {
   if (!unsaved) return true
   if (typeof window === 'undefined') return true
-  const leave = window.confirm('You have unsaved changes. Leave without saving?')
-  if (leave) unsaved = false
-  return leave
+  // A yes does not clear the flag: the page may stay (a new tab, the tab the
+  // host is already on, a failed action). The form clears it on save and on
+  // unmount, and an action that really leaves clears it on success.
+  return window.confirm('You have unsaved changes. Leave without saving?')
 }

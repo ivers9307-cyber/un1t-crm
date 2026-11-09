@@ -15,16 +15,16 @@ describe('unsaved-guard', () => {
     expect(confirmLeave()).toBe(true)
     expect(confirm).not.toHaveBeenCalled()
   })
-  it('prompts once when unsaved, and clears the flag on yes', () => {
+  it('keeps the flag on yes (the page may stay); the form clears it on unmount', () => {
     const confirm = stubWindow(true)
     setUnsaved(true)
     expect(hasUnsaved()).toBe(true)
     expect(confirmLeave()).toBe(true)
     expect(confirm).toHaveBeenCalledTimes(1)
     expect(confirm).toHaveBeenCalledWith('You have unsaved changes. Leave without saving?')
-    expect(hasUnsaved()).toBe(false)
+    expect(hasUnsaved()).toBe(true)
     expect(confirmLeave()).toBe(true)
-    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(confirm).toHaveBeenCalledTimes(2)
   })
   it('keeps the flag when the host says no', () => {
     stubWindow(false)
