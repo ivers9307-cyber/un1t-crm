@@ -1,25 +1,34 @@
 import { describe, it, expect } from 'vitest'
-import { isNavActive } from './HostNav.jsx'
+import { isNavActive, LINKS } from './HostNav.jsx'
 
 // Pure-function test only — isNavActive has no DOM/hook dependency, so no
 // react-dom/server render or next/navigation mock is needed here.
-const DASHBOARD = { href: '/host', label: 'Dashboard', exact: true }
+const OVERVIEW = { href: '/host', label: 'Overview', exact: true }
+const EVENTS = { href: '/host/events', label: 'Events', exact: false }
+const YOUR_PAGE = { href: '/host/page', label: 'Your page', exact: false }
 const CONTACTS = { href: '/host/contacts', label: 'Contacts', exact: false }
 const EMAILS = { href: '/host/emails', label: 'Emails', exact: false }
 
 describe('isNavActive', () => {
-  it('matches Dashboard only on the exact /host path', () => {
-    expect(isNavActive('/host', DASHBOARD)).toBe(true)
+  it('matches Overview only on the exact /host path', () => {
+    expect(isNavActive('/host', OVERVIEW)).toBe(true)
   })
 
-  it('does not light up Dashboard on a sub-path', () => {
-    expect(isNavActive('/host/contacts', DASHBOARD)).toBe(false)
+  it('does not light up Overview on a sub-path', () => {
+    expect(isNavActive('/host/contacts', OVERVIEW)).toBe(false)
   })
 
-  it('does not light up any link on an unrelated section', () => {
-    expect(isNavActive('/host/events/new', DASHBOARD)).toBe(false)
-    expect(isNavActive('/host/events/new', CONTACTS)).toBe(false)
-    expect(isNavActive('/host/events/new', EMAILS)).toBe(false)
+  it('lights Events on the list, an event page and the create page', () => {
+    for (const p of ['/host/events', '/host/events/e1', '/host/events/e1/setup', '/host/events/new']) expect(isNavActive(p, EVENTS)).toBe(true)
+  })
+
+  it('lights Your page on /host/page only', () => {
+    expect(isNavActive('/host/page', YOUR_PAGE)).toBe(true)
+    expect(isNavActive('/host/pages', YOUR_PAGE)).toBe(false)
+  })
+
+  it('lists the six places in order', () => {
+    expect(LINKS.map((l) => l.label)).toEqual(['Overview', 'Events', 'Contacts', 'Emails', 'Earnings', 'Your page'])
   })
 
   it('prefix-matches Contacts on a nested detail path', () => {
