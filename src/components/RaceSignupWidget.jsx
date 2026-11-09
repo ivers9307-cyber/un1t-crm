@@ -38,7 +38,7 @@ import { tierPriceLabel, groupPriceLabel, effectiveNonMemberFee } from '@/lib/pr
 import { resolveRegistrationQuestions, validateAnswers } from '@/lib/registration-questions'
 import { rememberEventAttribution, readEventAttribution } from '@/lib/event-attribution'
 import EventWaitlistForm from './EventWaitlistForm.jsx'
-import DonateCard, { CharityRaisedStrip, OrDivider } from './DonateCard.jsx'
+import DonateCard, { CharityRaisedStrip, DonateJumpLink, OrDivider } from './DonateCard.jsx'
 
 // Kind-keyed copy. Adding a new kind = one entry. The 'race' entry
 // holds the original strings so the operator-visible UX for races
@@ -1288,6 +1288,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           <CharityRaisedStrip charity={race.charity} currency={race.payment_currency || 'EUR'} brand={race.organization_name || ''} />
           {/* CHARITY.13 — items-start so the donate card hugs its content instead of
               stretching to the taller signup card; the OR rule still spans the row. */}
+          <DonateJumpLink charity={race.charity} brand={race.organization_name || ''} />
           {/* EVENTMOBILE.1 — on a phone the cards stack, and the signup (what
               most visitors came for) goes first: flex-col-reverse shows signup,
               OR, donate. The DOM order (and so the desktop row) is unchanged. */}
