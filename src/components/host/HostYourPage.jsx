@@ -5,14 +5,48 @@
 // Plain data in (urls, count, copy values); the handlers live here. Replaces
 // the dashboard card's drawer.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import HostListPageEditor from '@/components/host/HostListPageEditor'
 import CopyLinkButton from '@/components/host/CopyLinkButton'
 
 const BTN = 'rounded-lg border border-white/15 text-white/80 text-xs font-semibold px-3 py-1.5 hover:bg-white/10 hover:text-white'
 
+const WIDE = '(min-width: 1024px)'
+const PREVIEW_ID = 'host-page-preview'
+
+// The page's own path on THIS origin (the site only frames itself, so the
+// customer-facing host in `url` cannot be framed). Only a bare /h/<slug>.
+function previewPathOf(url) {
+  try {
+    const { pathname } = new URL(url)
+    return /^\/h\/[^/]+$/.test(pathname) ? pathname : null
+  } catch {
+    return null
+  }
+}
+
+// True from `lg` up. The preview is one iframe, so CSS alone cannot hide it;
+// the component decides whether to mount it.
+function useIsWide() {
+  const [wide, setWide] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined
+    const mql = window.matchMedia(WIDE)
+    const sync = () => setWide(mql.matches)
+    sync()
+    mql.addEventListener('change', sync)
+    return () => mql.removeEventListener('change', sync)
+  }, [])
+  return wide
+}
+
 export default function HostYourPage({ url, joinUrl, signupCount, copyValues }) {
   const [copy, setCopy] = useState(copyValues)
+  const [saves, setSaves] = useState(0)
+  const [open, setOpen] = useState(false)
+  const wide = useIsWide()
+  const previewPath = previewPathOf(url)
+  const showPreview = open || wide
 
   return (
     <div>
@@ -31,12 +65,45 @@ export default function HostYourPage({ url, joinUrl, signupCount, copyValues }) 
         </div>
       </div>
 
-      <HostListPageEditor
-        layout="sections"
-        initial={copy}
-        previewUrl={url}
-        onSaved={(v) => setCopy(v)}
-      />
+      <div className={previewPath ? 'lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] lg:gap-8 lg:items-start' : ''}>
+        <div className="min-w-0">
+          <HostListPageEditor
+            layout="sections"
+            initial={copy}
+            previewUrl={url}
+            onSaved={(v) => { setCopy(v); setSaves((n) => n + 1) }}
+          />
+          {previewPath && (
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-controls={PREVIEW_ID}
+              onClick={() => setOpen((o) => !o)}
+              className={`${BTN} mt-4 lg:hidden`}
+            >
+              {open ? 'Hide preview' : 'Show preview'}
+            </button>
+          )}
+        </div>
+        {previewPath && (
+          <div id={PREVIEW_ID} className="mt-4 lg:mt-0 lg:sticky lg:top-4 min-w-0">
+            {showPreview && (
+              <>
+                <div className="overflow-hidden rounded-lg border border-white/15 bg-white">
+                  <iframe
+                    key={saves}
+                    title="Preview of your public page"
+                    src={previewPath}
+                    loading="lazy"
+                    className="block h-[640px] w-full"
+                  />
+                </div>
+                <p className="mt-2 text-xs text-white/40">This shows your saved page. Save to update it.</p>
+              </>
+            )}
+          </div>
+        )}
+      </div>
 
       {joinUrl && (
         <div data-testid="signup-form-link" className="mt-8 border-t border-white/10 pt-4 flex flex-wrap items-center justify-between gap-3">
