@@ -7,6 +7,7 @@ const state = {
   signedOut: false,
   host: { id: 'h1', name: 'Host One', payment_provider: 'stripe_connect', charges_enabled: true },
   events: [], eventsError: null, revenue: null, revenueThrows: false,
+  rollup: { bookings: 0, views: 0, signups: 0, contacts: 0 }, windowRevenue: null, windowThrows: false,
   fill: { ok: true, sessions: [], booked: 0, capacity: null },
   stats: { ok: true, stats: { views: 0, unique_visitors: 0, confirmed: 0, conversion_pct: null, waitlist: { waiting: 0, offered: 0, claimed: 0 } } },
 }
@@ -26,11 +27,16 @@ vi.mock('@/lib/supabase', () => ({
   }),
 }))
 vi.mock('@/lib/host-revenue', () => ({
-  getHostRevenue: vi.fn(async () => {
+  getHostRevenue: vi.fn(async (_db, _id, opts) => {
+    if (opts?.sinceIso) {
+      if (state.windowThrows) throw new Error('boom')
+      return state.windowRevenue
+    }
     if (state.revenueThrows) throw new Error('boom')
     return state.revenue
   }),
 }))
+vi.mock('@/lib/host-rollup', () => ({ loadHostRollup: vi.fn(async () => state.rollup) }))
 vi.mock('@/lib/host-org-brand', () => ({ resolveHostOrgBrand: vi.fn(async () => ({ name: 'Brand X', shortName: 'BX' })) }))
 vi.mock('@/lib/host-session-fill', () => ({ loadSessionFill: vi.fn(async () => state.fill) }))
 vi.mock('@/lib/event-stats', () => ({ loadEventStats: vi.fn(async () => state.stats) }))
@@ -75,6 +81,9 @@ beforeEach(() => {
   state.eventsError = null
   state.revenue = { currency: 'EUR', totals: {}, perEvent: [] }
   state.revenueThrows = false
+  state.rollup = { bookings: 0, views: 0, signups: 0, contacts: 0 }
+  state.windowRevenue = { currency: 'EUR', totals: { gross_cents: 0, net_to_host_cents: 0 }, perEvent: [] }
+  state.windowThrows = false
   state.fill = { ok: true, sessions: [], booked: 0, capacity: null }
   state.stats = { ok: true, stats: { views: 0, unique_visitors: 0, confirmed: 0, conversion_pct: null, waitlist: { waiting: 0, offered: 0, claimed: 0 } } }
 })
@@ -260,5 +269,70 @@ describe('host overview page', () => {
     expect(t).not.toContain('Grow your list')
     expect(t).not.toContain('Your events and earnings at a glance')
     expect(headings(el)).not.toContain('Revenue')
+  })
+
+  describe('Last 30 days', () => {
+    const block = (t) => t.split('Last 30 days')[1].split('Coming up')[0]
+
+    it('sits between Next up and Coming up and shows the four figures', async () => {
+      state.events = [ev('u1', 'published', '2026-12-05'), ev('u2', 'published', '2026-12-06')]
+      state.rollup = { bookings: 12, views: 340, signups: 5, contacts: 48 }
+      state.windowRevenue = { currency: 'EUR', totals: { gross_cents: 20000, net_to_host_cents: 18000 }, perEvent: [] }
+      const el = await Page()
+      const hs = headings(el)
+      expect(hs.indexOf('Last 30 days')).toBeGreaterThan(hs.indexOf('Next up'))
+      expect(hs.indexOf('Last 30 days')).toBeLessThan(hs.indexOf('Coming up'))
+      const b = block(text(el))
+      expect(b).toContain('Bookings12')
+      expect(b).toContain('Net earned€180.00')
+      expect(b).toContain('Event page views340across all events')
+      expect(b).toContain('List signups548 contacts')
+    })
+
+    it('shows unavailable for a null roll-up figure and never 0', async () => {
+      state.events = [ev('u1', 'published', '2026-12-05')]
+      state.rollup = { bookings: null, views: null, signups: null, contacts: null }
+      const b = block(text(await Page()))
+      expect(b).toContain('Bookingsunavailable')
+      expect(b).toContain('Event page viewsunavailable')
+      expect(b).toContain('List signupsunavailable')
+      expect(b).not.toMatch(/Bookings0|views0|signups0/)
+      expect(b).not.toContain('contacts')
+    })
+
+    it('shows unavailable on the money tile when the windowed revenue read throws', async () => {
+      state.events = [ev('u1', 'published', '2026-12-05')]
+      state.windowThrows = true
+      expect(block(text(await Page()))).toContain('Net earnedunavailable')
+    })
+
+    it('shows Gross collected, not Net earned, for a non-Stripe host', async () => {
+      state.host = { id: 'h1', name: 'Host One', payment_provider: 'revolut', charges_enabled: false }
+      state.events = [ev('u1', 'published', '2026-12-05')]
+      state.windowRevenue = { currency: 'EUR', totals: { gross_cents: 5000, net_to_host_cents: 4000 }, perEvent: [] }
+      const b = block(text(await Page()))
+      expect(b).toContain('Gross collected€50.00')
+      expect(b).not.toContain('Net earned')
+    })
+
+    it('renders for a host with no events, with the money tile at the formatted zero', async () => {
+      const b = block(text(await Page()))
+      expect(b).toContain('Bookings0')
+      expect(b).toContain('Net earned€0.00')
+    })
+
+    it('asks for the window from 30 days before today at local midnight', async () => {
+      const { getHostRevenue } = await import('@/lib/host-revenue')
+      const { loadHostRollup } = await import('@/lib/host-rollup')
+      state.events = [ev('u1', 'published', '2026-12-05')]
+      await Page()
+      expect(loadHostRollup).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ hostId: 'h1', eventIds: ['u1'], sinceDay: '2026-10-10', sinceIso: '2026-10-09T23:00:00.000Z' }))
+      expect(getHostRevenue).toHaveBeenCalledWith(expect.anything(), 'h1', { sinceIso: '2026-10-09T23:00:00.000Z' })
+    })
+
+    it('is absent when the events read fails', async () => {
+      state.eventsError = { message: 'boom' }
+      expect(headings(await Page())).not.toContain('Last 30 days')
+    })
   })
 })

@@ -12,7 +12,8 @@ import { createServerClient } from '@/lib/supabase'
 import { loadEventStats } from '@/lib/event-stats'
 import { loadSessionFill } from '@/lib/host-session-fill'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
-import { formatInZone, zonedWallClockToInstant } from '@/lib/location-time'
+import { formatInZone, zonedWallClockToInstant, addDaysISO } from '@/lib/location-time'
+import { loadHostRollup } from '@/lib/host-rollup'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { logWarn } from '@/lib/log'
 import {
@@ -107,6 +108,21 @@ export default async function HostOverviewPage() {
   } catch (e) {
     logWarn('host-overview', 'revenue unavailable', { err: e })
   }
+  // Last 30 days: a windowed revenue read beside the all-time one above.
+  const sinceDay = addDaysISO(today, -30)
+  const sinceMs = zonedWallClockToInstant(sinceDay, '00:00', zone)
+  const sinceIso = Number.isFinite(sinceMs) ? new Date(sinceMs).toISOString() : null
+  let windowRevenue = null
+  let rollup = { bookings: null, views: null, signups: null, contacts: null }
+  if (sinceIso) {
+    try {
+      windowRevenue = await getHostRevenue(db, host.id, { sinceIso })
+    } catch (e) {
+      logWarn('host-overview', 'windowed revenue unavailable', { err: e })
+    }
+    rollup = await loadHostRollup(db, { hostId: host.id, eventIds: list.map((e) => e.id), sinceIso, sinceDay })
+  }
+  const unavailable = (n) => (n === null || n === undefined ? 'unavailable' : n)
   const revenueByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
   const cur = revenue?.currency || 'EUR'
   const label = moneyLabel(host)
@@ -199,6 +215,21 @@ export default async function HostOverviewPage() {
             <Link href="/host/events/new" className="text-white underline underline-offset-2 hover:text-white/80">Nothing on sale yet — create an event.</Link>
           </p>
         )}
+      </section>
+
+      <section className="mt-8">
+        <h2 className={H2}>Last 30 days</h2>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {tile({ label: 'Bookings', value: unavailable(rollup.bookings) })}
+          {tile({
+            label: label === 'net' ? 'Net earned' : 'Gross collected',
+            value: windowRevenue
+              ? formatHostMoney(label === 'net' ? windowRevenue.totals.net_to_host_cents : windowRevenue.totals.gross_cents, windowRevenue.currency || cur)
+              : 'unavailable',
+          })}
+          {tile({ label: 'Event page views', value: unavailable(rollup.views), sub: 'across all events' })}
+          {tile({ label: 'List signups', value: unavailable(rollup.signups), sub: rollup.contacts === null ? null : `${rollup.contacts} contacts` })}
+        </div>
       </section>
 
       {comingUp.length > 0 && (
