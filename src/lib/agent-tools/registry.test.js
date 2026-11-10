@@ -216,18 +216,18 @@ describe('runTool', () => {
   })
 })
 
-describe('runTool assistant_permission wording', () => {
+describe('runTool mcp_access_permission wording', () => {
   it('names the studio case and the default case differently', async () => {
     const { db } = fakeDb()
     const auth = fakeAuth()
     auth.extra.user.assignmentsByLocation[B].permissions = {}
     const named = await runTool(echo, { studio_id: B, text: 'hi' }, auth, { db })
-    expect(named).toMatchObject({ ok: false, code: 'assistant_permission', message: 'The AI Assistant permission is not held at that studio.' })
+    expect(named).toMatchObject({ ok: false, code: 'mcp_access_permission', message: 'The Connect an Agent permission is not held at that studio.' })
 
     auth.extra.user.rolesByLocation = { [A]: 'staff', [B]: 'staff' }
     auth.extra.user.assignmentsByLocation[A] = { role: 'staff', permissions: {} }
     const fallback = await runTool(echo, { text: 'hi' }, auth, { db })
-    expect(fallback).toMatchObject({ ok: false, code: 'assistant_permission', message: 'No studio where the AI Assistant permission is held.' })
+    expect(fallback).toMatchObject({ ok: false, code: 'mcp_access_permission', message: 'No studio where the Connect an Agent permission is held.' })
   })
 })
 

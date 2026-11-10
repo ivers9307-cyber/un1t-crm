@@ -40,8 +40,11 @@ const RATE_LIMIT = Object.freeze({ max: 120, windowMs: 60_000 })
 
 const MESSAGES = Object.freeze({
   studio_not_found: 'Unknown studio.',
-  assistant_permission: 'The AI Assistant permission is not held at that studio.',
-  assistant_permission_default: 'No studio where the AI Assistant permission is held.',
+  // MCPACCESS.1 — name the permission the operator actually sees in
+  // /settings/staff. Saying "AI Assistant" here would send a refused
+  // person to switch on the paid in-app chat, which is deliberately off.
+  mcp_access_permission: 'The Connect an Agent permission is not held at that studio.',
+  mcp_access_permission_default: 'No studio where the Connect an Agent permission is held.',
   studio_refused: 'That studio cannot be used.',
   mcp_disabled: 'MCP is not switched on for this organisation. Ask an organisation admin.',
   tool_failed: 'The tool failed. The error has been logged.',
@@ -74,7 +77,7 @@ function zodMessage(error) {
 }
 
 function studioMessage(code, studioId) {
-  if (code === 'assistant_permission' && !studioId) return MESSAGES.assistant_permission_default
+  if (code === 'mcp_access_permission' && !studioId) return MESSAGES.mcp_access_permission_default
   return MESSAGES[code] || MESSAGES.studio_refused
 }
 

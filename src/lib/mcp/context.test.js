@@ -43,14 +43,14 @@ describe('resolveStudio', () => {
     expect(random).toEqual(outside)
   })
 
-  it('answers assistant_permission for a member studio without the permission', () => {
+  it('answers mcp_access_permission for a member studio without the permission', () => {
     const user = userWith({ active: 'a', roles: { a: 'owner', b: 'staff' } })
-    expect(resolveStudio(user, 'b')).toEqual({ ok: false, code: 'assistant_permission' })
+    expect(resolveStudio(user, 'b')).toEqual({ ok: false, code: 'mcp_access_permission' })
   })
 
-  it('answers assistant_permission by default when no studio qualifies', () => {
+  it('answers mcp_access_permission by default when no studio qualifies', () => {
     const user = userWith({ active: 'a', roles: { a: 'staff' } })
-    expect(resolveStudio(user, null)).toEqual({ ok: false, code: 'assistant_permission' })
+    expect(resolveStudio(user, null)).toEqual({ ok: false, code: 'mcp_access_permission' })
   })
 
   it('returns the studio row for an explicit qualifying id', () => {

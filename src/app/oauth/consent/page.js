@@ -68,7 +68,7 @@ export default async function OAuthConsentPage({ searchParams }) {
   const eligibility = enabledOrgs.length === 0
     ? { ok: false, reason: 'mcp_disabled' }
     : !mcpAccess
-      ? { ok: false, reason: 'assistant_permission' }
+      ? { ok: false, reason: 'mcp_access_permission' }
       : { ok: true, reason: null }
 
   return (

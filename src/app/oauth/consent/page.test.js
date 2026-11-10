@@ -90,10 +90,10 @@ describe('/oauth/consent page', () => {
     expect(form.props.eligibility).toEqual({ ok: false, reason: 'mcp_disabled' })
   })
 
-  it('passes eligibility assistant_permission when the permission is held nowhere', async () => {
+  it('passes eligibility mcp_access_permission when the permission is held nowhere', async () => {
     hasPermissionAtAnyLocation.mockReturnValue(false)
     const form = findForm(await render('abc'))
-    expect(form.props.eligibility).toEqual({ ok: false, reason: 'assistant_permission' })
+    expect(form.props.eligibility).toEqual({ ok: false, reason: 'mcp_access_permission' })
   })
 
   it('refuses under View as user: no form, so no Approve path', async () => {
