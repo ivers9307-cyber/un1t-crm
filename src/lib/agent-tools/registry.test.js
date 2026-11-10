@@ -34,12 +34,15 @@ function fakeAuth({ enabledOrgIds = [ORG1] } = {}) {
         activeLocation: locations[0],
         rolesByLocation: { [A]: 'manager', [B]: 'staff' },
         assignmentsByLocation: {
-          [A]: { role: 'manager', permissions: {} },
-          [B]: { role: 'staff', permissions: { assistant: true } },
+          // MCPACCESS.1 — a manager does NOT hold mcp_access by default
+          // (master/owner only), so grant it here the way an admin would at
+          // /settings/staff for the pilot.
+          [A]: { role: 'manager', permissions: { mcp_access: true } },
+          [B]: { role: 'staff', permissions: { mcp_access: true } },
         },
       },
       enabledOrgIds,
-      assistantAnywhere: true,
+      mcpAccessAnywhere: true,
     },
   }
 }

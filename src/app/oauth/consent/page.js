@@ -62,10 +62,12 @@ export default async function OAuthConsentPage({ searchParams }) {
   }
 
   const enabledOrgs = await mcpEnabledOrgIds(createServerClient(), user)
-  const assistant = hasPermissionAtAnyLocation(user, 'assistant')
+  // MCPACCESS.1 — `mcp_access`, not `assistant`: connecting an agent costs
+  // us no model tokens, the in-app chat does, so they are separate grants.
+  const mcpAccess = hasPermissionAtAnyLocation(user, 'mcp_access')
   const eligibility = enabledOrgs.length === 0
     ? { ok: false, reason: 'mcp_disabled' }
-    : !assistant
+    : !mcpAccess
       ? { ok: false, reason: 'assistant_permission' }
       : { ok: true, reason: null }
 

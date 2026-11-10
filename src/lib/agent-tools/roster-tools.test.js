@@ -45,10 +45,10 @@ function auth(role = 'manager') {
         locations,
         activeLocation: locations[0],
         rolesByLocation: { [DUB]: role },
-        assignmentsByLocation: { [DUB]: { role, permissions: { assistant: true } } },
+        assignmentsByLocation: { [DUB]: { role, permissions: { mcp_access: true } } },
       },
       enabledOrgIds: ['org-1'],
-      assistantAnywhere: true,
+      mcpAccessAnywhere: true,
     },
   }
 }

@@ -39,7 +39,7 @@ export default defineTool({
         role: roleAt(user, l.id),
         today: todayStrIn(zone, nowMs),
         mcp_enabled: mcpOn(l),
-        assistant: hasPermissionForLocation(user, l.id, 'assistant'),
+        mcp_access: hasPermissionForLocation(user, l.id, 'mcp_access'),
       }
     })
 

@@ -15,6 +15,7 @@ import listPipeline from './list-pipeline.js'
 import listTasks from './list-tasks.js'
 import createContact from './create-contact.js'
 import createActivity from './create-activity.js'
+import { readableContactStudios } from './_contact-scope.js'
 
 const DUB = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a01'
 const HATCH = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a02'
@@ -23,9 +24,9 @@ const C1 = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1e01'
 const C2 = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1e02'
 const NOW_MS = Date.UTC(2031, 10, 1, 12, 0, 0)
 
-// Same organisation as DUB, Assistant and Contacts both on: readable from DUB.
+// Same organisation as DUB, Connect-an-Agent and Contacts both on: readable from DUB.
 const SIB = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a03'
-// Same organisation, Contacts on but the AI Assistant off: not readable through MCP.
+// Same organisation, Contacts on but Connect-an-Agent off: not readable through MCP.
 const NOAST = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a04'
 // Another organisation whose MCP switch is off: not readable through MCP.
 const ORG2 = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a05'
@@ -58,15 +59,15 @@ function auth(role = 'manager', perms = {}) {
         activeLocation: locations[0],
         rolesByLocation: Object.fromEntries(locations.map((l) => [l.id, role])),
         assignmentsByLocation: {
-          [DUB]: { role, permissions: { assistant: true, ...perms } },
-          [HATCH]: { role, permissions: { assistant: true, contacts: false } },
-          [SIB]: { role, permissions: { assistant: true, contacts: true } },
-          [NOAST]: { role, permissions: { assistant: false, contacts: true } },
-          [ORG2]: { role, permissions: { assistant: true, contacts: true } },
+          [DUB]: { role, permissions: { mcp_access: true, ...perms } },
+          [HATCH]: { role, permissions: { mcp_access: true, contacts: false } },
+          [SIB]: { role, permissions: { mcp_access: true, contacts: true } },
+          [NOAST]: { role, permissions: { mcp_access: false, contacts: true } },
+          [ORG2]: { role, permissions: { mcp_access: true, contacts: true } },
         },
       },
       enabledOrgIds: ['org-1'],
-      assistantAnywhere: true,
+      mcpAccessAnywhere: true,
     },
   }
 }
@@ -410,5 +411,43 @@ describe('create_activity', () => {
     })
     expect((await run(createActivity, input, 'manager', related.db)).ok).toBe(true)
     expect(argOf(related.on('activities')[0], 'insert')[1]).toMatchObject({ contact_id: C1, location_id: DUB, assignee_id: ME })
+  })
+})
+
+// MCPACCESS.1 — the contact fence is TWO permissions ANDed: the MCP door
+// (`mcp_access`, swapped from `assistant`) and the Contacts data permission.
+// Review Focus 5: the Contacts half must survive the swap. The included case
+// is the RED driver (mcp_access on, assistant off — readable only once the
+// swap lands); the excluded case is the guard against a swap that replaces
+// both checks or drops the Contacts one.
+describe('readableContactStudios (MCPACCESS.1)', () => {
+  const OPEN = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a11'   // mcp_access + contacts
+  const NOCON = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a12'  // mcp_access, Contacts OFF
+
+  function fenceUser() {
+    const loc = (id) => ({ id, name: id, timezone: 'Europe/Dublin', organization_id: 'org-1' })
+    const locations = [loc(OPEN), loc(NOCON)]
+    return {
+      user: {
+        id: ME,
+        role: 'staff',
+        isMaster: false,
+        locations,
+        activeLocation: locations[0],
+        rolesByLocation: { [OPEN]: 'staff', [NOCON]: 'staff' },
+        assignmentsByLocation: {
+          // assistant deliberately false at both: pre-swap these are unreadable,
+          // post-swap OPEN becomes readable and NOCON stays fenced by Contacts.
+          [OPEN]: { role: 'staff', permissions: { mcp_access: true, assistant: false, contacts: true } },
+          [NOCON]: { role: 'staff', permissions: { mcp_access: true, assistant: false, contacts: false } },
+        },
+      },
+      ctx: { studio: { organization_id: 'org-1' }, enabledOrgIds: ['org-1'] },
+    }
+  }
+
+  it('includes a studio holding mcp_access and Contacts, and excludes one without Contacts', () => {
+    const { user, ctx } = fenceUser()
+    expect(readableContactStudios(user, ctx)).toEqual([OPEN])
   })
 })

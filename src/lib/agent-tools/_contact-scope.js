@@ -22,7 +22,11 @@ import { studiosOfContact } from '@/lib/contact-studios'
 /**
  * The ids of the person's studios a tool call may read contacts at: in the
  * resolved studio's organisation, that organisation's MCP switch on, and the
- * person holding `assistant` AND `contacts` there.
+ * person holding `mcp_access` AND `contacts` there.
+ *
+ * MCPACCESS.1 — two permissions ANDed, and they answer different questions:
+ * `mcp_access` is the MCP door (swapped from `assistant`), `contacts` is the
+ * data permission. Never collapse them into one.
  *
  * @param {object} user getCurrentUser() result
  * @param {{ studio: { organization_id: string }, enabledOrgIds: string[] }} ctx the tool call's context
@@ -32,7 +36,7 @@ export function readableContactStudios(user, ctx) {
   if (!orgId || !(ctx.enabledOrgIds || []).includes(orgId)) return []
   return (user?.locations || [])
     .filter((l) => l?.id && l.organization_id === orgId
-      && hasPermissionForLocation(user, l.id, 'assistant')
+      && hasPermissionForLocation(user, l.id, 'mcp_access')
       && hasPermissionForLocation(user, l.id, 'contacts'))
     .map((l) => l.id)
 }
