@@ -11,10 +11,10 @@
 //
 // Through MCP the studios that count are narrower than the person's Contacts
 // studios: only those in the resolved studio's organisation, whose
-// organisation has MCP switched on, where the person holds the AI Assistant
-// permission as well as Contacts. Otherwise a call resolved at a studio of
-// organisation A would read past organisation B's switch, or past a studio
-// where the assistant is off.
+// organisation has MCP switched on, where the person holds Connect an Agent
+// (`mcp_access`) as well as Contacts. Otherwise a call resolved at a studio
+// of organisation A would read past organisation B's switch, or past a
+// studio where agent access is off.
 
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { studiosOfContact } from '@/lib/contact-studios'

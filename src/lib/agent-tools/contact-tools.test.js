@@ -450,4 +450,14 @@ describe('readableContactStudios (MCPACCESS.1)', () => {
     const { user, ctx } = fenceUser()
     expect(readableContactStudios(user, ctx)).toEqual([OPEN])
   })
+
+  // The empty set is the load-bearing case: get-contact.js gates on
+  // `readableContactStudios(...).length > 0`, so an "if empty, fall back to
+  // the resolved studio" convenience would OPEN the tool rather than close
+  // it — the Pride Training Club bug relocated into the contact fence.
+  it('returns no studios at all when mcp_access is held but Contacts is not', () => {
+    const { user, ctx } = fenceUser()
+    user.assignmentsByLocation[OPEN].permissions.contacts = false
+    expect(readableContactStudios(user, ctx)).toEqual([])
+  })
 })

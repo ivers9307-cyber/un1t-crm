@@ -1,6 +1,6 @@
 // MCP.1 — `get_contact`: one contact's card. Readable when the contact is
 // homed at, or has a relationship row at, a studio of the resolved studio's
-// organisation (MCP switched on) where the person holds the AI Assistant and
+// organisation (MCP switched on) where the person holds Connect an Agent and
 // Contacts permissions (_contact-scope.js); anything else, a random id
 // included, answers the same not_found. Once readable, the contact's deals, notes,
 // activities and class bookings are read by contact_id, as the contact page

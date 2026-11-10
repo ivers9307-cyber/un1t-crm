@@ -151,9 +151,19 @@ hole before it is one. Change it if the tier mapping should differ.
 
 ### 4. The gate swap
 
-Three sites gate; two are informational. No tool module names the key — tools
-reach it through `context.js` and `_contact-scope.js` — so none of the 18 tools
-change.
+Three sites gate; two are informational. No tool module *enforces* the key —
+tools reach enforcement through `context.js` and `_contact-scope.js`, so none
+of the 18 tools changes behaviour.
+
+**Corrected 10 Nov after review:** several tool modules nonetheless *name* the
+permission in prose that does change — `whoami`'s shipped `description`
+string (the text the MCP client shows Claude), plus header comments in
+`whoami`, `get-contact`, `get-classes`, `get-class-roster`, `registry.js`,
+`_contact-scope.js` and `mcp/auth.js`. The original wording here read as "no
+tool file is touched", which is how the first pass shipped a tool
+description still telling the agent the gate is AI Assistant.
+`tests/agent-tools-guard.test.js` now fails any tool whose `title` or
+`description` names the AI Assistant permission.
 
 **Gates:**
 

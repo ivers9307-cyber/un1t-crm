@@ -21,14 +21,14 @@ function userWith({ active, roles, perms = {} }) {
 }
 
 describe('resolveStudio', () => {
-  it('defaults to the active studio when the person holds assistant there', () => {
+  it('defaults to the active studio when the person holds mcp_access there', () => {
     const user = userWith({ active: 'b', roles: { a: 'owner', b: 'owner' } })
     const r = resolveStudio(user, null)
     expect(r.ok).toBe(true)
     expect(r.studio.id).toBe('b')
   })
 
-  it('falls back to the first studio with assistant when the active one lacks it', () => {
+  it('falls back to the first studio with mcp_access when the active one lacks it', () => {
     const user = userWith({ active: 'a', roles: { a: 'staff', b: 'owner', c: 'owner' } })
     const r = resolveStudio(user, null)
     expect(r.ok).toBe(true)
@@ -70,8 +70,10 @@ describe('resolveStudio', () => {
   })
 
   it('refuses someone holding assistant but not mcp_access', () => {
-    // manager: assistant true by default, mcp_access false by default.
-    const user = userWith({ active: 'a', roles: { a: 'manager' } })
+    // The grant is EXPLICIT, not a role default: leaning on manager's
+    // `assistant: true` default would make this test vacuous the day that
+    // default flips (which the owner is actively trying to bring about).
+    const user = userWith({ active: 'a', roles: { a: 'staff' }, perms: { a: { assistant: true } } })
     expect(resolveStudio(user, null).ok).toBe(false)
   })
 

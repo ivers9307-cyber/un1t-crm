@@ -22,7 +22,7 @@
 //    conscious acceptance, not an oversight.
 //
 // The door refuses only a bad or expired token (null). Policy refusals (the
-// org's switch is off, no `assistant` permission, a role gate) are tool-level
+// org's switch is off, no `mcp_access` permission, a role gate) are tool-level
 // results made by the registry, which is why this returns the user plus
 // `enabledOrgIds` and `mcpAccessAnywhere` rather than refusing on them.
 

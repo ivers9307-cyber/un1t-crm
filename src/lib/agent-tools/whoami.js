@@ -3,7 +3,7 @@
 // organisation), open to anyone with a studio.
 //
 // Each studio echoes only id, name, zone, role, today's date there, whether
-// MCP is on for its organisation and whether the person holds `assistant`
+// MCP is on for its organisation and whether the person holds `mcp_access`
 // there: never the location row itself (it carries settings).
 
 import { z } from 'zod'
@@ -16,7 +16,7 @@ export default defineTool({
   name: 'whoami',
   title: 'Who am I',
   description: 'Who this connection acts as: the person, each of their studios (id, name, time zone, role there, '
-    + 'today\'s date there, whether MCP is on for its organisation, whether the AI Assistant permission is held there), '
+    + 'today\'s date there, whether MCP is on for its organisation, whether the Connect an Agent permission is held there), '
     + 'the default studio, and the tools that may be called at the studio this call resolved to (the default when '
     + 'studio_id is omitted). Call it first.',
   inputSchema: z.object({

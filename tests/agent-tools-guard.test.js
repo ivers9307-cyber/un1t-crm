@@ -196,6 +196,20 @@ describe('agent tools guard (MCP.1)', () => {
     expect(new Set(names).size, `duplicate tool names: ${names.join(', ')}`).toBe(names.length)
   })
 
+  // MCPACCESS.1 — a tool's `title` and `description` are shipped to the MCP
+  // client in the tool list, so they are what Claude repeats to the operator.
+  // The MCP gate is `mcp_access` ("Connect an Agent"); naming the AI Assistant
+  // permission here tells a refused person to switch on the paid, uncapped
+  // in-app chat that is deliberately off — the confusion this whole change
+  // exists to remove. Comments are not shipped and are not checked.
+  it('no tool description or title names the AI Assistant permission', async () => {
+    const { TOOLS } = await import('@/lib/agent-tools/index.js')
+    const offenders = TOOLS
+      .filter((t) => /ai assistant/i.test(`${t.title} ${t.description}`))
+      .map((t) => t.name)
+    expect(offenders, `agent-facing text names the wrong permission: ${offenders.join(', ')}`).toEqual([])
+  })
+
   it('no tool names a forbidden table', () => {
     const bad = sourceFiles().flatMap((f) => forbiddenTables(codeOf(f)).map((t) => `${rel(f)}: ${t}`))
     expect(bad, `out-of-scope tables for MCP v1:\n${bad.join('\n')}`).toEqual([])

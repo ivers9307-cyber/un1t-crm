@@ -4,7 +4,7 @@
 // order for all of them:
 //
 //   rate limit (120/min per person, malformed calls included) → input (zod) → studio (resolveStudio:
-//   one of the person's studios where they hold `assistant`) → the studio's
+//   one of the person's studios where they hold `mcp_access`) → the studio's
 //   organisation has MCP switched on (unless the tool is `alwaysAvailable`)
 //   → the tool's own gate → run.
 //
