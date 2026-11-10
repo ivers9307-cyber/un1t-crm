@@ -2,7 +2,7 @@
 // roster permission at the studio the call resolves to AND Contacts at the
 // class's own studio (a roster is member names), through the same readable
 // studios the contact tools use (readableContactStudios: the resolved studio's
-// organisation, MCP switched on, AI Assistant and Contacts both held).
+// organisation, MCP switched on, Connect an Agent and Contacts both held).
 //
 // The service role has no RLS, so that list is the fence: the occurrence is
 // read `.in('location_id', readable)`, and an occurrence at any other studio

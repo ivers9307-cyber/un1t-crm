@@ -63,22 +63,22 @@ describe('verifyMcpToken', () => {
     expect(logError.mock.calls[0][2]).toEqual({ code: 'ECONNRESET' })
   })
 
-  it('returns the user, enabled org ids and assistantAnywhere', async () => {
+  it('returns the user, enabled org ids and mcpAccessAnywhere', async () => {
     const user = ownerAt('org1-a', 'org2-a')
     const r = await verifyMcpToken(TOKEN, { getUser: async () => user, verifyToken: verifyAs(), db: makeFakeDb(fixture()) })
     expect(r).toEqual({
       token: TOKEN,
       clientId: 'client-x',
       scopes: [],
-      extra: { user, enabledOrgIds: ['org1'], assistantAnywhere: true },
+      extra: { user, enabledOrgIds: ['org1'], mcpAccessAnywhere: true },
     })
   })
 
-  it('reports assistantAnywhere false for someone holding assistant nowhere', async () => {
+  it('reports mcpAccessAnywhere false for someone holding mcp_access nowhere', async () => {
     const user = ownerAt('org1-a')
     user.assignmentsByLocation['org1-a'].role = 'staff'
     const r = await verifyMcpToken(TOKEN, { getUser: async () => user, verifyToken: verifyAs(), db: makeFakeDb(fixture()) })
-    expect(r.extra.assistantAnywhere).toBe(false)
+    expect(r.extra.mcpAccessAnywhere).toBe(false)
   })
 
   it('still returns the user (no enabled orgs) when the org_settings read fails', async () => {

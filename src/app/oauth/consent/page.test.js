@@ -2,7 +2,7 @@
 //
 // Supabase Auth's OAuth server sends a person here (Authorization Path
 // /oauth/consent) with ?authorization_id=…. The page decides who may even be
-// offered the Approve button (the org switch + the assistant permission) and
+// offered the Approve button (the org switch + the mcp_access permission) and
 // hands that to the client form; the form talks to Supabase from the browser.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -73,7 +73,7 @@ describe('/oauth/consent page', () => {
     expect(getCurrentUser).not.toHaveBeenCalled()
   })
 
-  it('passes eligibility ok when an org has MCP on and the assistant permission is held', async () => {
+  it('passes eligibility ok when an org has MCP on and the mcp_access permission is held', async () => {
     const form = findForm(await render('abc'))
     expect(form.props).toMatchObject({
       authorizationId: 'abc',
@@ -81,7 +81,7 @@ describe('/oauth/consent page', () => {
       personName: 'Casey Coach',
     })
     expect(mcpEnabledOrgIds).toHaveBeenCalledWith(db, USER)
-    expect(hasPermissionAtAnyLocation).toHaveBeenCalledWith(USER, 'assistant')
+    expect(hasPermissionAtAnyLocation).toHaveBeenCalledWith(USER, 'mcp_access')
   })
 
   it('passes eligibility mcp_disabled when no org has it on', async () => {
@@ -90,10 +90,10 @@ describe('/oauth/consent page', () => {
     expect(form.props.eligibility).toEqual({ ok: false, reason: 'mcp_disabled' })
   })
 
-  it('passes eligibility assistant_permission when the permission is held nowhere', async () => {
+  it('passes eligibility mcp_access_permission when the permission is held nowhere', async () => {
     hasPermissionAtAnyLocation.mockReturnValue(false)
     const form = findForm(await render('abc'))
-    expect(form.props.eligibility).toEqual({ ok: false, reason: 'assistant_permission' })
+    expect(form.props.eligibility).toEqual({ ok: false, reason: 'mcp_access_permission' })
   })
 
   it('refuses under View as user: no form, so no Approve path', async () => {

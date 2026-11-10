@@ -10,6 +10,7 @@ import {
   sanitizePermissionsBlob,
   diffPermissionsBlob,
   mergeTemplates,
+  isFeatureGatedByLocation,
   WEB_PERMISSIONS,
   WEB_PERMISSION_KEYS,
   MOBILE_PERMISSION_KEYS,
@@ -571,5 +572,73 @@ describe('class_roster', () => {
     }
     expect(resolvePermission({ ...args, key: 'class_roster' })).toBe(true)
     expect(resolvePermission({ ...args, key: 'studio_management' })).toBe(false)
+  })
+})
+
+// MCPACCESS.1 — the staff MCP server is gated on its own key, not on
+// `assistant`. The two have opposite cost profiles: the in-app assistant
+// calls Anthropic on our key, the MCP server calls no model at all, so
+// they must be grantable apart. Spec:
+// docs/superpowers/specs/2026-11-10-mcp-access-decouple-design.md
+describe('resolvePermission — mcp_access (MCPACCESS.1)', () => {
+  it('defaults true for master and owner only', () => {
+    for (const role of ['master', 'owner']) {
+      expect(resolvePermission({
+        role,
+        location: { features: {} },
+        permissions: null,
+        defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+        key: 'mcp_access',
+      })).toBe(true)
+    }
+    for (const role of ['manager', 'head_coach', 'staff', 'reception']) {
+      expect(resolvePermission({
+        role,
+        location: { features: {} },
+        permissions: null,
+        defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+        key: 'mcp_access',
+      })).toBe(false)
+    }
+  })
+
+  // Review Focus 2 — the per-studio off switch must bind master too, or it
+  // is decorative. This is the exact mechanism that made MCP.1 unusable:
+  // features.assistant = false at Stillorgan denied master.
+  it('is denied by an explicit location false, even for master', () => {
+    expect(resolvePermission({
+      role: 'master',
+      location: { features: { mcp_access: false } },
+      permissions: null,
+      defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+      key: 'mcp_access',
+    })).toBe(false)
+  })
+
+  // Review Focus 4 — the KEY_BUNDLES entry must actually bind, or a tenant
+  // on a tier without bundle_sales reads contacts and pipeline through MCP
+  // while the app blocks them.
+  it('is denied when bundle_sales is off at the location, even for master', () => {
+    expect(resolvePermission({
+      role: 'master',
+      location: { features: { bundle_sales: false } },
+      permissions: null,
+      defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+      key: 'mcp_access',
+    })).toBe(false)
+  })
+
+  it('is location-gated (not notify-exempt, not approvals-exempt)', () => {
+    expect(isFeatureGatedByLocation('mcp_access')).toBe(true)
+  })
+
+  it('a per-user override wins over the role default for manager', () => {
+    expect(resolvePermission({
+      role: 'manager',
+      location: { features: {} },
+      permissions: { mcp_access: true },
+      defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+      key: 'mcp_access',
+    })).toBe(true)
   })
 })

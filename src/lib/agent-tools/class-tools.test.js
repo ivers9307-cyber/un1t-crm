@@ -33,12 +33,12 @@ function auth(role = 'manager', perms = {}) {
         activeLocation: locations[0],
         rolesByLocation: { [DUB]: role, [NOCON]: role },
         assignmentsByLocation: {
-          [DUB]: { role, permissions: { assistant: true, contacts: true, class_roster: true, bookings: true, ...perms } },
-          [NOCON]: { role, permissions: { assistant: true, contacts: false, class_roster: true } },
+          [DUB]: { role, permissions: { mcp_access: true, contacts: true, class_roster: true, bookings: true, ...perms } },
+          [NOCON]: { role, permissions: { mcp_access: true, contacts: false, class_roster: true } },
         },
       },
       enabledOrgIds: ['org-1'],
-      assistantAnywhere: true,
+      mcpAccessAnywhere: true,
     },
   }
 }

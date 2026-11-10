@@ -1,6 +1,6 @@
 // MCP.1 — `get_classes`: the class timetable at a studio for a day or up to 14
-// days, with how many are booked and waitlisted on each. Open to anyone with the
-// AI Assistant at the studio (the timetable is public on the booking pages);
+// days, with how many are booked and waitlisted on each. Open to anyone with
+// Connect an Agent at the studio (the timetable is public on the booking pages);
 // who is IN a class is `get_class_roster`, behind Contacts.
 //
 // Days are the studio's calendar days: `YYYY-MM-DD` becomes a `starts_at`

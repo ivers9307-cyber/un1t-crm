@@ -22,9 +22,9 @@
 //    conscious acceptance, not an oversight.
 //
 // The door refuses only a bad or expired token (null). Policy refusals (the
-// org's switch is off, no `assistant` permission, a role gate) are tool-level
+// org's switch is off, no `mcp_access` permission, a role gate) are tool-level
 // results made by the registry, which is why this returns the user plus
-// `enabledOrgIds` and `assistantAnywhere` rather than refusing on them.
+// `enabledOrgIds` and `mcpAccessAnywhere` rather than refusing on them.
 
 import { createClient } from '@supabase/supabase-js'
 import { getCurrentUser } from '@/lib/auth'
@@ -73,7 +73,7 @@ export async function defaultVerifyToken(token) {
  * @param {string} token the raw Bearer token
  * @param {{ getUser?: Function, verifyToken?: Function, db?: object }} [opts] injected in tests
  * @returns {Promise<null | { token: string, clientId: string, scopes: string[],
- *   extra: { user: object, enabledOrgIds: string[], assistantAnywhere: boolean } }>}
+ *   extra: { user: object, enabledOrgIds: string[], mcpAccessAnywhere: boolean } }>}
  */
 export async function verifyMcpToken(token, { getUser = getCurrentUser, verifyToken = defaultVerifyToken, db } = {}) {
   const clientId = jwtClientId(token)
@@ -104,7 +104,7 @@ export async function verifyMcpToken(token, { getUser = getCurrentUser, verifyTo
     extra: {
       user,
       enabledOrgIds,
-      assistantAnywhere: hasPermissionAtAnyLocation(user, 'assistant'),
+      mcpAccessAnywhere: hasPermissionAtAnyLocation(user, 'mcp_access'),
     },
   }
 }

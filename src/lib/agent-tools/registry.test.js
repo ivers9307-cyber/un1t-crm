@@ -34,12 +34,15 @@ function fakeAuth({ enabledOrgIds = [ORG1] } = {}) {
         activeLocation: locations[0],
         rolesByLocation: { [A]: 'manager', [B]: 'staff' },
         assignmentsByLocation: {
-          [A]: { role: 'manager', permissions: {} },
-          [B]: { role: 'staff', permissions: { assistant: true } },
+          // MCPACCESS.1 — a manager does NOT hold mcp_access by default
+          // (master/owner only), so grant it here the way an admin would at
+          // /settings/staff for the pilot.
+          [A]: { role: 'manager', permissions: { mcp_access: true } },
+          [B]: { role: 'staff', permissions: { mcp_access: true } },
         },
       },
       enabledOrgIds,
-      assistantAnywhere: true,
+      mcpAccessAnywhere: true,
     },
   }
 }
@@ -213,18 +216,18 @@ describe('runTool', () => {
   })
 })
 
-describe('runTool assistant_permission wording', () => {
+describe('runTool mcp_access_permission wording', () => {
   it('names the studio case and the default case differently', async () => {
     const { db } = fakeDb()
     const auth = fakeAuth()
     auth.extra.user.assignmentsByLocation[B].permissions = {}
     const named = await runTool(echo, { studio_id: B, text: 'hi' }, auth, { db })
-    expect(named).toMatchObject({ ok: false, code: 'assistant_permission', message: 'The AI Assistant permission is not held at that studio.' })
+    expect(named).toMatchObject({ ok: false, code: 'mcp_access_permission', message: 'The Connect an Agent permission is not held at that studio.' })
 
     auth.extra.user.rolesByLocation = { [A]: 'staff', [B]: 'staff' }
     auth.extra.user.assignmentsByLocation[A] = { role: 'staff', permissions: {} }
     const fallback = await runTool(echo, { text: 'hi' }, auth, { db })
-    expect(fallback).toMatchObject({ ok: false, code: 'assistant_permission', message: 'No studio where the AI Assistant permission is held.' })
+    expect(fallback).toMatchObject({ ok: false, code: 'mcp_access_permission', message: 'No studio where the Connect an Agent permission is held.' })
   })
 })
 
