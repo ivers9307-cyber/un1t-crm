@@ -75,6 +75,7 @@ for (const m of MOBILE_PERMISSIONS) {
 // mobile.
 const WEB_ONLY_OK = {
   class_roster:   'web /live roster only; phone screen out of scope',
+  mcp_access:     'MCPACCESS.1: MCP is a desktop/CLI connector (Claude Desktop, Claude Code). No phone counterpart — the mobile `assistant` key stays mapped to web `assistant`.',
   // W1 (parity inversion): contacts now has a mobile read surface — a
   // searchable directory + contact detail via the `contacts`
   // MOBILE_PERMISSIONS entry (webEquivalent: 'contacts'), so it's matched,

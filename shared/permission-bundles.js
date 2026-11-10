@@ -120,6 +120,12 @@ export const KEY_BUNDLES = Object.freeze({
   // assistant with CRM tool use" — grouped with the other CRM-data
   // utilities in this bundle rather than given a hub of its own.
   assistant: ['bundle_sales'],
+  // MCPACCESS.1 — bundled like `assistant` on purpose. An unbundled key is
+  // never bundle-denied (deniedByEveryBundle returns false on a missing
+  // entry), so leaving it out would let a tenant on a tier without
+  // bundle_sales read contacts and pipeline through MCP while the app
+  // blocks them.
+  mcp_access: ['bundle_sales'],
   // JUDGEMENT CALL (plan's 17 unassigned; plan draft: "→ bundle_sales?").
   // src/app/settings/glofox-import/page.js imports Glofox members
   // INTO contacts — a contacts/CRM-data operation surfaced from the
