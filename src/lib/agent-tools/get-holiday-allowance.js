@@ -5,6 +5,7 @@
 // person with no stored row gets their real entitlement, not a default.
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool, ToolRefusal } from './registry.js'
 import { isManagerAt } from '@/lib/mcp/context'
 import { parseAllowanceYear, allowanceYearIn } from '@/lib/allowance-year'
@@ -18,8 +19,8 @@ export default defineTool({
     + 'not deducted). Omit profile_id for the caller\'s own allowance; another person\'s is for managers, and only '
     + 'for someone who works at the studio. year defaults to this year on the studio\'s calendar.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
-    profile_id: z.string().uuid().optional().describe('A staff member\'s id (list_staff); omit for the caller.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
+    profile_id: uuidLike.optional().describe('A staff member\'s id (list_staff); omit for the caller.'),
     year: z.union([z.number().int(), z.string()]).optional().describe('Four-digit year; omit for this year.'),
   }).superRefine((value, ctx) => {
     const { error } = parseAllowanceYear(value.year)

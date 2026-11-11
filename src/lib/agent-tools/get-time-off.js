@@ -3,6 +3,7 @@
 // in-app assistant's rule). Pay is never involved.
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool } from './registry.js'
 import { rangeFields, checkRange } from './_dates.js'
 import { isManagerAt } from '@/lib/mcp/context'
@@ -16,7 +17,7 @@ export default defineTool({
     + '366 days. Managers see everyone; anyone else sees only their own requests. Lists are capped at 50 rows; '
     + 'ask for a shorter range when capped is true.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     ...rangeFields,
   }).superRefine(checkRange({ maxDays: 366, what: 'A time-off lookup' })),
   gate: () => true,

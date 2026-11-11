@@ -7,6 +7,7 @@
 // A pipeline id that is not one of this studio's answers not_found.
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool, ToolRefusal } from './registry.js'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { pipelineDealSelect, boardDealMapper, boardCardOptionsForModule } from '@/lib/pipeline-board'
@@ -20,8 +21,8 @@ export default defineTool({
     + '(pipeline_id) and optionally one stage (stage_slug). Each stage carries its exact count; at most 50 deals '
     + 'are listed a stage (capped is true when there are more). Needs the Pipeline permission.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
-    pipeline_id: z.string().uuid().optional().describe('One pipeline; omit for every enabled pipeline.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
+    pipeline_id: uuidLike.optional().describe('One pipeline; omit for every enabled pipeline.'),
     stage_slug: z.string().min(1).max(100).optional().describe('One stage by slug, e.g. new_lead.'),
   }),
   gate: (user, studioId) => hasPermissionForLocation(user, studioId, 'pipeline'),

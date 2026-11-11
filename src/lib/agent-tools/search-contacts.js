@@ -8,6 +8,7 @@
 // relationship at a studio (thousands at Stillorgan) cannot travel as a URL.
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool, ToolRefusal } from './registry.js'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { sanitizeSearchTerm, MIN_CONTACT_SEARCH_LEN } from '@/lib/command-palette'
@@ -22,7 +23,7 @@ export default defineTool({
     + 'Includes contacts homed at another studio of the organisation who have a relationship with this one. '
     + 'Returns at most 20 (capped is true when there are more: narrow the term). Needs the Contacts permission.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     query: z.string().max(200).describe('Part of a name, email address or phone number.'),
   }),
   gate: (user, studioId) => hasPermissionForLocation(user, studioId, 'contacts'),

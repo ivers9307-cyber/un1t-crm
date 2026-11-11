@@ -8,7 +8,7 @@
 import { z } from 'zod'
 import { defineTool, ToolRefusal } from './registry.js'
 import { isManagerAt } from '@/lib/mcp/context'
-import { isRealCalendarDate } from '@/lib/schemas'
+import { isRealCalendarDate, uuidLike } from '@/lib/schemas'
 import { upsertShiftAssignment } from '@/lib/roster-write'
 
 export default defineTool({
@@ -19,9 +19,9 @@ export default defineTool({
     + 'user first, and never retry on your own. If the person is already on '
     + 'that shift the call succeeds with created: false. For managers.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
-    profile_id: z.string().uuid().describe('The staff member (list_staff).'),
-    shift_template_id: z.string().uuid().describe('The shift template (list_shift_templates).'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
+    profile_id: uuidLike.describe('The staff member (list_staff).'),
+    shift_template_id: uuidLike.describe('The shift template (list_shift_templates).'),
     date: z.string().refine(isRealCalendarDate, 'date must be a real calendar date, YYYY-MM-DD').describe('The shift date, YYYY-MM-DD.'),
   }),
   gate: (user, studioId) => isManagerAt(user, studioId),
