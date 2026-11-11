@@ -2,6 +2,7 @@
 // Hours only; pay figures live in `staff_cost_report` and nowhere else.
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool } from './registry.js'
 import { rangeFields, checkRange } from './_dates.js'
 import { isManagerAt } from '@/lib/mcp/context'
@@ -14,7 +15,7 @@ export default defineTool({
     + 'total. Hours are the effective shift hours (a coach\'s changed times count). No pay figures. For managers. '
     + 'Capped at 50 people (capped is true when there are more; total_hours still covers everyone).',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     ...rangeFields,
   }).superRefine(checkRange({ maxDays: 366, what: 'A report' })),
   gate: (user, studioId) => isManagerAt(user, studioId),

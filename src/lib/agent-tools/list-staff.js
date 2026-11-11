@@ -3,6 +3,7 @@
 // phone or pay: those columns are not even selected.
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool } from './registry.js'
 import { isManagerAt } from '@/lib/mcp/context'
 
@@ -14,7 +15,7 @@ export default defineTool({
   description: 'Active staff at a studio: id, name, role there and employment type. For managers. '
     + 'Capped at 50 people (capped is true when there are more).',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
   }),
   gate: (user, studioId) => isManagerAt(user, studioId),
   run: async (_input, ctx) => {

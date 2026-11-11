@@ -5,6 +5,7 @@
 // viewer's role at that row's studio).
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool } from './registry.js'
 import { rangeFields, checkRange } from './_dates.js'
 import { isManagerAt } from '@/lib/mcp/context'
@@ -25,7 +26,7 @@ export default defineTool({
     + 'a day listed there is "not published yet", not "nobody is working". Lists are capped at 50 rows; '
     + 'ask for a shorter range when capped is true.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     ...rangeFields,
   }).superRefine(checkRange({ maxDays: MAX_DAYS, what: 'A shift lookup' })),
   gate: () => true,

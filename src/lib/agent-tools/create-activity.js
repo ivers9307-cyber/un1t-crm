@@ -15,7 +15,7 @@ import { contactReadableAt } from './_contact-scope.js'
 import { isManagerAt } from '@/lib/mcp/context'
 import { hasRelationshipAt } from '@/lib/contact-studios'
 import { canWriteActivitiesAt } from '@/lib/activity-write-gate'
-import { isRealCalendarDate } from '@/lib/schemas'
+import { isRealCalendarDate, uuidLike } from '@/lib/schemas'
 
 export default defineTool({
   name: 'create_activity',
@@ -24,8 +24,8 @@ export default defineTool({
     + 'optionally with a due date and a note. This writes to the CRM: confirm with the user first and never retry '
     + 'on your own. For managers with the Tasks and Contacts permissions.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
-    contact_id: z.string().uuid().describe('The contact (search_contacts).'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
+    contact_id: uuidLike.describe('The contact (search_contacts).'),
     type: z.enum(['call', 'meeting', 'task']).describe('call, meeting or task.'),
     subject: z.string().trim().min(1).max(500).describe('A short title.'),
     due_date: z.string().refine(isRealCalendarDate, 'due_date must be a real calendar date, YYYY-MM-DD').optional()

@@ -9,6 +9,7 @@
 // answers exactly like an unknown id (`not_found`), so an id cannot be probed.
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool, ToolRefusal } from './registry.js'
 import { readableContactStudios } from './_contact-scope.js'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -23,8 +24,8 @@ export default defineTool({
     + 'status (BOOKED, WAITING for the waitlist, CANCELLED) and whether they attended. Needs the Class roster '
     + 'and Contacts permissions at the class\'s studio. Capped at 50 bookings (capped is true when there are more).',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
-    occurrence_id: z.string().uuid().describe('The class id from get_classes.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
+    occurrence_id: uuidLike.describe('The class id from get_classes.'),
   }),
   gate: (user, studioId) => hasPermissionForLocation(user, studioId, 'class_roster'),
   run: async (input, ctx) => {

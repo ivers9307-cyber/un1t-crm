@@ -11,6 +11,7 @@
 // who cannot read it, _contact-scope.js).
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool, ToolRefusal } from './registry.js'
 import { isAdminAt } from '@/lib/mcp/context'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -27,7 +28,7 @@ export default defineTool({
     + 'If someone in the organisation already has that email the call returns them with existing: true and creates '
     + 'nothing. For owners and managers with the Contacts permission.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     name: z.string().trim().min(1).max(200).describe('Full name.'),
     email: z.string().trim().email().max(320).describe('Email address.'),
     phone: z.string().trim().max(50).optional().describe('Phone number.'),

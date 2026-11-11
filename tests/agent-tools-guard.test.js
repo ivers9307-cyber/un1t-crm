@@ -8,7 +8,11 @@
 // not a studio filter.
 //
 //  1. Every tool module is `export default defineTool({ … })` with an optional
-//     `studio_id: z.string().uuid().optional()` in its inputSchema and a gate.
+//     `studio_id: uuidLike.optional()` in its inputSchema and a gate.
+//     uuidLike, NOT z.string().uuid(): zod 4's .uuid() is RFC-strict and
+//     REJECTS UN1T Stillorgan's seeded location id
+//     (a0000000-0000-0000-0000-000000000001, version nibble 0), so every
+//     tool call naming that studio answered invalid_input. ASSISTREG.3.
 //  2. index.js lists every tool module exactly once (and nothing else).
 //  3. No tool names a table that is out of scope for v1 (messaging, cars,
 //     Xero, fees, trial purchases, un1t.online writes), as `.from('<t>')` or
@@ -170,10 +174,10 @@ describe('agent tools guard (MCP.1)', () => {
     const bad = tools.filter((f) => {
       const code = codeOf(f)
       return !/export\s+default\s+defineTool\(\s*\{/.test(code) ||
-        !/\bstudio_id\s*:\s*z\s*\.\s*string\(\s*\)\s*\.\s*uuid\(\s*\)\s*\.\s*optional\(\s*\)/.test(code) ||
+        !/\bstudio_id\s*:\s*uuidLike\s*\.\s*optional\(\s*\)/.test(code) ||
         !/\bgate\s*[:(]/.test(code)
     }).map(rel)
-    expect(bad, `each tool must be \`export default defineTool({ … })\` with studio_id: z.string().uuid().optional() and a gate:\n${bad.join('\n')}`).toEqual([])
+    expect(bad, `each tool must be \`export default defineTool({ … })\` with studio_id: uuidLike.optional() and a gate (uuidLike, never z.string().uuid(), which rejects Stillorgan's seeded id):\n${bad.join('\n')}`).toEqual([])
   })
 
   it('every tool is listed in index.js exactly once', async () => {
