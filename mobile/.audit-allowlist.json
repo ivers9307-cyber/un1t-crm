@@ -125,6 +125,18 @@
       "expires": "2026-12-15"
     },
     {
+      "id": "GHSA-rhr8-3pm8-cq29",
+      "package": "node-forge",
+      "reason": "Build-time/CLI only, first-party input only, not in the shipped bundle. Verified 11 Nov 2026 against the installed tree: one node-forge copy (1.4.0) with exactly two parents, @expo/code-signing-certificates and expo > @expo/cli 57.0.10, both declaring ^1.3.3; the certs package is required only from expo-updates/cli/** (generateCodeSigningAsync, configureCodeSigningAsync), never from expo-updates/build/**. Variant: resource exhaustion in asn1.fromDer on a crafted BIT STRING, reachable here only through forge.pki.certificateFromPem, whose one call site is @expo/cli src/run/ios/codeSigning/Security.js:70 — the PEM it parses is the stdout of the macOS `security` binary (find-certificate / find-identity), i.e. the developer's own keychain on the developer's own machine, so the worst case is their local `expo start` or `run:ios` hanging on a certificate they installed themselves. Fix is open and deferred, not unavailable: ^1.3.3 already admits the patched 1.4.3, so `npm update node-forge --package-lock-only` closes this and the other seven node-forge accepts at once; it edits mobile/package-lock.json, which publishes an OTA (DEPAUDIT.8) while the fleet is frozen on 2.3.x. Take the bump with the next native release instead of re-accepting.",
+      "expires": "2026-12-15"
+    },
+    {
+      "id": "GHSA-6qrw-m8cv-hcxf",
+      "package": "node-forge",
+      "reason": "Build-time/CLI only, not in the shipped bundle: the same single node-forge 1.4.0 copy and the same two ^1.3.3 parents as GHSA-rhr8-3pm8-cq29, verified 11 Nov 2026. Variant: the same PKCS#1 v1.5 VERIFY forgery-acceptance class as GHSA-86w9-cpqp-85rv, via a non-canonical DigestInfo encoding, and it has the same answer — none of these paths verifies a signature produced by anyone else. @expo/cli signs dev-server manifests with the developer's own key and re-verifies the signature it just made, and the certificate work checks a self-signed certificate against the key pair that generated it; neither file calls a pkcs12 or tls API at all. On the phone, update code signing is not configured in app.config.js and would be verified by expo-updates' native Swift/Kotlin, never by this JS. Deferred on the same terms: ^1.3.3 admits the patched 1.4.3, but the lockfile edit publishes an OTA (DEPAUDIT.8), so take it with the next native release rather than re-accepting.",
+      "expires": "2026-12-15"
+    },
+    {
       "id": "GHSA-qr28-fpjm-wq7f",
       "package": "decode-uri-component",
       "reason": "Runtime-reachable, but only through the device's own deep links: expo-router@57 > query-string@7.1.3 (pins ^0.2.2) parses the query string of a URL the phone was asked to open, so the exponential/quadratic percent-decoding DoS can at worst hang that person's own app on a URL they opened; no server and no other user is affected. Not fixable without a crash: the patched 0.5.1 is ESM-only (type: module, default export) and query-string 7 calls require('decode-uri-component') as a function, so an override would break every route parse at launch (the linkify-it 6.x white-screen class). npm's fix is expo-router 58 (semver-major, an Expo SDK bump), which is its own PR; re-decide with the SDK 58 upgrade.",
