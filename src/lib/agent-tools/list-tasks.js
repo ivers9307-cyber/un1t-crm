@@ -6,6 +6,7 @@
 // named instead of `*` (so the task's free-text note stays out).
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool } from './registry.js'
 import { canWriteActivitiesAt } from '@/lib/activity-write-gate'
 import { addDaysISO } from '@/lib/location-time'
@@ -21,7 +22,7 @@ export default defineTool({
     + '"today", or "week" (default: today and the next 6 days), on the studio\'s calendar. Tasks with no due date '
     + 'are not listed. Capped at 50 (capped is true when there are more). Needs the Tasks and Contacts permissions.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     assignee: z.enum(['me', 'all']).default('me').describe('"me" for tasks assigned to the caller, "all" for everyone\'s.'),
     due: z.enum(['overdue', 'today', 'week']).default('week').describe('The due window.'),
   }),

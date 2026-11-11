@@ -12,6 +12,7 @@
 // readers treat it.
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool, ToolRefusal } from './registry.js'
 import { checkRange } from './_dates.js'
 import { reportPeriodError } from '@/lib/report-period'
@@ -33,7 +34,7 @@ export default defineTool({
     + 'booked and waitlisted counts and the platform that runs it. Lists are capped at 50 classes (capped is true '
     + 'when there are more; ask for a shorter range). Names of who is booked are in get_class_roster.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     date: z.string().optional().describe('One day, YYYY-MM-DD, on the studio\'s calendar. Default: today.'),
     start: z.string().optional().describe('First day of a range, YYYY-MM-DD (give end too; at most 14 days).'),
     end: z.string().optional().describe('Last day (inclusive) of a range, YYYY-MM-DD.'),

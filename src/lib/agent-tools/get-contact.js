@@ -9,6 +9,7 @@
 // text and is not even selected), a note's content is cut to 200 characters.
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool, ToolRefusal } from './registry.js'
 import { contactReadableAt, readableContactStudios } from './_contact-scope.js'
 import { studiosOfContact } from '@/lib/contact-studios'
@@ -109,8 +110,8 @@ export default defineTool({
     + 'the 20 most recent notes and activities (subjects only, no message text), and class bookings from '
     + '30 days back to 30 days ahead (instants in UTC). Needs the Contacts permission at a studio of this organisation the contact belongs to.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
-    contact_id: z.string().uuid().describe('The contact (search_contacts).'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
+    contact_id: uuidLike.describe('The contact (search_contacts).'),
   }),
   // At least one studio of the resolved studio's organisation where contacts may be read.
   gate: (user, _studioId, ctx) => readableContactStudios(user, ctx).length > 0,

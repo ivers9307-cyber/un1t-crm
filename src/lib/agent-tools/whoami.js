@@ -7,6 +7,7 @@
 // there: never the location row itself (it carries settings).
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool } from './registry.js'
 import { resolveStudio, roleAt } from '@/lib/mcp/context'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -20,7 +21,7 @@ export default defineTool({
     + 'the default studio, and the tools that may be called at the studio this call resolved to (the default when '
     + 'studio_id is omitted). Call it first.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
   }),
   gate: () => true,
   alwaysAvailable: true,

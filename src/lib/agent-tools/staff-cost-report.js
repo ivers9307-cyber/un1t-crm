@@ -4,6 +4,7 @@
 // not a head coach).
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool } from './registry.js'
 import { rangeFields, checkRange } from './_dates.js'
 import { roleAt } from '@/lib/mcp/context'
@@ -17,7 +18,7 @@ export default defineTool({
     + '(EUR), highest cost first, with the total. Shows pay rates, so it is for owners and managers only. '
     + 'Capped at 50 people (capped is true when there are more; total_cost still covers everyone).',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     ...rangeFields,
   }).superRefine(checkRange({ maxDays: 366, what: 'A report' })),
   gate: (user, studioId) => RATE_REPORT_VIEWER_ROLES.includes(roleAt(user, studioId)),

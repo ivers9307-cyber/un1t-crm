@@ -6,6 +6,7 @@
 // parsed as instants.
 
 import { z } from 'zod'
+import { uuidLike } from '@/lib/schemas'
 import { defineTool } from './registry.js'
 import { rangeFields, checkRange } from './_dates.js'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -22,7 +23,7 @@ export default defineTool({
     + 'These are appointments, not class bookings (see get_classes). Capped at 50 (capped is true when there '
     + 'are more; ask for a shorter range). Needs the Bookings permission.',
   inputSchema: z.object({
-    studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
+    studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     ...rangeFields,
   }).superRefine(checkRange({ maxDays: MAX_DAYS, what: 'An appointment lookup' })),
   gate: (user, studioId) => hasPermissionForLocation(user, studioId, 'bookings'),
