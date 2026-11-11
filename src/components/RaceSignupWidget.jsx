@@ -37,6 +37,7 @@ import { resolveWaveWindowMinutes } from '@/lib/wave-window'
 import { tierPriceLabel, groupPriceLabel, effectiveNonMemberFee } from '@/lib/pricing-tiers'
 import { resolveRegistrationQuestions, validateAnswers } from '@/lib/registration-questions'
 import { rememberEventAttribution, readEventAttribution } from '@/lib/event-attribution'
+import { eurosToCents, validateEntryAmount } from '@/lib/charity-entry-amount'
 import EventWaitlistForm from './EventWaitlistForm.jsx'
 import DonateCard, { CharityRaisedStrip, DonateJumpLink, OrDivider } from './DonateCard.jsx'
 
@@ -289,6 +290,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // invalid_promo_code inline so the customer can fix + retry.
   const [promoCode, setPromoCode] = useState('')
   const [promoError, setPromoError] = useState(null)
+  // CHARITYENTRY.1 — the per-person amount typed on a choose-your-amount
+  // charity day. null = untouched, so the box shows the suggested amount.
+  const [entryAmountText, setEntryAmountText] = useState(null)
 
   // EVENT-WAITLIST.1 — a waitlist offer link opens this page with ?wl=<token>.
   // Kept in state and sent as waitlist_token on register, so the waitlist row
@@ -430,13 +434,21 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   }
 
   // Live pricing preview. Mirrors computeTeamPricing on the server.
-  const memberPricing = !!race?.member_pricing_enabled
+  // CHARITYENTRY.1 — on a choose-your-amount charity day the typed amount is
+  // everyone's per-person price (no member rate, no tiers), as on the server.
+  const entryAmount = race?.charity?.entry_amount?.enabled ? race.charity.entry_amount : null
+  const entryAmountShown = entryAmountText ?? (entryAmount ? String(entryAmount.suggested_cents / 100) : '')
+  const chosenEntryCents = entryAmount ? eurosToCents(entryAmountShown) : null
+  const amountPending = !!entryAmount && chosenEntryCents == null
+  const memberPricing = !entryAmount && !!race?.member_pricing_enabled
   const memberFeeCents = Number.isFinite(race?.member_fee_cents) ? race.member_fee_cents : null
   // TIERS.1 — the per-person non-member fee for THIS headcount: the group
   // price once the party is big enough, else the current tier, else base.
-  const tierPricing = race?.pricing && (race.pricing.current || race.pricing.group || race.pricing.next) ? race.pricing : null
+  const tierPricing = !entryAmount && race?.pricing && (race.pricing.current || race.pricing.group || race.pricing.next) ? race.pricing : null
   const baseNonMemberFee = Number.isFinite(race?.non_member_fee_cents) ? race.non_member_fee_cents : null
-  const nonMemberFeeCents = tierPricing ? effectiveNonMemberFee(tierPricing, liveRoster.length) : baseNonMemberFee
+  const nonMemberFeeCents = entryAmount
+    ? chosenEntryCents
+    : tierPricing ? effectiveNonMemberFee(tierPricing, liveRoster.length) : baseNonMemberFee
   const currency = race?.payment_currency || 'EUR'
 
   let memberCount = 0, nonMemberCount = 0
@@ -523,6 +535,12 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
       }
     }
 
+    // CHARITYENTRY.1 — the same floor and ceiling the server holds.
+    if (entryAmount) {
+      const judged = validateEntryAmount(entryAmount, chosenEntryCents, fmtMoney)
+      if (!judged.ok) errors.entry_amount = judged.error
+    }
+
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors)
       return
@@ -565,6 +583,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         marketing_consent: marketingConsent,
         ...(questions.length > 0 ? { answers: { entry: answers.entry, people: liveRoster.map((_, i) => answers.people[i] || {}) } } : {}),
         ...(promoCode.trim() ? { promo_code: promoCode.trim() } : {}),
+        ...(entryAmount && chosenEntryCents ? { entry_amount_cents: chosenEntryCents } : {}),
         ...(waitlistToken ? { waitlist_token: waitlistToken } : {}),
       }),
     })
@@ -580,7 +599,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         return
       }
       // QUESTIONS.1 — the server's answer issues land on their fields.
-      if (res.status === 400 && json.code === 'invalid_answers' && Array.isArray(json.issues)) {
+      if (res.status === 400 && (json.code === 'invalid_answers' || json.code === 'invalid_entry_amount') && Array.isArray(json.issues)) {
         setFieldErrors(Object.fromEntries(json.issues.map((i) => [i.path, i.message])))
         return
       }
@@ -636,7 +655,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const isClosed = race.registration_state !== 'open'
   const closeMsg = closedReasons[race.registration_state]
   const showMemberNotice = !!(race.member_pricing_enabled || race.members_only)
-  const showPricingCard = !!(memberPricing || nonMemberFeeCents != null)
+  const showPricingCard = !!(entryAmount || memberPricing || nonMemberFeeCents != null)
   const wavesArr = Array.isArray(race.waves) ? race.waves : []
   // WAVEWIN.1 — for races the picker only offers the immediately-
   // available window (earlier sold-out waves stay, greyed; later waves
@@ -715,11 +734,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // shared by the desktop submit and the mobile sticky action bar.
   const submitLabel = submitting
     ? 'Submitting…'
-    : totalCents > 0 && !ratePending
+    : totalCents > 0 && !ratePending && !amountPending
       ? copy.submitPaidLabel(fmtMoney(totalCents))
       : copy.submitFreeLabel
 
-  const liveTotalLabel = ratePending ? '—' : totalCents > 0 ? fmtMoney(totalCents) : 'Free'
+  const liveTotalLabel = ratePending || amountPending ? '—' : totalCents > 0 ? fmtMoney(totalCents) : 'Free'
 
   // Dark input / label / error class recipes (design-system tokens).
   const inputCls = (invalid) =>
@@ -794,7 +813,12 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           {/* TIERS.1 — with tiers the row reads "Early bird €25.00 (limited),
               then €35.00"; the group price gets its own row. Member pricing
               keeps its two-rate copy (tiers replace the non-member fee only). */}
-          {tierPricing && !memberPricing ? (
+          {entryAmount ? (
+            <div className="flex items-start gap-3">
+              <BadgeEuro size={16} className="text-white/40 mt-0.5 shrink-0" />
+              <span>Choose your entry amount: {fmtMoney(entryAmount.suggested_cents)} suggested per person{entryAmount.min_cents < entryAmount.suggested_cents ? `, from ${fmtMoney(entryAmount.min_cents)}` : ''}</span>
+            </div>
+          ) : tierPricing && !memberPricing ? (
             <>
               <div className="flex items-start gap-3">
                 <BadgeEuro size={16} className="text-white/40 mt-0.5 shrink-0" />
@@ -1123,6 +1147,33 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* CHARITYENTRY.1 — the entrant's own per-person amount. */}
+          {entryAmount && (
+            <div className="pt-4 border-t border-white/10">
+              <label htmlFor="entry-amount" className={labelCls}>Your entry amount, per person</label>
+              <div className="relative">
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[15px] text-white/55 pointer-events-none">{currency === 'GBP' ? '£' : '€'}</span>
+                <input
+                  id="entry-amount"
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  value={entryAmountShown}
+                  onChange={e => {
+                    setEntryAmountText(e.target.value)
+                    if (fieldErrors.entry_amount) setFieldErrors(prev => ({ ...prev, entry_amount: undefined }))
+                  }}
+                  aria-invalid={!!fieldErrors.entry_amount}
+                  className={`${inputCls(!!fieldErrors.entry_amount)} pl-8`}
+                />
+              </div>
+              <p className="text-[11px] text-white/45 mt-1">
+                Pay what you like, from {fmtMoney(entryAmount.min_cents)}.
+              </p>
+              {fieldErrors.entry_amount && <p className={errCls}>{fieldErrors.entry_amount}</p>}
             </div>
           )}
 

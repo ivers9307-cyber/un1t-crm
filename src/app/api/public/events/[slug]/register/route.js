@@ -39,6 +39,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
 import { applyTierPricing } from '@/lib/pricing-tiers'
+import { resolveEntryAmountSettings, validateEntryAmount, priceRaceAtChosenAmount } from '@/lib/charity-entry-amount'
 import { resolveRegistrationQuestions, validateAnswers } from '@/lib/registration-questions'
 import { normalizeCode, computeDiscountCents, promoCodeError } from '@/lib/promo-codes'
 import { createRacePayment, refreshRacePaymentFromProvider } from '@/lib/race-payments'
@@ -88,6 +89,9 @@ const RegisterSchema = z.object({
   marketing_consent: z.boolean().optional(),
   // EVENTS-PROMO.1 — optional discount code applied to the ticket amount.
   promo_code: z.string().trim().max(64).optional(),
+  // CHARITYENTRY.1 — the per-person amount the entrant chose, in cents, on an
+  // event whose Charity day lets entrants choose. Ignored on a fixed-price event.
+  entry_amount_cents: z.number().int().positive().max(100000000).optional(),
   // EVENT-WAITLIST.1 — the claim token from a waitlist offer link.
   waitlist_token: z.string().trim().max(1000).optional(),
   // FINDTEAM.3 — "Find me a team": a solo entrant with no team. Sent WITHOUT
@@ -219,6 +223,7 @@ export async function POST(request, props) {
       registration_opens_at, registration_closes_at, active, status,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency, create_in_glofox, host_id, find_team, entry_policy, pricing_tiers, registration_questions,
+      charity_enabled, charity,
       waves:race_waves ( id, start_time, capacity, label )
     `)
     .eq('slug', params.slug)
@@ -268,6 +273,22 @@ export async function POST(request, props) {
       error: 'Registration has closed for this race.',
       code: 'closed',
     }, { status: 409 })
+  }
+
+  // CHARITYENTRY.1 — choose-your-entry-amount. Judged before anything is
+  // written. A form still cached from before the switch sends no amount: it
+  // pays the suggested amount (the ticket price it was showing).
+  const entryAmount = resolveEntryAmountSettings(race)
+  let chosenEntryCents = null
+  if (entryAmount.enabled) {
+    const judged = validateEntryAmount(entryAmount, body.entry_amount_cents ?? entryAmount.suggested_cents)
+    if (!judged.ok) {
+      return NextResponse.json({
+        success: false, error: judged.error, code: 'invalid_entry_amount',
+        issues: [{ path: 'entry_amount', message: judged.error }],
+      }, { status: 400 })
+    }
+    chosenEntryCents = judged.cents
   }
 
   // ─── lead_gen: pure data-capture form ───────────────────────────
@@ -762,7 +783,9 @@ export async function POST(request, props) {
   ]
 
   let validatedRoster
-  if (race.member_pricing_enabled || race.members_only) {
+  // CHARITYENTRY.1 — a chosen amount has no member rate, so only a
+  // members_only event still needs the lookup.
+  if ((race.member_pricing_enabled && chosenEntryCents == null) || race.members_only) {
     validatedRoster = await validateTeamRoster({
       db,
       members: fullRoster,
@@ -818,7 +841,12 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Pricing is unavailable right now. Please try again in a moment.', code: 'pricing_unavailable' }, { status: 503 })
   }
   // Pricing breakdown.
-  const pricing = computeTeamPricing({ validatedRoster, race: priced.race })
+  // CHARITYENTRY.1 — a chosen amount replaces the tier/member price outright.
+  const pricing = computeTeamPricing({
+    validatedRoster,
+    race: chosenEntryCents != null ? priceRaceAtChosenAmount(priced.race, chosenEntryCents) : priced.race,
+  })
+  const appliedTier = chosenEntryCents != null ? null : priced.tier
 
   // ── Promo code (EVENTS-PROMO.1) ──────────────────────────────────────────
   // Applied to the ticket amount BEFORE the per-ticket booking fee. A bad code
@@ -904,7 +932,7 @@ export async function POST(request, props) {
       promo_code_id: appliedPromo?.id || null,
       promo_discount_cents: appliedPromo ? promoDiscountCents : null,
       // TIERS.1 — the tier bought; only such entries consume tier seats.
-      pricing_tier_id: priced.tier?.id ?? null,
+      pricing_tier_id: appliedTier?.id ?? null,
       // QUESTIONS.1 — the entry-level answers.
       answers: answered.entry,
       // HOSTSTATS.1 — where the booking came from (null when the form sent none).
@@ -1094,7 +1122,7 @@ export async function POST(request, props) {
         member_fee_cents: pricing.member_fee_cents,
         non_member_fee_cents: pricing.non_member_fee_cents,
         // TIERS.1 — the tier this entry was priced at, or null (base price).
-        tier: priced.tier ? { id: priced.tier.id, name: priced.tier.name } : null,
+        tier: appliedTier ? { id: appliedTier.id, name: appliedTier.name } : null,
       },
       payment: {
         id: paymentResult.payment.id,
