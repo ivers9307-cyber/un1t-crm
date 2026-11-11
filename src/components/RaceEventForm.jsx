@@ -1605,7 +1605,7 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
             templateId={confirmationTemplateId}
             onTemplateId={setConfirmationTemplateId}
             templates={emailTemplates}
-            extraTags={['{{manage_url}}']}
+            extraTags={['{{manage_url}}', '{{amount}}', '{{amount_per_person}}']}
           />
 
           <div className="pt-4 border-t border-un1t-border">
@@ -1878,6 +1878,9 @@ function charityToForm(saved) {
   f.min = centsToEuroText(s.min_cents)
   f.max = centsToEuroText(s.max_cents)
   f.goal = centsToEuroText(s.goal_cents)
+  // CHARITYENTRY.1 — entrants choose their entry amount.
+  f.entry_choose_amount = s.entry_choose_amount === true
+  f.entry_min = centsToEuroText(s.entry_min_cents)
   f.match_multiplier = s.match_multiplier != null ? String(s.match_multiplier) : ''
   f.custom_allowed = s.custom_allowed ?? CHARITY_DEFAULTS.custom_allowed
   f.show_total = s.show_total ?? CHARITY_DEFAULTS.show_total
@@ -1926,6 +1929,14 @@ function charityFromForm(f) {
   }
 
   out.custom_allowed = !!f.custom_allowed
+  // CHARITYENTRY.1 — saved whether on or off, so the minimum survives a toggle.
+  out.entry_choose_amount = !!f.entry_choose_amount
+  const entryMinRaw = String(f.entry_min ?? '').trim()
+  if (entryMinRaw) {
+    const n = Number(entryMinRaw)
+    if (!Number.isFinite(n) || Math.round(n * 100) < 1 || n > 5000) return { error: 'Charity day: the minimum entry amount must be between €0.01 and €5,000 (or leave it blank for €5).' }
+    out.entry_min_cents = Math.round(n * 100)
+  }
   out.show_total = !!f.show_total
   out.include_entries = !!f.include_entries
 
@@ -2023,6 +2034,18 @@ function CharityDaySection({ enabled, onEnabled, values, onChange, eventId = nul
           <div>
             {text('blurb', 'Blurb', CHARITY_DEFAULTS.blurb, { rows: 2 })}
             <p className={hintCls}>Merge tags: <code>{'{{charity}}'}</code>, <code>{'{{brand}}'}</code>.</p>
+          </div>
+
+          {/* CHARITYENTRY.1 — the entry fee becomes "pay what you like". */}
+          <div className="space-y-2">
+            {check('entry_choose_amount', 'Let entrants choose their entry amount')}
+            <p className={hintCls}>Each person pays the amount the person registering types, at or above the minimum. The entry price above is the suggested amount the box starts on. Member pricing and price tiers do not apply while this is on.</p>
+            {values.entry_choose_amount && (
+              <div className="max-w-[14rem]">
+                <label htmlFor="charity-entry_min" className={labelCls}>Minimum entry per person (€)</label>
+                <input id="charity-entry_min" type="number" min={0} step="0.01" value={values.entry_min} onChange={(e) => onChange('entry_min', e.target.value)} placeholder="5" className={input} />
+              </div>
+            )}
           </div>
 
           <div>

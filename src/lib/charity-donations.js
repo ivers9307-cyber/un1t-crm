@@ -84,6 +84,10 @@ export const CharitySettingsSchema = z
     receipt_intro: text.optional(),
     video_url: z.string().trim().max(2000).optional(),
     video_file_url: z.string().trim().max(2000).optional(),
+    // CHARITYENTRY.1 — entrants choose their per-person entry amount (the
+    // ticket price is the suggestion; this is the floor). See charity-entry-amount.js.
+    entry_choose_amount: z.boolean().optional(),
+    entry_min_cents: cents.max(500000).optional(),
   })
   .superRefine((s, ctx) => {
     if (s.video_url && !parseEmbed(s.video_url)) {
