@@ -98,6 +98,13 @@ export const WEB_PERMISSIONS = Object.freeze([
   // Default-off for staff + head_coach below.
   { key: 'attendance_reports', label: 'Attendance Reports',     hint: 'Who turned up on time. Auto-stamped from UniFi Access door unlocks; staff cannot see this.' },
   { key: 'assistant',         label: 'AI Assistant',            hint: 'In-app chat assistant with CRM tool use.' },
+  // MCPACCESS.1 — deliberately NOT the `assistant` key. The in-app
+  // assistant calls Anthropic on our key and enforces no spend ceiling;
+  // the MCP server calls no model at all (inference is billed to the
+  // operator's own Claude client). Opposite cost profiles, so the two
+  // must be grantable apart. Named "Connect an Agent" because the
+  // Integrations hub already has an org-level "Agent access" card.
+  { key: 'mcp_access',        label: 'Connect an Agent',        hint: 'Connect Claude or another MCP client to the CRM as yourself. Not the in-app chat.' },
   // Mig 093 (Nov 2026): renamed from `door_unlock` (mobile-only)
   // to `studio_management` (cross-platform, top-level on
   // permissions). Both web sidebar AND mobile read this single
@@ -348,6 +355,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // on it, the same two-level shape as approvals_inbox.
     email: true, email_inbox: true, whatsapp: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true, class_roster: true,
+    mcp_access: true,
     device_control: true,
     // Studio Management children (STUDIO-GROUP.1) — master has all.
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
@@ -383,6 +391,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
     email: false, email_inbox: false, whatsapp: false,
     schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true, class_roster: true,
+    mcp_access: false,
     device_control: false,                         // on-site device control — not a staff surface
     // Studio Management children — all off for staff.
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
@@ -423,6 +432,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,       // front desk runs the booking desk
     email: false, email_inbox: false, whatsapp: true,        // WhatsApp inbox is the front-desk channel
     schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true, class_roster: false,
+    mcp_access: false,
     device_control: false,
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
@@ -458,6 +468,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     email: true, email_inbox: false, whatsapp: true,
     schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
     assistant: true, studio_management: false,    // explicit opt-in
+    mcp_access: false,
     class_timer: true,                             // running the class timer is a coaching duty
     class_roster: true,
     device_control: false,                         // owner + manager by default; grant per-user
@@ -495,6 +506,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,
     email: true, email_inbox: true, whatsapp: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true, class_roster: true,
+    mcp_access: false,
     device_control: true,                          // managers run on-site device control
     // Studio Management children — manager gets TV displays (marketing
     // surface they handle day-to-day). Contracts + imports stay
@@ -532,6 +544,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,
     email: true, email_inbox: true, whatsapp: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true, class_roster: true,
+    mcp_access: true,
     device_control: true,
     // Studio Management children — owner gets contracts + TV displays
     // by default (mirroring the old role-only gates). Imports stay

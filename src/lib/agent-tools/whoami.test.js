@@ -52,12 +52,15 @@ function auth() {
         activeLocation: locations[0],
         rolesByLocation: { [DUB]: 'manager', [NYC]: 'staff' },
         assignmentsByLocation: {
-          [DUB]: { role: 'manager', permissions: {} },
+          // MCPACCESS.1 — mcp_access is master/owner by default, so the
+          // manager carries an explicit grant; the staff studio carries none,
+          // which is what makes the per-studio report below meaningful.
+          [DUB]: { role: 'manager', permissions: { mcp_access: true } },
           [NYC]: { role: 'staff', permissions: {} },
         },
       },
       enabledOrgIds: ['org-1'],
-      assistantAnywhere: true,
+      mcpAccessAnywhere: true,
     },
   }
 }
@@ -77,8 +80,8 @@ describe('whoami', () => {
       name: 'Pat Manager',
       default_studio_id: DUB,
       studios: [
-        { id: DUB, name: 'Dublin Studio', timezone: 'Europe/Dublin', role: 'manager', today: '2026-11-02', mcp_enabled: true, assistant: true },
-        { id: NYC, name: 'New York Studio', timezone: 'America/New_York', role: 'staff', today: '2026-11-01', mcp_enabled: false, assistant: false },
+        { id: DUB, name: 'Dublin Studio', timezone: 'Europe/Dublin', role: 'manager', today: '2026-11-02', mcp_enabled: true, mcp_access: true },
+        { id: NYC, name: 'New York Studio', timezone: 'America/New_York', role: 'staff', today: '2026-11-01', mcp_enabled: false, mcp_access: false },
       ],
       tools: ['whoami', 'manager_tool'],
     })

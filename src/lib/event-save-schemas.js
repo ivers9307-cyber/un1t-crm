@@ -19,6 +19,7 @@ import { PricingTiersSchema } from './pricing-tiers'
 import { RegistrationQuestionsSchema } from './registration-questions'
 import { FindTeamSettingsSchema } from './find-team'
 import { EntryPolicySettingsSchema } from './entry-policy'
+import { WAVE_WINDOW_MIN_MINUTES, WAVE_WINDOW_ALL_MINUTES } from './wave-window'
 
 // ----------------------------------------------------------------------------
 // Waves (mig 083). capacity null = unlimited.
@@ -126,6 +127,8 @@ export const EventCreateFields = z.object({
   registration_questions: RegistrationQuestionsSchema.nullable().optional(),
   // CALENDAR.1 (mig 820) — the calendar entry's length; null = the kind's default.
   duration_minutes: z.number().int().min(5).max(1440).nullable().optional(),
+  // WAVEWIN.2 (mig 825) — the public wave picker's release window; null = 90 minutes.
+  wave_window_minutes: z.number().int().min(WAVE_WINDOW_MIN_MINUTES).max(WAVE_WINDOW_ALL_MINUTES).nullable().optional(),
   // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
   // (race_events.entry_policy, mig 767).
   entry_policy: EntryPolicySettingsSchema.nullable().optional(),
@@ -220,6 +223,8 @@ export const EventUpdateFields = z.object({
   registration_questions: RegistrationQuestionsSchema.nullable().optional(),
   // CALENDAR.1 (mig 820) — the calendar entry's length; null = the kind's default.
   duration_minutes: z.number().int().min(5).max(1440).nullable().optional(),
+  // WAVEWIN.2 (mig 825) — the public wave picker's release window; null = 90 minutes.
+  wave_window_minutes: z.number().int().min(WAVE_WINDOW_MIN_MINUTES).max(WAVE_WINDOW_ALL_MINUTES).nullable().optional(),
   // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
   // (race_events.entry_policy, mig 767).
   entry_policy: EntryPolicySettingsSchema.nullable().optional(),

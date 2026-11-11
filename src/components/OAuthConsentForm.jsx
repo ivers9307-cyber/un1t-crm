@@ -12,7 +12,7 @@ import { createBrowserClient } from '@/lib/supabase'
 // Fixed by the MCP.1 brief; shown verbatim next to a disabled Approve.
 const REFUSALS = {
   mcp_disabled: 'MCP access is not switched on for your organisation. Ask an organisation admin.',
-  assistant_permission: 'Ask an admin to switch on AI Assistant for you.',
+  mcp_access_permission: 'Ask an admin to switch on Connect an Agent for you.',
 }
 
 const CAPABILITIES = [
@@ -35,7 +35,7 @@ function redirectHost(uri) {
 /**
  * @param {object} props
  * @param {string} props.authorizationId
- * @param {{ ok: boolean, reason: null | 'mcp_disabled' | 'assistant_permission' }} props.eligibility
+ * @param {{ ok: boolean, reason: null | 'mcp_disabled' | 'mcp_access_permission' }} props.eligibility
  * @param {string} [props.personName]
  */
 export default function OAuthConsentForm({ authorizationId, eligibility, personName }) {

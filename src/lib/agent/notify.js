@@ -11,6 +11,7 @@
 // message row so the thread history is complete. Fail-soft
 // throughout — a send hiccup never breaks the approval.
 
+import { conversationAddress } from '@/lib/whatsapp-address'
 import { stripEmDashes } from './core'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { resolveAgentSettings } from './settings-resolve'
@@ -198,11 +199,11 @@ export async function sendAgentThreadMessage(db, { channel, conversationId, text
   try {
     if (channel === 'whatsapp') {
       const { data: conversation } = await db.from('whatsapp_conversations')
-        .select('id, location_id, wa_phone, window_expires_at, contact_id, contacts!contact_id ( id, wa_phone )')
+        .select('id, location_id, wa_phone, wa_bsuid, window_expires_at, contact_id, contacts!contact_id ( id, wa_phone )')
         .eq('id', conversationId)
         .maybeSingle()
       if (!conversation) return { sent: false, reason: 'conversation_not_found' }
-      const phone = conversation.contacts?.wa_phone || conversation.wa_phone
+      const phone = conversationAddress(conversation, conversation.contacts)
       if (!phone) return { sent: false, reason: 'no_phone' }
 
       const { sendTextMessage, isWindowOpen } = await import('@/lib/whatsapp')

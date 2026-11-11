@@ -5,7 +5,7 @@
 // page via `@/lib/recovery-link` (hardened against CVE-internal 2026-05-13, the
 // 2026-06 session-race and the 2026-07-31 PKCE-verifier bug). It used to be a
 // verbatim copy, which meant it carried the same bug — keep it shared. Only the
-// styling (dark host brand) and the success redirect (/host) differ. Lives
+// styling (the host theme, light or dark) and the success redirect (/host) differ. Lives
 // OUTSIDE the (portal) gate.
 //
 // W1.S1c: page.js (server) resolves the request host's organisation brand and
@@ -16,6 +16,7 @@ import { useRouter } from 'next/navigation'
 import { Check, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { passwordRequirements, validatePasswordComplexity } from '@/lib/schemas'
+import { HOST_BTN_PRIMARY, HOST_EYEBROW, HOST_HINT, HOST_INPUT, HOST_LABEL, HOST_NOTICE, HOST_NOTICE_TONE, HOST_SECTION } from '@/components/host/host-ui'
 import { parseRecoveryLink, establishRecoverySession } from '@/lib/recovery-link'
 
 export default function HostSetPasswordForm({ brand }) {
@@ -94,34 +95,33 @@ export default function HostSetPasswordForm({ brand }) {
     }
   }
 
-  const input = 'w-full bg-white/[0.04] border border-white/12 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/30'
-
   return (
-    <div className="min-h-screen bg-black text-white flex items-center justify-center px-4">
+    <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <div className="font-bold tracking-[0.3em] text-2xl">{brand.shortName}</div>
-          <p className="text-[11px] uppercase tracking-[0.2em] text-white/45 mt-2">Host portal</p>
+          <p className={`${HOST_EYEBROW} mt-2`}>Host portal</p>
         </div>
         <form onSubmit={handleSet} className="space-y-4">
           <div>
-            <h2 className="text-sm font-semibold">{flowType === 'invite' ? 'Welcome — set your password' : 'Set a new password'}</h2>
-            <p className="text-xs text-white/50 mt-1">You&apos;ll use this with your email to sign in from now on.</p>
+            <h2 className={HOST_SECTION}>{flowType === 'invite' ? 'Welcome — set your password' : 'Set a new password'}</h2>
+            <p className={`${HOST_HINT} mt-1`}>You&apos;ll use this with your email to sign in from now on.</p>
           </div>
 
           {!ready && !error && (
-            <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-200">
+            <div className={`${HOST_NOTICE} ${HOST_NOTICE_TONE.warn}`}>
               Verifying your invite…
             </div>
           )}
 
           <div>
-            <input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password" autoComplete="new-password" className={input} />
+            <label htmlFor="host-new-password" className={`${HOST_LABEL} mb-1.5`}>New password</label>
+            <input id="host-new-password" type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password" autoComplete="new-password" className={HOST_INPUT} />
             <ul className="mt-2 space-y-1">
               {passwordRequirements.map((r) => {
                 const ok = r.test(password || '')
                 return (
-                  <li key={r.id} className={`flex items-center gap-2 text-xs ${ok ? 'text-emerald-400' : 'text-white/40'}`}>
+                  <li key={r.id} className={`flex items-center gap-2 text-xs ${ok ? 'text-host-ok' : 'text-host-hint'}`}>
                     {ok ? <Check size={12} /> : <X size={12} />}<span>{r.label}</span>
                   </li>
                 )
@@ -129,11 +129,14 @@ export default function HostSetPasswordForm({ brand }) {
             </ul>
           </div>
 
-          <input type="password" required minLength={8} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirm password" autoComplete="new-password" className={input} />
+          <div>
+            <label htmlFor="host-confirm-password" className={`${HOST_LABEL} mb-1.5`}>Confirm password</label>
+            <input id="host-confirm-password" type="password" required minLength={8} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirm password" autoComplete="new-password" className={HOST_INPUT} />
+          </div>
 
-          {error && <p className="text-sm text-red-400">{error}</p>}
+          {error && <p className="text-sm text-host-bad">{error}</p>}
 
-          <button type="submit" disabled={loading || !ready} className="w-full bg-white text-black font-semibold rounded-lg px-3 py-2.5 text-sm disabled:opacity-60">
+          <button type="submit" disabled={loading || !ready} className={`${HOST_BTN_PRIMARY} w-full`}>
             {loading ? 'Setting…' : 'Set password & sign in'}
           </button>
         </form>

@@ -22,7 +22,8 @@ import { FLOW_EVENT_FIELDS, applyFlowEvent } from '@/lib/whatsapp-flow-events'
 import { recordCtwaTouch } from '@/lib/meta-capi'
 import { pricingColumnsFromStatus } from '@/lib/whatsapp-pricing'
 import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
-import { captureInboundBsuid, extractInboundBsuid } from '@/lib/whatsapp-bsuid'
+import { captureInboundBsuid } from '@/lib/whatsapp-bsuid'
+import { inboundSender } from '@/lib/whatsapp-address'
 import { parseEchoMessages, parseSyncContacts, parseHistoryMessages, nextHistorySyncState, parseAccountUpdateEvent, nextCoexistenceLinkState, COEX_LINK_EVENTS } from '@/lib/whatsapp-coexistence'
 import { syncContactMatchOnly, ingestCoexistenceMessage } from '@/lib/whatsapp-coexistence-ingest'
 import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
@@ -213,7 +214,25 @@ export async function POST(request) {
               })
               if (dedup.seen) continue
             }
-            await handleIncomingMessage(db, message, value.contacts, routing.locationId, routing.numberId)
+            // WA-BSUID.2 — one message's failure must not take the rest of this
+            // POST with it. The whole loop used to sit in ONE try/catch, so a
+            // throw here (a sender with a hidden phone number crashed on
+            // `message.from.startsWith`) silently skipped every later message
+            // and every delivery status in the same delivery. This message is
+            // still lost when it throws: its dedupe key is claimed above and
+            // Meta gets its 200, so nothing resends it. Hence error level.
+            try {
+              await handleIncomingMessage(db, message, value.contacts, routing.locationId, routing.numberId)
+            } catch (err) {
+              logError('wa-webhook', 'inbound message handler threw; this message is NOT recorded and Meta will not resend it', {
+                waMessageId: message?.id || null,
+                messageType: message?.type || null,
+                hasPhone: !!message?.from,
+                hasUserId: !!message?.from_user_id,
+                locationId: routing.locationId,
+                err,
+              })
+            }
           }
         }
 
@@ -230,7 +249,15 @@ export async function POST(request) {
               })
               if (dedup.seen) continue
             }
-            await handleStatusUpdate(db, status)
+            try {
+              await handleStatusUpdate(db, status)
+            } catch (err) {
+              logError('wa-webhook', 'status handler threw; this status is NOT recorded and Meta will not resend it', {
+                waMessageId: status?.id || null,
+                status: status?.status || null,
+                err,
+              })
+            }
           }
         }
       }
@@ -276,19 +303,35 @@ async function threadContactFor(db, { existingConv, phoneContact, matches, orgLo
 }
 
 async function handleIncomingMessage(db, message, contacts, defaultLocationId, receivingNumberId = null) {
-  const senderPhone = message.from  // E.164 format
+  // WA-BSUID.2 — a sender who hides their number arrives with NO `from` and no
+  // `contacts[].wa_id`, only a business-scoped user id (`from_user_id`). The
+  // phone is therefore optional from here down: `senderPhone` is null for such
+  // a person, their thread and contact are found by BSUID, and everything that
+  // replies is handed `replyTo` (the phone when there is one, else the BSUID,
+  // which the send functions address with Meta's `recipient` field).
+  const sender = inboundSender(message, contacts)
+  const senderPhone = sender.phone  // E.164 without '+', or null
+  const senderBsuid = sender.bsuid
+  const replyTo = sender.address
   const messageId = message.id
   const timestamp = message.timestamp ? new Date(parseInt(message.timestamp) * 1000) : new Date()
 
-  // Get sender name from Meta's contacts array
-  const metaContact = contacts?.find(c => c.wa_id === senderPhone)
-  const senderName = metaContact?.profile?.name || null
+  if (!replyTo) {
+    // Neither a phone nor a user id: nothing to thread it on or answer.
+    logError('wa-webhook', 'inbound message names no sender (no from, no from_user_id); not recorded', {
+      waMessageId: messageId || null, messageType: message.type || null, locationId: defaultLocationId,
+    })
+    return
+  }
+
+  // Sender name from Meta's contacts array
+  const senderName = sender.name
 
   // Try to find existing contact by phone number
   // Meta sends phone without '+' (e.g. 353873147675), but contacts may store it
   // with '+' (e.g. +353873147675). Check both formats.
-  const phoneWithPlus = senderPhone.startsWith('+') ? senderPhone : `+${senderPhone}`
-  const phoneWithout = senderPhone.startsWith('+') ? senderPhone.slice(1) : senderPhone
+  const phoneWithPlus = senderPhone ? (senderPhone.startsWith('+') ? senderPhone : `+${senderPhone}`) : null
+  const phoneWithout = senderPhone ? (senderPhone.startsWith('+') ? senderPhone.slice(1) : senderPhone) : null
 
   // COMMS-AUDIT 2026-07-10 — the phone can match contacts at SEVERAL
   // locations (multi-gym members, shared numbers), ordered oldest first so
@@ -306,10 +349,15 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // its 200.
   const orgLocIds = await orgLocationIdsFor(db, defaultLocationId)
   let contact = null
-  const { data: existingContacts } = await db.from('contacts')
+  // WA-BSUID.2 — with no phone the match is the BSUID an earlier message of
+  // theirs stamped on the contact (captureInboundBsuid below). No match means
+  // an unknown sender, exactly as for a phone nobody holds.
+  const contactScope = db.from('contacts')
     .select('id, location_id')
     .in('location_id', scopeFor(orgLocIds))
-    .or(`wa_phone.eq.${phoneWithout},wa_phone.eq.${phoneWithPlus},phone.eq.${phoneWithout},phone.eq.${phoneWithPlus}`)
+  const { data: existingContacts } = await (senderPhone
+    ? contactScope.or(`wa_phone.eq.${phoneWithout},wa_phone.eq.${phoneWithPlus},phone.eq.${phoneWithout},phone.eq.${phoneWithPlus}`)
+    : contactScope.eq('wa_bsuid', senderBsuid))
     .order('created_at', { ascending: true })
     .order('id', { ascending: true })
     .limit(20)
@@ -338,12 +386,15 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     // consent bug two functions down survived two audits precisely because its
     // writes looked handled and reported nothing.
     //
-    // Ensure wa_phone is set on the contact (store without + to match Meta's format)
-    const { error: phoneErr } = await db.from('contacts')
-      .update({ wa_phone: phoneWithout })
-      .eq('id', contact.id)
-      .is('wa_phone', null)
-    if (phoneErr) console.error(`[wa-webhook] wa_phone backfill failed for contact ${contact.id}:`, phoneErr.message)
+    // Ensure wa_phone is set on the contact (store without + to match Meta's format).
+    // Skipped for a sender with a hidden number: there is no phone to store.
+    if (phoneWithout) {
+      const { error: phoneErr } = await db.from('contacts')
+        .update({ wa_phone: phoneWithout })
+        .eq('id', contact.id)
+        .is('wa_phone', null)
+      if (phoneErr) console.error(`[wa-webhook] wa_phone backfill failed for contact ${contact.id}:`, phoneErr.message)
+    }
 
     // Reactivate a number previously flagged undeliverable — an inbound message
     // proves they're on WhatsApp. Only flips 'undeliverable' (never opted_out/blocked).
@@ -369,7 +420,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     numberId: receivingNumberId,
     numberHomeLocationId: defaultLocationId,
     waPhone: senderPhone,
-    bsuid: extractInboundBsuid(contacts, senderPhone),
+    bsuid: senderBsuid,
     contact,
     contactStudios: contact && studiosByContact ? (studiosByContact.get(contact.id) || []) : null,
     contextMessageId: message.context?.id || null,
@@ -396,6 +447,20 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   let conversationId
   if (existingConv) {
     conversationId = existingConv.id
+    // WA-BSUID.2 — a thread opened while the sender's number was hidden has no
+    // wa_phone. Once Meta sends the number (it does after we have exchanged
+    // messages), store it, so the inbox shows it and phone-keyed lookups find
+    // the thread. Only on a thread found by THIS sender's BSUID (never a
+    // redacted row), and only into an empty column. A refusal means the person
+    // already has a phone-keyed thread at this studio: logged, threads stay
+    // separate, the message is still filed.
+    if (senderPhone && senderBsuid && !existingConv.wa_phone && existingConv.wa_bsuid === senderBsuid) {
+      const { error: threadPhoneErr } = await db.from('whatsapp_conversations')
+        .update({ wa_phone: senderPhone })
+        .eq('id', conversationId)
+        .is('wa_phone', null)
+      if (threadPhoneErr) console.error(`[wa-webhook] could not store the sender's number on conversation ${conversationId} (it stays keyed on their user id):`, threadPhoneErr.message)
+    }
     // If contact was found but conversation wasn't linked yet, link it now
     if (contact && !existingConv.contact_id) {
       const { error: linkErr } = await db.from('whatsapp_conversations')
@@ -413,6 +478,12 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
       location_id: locationId,
       contact_id: actingContact?.id || null,  // null if unknown sender
       wa_phone: senderPhone,
+      // WA-BSUID.2 — a phone-less thread is keyed on the BSUID from its first
+      // row (the partial unique (location_id, wa_bsuid) then guards the race
+      // the phone index guards for everyone else). With a phone the BSUID is
+      // stamped afterwards by captureInboundBsuid, which never lets a clash
+      // fail the insert.
+      ...(senderPhone ? {} : { wa_bsuid: senderBsuid }),
       wa_profile_name: senderName,
       status: 'active',
       // CTWA: a click-to-WhatsApp ad's first message carries referral.ctwa_clid
@@ -429,7 +500,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
       const { data: raced, error: racedErr } = await db.from('whatsapp_conversations')
         .select('id')
         .eq('location_id', locationId)
-        .eq('wa_phone', senderPhone)
+        .eq(senderPhone ? 'wa_phone' : 'wa_bsuid', senderPhone || senderBsuid)
         .limit(1)
         .maybeSingle()
       if (racedErr) console.error('[whatsapp webhook] conversation re-read after a failed insert failed:', racedErr.message)
@@ -440,7 +511,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   }
 
   if (!conversationId) {
-    console.error('Could not create conversation for:', senderPhone)
+    console.error('Could not create conversation for:', replyTo)
     return
   }
 
@@ -468,7 +539,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // conversation + contact. Capture ONLY — identity resolution above stays
   // phone-keyed. Best-effort: never overwrites a differing stored value
   // (warns — that's a collision signal) and never throws out of the webhook.
-  await captureInboundBsuid(db, { contacts, senderPhone, conversationId, contactId: actingContact?.id || null })
+  await captureInboundBsuid(db, { contacts, senderPhone, bsuid: senderBsuid, conversationId, contactId: actingContact?.id || null })
 
   // Update profile name if we have one (it can change)
   if (senderName) {
@@ -677,7 +748,8 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
         message,
         messageType,
         body,
-        senderPhone,
+        // The address the picker's question is sent to (WA-BSUID.2).
+        senderPhone: replyTo,
       })
     } catch (e) {
       console.error('[wa-webhook] studio picker failed (carrying on):', e?.message || String(e))
@@ -782,6 +854,10 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
         // pass the sender's number from the webhook payload so the ack
         // can actually send.
         waPhone: phoneWithout,
+        // WA-BSUID.2 — with a hidden number there is no phone to close
+        // same-number contacts by (waPhone stays null), but the
+        // acknowledgement still has somewhere to go.
+        ...(senderPhone ? {} : { replyTo }),
         locationId,
         conversationId,
         keyword,
@@ -812,7 +888,9 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
       agentResult = await maybeAutoReply(db, {
         conversationId,
         locationId,
-        senderPhone,
+        // Where Mia's reply goes: the phone, or the BSUID of a sender who
+        // hides their number (WA-BSUID.2).
+        senderPhone: replyTo,
         contactId: actingContact?.id || null,
         messageType,
         body,
@@ -894,7 +972,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   if (messageType === 'request_welcome' && !awaitingStudio) {
     try {
       const { maybeSendWelcomeGreeting } = await import('@/lib/agent/welcome-greeting')
-      await maybeSendWelcomeGreeting(db, { conversationId, locationId, senderPhone, contactId: actingContact?.id || null })
+      await maybeSendWelcomeGreeting(db, { conversationId, locationId, senderPhone: replyTo, contactId: actingContact?.id || null })
     } catch (err) {
       console.error('[whatsapp webhook] welcome greeting failed', err?.message)
     }

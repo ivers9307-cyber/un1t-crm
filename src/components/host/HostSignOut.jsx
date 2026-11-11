@@ -4,6 +4,7 @@
 
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
+import { HOST_BTN_GHOST } from './host-ui'
 
 export default function HostSignOut() {
   const router = useRouter()
@@ -14,7 +15,7 @@ export default function HostSignOut() {
     router.refresh()
   }
   return (
-    <button type="button" onClick={signOut} className="text-white/50 hover:text-white transition">
+    <button type="button" onClick={signOut} className={HOST_BTN_GHOST}>
       Sign out
     </button>
   )

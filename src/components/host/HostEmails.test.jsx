@@ -1,11 +1,20 @@
-import { describe, it, expect } from 'vitest'
+// @vitest-environment jsdom
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { render, cleanup, screen, waitFor } from '@testing-library/react'
 import { renderToStaticMarkup } from 'react-dom/server'
+let searchString = ''
+const replace = vi.fn()
+vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams(searchString), useRouter: () => ({ push: vi.fn(), replace }) }))
+
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); replace.mockClear() })
+
 import HostEmailPreviewModal from './HostEmailPreviewModal.jsx'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import {
   buildTestSendBody, statsLine, rowSubline, schedulePanelDefaults, audienceSummary, sendConfirmCopy, rowActions,
-  designStateForDraft,
+  designStateForDraft, unlayerThemeFor,
 } from './HostEmails.jsx'
+import HostEmails from './HostEmails.jsx'
 
 // HOST-EMAIL.10 — the Test button prompts for an address and posts it to
 // /api/host/emails/[id]/send-test. Pure-function test only (the repo's host
@@ -223,5 +232,160 @@ describe('the host composer on a New York host', () => {
     expect(schedulePanelDefaults({ scheduled_for: '2026-11-04T14:00:00.000Z' }, Date.parse('2026-11-01T10:03:00Z'), NY)).toEqual({ date: '2026-11-04', time: '09:00' })
     // 2026-11-01T03:50Z is 23:50 EDT on 31 Oct; +17 min rounds up to 00:15 EDT on 1 Nov.
     expect(schedulePanelDefaults({ scheduled_for: null }, Date.parse('2026-11-01T03:50:00Z'), NY)).toEqual({ date: '2026-11-01', time: '00:15' })
+  })
+})
+
+// HOSTPORTAL.4 — the Promote tab's "Write an email about this event" lands here
+// with ?open=<draft id>&notice=event.
+describe('HostEmails ?open and ?notice=event', () => {
+  const DRAFT = 'd0000000-0000-4000-8000-0000000000d1'
+  const EVENT_NOTICE = 'Draft created from your event. The short codes in angle brackets keep the layout and the booking link working: change the words between them, then press Preview as sent to see the email as it will arrive.'
+
+  function stubApi({ list = [{ id: DRAFT, subject: 'Summer Run', status: 'draft', audience_kind: 'all', email_type: 'marketing' }] } = {}) {
+    const calls = []
+    const fetchMock = vi.fn(async (url) => {
+      calls.push(String(url))
+      const u = String(url)
+      if (u === '/api/host/emails') return { ok: true, json: async () => ({ success: true, data: list }) }
+      if (u === '/api/host/emails/audiences') return { ok: true, json: async () => ({ success: true, data: { all_count: 5, mailing_list_count: 0, events: [] } }) }
+      if (u.startsWith('/api/host/emails/')) {
+        const id = u.split('/').pop()
+        return { ok: true, json: async () => ({ success: true, data: { id, subject: 'Summer Run', body_html: '<p>Hello</p>', design_json: null, audience_kind: 'all', email_type: 'marketing', status: 'draft' } }) }
+      }
+      return { ok: true, json: async () => ({ success: true, data: [] }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return calls
+  }
+  const opens = (calls) => calls.filter((u) => u === `/api/host/emails/${DRAFT}`)
+
+  it('opens the draft named by ?open once the list has loaded, and only once', async () => {
+    searchString = `open=${DRAFT}&notice=event`
+    const calls = stubApi()
+    const { rerender } = render(<HostEmails />)
+    await waitFor(() => expect(opens(calls)).toHaveLength(1))
+    // the list was read before the draft was opened
+    expect(calls.indexOf('/api/host/emails')).toBeLessThan(calls.indexOf(`/api/host/emails/${DRAFT}`))
+    await waitFor(() => expect(document.getElementById('host-email-subject').value).toBe('Summer Run'))
+    // later re-renders (new search-params object) never open it again
+    searchString = `open=${DRAFT}&notice=event&x=1`
+    rerender(<HostEmails />)
+    rerender(<HostEmails zone="America/New_York" />)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(opens(calls)).toHaveLength(1)
+  })
+
+  it('does nothing for an id that is not one of this host\'s drafts', async () => {
+    searchString = 'open=not-mine&notice=event'
+    const calls = stubApi()
+    render(<HostEmails />)
+    await waitFor(() => expect(calls).toContain('/api/host/emails'))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(calls.filter((u) => u.endsWith('/not-mine'))).toHaveLength(0)
+  })
+
+  it('does not open a draft that has already been sent', async () => {
+    searchString = `open=${DRAFT}`
+    const calls = stubApi({ list: [{ id: DRAFT, subject: 'Old', status: 'sent', audience_kind: 'all', email_type: 'marketing' }] })
+    render(<HostEmails />)
+    await waitFor(() => expect(calls).toContain('/api/host/emails'))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(opens(calls)).toHaveLength(0)
+  })
+
+  it('shows the event-draft notice for ?notice=event, and keeps it after the draft opens', async () => {
+    searchString = `open=${DRAFT}&notice=event`
+    const calls = stubApi()
+    render(<HostEmails />)
+    await waitFor(() => expect(opens(calls)).toHaveLength(1))
+    await waitFor(() => expect(screen.getByText(EVENT_NOTICE)).toBeTruthy())
+  })
+
+  it('shows the event-draft notice for ?notice=event even with no ?open', async () => {
+    searchString = 'notice=event'
+    stubApi()
+    render(<HostEmails />)
+    await waitFor(() => expect(screen.getByText(EVENT_NOTICE)).toBeTruthy())
+  })
+
+  it('cleans the URL once with router.replace after the draft is open, and the notice stays on screen', async () => {
+    searchString = `open=${DRAFT}&notice=event`
+    const calls = stubApi()
+    const { rerender } = render(<HostEmails />)
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+    expect(replace).toHaveBeenCalledWith('/host/emails')
+    expect(opens(calls)).toHaveLength(1)
+    // the URL is now clean: the params are gone, and the notice is not cleared
+    searchString = ''
+    rerender(<HostEmails />)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(screen.getByText(EVENT_NOTICE)).toBeTruthy()
+    expect(document.getElementById('host-email-subject').value).toBe('Summer Run')
+    expect(replace).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not clean the URL before the list has loaded and the draft has opened', async () => {
+    searchString = `open=${DRAFT}&notice=event`
+    stubApi()
+    render(<HostEmails />)
+    expect(replace).not.toHaveBeenCalled()
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+    expect(document.getElementById('host-email-subject').value).toBe('Summer Run')
+  })
+
+  it('cleans the URL for ?notice=event with no ?open and for ?notice=reminder, keeping the notice', async () => {
+    searchString = 'notice=event'
+    stubApi()
+    const { unmount } = render(<HostEmails />)
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+    expect(screen.getByText(EVENT_NOTICE)).toBeTruthy()
+    unmount()
+    replace.mockClear()
+    searchString = 'notice=reminder'
+    render(<HostEmails />)
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/host/emails'))
+    expect(screen.getByText('Reminder draft created. Edit it, test it, then send or schedule.')).toBeTruthy()
+  })
+
+  it('cleans the URL when ?open names something that is not a draft of this host', async () => {
+    searchString = 'open=not-mine'
+    stubApi()
+    render(<HostEmails />)
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+  })
+})
+
+// HOSTTHEME.1 — the email designer follows the portal's theme attribute.
+describe('unlayerThemeFor', () => {
+  function inside(theme) {
+    const wrap = document.createElement('div')
+    if (theme) wrap.setAttribute('data-host-theme', theme)
+    const el = document.createElement('div')
+    wrap.appendChild(el)
+    return el
+  }
+  const prefersLight = (matches) => vi.stubGlobal('matchMedia', vi.fn((q) => ({ matches: q === '(prefers-color-scheme: light)' && matches })))
+
+  it('is dark for a null element', () => {
+    expect(unlayerThemeFor(null)).toBe('dark')
+  })
+  it('is dark when no ancestor carries the theme', () => {
+    expect(unlayerThemeFor(inside(null))).toBe('dark')
+  })
+  it('follows an explicit light or dark choice', () => {
+    prefersLight(false)
+    expect(unlayerThemeFor(inside('light'))).toBe('light')
+    prefersLight(true)
+    expect(unlayerThemeFor(inside('dark'))).toBe('dark')
+  })
+  it('follows the device under system', () => {
+    prefersLight(true)
+    expect(unlayerThemeFor(inside('system'))).toBe('light')
+    prefersLight(false)
+    expect(unlayerThemeFor(inside('system'))).toBe('dark')
+  })
+  it('is dark under system when matchMedia is absent', () => {
+    vi.stubGlobal('matchMedia', undefined)
+    expect(unlayerThemeFor(inside('system'))).toBe('dark')
   })
 })

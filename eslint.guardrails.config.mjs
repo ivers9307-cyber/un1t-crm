@@ -558,8 +558,10 @@ const config = [
     // chip-contrast rule does not apply. The public event booking flow
     // (register / checkout / confirmation / embed) was reskinned to the dark
     // UN1T brand (EVENTS-RESKIN.1), so it joins the same exemption. The host
-    // self-serve portal (HOST-PORTAL.3) is a bg-black host surface too — its
-    // layout, login, set-password and event form all render white-on-black.
+    // self-serve portal (HOST-PORTAL.3) is styled from its own `host-*` theme
+    // tokens (HOSTTHEME.1, light and dark), not the CRM's light palette, so
+    // this rule's light-surface judgement does not apply there either;
+    // tests/host-theme-raw-colours-guard.test.js polices its colours.
     files: [
       'src/app/tv/**', 'src/app/present/**', 'src/components/RaceDisplayBoard.jsx',
       'src/app/event/**', 'src/app/event-pay/**', 'src/app/embed/event/**',
@@ -568,7 +570,7 @@ const config = [
       'src/components/EventWaitlistForm.jsx',
       'src/components/RaceConfirmedPage.jsx',
       'src/components/RaceCheckoutPage.jsx',
-      'src/app/host/**', 'src/components/host/**',
+      'src/app/host/**', 'src/components/host/**', 'src/lib/host-portal.js',
     ],
     plugins: { guardrails },
     rules: {

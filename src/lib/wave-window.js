@@ -14,10 +14,43 @@
 //
 // Display-only policy: the register API still accepts any wave id, and
 // the operator surfaces (RaceControlPanel etc.) always see every wave.
-// The window length is a product constant for now — make it a
-// race_events column if an event ever needs a different one.
+//
+// WAVEWIN.2 — the window length is the event's own setting
+// (race_events.wave_window_minutes, mig 825), chosen on the staff event
+// form. NULL = WAVE_WINDOW_MINUTES. Waves are same-day, so a whole-day
+// window (WAVE_WINDOW_ALL_MINUTES) is "every start time at once".
 
 export const WAVE_WINDOW_MINUTES = 90
+// The range the column's CHECK accepts (mig 825) — keep the three in step
+// (tests/migration-825-wave-window.test.js runs the migration against them).
+export const WAVE_WINDOW_MIN_MINUTES = 15
+export const WAVE_WINDOW_ALL_MINUTES = 1440
+// What the event form offers, default first.
+export const WAVE_WINDOW_CHOICES = Object.freeze([WAVE_WINDOW_MINUTES, 120, 180, 240, 360, WAVE_WINDOW_ALL_MINUTES])
+
+/**
+ * The release window for an event, in minutes. Anything but a whole number
+ * inside the column's range (a missing column, NULL, a hand-edited value)
+ * falls back to the default — the picker must never lose its waves to a bad
+ * setting.
+ * @param {{ wave_window_minutes?: number|null }|null|undefined} event
+ */
+export function resolveWaveWindowMinutes(event) {
+  const n = event?.wave_window_minutes
+  if (typeof n !== 'number' || !Number.isInteger(n)) return WAVE_WINDOW_MINUTES
+  if (n < WAVE_WINDOW_MIN_MINUTES || n > WAVE_WINDOW_ALL_MINUTES) return WAVE_WINDOW_MINUTES
+  return n
+}
+
+/** "90 minutes" / "2 hours" / "2 hours 30 minutes" / "the whole day". */
+export function waveWindowLabel(minutes) {
+  if (minutes >= WAVE_WINDOW_ALL_MINUTES) return 'the whole day'
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  if (m === 0 && h > 0) return h === 1 ? '1 hour' : `${h} hours`
+  if (minutes < 120) return `${minutes} minutes`
+  return `${h} hours ${m} minutes`
+}
 
 // 'HH:MM' / 'HH:MM:SS' wall-clock → minutes since midnight, or null.
 // Waves are same-day (race_date), so plain minute arithmetic is safe —

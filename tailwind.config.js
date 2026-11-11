@@ -23,6 +23,38 @@ module.exports = {
         // Editorial funnel pages (TRIALFIRST.1): the pale band between
         // the black sections. One token so the four pages cannot drift.
         lp: { pale: '#F5F5F3' },
+        // Host portal themes (HOSTTHEME.1): every value is a CSS variable set on
+        // the [data-host-theme] wrapper in globals.css, so one class works in both themes.
+        host: {
+          bg: 'var(--host-bg)',
+          panel: 'var(--host-panel)',
+          well: 'var(--host-well)',
+          hover: 'var(--host-hover)',
+          input: 'var(--host-input)',
+          border: 'var(--host-border)',
+          edge: 'var(--host-edge)',
+          text: 'var(--host-text)',
+          label: 'var(--host-label)',
+          hint: 'var(--host-hint)',
+          faint: 'var(--host-faint)',
+          accent: 'var(--host-accent)',
+          'on-accent': 'var(--host-on-accent)',
+          ok: 'var(--host-ok)',
+          'ok-bg': 'var(--host-ok-bg)',
+          'ok-edge': 'var(--host-ok-edge)',
+          warn: 'var(--host-warn)',
+          'warn-bg': 'var(--host-warn-bg)',
+          'warn-edge': 'var(--host-warn-edge)',
+          bad: 'var(--host-bad)',
+          'bad-bg': 'var(--host-bad-bg)',
+          'bad-edge': 'var(--host-bad-edge)',
+          info: 'var(--host-info)',
+          'info-bg': 'var(--host-info-bg)',
+          'info-edge': 'var(--host-info-edge)',
+          star: 'var(--host-star)',
+          danger: 'var(--host-danger)',
+          'on-danger': 'var(--host-on-danger)',
+        },
         un1t: {
           // Intent-based tokens (UI-FOUND.1). Names previously meant
           // their opposite (e.g. `black` held #FFFFFF) after a

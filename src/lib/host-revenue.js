@@ -75,8 +75,10 @@ export function aggregateHostRevenue(payments, events = []) {
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db
  * @param {string} hostId
+ * @param {{ sinceIso?: string|null }} [opts] sinceIso windows the payments by
+ *   completed_at (a refunded payment still counts by when it completed).
  */
-export async function getHostRevenue(db, hostId) {
+export async function getHostRevenue(db, hostId, { sinceIso = null } = {}) {
   const { data: events, error: evErr } = await db
     .from('race_events')
     .select('id, name, race_date')
@@ -88,11 +90,13 @@ export async function getHostRevenue(db, hostId) {
   const payments = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await db
+    let q = db
       .from('race_payments')
       .select('race_event_id, amount_cents, application_fee_cents, net_to_host_cents, refunded_amount_cents, status, currency')
       .in('race_event_id', eventIds)
       .in('status', ['completed', 'refunded'])
+    if (sinceIso) q = q.gte('completed_at', sinceIso)
+    const { data, error } = await q
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) throw new Error(`host revenue: payments query failed: ${error.message}`)

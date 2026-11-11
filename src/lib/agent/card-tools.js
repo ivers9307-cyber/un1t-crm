@@ -15,6 +15,7 @@
 // messages are written FOR the model (list the valid names so it can
 // self-correct, tell it to answer in text instead).
 
+import { conversationAddress } from '@/lib/whatsapp-address'
 import { AGENT_MESSAGE_SOURCE } from './core'
 import { sendCardSetToConversation } from '@/lib/whatsapp-carousel-send'
 
@@ -74,10 +75,10 @@ export async function executeCardTool(toolName, input, ctx) {
   }
 
   const { data: conversation } = await db.from('whatsapp_conversations')
-    .select('id, contact_id, wa_phone')
+    .select('id, contact_id, wa_phone, wa_bsuid')
     .eq('id', conversationId)
     .maybeSingle()
-  if (!conversation?.wa_phone) {
+  if (!conversationAddress(conversation)) {
     return { error: 'no_recipient', message: "Could not resolve this conversation's WhatsApp number — answer in text instead." }
   }
 

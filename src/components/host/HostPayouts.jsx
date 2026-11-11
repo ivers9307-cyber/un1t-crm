@@ -7,12 +7,14 @@
 // component renders NOTHING in that case (or on fetch error) — the dashboard
 // must never gain a broken section because Stripe is unreachable.
 //
-// Dark UN1T host-portal styling (bg-black page) — dark-surface chip recipe
-// `bg-<c>-500/15 text-<c>-300`; host paths are exempt from the light-theme
-// -700 chip rule.
+// Themed with the host class kit (host-ui.js): chips and surfaces use the
+// `host-*` tokens, so they are right in light and dark.
 
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
+import { HOST_CHIP, HOST_CHIP_TONE, HOST_EYEBROW, HOST_LIST, HOST_META, HOST_HINT } from './host-ui'
 
+// Kept private: src/lib/host-portal.js imports server-only code (location-time),
+// which must not enter this client bundle.
 function formatMoney(cents, currency) {
   const n = (Number(cents) || 0) / 100
   try {
@@ -31,14 +33,14 @@ function formatUnixDate(seconds) {
   return d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-// Dark-surface payout status chips (paid = money landed; pending/in_transit =
+// Payout status chips (paid = money landed; pending/in_transit =
 // on the way; failed/canceled = needs the host's attention in Stripe).
 const PAYOUT_STATUS_CHIP = {
-  paid: 'bg-emerald-500/15 text-emerald-300',
-  pending: 'bg-amber-500/15 text-amber-300',
-  in_transit: 'bg-amber-500/15 text-amber-300',
-  failed: 'bg-red-500/15 text-red-300',
-  canceled: 'bg-red-500/15 text-red-300',
+  paid: `${HOST_CHIP} ${HOST_CHIP_TONE.ok}`,
+  pending: `${HOST_CHIP} ${HOST_CHIP_TONE.warn}`,
+  in_transit: `${HOST_CHIP} ${HOST_CHIP_TONE.warn}`,
+  failed: `${HOST_CHIP} ${HOST_CHIP_TONE.bad}`,
+  canceled: `${HOST_CHIP} ${HOST_CHIP_TONE.bad}`,
 }
 
 const PAYOUT_STATUS_LABEL = {
@@ -49,7 +51,11 @@ const PAYOUT_STATUS_LABEL = {
   canceled: 'Canceled',
 }
 
-export default function HostPayouts() {
+const PayoutsContext = createContext(null)
+
+// Fetches /api/host/stripe/payouts once and shares the result (data|null) with
+// HostBalance and HostPayoutList, so the Earnings page needs a single request.
+export function HostPayoutsProvider({ children }) {
   const [data, setData] = useState(null)
 
   useEffect(() => {
@@ -68,44 +74,55 @@ export default function HostPayouts() {
     return () => { cancelled = true }
   }, [])
 
-  // No data (non-Stripe host, Stripe error, fetch failed, still loading) →
-  // render nothing at all.
+  return <PayoutsContext.Provider value={data}>{children}</PayoutsContext.Provider>
+}
+
+// No data (non-Stripe host, Stripe error, fetch failed, still loading) →
+// each block renders nothing at all, heading included.
+export function HostBalance() {
+  const data = useContext(PayoutsContext)
   if (!data) return null
-
   const cur = data.balance?.currency || 'EUR'
-  const payouts = Array.isArray(data.payouts) ? data.payouts : []
-
   return (
     <section className="mt-8">
-      <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Payouts</h2>
-
+      <h2 className={`${HOST_EYEBROW} mb-3`}>Balance</h2>
       <div className="grid grid-cols-2 gap-3 max-w-md">
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-          <p className="text-[11px] uppercase tracking-wide text-white/40">Available</p>
+        <div className="rounded-xl border border-host-border bg-host-panel px-4 py-3">
+          <p className={HOST_META}>Available</p>
           <p className="text-lg font-semibold mt-1 tabular-nums">
             {formatMoney(data.balance?.available_cents, cur)}
           </p>
         </div>
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-          <p className="text-[11px] uppercase tracking-wide text-white/40">On the way</p>
+        <div className="rounded-xl border border-host-border bg-host-panel px-4 py-3">
+          <p className={HOST_META}>On the way</p>
           <p className="text-lg font-semibold mt-1 tabular-nums">
             {formatMoney(data.balance?.pending_cents, cur)}
           </p>
         </div>
       </div>
+    </section>
+  )
+}
 
+export function HostPayoutList() {
+  const data = useContext(PayoutsContext)
+  if (!data) return null
+  const payouts = Array.isArray(data.payouts) ? data.payouts : []
+  return (
+    <section className="mt-8">
+      <h2 className={`${HOST_EYEBROW} mb-3`}>Payouts</h2>
       {payouts.length === 0 ? (
-        <p className="text-white/50 text-sm mt-3">No payouts yet.</p>
+        <p className={HOST_HINT}>No payouts yet.</p>
       ) : (
-        <ul className="mt-3 divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
+        <ul className={`${HOST_LIST} overflow-hidden`}>
           {payouts.map((p) => {
-            const chip = PAYOUT_STATUS_CHIP[p.status] || 'bg-white/10 text-white/70'
+            const chip = PAYOUT_STATUS_CHIP[p.status] || `${HOST_CHIP} ${HOST_CHIP_TONE.neutral}`
             return (
               <li key={p.id} className="px-4 py-2.5 flex items-center justify-between gap-4 text-sm">
-                <span className="text-white/60">{formatUnixDate(p.arrival_date)}</span>
+                <span className="text-host-hint">{formatUnixDate(p.arrival_date)}</span>
                 <span className="flex items-center gap-3">
                   <span className="font-medium tabular-nums">{formatMoney(p.amount, p.currency)}</span>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
+                  <span className={chip}>
                     {PAYOUT_STATUS_LABEL[p.status] || p.status}
                   </span>
                 </span>

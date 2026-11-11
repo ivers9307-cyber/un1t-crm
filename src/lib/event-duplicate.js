@@ -32,10 +32,11 @@ export const DUPLICATE_COLUMNS = Object.freeze([
   'hero_image_url', 'accent_hex', 'venue_name', 'venue_address',
   'confirmation_email_subject', 'confirmation_email_intro', 'confirmation_email_template_id',
   'reminder_email_subject', 'reminder_email_intro',
+  'rating_email_subject', 'rating_email_intro',
   'moved_email_subject', 'moved_email_intro',
   'waitlist_email_subject', 'waitlist_email_intro',
   'gap_email_subject', 'gap_email_intro',
-  'entry_policy', 'find_team', 'charity_enabled', 'charity', 'tv_logos', 'pricing_tiers', 'registration_questions', 'duration_minutes',
+  'entry_policy', 'find_team', 'charity_enabled', 'charity', 'tv_logos', 'pricing_tiers', 'registration_questions', 'duration_minutes', 'wave_window_minutes',
   'shared', 'staff_required', 'sending_location_id', 'create_in_glofox',
   'race_date',
 ])

@@ -61,6 +61,9 @@ const SWEPT = [
   // into HostLoginForm/HostSetPasswordForm so page.js can resolve the brand.
   'src/app/host/(portal)/layout.js',
   'src/app/host/(portal)/page.js',
+  'src/app/host/(portal)/earnings/page.js',
+  'src/app/host/(portal)/events/page.js',
+  'src/app/host/(portal)/page/page.js',
   'src/app/host/(portal)/events/new/page.js',
   'src/app/host/(portal)/events/[id]/edit/page.js',
   'src/app/host/login/page.js',

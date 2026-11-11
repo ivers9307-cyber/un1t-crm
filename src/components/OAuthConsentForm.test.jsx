@@ -26,7 +26,7 @@ const DETAILS = {
 }
 const OK = { ok: true, reason: null }
 const MCP_OFF = 'MCP access is not switched on for your organisation. Ask an organisation admin.'
-const NO_ASSISTANT = 'Ask an admin to switch on AI Assistant for you.'
+const NO_MCP_ACCESS = 'Ask an admin to switch on Connect an Agent for you.'
 
 let assign
 beforeEach(() => {
@@ -63,11 +63,11 @@ describe('OAuthConsentForm', () => {
     expect(screen.getByRole('button', { name: /deny/i }).disabled).toBe(false)
   })
 
-  it('disables Approve with the reason when the assistant permission is missing', async () => {
-    form({ ok: false, reason: 'assistant_permission' })
+  it('disables Approve with the reason when the mcp_access permission is missing', async () => {
+    form({ ok: false, reason: 'mcp_access_permission' })
     await screen.findByText('Claude')
     expect(screen.getByRole('button', { name: /approve/i }).disabled).toBe(true)
-    expect(screen.getByText(NO_ASSISTANT)).toBeTruthy()
+    expect(screen.getByText(NO_MCP_ACCESS)).toBeTruthy()
   })
 
   it('calls approveAuthorization and assigns the redirect_url', async () => {
@@ -111,7 +111,7 @@ describe('OAuthConsentForm', () => {
   })
 
   it('does not call approve when the form is ineligible (button is disabled)', async () => {
-    form({ ok: false, reason: 'assistant_permission' })
+    form({ ok: false, reason: 'mcp_access_permission' })
     await screen.findByText('Claude')
     fireEvent.click(screen.getByRole('button', { name: /approve/i }))
     expect(oauth.approveAuthorization).not.toHaveBeenCalled()

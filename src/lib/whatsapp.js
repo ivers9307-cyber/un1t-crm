@@ -21,6 +21,7 @@ import { bodyVariableSlots, renderSentTemplateBody } from '@shared/wa-template-s
 import { sendPushToRolesAtLocation } from './push'
 import { MANAGER_ROLES } from './schemas'
 import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
+import { recipientFields } from './whatsapp-address.js'
 import { DISPATCHED_STATUSES, countBroadcastSendCounters, broadcastCountersPatch, countOpenClaims } from './whatsapp-broadcast-counters.js'
 
 // WA-MULTI.1 — config is per-location. The resolution helper lives in
@@ -104,7 +105,7 @@ export async function sendTextMessage(to, text, opts = {}) {
       body: JSON.stringify({
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
-        to,
+        ...recipientFields(to),
         type: 'text',
         text: { body: part },
       }),
@@ -134,7 +135,7 @@ export async function sendTextMessage(to, text, opts = {}) {
 export function buildInteractivePayload(to, text, options) {
   const opts = (options || []).slice(0, 10)
   const norm = (o, i) => (o && typeof o === 'object' ? { id: String(o.id), title: String(o.title) } : { id: agentOptionId(i), title: String(o) })
-  const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive' }
+  const base = { messaging_product: 'whatsapp', recipient_type: 'individual', ...recipientFields(to), type: 'interactive' }
   if (opts.length <= 3) {
     return {
       ...base,
@@ -198,7 +199,7 @@ export function buildFlowPayload(to, { flowId, flowToken, flowCta, screen, data 
     ? { flow_action: 'navigate', flow_action_payload: { screen, data } }
     : { flow_action: 'data_exchange' }
   return {
-    messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive',
+    messaging_product: 'whatsapp', recipient_type: 'individual', ...recipientFields(to), type: 'interactive',
     interactive: {
       type: 'flow',
       body: { text: bodyText || 'Tap below to book your first visit.' },
@@ -231,7 +232,7 @@ export async function sendFlowMessage(to, opts = {}) {
 // same as any session message.
 export function buildCtaUrlPayload(to, { bodyText, buttonText, url }) {
   return {
-    messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive',
+    messaging_product: 'whatsapp', recipient_type: 'individual', ...recipientFields(to), type: 'interactive',
     interactive: {
       type: 'cta_url',
       body: { text: bodyText },
@@ -298,7 +299,7 @@ export function buildMediaCarouselPayload(to, { bodyText, cards }) {
   }
   if (cards.length < 2 || cards.length > 10) throw new Error('Carousel needs 2-10 cards')
   return {
-    messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive',
+    messaging_product: 'whatsapp', recipient_type: 'individual', ...recipientFields(to), type: 'interactive',
     interactive: {
       type: 'carousel',
       body: { text: bodyText },
@@ -329,7 +330,7 @@ export async function sendTemplateMessage(to, templateName, language = 'en', com
   const body = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to,
+    ...recipientFields(to),
     type: 'template',
     template: {
       name: templateName,
@@ -389,7 +390,7 @@ export async function sendMediaMessage(to, type, mediaUrl, caption, opts = {}) {
     body: JSON.stringify({
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
-      to,
+      ...recipientFields(to),
       type,
       ...mediaTypes[type],
     }),
@@ -417,7 +418,7 @@ export async function sendReaction(to, messageId, emoji, opts = {}) {
     body: JSON.stringify({
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
-      to,
+      ...recipientFields(to),
       type: 'reaction',
       reaction: { message_id: messageId, emoji: emoji || '' },
     }),

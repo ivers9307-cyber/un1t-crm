@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { conversationAddress } from '@/lib/whatsapp-address'
 import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { sendFlowMessage } from '@/lib/whatsapp'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
@@ -35,7 +36,7 @@ export async function POST(request, props) {
 
   const db = createServerClient()
   const { data: conversation, error: convError } = await db.from('whatsapp_conversations')
-    .select('id, location_id, contact_id, wa_phone')
+    .select('id, location_id, contact_id, wa_phone, wa_bsuid')
     .eq('id', params.id)
     .maybeSingle()
   // A failed read is never an empty answer: not a 404, a retryable 500.
@@ -75,7 +76,7 @@ export async function POST(request, props) {
   // already opens the class Day screen directly.
   let sendResult
   try {
-    sendResult = await sendFlowMessage(conversation.wa_phone, {
+    sendResult = await sendFlowMessage(conversationAddress(conversation), {
       locationId: conversation.location_id,
       // WAREPLYNUMBER.1 (C86) — from the number this thread was written to.
       replyInConversation: conversation.id,

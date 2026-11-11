@@ -1726,6 +1726,22 @@ registry.registerPath({
   },
 })
 registry.registerPath({
+  method: 'post',
+  path: '/api/host/events/{id}/announce-draft',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Create a draft email about one of the host's own on-sale events (HOSTPORTAL.4)",
+  description: "Host session (getCurrentHost). Creates a `host_campaigns` DRAFT for the whole list (`audience_kind` `all`, `email_type` `marketing`, no design) whose body names the event, its date, session times and venue and links to the public event page. Sends nothing. Another host's event is 404; an event that is not published and active is 409.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    201: { description: 'The new draft id', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike }) }) } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Publish this event before emailing your list about it.', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The event link could not be built, or the insert failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
   method: 'patch',
   path: '/api/host/events/{id}/ratings/{ratingId}',
   tags: ['Host Portal'],
@@ -1750,6 +1766,21 @@ const EventStats = z.object({
   capped: z.boolean(),
 })
 const EventStatsResponse = z.object({ success: z.literal(true), data: EventStats })
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/events/{id}/qr',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "QR code PNG of one of the host's own event pages",
+  description: 'Host session (getCurrentHost). An 800x800 PNG of the public event URL on the host\'s tenant host with utm_source=qr, so poster scans appear as "QR code" in Insights; sent as an attachment named <slug>-qr.png. Another host\'s event is 404, and so is an event with no slug.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The PNG', content: { 'image/png': { schema: z.string() } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, not this host's event, or no public link yet", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Public URL or QR generation failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
 registry.registerPath({
   method: 'get',
   path: '/api/host/events/{id}/stats',

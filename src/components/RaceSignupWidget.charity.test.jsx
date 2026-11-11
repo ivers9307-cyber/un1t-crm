@@ -74,6 +74,23 @@ describe('event page — donations on', () => {
     expect(follows(register, desc)).toBe(true)
   })
 
+  // EVENTMOBILE.2 — the phone jump link carries the operator's heading and
+  // points at the donate card; no heading, no link.
+  it('links to the donate card from above the cards, in the heading\'s words', async () => {
+    await renderWith({ charity: CHARITY })
+    const link = screen.getByRole('link', { name: /Can't race\? Give a rep\./ })
+    expect(link.getAttribute('href')).toBe('#donate')
+    expect(link.className).toContain('md:hidden')
+    const target = document.getElementById('donate')
+    expect(target.contains(screen.getByRole('button', { name: /^Donate/ }))).toBe(true)
+    expect(follows(link, target)).toBe(true)
+  })
+
+  it('has no jump link when the donate card has no heading', async () => {
+    await renderWith({ charity: { ...CHARITY, heading: '' } })
+    expect(document.querySelector('a[href="#donate"]')).toBeNull()
+  })
+
   it('shows the raised-so-far strip', async () => {
     await renderWith({ charity: CHARITY })
     const text = document.body.textContent

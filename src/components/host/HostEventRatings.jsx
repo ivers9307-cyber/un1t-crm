@@ -4,6 +4,7 @@
 // Hide/Show toggle that calls PATCH /api/host/events/<id>/ratings/<rating id>.
 
 import { useEffect, useState } from 'react'
+import { HOST_CHIP, HOST_CHIP_TONE, HOST_HINT, HOST_SECTION, HOST_SECTION_DESC } from '@/components/host/host-ui'
 
 const stars = (n) => '★'.repeat(n) + '☆'.repeat(5 - n)
 const when = (iso) => { try { return new Date(iso).toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' }) } catch { return '' } }
@@ -45,39 +46,39 @@ export default function HostEventRatings({ eventId }) {
 
   return (
     <section className="mt-10">
-      <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-1">Ratings</h2>
-      <p className="text-xs text-white/35 mb-4">
+      <h2 className={HOST_SECTION}>Ratings</h2>
+      <p className={`${HOST_SECTION_DESC} mb-4`}>
         Attendees are asked the morning after. Your page shows the average and the newest comments once three or more are public; hide any you&rsquo;d rather not show.
       </p>
-      {state.status === 'loading' && <p className="text-white/50 text-sm">Loading ratings…</p>}
-      {state.status === 'error' && <p className="text-white/50 text-sm">Ratings unavailable right now.</p>}
+      {state.status === 'loading' && <p className={HOST_HINT}>Loading ratings…</p>}
+      {state.status === 'error' && <p className={HOST_HINT}>Ratings unavailable right now.</p>}
       {state.status === 'ready' && state.ratings.length === 0 && (
-        <p className="text-white/50 text-sm">No ratings yet. Attendees are asked the morning after the event.</p>
+        <p className={HOST_HINT}>No ratings yet. Attendees are asked the morning after the event.</p>
       )}
       {state.status === 'ready' && state.ratings.length > 0 && (
         <>
           {state.summary && (
-            <p className="mb-3 text-sm text-white/70">
-              <span className="text-yellow-300">★</span> {state.summary.average} · {state.summary.count} public rating{state.summary.count === 1 ? '' : 's'}
+            <p className="mb-3 text-sm text-host-label">
+              <span className="text-host-star">★</span> {state.summary.average} · {state.summary.count} public rating{state.summary.count === 1 ? '' : 's'}
             </p>
           )}
           <ul className="space-y-2">
             {state.ratings.map((r) => (
-              <li key={r.id} className={`flex items-start justify-between gap-4 rounded-lg border border-white/10 px-4 py-3 ${r.is_public ? 'bg-white/[0.02]' : 'bg-white/[0.01] opacity-70'}`}>
+              <li key={r.id} className={`flex items-start justify-between gap-4 rounded-lg border border-host-border px-4 py-3 ${r.is_public ? 'bg-host-panel' : 'bg-host-well'}`}>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 text-sm">
-                    <span className="text-yellow-300 tracking-tight" aria-label={`${r.rating} out of 5`}>{stars(r.rating)}</span>
-                    {r.author && <span className="text-white/80">{r.author}</span>}
-                    <span className="text-white/35 text-xs">{when(r.created_at)}</span>
-                    {!r.is_public && <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-white/60">Hidden</span>}
+                    <span className="text-host-star tracking-tight" aria-label={`${r.rating} out of 5`}>{stars(r.rating)}</span>
+                    {r.author && <span className="text-host-label">{r.author}</span>}
+                    <span className="text-host-hint text-xs">{when(r.created_at)}</span>
+                    {!r.is_public && <span className={`${HOST_CHIP} ${HOST_CHIP_TONE.neutral}`}>Hidden</span>}
                   </div>
-                  {r.comment && <p className="mt-1 text-sm text-white/75">{r.comment}</p>}
+                  {r.comment && <p className="mt-1 text-sm text-host-label">{r.comment}</p>}
                 </div>
                 <button
                   type="button"
                   onClick={() => toggle(r)}
                   disabled={busyId === r.id}
-                  className="shrink-0 rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:bg-white/5 disabled:opacity-50"
+                  className="shrink-0 rounded-lg border border-host-edge bg-host-panel px-3 py-1.5 text-xs text-host-text hover:bg-host-hover disabled:opacity-50"
                 >
                   {r.is_public ? 'Hide' : 'Show'}
                 </button>
@@ -86,7 +87,7 @@ export default function HostEventRatings({ eventId }) {
           </ul>
         </>
       )}
-      {error && <p className="mt-3 text-sm text-red-300">{error}</p>}
+      {error && <p className="mt-3 text-sm text-host-bad">{error}</p>}
     </section>
   )
 }

@@ -6,6 +6,7 @@
 
 import { HANDOFF_PREFIX, OPTIONS_PREFIX, SKIP_PREFIX } from './prompt'
 import { DEFAULT_TZ } from '@/lib/location-time'
+import { isBsuid } from '@/lib/whatsapp-address'
 import { VOICE_TRANSCRIPT_MARKER, effectiveTranscriptStatus } from '@shared/voice-note'
 
 export const AGENT_MESSAGE_SOURCE = 'agent'
@@ -42,6 +43,9 @@ export function normalisePhone(p) {
  * real match for short/foreign numbers.
  */
 export function phoneMatchesAllowlist(senderPhone, list) {
+  // WA-BSUID.2 — a business-scoped user id (IE.1349…) is not a phone: its
+  // digits must never be compared against a list of numbers.
+  if (isBsuid(senderPhone)) return false
   const s = normalisePhone(senderPhone)
   if (!s) return false
   const sTail = s.slice(-9)

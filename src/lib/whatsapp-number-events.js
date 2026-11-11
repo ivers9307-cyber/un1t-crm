@@ -10,6 +10,7 @@
 
 import { studiosUsingNumbers } from './whatsapp-config.js'
 import { logError } from './log.js'
+import { normalizeMessagingLimit, tierLabel } from './whatsapp-number-health.js'
 
 export const NUMBER_EVENT_FIELDS = new Set([
   'phone_number_quality_update',
@@ -26,7 +27,8 @@ export function numberColumnUpdate(field, value = {}) {
       const patch = {}
       if (value.event === 'FLAGGED') patch.quality_rating = 'RED'
       if (value.event === 'UNFLAGGED') patch.quality_rating = 'GREEN'
-      if (value.current_limit) patch.messaging_limit_tier = value.current_limit
+      // WA-LIMIT.1 — one spelling for the stored tier, whichever form Meta sent.
+      if (value.current_limit) patch.messaging_limit_tier = normalizeMessagingLimit(value.current_limit)
       return Object.keys(patch).length ? patch : null
     }
     case 'phone_number_name_update':
@@ -175,7 +177,13 @@ export function numberNotification(field, value = {}, label) {
     }
     case 'business_capability_update': {
       const parts = []
-      if (value.max_daily_conversation_per_phone != null) parts.push(`daily template conversations per number: ${value.max_daily_conversation_per_phone}`)
+      // WA-LIMIT.1 — Meta renamed the property when the limit moved to the
+      // business portfolio: `max_daily_conversations_per_business` from v24
+      // (a tier string, or a bare number in Meta's own example), replacing
+      // `max_daily_conversation_per_phone`. Read both, so the notice survives
+      // the Graph version bump; the stored tier is refreshed by the health poll.
+      const dailyLimit = value.max_daily_conversations_per_business ?? value.max_daily_conversation_per_phone
+      if (dailyLimit != null) parts.push(`daily messaging limit: ${tierLabel(normalizeMessagingLimit(dailyLimit))}`)
       if (value.max_phone_numbers_per_business != null) parts.push(`max phone numbers: ${value.max_phone_numbers_per_business}`)
       if (!parts.length) return null
       return { title: 'WhatsApp capability update', body: `ℹ️ Meta updated account capabilities — ${parts.join('; ')}.` }

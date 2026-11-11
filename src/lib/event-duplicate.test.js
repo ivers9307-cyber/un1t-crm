@@ -134,6 +134,15 @@ describe('duplicateEvent', () => {
     expect(DUPLICATE_COLUMNS).toContain('pricing_tiers')
     expect(DUPLICATE_COLUMNS).toContain('registration_questions')
     expect(DUPLICATE_COLUMNS).toContain('duration_minutes')
+    expect(DUPLICATE_COLUMNS).toContain('wave_window_minutes') // WAVEWIN.2
+  })
+  // RATINGCOPY.1 — the copy list carried every other email copy pair but not this one.
+  it('DUPLICATE_COLUMNS carries the rating request copy, and a copy keeps it', async () => {
+    expect(DUPLICATE_COLUMNS).toContain('rating_email_subject')
+    expect(DUPLICATE_COLUMNS).toContain('rating_email_intro')
+    const d = db({ source: { ...SOURCE, rating_email_subject: 'How was it?', rating_email_intro: 'Tell us.' } })
+    await duplicateEvent(d, { sourceId: E1, raceDate: '2026-12-12' })
+    expect(inserted(d, 'race_events').payload).toMatchObject({ rating_email_subject: 'How was it?', rating_email_intro: 'Tell us.' })
   })
   it('DUPLICATE_COLUMNS never names id, slug, status, series_id or the review stamps', () => {
     for (const c of ['id', 'slug', 'status', 'series_id', 'submitted_at', 'reviewed_at', 'rejected_reason', 'active', 'created_at']) {

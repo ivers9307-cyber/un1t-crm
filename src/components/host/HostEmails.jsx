@@ -18,13 +18,13 @@
 // (HostEmailReport, at /host/emails/[id]) and the subline swaps in the
 // per-send stats once the list API reports them.
 //
-// Dark UN1T host-portal styling (bg-black page) — dark-surface chip recipe
-// `bg-<c>-500/15 text-<c>-300`; host paths are exempt from the light-theme
-// -700 chip rule.
+// HOSTTHEME.1 — styled from the `host-*` theme tokens and the kit in
+// host-ui.js, so it reads in both the light and the dark host theme.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { HOST_BTN_PRIMARY, HOST_BTN_PRIMARY_SM, HOST_BTN_SM, HOST_CHIP, HOST_CHIP_TONE, HOST_EYEBROW, HOST_HINT, HOST_LABEL, HOST_LIST, HOST_NOTICE, HOST_NOTICE_TONE, HOST_PANEL, HOST_SECTION } from '@/components/host/host-ui'
 import {
   nextQuarterHour, isoToZonedInputs, zonedLocalToIso, scheduleLabelIn, scheduleZoneLabel, scheduleErrorCopy, TIME_OPTIONS,
 } from '@/lib/host-schedule-time'
@@ -150,12 +150,15 @@ export function designStateForDraft(draft, { editorInited = false, unlayerReady 
 }
 
 const STATUS_CHIP = {
-  draft: 'bg-white/10 text-white/70',
-  scheduled: 'bg-sky-500/15 text-sky-300',
-  sending: 'bg-amber-500/15 text-amber-300',
-  sent: 'bg-emerald-500/15 text-emerald-300',
-  failed: 'bg-red-500/15 text-red-300',
+  draft: HOST_CHIP_TONE.neutral,
+  scheduled: HOST_CHIP_TONE.info,
+  sending: HOST_CHIP_TONE.warn,
+  sent: HOST_CHIP_TONE.ok,
+  failed: HOST_CHIP_TONE.bad,
 }
+
+// The kit's chip, kept from shrinking in the subject line (the tone carries every colour).
+const CHIP_BASE = `shrink-0 ${HOST_CHIP}`
 
 const STATUS_LABEL = {
   draft: 'Draft',
@@ -165,8 +168,19 @@ const STATUS_LABEL = {
   failed: 'Failed',
 }
 
+// The editor follows the host theme the portal wrapper carries (data-host-theme:
+// light | dark | system). Read once when the designer starts.
+export function unlayerThemeFor(el) {
+  const host = el?.closest?.('[data-host-theme]')?.getAttribute('data-host-theme')
+  if (host === 'light') return 'light'
+  if (host === 'system' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: light)').matches) return 'light'
+  return 'dark'
+}
+
 const UNLAYER_SRC = 'https://editor.unlayer.com/embed.js'
 const EDITOR_DIV_ID = 'host-email-designer'
+const EVENT_DRAFT_NOTICE = 'Draft created from your event. The short codes in angle brackets keep the layout and the booking link working: change the words between them, then press Preview as sent to see the email as it will arrive.'
+
 // How long to wait for the embed script before telling the host it failed.
 const UNLAYER_LOAD_TIMEOUT_MS = 15000
 
@@ -208,6 +222,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
   const [previewBusy, setPreviewBusy] = useState(false)
   const [rowBusyId, setRowBusyId] = useState(null) // delete/duplicate in flight
   const searchParams = useSearchParams()
+  const router = useRouter()
 
   const campaignsById = useMemo(() => new Map((campaigns || []).map((c) => [c.id, c])), [campaigns])
 
@@ -233,9 +248,39 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
 
   // HOST-EMAILS.2 — the reminder report page navigates here after creating
   // a non-openers draft.
+  // Once ?open / ?notice have been handled the URL is cleaned (one
+  // router.replace) so a reload neither reopens the draft nor repeats the
+  // notice. The notice state survives: nothing here clears it.
+  const urlCleanedRef = useRef(false)
+  const cleanUrl = () => {
+    if (urlCleanedRef.current) return
+    urlCleanedRef.current = true
+    router.replace('/host/emails')
+  }
   useEffect(() => {
-    if (searchParams?.get('notice') === 'reminder') setNotice('Reminder draft created. Edit it, test it, then send or schedule.')
-  }, [searchParams])
+    const wanted = searchParams?.get('notice')
+    if (wanted === 'reminder') setNotice('Reminder draft created. Edit it, test it, then send or schedule.')
+    if (wanted === 'event') setNotice(EVENT_DRAFT_NOTICE)
+    // With ?open present the open effect below cleans the URL, after the list loads.
+    if ((wanted === 'reminder' || wanted === 'event') && !searchParams.get('open')) cleanUrl()
+  }, [searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // HOSTPORTAL.4 — the Promote tab's "Write an email about this event" lands
+  // on ?open=<draft id>. Open it ONCE, after the list has loaded, through the
+  // same function the row's Edit uses. An id that is not one of this host's
+  // drafts is left alone. editDraft clears the notice, so it is set again after.
+  const openHandledRef = useRef(false)
+  useEffect(() => {
+    const id = searchParams?.get('open')
+    if (!id || openHandledRef.current || campaigns === null) return
+    openHandledRef.current = true
+    if (campaignsById.get(id)?.status !== 'draft') { cleanUrl(); return }
+    const wantsNotice = searchParams.get('notice') === 'event'
+    editDraft(id).then((opened) => {
+      if (opened && wantsNotice) setNotice(EVENT_DRAFT_NOTICE)
+      cleanUrl()
+    })
+  }, [campaigns, campaignsById, searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load the Unlayer embed script once; fall back to plain text if it never
   // arrives (blocked network, script error) so the host can always write.
@@ -286,7 +331,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
     window.unlayer.init({
       id: EDITOR_DIV_ID,
       displayMode: 'email',
-      appearance: { theme: 'dark' },
+      appearance: { theme: unlayerThemeFor(el) },
       // HOST-EMAIL.6 — the variables guide: Unlayer's built-in merge-tags
       // picker, limited to the tags the host send path substitutes.
       mergeTags: [
@@ -371,7 +416,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) {
         setError(json.error || 'Could not open the draft.')
-        return
+        return false
       }
       const c = json.data
       setEditingId(c.id)
@@ -403,9 +448,11 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
       }
       pendingDesignRef.current = next.pendingDesign
       setDesignerNotice(next.notice)
-      document.getElementById('host-email-subject')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      document.getElementById('host-email-subject')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+      return true
     } catch {
       setError('Could not open the draft.')
+      return false
     } finally {
       setLoadingDraftId(null)
     }
@@ -680,24 +727,17 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
   }
 
   const inputBase =
-    'rounded-lg border border-white/15 bg-white/[0.04] px-3 py-2 text-sm text-white ' +
-    'placeholder:text-white/30 focus:outline-none focus:border-white/40'
+    'rounded-lg border border-host-edge bg-host-input px-3 py-2 text-sm text-host-text ' +
+    'placeholder:text-host-faint focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-host-accent'
   const input = `w-full ${inputBase}`
-  const btnSecondary =
-    'rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 ' +
-    'hover:text-white hover:border-white/40 disabled:opacity-50'
-  const btnPrimary =
-    'rounded-lg bg-white text-black text-xs font-semibold px-3 py-1.5 hover:bg-white/90 disabled:opacity-50'
+  const btnSecondary = HOST_BTN_SM
+  const btnPrimary = HOST_BTN_PRIMARY_SM
 
   return (
     <div>
       {(error || notice) && (
         <div
-          className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
-            error
-              ? 'border-red-500/25 bg-red-500/10 text-red-300'
-              : 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300'
-          }`}
+          className={`mt-4 ${HOST_NOTICE} ${error ? HOST_NOTICE_TONE.bad : HOST_NOTICE_TONE.ok}`}
         >
           {error || notice}
         </div>
@@ -705,23 +745,23 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
 
       <section className="mt-6">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-xs uppercase tracking-[0.15em] text-white/45">
+          <h2 className={HOST_SECTION}>
             {editingId ? 'Edit draft' : 'New email'}
           </h2>
           {editingId && (
             <button
               type="button"
               onClick={resetComposer}
-              className="text-xs text-white/45 hover:text-white"
+              className="text-xs text-host-hint hover:text-host-text"
             >
               Discard changes · start a new email
             </button>
           )}
         </div>
-        <form onSubmit={saveDraft} className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+        <form onSubmit={saveDraft} className={`${HOST_PANEL} space-y-3`}>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <label htmlFor="host-email-subject" className="block text-xs text-white/50 mb-1">Subject</label>
+              <label htmlFor="host-email-subject" className={`${HOST_LABEL} mb-1`}>Subject</label>
               <input
                 id="host-email-subject"
                 type="text"
@@ -734,7 +774,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
               />
             </div>
             <div>
-              <label htmlFor="host-email-audience" className="block text-xs text-white/50 mb-1">Send to</label>
+              <label htmlFor="host-email-audience" className={`${HOST_LABEL} mb-1`}>Send to</label>
               {audienceCampaignId ? (
                 <>
                   <input
@@ -745,7 +785,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                     aria-describedby="host-email-audience-note"
                     className={input}
                   />
-                  <p id="host-email-audience-note" className="text-[11px] text-white/40 mt-0.5">Resolved when you send: anyone who has opened since then is left out. Duplicate this email to pick a different audience.</p>
+                  <p id="host-email-audience-note" className={`${HOST_HINT} mt-0.5`}>Resolved when you send: anyone who has opened since then is left out. Duplicate this email to pick a different audience.</p>
                 </>
               ) : (
                 <select
@@ -771,43 +811,43 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
           </div>
 
           <div>
-            <span className="block text-xs text-white/50 mb-1">Email type</span>
+            <span className={`${HOST_LABEL} mb-1`}>Email type</span>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => setEmailType('marketing')}
-                className={`flex-1 rounded-lg border px-3 py-2 text-left ${emailType === 'marketing' ? 'border-white/50 bg-white/[0.06]' : 'border-white/15 hover:border-white/30'}`}
+                className={`flex-1 rounded-lg border px-3 py-2 text-left ${emailType === 'marketing' ? 'border-host-accent bg-host-hover' : 'border-host-edge hover:bg-host-hover'}`}
               >
                 <span className="block text-sm font-semibold">Marketing</span>
-                <span className="block text-[11px] text-white/45 mt-0.5">Promotions and news. Only goes to contacts opted in to marketing.</span>
+                <span className={`block ${HOST_HINT} mt-0.5`}>Promotions and news. Only goes to contacts opted in to marketing.</span>
               </button>
               <button
                 type="button"
                 onClick={() => setEmailType('utility')}
-                className={`flex-1 rounded-lg border px-3 py-2 text-left ${emailType === 'utility' ? 'border-white/50 bg-white/[0.06]' : 'border-white/15 hover:border-white/30'}`}
+                className={`flex-1 rounded-lg border px-3 py-2 text-left ${emailType === 'utility' ? 'border-host-accent bg-host-hover' : 'border-host-edge hover:bg-host-hover'}`}
               >
                 <span className="block text-sm font-semibold">Utility</span>
-                <span className="block text-[11px] text-white/45 mt-0.5">Operational info for attendees — time changes, instructions. Reaches people regardless of marketing opt-in, so only use it for messages about their booking.</span>
+                <span className={`block ${HOST_HINT} mt-0.5`}>Operational info for attendees — time changes, instructions. Reaches people regardless of marketing opt-in, so only use it for messages about their booking.</span>
               </button>
             </div>
           </div>
 
           <div>
             <div className="flex items-center justify-between mb-1">
-              <span className="block text-xs text-white/50">Message</span>
+              <span className={HOST_LABEL}>Message</span>
               <div className="flex gap-1 text-[11px]">
                 <button
                   type="button"
                   onClick={() => setMode('design')}
                   disabled={!unlayerReady}
-                  className={`rounded px-2 py-0.5 ${mode === 'design' ? 'bg-white/15 text-white' : 'text-white/45 hover:text-white'} disabled:opacity-40`}
+                  className={`rounded px-2 py-0.5 ${mode === 'design' ? 'bg-host-panel text-host-text font-semibold ring-1 ring-host-edge' : 'text-host-hint hover:text-host-text'} disabled:opacity-40`}
                 >
                   Design
                 </button>
                 <button
                   type="button"
                   onClick={() => ((pendingDesignRef.current || (hasDesign && mode === 'design' && !designDropped)) ? dropDesign() : setMode('text'))}
-                  className={`rounded px-2 py-0.5 ${mode === 'text' ? 'bg-white/15 text-white' : 'text-white/45 hover:text-white'}`}
+                  className={`rounded px-2 py-0.5 ${mode === 'text' ? 'bg-host-panel text-host-text font-semibold ring-1 ring-host-edge' : 'text-host-hint hover:text-host-text'}`}
                 >
                   Plain text
                 </button>
@@ -815,16 +855,16 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
             </div>
 
             {mode === 'design' ? (
-              <div className="rounded-lg overflow-hidden border border-white/15 bg-white/[0.02]">
+              <div className="rounded-lg overflow-hidden border border-host-edge bg-host-panel">
                 {/* Unlayer's iframe sizes to 100% of its container, so the
                     container needs a DEFINITE height — min-height alone lets
                     the iframe collapse (squashed toolbar + dead space). */}
                 <div id={EDITOR_DIV_ID} style={{ height: 620 }}>
                   {(!unlayerReady || designerNotice) && (
-                    <div className="p-4 text-sm text-white/60">
+                    <div className="p-4 text-sm text-host-hint">
                       <p>{designerNotice === 'failed' ? 'The designer could not load. Reload the page, or edit as text (this drops the design).' : 'Loading the designer…'}</p>
                       {designerNotice !== '' && (
-                        <button type="button" onClick={dropDesign} className="mt-2 text-xs underline text-white/70 hover:text-white">Edit as text instead</button>
+                        <button type="button" onClick={dropDesign} className="mt-2 text-xs underline text-host-label hover:text-host-text">Edit as text instead</button>
                       )}
                     </div>
                   )}
@@ -842,7 +882,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                 className={input}
               />
             )}
-            <p className="text-[11px] text-white/35 mt-1">
+            <p className={`${HOST_HINT} mt-1`}>
               Sent with your sender name and an unsubscribe link added automatically.
               {' '}Personalise with variables: {'{{first_name}}'}, {'{{last_name}}'}, {'{{name}}'}, {'{{email}}'} — in the designer they&apos;re under the text toolbar&apos;s merge-tags menu.
             </p>
@@ -851,7 +891,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
             <button
               type="submit"
               disabled={busy}
-              className="rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90 disabled:opacity-50"
+              className={HOST_BTN_PRIMARY}
             >
               {busy ? 'Saving…' : editingId ? 'Save changes' : 'Save draft'}
             </button>
@@ -863,19 +903,19 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
       </section>
 
       <section className="mt-8">
-        <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Your emails</h2>
+        <h2 className={`${HOST_EYEBROW} mb-3`}>Your emails</h2>
         {campaigns === null ? (
-          <p className="text-white/40 text-sm">Loading…</p>
+          <p className="text-host-hint text-sm">Loading…</p>
         ) : campaigns.length === 0 ? (
-          <p className="text-white/50 text-sm">No emails yet — write your first one above.</p>
+          <p className="text-host-hint text-sm">No emails yet — write your first one above.</p>
         ) : (
-          <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
+          <ul className={`${HOST_LIST} overflow-hidden`}>
             {campaigns.map((c) => {
-              const chip = STATUS_CHIP[c.status] || 'bg-white/10 text-white/70'
+              const chip = STATUS_CHIP[c.status] || HOST_CHIP_TONE.neutral
               const actions = rowActions(c.status)
               return (
                 <li key={c.id} className="px-4 py-3">
-                  <div className="flex items-center justify-between gap-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <div className="min-w-0">
                       <p className="flex items-center gap-2 font-medium">
                         {c.status === 'draft' || c.status === 'scheduled' ? (
@@ -883,29 +923,29 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                         ) : (
                           <Link href={`/host/emails/${c.id}`} className="truncate hover:underline">{c.subject}</Link>
                         )}
-                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
+                        <span className={`${CHIP_BASE} ${chip}`}>
                           {STATUS_LABEL[c.status] || c.status}
                         </span>
                         {c.status === 'draft' && c.schedule_error && (
-                          <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-amber-500/15 text-amber-300">
+                          <span className={`${CHIP_BASE} ${HOST_CHIP_TONE.warn}`}>
                             Not sent
                           </span>
                         )}
                         {c.email_type === 'utility' && (
-                          <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-sky-500/15 text-sky-300">
+                          <span className={`${CHIP_BASE} ${HOST_CHIP_TONE.info}`}>
                             Utility
                           </span>
                         )}
                         {c.stats?.failed > 0 && (
-                          <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-amber-500/15 text-amber-300">
+                          <span className={`${CHIP_BASE} ${HOST_CHIP_TONE.warn}`}>
                             {c.stats.failed} failed
                           </span>
                         )}
                       </p>
-                      <p className="text-xs text-white/45 mt-0.5">
+                      <p className="text-xs text-host-hint mt-0.5">
                         {rowSubline(c, zone, brandName)}
                         {c.audience_kind === 'non_openers' && (
-                          <span className="text-white/35"> · {audienceSummary(c, campaignsById)}</span>
+                          <span className="text-host-hint"> · {audienceSummary(c, campaignsById)}</span>
                         )}
                         {c.status !== 'scheduled' && (
                           <>
@@ -915,7 +955,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                         )}
                       </p>
                     </div>
-                    <div className="shrink-0 flex items-center gap-3">
+                    <div className="shrink-0 flex flex-wrap items-center gap-2 sm:gap-3">
                       {c.status === 'draft' && (
                         <div className="shrink-0 flex items-center gap-2">
                           <button
@@ -978,7 +1018,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                             type="button"
                             onClick={() => cancelSchedule(c.id)}
                             disabled={schedulingBusyId === c.id || rowBusyId === c.id}
-                            className="rounded-lg border border-red-400/40 text-red-300 text-xs font-semibold px-3 py-1.5 hover:border-red-300 disabled:opacity-50"
+                            className="rounded-lg border border-host-bad-edge text-host-bad text-xs font-semibold px-3 py-1.5 hover:bg-host-bad-bg disabled:opacity-50"
                           >
                             {schedulingBusyId === c.id ? 'Cancelling…' : 'Cancel'}
                           </button>
@@ -991,7 +1031,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                               type="button"
                               onClick={() => duplicateCampaign(c)}
                               disabled={rowBusyId === c.id}
-                              className="text-xs text-white/50 hover:text-white disabled:opacity-50"
+                              className="text-xs text-host-hint hover:text-host-text disabled:opacity-50"
                             >
                               {rowBusyId === c.id ? 'Duplicating…' : 'Duplicate'}
                             </button>
@@ -1001,7 +1041,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                               type="button"
                               onClick={() => deleteCampaign(c)}
                               disabled={rowBusyId === c.id}
-                              className="text-xs text-red-300/80 hover:text-red-300 disabled:opacity-50"
+                              className="text-xs text-host-bad hover:underline disabled:opacity-50"
                             >
                               {rowBusyId === c.id ? 'Working…' : 'Delete'}
                             </button>
@@ -1013,9 +1053,9 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                   {schedulingId === c.id && (c.status === 'draft' || c.status === 'scheduled') && (
                     <div
                       id={`schedule-panel-${c.id}`}
-                      className="mt-3 rounded-lg border border-white/10 bg-white/[0.03] p-3 flex flex-wrap items-end gap-3"
+                      className="mt-3 rounded-lg border border-host-border bg-host-well p-3 flex flex-wrap items-end gap-3"
                     >
-                      <label className="block text-xs text-white/60">
+                      <label className="block text-xs text-host-label">
                         Date
                         <input
                           type="date"
@@ -1025,7 +1065,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                           className={`${inputBase} mt-1`}
                         />
                       </label>
-                      <label className="block text-xs text-white/60">
+                      <label className="block text-xs text-host-label">
                         Time ({scheduleZoneLabel(zone)})
                         <select
                           value={scheduleTime}
@@ -1046,11 +1086,11 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                       <button
                         type="button"
                         onClick={() => setSchedulingId(null)}
-                        className="text-xs text-white/60 hover:text-white px-2 py-2"
+                        className="text-xs text-host-hint hover:text-host-text px-2 py-2"
                       >
                         Close
                       </button>
-                      <p className="basis-full text-[11px] text-white/40 mt-1">
+                      <p className={`basis-full ${HOST_HINT} mt-1`}>
                         Starts sending within a few minutes of this time. Every check (sender, list, daily limit) runs again then.
                       </p>
                     </div>

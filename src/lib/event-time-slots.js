@@ -6,7 +6,8 @@
 // (e.g. an 8am and a 9am class on one page), and these helpers decide what
 // the public widget shows for each kind:
 //
-//   - race: the wave picker, limited to the 90-minute release window
+//   - race: the wave picker, limited to the event's release window
+//     (90 minutes unless the event sets its own, WAVEWIN.2)
 //   - lead_gen: never a picker (no date, no time)
 //   - any other kind: a plain time picker when there are 2+ times, every
 //     time shown (no release window — a class at 8am and 6pm both show),
@@ -22,11 +23,13 @@ const hhmm = (t) => (typeof t === 'string' ? t.slice(0, 5) : '')
  * HOSTSERIES.1 (design decision 6): a HOST event's sessions are a plain list
  * whatever the kind — the 90-minute release window exists for UN1T's
  * generated Hyrox waves, and a host race at 10:00 and 14:00 must show both.
- * @param {{ hosted?: boolean }} [opts]
+ * WAVEWIN.2: `windowMinutes` is the event's own window
+ * (resolveWaveWindowMinutes); omitted = the 90-minute default.
+ * @param {{ hosted?: boolean, windowMinutes?: number }} [opts]
  */
-export function timePickerWaves(kind, waves, { hosted = false } = {}) {
+export function timePickerWaves(kind, waves, { hosted = false, windowMinutes } = {}) {
   const arr = Array.isArray(waves) ? waves : []
-  if (isRaceKind(kind)) return hosted ? arr : windowedWaves(arr)
+  if (isRaceKind(kind)) return hosted ? arr : windowedWaves(arr, windowMinutes)
   if (kind === 'lead_gen') return []
   return arr.length > 1 ? arr : []
 }

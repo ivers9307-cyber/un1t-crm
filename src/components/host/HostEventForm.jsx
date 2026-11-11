@@ -1,21 +1,26 @@
 'use client'
 
-// HOST-PORTAL.3 — host self-serve event create/edit form. Dark UN1T host-portal
-// styling (bg-black surface, translucent-white inputs). Builds the exact strict
+// HOST-PORTAL.3 — host self-serve event create/edit form. Styled from the host
+// theme tokens and class kit (HOSTTHEME.1, light and dark). Builds the exact strict
 // HostEventSchema body (only the schema keys) and POSTs (create) / PUTs (edit)
 // the host-scoped /api/host/events routes. Ticket price is entered in EUROS and
 // converted to integer cents on submit. registration_opens_at/closes_at are not
 // editable here — they're passed through unchanged (normalized to ISO) so an
 // edit never silently wipes a reg window.
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { ImagePlus, Loader2, X } from 'lucide-react'
-import { HOST_EVENT_KINDS, MAX_SESSIONS } from '@/lib/host-events'
+import { HOST_EVENT_KINDS, MAX_SESSIONS, RE_REVIEW_REASONS, RE_REVIEW_REASON_LABEL, reReviewReasons, editChangesFromInput } from '@/lib/host-events'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 import PricingTiersEditor from '@/components/PricingTiersEditor'
 import RegistrationQuestionsEditor from '@/components/RegistrationQuestionsEditor'
+import { HOST_PANEL, HOST_SECTION, HOST_SECTION_DESC, HOST_LABEL, HOST_HINT, HOST_INPUT, HOST_TEXTAREA, HOST_WELL, HOST_BTN, HOST_BTN_PRIMARY, HOST_BTN_GHOST, HOST_CHOICE, HOST_CHOICE_ON, HOST_TAB, HOST_NOTICE, HOST_NOTICE_TONE } from '@/components/host/host-ui'
+import GuardedLink from '@/components/host/GuardedLink'
+import HostSubmitButton from '@/components/host/HostSubmitButton'
+import OffSaleConfirmDialog, { joinLabels } from '@/components/host/OffSaleConfirmDialog'
+import { hasUnsaved, setUnsaved } from '@/lib/unsaved-guard'
 
 const KIND_LABELS = {
   workshop: 'Workshop',
@@ -41,13 +46,44 @@ function centsToEuros(cents) {
   return (Number(cents) / 100).toFixed(2)
 }
 
-const input =
-  'w-full bg-white/[0.04] border border-white/12 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/30'
-const labelCls = 'block text-xs uppercase tracking-wide text-white/45 mb-1.5'
-const sectionCls = 'text-xs uppercase tracking-[0.15em] text-white/45 mb-3'
+const input = HOST_INPUT
+const labelCls = `${HOST_LABEL} mb-1.5`
+const OPTIONAL = <span className="font-normal text-host-hint">(optional)</span>
+// HOSTPORTAL.2 — the jump bar: pill label, section id (the ids live on the
+// <section>s below).
+const JUMPS = [
+  { id: 'setup-basics', label: 'Basics' },
+  { id: 'setup-schedule', label: 'Schedule & sessions' },
+  { id: 'setup-tickets', label: 'Tickets & pricing' },
+  { id: 'setup-questions', label: 'Questions at signup' },
+  { id: 'setup-look', label: 'Page look' },
+  { id: 'setup-emails', label: 'Emails' },
+]
+
+
+// One panel per section: a heading and a one-line description, then the fields.
+function SectionHead({ children, desc }) {
+  return (
+    <div className="mb-4">
+      <h2 className={HOST_SECTION}>{children}</h2>
+      <p className={HOST_SECTION_DESC}>{desc}</p>
+    </div>
+  )
+}
+const panelCls = `${HOST_PANEL} scroll-mt-24`
+
+// The off-sale rule's view of a body: the server trims a tier's name before it
+// compares, so the form does too (a rename by spaces alone is not a change).
+function predictedChanges(body) {
+  const changes = editChangesFromInput(body)
+  if (Array.isArray(changes.pricing_tiers)) {
+    changes.pricing_tiers = changes.pricing_tiers.map((t) => ({ ...t, name: String(t.name ?? '').trim() }))
+  }
+  return changes
+}
 
 // brandName (W1.S1c): the host's organisation, resolved by the server page.
-export default function HostEventForm({ mode = 'create', initial = null, eventId = null, brandName = PLATFORM_NAME }) {
+export default function HostEventForm({ mode = 'create', initial = null, eventId = null, brandName = PLATFORM_NAME, status = null }) {
   const router = useRouter()
   const isEdit = mode === 'edit'
 
@@ -127,6 +163,25 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
   const [issues, setIssues] = useState([])
+  const [saved, setSaved] = useState(false)
+  // HOSTPORTAL.2 — the server took the last save off sale; the reasons the
+  // confirm dialog is asking about (null = closed).
+  const [offSale, setOffSale] = useState(false)
+  const [confirmReasons, setConfirmReasons] = useState(null)
+  // The last save sent the event to review, but the `status` prop still reads
+  // published until the refresh lands: it is already off sale, so no second
+  // dialog and no standing notice. Cleared when the status prop moves.
+  const [wentOffSale, setWentOffSale] = useState(false)
+  useEffect(() => { setWentOffSale(false) }, [status])
+  const onSale = status === 'published' && !wentOffSale
+  // What the SERVER holds, as far as the off-sale rule can tell. Starts as the
+  // loaded event and moves to the body each save sent.
+  const serverHolds = useRef({
+    non_member_fee_cents: initial?.non_member_fee_cents,
+    race_date: initial?.race_date,
+    pricing_tiers: initial?.pricing_tiers,
+    waves: (initial?.sessions || []).map((s) => ({ id: s.id, start_time: s.start_time })),
+  })
 
   // Reg window isn't editable here — preserve whatever the event already has.
   const regOpensAt = initial?.registration_opens_at ?? null
@@ -246,9 +301,11 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         label: trimmedText(s.label),
         capacity: parseInt(s.capacity, 10),
       })),
-      // A series pick travels; clearing it sends null (so an edit can leave a
-      // series); with no series at all the key is absent.
-      ...(seriesId ? { series_id: seriesId } : (initial?.series_id ? { series_id: null } : {})),
+      // An edit always states its series (null leaves it), from state alone:
+      // reading the live `initial` prop here made the body change when the
+      // refresh handed down the saved value, which read as an unsaved edit.
+      // A create sends the key only when a series is picked.
+      ...(isEdit ? { series_id: seriesId || null } : (seriesId ? { series_id: seriesId } : {})),
       hero_image_url: trimmedText(heroImageUrl),
       accent_hex: trimmedText(accentHex),
       venue_name: venueName.trim(),
@@ -262,11 +319,16 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     }
   }
 
-  async function handleSubmit(e) {
+  // The check at the moment of submitting (button or Enter): a published
+  // event whose edit would be sent back to review asks first and sends
+  // nothing until the host confirms.
+  function handleSubmit(e) {
     e.preventDefault()
     if (submitting) return
     setError(null)
     setIssues([])
+    setSaved(false)
+    setOffSale(false)
 
     const clientErr = clientValidate()
     if (clientErr) {
@@ -274,24 +336,58 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       return
     }
 
+    if (isEdit && onSale) {
+      const reasons = reReviewReasons(
+        { status, ...serverHolds.current },
+        predictedChanges(buildBody()),
+      )
+      if (reasons.length > 0) {
+        setConfirmReasons(reasons)
+        return
+      }
+    }
+    performSave()
+  }
+
+  async function performSave() {
     setSubmitting(true)
     try {
       const url = isEdit ? `/api/host/events/${eventId}` : '/api/host/events'
       const method = isEdit ? 'PUT' : 'POST'
+      const sentBody = buildBody()
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildBody()),
+        body: JSON.stringify(sentBody),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) {
-        setError(json.error || 'Something went wrong. Please try again.')
+        setError(json.message || json.error || 'Something went wrong. Please try again.')
         setIssues(Array.isArray(json.issues) ? json.issues : [])
         setSubmitting(false)
         return
       }
-      const id = isEdit ? eventId : json.data?.id
-      router.push(`/host/events/${id}`)
+      if (isEdit) {
+        // Stay on the page: the saved body is the new baseline, and the
+        // refresh re-renders the layout so the header's status chip updates.
+        // An edit typed while the save was in flight is not saved: judge the
+        // body as it is NOW against the one that was sent.
+        baseline.current = JSON.stringify(sentBody)
+        const sent = predictedChanges(sentBody)
+        serverHolds.current = sent
+        const nowOffSale = json.data?.reReview === true || wentOffSale
+        if (nowOffSale) setWentOffSale(true)
+        setOffSale(nowOffSale)
+        const stillDirty = latestBody.current !== baseline.current
+        setDirty(stillDirty)
+        setUnsaved(stillDirty)
+        setSaved(!stillDirty)
+        setSubmitting(false)
+        router.refresh()
+        return
+      }
+      setUnsaved(false)
+      router.push(`/host/events/${json.data?.id}/setup`)
       router.refresh()
     } catch (err) {
       setError(err?.message || 'Network error. Please try again.')
@@ -299,13 +395,102 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     }
   }
 
-  const cancelHref = isEdit && eventId ? `/host/events/${eventId}` : '/host'
+  // HOSTPORTAL.2 — unsaved-changes tracking. The baseline is the body as first
+  // rendered (the series fetch only fills the select's options, which the body
+  // does not carry); a save moves it to the body that was saved.
+  const currentBody = JSON.stringify(buildBody())
+  const baseline = useRef(null)
+  const latestBody = useRef(currentBody)
+  function rebaseSessions(mapSessions) {
+    if (!baseline.current) return
+    const base = JSON.parse(baseline.current)
+    base.sessions = mapSessions(base.sessions || [])
+    baseline.current = JSON.stringify(base)
+  }
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => { latestBody.current = currentBody }, [currentBody])
+  useEffect(() => {
+    if (baseline.current === null) baseline.current = currentBody
+    const isDirty = currentBody !== baseline.current
+    setDirty(isDirty)
+    setUnsaved(isDirty)
+    if (isDirty) setSaved(false)
+  }, [currentBody])
+  useEffect(() => () => setUnsaved(false), [])
+
+  // A save that added sessions leaves their rows id-less in this mounted form;
+  // router.refresh() then hands down a fresh `initial` carrying the new ids.
+  // Give each id-less row the id of the server session at the same start time
+  // (never touching what was typed) and move the baseline the same way, so the
+  // merge alone never changes dirty-ness. Without it the next save would
+  // delete and re-create those sessions.
+  const serverSessions = initial?.sessions
+  useEffect(() => {
+    if (!Array.isArray(serverSessions)) return
+    // The refreshed event is what the server holds now, new session ids included.
+    serverHolds.current = { ...serverHolds.current, waves: serverSessions.map((s) => ({ id: s.id, start_time: s.start_time })) }
+    const hhmm = (t) => String(t || '').slice(0, 5)
+    const idByTime = new Map(serverSessions.filter((s) => s.id).map((s) => [hhmm(s.start_time), s.id]))
+    const taken = new Set(sessions.map((s) => s.id).filter(Boolean))
+    const fill = (time) => {
+      const id = idByTime.get(hhmm(time))
+      return id && !taken.has(id) ? id : null
+    }
+    if (!sessions.some((s) => !s.id && fill(s.start_time))) return
+    setSessions((prev) => prev.map((s) => {
+      const id = s.id ? null : fill(s.start_time)
+      return id ? { ...s, id } : s
+    }))
+    rebaseSessions((list) => list.map((s) => {
+      const id = s.id ? null : fill(s.start_time)
+      return id ? { id, ...s } : s
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverSessions])
+  useEffect(() => {
+    if (!dirty) return undefined
+    // Consult the shared flag: an action that already cleared it (Take off
+    // sale, Delete) must not raise the browser's prompt on its way out.
+    const warn = (e) => {
+      if (!hasUnsaved()) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+
+  function jumpTo(id) {
+    if (id === 'setup-emails') setShowEmail(true)
+    document.getElementById(id)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+  }
+
+  const cancelHref = isEdit && eventId ? `/host/events/${eventId}` : '/host/events'
 
   return (
     <form onSubmit={handleSubmit} className="space-y-10">
+      {isEdit && onSale && (
+        <div role="note" className={`${HOST_NOTICE} ${HOST_NOTICE_TONE.warn}`}>
+          This event is on sale. Changing {joinLabels(RE_REVIEW_REASONS.map((r) => RE_REVIEW_REASON_LABEL[r]), 'or')} takes it <strong>off sale</strong> until {brandName} approves it again: the public page goes offline and new bookings stop. Existing bookings are kept. Everything else saves straight away.
+        </div>
+      )}
+      {isEdit && (
+        <nav aria-label="Jump to a section" className="-mt-2 flex gap-2 overflow-x-auto pb-1">
+          {JUMPS.map((j) => (
+            <button
+              key={j.id}
+              type="button"
+              onClick={() => jumpTo(j.id)}
+              className={`shrink-0 whitespace-nowrap border border-host-border ${HOST_TAB}`}
+            >
+              {j.label}
+            </button>
+          ))}
+        </nav>
+      )}
       {/* Basics */}
-      <section>
-        <h2 className={sectionCls}>Basics</h2>
+      <section id="setup-basics" className={panelCls}>
+        <SectionHead desc="What it is and where.">Basics</SectionHead>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label htmlFor="he-kind" className={labelCls}>Type</label>
@@ -316,7 +501,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
               className={`${input} appearance-none`}
             >
               {HOST_EVENT_KINDS.map((k) => (
-                <option key={k} value={k} className="bg-black text-white">
+                <option key={k} value={k}>
                   {KIND_LABELS[k] || k}
                 </option>
               ))}
@@ -347,7 +532,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
             />
           </div>
           <div>
-            <label htmlFor="he-venue-addr" className={labelCls}>Venue address <span className="text-white/30 normal-case">(optional)</span></label>
+            <label htmlFor="he-venue-addr" className={labelCls}>Venue address {OPTIONAL}</label>
             <input
               id="he-venue-addr"
               type="text"
@@ -361,8 +546,8 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       </section>
 
       {/* Schedule */}
-      <section>
-        <h2 className={sectionCls}>Schedule</h2>
+      <section id="setup-schedule" className={panelCls}>
+        <SectionHead desc="When it runs and how many places each time has.">Schedule &amp; sessions</SectionHead>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label htmlFor="he-date" className={labelCls}>Date</label>
@@ -371,7 +556,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
               type="date"
               value={raceDate}
               onChange={(e) => setRaceDate(e.target.value)}
-              className={`${input} [color-scheme:dark]`}
+              className={input}
               required
             />
           </div>
@@ -389,24 +574,24 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
               placeholder={kind === 'race' ? '120' : '60'}
               className={input}
             />
-            <p className="mt-1.5 text-xs text-white/35">For the "add to calendar" entry. Blank = {kind === 'race' ? '2 hours' : '1 hour'}.</p>
+            <p className={`mt-1.5 ${HOST_HINT}`}>For the "add to calendar" entry. Blank = {kind === 'race' ? '2 hours' : '1 hour'}.</p>
           </div>
         </div>
 
         {(seriesOptions.length > 0 || seriesId) && (
           <div className="mt-4">
-            <label htmlFor="he-series" className={labelCls}>Series <span className="text-white/30 normal-case">(optional)</span></label>
+            <label htmlFor="he-series" className={labelCls}>Series {OPTIONAL}</label>
             <select
               id="he-series"
               value={seriesId || ''}
               onChange={(e) => setSeriesId(e.target.value || null)}
-              className={`${input} sm:max-w-md [color-scheme:dark]`}
+              className={`${input} sm:max-w-md`}
             >
               <option value="">Not part of a series</option>
               {seriesOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               {seriesId && !seriesOptions.some((s) => s.id === seriesId) && <option value={seriesId}>Current series</option>}
             </select>
-            <p className="mt-1.5 text-xs text-white/35">A series is one link that lists every published date.</p>
+            <p className={`mt-1.5 ${HOST_HINT}`}>A series is one link that lists every published date.</p>
           </div>
         )}
 
@@ -415,7 +600,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         <div className="mt-5 space-y-3">
           <span className={labelCls}>Sessions</span>
           {sessions.map((sess, i) => (
-            <div key={sess.key} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1.4fr_auto] gap-3 items-end rounded-xl border border-white/10 bg-white/[0.02] p-3">
+            <div key={sess.key} className={`grid grid-cols-1 sm:grid-cols-[1fr_1fr_1.4fr_auto] gap-3 items-end ${HOST_WELL}`}>
               <div>
                 <label htmlFor={`he-start-${sess.key}`} className={labelCls}>Start time</label>
                 <input
@@ -423,7 +608,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                   type="time"
                   value={sess.start_time}
                   onChange={(e) => updateSession(sess.key, { start_time: e.target.value })}
-                  className={`${input} [color-scheme:dark]`}
+                  className={input}
                   required
                 />
               </div>
@@ -442,7 +627,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 />
               </div>
               <div>
-                <label htmlFor={`he-slabel-${sess.key}`} className={labelCls}>Label <span className="text-white/30 normal-case">(optional)</span></label>
+                <label htmlFor={`he-slabel-${sess.key}`} className={labelCls}>Label {OPTIONAL}</label>
                 <input
                   id={`he-slabel-${sess.key}`}
                   type="text"
@@ -458,7 +643,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 disabled={sessions.length <= 1}
                 aria-label={`Remove session ${i + 1}`}
                 title={sessions.length <= 1 ? 'An event needs at least one session' : 'Remove this session'}
-                className="h-[42px] px-3 rounded-lg border border-white/12 text-white/60 hover:text-white hover:border-white/30 disabled:opacity-30 disabled:cursor-not-allowed"
+                className={`${HOST_BTN_GHOST} h-11 rounded-lg border border-host-edge px-3`}
               >
                 <X size={14} />
               </button>
@@ -468,25 +653,25 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
             <button
               type="button"
               onClick={addSession}
-              className="text-sm text-white/70 hover:text-white underline underline-offset-2"
+              className={HOST_BTN}
             >
               + Add a session
             </button>
           )}
-          <p className="text-xs text-white/35">
-            Each session is its own start time with its own places. A session with bookings cannot be removed; changing an existing session&apos;s time on a live event sends it back for approval.
+          <p className={HOST_HINT}>
+            Each session is its own start time with its own places. A session with bookings cannot be removed; changing an existing session&apos;s time on a live event takes it off sale until {brandName} approves it again.
           </p>
         </div>
       </section>
 
-      {/* Tickets & teams */}
-      <section>
-        <h2 className={sectionCls}>Tickets &amp; teams</h2>
+      {/* Tickets & pricing */}
+      <section id="setup-tickets" className={panelCls}>
+        <SectionHead desc="What a place costs and how big a booking can be.">Tickets &amp; pricing</SectionHead>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label htmlFor="he-price" className={labelCls}>Standard price (EUR)</label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-white/40">€</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-host-hint">€</span>
               <input
                 id="he-price"
                 type="number"
@@ -498,7 +683,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 className={`${input} pl-7`}
               />
             </div>
-            <p className="mt-1.5 text-xs text-white/35">Set 0.00 for a free event. Pricing tiers below replace it while they apply.</p>
+            <p className={`mt-1.5 ${HOST_HINT}`}>Set 0.00 for a free event. Pricing tiers below replace it while they apply.</p>
           </div>
           <div>
             <span className={labelCls}>Allowed team sizes</span>
@@ -508,10 +693,8 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 return (
                   <label
                     key={n}
-                    className={`cursor-pointer select-none rounded-lg border px-3 py-1.5 text-sm transition ${
-                      on
-                        ? 'border-white/40 bg-white/10 text-white'
-                        : 'border-white/12 bg-white/[0.02] text-white/50 hover:text-white/80'
+                    className={`cursor-pointer select-none transition ${
+                      on ? HOST_CHOICE_ON : HOST_CHOICE
                     }`}
                   >
                     <input
@@ -525,34 +708,34 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 )
               })}
             </div>
-            <p className="mt-1.5 text-xs text-white/35">Pick every team size a booking may have.</p>
+            <p className={`mt-1.5 ${HOST_HINT}`}>Pick every team size a booking may have.</p>
           </div>
         </div>
         {/* TIERS.1 — early bird, capacity tiers and a group price. */}
         <div className="mt-5">
-          <span className={labelCls}>Pricing tiers <span className="text-white/30 normal-case">(optional)</span></span>
+          <span className={labelCls}>Pricing tiers {OPTIONAL}</span>
           <PricingTiersEditor value={pricingTiers} onChange={setPricingTiers} dark />
         </div>
       </section>
 
       {/* QUESTIONS.1 — asked at signup; answers travel with the attendees. */}
-      <section>
-        <h2 className={sectionCls}>Questions at signup</h2>
+      <section id="setup-questions" className={panelCls}>
+        <SectionHead desc="Anything you need to know from the people booking.">Questions at signup</SectionHead>
         <RegistrationQuestionsEditor value={questions} onChange={setQuestions} dark />
       </section>
 
-      {/* Presentation */}
-      <section>
-        <h2 className={sectionCls}>Presentation</h2>
+      {/* Page look */}
+      <section id="setup-look" className={panelCls}>
+        <SectionHead desc="How the event page looks.">Page look</SectionHead>
         <div>
-          <label htmlFor="he-desc" className={labelCls}>Description <span className="text-white/30 normal-case">(optional)</span></label>
+          <label htmlFor="he-desc" className={labelCls}>Description {OPTIONAL}</label>
           <textarea
             id="he-desc"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={4}
             placeholder="What can attendees expect?"
-            className={`${input} resize-y`}
+            className={HOST_TEXTAREA}
           />
         </div>
         {/* Hero image — HOST-PORTAL.11. Edit mode uploads bytes directly via
@@ -564,22 +747,22 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         <div className="mt-4">
           {isEdit && eventId ? (
             <div>
-              <span className={labelCls}>Hero image <span className="text-white/30 normal-case">(optional)</span></span>
+              <span className={labelCls}>Hero image {OPTIONAL}</span>
               <div className="space-y-3">
                 {heroError && (
-                  <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                  <div className={`${HOST_NOTICE} ${HOST_NOTICE_TONE.bad}`}>
                     {heroError}
                   </div>
                 )}
                 {heroImageUrl.trim() ? (
-                  <div className="relative overflow-hidden rounded-lg border border-white/12 bg-white/[0.02]">
+                  <div className="relative overflow-hidden rounded-lg border border-host-border bg-host-well">
                     <img src={heroImageUrl} alt="Event hero" className="w-full max-h-56 object-cover" />
                     <button
                       type="button"
                       onClick={handleHeroRemove}
                       disabled={heroBusy}
                       title="Remove hero image"
-                      className="absolute top-2 right-2 rounded-full border border-white/15 bg-black/70 p-1.5 text-white/60 hover:text-red-400 disabled:opacity-50"
+                      className="absolute top-2 right-2 rounded-full border border-host-edge bg-host-panel p-1.5 text-host-hint hover:text-host-bad disabled:opacity-50"
                     >
                       {heroBusy ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />}
                     </button>
@@ -587,11 +770,11 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 ) : (
                   <label
                     htmlFor="he-hero-file"
-                    className={`flex h-36 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-white/12 bg-white/[0.02] text-white/45 transition hover:border-white/30 hover:text-white/70 ${heroBusy ? 'pointer-events-none opacity-50' : ''}`}
+                    className={`flex h-36 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-host-edge bg-host-well text-host-hint transition hover:bg-host-hover hover:text-host-text ${heroBusy ? 'pointer-events-none opacity-50' : ''}`}
                   >
                     {heroBusy ? <Loader2 size={22} className="animate-spin" /> : <ImagePlus size={22} />}
                     <span className="mt-1.5 text-xs">{heroBusy ? 'Uploading…' : 'Upload hero image'}</span>
-                    <span className="mt-0.5 text-[11px] text-white/30">PNG, JPEG or WebP · max 5MB</span>
+                    <span className="mt-0.5 text-[11px] text-host-hint">PNG, JPEG or WebP · max 5MB</span>
                     <input
                       id="he-hero-file"
                       type="file"
@@ -606,7 +789,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                   </label>
                 )}
                 <div>
-                  <label htmlFor="he-hero" className="mb-1.5 block text-[11px] text-white/35">Or paste an image URL</label>
+                  <label htmlFor="he-hero" className={labelCls}>Or paste an image URL</label>
                   <input
                     id="he-hero"
                     type="url"
@@ -616,14 +799,14 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                     className={input}
                   />
                 </div>
-                <p className="text-xs text-white/35">
+                <p className={HOST_HINT}>
                   Uploads save straight away — press “Save changes” to update your event page.
                 </p>
               </div>
             </div>
           ) : (
             <div>
-              <label htmlFor="he-hero" className={labelCls}>Hero image URL <span className="text-white/30 normal-case">(optional)</span></label>
+              <label htmlFor="he-hero" className={labelCls}>Hero image URL {OPTIONAL}</label>
               <input
                 id="he-hero"
                 type="url"
@@ -632,13 +815,13 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 placeholder="https://…"
                 className={input}
               />
-              <p className="mt-1.5 text-xs text-white/35">You can upload an image after saving.</p>
+              <p className={`mt-1.5 ${HOST_HINT}`}>You can upload an image after saving.</p>
             </div>
           )}
         </div>
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label htmlFor="he-accent" className={labelCls}>Accent colour <span className="text-white/30 normal-case">(optional)</span></label>
+            <label htmlFor="he-accent" className={labelCls}>Accent colour {OPTIONAL}</label>
             <div className="flex items-center gap-3">
               <input
                 id="he-accent"
@@ -649,7 +832,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 className={input}
               />
               <span
-                className="h-9 w-9 shrink-0 rounded-lg border border-white/12"
+                className="h-9 w-9 shrink-0 rounded-lg border border-host-edge"
                 style={ACCENT_RE.test(accentHex.trim()) ? { backgroundColor: accentHex.trim() } : undefined}
                 aria-hidden="true"
               />
@@ -659,18 +842,21 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       </section>
 
       {/* Email copy (secondary, collapsed) */}
-      <section>
-        <button
-          type="button"
-          onClick={() => setShowEmail((v) => !v)}
-          className="flex items-center gap-2 text-xs uppercase tracking-[0.15em] text-white/45 hover:text-white/70 transition"
-        >
-          <span>{showEmail ? '▾' : '▸'}</span>
-          Email copy (optional)
-        </button>
+      <section id="setup-emails" className={panelCls}>
+        <h2 className={HOST_SECTION}>
+          <button
+            type="button"
+            onClick={() => setShowEmail((v) => !v)}
+            className="flex items-center gap-2"
+          >
+            <span>{showEmail ? '▾' : '▸'}</span>
+            Emails (optional)
+          </button>
+        </h2>
+        <p className={HOST_SECTION_DESC}>The confirmation, reminder and rating request, if you want to change the wording.</p>
         {showEmail && (
-          <div className="mt-4 space-y-4 border-l border-white/10 pl-4">
-            <p className="text-xs text-white/40">
+          <div className="mt-4 space-y-4 border-l border-host-border pl-4">
+            <p className={HOST_HINT}>
               Customise the confirmation, reminder and post-event rating emails attendees receive. Leave blank to use {brandName} defaults.
             </p>
             <div>
@@ -690,7 +876,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 value={confirmIntro}
                 onChange={(e) => setConfirmIntro(e.target.value)}
                 rows={3}
-                className={`${input} resize-y`}
+                className={HOST_TEXTAREA}
               />
             </div>
             <div>
@@ -710,7 +896,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 value={reminderIntro}
                 onChange={(e) => setReminderIntro(e.target.value)}
                 rows={3}
-                className={`${input} resize-y`}
+                className={HOST_TEXTAREA}
               />
             </div>
             {/* HOSTPAGE.2 — the "How was <event>?" email sent the morning after. */}
@@ -732,7 +918,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
                 value={ratingIntro}
                 onChange={(e) => setRatingIntro(e.target.value)}
                 rows={3}
-                className={`${input} resize-y`}
+                className={HOST_TEXTAREA}
               />
             </div>
           </div>
@@ -741,10 +927,10 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
 
       {/* Errors */}
       {(error || issues.length > 0) && (
-        <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+        <div className={`${HOST_NOTICE} ${HOST_NOTICE_TONE.bad}`}>
           {error && <p>{error}</p>}
           {issues.length > 0 && (
-            <ul className="mt-2 list-disc pl-4 space-y-0.5 text-red-300/90">
+            <ul className="mt-2 list-disc pl-4 space-y-0.5">
               {issues.map((iss, i) => (
                 <li key={i}>
                   {(Array.isArray(iss.path) && iss.path.length ? `${iss.path.join('.')}: ` : '')}
@@ -757,20 +943,38 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       )}
 
       {/* Actions */}
-      <div className="flex items-center gap-3 pt-2">
+      <div className="flex flex-wrap items-center gap-3 pt-2">
         <button
           type="submit"
           disabled={submitting}
-          className="rounded-lg bg-white text-black text-sm font-semibold px-5 py-2.5 hover:bg-white/90 disabled:opacity-60"
+          className={HOST_BTN_PRIMARY}
         >
           {submitting
             ? isEdit ? 'Saving…' : 'Creating…'
             : isEdit ? 'Save changes' : 'Create event'}
         </button>
-        <a href={cancelHref} className="text-sm text-white/50 hover:text-white transition">
+        {isEdit && (status === 'draft' || status === 'rejected') && (
+          dirty
+            ? <span className="text-sm text-host-hint">Save your changes before submitting.</span>
+            : <span className="text-sm"><HostSubmitButton eventId={eventId} /></span>
+        )}
+        <GuardedLink href={cancelHref} className={HOST_BTN_GHOST}>
           Cancel
-        </a>
+        </GuardedLink>
+        {saved && (
+          <span role="status" className={`text-sm ${offSale ? 'text-host-warn' : 'text-host-ok'}`}>
+            {offSale ? `Saved. This event is off sale until ${brandName} approves it again.` : 'Saved.'}
+          </span>
+        )}
       </div>
+      <OffSaleConfirmDialog
+        open={confirmReasons !== null}
+        reasons={confirmReasons || []}
+        brandName={brandName}
+        busy={submitting}
+        onConfirm={() => { setConfirmReasons(null); performSave() }}
+        onKeepEditing={() => setConfirmReasons(null)}
+      />
     </form>
   )
 }
