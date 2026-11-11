@@ -324,6 +324,21 @@ describe('the shipped allowlist files', () => {
   // an override would crash the router at launch (the linkify-it 6.x class
   // below); npm's fix is expo-router 58, an Expo SDK bump. Drop it with SDK 58.
   //
+  // DEPAUDIT.9 (2026-11-11, on a PR touching nothing but this allowlist and a
+  // changelog entry) added TWO more node-forge ids, published overnight, on
+  // that same single build-time 1.4.0 copy with the same two ^1.3.3 parents:
+  // a PKCS#1 v1.5 signature-VERIFY forgery via a non-canonical DigestInfo
+  // encoding (the GHSA-86w9-cpqp-85rv class) and a resource exhaustion in
+  // asn1.fromDer on a crafted BIT STRING, reachable only through
+  // forge.pki.certificateFromPem, whose one call site parses the stdout of
+  // the macOS `security` binary. Same accept reason as the DEPAUDIT.8 six.
+  // Correction to the note above: the patched release is 1.4.3, not 1.4.2 —
+  // `^1.3.3` already admits it, so `npm update node-forge --package-lock-only`
+  // closes ALL EIGHT node-forge ids at once. It edits mobile/package-lock.json,
+  // which is an OTA publish path, and the fleet is frozen on 2.3.x while 2.4.0
+  // sits in App Review. Both expire 2026-12-15: take the bump with the next
+  // native release and drop every node-forge id here.
+  //
   // Exact-match on sorted ids, so ANY additional accept — or a swap to a
   // different id — still fails here and forces a reviewed decision.
   it('mobile accepts exactly the image-size, build-time brace-expansion, node-forge, dev-server zod and expo-router decode-uri-component advisories', () => {
@@ -334,6 +349,7 @@ describe('the shipped allowlist files', () => {
       'GHSA-5p2g-fcmc-qvqq', // image-size
       'GHSA-5x38-2vff-x55p', // node-forge X.509 basicConstraints (DEPAUDIT.8)
       'GHSA-6j4f-fj2g-mc7p', // brace-expansion (DEPAUDIT.5)
+      'GHSA-6qrw-m8cv-hcxf', // node-forge PKCS#1 v1.5 verify forgery (DEPAUDIT.9)
       'GHSA-7wch-p9px-956x', // node-forge PEM ReDoS (DEPAUDIT.8)
       'GHSA-86w9-cpqp-85rv', // node-forge (DEPAUDIT.6)
       'GHSA-8hrf-8g6f-7xwp', // node-forge TLS record DoS (DEPAUDIT.8)
@@ -342,6 +358,7 @@ describe('the shipped allowlist files', () => {
       'GHSA-mrhx-c7xc-m3w5', // zod under @expo/cli (DEPAUDIT.7)
       'GHSA-qhr7-859c-m2p7', // brace-expansion (DEPAUDIT.5)
       'GHSA-qr28-fpjm-wq7f', // decode-uri-component under expo-router@57 (DEPAUDIT.8)
+      'GHSA-rhr8-3pm8-cq29', // node-forge asn1.fromDer exhaustion (DEPAUDIT.9)
       'GHSA-w3rx-r6r6-pgpr', // image-size
     ])
   })
