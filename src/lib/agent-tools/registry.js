@@ -90,6 +90,58 @@ function studioMessage(code, studioId) {
  * @param {{ db: object, nowMs?: number }} opts db is a service-role client
  * @returns {Promise<{ ok: true, data: object } | { ok: false, code: string, message: string }>}
  */
+/**
+ * Validate a tool's raw input. Split out of runTool so a door can read
+ * `studio_id` from VALIDATED input before resolving a studio — the MCP door
+ * depends on that order, because a malformed studio_id must answer
+ * `invalid_input`, never `studio_not_found`.
+ *
+ * @returns {{ ok: true, input: object } | { ok: false, code: string, message: string }}
+ */
+export function parseToolInput(tool, rawInput) {
+  const parsed = tool.inputSchema.safeParse(rawInput ?? {})
+  if (!parsed.success) return { ok: false, code: 'invalid_input', message: zodMessage(parsed.error) }
+  return { ok: true, input: parsed.data }
+}
+
+/**
+ * ASSISTREG.2 — the half of a tool call that is the same whoever opened the
+ * door: build the context, apply the tool's own gate, run it, and turn a
+ * ToolRefusal into a result. The caller supplies the studio, so each door
+ * decides for itself what "this studio" means — the MCP door resolves one the
+ * person holds `mcp_access` at, the in-app assistant forces the session's
+ * active location and never lets the model name one.
+ *
+ * Everything MCP-specific stays in runTool below: the rate limit, studio
+ * resolution, the `org_settings.mcp_enabled` switch and the `mcp_tool_calls`
+ * row. That last one is load-bearing — assistant traffic writing those rows
+ * would destroy the only signal for whether anything has ever connected over
+ * MCP.
+ *
+ * @param {object} tool a defineTool definition
+ * @param {object} input VALIDATED input (parseToolInput)
+ * @returns {Promise<{ ok: true, data: object } | { ok: false, code: string, message: string }>}
+ */
+export async function runToolAtStudio(tool, input, { db, user, studio, nowMs = Date.now(), enabledOrgIds = [] }) {
+  try {
+    const zone = zoneOfLocation(studio)
+    const ctx = {
+      db, user, studio, zone, nowMs, enabledOrgIds,
+      today: todayStrIn(zone, nowMs),
+      role: roleAt(user, studio.id),
+    }
+    if (!tool.gate(user, studio.id, ctx)) {
+      return { ok: false, code: 'forbidden', message: `The role held at ${studio.name} does not allow ${tool.title}.` }
+    }
+    return { ok: true, data: await tool.run(input, ctx) }
+  } catch (err) {
+    if (err instanceof ToolRefusal) return { ok: false, code: err.code, message: err.message }
+    // Any other throw (run or gate) is a failed call, recorded like any other.
+    logError('mcp', 'tool failed', { tool: tool.name, err })
+    return { ok: false, code: 'tool_failed', message: MESSAGES.tool_failed }
+  }
+}
+
 export async function runTool(tool, rawInput, auth, { db, nowMs = Date.now() } = {}) {
   const startedMs = Date.now()
   const user = auth.extra.user
@@ -103,7 +155,8 @@ export async function runTool(tool, rawInput, auth, { db, nowMs = Date.now() } =
     if (err instanceof ToolRefusal) {
       result = { ok: false, code: err.code, message: err.message }
     } else {
-      // Any other throw (run or gate) is a failed call, recorded like any other.
+      // A throw from the door itself (the rate-limit read, studio resolution)
+      // is a failed call. runToolAtStudio catches its own.
       logError('mcp', 'tool failed', { tool: tool.name, err })
       result = { ok: false, code: 'tool_failed', message: MESSAGES.tool_failed }
     }
@@ -116,9 +169,9 @@ export async function runTool(tool, rawInput, auth, { db, nowMs = Date.now() } =
       return { ok: false, code: 'rate_limited', message: `Too many tool calls. Try again in ${limit.retryAfterSec} seconds.` }
     }
 
-    const parsed = tool.inputSchema.safeParse(rawInput ?? {})
-    if (!parsed.success) return { ok: false, code: 'invalid_input', message: zodMessage(parsed.error) }
-    const input = parsed.data
+    const parsed = parseToolInput(tool, rawInput)
+    if (!parsed.ok) return parsed
+    const input = parsed.input
 
     const resolved = resolveStudio(user, input.studio_id ?? null)
     if (!resolved.ok) return { ok: false, code: resolved.code, message: studioMessage(resolved.code, input.studio_id) }
@@ -128,17 +181,7 @@ export async function runTool(tool, rawInput, auth, { db, nowMs = Date.now() } =
       return { ok: false, code: 'mcp_disabled', message: MESSAGES.mcp_disabled }
     }
 
-    const zone = zoneOfLocation(studio)
-    const ctx = {
-      db, user, studio, zone, nowMs, enabledOrgIds,
-      today: todayStrIn(zone, nowMs),
-      role: roleAt(user, studio.id),
-    }
-    if (!tool.gate(user, studio.id, ctx)) {
-      return { ok: false, code: 'forbidden', message: `The role held at ${studio.name} does not allow ${tool.title}.` }
-    }
-
-    return { ok: true, data: await tool.run(input, ctx) }
+    return runToolAtStudio(tool, input, { db, user, studio, nowMs, enabledOrgIds })
   }
 
   // A rate_limited refusal is not recorded: the limiter is the bound on how

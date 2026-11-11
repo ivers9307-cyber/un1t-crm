@@ -461,3 +461,15 @@ describe('readableContactStudios (MCPACCESS.1)', () => {
     expect(readableContactStudios(user, ctx)).toEqual([])
   })
 })
+
+// ASSISTREG.2 — asserted only against the assistant's own copy before the
+// bridge. A failed contacts read must never read out as "no matches", which
+// the model would answer by offering to create the person again.
+describe('search_contacts — a failed read is never "no matches"', () => {
+  it('answers a failed read as tool_failed', async () => {
+    const { db } = makeDb({ contacts: { data: null, error: { message: 'boom' } } })
+    const res = await run(searchContacts, { query: 'alice' }, 'manager', db, { contacts: true })
+    expect(res).toMatchObject({ ok: false, code: 'tool_failed' })
+    expect(res.data).toBeUndefined()
+  })
+})

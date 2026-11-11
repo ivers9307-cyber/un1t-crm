@@ -360,3 +360,47 @@ describe('staff reports', () => {
     expect(await run(staffHoursReport, period, 'manager', db)).toMatchObject({ ok: false, code: 'tool_failed' })
   })
 })
+
+// ASSISTREG.2 — these properties used to be asserted ONLY against the in-app
+// assistant's own copies of these tools (src/app/api/assistant/chat/route.js).
+// The assistant now runs these bodies, so the assertions move to the body.
+// Each is the "removing a silent failure" rule from CLAUDE.md: a failed read
+// must never read out as "nobody is off" or as the 20-day default.
+describe('get_time_off / get_holiday_allowance — a failed read is never an answer', () => {
+  it('answers a failed time-off read as tool_failed, never as "nobody is off"', async () => {
+    const { db } = makeDb({ time_off_requests: { data: null, error: { message: 'boom' } } })
+    const res = await run(getTimeOff, { start: '2026-11-02', end: '2026-11-08' }, 'manager', db)
+    expect(res).toMatchObject({ ok: false, code: 'tool_failed' })
+    expect(res.data).toBeUndefined()
+  })
+
+  it('scopes a non-manager to their own time off', async () => {
+    const { db, on } = makeDb({ time_off_requests: { data: [], error: null } })
+    await run(getTimeOff, { start: '2026-11-02', end: '2026-11-08' }, 'staff', db)
+    const q = on('time_off_requests')[0]
+    expect(used(q, 'eq', 'location_id', DUB)).toBe(true)
+    expect(used(q, 'eq', 'profile_id', ME)).toBe(true)
+  })
+
+  it('does not scope a manager to their own time off', async () => {
+    const { db, on } = makeDb({ time_off_requests: { data: [], error: null } })
+    await run(getTimeOff, { start: '2026-11-02', end: '2026-11-08' }, 'manager', db)
+    expect(used(on('time_off_requests')[0], 'eq', 'profile_id', ME)).toBe(false)
+  })
+
+  it('answers a failed allowance read as tool_failed, never as the default entitlement', async () => {
+    getHolidayAllowance.mockResolvedValue({ allowance: null, error: { message: 'boom' } })
+    const { db } = makeDb()
+    const res = await run(getHolidayAllowanceTool, {}, 'staff', db)
+    expect(res).toMatchObject({ ok: false, code: 'tool_failed' })
+  })
+
+  it('refuses a staff member another person’s allowance, and never reads it', async () => {
+    getHolidayAllowance.mockResolvedValue({ allowance: { total_days: 20, carried_over: 0, used_days: 0 }, error: null })
+    getPendingHolidayDays.mockResolvedValue({ days: 0, error: null })
+    const { db } = makeDb()
+    const res = await run(getHolidayAllowanceTool, { profile_id: OTHER }, 'staff', db)
+    expect(res).toMatchObject({ ok: false, code: 'forbidden' })
+    expect(getHolidayAllowance).not.toHaveBeenCalled()
+  })
+})
