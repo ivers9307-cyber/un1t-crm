@@ -518,6 +518,10 @@ async function sendEmail({ db, payment, ctx: baseCtx, commsLocationId }) {
     when: ctx.waveLabel || ctx.raceDateLabel,
     location: ctx.locationName,
     manage_url: ctx.manageUrl || '',
+    // CHARITYENTRY.1 — what this entry paid (total, and per person).
+    amount: ctx.amountLabel || '',
+    // Blank on a mixed member/non-member entry, where there is no one rate.
+    amount_per_person: ctx.memberCount > 0 ? '' : (ctx.nonMemberFeeLabel || ''),
   }
 
   const { subject, htmlBody } = await resolveEventEmail({
