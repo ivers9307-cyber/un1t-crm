@@ -19,6 +19,7 @@ import { checkRateLimit } from '@/lib/rate-limit'
 import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { logError } from '@/lib/log'
 import { resolveStudio, roleAt } from '@/lib/mcp/context'
+import { mcpReadableStudioIds } from './_contact-scope.js'
 import { recordToolCall } from '@/lib/mcp/log'
 
 /**
@@ -122,11 +123,16 @@ export function parseToolInput(tool, rawInput) {
  * @param {object} input VALIDATED input (parseToolInput)
  * @returns {Promise<{ ok: true, data: object } | { ok: false, code: string, message: string }>}
  */
-export async function runToolAtStudio(tool, input, { db, user, studio, nowMs = Date.now(), enabledOrgIds = [] }) {
+export async function runToolAtStudio(tool, input, {
+  db, user, studio, nowMs = Date.now(), enabledOrgIds = [], readableStudioIds = [],
+}) {
   try {
     const zone = zoneOfLocation(studio)
     const ctx = {
       db, user, studio, zone, nowMs, enabledOrgIds,
+      // ASSISTREG.3 — which studios this call may read contacts at is the
+      // DOOR's decision (see _contact-scope.js); a tool body only reads it.
+      readableStudioIds,
       today: todayStrIn(zone, nowMs),
       role: roleAt(user, studio.id),
     }
@@ -181,7 +187,10 @@ export async function runTool(tool, rawInput, auth, { db, nowMs = Date.now() } =
       return { ok: false, code: 'mcp_disabled', message: MESSAGES.mcp_disabled }
     }
 
-    return runToolAtStudio(tool, input, { db, user, studio, nowMs, enabledOrgIds })
+    return runToolAtStudio(tool, input, {
+      db, user, studio, nowMs, enabledOrgIds,
+      readableStudioIds: mcpReadableStudioIds(user, { studio, enabledOrgIds }),
+    })
   }
 
   // A rate_limited refusal is not recorded: the limiter is the bound on how

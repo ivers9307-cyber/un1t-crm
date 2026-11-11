@@ -202,35 +202,6 @@ Permissions are: dashboard, pipeline, contacts, events, bookings, activities, em
 // cannot drift between the two callers.
 export const TOOLS = [
   {
-    name: 'create_contact',
-    description: 'Create a new contact in the CRM. Use when the user asks to add a new member, lead, or contact.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Full name of the contact' },
-        email: { type: 'string', description: 'Email address (required)' },
-        phone: { type: 'string', description: 'Phone number' },
-        lead_source: { type: 'string', enum: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'other'], description: 'How the lead was acquired' },
-      },
-      required: ['name', 'email'],
-    },
-  },
-  {
-    name: 'create_activity',
-    description: 'Create a task, call reminder, or activity linked to a contact. Use when the user wants to schedule a follow-up.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        subject: { type: 'string', description: 'What the activity is about' },
-        type: { type: 'string', enum: ['call', 'email', 'meeting', 'task'], description: 'Activity type' },
-        contact_id: { type: 'string', description: 'Contact UUID to link to' },
-        due_date: { type: 'string', description: 'Due date (YYYY-MM-DD)' },
-        note: { type: 'string', description: 'Additional notes' },
-      },
-      required: ['subject', 'type'],
-    },
-  },
-  {
     name: 'navigate_user',
     description: 'Suggest the user navigate to a specific page. Use when guiding them to a feature.',
     input_schema: {

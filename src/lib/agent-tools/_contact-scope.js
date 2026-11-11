@@ -9,36 +9,70 @@
 // way, never moved). An unknown contact and an unreadable one get the same
 // answer (null → the tool's `not_found`), so a contact id cannot be probed.
 //
-// Through MCP the studios that count are narrower than the person's Contacts
-// studios: only those in the resolved studio's organisation, whose
-// organisation has MCP switched on, where the person holds Connect an Agent
-// (`mcp_access`) as well as Contacts. Otherwise a call resolved at a studio
-// of organisation A would read past organisation B's switch, or past a
-// studio where agent access is off.
+// WHICH studios count is the DOOR's question, not this file's (ASSISTREG.3).
+// Each door computes the list and puts it on `ctx.readableStudioIds`:
+//
+//   MCP        mcpReadableStudioIds() below — the person's studios in the
+//              resolved studio's organisation, that organisation's MCP switch
+//              on, holding `mcp_access` AND Contacts. Otherwise a call
+//              resolved at a studio of organisation A would read past
+//              organisation B's switch, or past a studio where agent access
+//              is off.
+//   assistant  the session's active location, if Contacts is held there.
+//              It must NOT ask for `mcp_access` or the MCP org switch: those
+//              are the MCP door's, and asking for them here is what made
+//              create_contact and create_activity unbridgeable — they would
+//              have refused every manager (mcp_access is master+owner by
+//              default) and everything at CCF Autos, silently. MCPACCESS.1
+//              from the other side.
+//
+// A tool body never recomputes it: it reads what its door decided.
 
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { studiosOfContact } from '@/lib/contact-studios'
 
 /**
- * The ids of the person's studios a tool call may read contacts at: in the
- * resolved studio's organisation, that organisation's MCP switch on, and the
- * person holding `mcp_access` AND `contacts` there.
+ * The studios a tool call may read contacts at: whatever its door decided.
+ *
+ * @param {object} _user kept for signature stability; the answer is the door's
+ * @param {{ readableStudioIds?: string[] }} ctx the tool call's context
+ */
+export function readableContactStudios(_user, ctx) {
+  return ctx?.readableStudioIds ?? []
+}
+
+/**
+ * The MCP door's answer: the person's studios in the resolved studio's
+ * organisation, that organisation's MCP switch on, holding BOTH `mcp_access`
+ * and `contacts` there.
  *
  * MCPACCESS.1 — two permissions ANDed, and they answer different questions:
  * `mcp_access` is the MCP door (swapped from `assistant`), `contacts` is the
  * data permission. Never collapse them into one.
  *
  * @param {object} user getCurrentUser() result
- * @param {{ studio: { organization_id: string }, enabledOrgIds: string[] }} ctx the tool call's context
+ * @param {{ studio: { organization_id: string }, enabledOrgIds: string[] }} args
  */
-export function readableContactStudios(user, ctx) {
-  const orgId = ctx?.studio?.organization_id
-  if (!orgId || !(ctx.enabledOrgIds || []).includes(orgId)) return []
+export function mcpReadableStudioIds(user, { studio, enabledOrgIds }) {
+  const orgId = studio?.organization_id
+  if (!orgId || !(enabledOrgIds || []).includes(orgId)) return []
   return (user?.locations || [])
     .filter((l) => l?.id && l.organization_id === orgId
       && hasPermissionForLocation(user, l.id, 'mcp_access')
       && hasPermissionForLocation(user, l.id, 'contacts'))
     .map((l) => l.id)
+}
+
+/**
+ * The in-app assistant's answer: the session's active location, if Contacts is
+ * held there. No `mcp_access`, no MCP org switch — see the header.
+ *
+ * @param {object} user getCurrentUser() result
+ * @param {string} studioId the session's active location id
+ */
+export function assistantReadableStudioIds(user, studioId) {
+  if (!studioId) return []
+  return hasPermissionForLocation(user, studioId, 'contacts') ? [studioId] : []
 }
 
 /**

@@ -108,7 +108,12 @@ describe('executeTool list_shift_templates — canonical two-tenant world', () =
 describe('executeTool create_contact — canonical two-tenant world', () => {
   it('ignores a smuggled cross-tenant location_id and stamps the active location', async () => {
     const res = await executeTool('create_contact', { name: 'New Lead', email: 'x@x.com', location_id: LOC_B1 }, MANAGER_A1)
-    expect(res.success).toBe(true)
+    // The registry body answers { existing, contact } (an email already in the
+    // org is reported, not failed). location_id is not in its schema, so zod
+    // strips the smuggled one before any write; the row is stamped with the
+    // session's active studio.
+    expect(res.error).toBeUndefined()
+    expect(res.existing).toBe(false)
     const insert = db._writesTo('contacts').find((w) => w.op === 'insert')
     expect(insert.payload.location_id).toBe(LOC_A1)
   })

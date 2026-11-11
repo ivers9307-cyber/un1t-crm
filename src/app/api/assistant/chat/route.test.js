@@ -164,66 +164,6 @@ beforeEach(() => {
 })
 
 // ── search_contacts ──────────────────────────────────────────────────
-describe('executeTool create_contact — location stamping', () => {
-  it('stamps the caller’s active location on the inserted row', async () => {
-    const db = useDb({ contacts: [] })
-    const res = await executeTool('create_contact', { name: 'New Lead', email: 'new@x.com' }, MANAGER)
-    expect(res.success).toBe(true)
-    const insert = db._writes.find(w => w.table === 'contacts' && w.op === 'insert')
-    expect(insert.payload.location_id).toBe('loc-a')
-  })
-
-  it('cannot be tricked into writing another location_id from tool input', async () => {
-    // The tool schema has no location_id field, but prove a smuggled one
-    // is ignored — the row is always stamped with context.locationId.
-    const db = useDb({ contacts: [] })
-    await executeTool('create_contact', { name: 'X', email: 'x@x.com', location_id: 'loc-b' }, MANAGER)
-    const insert = db._writes.find(w => w.table === 'contacts' && w.op === 'insert')
-    expect(insert.payload.location_id).toBe('loc-a')
-  })
-
-  it('refuses to create an orphan row when there is no active location', async () => {
-    const db = useDb({ contacts: [] })
-    const res = await executeTool('create_contact', { name: 'New', email: 'n@x.com' }, { ...MANAGER, locationId: null })
-    expect(res.error).toMatch(/active location/i)
-    expect(db._writes.some(w => w.table === 'contacts' && w.op === 'insert')).toBe(false)
-  })
-})
-
-// ── list_staff ───────────────────────────────────────────────────────
-describe('executeTool create_activity — contact ownership + location stamping', () => {
-  const contacts = [
-    { id: 'c-a1', name: 'Alice', email: 'a@a.com', location_id: 'loc-a' },
-    { id: 'c-b1', name: 'Bob', email: 'b@b.com', location_id: 'loc-b' }, // other tenant
-  ]
-
-  it('creates an activity for an in-location contact and stamps the location', async () => {
-    const db = useDb({ contacts, activities: [] })
-    const res = await executeTool('create_activity', { subject: 'Call Alice', type: 'call', contact_id: 'c-a1' }, MANAGER)
-    expect(res.success).toBe(true)
-    const insert = db._writes.find(w => w.table === 'activities' && w.op === 'insert')
-    expect(insert.payload.location_id).toBe('loc-a')
-    expect(insert.payload.contact_id).toBe('c-a1')
-  })
-
-  it('refuses to attach an activity to another tenant’s contact and issues no insert', async () => {
-    const db = useDb({ contacts, activities: [] })
-    const res = await executeTool('create_activity', { subject: 'Call Bob', type: 'call', contact_id: 'c-b1' }, MANAGER)
-    expect(res.error).toMatch(/not found/i)
-    expect(db._writes.some(w => w.table === 'activities' && w.op === 'insert')).toBe(false)
-  })
-
-  it('creates an unlinked activity (no contact_id) stamped with the active location', async () => {
-    const db = useDb({ contacts, activities: [] })
-    const res = await executeTool('create_activity', { subject: 'General task', type: 'task' }, MANAGER)
-    expect(res.success).toBe(true)
-    const insert = db._writes.find(w => w.table === 'activities' && w.op === 'insert')
-    expect(insert.payload.location_id).toBe('loc-a')
-    expect(insert.payload.contact_id).toBeNull()
-  })
-})
-
-// ── create_shift ─────────────────────────────────────────────────────
 describe('executeTool generate_report staff_cost — profiles read is location-scoped', () => {
   const profile_locations = [
     { profile_id: 'p-a1', location_id: 'loc-a' },

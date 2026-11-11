@@ -60,19 +60,8 @@ const MAX_TOOL_ITERATIONS = 5
 //
 // 'all' = any role, 'manager' = owner/manager/head_coach, 'admin' = owner/manager only
 const TOOL_PERMISSIONS = {
-  navigate_user:    'all',
-  generate_report:  'manager',
-  // 🔴 These two have registry twins but are NOT bridged, and the reason is
-  // the MCPACCESS.1 trap in reverse. Their bodies resolve the contact through
-  // readableContactStudios (src/lib/agent-tools/_contact-scope.js), which
-  // requires BOTH `mcp_access` at the studio AND the studio's organisation in
-  // ctx.enabledOrgIds — the `org_settings.mcp_enabled` switch. Those are MCP
-  // DOOR concerns baked into a tool body: bridged as-is they would refuse
-  // every manager (mcp_access is master+owner by default) and everything at
-  // CCF Autos, silently. Moving that pair out of the helper into a
-  // door-supplied readable-studio list is the follow-up that unblocks them.
-  create_contact:   'admin',
-  create_activity:  'manager',
+  navigate_user:   'all',
+  generate_report: 'manager',
 }
 
 function checkToolPermission(toolName, role) {
@@ -108,54 +97,6 @@ export async function executeTool(toolName, input, context) {
   }
 
   switch (toolName) {
-    case 'create_contact': {
-      // Stamp the active location; never trust an input-supplied one.
-      // Without a location this would insert a tenant-less orphan row.
-      if (!locationId) return { error: 'No active location — switch to a location before creating a contact.' }
-      const { data, error } = await db.from('contacts').insert({
-        name: input.name,
-        email: input.email,
-        phone: input.phone || null,
-        lead_source: input.lead_source || 'other',
-        location_id: locationId,
-      }).select().single()
-      if (error) return { error: error.message }
-      // AUTOMATIONS: glofox_lead_provisioning (assistant-created lead).
-      try {
-        const { maybeProvisionLeadInGlofox } = await import('@/lib/automations/glofox-lead-provisioning')
-        await maybeProvisionLeadInGlofox({ db, locationId, contact: data, source: 'assistant' })
-        const { triggerSequencesForContactCreated } = await import('@/lib/sequences/triggers')
-        await triggerSequencesForContactCreated(data.id)
-      } catch { /* hook never throws */ }
-      return { success: true, contact: { id: data.id, name: data.name, email: data.email } }
-    }
-    case 'create_activity': {
-      if (!locationId) return { error: 'No active location for this action.' }
-      // If linking to a contact, confirm it's in the caller's location
-      // BEFORE inserting — and always stamp the active location_id.
-      let contactId = null
-      if (input.contact_id) {
-        const { data: contact } = await db.from('contacts')
-          .select('id')
-          .eq('id', input.contact_id)
-          .eq('location_id', locationId)
-          .maybeSingle()
-        if (!contact) return { error: 'Contact not found in your active location.' }
-        contactId = contact.id
-      }
-      const record = {
-        subject: input.subject,
-        type: input.type,
-        contact_id: contactId,
-        location_id: locationId,
-        due_date: input.due_date || null,
-        note: input.note || null,
-        done: false,
-      }
-      const { data, error } = await db.from('activities').insert(record).select().single()
-      if (error) return { error: error.message }
-      return { success: true, activity: { id: data.id, subject: data.subject, type: data.type, due_date: data.due_date } }
-    }
     case 'navigate_user': {
       // input.path is handed to the client which router.push()es it verbatim.
       // Only allow internal app paths — an absolute or protocol-relative URL

@@ -15,7 +15,7 @@ import listPipeline from './list-pipeline.js'
 import listTasks from './list-tasks.js'
 import createContact from './create-contact.js'
 import createActivity from './create-activity.js'
-import { readableContactStudios } from './_contact-scope.js'
+import { assistantReadableStudioIds, mcpReadableStudioIds, readableContactStudios } from './_contact-scope.js'
 
 const DUB = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a01'
 const HATCH = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a02'
@@ -420,7 +420,7 @@ describe('create_activity', () => {
 // is the RED driver (mcp_access on, assistant off — readable only once the
 // swap lands); the excluded case is the guard against a swap that replaces
 // both checks or drops the Contacts one.
-describe('readableContactStudios (MCPACCESS.1)', () => {
+describe('mcpReadableStudioIds (MCPACCESS.1) + the door split (ASSISTREG.3)', () => {
   const OPEN = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a11'   // mcp_access + contacts
   const NOCON = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a12'  // mcp_access, Contacts OFF
 
@@ -442,13 +442,13 @@ describe('readableContactStudios (MCPACCESS.1)', () => {
           [NOCON]: { role: 'staff', permissions: { mcp_access: true, assistant: false, contacts: false } },
         },
       },
-      ctx: { studio: { organization_id: 'org-1' }, enabledOrgIds: ['org-1'] },
+      args: { studio: { organization_id: 'org-1' }, enabledOrgIds: ['org-1'] },
     }
   }
 
   it('includes a studio holding mcp_access and Contacts, and excludes one without Contacts', () => {
-    const { user, ctx } = fenceUser()
-    expect(readableContactStudios(user, ctx)).toEqual([OPEN])
+    const { user, args } = fenceUser()
+    expect(mcpReadableStudioIds(user, args)).toEqual([OPEN])
   })
 
   // The empty set is the load-bearing case: get-contact.js gates on
@@ -456,9 +456,32 @@ describe('readableContactStudios (MCPACCESS.1)', () => {
   // the resolved studio" convenience would OPEN the tool rather than close
   // it — the Pride Training Club bug relocated into the contact fence.
   it('returns no studios at all when mcp_access is held but Contacts is not', () => {
-    const { user, ctx } = fenceUser()
+    const { user, args } = fenceUser()
     user.assignmentsByLocation[OPEN].permissions.contacts = false
-    expect(readableContactStudios(user, ctx)).toEqual([])
+    expect(mcpReadableStudioIds(user, args)).toEqual([])
+  })
+
+  // ASSISTREG.3 — the in-app assistant's door asks a DIFFERENT question: the
+  // active location, Contacts only. It must not ask for mcp_access or the MCP
+  // org switch; requiring them inside the body is what made create_contact
+  // and create_activity unbridgeable.
+  it('the assistant door admits the active studio on Contacts alone, with no mcp_access', () => {
+    const { user } = fenceUser()
+    user.assignmentsByLocation[OPEN].permissions.mcp_access = false
+    expect(assistantReadableStudioIds(user, OPEN)).toEqual([OPEN])
+    expect(mcpReadableStudioIds(user, { studio: { organization_id: 'org-1' }, enabledOrgIds: ['org-1'] })).toEqual([])
+  })
+
+  it('the assistant door still fences on Contacts, and on having a studio at all', () => {
+    const { user } = fenceUser()
+    expect(assistantReadableStudioIds(user, NOCON)).toEqual([])
+    expect(assistantReadableStudioIds(user, null)).toEqual([])
+  })
+
+  // A body never recomputes the list: it reads what its door decided.
+  it('readableContactStudios is now a pure read of ctx.readableStudioIds', () => {
+    expect(readableContactStudios({}, { readableStudioIds: ['x'] })).toEqual(['x'])
+    expect(readableContactStudios({}, {})).toEqual([])
   })
 })
 

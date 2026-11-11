@@ -133,14 +133,13 @@ describe('runAssistantTool — the studio is the session’s, not the model’s'
 // ASSISTREG.2 — what the gate swap actually changes, tool by tool. The old
 // TOOL_PERMISSIONS map judged role alone; these gates are the registry's.
 //
-// 🔴 The one MATERIAL access change is search_contacts, and it is a WIDENING,
-// not the tightening it looks like: `contacts` defaults to TRUE for every
-// role including staff, and the registry gates search_contacts on that key
-// with NO role floor, where the assistant demanded the manager tier. So a
-// plain staff member can now search contacts through the assistant — which is
-// consistent with the Contacts screen they can already open, and with the MCP
-// server. Pinned here so the change is visible and reversible: putting a
-// manager floor back is one clause in search-contacts.js's gate.
+// ASSISTREG.3 — and the assistant's historical tiers are kept as FLOORS under
+// those gates, so effective access is the INTERSECTION: the swap can narrow
+// what the assistant grants, never widen it. Without the floor it DID widen
+// one tool — `contacts` defaults TRUE for every role including staff, and the
+// registry gates search_contacts on that key with no role floor, where the
+// assistant has always demanded the manager tier. The MCP server keeps the
+// unfloored gate, which is why the floor lives in the door, not the tool.
 describe('runAssistantTool — the gates are the registry’s now', () => {
   const STUDIO2 = { id: 'loc-a', name: 'Stillorgan', organization_id: 'org-1', timezone: 'Europe/Dublin' }
   function userWith(role, permissions = {}) {
@@ -155,14 +154,6 @@ describe('runAssistantTool — the gates are the registry’s now', () => {
   }
   const db = () => ({ from: () => { throw new Error('no read expected') } })
 
-  it('lets a STAFF member search contacts, because Contacts defaults true for every role', async () => {
-    const res = await runAssistantTool('search_contacts', { query: 'alice' }, {
-      db: { from: () => ({ select: () => ({ eq: () => ({ or: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }) }) }) }) }) },
-      user: userWith('staff'),
-    })
-    expect(res.error).toBeUndefined()
-  })
-
   it('refuses it once Contacts is switched off for that person at that studio', async () => {
     const res = await runAssistantTool('search_contacts', { query: 'alice' }, {
       db: db(), user: userWith('manager', { contacts: false }),
@@ -170,25 +161,39 @@ describe('runAssistantTool — the gates are the registry’s now', () => {
     expect(res.error).toMatch(/does not allow/i)
   })
 
-  it('does NOT bridge create_contact or create_activity', async () => {
-    // Their registry bodies resolve the contact through readableContactStudios,
-    // which demands mcp_access AND the org's mcp_enabled switch — door
-    // concerns baked into a body. Bridged as-is they would refuse every
-    // manager and everything at CCF Autos (MCPACCESS.1 from the other side),
-    // so the chat route still owns them. This pins that boundary: if someone
-    // adds them to BRIDGED_TOOL_NAMES without moving that pair out of the
-    // helper first, this fails.
-    for (const name of ['create_contact', 'create_activity']) {
-      expect(isBridgedTool(name), name).toBe(false)
-      const res = await runAssistantTool(name, {}, { db: db(), user: userWith('manager') })
-      expect(res.error, name).toMatch(/unknown tool/i)
-    }
+  it('bridges create_contact and create_activity, and keeps their tier floors', async () => {
+    // ASSISTREG.3 — these two were unbridgeable while readableContactStudios
+    // demanded mcp_access and the MCP org switch inside the body. The door
+    // supplies the list now, so they bridge; their historical tiers stay as
+    // floors, so nobody gains access who did not have it.
+    expect(isBridgedTool('create_contact')).toBe(true)
+    expect(isBridgedTool('create_activity')).toBe(true)
+    // head_coach cleared 'manager' but never 'admin'.
+    const hc = await runAssistantTool('create_contact', { name: 'X', email: 'x@x.com' }, {
+      db: db(), user: userWith('head_coach'),
+    })
+    expect(hc.error).toMatch(/permission denied/i)
+    const staff = await runAssistantTool('create_activity', { subject: 'S', type: 'call' }, {
+      db: db(), user: userWith('staff'),
+    })
+    expect(staff.error).toMatch(/permission denied/i)
+  })
+
+  it('keeps search_contacts at the manager tier — the swap must not widen it', async () => {
+    // The registry gate is Contacts alone (no role floor), and Contacts
+    // defaults TRUE for staff, so without the floor a staff member would gain
+    // assistant contact search. The MCP server keeps the unfloored gate.
+    const res = await runAssistantTool('search_contacts', { query: 'alice' }, {
+      db: db(), user: userWith('staff'),
+    })
+    expect(res.error).toMatch(/permission denied/i)
+    expect(allowedBridgedToolDefinitions(userWith('staff')).map(d => d.name)).not.toContain('search_contacts')
   })
 
   it('still refuses a staff member create_shift and list_staff', async () => {
     for (const [name, input] of [['create_shift', { date: '2026-11-02' }], ['list_staff', {}]]) {
       const res = await runAssistantTool(name, input, { db: db(), user: userWith('staff') })
-      expect(res.error, name).toMatch(/does not allow|required|invalid/i)
+      expect(res.error, name).toMatch(/permission denied|does not allow/i)
     }
   })
 
@@ -196,14 +201,14 @@ describe('runAssistantTool — the gates are the registry’s now', () => {
     const names = allowedBridgedToolDefinitions(userWith('staff')).map(d => d.name)
     expect(names).toContain('get_shifts')
     expect(names).toContain('get_time_off')
-    expect(names).toContain('search_contacts')   // the widening, stated out loud
+    expect(names).not.toContain('search_contacts')  // floored at manager
     expect(names).not.toContain('create_shift')
     expect(names).not.toContain('list_staff')
   })
 
   it('offers a manager the write tools too', async () => {
     const names = allowedBridgedToolDefinitions(userWith('manager')).map(d => d.name)
-    for (const n of ['create_shift', 'list_staff', 'list_shift_templates']) {
+    for (const n of ['create_shift', 'list_staff', 'list_shift_templates', 'search_contacts', 'create_activity', 'create_contact']) {
       expect(names, n).toContain(n)
     }
   })

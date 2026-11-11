@@ -24,6 +24,9 @@
 import { z } from 'zod'
 import { TOOLS } from '@/lib/agent-tools'
 import { parseToolInput, runToolAtStudio } from '@/lib/agent-tools/registry'
+import { assistantReadableStudioIds } from '@/lib/agent-tools/_contact-scope'
+import { roleAt } from '@/lib/mcp/context'
+import { ADMIN_ROLES, MANAGER_ROLES } from '@/lib/schemas'
 
 /**
  * The tools the assistant runs from the registry, by name. Everything else the
@@ -38,16 +41,10 @@ import { parseToolInput, runToolAtStudio } from '@/lib/agent-tools/registry'
  * `unpublished_days` names the days no published roster covers, so a half
  * published week reads as "not published yet" and never as "nobody working".
  */
-// 🔴 create_contact and create_activity are deliberately ABSENT. Both have
-// registry twins, but those bodies resolve a contact through
-// readableContactStudios (./_contact-scope.js), which demands `mcp_access` at
-// the studio AND the studio's org in ctx.enabledOrgIds (the
-// `org_settings.mcp_enabled` switch). Those are this file's concerns, not a
-// body's: bridged as-is they would refuse every manager and everything at CCF
-// Autos — MCPACCESS.1 again, from the other side. They stay in the chat route
-// until that pair moves out of the helper into a door-supplied list.
 export const BRIDGED_TOOL_NAMES = Object.freeze([
   'search_contacts',
+  'create_contact',
+  'create_activity',
   'create_shift',
   'list_staff',
   'list_shift_templates',
@@ -57,6 +54,46 @@ export const BRIDGED_TOOL_NAMES = Object.freeze([
 ])
 
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]))
+
+/**
+ * ASSISTREG.3 — the assistant's historical role tier for each bridged tool,
+ * kept as a FLOOR under the registry's gate. Effective access is the
+ * INTERSECTION, so moving onto the registry gates can only ever narrow what
+ * the assistant grants, never widen it.
+ *
+ * Without this floor the swap silently WIDENED one tool: `contacts` defaults
+ * to true for every role including staff, and the registry gates
+ * search_contacts on that key with no role floor, where the assistant has
+ * always demanded the manager tier. The MCP server keeps the unfloored gate
+ * (a staff member holding Connect an Agent and Contacts may search there) —
+ * which is why the floor lives in THIS door and not in the tool.
+ *
+ * 'all' = any role · 'manager' = owner/manager/head_coach (+ master)
+ * 'admin' = owner/manager (+ master)
+ */
+const TIER_FLOOR = Object.freeze({
+  search_contacts: 'manager',
+  create_contact: 'admin',
+  create_activity: 'manager',
+  create_shift: 'manager',
+  list_staff: 'manager',
+  list_shift_templates: 'manager',
+  // get_shifts replaces get_shifts_for_week, which was 'all'.
+  get_shifts: 'all',
+  get_time_off: 'all',
+  get_holiday_allowance: 'all',
+})
+
+/** Whether the person clears the assistant's own historical tier at a studio. */
+function clearsTierFloor(name, user, studioId) {
+  const tier = TIER_FLOOR[name]
+  if (tier === 'all') return true
+  const role = roleAt(user, studioId)
+  if (tier === 'manager') return MANAGER_ROLES.includes(role)
+  if (tier === 'admin') return ADMIN_ROLES.includes(role)
+  // An unlisted bridged tool fails closed rather than inheriting 'all'.
+  return false
+}
 
 /** @returns {boolean} whether this tool name is run from the registry. */
 export function isBridgedTool(name) {
@@ -122,7 +159,9 @@ export function allowedBridgedToolDefinitions(user) {
   return bridgedToolDefinitions().filter((def) => {
     const tool = bridgedTool(def.name)
     try {
-      return Boolean(tool.gate(user, studioId))
+      return clearsTierFloor(def.name, user, studioId) && Boolean(tool.gate(user, studioId, {
+        readableStudioIds: assistantReadableStudioIds(user, studioId),
+      }))
     } catch {
       // A gate that cannot answer is not an invitation.
       return false
@@ -154,9 +193,20 @@ export async function runAssistantTool(name, rawInput, { db, user, nowMs = Date.
   // sent so no tool body can read one (runToolAtStudio ignores it regardless).
   const { studio_id: _ignored, ...input } = rawInput && typeof rawInput === 'object' ? rawInput : {}
 
+  // The assistant's own historical tier, under the tool's gate: the swap can
+  // narrow access, never widen it (TIER_FLOOR).
+  if (!clearsTierFloor(name, user, studio.id)) {
+    return { error: `Permission denied: your role does not have access to this action. Please ask a manager or owner for help.` }
+  }
+
   const parsed = parseToolInput(tool, input)
   if (!parsed.ok) return { error: parsed.message }
 
-  const result = await runToolAtStudio(tool, parsed.input, { db, user, studio, nowMs })
+  const result = await runToolAtStudio(tool, parsed.input, {
+    db, user, studio, nowMs,
+    // ASSISTREG.3 — this door's contact reach: the active studio on Contacts
+    // alone. Never mcp_access, never the MCP org switch.
+    readableStudioIds: assistantReadableStudioIds(user, studio.id),
+  })
   return result.ok ? result.data : { error: result.message }
 }
