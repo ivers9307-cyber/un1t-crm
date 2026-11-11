@@ -17,6 +17,7 @@ import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, ADMIN_ROLES, isRealCalendarDate } from '@/lib/schemas'
 import { reportPeriodError } from '@/lib/report-period'
 import { parseAllowanceYear } from '@/lib/allowance-year'
+import { sanitizeSearchTerm, MIN_CONTACT_SEARCH_LEN } from '@/lib/command-palette'
 import {
   splitSSEEvents,
   initTurn,
@@ -124,12 +125,28 @@ export async function executeTool(toolName, input, context) {
       // Scope to the active location — an unscoped search would match
       // contacts in every tenant. No location → no unscoped read.
       if (!locationId) return { contacts: [], count: 0 }
+      // ASSISTREG.1 — the term is BOTH a LIKE pattern and a value inside the
+      // .or() string, so it is sanitised exactly as the registry's
+      // search-contacts.js does: sanitizeSearchTerm drops , ( ) % * _ and
+      // " \ go too (PostgREST rejects those inside an .or() value). Raw, a
+      // `,` in the term closed the clause and opened another, letting the
+      // caller filter on any contacts column the tool never offered — a
+      // filter oracle over the studio's contacts — and a bare `%` matched
+      // everyone. Reach is deliberately unchanged (still this one studio,
+      // still name + email): this is the sanitiser, not the migration.
+      const term = sanitizeSearchTerm(input.query).replace(/["\\]/g, ' ').replace(/\s+/g, ' ').trim()
+      if (term.length < MIN_CONTACT_SEARCH_LEN) {
+        return { error: `The search term needs at least ${MIN_CONTACT_SEARCH_LEN} characters (commas, brackets, quotes, backslashes, % * and _ are ignored).` }
+      }
+      // Deliberate substring search: the wildcards are spelled here, and the
+      // sanitiser above guarantees the term carries none of its own.
+      const like = `%${term}%`
       // A failed read is an error, never "no contact by that name" (which
       // the model would answer by offering to create one).
       const { data, error } = await db.from('contacts')
         .select('id, name, email, phone, pipeline_stage_slug, lead_source')
         .eq('location_id', locationId)
-        .or(`name.ilike.%${input.query}%,email.ilike.%${input.query}%`)
+        .or(`name.ilike.${like},email.ilike.${like}`)
         .limit(10)
       if (error) return { error: `Failed to load contacts: ${error.message}` }
       return { contacts: data || [], count: (data || []).length }
