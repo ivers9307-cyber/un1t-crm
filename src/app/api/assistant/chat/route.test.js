@@ -172,6 +172,47 @@ describe('executeTool search_contacts — location scoping', () => {
   })
 })
 
+// ── search_contacts — the term is a PATTERN, and a .or() VALUE ────────
+// ASSISTREG.1. The term was interpolated raw into the .or() string:
+//   .or(`name.ilike.%${input.query}%,email.ilike.%${input.query}%`)
+// Two defects in one line, both reachable by any text the model can be
+// induced to emit (a contact note it just read, say):
+//   1. a `,` in the term ENDS the clause and starts another, so the
+//      caller picks columns the tool never offered — a filter oracle
+//      over every contacts column at the active studio;
+//   2. `%` and `_` are LIKE wildcards, so `%` alone matches everyone.
+// The registry's search-contacts.js already sanitises; these pin the
+// same rule here. Reach is unchanged on purpose (ASSISTREG.1 is parity):
+// still `.eq('location_id', …)`, still the manager tier.
+describe('executeTool search_contacts — the term cannot inject or wildcard', () => {
+  const contacts = [
+    { id: 'c-a1', name: 'Alice Anderson', email: 'alice@a.com', phone: '+353871111111', location_id: 'loc-a' },
+    // Name and email match nothing a caller searching "alice" asked for.
+    // Only its PHONE matches the injected clause below.
+    { id: 'c-zz', name: 'Zebra Zane', email: 'zebra@a.com', phone: '+353879999999', location_id: 'loc-a' },
+  ]
+
+  it('does not let a comma in the term add a filter on a column the tool never offered', async () => {
+    useDb({ contacts })
+    const res = await executeTool('search_contacts', { query: 'alice,phone.ilike.%87999%' }, MANAGER)
+    const ids = (res.contacts || []).map(c => c.id)
+    // Zebra matches ONLY through the smuggled phone clause.
+    expect(ids).not.toContain('c-zz')
+  })
+
+  it('treats % in the term as a character, not a wildcard that matches everyone', async () => {
+    useDb({ contacts })
+    const res = await executeTool('search_contacts', { query: '%' }, MANAGER)
+    expect((res.contacts || []).map(c => c.id)).not.toContain('c-a1')
+  })
+
+  it('still finds an ordinary contact by part of their name', async () => {
+    useDb({ contacts })
+    const res = await executeTool('search_contacts', { query: 'alice' }, MANAGER)
+    expect((res.contacts || []).map(c => c.id)).toEqual(['c-a1'])
+  })
+})
+
 // ── create_contact ───────────────────────────────────────────────────
 describe('executeTool create_contact — location stamping', () => {
   it('stamps the caller’s active location on the inserted row', async () => {
