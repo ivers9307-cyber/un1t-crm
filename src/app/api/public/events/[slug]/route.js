@@ -16,6 +16,7 @@ import { isHostAnchorLocation, pickAudienceVenueName } from '@/lib/event-comms-l
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { getOrgBrandName } from '@/lib/location-branding'
 import { resolveCharitySettings, computeCharityTotals, resolveCharityVideo } from '@/lib/charity-donations'
+import { resolveEntryAmountSettings } from '@/lib/charity-entry-amount'
 import { resolveFindTeamSettings } from '@/lib/find-team'
 import { logWarn } from '@/lib/log'
 
@@ -259,6 +260,8 @@ async function buildPublicCharity(db, race) {
     // CHARITY.13/14 — the uploaded file (hero image as its poster) or the
     // embeddable form of the link; the raw link stays server-side.
     video: resolveCharityVideo(s, { posterUrl: race.hero_image_url || null }),
+    // CHARITYENTRY.1 — choose-your-entry-amount: { enabled, min/max/suggested cents }.
+    entry_amount: resolveEntryAmountSettings(race),
   }
   if (!s.show_total) return block
 

@@ -20,6 +20,7 @@ import { addEventAttendeesToHostList } from './host-contact-list'
 import { sendRegistrationMovedEmail } from './race-confirmations'
 import { moveLocationIds } from './move-locations'
 import { holdingPlaces } from './entry-policy'
+import { resolveEntryAmountSettings } from './charity-entry-amount'
 import {
   MOVE_ERRORS, MOVE_ERROR_MESSAGES, membersOf,
   entryLabel, entryHeadcount, entryLeadEmail, perPersonFeeCents, computePriceGapCents,
@@ -114,12 +115,22 @@ export function evaluateMove({
   return { ok: true }
 }
 
+/**
+ * CHARITYENTRY.1 — the price gap of a move, except that on an event where
+ * entrants choose their own amount there is no fixed price to take a
+ * difference from: what they paid stands, so the gap is 0.
+ */
+export function movePriceGapCents(args) {
+  if (resolveEntryAmountSettings(args.sourceEvent).enabled || resolveEntryAmountSettings(args.targetEvent).enabled) return 0
+  return computePriceGapCents(args)
+}
+
 const EVENT_COLUMNS = `
   id, name, slug, race_date, location_id, host_id, active, status, kind,
   capacity_mode, allowed_team_sizes,
   member_pricing_enabled, member_fee_cents, non_member_fee_cents, payment_currency,
   venue_name, accent_hex, hero_image_url, sending_location_id,
-  moved_email_subject, moved_email_intro, entry_policy, pricing_tiers,
+  moved_email_subject, moved_email_intro, entry_policy, pricing_tiers, charity_enabled, charity,
   waves:race_waves ( id, race_event_id, start_time, label, capacity, display_order ),
   locations:location_id ( id, name, is_host_anchor, organization_id, timezone )
 `
@@ -368,7 +379,7 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
       // TIERS.1 — the gap is the base fees; the dialog says tiers are not in it.
       has_tiers: Array.isArray(ev.pricing_tiers) && ev.pricing_tiers.length > 0,
       // A change of time costs nothing: same event, same fees.
-      price_gap_cents: sameEvent ? 0 : computePriceGapCents({ sourceEvent: source, targetEvent: ev, members, headcount }),
+      price_gap_cents: sameEvent ? 0 : movePriceGapCents({ sourceEvent: source, targetEvent: ev, members, headcount }),
       currency: ev.payment_currency || source?.payment_currency || 'EUR',
       waves,
     }
@@ -445,7 +456,7 @@ export async function checkMove(db, {
   if (!verdict.ok) return verdict
 
   const headcount = entryHeadcount(registration)
-  const priceGapCents = computePriceGapCents({ sourceEvent: registration.race, targetEvent, members: membersOf(registration), headcount })
+  const priceGapCents = movePriceGapCents({ sourceEvent: registration.race, targetEvent, members: membersOf(registration), headcount })
   return { ok: true, registration, targetEvent, targetWave, headcount, priceGapCents }
 }
 

@@ -86,6 +86,10 @@ export function applyEventMergeTags(text, contact, extras = {}) {
   // host's name and the signed link to the rate page.
   out = out.replaceAll('{{host_name}}', extras.host_name || '')
   out = out.replaceAll('{{rate_url}}', extras.rate_url || '')
+  // CHARITYENTRY.1 — set by the confirmation email: what the entry paid in
+  // total, and per person (the chosen amount on a choose-your-amount event).
+  out = out.replaceAll('{{amount_per_person}}', extras.amount_per_person || '')
+  out = out.replaceAll('{{amount}}', extras.amount || '')
   return out
 }
 
@@ -116,6 +120,8 @@ export function applyEventMergeTagsHtml(html, contact, extras = {}) {
     // HOSTPAGE.2 — the rating request's host name and signed rate link.
     host_name: escapeHtml(extras.host_name || ''),
     rate_url: escapeHtml(extras.rate_url || ''),
+    amount: escapeHtml(extras.amount || ''),
+    amount_per_person: escapeHtml(extras.amount_per_person || ''),
   }
   return applyEventMergeTags(html, safeContact, safeExtras)
 }
