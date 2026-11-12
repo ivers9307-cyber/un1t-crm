@@ -197,6 +197,7 @@ Full set in [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md); 
 |---|---|
 | [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md) | Module map, lib-helper catalogue, full DB schema + RLS, email/WhatsApp/audience internals, RBAC matrix, orgs, master admin matrix, performance posture |
 | [`docs/architecture/INTEGRATIONS.md`](docs/architecture/INTEGRATIONS.md) | Env vars, Xero, Revolut, Pay subdomain, Cars deposit (+ the retired Twilio/SMS note) |
+| [`docs/glofox-api-reference.md`](docs/glofox-api-reference.md) | Every Glofox call we make and how we judge its answer — request/response shapes seen LIVE, the 200-with-a-failure-body cases, retry policy per endpoint, webhook payload paths. A dated snapshot of observed behaviour; `src/lib/glofox.js` and the Glofox invariants above are what bind |
 | [`docs/architecture/MOBILE.md`](docs/architecture/MOBILE.md) | The Expo/RN app in `mobile/` — setup, routing, feature flags, push, EAS deployment |
 | [`docs/LESSONS.md`](docs/LESSONS.md) | War stories behind the invariants + per-vendor specifics (+ archived Cowork-sandbox notes) |
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | Durable do-not-build decisions + design-doc pointers |
