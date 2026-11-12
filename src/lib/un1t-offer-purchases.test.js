@@ -28,7 +28,7 @@ vi.mock('@/lib/un1t-online-funnel-emails', () => ({ sendUn1tAccountEmail: mocks.
 vi.mock('@/lib/trial-purchase-un1t-settle', () => ({ UN1T_TRIAL_EXPIRY_MS: 24 * 60 * 60_000 + 45 * 60_000 }))
 vi.mock('@/lib/log', () => ({ logError: mocks.error, logWarn: mocks.warn, logInfo: vi.fn() }))
 
-import { sweepUn1tOfferPurchases, OFFER_SET_PASSWORD_BODY } from './un1t-offer-purchases'
+import { sweepUn1tOfferPurchases, OFFER_SET_PASSWORD_BODY, EXPIRED_ERROR } from './un1t-offer-purchases'
 
 const LOC = 'loc-hatch'
 const HOUR = 60 * 60_000
@@ -139,7 +139,7 @@ describe('sweepUn1tOfferPurchases', () => {
   it('sweep records off-page purchase in window', async () => {
     const { db, writes, tables } = makeDb({ txs: [tx()] })
     const r = await sweepUn1tOfferPurchases(db, LOC, { now: NOW })
-    expect(r).toMatchObject({ ok: true, checked: 1, recorded: 1, matchedPage: 0, failed: 0 })
+    expect(r).toMatchObject({ ok: true, checked: 1, recorded: 1, matchedPage: 0, failed: 0, passwordPending: 0 })
     const inserts = purchaseWrites(writes).filter((w) => w.kind === 'insert')
     expect(inserts).toHaveLength(1)
     expect(inserts[0].fields).toMatchObject({
@@ -182,7 +182,7 @@ describe('sweepUn1tOfferPurchases', () => {
       txs: [tx({ remote_created_at: '2026-12-01T00:30:00.000Z' })],
     })
     const r = await sweepUn1tOfferPurchases(db, LOC, { now: () => Date.parse('2026-12-01T01:00:00.000Z') })
-    expect(r).toMatchObject({ ok: true, matchedPage: 1, recorded: 0, failed: 0 })
+    expect(r).toMatchObject({ ok: true, matchedPage: 1, recorded: 0, failed: 0, passwordPending: 0 })
     const upd = purchaseWrites(writes).filter((w) => w.kind === 'update' && w.fields.state === 'paid')
     expect(upd).toHaveLength(1)
     expect(upd[0].filters).toContainEqual(['eq', 'id', 'op1'])
@@ -208,6 +208,71 @@ describe('sweepUn1tOfferPurchases', () => {
     const r = await sweepUn1tOfferPurchases(db, LOC, { now: () => Date.parse('2026-12-01T01:00:00.000Z') })
     expect(r).toMatchObject({ matchedPage: 0, recorded: 0 })
     expect(purchaseWrites(writes)).toHaveLength(0)
+  })
+
+  it('fix 1: a late payment settles a page row the sweep had already expired, and set-password runs', async () => {
+    const expired = pageRow({ created_at: '2026-11-30T23:50:00.000Z', state: 'cancelled', last_error: EXPIRED_ERROR })
+    const { db, writes, tables } = makeDb({ purchases: [expired], txs: [tx({ remote_created_at: '2026-12-01T00:30:00.000Z' })] })
+    const r = await sweepUn1tOfferPurchases(db, LOC, { now: () => Date.parse('2026-12-03T09:00:00.000Z') })
+    expect(r).toMatchObject({ ok: true, matchedPage: 1, recorded: 0, failed: 0, passwordPending: 0 })
+    const upd = purchaseWrites(writes).find((w) => w.kind === 'update' && w.fields.state === 'paid')
+    expect(upd.filters).toContainEqual(['eq', 'state', 'cancelled'])
+    expect(upd.fields).toMatchObject({ last_error: null, updated_at: '2026-12-03T09:00:00.000Z' })
+    expect(tables.offer_purchases[0]).toMatchObject({ state: 'paid', last_error: null, un1t_transaction_id: 'tx1' })
+    expect(purchaseWrites(writes).filter((w) => w.kind === 'insert')).toHaveLength(0)
+    expect(mocks.setPassword).toHaveBeenCalledTimes(1)
+    expect(mocks.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('fix 1: an in-window payment on an expired page row settles that row, not an off_page insert', async () => {
+    const expired = pageRow({ state: 'cancelled', last_error: EXPIRED_ERROR })
+    const { db, writes, tables } = makeDb({ purchases: [expired], txs: [tx()] })
+    const r = await sweepUn1tOfferPurchases(db, LOC, { now: NOW })
+    expect(r).toMatchObject({ ok: true, matchedPage: 1, recorded: 0 })
+    expect(tables.offer_purchases).toHaveLength(1)
+    expect(tables.offer_purchases[0].state).toBe('paid')
+    expect(purchaseWrites(writes).filter((w) => w.kind === 'insert')).toHaveLength(0)
+    expect(mocks.setPassword).toHaveBeenCalledTimes(1)
+  })
+
+  it('fix 1: a page row cancelled for another reason is never re-opened', async () => {
+    const cancelled = pageRow({ state: 'cancelled', last_error: 'buyer_cancelled' })
+    const { db, writes, tables } = makeDb({ purchases: [cancelled], txs: [tx()] })
+    const r = await sweepUn1tOfferPurchases(db, LOC, { now: NOW })
+    expect(r).toMatchObject({ ok: true, matchedPage: 0, recorded: 1 })
+    expect(tables.offer_purchases.find((p) => p.id === 'op1')).toMatchObject({ state: 'cancelled', last_error: 'buyer_cancelled' })
+    expect(purchaseWrites(writes).filter((w) => w.kind === 'update' && w.filters.some((f) => f[1] === 'id' && f[2] === 'op1'))).toHaveLength(0)
+    expect(mocks.setPassword).not.toHaveBeenCalled()
+  })
+
+  it('fix 1: an expired row is not expired again', async () => {
+    const expired = pageRow({ state: 'cancelled', last_error: EXPIRED_ERROR, created_at: '2026-11-01T00:00:00.000Z' })
+    const { db, writes } = makeDb({ purchases: [expired] })
+    const r = await sweepUn1tOfferPurchases(db, LOC, { now: NOW })
+    expect(r).toMatchObject({ ok: true, expired: 0 })
+    expect(purchaseWrites(writes)).toHaveLength(0)
+  })
+
+  it('minor 1: a set-password step that did not finish counts in passwordPending, not failed, and is stamped', async () => {
+    mocks.setPassword.mockResolvedValueOnce({ explanation: 'deferred', forgotPassword: 'in_doubt' })
+    const { db, tables } = makeDb({ purchases: [pageRow()], txs: [tx()] })
+    const r = await sweepUn1tOfferPurchases(db, LOC, { now: NOW })
+    expect(r).toMatchObject({ ok: true, matchedPage: 1, failed: 0, passwordPending: 1 })
+    expect(tables.offer_purchases[0]).toMatchObject({ state: 'paid', last_error: 'set_password:in_doubt' })
+    mocks.setPassword.mockRejectedValueOnce(new Error('ledger down'))
+    const b = makeDb({ purchases: [pageRow()], txs: [tx()] })
+    const r2 = await sweepUn1tOfferPurchases(b.db, LOC, { now: NOW })
+    expect(r2).toMatchObject({ ok: true, failed: 0, passwordPending: 1 })
+    expect(b.tables.offer_purchases[0].last_error).toBe('set_password:error')
+  })
+
+  it('minor 3: the window end is inclusive to the end of its second', async () => {
+    const { db, writes } = makeDb({ txs: [tx({ remote_created_at: '2026-11-30T23:59:59.500Z' })] })
+    const r = await sweepUn1tOfferPurchases(db, LOC, { now: NOW })
+    expect(r).toMatchObject({ ok: true, recorded: 1 })
+    expect(purchaseWrites(writes).find((w) => w.kind === 'insert').fields.origin).toBe('off_page')
+    const after = makeDb({ txs: [tx({ remote_created_at: '2026-12-01T00:00:00.000Z' })] })
+    expect((await sweepUn1tOfferPurchases(after.db, LOC, { now: NOW })).recorded).toBe(0)
   })
 
   it('sweep is idempotent across runs', async () => {

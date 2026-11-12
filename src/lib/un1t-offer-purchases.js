@@ -28,7 +28,20 @@
 //      The unique (location_id, un1t_transaction_id) key makes a second
 //      record impossible: a 23505 there is "already recorded", never failed;
 //   7. page rows still open after UN1T_TRIAL_EXPIRY_MS (the hosted
-//      checkout's 24h plus the sync's lag) are cancelled (CAS).
+//      checkout's 24h plus the sync's lag) are cancelled (CAS) with
+//      last_error EXPIRED_ERROR. The expiry is reversible: an expired row is
+//      read back in step 3 and a payment the sync mirrors late still settles
+//      it (CAS on the state as read), so a slow sync never loses a buyer. A
+//      row cancelled for any other reason is never re-opened.
+//
+// Offers are deliberately NOT filtered by `active`: an in-window buyer is
+// owed the bonus even if the offer is switched off later. The window end is
+// inclusive to the end of its second (ends_at 23:59:59 covers 23:59:59.999).
+//
+// `passwordPending`: a settled page buyer whose set-password step did not
+// finish (anything but done / skipped_*, or a throw); stamped on the row as
+// last_error 'set_password:<verdict>' for staff. It is not a failure: the
+// heartbeat judges only `ok`.
 //
 // Never throws. `ok` is false only when a read in steps 1-3 failed, and then
 // nothing is written. A failed side effect counts in `failed`, is logged with
@@ -48,13 +61,16 @@ const ORIGIN = 'web_offer'
 const PAGE = 500
 const UNIQUE_VIOLATION = '23505'
 const FALLBACK_BUYER_NAME = 'un1t.online client'
+// The last_error of a page row the sweep cancelled as abandoned (step 7): the
+// one cancelled state step 3 reads back, so a late-mirrored payment settles it.
+export const EXPIRED_ERROR = 'un1t_checkout_expired'
 
 export const OFFER_SET_PASSWORD_SUBJECT = 'Your UN1T Hatch Street account'
 export const OFFER_SET_PASSWORD_BODY = "Thanks for your Black Friday purchase at UN1T Hatch Street. We've set up your un1t.online account. Check your inbox for a code to set your password, then book your first class in the app."
 
 const OFFER_COLS = 'id, location_id, name, bonus_headline, un1t_product_id, starts_at, ends_at'
 const TX_COLS = 'un1t_id, un1t_user_id, contact_id, product_id, type, amount_cents, currency, refunded, remote_created_at'
-const PAGE_ROW_COLS = 'id, offer_id, location_id, contact_id, buyer_name, buyer_email, buyer_phone, amount_cents, currency, un1t_user_id, un1t_product_id, state, created_at'
+const PAGE_ROW_COLS = 'id, offer_id, location_id, contact_id, buyer_name, buyer_email, buyer_phone, amount_cents, currency, un1t_user_id, un1t_product_id, state, last_error, created_at'
 
 class ReadFailed extends Error {
   constructor(what, code) {
@@ -83,10 +99,10 @@ const ms = (v) => Date.parse(v)
  * @param {object} db service-role client
  * @param {string} locationId
  * @param {{ now?: () => number }} [opts]
- * @returns {Promise<{ ok: boolean, checked: number, recorded: number, matchedPage: number, expired: number, failed: number }>}
+ * @returns {Promise<{ ok: boolean, checked: number, recorded: number, matchedPage: number, expired: number, failed: number, passwordPending: number }>}
  */
 export async function sweepUn1tOfferPurchases(db, locationId, { now = () => Date.now() } = {}) {
-  const out = { ok: true, checked: 0, recorded: 0, matchedPage: 0, expired: 0, failed: 0 }
+  const out = { ok: true, checked: 0, recorded: 0, matchedPage: 0, expired: 0, failed: 0, passwordPending: 0 }
   try {
     return await sweep(db, locationId, now(), out)
   } catch (err) {
@@ -131,13 +147,17 @@ async function sweep(db, locationId, nowMs, out) {
     .not('un1t_transaction_id', 'is', null)
     .order('id', { ascending: true }), 'recorded offer transactions'))
     .map((r) => String(r.un1t_transaction_id)))
-  const pageRows = await readAll(() => db.from('offer_purchases').select(PAGE_ROW_COLS)
+  // Open rows, and rows this sweep expired (a payment mirrored late still settles them).
+  const pageRowsRead = (extra) => readAll(() => extra(db.from('offer_purchases').select(PAGE_ROW_COLS)
     .eq('location_id', locationId)
     .eq('payment_provider', 'un1t_online')
-    .eq('origin', 'page')
-    .eq('state', 'created')
+    .eq('origin', 'page'))
     .order('created_at', { ascending: true })
-    .order('id', { ascending: true }), 'open offer page rows')
+    .order('id', { ascending: true }), 'offer page rows')
+  const openRows = await pageRowsRead((q) => q.eq('state', 'created'))
+  const expiredRows = await pageRowsRead((q) => q.eq('state', 'cancelled').eq('last_error', EXPIRED_ERROR))
+  const pageRows = [...openRows, ...expiredRows]
+    .sort((a, b) => (ms(a.created_at) - ms(b.created_at)) || String(a.id).localeCompare(String(b.id)))
 
   // ── 4-6. Each transaction, once ──
   const taken = new Set() // page row ids matched this run: never matched twice, never expired
@@ -152,14 +172,15 @@ async function sweep(db, locationId, nowMs, out) {
     for (const offer of byProduct.get(String(t.product_id)) || []) {
       const startMs = ms(offer.starts_at)
       const endMs = ms(offer.ends_at)
-      const inWindow = paidMs >= startMs && paidMs <= endMs
+      // Inclusive to the end of ends_at's second.
+      const inWindow = paidMs >= startMs && paidMs < endMs + 1000
       if (inWindow && !windowOffer) windowOffer = offer
       if (t.un1t_user_id == null) continue
       const row = pageRows.find((r) => !taken.has(r.id)
         && r.offer_id === offer.id
         && r.un1t_user_id != null && String(r.un1t_user_id) === String(t.un1t_user_id)
         && ms(r.created_at) <= paidMs
-        && (inWindow || (paidMs > endMs && ms(r.created_at) <= endMs)))
+        && (inWindow || (paidMs >= endMs + 1000 && ms(r.created_at) < endMs + 1000)))
       if (row) { match = { offer, row }; break }
     }
     if (!match && !windowOffer) continue
@@ -167,20 +188,20 @@ async function sweep(db, locationId, nowMs, out) {
     used.add(txId)
     if (match) {
       taken.add(match.row.id)
-      await settlePageRow(db, match.row, match.offer, t, out)
+      await settlePageRow(db, match.row, match.offer, t, nowMs, out)
     } else {
       await recordOffPage(db, locationId, windowOffer, t, out)
     }
   }
 
   // ── 7. Abandoned page checkouts ──
-  for (const r of pageRows) {
+  for (const r of openRows) {
     if (taken.has(r.id)) continue
     if (ms(r.created_at) + UN1T_TRIAL_EXPIRY_MS >= nowMs) continue
     let data, error
     try {
       ({ data, error } = await db.from('offer_purchases')
-        .update({ state: 'cancelled', last_error: 'un1t_checkout_expired', updated_at: new Date(nowMs).toISOString() })
+        .update({ state: 'cancelled', last_error: EXPIRED_ERROR, updated_at: new Date(nowMs).toISOString() })
         .eq('id', r.id).eq('state', 'created').select('id'))
     } catch (err) {
       error = err
@@ -194,16 +215,17 @@ async function sweep(db, locationId, nowMs, out) {
 }
 
 /** The CAS settle of a page row, then its side effects when this run settled it. */
-async function settlePageRow(db, row, offer, t, out) {
+async function settlePageRow(db, row, offer, t, nowMs, out) {
   const ids = { locationId: row.location_id, purchaseId: row.id, offerId: offer.id, transaction: String(t.un1t_id) }
   const patch = {
     state: 'paid', paid_at: t.remote_created_at, un1t_transaction_id: String(t.un1t_id),
-    amount_cents: Number(t.amount_cents), updated_at: new Date().toISOString(),
+    amount_cents: Number(t.amount_cents), last_error: null, updated_at: new Date(nowMs).toISOString(),
   }
   let data, error
   try {
     ({ data, error } = await db.from('offer_purchases').update(patch)
-      .eq('id', row.id).eq('state', 'created').select('id'))
+      // The state as read: 'created', or 'cancelled' by this sweep's expiry.
+      .eq('id', row.id).eq('state', row.state).select('id'))
   } catch (err) {
     error = err
   }
@@ -267,7 +289,7 @@ async function settlePageRow(db, row, offer, t, out) {
     logError(LOG, 'set-password step failed after settling', { ...ids, code: err?.code ?? null, errClass: err?.name })
   }
   if (verdict !== 'done' && !String(verdict).startsWith('skipped_')) {
-    out.failed++
+    out.passwordPending++
     // Best-effort, for staff: the row is already paid.
     try {
       const { error: noteErr } = await db.from('offer_purchases')
