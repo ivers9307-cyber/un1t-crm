@@ -110,8 +110,10 @@ export function approvalRefusalMessage(view) {
   switch (view?.reason) {
     case 'used': return 'This approval has already been used.'
     case 'expired': return `This approval has expired. ${NEW_TEST}`
-    case 'voided': return 'This approval was withdrawn: a newer test was sent, or the campaign was changed or stopped. '
-      + 'Use the link in the newest test email, or ask Claude for a new test.'
+    // Voided only by: a newer test, an edit or a cancel through Claude, or a
+    // test email that failed to send. A CRM edit shows as 'changed' instead.
+    case 'voided': return 'This approval was withdrawn: a newer test was sent, or the campaign was edited or cancelled '
+      + 'through Claude. Use the link in the newest test email, or ask Claude for a new test.'
     case 'blocked': return view.message
     case 'changed': return `This campaign has changed since the test was sent. ${NEW_TEST}`
     case 'send_at_passed': return `The time this campaign was to be scheduled for has passed. ${NEW_TEST}`

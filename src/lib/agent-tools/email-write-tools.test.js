@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/email-audience-counts', () => ({ emailAudienceCounts: vi.fn() }))
-vi.mock('@/lib/campaign-approval', () => ({ voidApprovals: vi.fn() }))
+vi.mock('@/lib/campaign-approval', () => ({ voidApprovals: vi.fn(), pendingApproval: vi.fn() }))
 vi.mock('@/lib/campaign-release', () => ({ stopCampaign: vi.fn() }))
 vi.mock('@/lib/landing-media-library', () => ({ listLandingMediaForUser: vi.fn() }))
 vi.mock('@/lib/from-address', () => ({ describeFromAddress: vi.fn() }))
@@ -16,7 +16,7 @@ import cancelEmailCampaign from './cancel-email-campaign.js'
 import { htmlSha256 } from './_email-campaign.js'
 import { renderAgentEmail } from '@/lib/agent-email-blocks'
 import { emailAudienceCounts } from '@/lib/email-audience-counts'
-import { voidApprovals } from '@/lib/campaign-approval'
+import { voidApprovals, pendingApproval } from '@/lib/campaign-approval'
 import { stopCampaign } from '@/lib/campaign-release'
 import { listLandingMediaForUser } from '@/lib/landing-media-library'
 import { describeFromAddress } from '@/lib/from-address'
@@ -94,6 +94,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   emailAudienceCounts.mockResolvedValue(COUNTS)
   voidApprovals.mockResolvedValue(undefined)
+  pendingApproval.mockResolvedValue(null)
   listLandingMediaForUser.mockResolvedValue({ items: [] })
   getLocationBranding.mockResolvedValue({ companyName: 'Dublin Studio', logoUrl: null, shortName: 'D', locationName: 'D' })
   describeFromAddress.mockImplementation(async (_db, _loc, requested) => ({
@@ -326,6 +327,56 @@ describe('cancel_email_campaign', () => {
     const { db } = makeDb({ select: null })
     expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db)).toMatchObject({ ok: false, code: 'not_found' })
     expect(stopCampaign).not.toHaveBeenCalled()
+    expect(voidApprovals).not.toHaveBeenCalled()
+  })
+
+  it('withdraws any approval after a successful stop, so a link still in the inbox is dead', async () => {
+    for (const [status, stop] of [
+      ['scheduled', { ok: true, outcome: 'back_to_draft', status: 'draft', cancel_requested_at: null }],
+      ['sending', { ok: true, outcome: 'stop_requested', status: 'sending', cancel_requested_at: 'now' }],
+    ]) {
+      voidApprovals.mockClear()
+      stopCampaign.mockResolvedValue(stop)
+      const { db } = makeDb({ select: agentCampaign({ status }) })
+      expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db), status).toMatchObject({ ok: true })
+      expect(voidApprovals).toHaveBeenCalledWith(db, CAMP)
+      expect(voidApprovals.mock.invocationCallOrder[0]).toBeGreaterThan(stopCampaign.mock.invocationCallOrder.at(-1))
+    }
+  })
+
+  it('says the stop landed but the withdrawal failed when voiding throws after a stop', async () => {
+    stopCampaign.mockResolvedValue({ ok: true, outcome: 'back_to_draft', status: 'draft', cancel_requested_at: null })
+    voidApprovals.mockRejectedValue(new Error('db down'))
+    const { db } = makeDb({ select: agentCampaign({ status: 'scheduled' }) })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db)).toEqual({
+      ok: false, code: 'conflict',
+      message: 'The campaign was stopped, but withdrawing the earlier approval failed. Send a new test before anything is approved.',
+    })
+  })
+
+  it('a plain draft with a live approval: withdraws it and answers approval_withdrawn', async () => {
+    stopCampaign.mockResolvedValue({ ok: false, code: 'not_stoppable', message: 'This campaign is draft, so there is nothing to stop.', current_status: 'draft' })
+    pendingApproval.mockResolvedValue({ send_at: null, expires_at: 'x', audience_eligible: 8 })
+    const { db } = makeDb({ select: agentCampaign({ status: 'draft' }) })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db))
+      .toEqual({ ok: true, data: { outcome: 'approval_withdrawn', status: 'draft' } })
+    expect(pendingApproval).toHaveBeenCalledWith(db, CAMP, NOW_MS)
+    expect(voidApprovals).toHaveBeenCalledWith(db, CAMP)
+  })
+
+  it('a plain draft with no live approval keeps the existing conflict', async () => {
+    stopCampaign.mockResolvedValue({ ok: false, code: 'not_stoppable', message: 'This campaign is draft, so there is nothing to stop.', current_status: 'draft' })
+    const { db } = makeDb({ select: agentCampaign({ status: 'draft' }) })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db))
+      .toEqual({ ok: false, code: 'conflict', message: 'This campaign is draft, so there is nothing to stop.' })
+  })
+
+  it('a sent campaign is never voided through cancel', async () => {
+    stopCampaign.mockResolvedValue({ ok: false, code: 'not_stoppable', message: 'This campaign is sent, so there is nothing to stop.', current_status: 'sent' })
+    const { db } = makeDb({ select: agentCampaign({ status: 'sent' }) })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db)).toMatchObject({ ok: false, code: 'conflict' })
+    expect(pendingApproval).not.toHaveBeenCalled()
+    expect(voidApprovals).not.toHaveBeenCalled()
   })
 })
 

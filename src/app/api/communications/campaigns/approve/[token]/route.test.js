@@ -251,6 +251,34 @@ describe('POST /api/communications/campaigns/approve/[token]', () => {
     expect(campaign().status).toBe('draft')
   })
 
+  it('a consume lost to a void or an expiry says which, and that this press sent nothing', async () => {
+    const cases = [
+      [{ voided_at: '2026-11-12T09:59:59.000Z' }, /withdrawn.*Nothing was sent by this press\./],
+      [{ expires_at: '2026-11-12T09:59:59.000Z' }, /has expired/],
+    ]
+    for (const [landed, words] of cases) {
+      db = world()
+      db.beforeWrite = (table, q) => {
+        if (table === 'campaign_release_approvals' && 'used_at' in (q.patch || {})) Object.assign(approval(), landed)
+      }
+      const res = await press()
+      expect(res.status, JSON.stringify(landed)).toBe(409)
+      const { error } = await res.json()
+      expect(error).toMatch(words)
+      expect(error).not.toMatch(/already approved/)
+      expect(campaignWrites()).toEqual([])
+      expect(campaign().status).toBe('draft')
+    }
+  })
+
+  it('a release that errors after the consume says something went wrong and nothing was sent', async () => {
+    db.writeError = (table) => (table === 'campaigns' ? { message: 'db down' } : null)
+    const res = await press()
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('Something went wrong releasing the campaign. Nothing was sent. Ask Claude to send a new test.')
+    expect(campaign().status).toBe('draft')
+  })
+
   it('refuses when send_at has passed', async () => {
     db = world({ approval: { send_at: '2026-11-12T09:59:00.000Z' } })
     const res = await press()

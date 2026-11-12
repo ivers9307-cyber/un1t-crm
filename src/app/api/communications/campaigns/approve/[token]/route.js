@@ -26,7 +26,7 @@ import { hasPermissionForLocation } from '@/lib/permissions'
 import {
   loadApprovalView, approvalRefusalMessage, APPROVABLE_STATUSES, actingAsSomeoneElse, OWN_SESSION_MESSAGE,
 } from '@/lib/campaign-approval-view'
-import { consumeApproval, voidApprovals } from '@/lib/campaign-approval'
+import { consumeApproval, voidApprovals, findApproval } from '@/lib/campaign-approval'
 import { releasePreflight, releaseCampaign } from '@/lib/campaign-release'
 import { logError } from '@/lib/log'
 
@@ -34,6 +34,25 @@ export const dynamic = 'force-dynamic'
 
 const fail = (status, error) => NextResponse.json({ success: false, error }, { status })
 const NEW_TEST = 'Nothing was sent. Ask Claude to send a new test.'
+const ALREADY_APPROVED = 'This campaign was already approved.'
+const WITHDRAWN_DURING_PRESS = 'This approval was withdrawn: a newer test was sent, or the campaign was edited or '
+  + 'cancelled through Claude. Nothing was sent by this press.'
+const RELEASE_ERROR = 'Something went wrong releasing the campaign. Nothing was sent. Ask Claude to send a new test.'
+
+// The consume touched no row: read the approval again and say why. A failed
+// re-read still answers 409 (nothing was released either way).
+async function lostConsumeMessage(db, token, user, nowMs) {
+  let state
+  try {
+    state = await findApproval(db, { token, profileId: user.id, nowMs })
+  } catch (e) {
+    logError('campaign-approve', 'approval re-read after a lost consume failed', { error: e?.message })
+    return 'This approval could not be used. Nothing was sent by this press.'
+  }
+  if (state.code === 'voided') return WITHDRAWN_DURING_PRESS
+  if (state.code === 'expired') return approvalRefusalMessage({ reason: 'expired' })
+  return ALREADY_APPROVED
+}
 
 const REFUSAL_STATUS = {
   not_found: 404,
@@ -85,7 +104,7 @@ export async function POST(request, props) {
     logError('campaign-approve', 'approval consume failed', { approval_id: approval.id, error: e?.message })
     return fail(500, 'This approval could not be used. Nothing was sent. Try again.')
   }
-  if (!spent) return fail(409, 'This campaign was already approved.')
+  if (!spent) return fail(409, await lostConsumeMessage(db, token, user, nowMs))
 
   const release = await releaseCampaign(db, campaign, {
     sendAt: approval.send_at ? new Date(approval.send_at) : null,
@@ -96,6 +115,7 @@ export async function POST(request, props) {
     logError('campaign-approve', 'release after consume did not apply', {
       campaign_id: campaign.id, approval_id: approval.id, code: release.code, current_status: release.current_status ?? null,
     })
+    if (release.code === 'error') return fail(500, RELEASE_ERROR)
     return fail(409, `The campaign changed while it was being released. ${NEW_TEST}`)
   }
 
