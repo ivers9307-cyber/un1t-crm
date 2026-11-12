@@ -64,8 +64,10 @@ export default defineTool({
       Object.assign(patch, await buildBody(db, user, studio, input.blocks))
     }
 
+    // Always return the row to draft: a release between our read and this
+    // write (draft → scheduled) must not leave new content scheduled.
     const unscheduled = campaign.status === 'scheduled'
-    if (unscheduled) Object.assign(patch, { status: 'draft', scheduled_at: null })
+    Object.assign(patch, { status: 'draft', scheduled_at: null })
 
     const { data, error } = await db.from('campaigns')
       .update(patch)
@@ -83,20 +85,24 @@ export default defineTool({
     // The content has changed: any approval for the old content is withdrawn.
     // If this throws the call fails, but the old approval is dead anyway (its
     // content key no longer matches).
-    await voidApprovals(db, campaign.id)
+    try {
+      await voidApprovals(db, campaign.id)
+    } catch {
+      throw new ToolRefusal('conflict', 'The edit was saved, but withdrawing the earlier approval failed. Send a new test before anything is approved.')
+    }
 
     return {
       campaign: {
         id: campaign.id,
         name: patch.name ?? campaign.name,
         subject: patch.subject ?? campaign.subject,
-        status: unscheduled ? 'draft' : campaign.status,
+        status: 'draft',
         sends_as: await sendsAs(db, studio),
       },
       unscheduled,
       note: unscheduled
         ? 'The campaign was scheduled; it is back to draft and any send approval was withdrawn. It needs approving again.'
-        : 'Any waiting send approval was withdrawn. It needs approving again.',
+        : 'The campaign is a draft; sending it needs a new test and approval.',
     }
   },
 })

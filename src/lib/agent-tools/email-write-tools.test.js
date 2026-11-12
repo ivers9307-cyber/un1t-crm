@@ -214,11 +214,13 @@ describe('update_email_draft', () => {
     expect(voidApprovals).toHaveBeenCalledWith(db, CAMP)
   })
 
-  it('a draft edit does not touch status', async () => {
-    const { db, kind } = makeDb({ select: agentCampaign() })
-    const r = await run(updateEmailDraft, { campaign_id: CAMP, subject: 'S' }, db)
-    expect(Object.keys(kind('update')[0].payload)).not.toContain('status')
-    expect(r.data.unscheduled).toBe(false)
+  it('a draft edit still writes status draft and scheduled_at null, for body and non-body edits', async () => {
+    for (const input of [{ subject: 'S' }, { blocks: [{ type: 'paragraph', text: 'x' }] }]) {
+      const { db, kind } = makeDb({ select: agentCampaign() })
+      const r = await run(updateEmailDraft, { campaign_id: CAMP, ...input }, db)
+      expect(kind('update')[0].payload).toMatchObject({ status: 'draft', scheduled_at: null })
+      expect(r.data.unscheduled).toBe(false)
+    }
   })
 
   it('update refuses a body edit when html_content no longer matches the stored blocks, and still allows a subject edit', async () => {
@@ -290,7 +292,8 @@ describe('update_email_draft', () => {
   it('lets a voiding failure fail the tool', async () => {
     voidApprovals.mockRejectedValue(new Error('boom'))
     const { db } = makeDb({ select: agentCampaign() })
-    expect(await run(updateEmailDraft, { campaign_id: CAMP, subject: 'x' }, db)).toMatchObject({ ok: false, code: 'tool_failed' })
+    expect(await run(updateEmailDraft, { campaign_id: CAMP, subject: 'x' }, db))
+      .toMatchObject({ ok: false, code: 'conflict', message: expect.stringContaining('The edit was saved') })
   })
 })
 
