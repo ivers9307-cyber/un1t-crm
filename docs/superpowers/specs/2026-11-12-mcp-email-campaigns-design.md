@@ -241,6 +241,12 @@ the person "the test is in your inbox, waiting for you".
   The tools can show it and its error, but cannot edit or release it; the
   message points to the CRM.
 
+- **An agent cannot email a whole studio with an empty filter.** A filter with
+  no rows matches everyone at the studio; from an agent it is refused, at save
+  and at test. The person names at least one filter or uses a saved segment.
+- **Approvals record being voided separately from being used** (`voided_at`
+  beside `used_at`), so the confirm page can say which happened.
+
 ### One set of send rules
 
 The status, subject/body, cap and wallet checks live inline in
