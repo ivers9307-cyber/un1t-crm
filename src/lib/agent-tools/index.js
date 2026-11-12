@@ -19,6 +19,15 @@ import createActivity from './create-activity.js'
 import getClasses from './get-classes.js'
 import getClassRoster from './get-class-roster.js'
 import getAppointments from './get-appointments.js'
+import listEmailSegments from './list-email-segments.js'
+import countEmailAudience from './count-email-audience.js'
+import listEmailImages from './list-email-images.js'
+import listEmailCampaigns from './list-email-campaigns.js'
+import getEmailCampaign from './get-email-campaign.js'
+import createEmailDraft from './create-email-draft.js'
+import updateEmailDraft from './update-email-draft.js'
+import cancelEmailCampaign from './cancel-email-campaign.js'
+import sendEmailForApproval from './send-email-for-approval.js'
 
 /** @type {ReadonlyArray<ReturnType<typeof import('./registry.js').defineTool>>} */
 export const TOOLS = Object.freeze([
@@ -40,4 +49,13 @@ export const TOOLS = Object.freeze([
   getClasses,
   getClassRoster,
   getAppointments,
+  listEmailSegments,
+  countEmailAudience,
+  listEmailImages,
+  listEmailCampaigns,
+  getEmailCampaign,
+  createEmailDraft,
+  updateEmailDraft,
+  cancelEmailCampaign,
+  sendEmailForApproval,
 ])

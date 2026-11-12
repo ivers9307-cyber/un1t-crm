@@ -9,10 +9,12 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { getEmailCapStatus } from '@/lib/usage-caps'
-import { checkSpend } from '@/lib/wallet-enforcement'
+import { releasePreflight, releaseCampaign } from '@/lib/campaign-release'
+import { conflict } from '@/lib/campaign-session-access'
 
 export const dynamic = 'force-dynamic'
+
+const PREFLIGHT_422 = ['email_hard_cap', 'wallet_empty']
 
 export async function POST(_request, props) {
   const params = await props.params;
@@ -43,82 +45,25 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: false, error: 'No email permission at this location' }, { status: 403 })
   }
 
-  // Only draft / scheduled / failed campaigns can be sent ('failed' is the
-  // COMMSFIX.C.5 re-send path — the operator fixes the cause and sends
-  // again, which clears last_error). 'sending' /
-  // 'sent' / 'cancelled' all reject — the operator should clone
-  // the campaign if they want to send it again.
-  //
-  // COMMSFIX.C.5 — 'failed' is re-sendable by design: it is the terminal state
-  // the cron assigns to a campaign whose populate kept erroring, and the whole
-  // point of surfacing it is that the operator fixes the cause (usually the
-  // audience filter) and sends again. Re-queueing clears last_error below.
-  if (!['draft', 'scheduled', 'failed'].includes(campaign.status)) {
-    return NextResponse.json({
-      success: false,
-      error: `Campaign is '${campaign.status}', cannot send`,
-    }, { status: 400 })
-  }
-
-  // COMMSFIX.D.2e — a campaign with no body (or no subject) must never reach
-  // 'queued'. Postmark permanently rejects HtmlBody null, so the entire
-  // audience records as bounced and the run looks like a deliverability
-  // catastrophe rather than an empty draft. This is the same guard the
-  // email-draft route (D.2d) and the cron promote step apply — every path to
-  // 'queued' is covered. Audit 2026-08-09 composer-ux, CONFIRMED high.
-  if (!campaign.subject || !String(campaign.subject).trim()) {
-    return NextResponse.json({ success: false, error: 'This campaign has no subject — add one before sending.' }, { status: 400 })
-  }
-  if (!campaign.html_content || !String(campaign.html_content).trim()) {
-    return NextResponse.json({ success: false, error: 'This campaign has no email body — nothing was queued. Open it in the editor and add content.' }, { status: 400 })
-  }
-
-  // SAAS4-M2 — optional per-org HARD email-send cap. Mirrors the
-  // WhatsApp blast preflight (blastBudgetBlockError): refuse to START
-  // at cap, with a message that says exactly how to proceed. Sequences
-  // and transactional sends are never capped. Fails OPEN inside the
-  // helper — a metering failure must never block a campaign.
-  const emailCap = await getEmailCapStatus({ locationId: campaign.location_id }, { db })
-  if (emailCap.capped) {
-    return NextResponse.json({
-      success: false,
-      error: `Monthly email hard cap reached (${emailCap.monthSends.toLocaleString()} of ${emailCap.capSends.toLocaleString()} sends this month). Raise or clear the cap in org settings to send this campaign.`,
-      code: 'email_hard_cap',
-    }, { status: 422 })
-  }
-
-  // INTEG-C3 — per-LOCATION prepaid wallet gate, beside (composing
-  // with, never replacing) the per-ORG hard cap above: a tier-pinned
-  // location whose monthly email allowance is used up AND whose wallet
-  // is empty pauses marketing starts. Unpinned locations (every UN1T
-  // location today) answer 'unpinned' and behave exactly as before.
-  // Fail-open on any error — a billing bug must never block a send.
-  try {
-    const spend = await checkSpend(db, campaign.location_id, 'email_send', 'marketing')
-    if (!spend.allow) {
-      return NextResponse.json({
-        success: false,
-        error: 'Monthly email allowance is used up and the prepaid wallet is empty — marketing sends are paused. Top up the wallet to send this campaign.',
-        code: 'wallet_empty',
-      }, { status: 422 })
+  // The status, subject/body, org hard cap and wallet rules (MCPEMAIL.1:
+  // one copy in src/lib/campaign-release.js, shared with the schedule and
+  // approve routes). A refused status or content is 400; a cap or an empty
+  // wallet is 422 with its code.
+  const preflight = await releasePreflight(db, campaign)
+  if (!preflight.ok) {
+    if (PREFLIGHT_422.includes(preflight.code)) {
+      return NextResponse.json({ success: false, error: preflight.message, code: preflight.code }, { status: 422 })
     }
-  } catch { /* fail open — checkSpend already never throws */ }
+    return NextResponse.json({ success: false, error: preflight.message }, { status: 400 })
+  }
 
-  // Flip to 'queued' — the run-campaigns cron will pick it up on
-  // its next tick (typically within 60s) and start the populate
-  // → send chunks state machine.
-  const { error: updateErr } = await db
-    .from('campaigns')
-    .update({
-      status: 'queued',
-      cancel_requested_at: null,    // clear any stale cancel flag from a previous abort
-      scheduled_at: null,           // send-now overrides any scheduled time
-      last_error: null,             // COMMSFIX.C.5 — this attempt starts clean
-    })
-    .eq('id', params.id)
-
-  if (updateErr) {
-    return NextResponse.json({ success: false, error: updateErr.message }, { status: 500 })
+  // Flip to 'queued', compare-and-set on the releasable statuses: a campaign
+  // the cron (or another tab) moved since our read is a 409 carrying its
+  // status as it is now, never a silent re-queue.
+  const release = await releaseCampaign(db, campaign)
+  if (!release.ok) {
+    if (release.code === 'conflict') return conflict(release.message, release.current_status)
+    return NextResponse.json({ success: false, error: release.message }, { status: 500 })
   }
 
   return NextResponse.json({

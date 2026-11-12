@@ -15,6 +15,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let tables = {}
 let updates = []
+// MCPEMAIL.1 — the send route's update is now a compare-and-set that selects
+// the touched ids; a write answers the row it touched unless a test says not.
+let updateRows = [{ id: 'camp-1' }]
 const fakeDb = {
   from: (table) => {
     const rows = tables[table] ?? []
@@ -28,7 +31,7 @@ const fakeDb = {
     b.then = (resolve, reject) => {
       if (state.op === 'update') {
         updates.push({ table, patch: state.patch })
-        return Promise.resolve({ data: null, error: null }).then(resolve, reject)
+        return Promise.resolve({ data: updateRows, error: null }).then(resolve, reject)
       }
       return Promise.resolve({ data: rows, error: null }).then(resolve, reject)
     }
@@ -66,6 +69,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   clearBillingStateCache()
   updates = []
+  updateRows = [{ id: 'camp-1' }]
   tables = { campaigns: [CAMPAIGN], location_plans: [] }
 })
 
@@ -164,5 +168,21 @@ describe('POST /api/campaigns/[id]/send — requires the email permission', () =
     const res = await POST({}, props)
     const body = await res.json()
     expect(body).toMatchObject({ success: true, queued: true })
+  })
+})
+
+// MCPEMAIL.1 — the send route's flip to 'queued' is a compare-and-set on the
+// releasable statuses (src/lib/campaign-release.js). A campaign the cron moved
+// since the route read it answers the schedule route's 409, with its status
+// as it is now, instead of being re-queued.
+describe('POST /api/campaigns/[id]/send — compare-and-set', () => {
+  it('409 STATUS_CHANGED with the current status when the update touches no row', async () => {
+    updateRows = []
+    tables.campaigns = [CAMPAIGN]
+    const res = await POST({}, props)
+    const body = await res.json()
+
+    expect(res.status).toBe(409)
+    expect(body).toEqual({ success: false, error: "The campaign's status changed; reload.", data: { status: 'draft' } })
   })
 })

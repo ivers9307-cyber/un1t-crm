@@ -63,7 +63,7 @@ export default async function SendsHistoryPage() {
     // COMMSFIX.C.5 — last_error (mig 509) is why a campaign is 'failed', or why
     // one still sitting at 'queued' is not moving.
     const { data } = await db.from('campaigns')
-      .select('id, name, status, total_recipients, total_sent, total_bounced, created_at, scheduled_at, sent_at, parent_campaign_id, resend_enabled, last_error')
+      .select('id, name, status, total_recipients, total_sent, total_bounced, created_at, scheduled_at, sent_at, parent_campaign_id, resend_enabled, last_error, created_via')
       .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
     // REPORT-SOT.2 — the displayed counts come from campaign_recipients, one
     // RPC for the whole page rather than one per row. The stored counters stay
@@ -126,6 +126,10 @@ export default async function SendsHistoryPage() {
                             parent still has its resend pending. */}
                         {r.parent_campaign_id && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-un1t-border/40 text-un1t-subtle shrink-0">Resend</span>
+                        )}
+                        {/* MCPEMAIL.1 — drafted from Claude through the staff MCP server. */}
+                        {r.created_via === 'mcp' && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/10 text-violet-700 shrink-0">Made in Claude</span>
                         )}
                         {r.resend_enabled && r.status === 'sent' && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-700 shrink-0">resend scheduled</span>
