@@ -7,7 +7,9 @@ import { useEffect, useState } from 'react'
 
 const pad = (n) => String(n).padStart(2, '0')
 
-export default function SaleCountdown({ endsAt }) {
+// doneLabel: what shows once the instant passes (an "Opens" countdown says
+// the sale is open, not that it ended).
+export default function SaleCountdown({ endsAt, doneLabel = 'SALE ENDED' }) {
   // Render a placeholder until mounted so SSR and client HTML agree.
   const [now, setNow] = useState(null)
   useEffect(() => {
@@ -18,7 +20,7 @@ export default function SaleCountdown({ endsAt }) {
 
   if (now === null) return <span className="ofr-count">—</span>
   const ms = new Date(endsAt).getTime() - now
-  if (ms <= 0) return <span className="ofr-count">SALE ENDED</span>
+  if (ms <= 0) return <span className="ofr-count">{doneLabel}</span>
   const d = Math.floor(ms / 86400000)
   const h = Math.floor(ms / 3600000) % 24
   const m = Math.floor(ms / 60000) % 60

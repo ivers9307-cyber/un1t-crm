@@ -321,6 +321,16 @@ describe('GET /api/cron/un1t-online-sync', () => {
   })
 
   // PAIDTRIALTRIGGER.1 — the €39 purchase sweep, an arm with its own row (mig 805).
+  // BLACKFRIDAY.9f — the offer purchase sweep moved to process-trial-purchases:
+  // its set-password step is a un1t.online write, and this cron is write-fenced
+  // (tests/un1t-online-write-guard.test.js). Nothing here stamps its row.
+  it('never stamps the offer purchase sweep row (the arm lives in process-trial-purchases)', async () => {
+    h.discovery = found([loc('hatch')])
+    runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+    await GET(req())
+    expect(stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-offer-purchase-sweep')).toEqual([])
+  })
+
   describe('€39 purchase sweep arm (PAIDTRIALTRIGGER.1)', () => {
     const syncStamps = () => stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-online-sync')
     const purchaseStamps = () => stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-paid-trial-purchase-sweep')

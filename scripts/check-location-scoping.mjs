@@ -412,9 +412,6 @@ export const EXEMPT = {
   'src/app/api/public/class-booking-payments/[id]/route.js': {
     class_booking_requests: 'Public paid-booking status poll: the row is resolved by its own unguessable UUID (the payment id handed to the payer in the create response) — the id IS the capability token, not enumerable. Returns only display-safe checkout fields (status/provider/token/url/amount/class_name), no contact PII. Mirrors public/event-payments/[id].',
   },
-  'src/app/api/public/offers/[slug]/checkout/route.js': {
-    sale_offers: 'Public sale checkout (OFFERS.4): the row is looked up by its globally-unique slug, then fenced to the Stillorgan home location by offerBelongsToHome (W0.4, src/lib/offers-home.js) — any other location\'s offer answers 404 until Wave 2 gives tenants their own offers route and payment rail. The only sensitive field the route touches is price_cents, which it reads server-side precisely so the client can never supply an amount.',
-  },
   'src/app/api/public/trial-purchases/[id]/route.js': {
     trial_purchases: 'PAIDTRIAL.1 public paid-trial status poll: the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response); the id IS the capability token, not enumerable. Returns only display-safe checkout fields and the public state, no buyer PII. Mirrors public/class-booking-payments/[id].',
   },
@@ -469,10 +466,6 @@ export const EXEMPT = {
   'src/app/h/[slug]/page.js': {
     race_events:
       'HOST-EVENTS-PAGE.1 — public host page: event_hosts row resolved by its published slug (the same public selector as /event/[slug]), then race_events filtered to THAT host_id + active=true + status=published + upcoming. Host events sit on a hidden anchor location, so host_id is their tenancy boundary (HOST-PORTAL.1); published content by design, and the embedded waves/registrations feed only the sold-out boolean — no count or capacity is rendered. Verified in src/app/h/[slug]/page.js loadHostEvents().',
-  },
-  'src/app/offers/[slug]/page.js': {
-    sale_offers:
-      'Public sale product page: row resolved by its globally-unique slug, then fenced to the Stillorgan home location by offerBelongsToHome (W0.4, src/lib/offers-home.js) — any other location\'s offer 404s until Wave 2 gives tenants their own offers route. Price is rendered server-side from the row so the client can never supply an amount.',
   },
   // PAGES.1 (Task 22): src/app/legal/un1t/[slug]/[doc]/page.js and
   // src/app/welcome/page.js carried landing_page_settings exemptions here

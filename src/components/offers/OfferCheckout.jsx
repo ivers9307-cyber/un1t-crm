@@ -1,47 +1,106 @@
 'use client'
 
-// OfferCheckout — buyer form + embedded Revolut checkout for one sale offer
-// (OFFERS.7). Clone of the ClassFunnelCheckout mount pattern, Revolut-only:
-// POST /api/public/offers/[slug]/checkout creates the order server-side
-// (price from sale_offers, never from here), then the SDK mounts against the
-// returned token. A status poll on /api/public/offer-purchases/[id] is the
-// paid fallback for redirect-style payment methods.
+// OfferCheckout — buyer form + checkout for one sale offer (OFFERS.7,
+// per studio since BLACKFRIDAY.3). POST /api/public/offers/[studio]/[slug]/checkout
+// creates the purchase server-side (price from sale_offers, never from here).
+//   * provider 'revolut' (Stillorgan): the Revolut SDK mounts against the
+//     returned token; a status poll on /api/public/offer-purchases/[id] is the
+//     paid fallback for redirect-style payment methods.
+//   * provider 'un1t_online' (Hatch Street): the browser goes to un1t.online's
+//     hosted checkout (data.checkout.url). The form carries un1t.online's
+//     terms and waiver tick (`terms`, un1tTermsPayload's shape, as /trial
+//     renders it); a 400 terms_required answer re-renders it from the reply;
+//     a 202 help_filed answer (staff have the buyer's details) ends the form.
+//   * cancelled (BLACKFRIDAY.9): the buyer came back from un1t.online's cancel
+//     URL; the form shows with "Checkout cancelled. Nothing was charged.".
+// Every prop is serialisable: a function prop from the server page crashes
+// the page in production.
 import { useEffect, useRef, useState } from 'react'
 import { loadRevolutSdk, revolutMode, revolutPublicKey } from '@/lib/revolut-embed'
+import { termsLabelSegments } from '@/lib/un1t-online-funnel-copy'
 
-export default function OfferCheckout({ slug, priceLabel, resumePurchaseId = null }) {
+function TermsTick({ terms, checked, onChange }) {
+  return (
+    <label className="mt-6" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, lineHeight: 1.5, color: '#b5b5b5' }}>
+      <input type="checkbox" required checked={checked} onChange={(e) => onChange(e.target.checked)}
+        style={{ marginTop: 3, width: 16, height: 16, accentColor: '#ffffff', flexShrink: 0 }} />
+      <span>
+        {termsLabelSegments({ terms_label: terms.label, terms_link_label: terms.terms_link_label, waiver_link_label: terms.waiver_link_label })
+          .map((seg, i) => (seg.link
+            ? <a key={i} href={seg.link === 'terms' ? terms.terms_url : terms.waiver_url} target="_blank" rel="noreferrer" style={{ color: '#ffffff', textDecoration: 'underline' }}>{seg.text}</a>
+            : <span key={i}>{seg.text}</span>))}
+      </span>
+    </label>
+  )
+}
+
+export default function OfferCheckout({ studio, slug, priceLabel, provider = 'revolut', terms = null, resumePurchaseId = null, cancelled = false }) {
+  const isUn1t = provider === 'un1t_online'
   // resumePurchaseId: set when Revolut redirected the buyer back after an
   // app-handoff payment (Revolut Pay on mobile) — start by confirming that
   // purchase instead of showing a fresh form.
-  const [step, setStep] = useState(resumePurchaseId ? 'confirming' : 'form') // form | pay | confirming | paid
+  const [step, setStep] = useState(resumePurchaseId ? 'confirming' : 'form') // form | pay | confirming | paid | help
+  const [helpMessage, setHelpMessage] = useState(null)
   const [fields, setFields] = useState({ name: '', email: '', phone: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  // Shown above the form until the buyer submits again.
+  const [notice, setNotice] = useState(cancelled ? 'Checkout cancelled. Nothing was charged.' : null)
   const [session, setSession] = useState(null) // { purchaseId, token }
   const targetRef = useRef(null)
   const instanceRef = useRef(null)
   const paidRef = useRef(false)
+  // The server's terms, when it asked for a tick this page did not know about.
+  const [termsOverride, setTermsOverride] = useState(null)
+  const [termsAccepted, setTermsAccepted] = useState(false)
+  const activeTerms = termsOverride || terms || null
 
   const markPaid = () => { if (!paidRef.current) { paidRef.current = true; setStep('paid') } }
 
   const submit = async (e) => {
     e.preventDefault()
-    setBusy(true); setError(null)
+    if (activeTerms && !termsAccepted) {
+      setError(activeTerms.required_message || 'Please tick to accept the terms and waiver.')
+      return
+    }
+    setBusy(true); setError(null); setNotice(null)
+    let leaving = false
     try {
-      const r = await fetch(`/api/public/offers/${slug}/checkout`, {
+      const r = await fetch(`/api/public/offers/${encodeURIComponent(studio)}/${encodeURIComponent(slug)}/checkout`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(fields),
+        body: JSON.stringify({ ...fields, ...(activeTerms ? { terms_accepted: true } : {}) }),
       })
       const j = await r.json().catch(() => ({}))
+      if (r.status === 400 && j.code === 'terms_required' && j.terms?.required === true) {
+        setTermsOverride(j.terms)
+        setTermsAccepted(false)
+        setError(j.error || j.terms.required_message || null)
+        return
+      }
+      // BLACKFRIDAY.4 — un1t.online's checkout could not be opened and staff
+      // have the buyer's details: say so and stop, rather than inviting a
+      // retry that would file a second help alert.
+      if (r.status === 202 && j.code === 'help_filed') {
+        setHelpMessage(j.error || 'The team has your details and will be in touch today.')
+        setStep('help')
+        return
+      }
       if (r.status === 410) throw new Error('The sale has ended.')
       if (!r.ok || !j.success) throw new Error(j.error || 'Could not start checkout. Please try again.')
+      if (j.data?.checkout?.provider === 'un1t_online') {
+        if (!j.data.checkout.url) throw new Error('Could not start checkout. Please try again.')
+        leaving = true
+        window.location.assign(j.data.checkout.url)
+        return
+      }
       setSession({ purchaseId: j.data.purchaseId, token: j.data.checkout.token })
       setStep('pay')
     } catch (err) {
       setError(err.message)
     } finally {
-      setBusy(false)
+      // Leaving for un1t.online: keep the button busy until the page goes.
+      if (!leaving) setBusy(false)
     }
   }
 
@@ -78,6 +137,8 @@ export default function OfferCheckout({ slug, priceLabel, resumePurchaseId = nul
   // as the redirect-return confirmation loop. On a terminal failure while
   // confirming, fall back to the form with a message.
   useEffect(() => {
+    // un1t.online settles its own payment: there is nothing here to poll.
+    if (isUn1t) return
     const purchaseId = step === 'pay' ? session?.purchaseId : step === 'confirming' ? resumePurchaseId : null
     if (!purchaseId) return
     let stopped = false
@@ -99,6 +160,26 @@ export default function OfferCheckout({ slug, priceLabel, resumePurchaseId = nul
     return () => { stopped = true; clearTimeout(t) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, session])
+
+  if (step === 'help') {
+    return (
+      <div className="text-center py-10">
+        <p className="ofr-display text-2xl mb-4">We&rsquo;ll be in touch</p>
+        <p className="text-sm" style={{ color: '#9a9a9a' }}>{helpMessage}</p>
+      </div>
+    )
+  }
+
+  if (step === 'confirming' && isUn1t) {
+    return (
+      <div className="text-center py-10">
+        <p className="ofr-display text-2xl mb-4">Thanks</p>
+        <p className="text-sm" style={{ color: '#9a9a9a' }}>
+          Thanks, your payment is with un1t.online. We&rsquo;ll be in touch within 24 hours to add your bonus.
+        </p>
+      </div>
+    )
+  }
 
   if (step === 'confirming') {
     return (
@@ -140,6 +221,7 @@ export default function OfferCheckout({ slug, priceLabel, resumePurchaseId = nul
 
   return (
     <form onSubmit={submit}>
+      {notice && <p className="text-sm mb-3" role="status" style={{ color: '#d4d4d4' }}>{notice}</p>}
       {error && <p className="text-sm mb-3" style={{ color: '#ef4444' }}>{error}</p>}
       <div className="mt-2">
         <label className="ofr-label" htmlFor="ofr-name">Full name</label>
@@ -156,11 +238,12 @@ export default function OfferCheckout({ slug, priceLabel, resumePurchaseId = nul
         <input id="ofr-phone" className="ofr-input" type="tel" required minLength={6} maxLength={30} autoComplete="tel"
           value={fields.phone} onChange={(e) => setFields((f) => ({ ...f, phone: e.target.value }))} />
       </div>
+      {activeTerms && <TermsTick terms={activeTerms} checked={termsAccepted} onChange={setTermsAccepted} />}
       <button className="ofr-pay mt-8" type="submit" disabled={busy}>
         {busy ? 'One moment…' : `Pay ${priceLabel} — lock it in`}
       </button>
       <p className="text-center mt-4" style={{ color: '#777', fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase' }}>
-        Secure checkout · Card · Apple Pay · Google Pay
+        {isUn1t ? 'Secure checkout with un1t.online' : 'Secure checkout · Card · Apple Pay · Google Pay'}
       </p>
     </form>
   )

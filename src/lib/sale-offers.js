@@ -10,12 +10,20 @@
 import { findOrCreateRaceContact } from './race-contact-linking'
 import { writeContactTag } from './contact-tags'
 import { sendOpsAlert } from './ops-alerts'
+import { escapeHtml } from './html-escape'
 import { resolveZone, DEFAULT_TZ } from '@shared/zoned-time'
 
 // The purchase tag is the buyer-suppression signal for the sale's emails.
-// Per sale: 'offer-sale-aug-2026' was the August weekend sale; November 2026
-// is the Tuesday-midnight class-pack sale (OFFERS.8).
-export const OFFER_SALE_TAG = 'offer-sale-nov-2026'
+// Per sale: 'offer-sale-aug-2026' was the August weekend sale;
+// 'offer-sale-nov-2026' the Tuesday-midnight class-pack sale (OFFERS.8);
+// Black Friday 2026 is 'offer-sale-bf-2026' (BLACKFRIDAY.2).
+export const OFFER_SALE_TAG = 'offer-sale-bf-2026'
+
+/** Active but not yet open: starts_at is still ahead (the Black Friday head start). */
+export function offerIsUpcoming(offer, now = new Date()) {
+  if (!offer?.active) return false
+  return new Date(offer.starts_at).getTime() > now.getTime()
+}
 
 export function offerIsOpen(offer, now = new Date()) {
   if (!offer?.active) return false
@@ -65,6 +73,7 @@ export async function resolveOfferPurchaseByOrderId(db, orderId, { throwOnError 
     .from('offer_purchases')
     .select('*, offer:offer_id ( id, slug, name, bonus_headline, price_cents, category )')
     .eq('revolut_order_id', orderId)
+    .eq('payment_provider', 'revolut') // BLACKFRIDAY.4: never a un1t.online row
     .maybeSingle()
   if (error && throwOnError) throw error
   return data || null
@@ -132,30 +141,54 @@ export async function linkOrCreateContactForPurchase(db, purchase) {
 
 // Staff notice on a paid purchase — org-configured ops recipients with the
 // master-push fallback (sendOpsAlert never throws). Staff-facing copy.
+/** Any whitespace run (newlines included) to one space, trimmed; '' for non-strings. */
+export function oneLine(v) {
+  return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : ''
+}
+
+/**
+ * The staff alert's closing instruction (BLACKFRIDAY.9). Only a Glofox
+ * studio's membership or pack says "Set them up in Glofox": a Hatch gift card
+ * rides Revolut too, and Hatch has no Glofox.
+ */
+export function staffClosingLine(purchase, offer, loc) {
+  if (purchase?.payment_provider === 'un1t_online') {
+    return `Already paid in un1t.online. Add the bonus (${offer?.bonus_headline}) there, then mark the sale fulfilled in Approvals.`
+  }
+  if (offer?.category === 'gift_card') return 'Issue the gift card, then mark the sale fulfilled in Approvals.'
+  if (loc?.membership_source === 'glofox') return 'Set them up in Glofox, then mark the sale fulfilled in Approvals.'
+  return 'Set them up, then mark the sale fulfilled in Approvals.'
+}
+
 export async function notifyStaffOfPaidPurchase(db, purchase, offer) {
   const { data: loc } = await db
     .from('locations')
-    .select('organization_id, name')
+    .select('organization_id, name, membership_source')
     .eq('id', purchase.location_id)
     .maybeSingle()
   if (!loc?.organization_id) return { sent: false }
 
   const amount = formatEuro(purchase.amount_cents)
-  const subject = `NEW SALE: ${offer.name} (${amount}) - ${purchase.buyer_name}`
+  // BLACKFRIDAY.9 — names come from the buyer's form or (off-page) a contact
+  // row: collapse whitespace so a newline can't break the subject or push.
+  const buyerName = oneLine(purchase.buyer_name)
+  const offerName = oneLine(offer.name)
+  const subject = `NEW SALE: ${offerName} (${amount}) - ${buyerName}`
+  const closing = staffClosingLine(purchase, offer, loc)
   const htmlBody = `
-    <p><strong>${purchase.buyer_name}</strong> just bought <strong>${offer.name}</strong> (${offer.bonus_headline}) for <strong>${amount}</strong>.</p>
+    <p><strong>${escapeHtml(buyerName)}</strong> just bought <strong>${escapeHtml(offerName)}</strong>${offer.bonus_headline ? ` (${escapeHtml(offer.bonus_headline)})` : ''} for <strong>${escapeHtml(amount)}</strong>.</p>
     <ul>
-      <li>Email: ${purchase.buyer_email}</li>
-      <li>Phone: ${purchase.buyer_phone || 'not given'}</li>
-      <li>Studio: ${loc.name || purchase.location_id}</li>
+      <li>Email: ${escapeHtml(purchase.buyer_email || 'not given')}</li>
+      <li>Phone: ${escapeHtml(purchase.buyer_phone || 'not given')}</li>
+      <li>Studio: ${escapeHtml(loc.name || purchase.location_id)}</li>
     </ul>
-    <p>Set them up in Glofox, then mark the sale fulfilled in Approvals.</p>`
+    <p>${escapeHtml(closing)}</p>`
   await sendOpsAlert({
     organizationId: loc.organization_id,
     locationId: purchase.location_id,
     subject,
     htmlBody,
-    pushBody: `${purchase.buyer_name} bought ${offer.name} (${amount})`,
+    pushBody: `${buyerName} bought ${offerName} (${amount})`,
   }, { db })
   return { sent: true }
 }
