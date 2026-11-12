@@ -241,8 +241,10 @@ describe('ADOPTDOMAIN.1 — retry + unchanged paths', () => {
     expect(db.state.patches.some((p) => 'postmark_server_id' in p || 'postmark_server_token' in p)).toBe(false)
     expect(db.state.row.postmark_server_id).toBe(21100951)
     expect(db.state.row.postmark_server_token).toBe('srv-tok')
-    // Webhooks were already stamped: not re-registered.
-    expect(ensureTenantServerStreams).not.toHaveBeenCalled()
+    // Webhooks were already stamped: not re-registered. The broadcast stream
+    // is still re-checked on a stamped row (PMUNSUB.1).
+    expect(ensureTenantServerStreams).toHaveBeenCalledTimes(1)
+    expect(ensureTenantServerStreams).toHaveBeenCalledWith('srv-tok')
     expect(ensureTenantServerWebhooks).not.toHaveBeenCalled()
     expect(createTenantDomain).toHaveBeenCalledTimes(1)
   })

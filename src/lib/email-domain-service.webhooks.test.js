@@ -134,14 +134,19 @@ describe('provisionEmailDomain — streams + webhooks on a fresh server (W1.E3)'
     expect(row.last_error).toBeNull()
   })
 
-  it('a stamped row is never re-registered', async () => {
+  // PMUNSUB.1 — the stream check runs on a stamped row too: a live tenant
+  // server was stamped while its broadcast stream sat on Postmark-handled
+  // unsubscribes, so "stamped" could not mean "never look again".
+  it('a stamped row re-checks the stream but never re-registers webhooks or re-stamps', async () => {
     const db = fakeDb({
       organization_id: 'org-a', postmark_server_id: 101, postmark_server_token: 'srv-tok',
       postmark_domain_id: 55, status: 'verifying', webhooks_registered_at: '2026-10-10T10:00:00.000Z',
     })
     await provisionEmailDomain(db, ARGS)
-    expect(ensureTenantServerStreams).not.toHaveBeenCalled()
+    expect(ensureTenantServerStreams).toHaveBeenCalledWith('srv-tok')
     expect(ensureTenantServerWebhooks).not.toHaveBeenCalled()
+    expect(db.state.row.webhooks_registered_at).toBe('2026-10-10T10:00:00.000Z')
+    expect(db.state.patches.some((p) => 'webhooks_registered_at' in p)).toBe(false)
   })
 })
 
@@ -180,13 +185,26 @@ describe('verifyEmailDomain — the verify button is the retry an operator can r
     expect(res.row.last_error).toBe('Event webhooks were not registered on the sending server (Postmark server API error: HTTP 503). Press Re-check DNS to retry.')
   })
 
-  it('does nothing extra once stamped', async () => {
-    const db = fakeDb({
-      organization_id: 'org-a', postmark_server_id: 101, postmark_server_token: 'srv-tok',
-      postmark_domain_id: 55, status: 'verifying', webhooks_registered_at: '2026-10-10T10:00:00.000Z',
-    })
+  const STAMPED = {
+    organization_id: 'org-a', postmark_server_id: 101, postmark_server_token: 'srv-tok',
+    postmark_domain_id: 55, status: 'verifying', webhooks_registered_at: '2026-10-10T10:00:00.000Z',
+  }
+
+  it('once stamped, verify re-checks the stream only (PMUNSUB.1)', async () => {
+    const db = fakeDb(STAMPED)
     await verifyEmailDomain(db, 'org-a')
-    expect(ensureTenantServerStreams).not.toHaveBeenCalled()
+    expect(ensureTenantServerStreams).toHaveBeenCalledWith('srv-tok')
+    expect(ensureTenantServerWebhooks).not.toHaveBeenCalled()
+  })
+
+  it('a stream failure on a stamped row is logged, keeps the stamp, and is not reported as a webhook failure', async () => {
+    ensureTenantServerStreams.mockRejectedValueOnce(new Error('Postmark server API error: Custom unsubscribe handling is not enabled for this account.'))
+    const db = fakeDb(STAMPED)
+    const row = await verifyEmailDomain(db, 'org-a')
+    expect(logWarn).toHaveBeenCalledWith('tenant-email-domain', expect.stringContaining('broadcast stream'), expect.objectContaining({ orgId: 'org-a' }))
+    expect(row.last_error ?? null).toBeNull()
+    expect(db.state.row.webhooks_registered_at).toBe('2026-10-10T10:00:00.000Z')
+    expect(ensureTenantServerWebhooks).not.toHaveBeenCalled()
   })
 })
 

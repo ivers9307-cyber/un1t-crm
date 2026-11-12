@@ -306,16 +306,38 @@ async function serverRequest(serverToken, method, path, body) {
 
 /**
  * Ensure the server has the `broadcast` message stream (campaign sends put
- * MessageStream 'broadcast' on the wire). Idempotent.
+ * MessageStream 'broadcast' on the wire) AND that it is on Custom unsubscribe
+ * handling. Idempotent.
+ *
+ * PMUNSUB.1 — "the stream exists" was never "the stream is configured": a
+ * Broadcasts stream this function did not create (one made by hand in the
+ * Postmark dashboard, or one Postmark provided) defaults to Postmark-handled
+ * unsubscribes. The old check returned on `exists`, so UN1T Group's server
+ * kept that default and Postmark appended its own Unsubscribe link under the
+ * CRM's footer on every marketing email (found 12 Nov 2026; the setting was
+ * confirmed in the Postmark dashboard). An existing stream whose handling is
+ * anything but Custom (or is not reported) is switched to Custom. Postmark may
+ * refuse that for an account not approved for Custom; the refusal throws with
+ * Postmark's own message and the caller decides what a failure means.
+ *
  * @param {string} serverToken - the tenant server's token (SECRET; never logged)
- * @returns {Promise<{ created: boolean }>}
+ * @returns {Promise<{ created: boolean, handlingFixed: boolean }>}
  */
 export async function ensureTenantServerStreams(serverToken) {
   const list = await serverRequest(serverToken, 'GET', '/message-streams')
-  const existing = (Array.isArray(list.MessageStreams) ? list.MessageStreams : []).map((s) => s?.ID)
-  if (existing.includes(BROADCAST_STREAM.ID)) return { created: false }
-  await serverRequest(serverToken, 'POST', '/message-streams', BROADCAST_STREAM)
-  return { created: true }
+  const streams = Array.isArray(list.MessageStreams) ? list.MessageStreams : []
+  const broadcast = streams.find((s) => s?.ID === BROADCAST_STREAM.ID)
+  if (!broadcast) {
+    await serverRequest(serverToken, 'POST', '/message-streams', BROADCAST_STREAM)
+    return { created: true, handlingFixed: false }
+  }
+  const wanted = BROADCAST_STREAM.SubscriptionManagementConfiguration.UnsubscribeHandlingType
+  const handling = String(broadcast.SubscriptionManagementConfiguration?.UnsubscribeHandlingType || '')
+  if (handling.toLowerCase() === wanted.toLowerCase()) return { created: false, handlingFixed: false }
+  await serverRequest(serverToken, 'PATCH', `/message-streams/${BROADCAST_STREAM.ID}`, {
+    SubscriptionManagementConfiguration: BROADCAST_STREAM.SubscriptionManagementConfiguration,
+  })
+  return { created: false, handlingFixed: true }
 }
 
 /**

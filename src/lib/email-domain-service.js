@@ -122,9 +122,9 @@ export function webhookFailureMessage(cause, status) {
 /**
  * W1.E3 — make sure the org's Postmark server carries the broadcast stream
  * and the six-trigger webhooks, then stamp webhooks_registered_at (mig 718).
- * Idempotent: a stamped row is left alone; a NULL stamp (never done, or a
- * failed earlier pass) runs both helpers again, and they only create what is
- * missing. A failure is NOT fatal to provisioning or verification: it is
+ * Idempotent: a stamped row only has its broadcast stream re-checked
+ * (PMUNSUB.1); a NULL stamp (never done, or a failed earlier pass) runs both
+ * helpers again, and they only create what is missing. A failure is NOT fatal to provisioning or verification: it is
  * logged structurally and returned as `error` (the cause) so the caller writes
  * it to last_error via webhookFailureMessage, and the stamp stays NULL so the
  * next provision OR verify call retries. The server token is read off the row and never logged.
@@ -132,7 +132,24 @@ export function webhookFailureMessage(cause, status) {
  * @returns {Promise<{ row: object, error: string|null }>}
  */
 async function ensureServerWebhooksRecorded(db, orgId, row) {
-  if (!row?.postmark_server_token || row.webhooks_registered_at) return { row, error: null }
+  if (!row?.postmark_server_token) return { row, error: null }
+  if (row.webhooks_registered_at) {
+    // PMUNSUB.1 — a stamped server still gets its broadcast stream checked:
+    // UN1T Group's server was stamped while that stream sat on
+    // Postmark-handled unsubscribes (Postmark's own link under the CRM's
+    // footer). One GET, and a PATCH only when the handling is wrong. A failure
+    // here is logged and nothing else: the webhooks ARE registered, so it must
+    // not surface as webhookFailureMessage, and the stamp stays.
+    try {
+      const out = await ensureTenantServerStreams(row.postmark_server_token)
+      if (out?.handlingFixed) {
+        logWarn('tenant-email-domain', 'broadcast stream was on Postmark-handled unsubscribes; switched to Custom', { orgId })
+      }
+    } catch (e) {
+      logWarn('tenant-email-domain', 'broadcast stream check failed on a registered server; will retry on the next provision or verify', { orgId, err: e?.message || 'unknown' })
+    }
+    return { row, error: null }
+  }
   try {
     await ensureTenantServerStreams(row.postmark_server_token)
     await ensureTenantServerWebhooks(row.postmark_server_token)

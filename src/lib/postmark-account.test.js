@@ -239,6 +239,7 @@ describe('ADOPTDOMAIN.1 findTenantDomainByName', () => {
 function routeFetch() {
   const gets = new Map()
   const posts = []
+  const failures = new Map()
   fetchMock.mockImplementation(async (url, opts = {}) => {
     const path = new URL(url).pathname
     const method = (opts.method || 'GET').toUpperCase()
@@ -246,13 +247,16 @@ function routeFetch() {
       if (!gets.has(path)) return jsonResponse({ Message: `no stub for GET ${path}` }, 500)
       return jsonResponse(gets.get(path))
     }
-    posts.push({ path, body: JSON.parse(opts.body), headers: opts.headers })
+    posts.push({ method, path, body: JSON.parse(opts.body), headers: opts.headers })
+    if (failures.has(`${method} ${path}`)) return failures.get(`${method} ${path}`)
     return jsonResponse({ ID: 1 })
   })
   return {
     get: (path, body) => gets.set(path, body),
     posted: (path) => posts.find((p) => p.path === path)?.body,
     postedAll: (path) => posts.filter((p) => p.path === path).map((p) => p.body),
+    patched: (path) => posts.filter((p) => p.method === 'PATCH' && p.path === path).map((p) => p.body),
+    fail: (method, path, status, body) => failures.set(`${method} ${path}`, jsonResponse(body, status)),
   }
 }
 
@@ -269,18 +273,54 @@ describe('W1.E3 tenant server streams + webhooks', () => {
     const r = routeFetch()
     r.get('/message-streams', { MessageStreams: [{ ID: 'outbound' }, { ID: 'inbound' }] })
     const out = await ensureTenantServerStreams('srv-tok')
-    expect(out).toEqual({ created: true })
+    expect(out).toEqual({ created: true, handlingFixed: false })
     expect(r.posted('/message-streams')).toEqual({
       ID: 'broadcast', Name: 'Broadcasts', MessageStreamType: 'Broadcasts',
       SubscriptionManagementConfiguration: { UnsubscribeHandlingType: 'Custom' },
     })
   })
 
-  it('is idempotent: an existing broadcast stream is not created again', async () => {
+  const CUSTOM = { SubscriptionManagementConfiguration: { UnsubscribeHandlingType: 'Custom' } }
+  const streams = (broadcast) => ({ MessageStreams: [{ ID: 'outbound' }, { ID: 'inbound' }, { ID: 'broadcast', ...broadcast }] })
+
+  it('is idempotent: an existing broadcast stream already on Custom is left alone', async () => {
     const r = routeFetch()
-    r.get('/message-streams', { MessageStreams: [{ ID: 'outbound' }, { ID: 'inbound' }, { ID: 'broadcast' }] })
-    expect(await ensureTenantServerStreams('srv-tok')).toEqual({ created: false })
+    r.get('/message-streams', streams(CUSTOM))
+    expect(await ensureTenantServerStreams('srv-tok')).toEqual({ created: false, handlingFixed: false })
     expect(r.postedAll('/message-streams')).toHaveLength(0)
+    expect(r.patched('/message-streams/broadcast')).toHaveLength(0)
+  })
+
+  // PMUNSUB.1 — a broadcast stream the CRM did not create defaults to
+  // Postmark-handled unsubscribes, so "exists" was never "configured":
+  // Postmark appended its own Unsubscribe link under the CRM's.
+  it('switches an existing broadcast stream on Postmark-handled unsubscribes to Custom', async () => {
+    const r = routeFetch()
+    r.get('/message-streams', streams({ SubscriptionManagementConfiguration: { UnsubscribeHandlingType: 'Postmark' } }))
+    expect(await ensureTenantServerStreams('srv-tok')).toEqual({ created: false, handlingFixed: true })
+    expect(r.postedAll('/message-streams')).toHaveLength(0)
+    expect(r.patched('/message-streams/broadcast')).toEqual([CUSTOM])
+  })
+
+  it('treats a stream whose handling Postmark did not report as not Custom, and sets it', async () => {
+    const r = routeFetch()
+    r.get('/message-streams', streams({}))
+    expect(await ensureTenantServerStreams('srv-tok')).toEqual({ created: false, handlingFixed: true })
+    expect(r.patched('/message-streams/broadcast')).toEqual([CUSTOM])
+  })
+
+  it('reads the handling case-insensitively (the API docs spell it both ways)', async () => {
+    const r = routeFetch()
+    r.get('/message-streams', streams({ SubscriptionManagementConfiguration: { UnsubscribeHandlingType: 'custom' } }))
+    expect(await ensureTenantServerStreams('srv-tok')).toEqual({ created: false, handlingFixed: false })
+    expect(r.patched('/message-streams/broadcast')).toHaveLength(0)
+  })
+
+  it('throws with Postmark\'s own words when the switch to Custom is refused', async () => {
+    const r = routeFetch()
+    r.get('/message-streams', streams({ SubscriptionManagementConfiguration: { UnsubscribeHandlingType: 'Postmark' } }))
+    r.fail('PATCH', '/message-streams/broadcast', 422, { Message: 'Custom unsubscribe handling is not enabled for this account.' })
+    await expect(ensureTenantServerStreams('srv-tok')).rejects.toThrow('Custom unsubscribe handling is not enabled for this account.')
   })
 
   it('registers one six-trigger webhook per stream, with the X-Webhook-Token header, skipping ones that exist', async () => {
