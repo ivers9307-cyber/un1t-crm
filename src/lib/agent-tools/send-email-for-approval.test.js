@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/email-audience-counts', () => ({ emailAudienceCounts: vi.fn() }))
-vi.mock('@/lib/campaign-approval', () => ({ issueApproval: vi.fn(), voidApprovals: vi.fn() }))
+vi.mock('@/lib/campaign-approval', async (importOriginal) => ({
+  ...(await importOriginal()), issueApproval: vi.fn(), voidApprovals: vi.fn(),
+}))
 vi.mock('@/lib/campaign-release', () => ({ releasePreflight: vi.fn() }))
 vi.mock('@/lib/landing-media-library', () => ({ listLandingMediaForUser: vi.fn() }))
 vi.mock('@/lib/from-address', async (importOriginal) => ({ ...(await importOriginal()), describeFromAddress: vi.fn() }))
@@ -76,6 +78,7 @@ function makeDb(campaignRow) {
 const campaign = (over = {}) => ({
   id: CAMP, location_id: DUB, name: 'Autumn', subject: 'Hi {{first_name}}', preview_text: null, from_name: 'Dublin',
   from_email: null, reply_to: null, html_content: '<html><body><p>Body</p></body></html>', audience_filter: FILTER,
+  postmark_stream: 'broadcast', ab_subject_b: null, ab_test_pct: 10, ab_wait_hours: 4, parent_campaign_id: null,
   agent_blocks: null, created_via: 'mcp', status: 'draft', scheduled_at: null, last_error: null,
   created_at: '2026-11-01T00:00:00Z', total_recipients: 0, total_sent: 0, total_delivered: 0, total_opened: 0,
   total_clicked: 0, total_bounced: 0, total_complained: 0, total_unsubscribed: 0,
@@ -201,6 +204,22 @@ describe('send_email_for_approval', () => {
     expect(await run({ campaign_id: CAMP }))
       .toEqual({ ok: false, code: 'conflict', message: 'Top up the wallet to send this campaign.' })
     expect(issueApproval).not.toHaveBeenCalled()
+  })
+
+  it('refuses a subject A/B test, a resend and a utility-stream campaign before issuing any approval', async () => {
+    const cases = [
+      [{ ab_subject_b: 'Another subject' }, /subject A\/B test/],
+      [{ parent_campaign_id: '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c09' }, /is a resend/],
+      [{ postmark_stream: 'outbound' }, /not on the marketing stream/],
+    ]
+    for (const [over, words] of cases) {
+      const r = await run({ campaign_id: CAMP }, { row: campaign(over) })
+      expect(r, JSON.stringify(over)).toMatchObject({ ok: false, code: 'conflict' })
+      expect(r.message).toMatch(words)
+      expect(r.message).toMatch(/Open it in the CRM\./)
+    }
+    expect(issueApproval).not.toHaveBeenCalled()
+    expect(sendEmail).not.toHaveBeenCalled()
   })
 
   it('answers not_found for a campaign that is not at this studio', async () => {

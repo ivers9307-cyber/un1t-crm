@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/email-audience-counts', () => ({ emailAudienceCounts: vi.fn() }))
-vi.mock('@/lib/campaign-approval', () => ({ pendingApproval: vi.fn() }))
+vi.mock('@/lib/campaign-approval', async (importOriginal) => ({ ...(await importOriginal()), pendingApproval: vi.fn() }))
 vi.mock('@/lib/landing-media-library', () => ({ listLandingMediaForUser: vi.fn() }))
 vi.mock('@/lib/from-address', () => ({ describeFromAddress: vi.fn() }))
 vi.mock('@/lib/campaign-display-stats', async (importActual) => ({
@@ -82,7 +82,8 @@ const run = (tool, input, db) => runTool(tool, input, auth(), { db, nowMs: NOW_M
 
 const campaign = (over = {}) => ({
   id: CAMP, location_id: DUB, name: 'Autumn', subject: 'Hi', preview_text: 'p', from_name: 'UN1T', reply_to: null,
-  html_content: '<p>hello</p>', audience_filter: FILTER, agent_blocks: null, created_via: 'web', status: 'draft',
+  html_content: '<p>hello</p>', audience_filter: FILTER, postmark_stream: 'broadcast', ab_subject_b: null, ab_test_pct: 10,
+  ab_wait_hours: 4, parent_campaign_id: null, agent_blocks: null, created_via: 'web', status: 'draft',
   scheduled_at: null, last_error: null, created_at: '2031-07-01T00:00:00Z',
   total_recipients: 5, total_sent: 5, total_delivered: 5, total_opened: 2, total_clicked: 1,
   total_bounced: 0, total_complained: 0, total_unsubscribed: 0,
@@ -225,6 +226,22 @@ describe('email read tools', () => {
     const never = makeDb({ campaigns: { data: campaign({ agent_blocks: null }), error: null } })
     const n = await run(getEmailCampaign, { campaign_id: CAMP }, never.db)
     expect(n.data).toMatchObject({ blocks: null, body_edited_in_crm: false })
+  })
+
+  it('get_email_campaign says up front when a campaign cannot be released through an approval', async () => {
+    const plain = makeDb({ campaigns: { data: campaign(), error: null } })
+    expect((await run(getEmailCampaign, { campaign_id: CAMP }, plain.db)).data.release_blocker).toBeNull()
+    const cases = [
+      [{ ab_subject_b: 'B' }, /subject A\/B test/],
+      [{ parent_campaign_id: '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d9998' }, /is a resend/],
+      [{ postmark_stream: 'outbound' }, /not on the marketing stream/],
+    ]
+    for (const [over, words] of cases) {
+      const { db } = makeDb({ campaigns: { data: campaign(over), error: null } })
+      expect((await run(getEmailCampaign, { campaign_id: CAMP }, db)).data.release_blocker, JSON.stringify(over)).toMatch(words)
+    }
+    const sent = makeDb({ campaigns: { data: campaign({ status: 'sent', ab_subject_b: 'B' }), error: null } })
+    expect((await run(getEmailCampaign, { campaign_id: CAMP }, sent.db)).data.release_blocker).toBeNull()
   })
 
   it("get_email_campaign's sends_as honours the campaign's from_email, else the studio default", async () => {

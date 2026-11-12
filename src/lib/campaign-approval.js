@@ -14,8 +14,12 @@ import { createHash, randomBytes } from 'node:crypto'
 
 export const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000
 export const APPROVALS_PER_HOUR = 5
+// Every campaigns column the sender reads that changes who gets what: the
+// eight a tool writes, plus the five a tool never sets but the CRM can (the
+// Duplicate button copies ab_* and postmark_stream onto a draft).
 export const APPROVAL_CONTENT_FIELDS = [
   'location_id', 'subject', 'preview_text', 'from_name', 'from_email', 'reply_to', 'html_content', 'audience_filter',
+  'postmark_stream', 'ab_subject_b', 'ab_test_pct', 'ab_wait_hours', 'parent_campaign_id',
 ]
 
 const TABLE = 'campaign_release_approvals'
@@ -34,7 +38,7 @@ function stable(v) {
   return v
 }
 
-/** sha256 hex over a stable JSON of the eight fields a release is approved on. */
+/** sha256 hex over a stable JSON of the fields a release is approved on (APPROVAL_CONTENT_FIELDS). */
 export function campaignContentKey(row) {
   const picked = {}
   for (const f of APPROVAL_CONTENT_FIELDS) {
@@ -43,6 +47,21 @@ export function campaignContentKey(row) {
     picked[f] = row[f]
   }
   return sha256(JSON.stringify(stable(picked)))
+}
+
+/**
+ * Why a campaign cannot be released through an agent approval, or null. The
+ * test email and the approve page show neither a B subject, a resend's
+ * non-opener audience nor a utility stream, so a campaign carrying any of them
+ * is the CRM's to send. Judged the way campaign-sender.js judges them: any
+ * truthy ab_subject_b is an A/B test, any parent_campaign_id a resend, and
+ * anything but 'broadcast' is not the marketing stream.
+ */
+export function agentReleaseBlocker(campaign) {
+  if (campaign?.ab_subject_b) return 'This campaign has a subject A/B test. Open it in the CRM.'
+  if (campaign?.parent_campaign_id) return 'This campaign is a resend. Open it in the CRM.'
+  if (campaign?.postmark_stream !== 'broadcast') return 'This campaign is not on the marketing stream. Open it in the CRM.'
+  return null
 }
 
 /** The audience grew past what the person tested: more than 10% AND more than 25 people. */

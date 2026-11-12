@@ -97,4 +97,11 @@ describe('/communications/campaigns/approve/[token]', () => {
     expect(container.textContent).toMatch(/grown from 100 to 130/)
     expect(container.querySelector(`a[href="/communications/sent/email/${CAMPAIGN_ID}"]`)).not.toBeNull()
   })
+
+  it('a blocked campaign shows the plain sentence and no button', async () => {
+    loadApprovalView.mockResolvedValue({ ok: false, reason: 'blocked', campaign: { id: CAMPAIGN_ID }, message: 'This campaign is a resend. Open it in the CRM.' })
+    const { container } = await renderPage()
+    expect(screen.queryByTestId('form-props')).toBeNull()
+    expect(container.textContent).toContain('This campaign is a resend. Open it in the CRM.')
+  })
 })

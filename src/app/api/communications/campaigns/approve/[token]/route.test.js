@@ -107,6 +107,7 @@ const campaignRow = (over = {}) => ({
   updated_at: READ_AT, subject: 'News from the studio', preview_text: 'A short note', from_name: 'Test Studio',
   from_email: null, reply_to: null, html_content: '<p>Hello</p>',
   audience_filter: { logic: 'and', filters: [{ field: 'tag', op: 'eq', value: 'members' }] },
+  postmark_stream: 'broadcast', ab_subject_b: null, ab_test_pct: 10, ab_wait_hours: 4, parent_campaign_id: null,
   last_error: null, cancel_requested_at: null, ...over,
 })
 const approvalRow = (over = {}) => ({
@@ -171,6 +172,34 @@ describe('POST /api/communications/campaigns/approve/[token]', () => {
       expect((await res.json()).error).toMatch(/changed since the test/)
       expect(approval().used_at).toBeNull()
       expect(campaign().status).toBe('draft')
+      expect(campaignWrites()).toEqual([])
+    }
+  })
+
+  it('refuses a campaign that became an A/B test, a resend or a utility send, even when the content key still matches', async () => {
+    const cases = [
+      [{ ab_subject_b: 'Subject B' }, /subject A\/B test/],
+      [{ parent_campaign_id: 'c0000000-0000-4000-8000-000000000009' }, /is a resend/],
+      [{ postmark_stream: 'outbound' }, /not on the marketing stream/],
+    ]
+    for (const [change, words] of cases) {
+      // The approval's key is taken over the changed row, so only the blocker stands in the way.
+      db = world({ campaign: change, approval: { content_key: campaignContentKey(campaignRow(change)) } })
+      const res = await press()
+      expect(res.status, JSON.stringify(change)).toBe(409)
+      expect((await res.json()).error).toMatch(words)
+      expect(approval().used_at).toBeNull()
+      expect(campaign().status).toBe('draft')
+      expect(campaignWrites()).toEqual([])
+    }
+  })
+
+  it('refuses when the A/B, resend or stream fields changed since the test (content key)', async () => {
+    for (const change of [{ ab_test_pct: 50 }, { ab_wait_hours: 1 }]) {
+      db = world({ campaign: change })
+      const res = await press()
+      expect(res.status, JSON.stringify(change)).toBe(409)
+      expect((await res.json()).error).toMatch(/changed since the test/)
       expect(campaignWrites()).toEqual([])
     }
   })

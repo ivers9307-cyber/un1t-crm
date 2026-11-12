@@ -12,17 +12,18 @@
 // all answer the same `not_found`, so nothing about another studio's campaign
 // is ever shown.
 
-import { findApproval, campaignContentKey, audienceGrewTooMuch } from '@/lib/campaign-approval'
+import { findApproval, campaignContentKey, audienceGrewTooMuch, agentReleaseBlocker } from '@/lib/campaign-approval'
 import { emailAudienceCounts } from '@/lib/email-audience-counts'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import { describeFromAddress } from '@/lib/from-address'
 import { hasPermissionForLocation } from '@/lib/permissions'
 
-// The eight content-key fields plus what the page and the release need. Named
+// The thirteen content-key fields (APPROVAL_CONTENT_FIELDS) plus what the page and the release need. Named
 // columns; html_content is read for the content key and the preflight only and
 // must never be handed to a client component.
 export const APPROVAL_CAMPAIGN_COLUMNS = 'id, name, status, scheduled_at, updated_at, '
-  + 'location_id, subject, preview_text, from_name, from_email, reply_to, html_content, audience_filter'
+  + 'location_id, subject, preview_text, from_name, from_email, reply_to, html_content, audience_filter, '
+  + 'postmark_stream, ab_subject_b, ab_test_pct, ab_wait_hours, parent_campaign_id'
 
 /** The statuses an approval may release (failed campaigns are out of v1). */
 export const APPROVABLE_STATUSES = Object.freeze(['draft', 'scheduled'])
@@ -41,7 +42,7 @@ function holdsStudio(user, locationId) {
  * Resolve and judge an approve link for `user`.
  * @returns {Promise<
  *   { ok: true, approval, campaign, studio, counts, sendsAs } |
- *   { ok: false, reason: 'not_found'|'used'|'expired'|'voided'|'changed'|'send_at_passed'|'audience_grew'|'audience_empty'|'no_permission', campaign?, tested?, now? }
+ *   { ok: false, reason: 'not_found'|'used'|'expired'|'voided'|'changed'|'blocked'|'send_at_passed'|'audience_grew'|'audience_empty'|'no_permission', campaign?, tested?, now? }
  * >}
  * Throws on a read failure (the caller answers 500; never a silent refusal or pass).
  */
@@ -63,6 +64,10 @@ export async function loadApprovalView(db, user, token, nowMs = Date.now()) {
 
   const known = { campaign: { id: campaign.id } }
   if (campaignContentKey(campaign) !== approval.content_key) return refuse('changed', known)
+  // Second fence behind the tool's own refusal: even a matching key never
+  // releases an A/B test, a resend or a utility send from an agent approval.
+  const blocker = agentReleaseBlocker(campaign)
+  if (blocker) return refuse('blocked', { ...known, message: blocker })
   if (approval.send_at && Date.parse(approval.send_at) <= nowMs) return refuse('send_at_passed', known)
 
   const { data: studio, error: studioError } = await db
@@ -95,6 +100,7 @@ export function approvalRefusalMessage(view) {
     case 'expired': return `This approval has expired. ${NEW_TEST}`
     case 'voided': return 'This approval was withdrawn: a newer test was sent, or the campaign was changed or stopped. '
       + 'Use the link in the newest test email, or ask Claude for a new test.'
+    case 'blocked': return view.message
     case 'changed': return `This campaign has changed since the test was sent. ${NEW_TEST}`
     case 'send_at_passed': return `The time this campaign was to be scheduled for has passed. ${NEW_TEST}`
     case 'audience_grew': return `The audience has grown from ${view.tested} to ${view.now} since the test. ${NEW_TEST}`

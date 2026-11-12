@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
 import {
   APPROVAL_TTL_MS, APPROVALS_PER_HOUR, APPROVAL_CONTENT_FIELDS,
-  campaignContentKey, audienceGrewTooMuch,
+  campaignContentKey, audienceGrewTooMuch, agentReleaseBlocker,
   issueApproval, findApproval, consumeApproval, voidApprovals, pendingApproval,
 } from './campaign-approval.js'
 
@@ -72,7 +72,8 @@ function approvalsDb({ failOn = null, failError = { message: 'boom' }, countOver
 
 const campaign = (over = {}) => ({
   id: CAMPAIGN, location_id: 'loc', subject: 'S', preview_text: 'P', from_name: 'F', from_email: 'f@x.com', reply_to: 'r@x.com',
-  html_content: '<p>Hi</p>', audience_filter: { a: 1, b: [1, 2] }, status: 'draft', updated_at: 'x', ...over,
+  html_content: '<p>Hi</p>', audience_filter: { a: 1, b: [1, 2] }, postmark_stream: 'broadcast', ab_subject_b: null,
+  ab_test_pct: 10, ab_wait_hours: 4, parent_campaign_id: null, status: 'draft', updated_at: 'x', ...over,
 })
 const consumeAt = (db, id, ms = NOW) => consumeApproval(db, id, ms)
 const issue = (db, over = {}) => issueApproval(db, {
@@ -83,18 +84,24 @@ describe('constants', () => {
   it('has the briefed values', () => {
     expect(APPROVAL_TTL_MS).toBe(86400000)
     expect(APPROVALS_PER_HOUR).toBe(5)
-    expect(APPROVAL_CONTENT_FIELDS).toEqual(['location_id', 'subject', 'preview_text', 'from_name', 'from_email', 'reply_to', 'html_content', 'audience_filter'])
+    expect(APPROVAL_CONTENT_FIELDS).toEqual([
+      'location_id', 'subject', 'preview_text', 'from_name', 'from_email', 'reply_to', 'html_content', 'audience_filter',
+      'postmark_stream', 'ab_subject_b', 'ab_test_pct', 'ab_wait_hours', 'parent_campaign_id',
+    ])
   })
 })
 
 describe('campaignContentKey', () => {
-  it('changes when any of the eight fields changes and not when updated_at or status does', () => {
+  it('changes when any of the thirteen fields changes and not when updated_at or status does', () => {
     const base = campaignContentKey(campaign())
     expect(base).toMatch(/^[0-9a-f]{64}$/)
     const changes = {
       location_id: 'other', subject: 'S2', preview_text: 'P2', from_name: 'F2', from_email: 'g@x.com', reply_to: 'z@x.com',
       html_content: '<p>Bye</p>', audience_filter: { a: 2 },
+      postmark_stream: 'outbound', ab_subject_b: 'Subject B', ab_test_pct: 20, ab_wait_hours: 8,
+      parent_campaign_id: 'c0000000-0000-4000-8000-000000000009',
     }
+    expect(Object.keys(changes).sort()).toEqual([...APPROVAL_CONTENT_FIELDS].sort())
     for (const [f, v] of Object.entries(changes)) {
       expect(campaignContentKey(campaign({ [f]: v })), f).not.toBe(base)
     }
@@ -114,6 +121,25 @@ describe('campaignContentKey', () => {
       expect(() => campaignContentKey(without), f).toThrow(new RegExp(f))
     }
     expect(campaignContentKey(campaign({ reply_to: undefined }))).toBe(campaignContentKey(campaign({ reply_to: null })))
+  })
+})
+
+describe('agentReleaseBlocker', () => {
+  it('passes a plain marketing campaign', () => {
+    expect(agentReleaseBlocker(campaign())).toBeNull()
+  })
+
+  it('blocks a subject A/B test, a resend and anything off the marketing stream, each with a plain sentence', () => {
+    expect(agentReleaseBlocker(campaign({ ab_subject_b: 'B' }))).toMatch(/subject A\/B test.*Open it in the CRM\./)
+    expect(agentReleaseBlocker(campaign({ parent_campaign_id: 'c0000000-0000-4000-8000-000000000009' })))
+      .toMatch(/is a resend.*Open it in the CRM\./)
+    expect(agentReleaseBlocker(campaign({ postmark_stream: 'outbound' }))).toMatch(/not on the marketing stream.*Open it in the CRM\./)
+    expect(agentReleaseBlocker(campaign({ postmark_stream: null }))).toMatch(/not on the marketing stream/)
+  })
+
+  it('judges the B subject the way the sender does (any truthy value is an A/B test)', () => {
+    expect(agentReleaseBlocker(campaign({ ab_subject_b: '' }))).toBeNull()
+    expect(agentReleaseBlocker(campaign({ ab_subject_b: '   ' }))).toMatch(/subject A\/B test/)
   })
 })
 

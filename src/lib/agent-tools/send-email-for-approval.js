@@ -9,7 +9,7 @@ import { uuidLike } from '@/lib/schemas'
 import { defineTool, ToolRefusal } from './registry.js'
 import { InvalidAudienceFilterError, stripUnsetFilterRows } from '@/lib/audience-filter'
 import { emailAudienceCounts } from '@/lib/email-audience-counts'
-import { issueApproval, voidApprovals } from '@/lib/campaign-approval'
+import { issueApproval, voidApprovals, agentReleaseBlocker } from '@/lib/campaign-approval'
 import { releasePreflight } from '@/lib/campaign-release'
 import { describeFromAddress, withRequestedFrom } from '@/lib/from-address'
 import { resolveEmailSender } from '@/lib/tenant-email'
@@ -65,6 +65,10 @@ export default defineTool({
       throw new ToolRefusal('conflict', `This campaign is ${campaign.status}, so it cannot be sent for approval.`
         + (campaign.status === 'failed' ? ' Open it in the CRM.' : ''))
     }
+    // A/B test, resend or utility stream: the test and the approve page show
+    // none of them, so the CRM sends those (also re-judged on the approve page).
+    const blocker = agentReleaseBlocker(campaign)
+    if (blocker) throw new ToolRefusal('conflict', blocker)
     if (!hasFilterRows(campaign.audience_filter)) {
       throw new ToolRefusal('invalid_input', 'This campaign has no audience: choose an audience first (update_email_draft with segment_id or filter).')
     }

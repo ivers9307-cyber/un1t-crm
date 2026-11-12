@@ -20,7 +20,8 @@ export const RESULT_STATUSES = Object.freeze(['queued', 'sending', 'sent', 'fail
 // campaignDisplayStats falls back on. html_content is read only to judge
 // "edited in the CRM" and is never returned.
 export const CAMPAIGN_COLS = 'id, location_id, name, subject, preview_text, from_name, from_email, reply_to, html_content, '
-  + 'audience_filter, agent_blocks, created_via, status, scheduled_at, last_error, created_at, '
+  + 'audience_filter, postmark_stream, ab_subject_b, ab_test_pct, ab_wait_hours, parent_campaign_id, '
+  + 'agent_blocks, created_via, status, scheduled_at, last_error, created_at, '
   + 'total_recipients, total_sent, total_delivered, total_opened, total_clicked, total_bounced, '
   + 'total_complained, total_unsubscribed'
 
