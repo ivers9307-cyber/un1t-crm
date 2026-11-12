@@ -1,71 +1,25 @@
 // /offers layout (OFFERS.7) — loads the sale's display faces (self-hosted by
-// next/font, no external requests) and the page chrome shared by the landing
-// and product pages. Public marketing-host surface: '/offers' is allowlisted
-// in src/lib/brands.js + src/proxy.js + AppShell PUBLIC_PATHS (all three, or
-// a logged-out visitor bounces — the /free-class lesson).
+// next/font, no external requests) and the page frame shared by the studio
+// picker, the storefronts and the product pages. Public marketing-host
+// surface: '/offers' is allowlisted in src/proxy.js publicPaths, AppShell
+// PUBLIC_PATHS, the un1t-marketing allowedPaths in src/lib/brands.js and
+// DB_BRAND_DEFAULTS in src/lib/tenant-domains-edge.js (nested paths match
+// by prefix).
+//
+// BLACKFRIDAY.3 — this layout has no studio, so it reads nothing: the tab
+// title and the footer (studio, deadline, legal line) live in
+// src/app/offers/[studio]/layout.js, and the picker sets its own title.
 import { Archivo, Archivo_Black } from 'next/font/google'
-import { createServerClient } from '@/lib/supabase'
-import { formatSaleDeadline } from '@/lib/sale-offers'
-import { resolveOffersHomeLocationId, NO_HOME_LOCATION_ID } from '@/lib/offers-home'
-import { storefrontTitle } from '@/lib/offers-storefront'
 import './offers.css'
-import { displayZoneFor } from '@/lib/display-zone'
 
 const archivo = Archivo({ subsets: ['latin'], weight: ['500', '600', '700'], variable: '--font-archivo' })
 const archivoBlack = Archivo_Black({ subsets: ['latin'], weight: '400', variable: '--font-archivo-black' })
 
-// GIFTCARD.3 — the title was the last hard-coded piece of campaign copy on
-// this surface. It survived the storefront flip and sat in the browser tab
-// (and any link preview) advertising a sale that had ended, above a page
-// selling gift cards. Derived from what is actually active, like everything
-// else here.
-export async function generateMetadata() {
-  const db = createServerClient()
-  // W0.4 — pinned to the Stillorgan home location, like the pages below it.
-  const homeId = await resolveOffersHomeLocationId(db)
-  const { data } = await db
-    .from('sale_offers')
-    .select('category')
-    .eq('active', true)
-    .eq('location_id', homeId || NO_HOME_LOCATION_ID)
-  // OFFERS.8 — one rule with the page's hero (src/lib/offers-storefront.js).
-  const cats = new Set((data || []).map((o) => o.category))
-  return {
-    title: storefrontTitle(cats),
-    robots: { index: false, follow: false },
-  }
-}
-
-export default async function OffersLayout({ children }) {
-  // Deadline is DERIVED from the live sale window, never hard-coded — see
-  // formatSaleDeadline(). A literal date here disagreed with the countdown
-  // the moment the operator moved ends_at in SQL.
-  const db = createServerClient()
-  const homeId = await resolveOffersHomeLocationId(db)
-  // Only DATED offers can produce a deadline line. Gift cards carry
-  // ends_at NULL, and Postgres sorts NULLs first on DESC — without this
-  // filter a live gift card would win the ordering and blank out a real
-  // sale's deadline in the footer.
-  const { data } = await db
-    .from('sale_offers')
-    .select('ends_at')
-    .eq('active', true)
-    .eq('location_id', homeId || NO_HOME_LOCATION_ID)
-    .not('ends_at', 'is', null)
-    .order('ends_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  // TZ.16 — the deadline on the offers' home studio clock (display only).
-  const zone = await displayZoneFor(db, null, homeId, 'offers')
-  const deadline = formatSaleDeadline(data?.ends_at, { zone })
-
+export default function OffersLayout({ children }) {
   return (
     <div className={`ofr ${archivo.variable} ${archivoBlack.variable}`}>
       <div className="ofr-frame">
         {children}
-        <footer style={{ padding: '40px 32px', color: '#666', fontSize: 12, letterSpacing: '.12em', borderTop: '1px solid var(--ofr-line)' }}>
-          UN1T STILLORGAN{deadline ? ` · SALE ENDS ${deadline}` : ''} · CHAMP CHAMP FITNESS LIMITED, DUBLIN, IRELAND
-        </footer>
       </div>
     </div>
   )

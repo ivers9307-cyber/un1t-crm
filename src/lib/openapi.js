@@ -515,19 +515,50 @@ registry.registerPath({
   },
 })
 
+// BLACKFRIDAY.4 — the per-studio offer checkout (the handler is src/lib/offer-checkout.js).
+const OfferCheckoutStart = z.object({
+  name: z.string().min(2).max(120),
+  email: z.string().email().max(200),
+  phone: z.string().min(6).max(30),
+  terms_accepted: z.boolean().optional().openapi({ description: "un1t.online offers only: the buyer's tick of the studio's un1t.online terms and liability waiver." }),
+}).openapi('OfferCheckoutStart')
+const offerCheckoutResponses = {
+  200: { description: 'Checkout opened. Revolut: { purchaseId, checkout: { provider: "revolut", token } }. un1t.online: { purchaseId, checkout: { provider: "un1t_online", url } } (the hosted checkout; the URL is never stored).' },
+  202: { description: "help_filed: un1t.online's checkout could not be opened; the row is failed with the reason and staff were alerted with the buyer's details. Nothing was charged.", content: { 'application/json': { schema: ErrorResponse } } },
+  400: { description: 'Validation failed, or terms_required (a un1t.online offer without the tick; the body carries the `terms` payload to render)', content: { 'application/json': { schema: ErrorResponse } } },
+  404: { description: 'Unknown studio, or no such offer at that studio', content: { 'application/json': { schema: ErrorResponse } } },
+  409: { description: 'not_open_yet (before starts_at), not_configured (a un1t.online membership or pack with no product, a product missing from the mirror, or writes off; never falls through to Revolut) or price_mismatch (the mirrored un1t.online price differs from the offer\'s)', content: { 'application/json': { schema: ErrorResponse } } },
+  410: { description: 'Sale ended', content: { 'application/json': { schema: ErrorResponse } } },
+  429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  500: { description: 'The purchase row or the buyer contact could not be written', content: { 'application/json': { schema: ErrorResponse } } },
+  502: { description: 'Revolut would not create the order', content: { 'application/json': { schema: ErrorResponse } } },
+  503: { description: 'busy: a read failed or un1t.online asked us to wait; try again', content: { 'application/json': { schema: ErrorResponse } } },
+}
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/offers/{studio}/{slug}/checkout',
+  tags: ['Public'],
+  summary: "Start the checkout for one studio's sale offer (Revolut or un1t.online)",
+  description: "Anonymous. Rate-limited to 8 requests per IP per 15 min. `studio` is an /offers studio key (stillorgan | hatch-street); the offer is read by (studio location, slug). The amount is read from sale_offers server-side; the body carries buyer details only. A un1t.online studio's memberships and class packs open un1t.online's hosted checkout (account found or created first, origin web_offer); everything else is a Revolut order.",
+  request: {
+    params: z.object({ studio: z.string(), slug: z.string() }),
+    body: { content: { 'application/json': { schema: OfferCheckoutStart } } },
+  },
+  responses: offerCheckoutResponses,
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/public/offers/{slug}/checkout',
   tags: ['Public'],
-  summary: 'Start a Revolut checkout for one sale offer',
-  description: 'Anonymous. Rate-limited to 8 requests per IP per 15 min. Amount is read from sale_offers server-side — the body carries buyer details only. 410 once the sale window has closed.',
-  responses: {
-    200: { description: 'Order created; returns { purchaseId, checkout: { provider, token } }' },
-    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Unknown offer', content: { 'application/json': { schema: ErrorResponse } } },
-    410: { description: 'Sale ended', content: { 'application/json': { schema: ErrorResponse } } },
-    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  summary: 'Legacy: start the checkout for a Stillorgan sale offer',
+  description: 'Kept for offer pages loaded before BLACKFRIDAY.4. `slug` is a Stillorgan offer slug; identical to /api/public/offers/stillorgan/{slug}/checkout.',
+  request: {
+    params: z.object({ slug: z.string() }),
+    body: { content: { 'application/json': { schema: OfferCheckoutStart } } },
   },
+  responses: offerCheckoutResponses,
 })
 
 // TRIALSTUDIO.6 — the /trial purchase body (the route's own Zod schema is the authority).
