@@ -61,3 +61,37 @@ describe('/communications/sent subtitle (COMMSLAYOUT.1)', () => {
     expect(screen.getByText(/sends at this location/i).textContent).not.toContain('—')
   })
 })
+
+describe('"Made in Claude" marker (MCPEMAIL.1)', () => {
+  function chainWith(rows) {
+    const o = {
+      select: (cols) => { o.cols = cols; return o }, eq: () => o, in: () => o, order: () => o, limit: () => o,
+      then: (resolve) => resolve({ data: rows, count: rows.length }),
+    }
+    return o
+  }
+  const row = (id, name, created_via) => ({
+    id, name, status: 'draft', created_via, created_at: '2031-07-01T00:00:00Z',
+    total_recipients: 0, total_sent: 0, total_bounced: 0,
+  })
+
+  it('shows "Made in Claude" on a campaign with created_via mcp and nothing on a web one', async () => {
+    const chains = {}
+    createServerClient.mockReturnValue({
+      from: (t) => {
+        chains[t] = chainWith(t === 'campaigns' ? [row('c1', 'Agent made', 'mcp'), row('c2', 'Web made', 'web')] : [])
+        return chains[t]
+      },
+    })
+    const { container } = render(await SendsHistoryPage())
+    const badges = screen.getAllByText('Made in Claude')
+    expect(badges).toHaveLength(1)
+    const agentRow = screen.getByText('Agent made').closest('tr')
+    const webRow = screen.getByText('Web made').closest('tr')
+    expect(agentRow.textContent).toContain('Made in Claude')
+    expect(webRow.textContent).not.toContain('Made in Claude')
+    expect(container.textContent).not.toContain('—Made')
+    // named columns only: the read must ask for created_via
+    expect(chains.campaigns.cols).toMatch(/\bcreated_via\b/)
+  })
+})

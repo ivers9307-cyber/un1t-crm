@@ -172,8 +172,9 @@ audience_eligible, send_at (null = now), expires_at, used_at, created_at`.
 - **Issued by** `send_email_for_approval`: a 32-byte random token, stored only
   as a sha256 hash, valid 24 hours. Issuing a new one voids earlier unused
   approvals for that campaign. At most 5 per campaign per hour.
-- **Bound to content.** `content_key` is a hash over `location_id, subject,
-  preview_text, from_name, reply_to, html_content, audience_filter`, the
+- **Bound to content.** `content_key` is a hash over eight fields
+  (`location_id, subject, preview_text, from_name, from_email, reply_to,
+  html_content, audience_filter`), the
   pattern `signedContentKey` uses in `src/lib/whatsapp-blast-signoff.js`. On
   the confirm page the key is recomputed from the row; a mismatch means the
   campaign changed since the test, and the page says to ask for a new test.
@@ -217,6 +218,12 @@ that write succeeds.
 the person "the test is in your inbox, waiting for you".
 
 ### Calls made while writing this up (Claude's, not Richard's)
+
+- **Built as: the release also pins `updated_at`, and an agent edit always
+  returns the campaign to draft.** The compare-and-set in `releaseCampaign`
+  matches the `updated_at` the approval was checked against, and
+  `update_email_draft` always writes status `draft` and voids live approvals,
+  whatever the status was.
 
 - **Editing a scheduled campaign from Claude un-schedules it.** The approval
   is already spent by then and the cron promotes `scheduled` to `queued`
