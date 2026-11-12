@@ -72,6 +72,7 @@ export async function resolveOfferPurchaseByOrderId(db, orderId, { throwOnError 
     .from('offer_purchases')
     .select('*, offer:offer_id ( id, slug, name, bonus_headline, price_cents, category )')
     .eq('revolut_order_id', orderId)
+    .eq('payment_provider', 'revolut') // BLACKFRIDAY.4: never a un1t.online row
     .maybeSingle()
   if (error && throwOnError) throw error
   return data || null

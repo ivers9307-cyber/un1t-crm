@@ -9,7 +9,8 @@
 //   * provider 'un1t_online' (Hatch Street): the browser goes to un1t.online's
 //     hosted checkout (data.checkout.url). The form carries un1t.online's
 //     terms and waiver tick (`terms`, un1tTermsPayload's shape, as /trial
-//     renders it); a 400 terms_required answer re-renders it from the reply.
+//     renders it); a 400 terms_required answer re-renders it from the reply;
+//     a 202 help_filed answer (staff have the buyer's details) ends the form.
 // Every prop is serialisable: a function prop from the server page crashes
 // the page in production.
 import { useEffect, useRef, useState } from 'react'
@@ -36,7 +37,8 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
   // resumePurchaseId: set when Revolut redirected the buyer back after an
   // app-handoff payment (Revolut Pay on mobile) — start by confirming that
   // purchase instead of showing a fresh form.
-  const [step, setStep] = useState(resumePurchaseId ? 'confirming' : 'form') // form | pay | confirming | paid
+  const [step, setStep] = useState(resumePurchaseId ? 'confirming' : 'form') // form | pay | confirming | paid | help
+  const [helpMessage, setHelpMessage] = useState(null)
   const [fields, setFields] = useState({ name: '', email: '', phone: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -70,6 +72,14 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
         setTermsOverride(j.terms)
         setTermsAccepted(false)
         setError(j.error || j.terms.required_message || null)
+        return
+      }
+      // BLACKFRIDAY.4 — un1t.online's checkout could not be opened and staff
+      // have the buyer's details: say so and stop, rather than inviting a
+      // retry that would file a second help alert.
+      if (r.status === 202 && j.code === 'help_filed') {
+        setHelpMessage(j.error || 'The team has your details and will be in touch today.')
+        setStep('help')
         return
       }
       if (r.status === 410) throw new Error('The sale has ended.')
@@ -146,6 +156,15 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
     return () => { stopped = true; clearTimeout(t) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, session])
+
+  if (step === 'help') {
+    return (
+      <div className="text-center py-10">
+        <p className="ofr-display text-2xl mb-4">We&rsquo;ll be in touch</p>
+        <p className="text-sm" style={{ color: '#9a9a9a' }}>{helpMessage}</p>
+      </div>
+    )
+  }
 
   if (step === 'confirming' && isUn1t) {
     return (

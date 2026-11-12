@@ -38,6 +38,14 @@ describe('resolveDisputeSource', () => {
     const db = fakeDb({ race_payments: { data: [{ id: 'rp1', race: { location_id: 'locR' } }], error: null } })
     expect(await resolveDisputeSource(db, 'ord')).toMatchObject({ source_type: 'race_registration', source_id: 'rp1', location_id: 'locR' })
   })
+  // BLACKFRIDAY.4 — a un1t.online offer row is never a Revolut sale.
+  it('reads offer purchases on the Revolut rail only', async () => {
+    const db = fakeDb({})
+    await resolveDisputeSource(db, 'ord')
+    const q = db.queries.find((x) => x.table === 'offer_purchases')
+    expect(q.ops).toContainEqual(['eq', 'payment_provider', 'revolut'])
+    expect(q.ops).toContainEqual(['eq', 'revolut_order_id', 'ord'])
+  })
   it('null when no table owns the order', async () => {
     expect(await resolveDisputeSource(fakeDb({}), 'ord')).toBeNull()
   })
