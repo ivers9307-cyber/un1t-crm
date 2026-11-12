@@ -13,9 +13,16 @@ import { sendOpsAlert } from './ops-alerts'
 import { resolveZone, DEFAULT_TZ } from '@shared/zoned-time'
 
 // The purchase tag is the buyer-suppression signal for the sale's emails.
-// Per sale: 'offer-sale-aug-2026' was the August weekend sale; November 2026
-// is the Tuesday-midnight class-pack sale (OFFERS.8).
-export const OFFER_SALE_TAG = 'offer-sale-nov-2026'
+// Per sale: 'offer-sale-aug-2026' was the August weekend sale;
+// 'offer-sale-nov-2026' the Tuesday-midnight class-pack sale (OFFERS.8);
+// Black Friday 2026 is 'offer-sale-bf-2026' (BLACKFRIDAY.2).
+export const OFFER_SALE_TAG = 'offer-sale-bf-2026'
+
+/** Active but not yet open: starts_at is still ahead (the Black Friday head start). */
+export function offerIsUpcoming(offer, now = new Date()) {
+  if (!offer?.active) return false
+  return new Date(offer.starts_at).getTime() > now.getTime()
+}
 
 export function offerIsOpen(offer, now = new Date()) {
   if (!offer?.active) return false

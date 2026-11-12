@@ -13,36 +13,36 @@ describe('offers storefront copy (OFFERS.8)', () => {
     expect(h.marquee).toMatch(/GIFT CARDS/)
   })
 
-  it('a pack-only sale never promises a membership', () => {
-    const h = heroFor([gift, pack, pack])
-    expect(h.line1).toBe('LOCK IN YOUR')
-    expect(h.line2).toBe('CLASSES')
-    expect(h.marquee).toBe('LOCK IN YOUR CLASSES · ')
-    expect(h.blurb).toMatch(/extra classes/)
-    expect(h.blurb).not.toMatch(/membership|plan/i)
+  const copy = { marquee: 'M · ', line1: 'L1', line2: 'L2', blurb: 'B' }
+
+  it('gift-only keeps the gift hero, with the studio in the title', () => {
+    expect(heroFor([gift], copy).line1).toBe('GIVE THE GIFT')
+    expect(heroFor([gift], copy, 'UN1T Hatch Street').title).toBe('Gift Cards — UN1T Hatch Street')
   })
 
-  it('a sale with any membership keeps the membership copy', () => {
-    expect(heroFor([pack, membership]).line2).toBe('MEMBERSHIP')
-    expect(heroFor([membership]).line2).toBe('MEMBERSHIP')
+  it('any timed sale reads from the studio copy', () => {
+    const h = heroFor([gift, pack, pack], copy, 'UN1T Hatch Street')
+    expect(h).toEqual({ marquee: 'M · ', line1: 'L1', line2: 'L2', blurb: 'B', title: 'Black Friday — UN1T Hatch Street' })
+    expect(heroFor([pack], copy).line2).toBe(copy.line2)
+    expect(heroFor([membership], copy).line2).toBe(copy.line2)
   })
 
-  it('an empty storefront falls back to the sale copy, not gift copy', () => {
-    expect(heroFor([]).line2).toBe('MEMBERSHIP')
+  it('copy is optional and defaults to the Black Friday head start', () => {
+    expect(heroFor([membership]).line2).toBe('HEAD START')
+    expect(heroFor([]).line2).toBe('HEAD START')
   })
 
   it('the tab title follows the same rule', () => {
     expect(storefrontTitle(new Set(['gift_card']))).toBe('Gift Cards — UN1T Stillorgan')
-    expect(storefrontTitle(new Set(['gift_card', 'class_pack']))).toBe('Lock In Your Classes — UN1T Stillorgan')
-    expect(storefrontTitle(new Set(['class_pack', 'membership']))).toBe('Lock In Your Membership — UN1T Stillorgan')
-    expect(storefrontTitle(new Set())).toBe('Lock In Your Membership — UN1T Stillorgan')
+    expect(storefrontTitle(new Set(['gift_card', 'class_pack']))).toBe('Black Friday — UN1T Stillorgan')
+    expect(storefrontTitle(new Set(), 'UN1T Hatch Street')).toBe('Black Friday — UN1T Hatch Street')
   })
 
   it('timed sale sections render ahead of the evergreen gift cards', () => {
     expect(CATEGORY_ORDER).toEqual(['membership', 'class_pack', 'gift_card'])
   })
 
-  it('a November buyer is tagged for the November sale', () => {
-    expect(OFFER_SALE_TAG).toBe('offer-sale-nov-2026')
+  it('a Black Friday buyer is tagged for the Black Friday sale', () => {
+    expect(OFFER_SALE_TAG).toBe('offer-sale-bf-2026')
   })
 })

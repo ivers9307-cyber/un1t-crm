@@ -13,6 +13,8 @@
 
 // Display order: the timed sale first, the evergreen gift cards last. A
 // category with no active rows renders nothing at all.
+import { DEFAULT_OFFERS_PAGE_COPY } from './offer-studios'
+
 export const CATEGORY_ORDER = ['membership', 'class_pack', 'gift_card']
 
 const GIFT_HERO = {
@@ -20,39 +22,30 @@ const GIFT_HERO = {
   line1: 'GIVE THE GIFT',
   line2: 'OF TRAINING',
   blurb: 'A UN1T gift card is coached strength and conditioning, 45 minutes at a time. Pick a value, pay in two minutes, and we will send you everything you need to hand it over.',
-  title: 'Gift Cards — UN1T Stillorgan',
-}
+  }
 
-const MEMBERSHIP_HERO = {
-  marquee: 'LOCK IN YOUR MEMBERSHIP · ',
-  line1: 'LOCK IN YOUR',
-  line2: 'MEMBERSHIP',
-  blurb: 'Every plan comes with extra time or extra classes on the house. Pay once, train more, done.',
-  title: 'Lock In Your Membership — UN1T Stillorgan',
-}
+const DEFAULT_STUDIO_LABEL = 'UN1T Stillorgan'
 
-const CLASSES_HERO = {
-  marquee: 'LOCK IN YOUR CLASSES · ',
-  line1: 'LOCK IN YOUR',
-  line2: 'CLASSES',
-  blurb: 'Every pack comes with extra classes on the house. Pay once, train more, done.',
-  title: 'Lock In Your Classes — UN1T Stillorgan',
-}
-
-function heroForCategories(cats) {
-  const giftOnly = cats.size > 0 && cats.size === 1 && cats.has('gift_card')
-  if (giftOnly) return GIFT_HERO
-  if (cats.has('membership')) return MEMBERSHIP_HERO
-  if (cats.has('class_pack')) return CLASSES_HERO
-  return MEMBERSHIP_HERO
+// A timed sale (any membership or class_pack present, or nothing at all)
+// reads from the studio's page copy; gift-only keeps the gift wording.
+function heroForCategories(cats, copy, studioLabel) {
+  const giftOnly = cats.size === 1 && cats.has('gift_card')
+  if (giftOnly) return { ...GIFT_HERO, title: `Gift Cards — ${studioLabel}` }
+  return {
+    marquee: copy.marquee,
+    line1: copy.line1,
+    line2: copy.line2,
+    blurb: copy.blurb,
+    title: `Black Friday — ${studioLabel}`,
+  }
 }
 
 /** Hero + marquee for the open offers (rows that passed offerIsOpen). */
-export function heroFor(offers) {
-  return heroForCategories(new Set((offers || []).map((o) => o.category)))
+export function heroFor(offers, copy = DEFAULT_OFFERS_PAGE_COPY, studioLabel = DEFAULT_STUDIO_LABEL) {
+  return heroForCategories(new Set((offers || []).map((o) => o.category)), copy, studioLabel)
 }
 
 /** Browser-tab title for a Set of active categories (the layout's metadata). */
-export function storefrontTitle(categories) {
-  return heroForCategories(categories instanceof Set ? categories : new Set(categories || [])).title
+export function storefrontTitle(categories, studioLabel = DEFAULT_STUDIO_LABEL) {
+  return heroForCategories(categories instanceof Set ? categories : new Set(categories || []), DEFAULT_OFFERS_PAGE_COPY, studioLabel).title
 }

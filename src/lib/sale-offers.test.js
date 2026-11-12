@@ -10,6 +10,7 @@ vi.mock('./ops-alerts', () => ({ sendOpsAlert: (...a) => sendOpsAlert(...a) }))
 import {
   OFFER_SALE_TAG,
   offerIsOpen,
+  offerIsUpcoming,
   offerHasDeadline,
   formatEuro,
   formatSaleDeadline,
@@ -46,6 +47,20 @@ describe('offerIsOpen', () => {
   })
   it('true at the final second', () => {
     expect(offerIsOpen(openOffer, new Date('2026-08-11T22:59:59Z'))).toBe(true)
+  })
+})
+
+describe('offerIsUpcoming', () => {
+  const o = { active: true, starts_at: '2026-11-23T00:00:00Z' }
+  it('true just before starts_at, false at it', () => {
+    expect(offerIsUpcoming(o, new Date('2026-11-22T23:59:59Z'))).toBe(true)
+    expect(offerIsUpcoming(o, new Date('2026-11-23T00:00:00Z'))).toBe(false)
+  })
+  it('false when inactive', () => {
+    expect(offerIsUpcoming({ ...o, active: false }, new Date('2026-11-01T00:00:00Z'))).toBe(false)
+  })
+  it('the sale tag is the Black Friday one', () => {
+    expect(OFFER_SALE_TAG).toBe('offer-sale-bf-2026')
   })
 })
 
