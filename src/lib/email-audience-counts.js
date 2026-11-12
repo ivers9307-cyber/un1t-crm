@@ -26,7 +26,8 @@ export async function emailAudienceCounts(db, { filter, locationId }) {
     return c || 0
   }
 
-  // Order matters — keep aligned with the route test's count sequence.
+  // Order matters: email-audience-counts.test.js and the audience-count route
+  // test answer these counts in this sequence.
   const matched = await viewCount(null)
   const not_opted_in = await viewCount((q) => q.eq('loc_email_marketing', false))
   const bounced_or_complained = await viewCount((q) => q.in('email_status', ['bounced', 'complained']))

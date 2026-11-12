@@ -20,9 +20,11 @@ import { uuidLike } from '@/lib/schemas'
 import { applyAudienceFilterAsync, scopedAudienceSource } from '@/lib/audience-filter'
 import { computeWhatsAppReachabilitySummary } from '@/lib/whatsapp'
 // FILTER-B.8 — the will-receive number for EVERY channel comes from the
-// shared per-channel eligibility builder, which delegates to that channel's
-// SEND builder. /api/communications/audience-preview calls the same function,
-// so the count, the preview and the send resolve one query path by
+// shared per-channel eligibility builder (buildEligibleAudienceQuery), which
+// delegates to that channel's SEND builder. The email branch reaches it through
+// emailAudienceCounts (src/lib/email-audience-counts.js, MCPEMAIL.1), shared
+// with the MCP email tools; /api/communications/audience-preview uses the same
+// builder, so the count, the preview and the send resolve one query path by
 // construction. (The SMS branch that lived here, and taught this lesson by
 // hand-copying its send gates, left with the SMS channel — TWILIO-RETIRE.1.)
 import { emailAudienceCounts } from '@/lib/email-audience-counts'

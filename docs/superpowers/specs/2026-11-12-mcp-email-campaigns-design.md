@@ -172,9 +172,10 @@ audience_eligible, send_at (null = now), expires_at, used_at, created_at`.
 - **Issued by** `send_email_for_approval`: a 32-byte random token, stored only
   as a sha256 hash, valid 24 hours. Issuing a new one voids earlier unused
   approvals for that campaign. At most 5 per campaign per hour.
-- **Bound to content.** `content_key` is a hash over eight fields
+- **Bound to content.** `content_key` is a hash over thirteen fields
   (`location_id, subject, preview_text, from_name, from_email, reply_to,
-  html_content, audience_filter`), the
+  html_content, audience_filter, postmark_stream, ab_subject_b, ab_test_pct,
+  ab_wait_hours, parent_campaign_id`), the
   pattern `signedContentKey` uses in `src/lib/whatsapp-blast-signoff.js`. On
   the confirm page the key is recomputed from the row; a mismatch means the
   campaign changed since the test, and the page says to ask for a new test.
@@ -211,13 +212,41 @@ studio; status is `draft` or `scheduled`; subject and body present; an audience
 is set and its eligible count is above zero; the audience has not grown past
 what was tested (below); `getEmailCapStatus`; `checkSpend`. Then one
 compare-and-set update on status to `queued` or `scheduled`, judged on the rows
-it touched; zero rows is a conflict. The approval is marked used only after
-that write succeeds.
+it touched; zero rows is a conflict. The approval is spent (a compare-and-set
+on `used_at`) BEFORE that write: a spent approval with no send is the safe
+failure, a send with a reusable approval is not.
 
 `get_email_campaign` reports whether an approval is waiting, so Claude can tell
 the person "the test is in your inbox, waiting for you".
 
 ### Calls made while writing this up (Claude's, not Richard's)
+
+- **Built as: the approval is spent before the release write.** The route
+  consumes the approval (compare-and-set on `used_at`) and only then runs the
+  release compare-and-set. If the release then touches no row (an edit landed
+  in between) or errors, nothing was sent and the approval stays spent: the
+  person asks for a new test. The reverse order could send with an approval
+  still reusable.
+- **Built as: the content key covers 13 fields.** Besides the eight a tool
+  writes, it covers the five the sender reads that a tool never sets but the
+  CRM can (its Duplicate copies `ab_*` and `postmark_stream` onto a draft):
+  `postmark_stream, ab_subject_b, ab_test_pct, ab_wait_hours,
+  parent_campaign_id`.
+- **Built as: three cases are never released from an approval.** A subject
+  A/B test (`ab_subject_b` set), a resend (`parent_campaign_id` set) and a
+  campaign not on the marketing stream (`postmark_stream` not `broadcast`):
+  neither the test email nor the page shows them, so the CRM sends those.
+  `send_email_for_approval` refuses before issuing an approval, the page and
+  route refuse even if the key matched, and `get_email_campaign` reports the
+  sentence as `release_blocker`.
+- **Built as: a "View as" or support session cannot approve.** Under "View
+  as", `getCurrentUser()` returns the target's profile, so a master holding
+  the link would press as that person. The page and the route refuse it
+  before any approval is read.
+- **Built as: cancelling withdraws approvals.** `cancel_email_campaign` voids
+  every waiting approval after a stop, and on a plain draft with a live
+  approval withdraws it (`approval_withdrawn`), so a link still in the inbox
+  is dead after "cancel it".
 
 - **Built as: the release also pins `updated_at`, and an agent edit always
   returns the campaign to draft.** The compare-and-set in `releaseCampaign`
