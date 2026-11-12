@@ -40,3 +40,11 @@ mobile/google-services.json
 
 # Agent scratch PR bodies must never be committed (W1.S4 left one on main, 11 Oct)
 /pr-*.md
+
+# Playwright MCP session output (console logs, traces). `playwright-report/`
+# above covers the test runner's own output; this is the MCP server's, which
+# lands in the primary checkout whenever a session drives a browser. It is
+# tool output, never source, and a browser console log from a live CRM session
+# can carry member data or a token — this repo is PUBLIC, so one `git add -A`
+# would publish it.
+.playwright-mcp/
