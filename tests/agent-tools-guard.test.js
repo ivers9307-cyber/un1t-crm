@@ -25,11 +25,24 @@
 //  5. No tool selects `*` (or a bare `.select()`, which is `*`) from
 //     profiles, locations or contacts, directly or as an embed: each has a
 //     REVOKE in its history, and a service-role `*` ships what it hides.
+//  6. MCPEMAIL.1 — no tool can send an email campaign. (a) No file names
+//     `releaseCampaign` or `consumeApproval`: a release happens only on the
+//     signed-in approve route. (b) No `.from('campaigns')` insert/update/upsert
+//     writes a `status` other than the literal 'draft', read from the object
+//     literal passed in or, for a named patch (`.update(patch)`), from its
+//     `const patch = {…}`, every `Object.assign(patch, …)` and any
+//     `patch.status = …`. The one documented exception is the cancel tool,
+//     which stops a campaign through `stopCampaign` (a lib outside this scan),
+//     so cancel-email-campaign.js must be the only file naming it. (c) Every
+//     APPROVAL_CONTENT_FIELDS column is in CAMPAIGN_COLS and in the approve
+//     view's APPROVAL_CAMPAIGN_COLUMNS, so a short select can never weaken the
+//     binding (campaignContentKey would throw, but only at run time).
 //
 // A floor, not a proof: a chain built across statements (`let q = …; q =
 // q.eq(…)`) reads as unfiltered (a false positive, by design: build the query
 // in one expression), and a table or select string held in a variable is
-// invisible to rules 3 and 5.
+// invisible to rules 3 and 5. Rule 6b cannot see a `status` that arrives
+// through a spread (`...body`) or a helper that builds the patch elsewhere.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
@@ -63,7 +76,7 @@ const unquote = (s) => s.slice(1, -1)
 /** Index just past the bracket group that opens at `i` (string-aware). */
 function skipGroup(code, i) {
   const open = code[i]
-  const close = open === '(' ? ')' : ']'
+  const close = open === '(' ? ')' : open === '[' ? ']' : '}'
   let depth = 0
   for (let k = i; k < code.length; k++) {
     const ch = code[k]
@@ -161,6 +174,64 @@ export function starSelects(code) {
   return hits
 }
 
+/** Files' names for the release-side functions no tool may reach. */
+export function releaseReferences(code) {
+  return [...code.matchAll(/\b(releaseCampaign|consumeApproval)\b/g)].map((m) => m[1])
+}
+
+const groupText = (code, open) => code.slice(open + 1, skipGroup(code, open) - 1)
+
+/** `status` keys in an object's text whose value is not the literal 'draft'. */
+function badStatusKeys(text) {
+  const bad = []
+  for (const m of text.matchAll(/(?<![\w$.'"`])status\s*:\s*/g)) {
+    const rest = text.slice(m.index + m[0].length)
+    if (!/^(['"`])draft\1(?=\s*(?:[,}\n]|$))/.test(rest)) bad.push(`status: ${rest.split(/[,}\n]/)[0].trim()}`)
+  }
+  for (const m of text.matchAll(/(?:^|[{,])\s*status\s*(?=[,}]|$)/g)) bad.push(`{ ${m[0].replace(/[{,]/, '').trim()} } (shorthand)`)
+  return bad
+}
+
+/** The status writes made through a named patch object `name`. */
+function badStatusInPatch(code, name) {
+  const bad = []
+  const n = name.replace(/\$/g, '\\$')
+  let declared = false
+  for (const m of code.matchAll(new RegExp(`\\b(?:const|let|var)\\s+${n}\\s*=\\s*`, 'g'))) {
+    declared = true
+    const at = m.index + m[0].length
+    if (code[at] === '{') bad.push(...badStatusKeys(groupText(code, at)))
+    else bad.push(`${name} = ${code.slice(at).split('\n')[0].trim()} (not an object literal)`)
+  }
+  for (const m of code.matchAll(new RegExp(`\\bObject\\s*\\.\\s*assign\\(\\s*${n}\\s*,`, 'g'))) {
+    bad.push(...badStatusKeys(groupText(code, m.index + m[0].indexOf('('))))
+  }
+  for (const m of code.matchAll(new RegExp(`\\b${n}\\s*(?:\\.\\s*status|\\[\\s*(['"\`])status\\1\\s*\\])\\s*=(?!=)\\s*`, 'g'))) {
+    const rest = code.slice(m.index + m[0].length)
+    if (!/^(['"`])draft\1/.test(rest)) bad.push(`${name}.status = ${rest.split('\n')[0].trim()}`)
+  }
+  if (!declared) bad.push(`${name}: no object literal declared in this file`)
+  return bad
+}
+
+/** Writes to `campaigns` that set a status other than 'draft'. */
+export function campaignStatusWrites(code) {
+  const bad = []
+  for (const { table, chain } of fromChains(code)) {
+    if (table !== 'campaigns') continue
+    for (const m of chain.matchAll(/\.\s*(insert|update|upsert)\s*\(/g)) {
+      const arg = groupText(chain, m.index + m[0].length - 1).trim()
+      if (/^[A-Za-z_$][\w$]*$/.test(arg)) bad.push(...badStatusInPatch(code, arg))
+      else if (/^[[{]/.test(arg)) bad.push(...badStatusKeys(arg))
+      else bad.push(`.${m[1]}(${arg.split('\n')[0]}): not an object literal or a named patch`)
+    }
+  }
+  return bad
+}
+
+/** Column names in a comma-separated select string (top level only). */
+const columnNames = (sel) => topLevelColumns(sel).filter(Boolean)
+
 // ── the rules, over the real registry ───────────────────────────────────────
 
 describe('agent tools guard (MCP.1)', () => {
@@ -228,6 +299,39 @@ describe('agent tools guard (MCP.1)', () => {
     const bad = sourceFiles().flatMap((f) => starSelects(codeOf(f)).map((s) => `${rel(f)}: ${s}`))
     expect(bad, `name the columns:\n${bad.join('\n')}`).toEqual([])
   })
+
+  // MCPEMAIL.1 — the central promise: no tool can send a campaign.
+  it('no tool file reaches releaseCampaign or consumeApproval', () => {
+    const bad = sourceFiles().flatMap((f) => releaseReferences(codeOf(f)).map((n) => `${rel(f)}: ${n}`))
+    expect(bad, `a release happens only on the signed-in approve route:\n${bad.join('\n')}`).toEqual([])
+  })
+
+  it("no tool writes a campaign status other than 'draft'", () => {
+    const campaignWriters = sourceFiles().filter((f) => fromChains(codeOf(f)).some((c) => c.table === 'campaigns' && /\.\s*(?:insert|update|upsert)\s*\(/.test(c.chain)))
+    // Not vacuous: the create and update tools write campaigns directly.
+    expect(campaignWriters.map(rel)).toEqual(expect.arrayContaining([
+      'src/lib/agent-tools/create-email-draft.js', 'src/lib/agent-tools/update-email-draft.js',
+    ]))
+    const bad = sourceFiles().flatMap((f) => campaignStatusWrites(codeOf(f)).map((s) => `${rel(f)}: ${s}`))
+    expect(bad, `a tool may only ever leave a campaign in draft:\n${bad.join('\n')}`).toEqual([])
+  })
+
+  it('only the cancel tool reaches stopCampaign (the documented exception)', () => {
+    const users = sourceFiles().filter((f) => /\bstopCampaign\b/.test(codeOf(f))).map(rel)
+    expect(users).toEqual(['src/lib/agent-tools/cancel-email-campaign.js'])
+  })
+
+  it('every approval content field is read by the tools and by the approve view', async () => {
+    const { APPROVAL_CONTENT_FIELDS } = await import('@/lib/campaign-approval')
+    const { CAMPAIGN_COLS } = await import('@/lib/agent-tools/_email-campaign.js')
+    const { APPROVAL_CAMPAIGN_COLUMNS } = await import('@/lib/campaign-approval-view')
+    expect(APPROVAL_CONTENT_FIELDS.length).toBeGreaterThanOrEqual(13)
+    for (const [name, cols] of [['CAMPAIGN_COLS', CAMPAIGN_COLS], ['APPROVAL_CAMPAIGN_COLUMNS', APPROVAL_CAMPAIGN_COLUMNS]]) {
+      const have = new Set(columnNames(cols))
+      const missing = APPROVAL_CONTENT_FIELDS.filter((f) => !have.has(f))
+      expect(missing, `${name} must read every approval content field`).toEqual([])
+    }
+  })
 })
 
 // ── the scanners catch what they claim to (only whoami exists today) ────────
@@ -285,5 +389,28 @@ describe('agent tools guard scanners', () => {
     expect(starSelects(`db.from('deals').select('id, contacts!contact_id(*)').eq('id', x)`)).toHaveLength(1)
     expect(starSelects(`db.from('deals').select('*, contacts!contact_id(id, first_name)').eq('location_id', s)`)).toEqual([])
     expect(starSelects(`db.from('contacts').select('id, deals(*)').eq('id', x)`)).toEqual([])
+  })
+
+  it('flags a release-side name, and only those two', () => {
+    expect(releaseReferences(`import { releaseCampaign } from '@/lib/campaign-release'`)).toEqual(['releaseCampaign'])
+    expect(releaseReferences(`await consumeApproval(db, id)`)).toEqual(['consumeApproval'])
+    expect(releaseReferences(`import { releasePreflight, stopCampaign } from '@/lib/campaign-release'`)).toEqual([])
+  })
+
+  it('reads a campaign status from an inline object, a named patch, Object.assign and an assignment', () => {
+    expect(campaignStatusWrites(`await db.from('campaigns').update({ status: 'queued' }).eq('id', x).eq('location_id', s)`)).toHaveLength(1)
+    expect(campaignStatusWrites(`await db.from('campaigns').insert([{ name, status: "scheduled" }]).select('id')`)).toHaveLength(1)
+    expect(campaignStatusWrites(`await db.from('campaigns').update({ status }).eq('id', x)`)).toHaveLength(1)
+    expect(campaignStatusWrites(`await db.from('campaigns').update({ status: 'draft', scheduled_at: null }).eq('id', x)`)).toEqual([])
+    expect(campaignStatusWrites(`const row = { status: 'draft', name }\nawait db.from('campaigns').insert(row).select('id')`)).toEqual([])
+    expect(campaignStatusWrites(`const row = { status: next }\nawait db.from('campaigns').insert(row).select('id')`)).toHaveLength(1)
+    expect(campaignStatusWrites(`const patch = {}\nObject.assign(patch, { status: 'draft' })\nawait db.from('campaigns').update(patch).eq('id', x)`)).toEqual([])
+    expect(campaignStatusWrites(`const patch = {}\nObject.assign(patch, { status: 'queued' })\nawait db.from('campaigns').update(patch).eq('id', x)`)).toHaveLength(1)
+    expect(campaignStatusWrites(`const patch = {}\npatch.status = 'sending'\nawait db.from('campaigns').update(patch).eq('id', x)`)).toHaveLength(1)
+    expect(campaignStatusWrites(`await db.from('campaigns').update(makePatch()).eq('id', x)`)).toHaveLength(1)
+    expect(campaignStatusWrites(`await db.from('campaigns').update(patch).eq('id', x)`)).toHaveLength(1)
+    // Another table's status and a returned object are not campaign writes.
+    expect(campaignStatusWrites(`await db.from('activities').insert({ status: 'todo' }).select('id')`)).toEqual([])
+    expect(campaignStatusWrites(`return { status: result.status }`)).toEqual([])
   })
 })
