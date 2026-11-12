@@ -28,7 +28,7 @@ vi.mock('@/lib/un1t-online-funnel-emails', () => ({ sendUn1tAccountEmail: mocks.
 vi.mock('@/lib/trial-purchase-un1t-settle', () => ({ UN1T_TRIAL_EXPIRY_MS: 24 * 60 * 60_000 + 45 * 60_000 }))
 vi.mock('@/lib/log', () => ({ logError: mocks.error, logWarn: mocks.warn, logInfo: vi.fn() }))
 
-import { sweepUn1tOfferPurchases, OFFER_SET_PASSWORD_BODY, EXPIRED_ERROR } from './un1t-offer-purchases'
+import { sweepUn1tOfferPurchases, clockMs, OFFER_SET_PASSWORD_BODY, EXPIRED_ERROR } from './un1t-offer-purchases'
 
 const LOC = 'loc-hatch'
 const HOUR = 60 * 60_000
@@ -173,6 +173,23 @@ describe('sweepUn1tOfferPurchases', () => {
     expect(r).toMatchObject({ ok: true, recorded: 0, matchedPage: 0 })
     expect(purchaseWrites(writes).filter((w) => w.kind === 'insert')).toHaveLength(0)
     expect(mocks.notify).not.toHaveBeenCalled()
+  })
+
+  // BLACKFRIDAY.9 — the cron passed `{ now: new Date() }` and every run threw
+  // `now is not a function`, caught as ok:false. A Date is read as a fixed instant.
+  it('a Date passed as now is accepted and read as that instant', async () => {
+    const page = pageRow({ created_at: '2026-11-30T23:50:00.000Z' })
+    const { db } = makeDb({ purchases: [page], txs: [tx({ remote_created_at: '2026-12-01T00:30:00.000Z' })] })
+    const r = await sweepUn1tOfferPurchases(db, LOC, { now: new Date('2026-12-01T01:00:00.000Z') })
+    expect(r).toMatchObject({ ok: true, matchedPage: 1 })
+  })
+
+  it('clockMs resolves a function, a Date, a number and nothing', () => {
+    expect(clockMs(() => 5)).toBe(5)
+    expect(clockMs(new Date(7))).toBe(7)
+    expect(clockMs(9)).toBe(9)
+    const before = Date.now()
+    expect(clockMs(undefined)).toBeGreaterThanOrEqual(before)
   })
 
   it('sweep honours late payment for a page row', async () => {

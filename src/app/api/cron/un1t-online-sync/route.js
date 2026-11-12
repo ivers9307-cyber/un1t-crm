@@ -224,7 +224,7 @@ export async function GET(request) {
       const timedOut = new Promise((resolve) => {
         timer = setTimeout(() => resolve({ timeout: true }), left)
       })
-      const res = await Promise.race([sweepUn1tOfferPurchases(db, locationId, { now: new Date() }), timedOut])
+      const res = await Promise.race([sweepUn1tOfferPurchases(db, locationId), timedOut])
       if (res?.timeout) {
         offerClean = false
         logWarn(CRON_NAME, 'offer purchase sweep timed out', { locationId })

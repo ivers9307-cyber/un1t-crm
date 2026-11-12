@@ -394,6 +394,17 @@ describe('GET /api/cron/un1t-online-sync', () => {
       expect(syncStamps()).toHaveLength(1)
     })
 
+    // BLACKFRIDAY.9 — the route passed `{ now: new Date() }`, which the sweep
+    // called as a function, so every run threw. Pin the call shape.
+    it('calls the offer sweep with no options or a function clock', async () => {
+      h.discovery = found([loc('hatch')])
+      runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+      await GET(req())
+      expect(sweepUn1tOfferPurchases).toHaveBeenCalledTimes(1)
+      const opts = sweepUn1tOfferPurchases.mock.calls[0][2]
+      if (opts !== undefined) expect(typeof opts.now).toBe('function')
+    })
+
     it('offer sweep failure does not stop the sync heartbeat', async () => {
       h.discovery = found([loc('hatch')])
       runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })

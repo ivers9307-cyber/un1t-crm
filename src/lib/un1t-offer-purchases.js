@@ -95,16 +95,26 @@ async function readAll(build, what) {
 
 const ms = (v) => Date.parse(v)
 
+/** Resolves the `now` option to epoch ms: a function, a Date, a number, or absent. */
+export function clockMs(now) {
+  if (typeof now === 'function') return Number(now())
+  if (now instanceof Date) return now.getTime()
+  if (typeof now === 'number' && Number.isFinite(now)) return now
+  return Date.now()
+}
+
 /**
  * @param {object} db service-role client
  * @param {string} locationId
- * @param {{ now?: () => number }} [opts]
+ * @param {{ now?: (() => number) | Date | number }} [opts] a clock function; a
+ *   Date or epoch-ms number is accepted too and read as a fixed instant
+ *   (BLACKFRIDAY.9: the cron once passed a Date and every run threw)
  * @returns {Promise<{ ok: boolean, checked: number, recorded: number, matchedPage: number, expired: number, failed: number, passwordPending: number }>}
  */
-export async function sweepUn1tOfferPurchases(db, locationId, { now = () => Date.now() } = {}) {
+export async function sweepUn1tOfferPurchases(db, locationId, { now } = {}) {
   const out = { ok: true, checked: 0, recorded: 0, matchedPage: 0, expired: 0, failed: 0, passwordPending: 0 }
   try {
-    return await sweep(db, locationId, now(), out)
+    return await sweep(db, locationId, clockMs(now), out)
   } catch (err) {
     if (err instanceof ReadFailed) {
       logError(LOG, `${err.what} unreadable; nothing recorded or expired`, { locationId, code: err.code })
