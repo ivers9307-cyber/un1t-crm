@@ -11,6 +11,8 @@
 //     terms and waiver tick (`terms`, un1tTermsPayload's shape, as /trial
 //     renders it); a 400 terms_required answer re-renders it from the reply;
 //     a 202 help_filed answer (staff have the buyer's details) ends the form.
+//   * cancelled (BLACKFRIDAY.9): the buyer came back from un1t.online's cancel
+//     URL; the form shows with "Checkout cancelled. Nothing was charged.".
 // Every prop is serialisable: a function prop from the server page crashes
 // the page in production.
 import { useEffect, useRef, useState } from 'react'
@@ -32,7 +34,7 @@ function TermsTick({ terms, checked, onChange }) {
   )
 }
 
-export default function OfferCheckout({ studio, slug, priceLabel, provider = 'revolut', terms = null, resumePurchaseId = null }) {
+export default function OfferCheckout({ studio, slug, priceLabel, provider = 'revolut', terms = null, resumePurchaseId = null, cancelled = false }) {
   const isUn1t = provider === 'un1t_online'
   // resumePurchaseId: set when Revolut redirected the buyer back after an
   // app-handoff payment (Revolut Pay on mobile) — start by confirming that
@@ -42,6 +44,8 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
   const [fields, setFields] = useState({ name: '', email: '', phone: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  // Shown above the form until the buyer submits again.
+  const [notice, setNotice] = useState(cancelled ? 'Checkout cancelled. Nothing was charged.' : null)
   const [session, setSession] = useState(null) // { purchaseId, token }
   const targetRef = useRef(null)
   const instanceRef = useRef(null)
@@ -59,7 +63,7 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
       setError(activeTerms.required_message || 'Please tick to accept the terms and waiver.')
       return
     }
-    setBusy(true); setError(null)
+    setBusy(true); setError(null); setNotice(null)
     let leaving = false
     try {
       const r = await fetch(`/api/public/offers/${encodeURIComponent(studio)}/${encodeURIComponent(slug)}/checkout`, {
@@ -217,6 +221,7 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
 
   return (
     <form onSubmit={submit}>
+      {notice && <p className="text-sm mb-3" role="status" style={{ color: '#d4d4d4' }}>{notice}</p>}
       {error && <p className="text-sm mb-3" style={{ color: '#ef4444' }}>{error}</p>}
       <div className="mt-2">
         <label className="ofr-label" htmlFor="ofr-name">Full name</label>

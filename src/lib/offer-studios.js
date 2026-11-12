@@ -95,3 +95,43 @@ export function offersPageCopy(location) {
     infoBlocks: blocks(s.infoBlocks, d.infoBlocks),
   }
 }
+
+// BLACKFRIDAY.9 — ONE payment-rail rule for an offer, used by the checkout
+// handler (offer-checkout.js) and the product page (/offers/[studio]/[slug]),
+// so the page never shows a form the handler would refuse.
+//   'un1t_online'    a un1t.online studio's membership or class pack that names
+//                    its un1t.online product: un1t.online's hosted checkout.
+//   'not_configured' that studio/category combination with no product id yet,
+//                    OR any offer carrying a un1t_product_id outside it (a
+//                    product-carrying row must never be sold through Revolut).
+//   'revolut'        everything else.
+export const UN1T_RAIL_CATEGORIES = new Set(['membership', 'class_pack'])
+
+/**
+ * @param {{ membership_source?: string|null }|null} location
+ * @param {{ category?: string|null, un1t_product_id?: string|null }|null} offer
+ * @returns {'un1t_online'|'revolut'|'not_configured'}
+ */
+export function offerRail(location, offer) {
+  const hasProduct = typeof offer?.un1t_product_id === 'string' ? offer.un1t_product_id.trim() !== '' : !!offer?.un1t_product_id
+  const un1tCombo = location?.membership_source === 'un1t_online' && UN1T_RAIL_CATEGORIES.has(offer?.category)
+  if (un1tCombo) return hasProduct ? 'un1t_online' : 'not_configured'
+  if (hasProduct) return 'not_configured'
+  return 'revolut'
+}
+
+/**
+ * What the product page's right-hand panel shows (BLACKFRIDAY.9). A
+ * `?purchase=` return resumes whatever the window says (a late payment is
+ * honoured), except when it carries `cancelled=1`: un1t.online's cancel URL is
+ * the success URL plus that flag, and a buyer who cancelled must never see
+ * "Thanks, your payment is with un1t.online".
+ * @param {{ open: boolean, upcoming: boolean, purchase?: string|null, cancelled?: boolean }} args
+ * @returns {'resume'|'form'|'upcoming'|'ended'}
+ */
+export function offerPageMode({ open, upcoming, purchase = null, cancelled = false }) {
+  if (purchase && !cancelled) return 'resume'
+  if (open) return 'form'
+  if (upcoming) return 'upcoming'
+  return 'ended'
+}

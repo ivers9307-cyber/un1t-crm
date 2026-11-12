@@ -23,8 +23,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { createOrder } from '@/lib/revolut'
-import { offerIsOpen, offerIsUpcoming } from '@/lib/sale-offers'
-import { resolveOfferStudio } from '@/lib/offer-studios'
+import { resolveOfferStudio, offerRail } from '@/lib/offer-studios'
 import { startUn1tOfferCheckout } from '@/lib/offer-checkout-un1t'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
@@ -34,19 +33,24 @@ import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 import { validateBody } from '@/lib/validate'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { logError, logWarn } from '@/lib/log'
+import { sendOpsAlert } from '@/lib/ops-alerts'
+import { escapeHtml } from '@/lib/html-escape'
+import { offerIsOpen, offerIsUpcoming } from '@/lib/sale-offers'
 
 const LOG = 'offers'
 
 export const offerCheckoutSchema = z.object({
-  name: z.string().trim().min(2).max(120),
+  // BLACKFRIDAY.9 — collapse any whitespace run (a newline included) to one
+  // space: the name lands in staff alert subjects and push bodies.
+  name: z.string().trim().min(2).max(120).transform((s) => s.replace(/\s+/g, ' ')),
   email: z.string().trim().email().max(200),
   phone: z.string().trim().min(6).max(30),
   // un1t.online offers only: the terms and waiver tick (judged below).
   terms_accepted: z.boolean().optional(),
 })
 
-// The categories a un1t.online studio sells through un1t.online's checkout.
-const UN1T_CATEGORIES = new Set(['membership', 'class_pack'])
+// Cents shown, so a mismatch of a few cents is visible in the alert.
+const euroExact = (cents) => `€${(Number(cents) / 100).toFixed(2)}`
 
 const NOT_FOUND = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 const BUSY = () => NextResponse.json({ success: false, code: 'busy', error: 'Busy right now, please try again in a minute.' }, { status: 503 })
@@ -120,18 +124,24 @@ export async function handleOfferCheckout(request, { studio: studioKey, slug }) 
 
   const purchaseId = crypto.randomUUID()
 
-  if (location.membership_source === 'un1t_online' && UN1T_CATEGORIES.has(offer.category)) {
-    return un1tCheckout(db, { request, body, studio, location, offer, purchaseId })
+  // BLACKFRIDAY.9 — the one rail rule (offerRail), shared with the product
+  // page. A un1t.online membership or pack with no product yet, and any offer
+  // carrying a un1t_product_id outside that combination, is refused: a
+  // product-carrying row is never sold through Revolut.
+  const rail = offerRail(location, offer)
+  if (rail === 'not_configured') {
+    logWarn(LOG, 'offer has no payment rail', {
+      offerId: offer.id, locationId: location.id, category: offer.category, hasProduct: !!offer.un1t_product_id,
+    })
+    return NOT_CONFIGURED()
+  }
+  if (rail === 'un1t_online') {
+    return un1tCheckout(db, { body, studio, location, offer, purchaseId })
   }
   return revolutCheckout(db, { request, body, studio, offer, purchaseId })
 }
 
 async function un1tCheckout(db, { body, studio, location, offer, purchaseId }) {
-  // A membership or pack here is sold by un1t.online only: no product, no sale.
-  if (!offer.un1t_product_id) {
-    logWarn(LOG, 'un1t offer has no un1t.online product', { offerId: offer.id, locationId: location.id })
-    return NOT_CONFIGURED()
-  }
 
   // The price the buyer sees is the offer's; un1t.online charges its product's.
   // The two must agree or the page would quote the wrong amount.
@@ -154,6 +164,26 @@ async function un1tCheckout(db, { body, studio, location, offer, purchaseId }) {
       offerId: offer.id, locationId: location.id, productId: offer.un1t_product_id,
       offerCents: offer.price_cents, productCents: product.price_cents ?? null,
     })
+    // BLACKFRIDAY.9 — staff hear about it, not only the log: every buyer of
+    // this offer is being turned away until the two prices agree. Best effort.
+    try {
+      await sendOpsAlert({
+        organizationId: location.organization_id ?? null,
+        locationId: location.id,
+        subject: `BLACK FRIDAY: price mismatch on ${offer.name}`.replace(/\s+/g, ' '),
+        htmlBody: `
+    <p>Buyers can't check out <strong>${escapeHtml(offer.name)}</strong>: the offer's price and its un1t.online product's price differ, so the page refuses the sale.</p>
+    <ul>
+      <li>Offer price: ${escapeHtml(euroExact(offer.price_cents))}</li>
+      <li>un1t.online product price: ${escapeHtml(product.price_cents == null ? 'not set' : euroExact(product.price_cents))}</li>
+      <li>Studio: ${escapeHtml(location.name || location.id)}</li>
+    </ul>
+    <p>Make the two prices agree (the offer in Offer sales, or the product in un1t.online) and buyers can check out again.</p>`,
+        pushBody: `Price mismatch on ${offer.name}: buyers can't check out`.replace(/\s+/g, ' '),
+      }, { db })
+    } catch (e) {
+      logWarn(LOG, 'price mismatch alert failed', { offerId: offer.id, locationId: location.id, errClass: e?.name })
+    }
     return NextResponse.json({
       success: false, code: 'price_mismatch', error: "This offer can't be bought online right now. Please contact the studio.",
     }, { status: 409 })

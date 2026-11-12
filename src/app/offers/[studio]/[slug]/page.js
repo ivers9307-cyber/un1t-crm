@@ -5,13 +5,17 @@
 // renders the sale-ended panel; an unknown studio or slug 404s.
 //
 // The row is looked up by (location_id, slug): a slug alone is not unique
-// since mig 827. An offer with un1t_product_id is sold through un1t.online
-// (Hatch Street), which needs its terms and waiver tick; the rest ride Revolut.
+// since mig 827. The payment rail is offerRail (the checkout handler's own
+// rule, BLACKFRIDAY.9): a un1t.online studio's membership or pack with a
+// product is sold through un1t.online, which needs its terms and waiver tick;
+// a row with no rail shows "Not available right now"; the rest ride Revolut.
+// A `?purchase=…&cancelled=1` return (un1t.online's cancel URL) shows the
+// form again with a "nothing was charged" notice, never the thanks panel.
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { offerIsOpen, offerIsUpcoming, offerHasDeadline, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
-import { resolveOfferStudio } from '@/lib/offer-studios'
+import { resolveOfferStudio, offerRail, offerPageMode } from '@/lib/offer-studios'
 import { studioTermsCopy } from '@/lib/landing-pages'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import SaleCountdown from '@/components/offers/SaleCountdown'
@@ -61,6 +65,7 @@ export default async function OfferPage(props) {
   // Revolut's redirect back after an app-handoff payment carries ?purchase=
   // (set by the checkout route's redirectUrl) — resume in confirming mode.
   const resumePurchaseId = typeof sp?.purchase === 'string' ? sp.purchase : null
+  const cancelled = sp?.cancelled === '1'
   const db = createServerClient()
   const resolved = await resolveOfferStudio(db, key)
   if (!resolved) notFound()
@@ -82,7 +87,11 @@ export default async function OfferPage(props) {
   const isGift = offer.category === 'gift_card'
   const [titleTop, ...titleRest] = offer.name.split(' ')
   const priceLabel = formatEuro(offer.price_cents)
-  const provider = offer.un1t_product_id ? 'un1t_online' : 'revolut'
+  const rail = offerRail(location, offer)
+  const provider = rail === 'not_configured' ? null : rail
+  const mode = offerPageMode({ open, upcoming, purchase: resumePurchaseId, cancelled })
+  const showCheckout = provider !== null && (mode === 'resume' || mode === 'form')
+  const unavailable = provider === null && (mode === 'resume' || mode === 'form')
   // un1t.online's terms and waiver tick, in the studio page's own words. The
   // legal links take the studio page's public path, which is the studio key.
   const terms = provider === 'un1t_online'
@@ -128,16 +137,24 @@ export default async function OfferPage(props) {
         {/* A ?purchase= return resumes whatever the window says: a late
             payment is honoured, so a buyer coming back after the close sees
             the confirmation, never "The sale has ended". */}
-        {open || resumePurchaseId ? (
+        {showCheckout ? (
           <OfferCheckout
             studio={studio.key}
             slug={offer.slug}
             priceLabel={priceLabel}
             provider={provider}
             terms={terms}
-            resumePurchaseId={resumePurchaseId}
+            resumePurchaseId={mode === 'resume' ? resumePurchaseId : null}
+            cancelled={cancelled}
           />
-        ) : upcoming ? (
+        ) : unavailable ? (
+          <div style={{ paddingTop: 24 }}>
+            <p className="ofr-display" style={{ fontSize: 28 }}>Not available right now</p>
+            <p style={{ color: '#9a9a9a', marginTop: 12, fontSize: 14, lineHeight: 1.6 }}>
+              This one can&rsquo;t be bought online at the moment. Get in touch and we will sort you out.
+            </p>
+          </div>
+        ) : mode === 'upcoming' ? (
           <div style={{ paddingTop: 24 }}>
             <p className="ofr-display" style={{ fontSize: 28 }}>
               Opens {formatSaleDeadline(offer.starts_at, { uppercase: false, zone })}

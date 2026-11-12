@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   OFFER_STUDIOS, studioForKey, studioForLocationSlug, resolveOfferStudio,
-  offersPageCopy, DEFAULT_OFFERS_PAGE_COPY,
+  offersPageCopy, DEFAULT_OFFERS_PAGE_COPY, offerRail, offerPageMode,
 } from './offer-studios'
 
 function dbReturning(result) {
@@ -72,5 +72,47 @@ describe('offersPageCopy', () => {
     expect(c.blurb).toBe(DEFAULT_OFFERS_PAGE_COPY.blurb)
     expect(c.line1).toBe('BLACK FRIDAY')
     expect(c.infoBlocks).toEqual(DEFAULT_OFFERS_PAGE_COPY.infoBlocks)
+  })
+})
+
+// BLACKFRIDAY.9 — one payment-rail rule for the handler and the page.
+describe('offerRail', () => {
+  const un1t = { membership_source: 'un1t_online' }
+  const glofox = { membership_source: 'glofox' }
+  it('a un1t.online studio membership or pack with a product goes to un1t.online', () => {
+    expect(offerRail(un1t, { category: 'membership', un1t_product_id: 'p1' })).toBe('un1t_online')
+    expect(offerRail(un1t, { category: 'class_pack', un1t_product_id: 'p2' })).toBe('un1t_online')
+  })
+  it('that combination without a product id is not configured, never Revolut', () => {
+    expect(offerRail(un1t, { category: 'membership', un1t_product_id: null })).toBe('not_configured')
+    expect(offerRail(un1t, { category: 'class_pack' })).toBe('not_configured')
+    expect(offerRail(un1t, { category: 'membership', un1t_product_id: '  ' })).toBe('not_configured')
+  })
+  it('a product id outside that combination is not configured, never Revolut', () => {
+    expect(offerRail(un1t, { category: 'gift_card', un1t_product_id: 'p3' })).toBe('not_configured')
+    expect(offerRail(glofox, { category: 'membership', un1t_product_id: 'p4' })).toBe('not_configured')
+    expect(offerRail(null, { category: 'class_pack', un1t_product_id: 'p5' })).toBe('not_configured')
+  })
+  it('everything else goes to Revolut', () => {
+    expect(offerRail(un1t, { category: 'gift_card', un1t_product_id: null })).toBe('revolut')
+    expect(offerRail(glofox, { category: 'membership', un1t_product_id: null })).toBe('revolut')
+    expect(offerRail(glofox, { category: 'gift_card' })).toBe('revolut')
+  })
+})
+
+describe('offerPageMode', () => {
+  it('a purchase return resumes whatever the window says', () => {
+    expect(offerPageMode({ open: false, upcoming: false, purchase: 'p' })).toBe('resume')
+    expect(offerPageMode({ open: true, upcoming: false, purchase: 'p' })).toBe('resume')
+  })
+  it('a cancelled return never resumes: form when open, else the window panel', () => {
+    expect(offerPageMode({ open: true, upcoming: false, purchase: 'p', cancelled: true })).toBe('form')
+    expect(offerPageMode({ open: false, upcoming: false, purchase: 'p', cancelled: true })).toBe('ended')
+    expect(offerPageMode({ open: false, upcoming: true, purchase: 'p', cancelled: true })).toBe('upcoming')
+  })
+  it('no purchase follows the window', () => {
+    expect(offerPageMode({ open: true, upcoming: false })).toBe('form')
+    expect(offerPageMode({ open: false, upcoming: true })).toBe('upcoming')
+    expect(offerPageMode({ open: false, upcoming: false })).toBe('ended')
   })
 })

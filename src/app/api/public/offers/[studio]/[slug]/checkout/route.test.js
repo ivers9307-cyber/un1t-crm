@@ -12,7 +12,9 @@ const mocks = vi.hoisted(() => ({
   findContact: vi.fn(),
   logError: vi.fn(),
   logWarn: vi.fn(),
+  sendOpsAlert: vi.fn(),
 }))
+vi.mock('@/lib/ops-alerts', () => ({ sendOpsAlert: (...a) => mocks.sendOpsAlert(...a) }))
 vi.mock('@/lib/revolut', () => ({ createOrder: (...a) => mocks.createOrder(...a) }))
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: (...a) => mocks.checkRateLimit(...a),
@@ -128,6 +130,13 @@ describe('POST /api/public/offers/[studio]/[slug]/checkout — Revolut', () => {
     expect(mocks.startUn1t).not.toHaveBeenCalled()
   })
 
+  it('collapses whitespace in the buyer name (no newline reaches an alert subject)', async () => {
+    const res = await POST(makeRequest({ ...goodBody, name: '  Jane\n\nDoe\t Smith ' }), props)
+    expect(res.status).toBe(200)
+    expect(state.inserts[0].row.buyer_name).toBe('Jane Doe Smith')
+    expect(mocks.createOrder.mock.calls[0][0].customer.fullName).toBe('Jane Doe Smith')
+  })
+
   it('hatch gift card uses revolut', async () => {
     const res = await POST(makeRequest(goodBody), propsFor('hatch-street', 'gift-card'))
     expect(res.status).toBe(200)
@@ -231,10 +240,42 @@ describe('POST /api/public/offers/[studio]/[slug]/checkout — Hatch on un1t.onl
     expect((await res.json()).code).toBe('price_mismatch')
     expect(mocks.logError).toHaveBeenCalledTimes(1)
     expect(mocks.logError.mock.calls[0][0]).toBe('offers')
+    // BLACKFRIDAY.9 — staff get one alert naming both prices and the studio.
+    expect(mocks.sendOpsAlert).toHaveBeenCalledTimes(1)
+    const [alert] = mocks.sendOpsAlert.mock.calls[0]
+    expect(alert.subject).toBe('BLACK FRIDAY: price mismatch on 3 Month Membership')
+    expect(alert.locationId).toBe('loc-h')
+    expect(alert.htmlBody).toContain('€597.00')
+    expect(alert.htmlBody).toContain('€627.00')
+    expect(alert.htmlBody).toContain('UN1T Hatch Street')
     const productQ = state.queries.find((q) => q.table === 'un1t_products')
     expect(productQ.filters).toEqual({ location_id: 'loc-h', un1t_id: 'prod-3m' })
     expect(mocks.createOrder).not.toHaveBeenCalled()
     expect(mocks.startUn1t).not.toHaveBeenCalled()
+  })
+
+  it('the price mismatch alert escapes the offer name and never blocks the 409', async () => {
+    state.offers = [{ ...hatchMembership, name: '3 Month <a href=x>Membership' }]
+    state.product = { price_cents: 62700 }
+    mocks.sendOpsAlert.mockRejectedValueOnce(new Error('postmark down'))
+    const res = await POST(makeRequest(ticked), hatch)
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('price_mismatch')
+    const [alert] = mocks.sendOpsAlert.mock.calls[0]
+    expect(alert.htmlBody).not.toContain('<a href=x>')
+    expect(alert.htmlBody).toContain('&lt;a href=x&gt;')
+  })
+
+  it('a product-carrying offer outside the un1t.online combination is not_configured, never Revolut', async () => {
+    state.offers = [{ ...hatchGift, un1t_product_id: 'prod-gift' }, { ...stillOffer, un1t_product_id: 'prod-still' }]
+    for (const p of [propsFor('hatch-street', 'gift-card'), propsFor('stillorgan', '20-class-pack')]) {
+      const res = await POST(makeRequest(ticked), p)
+      expect(res.status).toBe(409)
+      expect((await res.json()).code).toBe('not_configured')
+    }
+    expect(mocks.createOrder).not.toHaveBeenCalled()
+    expect(mocks.startUn1t).not.toHaveBeenCalled()
+    expect(state.inserts).toHaveLength(0)
   })
 
   it('a product missing from the mirror is not_configured; an unreadable mirror is busy', async () => {
