@@ -30,6 +30,7 @@ import { Un1tSettingsReadError } from '@/lib/un1t-online-settings'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { escapeHtml } from '@/lib/html-escape'
+import { oneLine } from '@/lib/sale-offers'
 import { logWarn, logError } from '@/lib/log'
 
 const LOG = 'offers'
@@ -96,7 +97,8 @@ export async function startUn1tOfferCheckout(db, { offer, location, contact, pur
       await sendOpsAlert({
         organizationId: location.organization_id ?? null,
         locationId,
-        subject: `BLACK FRIDAY: ${buyer.name} needs help buying ${offer.name}`,
+        // BLACKFRIDAY.9 — one line: a stored name can carry a newline.
+        subject: `BLACK FRIDAY: ${oneLine(buyer.name)} needs help buying ${oneLine(offer.name)}`,
         htmlBody: `
     <p><strong>${escapeHtml(buyer.name)}</strong> tried to buy <strong>${escapeHtml(offer.name)}</strong> on the offers page, but un1t.online's checkout could not be opened. Nothing was charged.</p>
     <ul>
@@ -106,7 +108,7 @@ export async function startUn1tOfferCheckout(db, { offer, location, contact, pur
       <li>Reason: ${escapeHtml(last_error)}</li>
     </ul>
     <p>Contact them today and sell the offer in un1t.online by hand.</p>`,
-        pushBody: `${buyer.name} needs help buying ${offer.name}`,
+        pushBody: `${oneLine(buyer.name)} needs help buying ${oneLine(offer.name)}`,
       }, { db })
     } catch (e) {
       logWarn(LOG, 'staff alert failed', { purchaseId, locationId, code: e?.code ?? null, errClass: e?.name })

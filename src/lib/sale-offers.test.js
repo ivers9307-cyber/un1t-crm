@@ -18,6 +18,8 @@ import {
   markOfferPurchaseState,
   linkOrCreateContactForPurchase,
   notifyStaffOfPaidPurchase,
+  staffClosingLine,
+  oneLine,
 } from './sale-offers'
 
 beforeEach(() => {
@@ -236,7 +238,7 @@ describe('notifyStaffOfPaidPurchase', () => {
   it('resolves the org from the location and sends an ops alert', async () => {
     const db = {
       from() { return this }, select() { return this }, eq() { return this },
-      maybeSingle: async () => ({ data: { organization_id: 'org1', name: 'UN1T Stillorgan' } }),
+      maybeSingle: async () => ({ data: { organization_id: 'org1', name: 'UN1T Stillorgan', membership_source: 'glofox' } }),
     }
     const r = await notifyStaffOfPaidPurchase(db, purchase, offer)
     expect(r.sent).toBe(true)
@@ -259,6 +261,47 @@ describe('notifyStaffOfPaidPurchase', () => {
     expect(html).toContain('Add the bonus (+2 WEEKS FREE) there')
     expect(html).toContain('Already paid in un1t.online')
     expect(html).not.toContain('Glofox')
+  })
+  // BLACKFRIDAY.9 — escaped HTML, one-line subjects, a closing line per studio.
+  const dbFor = (loc) => ({
+    from() { return this }, select() { return this }, eq() { return this },
+    maybeSingle: async () => ({ data: loc }),
+  })
+  it('escapes every interpolated field in the alert HTML', async () => {
+    const db = dbFor({ organization_id: 'org1', name: 'UN1T <b>Hatch</b>', membership_source: 'un1t_online' })
+    await notifyStaffOfPaidPurchase(db, {
+      ...purchase, buyer_name: 'Eve <a href=x>click</a>', buyer_email: 'e<x>@example.com', buyer_phone: '<script>',
+    }, { name: 'Pack <i>', bonus_headline: '+1 <u>' })
+    const html = sendOpsAlert.mock.calls[0][0].htmlBody
+    expect(html).not.toContain('<a href=x>')
+    expect(html).toContain('Eve &lt;a href=x&gt;click&lt;/a&gt;')
+    for (const raw of ['<x>', '<script>', '<i>', '<u>', '<b>Hatch']) expect(html).not.toContain(raw)
+  })
+  it('collapses newlines in the subject and push body', async () => {
+    const db = dbFor({ organization_id: 'org1', name: 'UN1T Stillorgan', membership_source: 'glofox' })
+    await notifyStaffOfPaidPurchase(db, { ...purchase, buyer_name: 'Jane\r\nBcc: x@y.z  Doe' }, { ...offer, name: '3 Month\nMembership' })
+    const alert = sendOpsAlert.mock.calls[0][0]
+    expect(alert.subject).toBe('NEW SALE: 3 Month Membership (€497) - Jane Bcc: x@y.z Doe')
+    expect(alert.subject).not.toMatch(/[\r\n]/)
+    expect(alert.pushBody).not.toMatch(/[\r\n]/)
+  })
+  it('a Hatch Revolut gift card says issue the gift card, never Glofox', async () => {
+    const db = dbFor({ organization_id: 'org1', name: 'UN1T Hatch Street', membership_source: 'un1t_online' })
+    await notifyStaffOfPaidPurchase(db, purchase, { ...offer, category: 'gift_card' })
+    const html = sendOpsAlert.mock.calls[0][0].htmlBody
+    expect(html).toContain('Issue the gift card, then mark the sale fulfilled in Approvals.')
+    expect(html).not.toContain('Glofox')
+  })
+  it('staffClosingLine: un1t.online, gift card, Glofox and neutral', () => {
+    expect(staffClosingLine({ payment_provider: 'un1t_online' }, offer, { membership_source: 'un1t_online' })).toMatch(/^Already paid in un1t.online/)
+    expect(staffClosingLine({ payment_provider: 'revolut' }, { category: 'gift_card' }, { membership_source: 'glofox' })).toBe('Issue the gift card, then mark the sale fulfilled in Approvals.')
+    expect(staffClosingLine({ payment_provider: 'revolut' }, { category: 'class_pack' }, { membership_source: 'glofox' })).toBe('Set them up in Glofox, then mark the sale fulfilled in Approvals.')
+    expect(staffClosingLine({ payment_provider: 'revolut' }, { category: 'membership' }, { membership_source: 'un1t_online' })).toBe('Set them up, then mark the sale fulfilled in Approvals.')
+    expect(staffClosingLine({ payment_provider: 'revolut' }, { category: 'membership' }, {})).toBe('Set them up, then mark the sale fulfilled in Approvals.')
+  })
+  it('oneLine collapses whitespace and tolerates non-strings', () => {
+    expect(oneLine(' a\n\tb  c ')).toBe('a b c')
+    expect(oneLine(null)).toBe('')
   })
   it('missing org → sent:false, no alert', async () => {
     const db = {

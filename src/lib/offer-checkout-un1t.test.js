@@ -126,6 +126,24 @@ describe('startUn1tOfferCheckout', () => {
     expect(mocks.checkout).not.toHaveBeenCalled()
   })
 
+  // BLACKFRIDAY.9 — the help alert escapes its HTML and keeps the subject on one line.
+  it('the help alert escapes the buyer and offer and collapses newlines in the subject', async () => {
+    mocks.ensureAccount.mockResolvedValue({ kind: 'card', reason: 'account_ambiguous' })
+    await startUn1tOfferCheckout(db, {
+      ...ARGS,
+      offer: { ...OFFER, name: '3 Month\nMembership' },
+      buyer: { name: 'Ava\r\n<a href=x>Doe</a>', email: 'a<b>@example.com', phone: '<i>' },
+    })
+    const [alert] = mocks.alert.mock.calls[0]
+    expect(alert.subject).toBe('BLACK FRIDAY: Ava <a href=x>Doe</a> needs help buying 3 Month Membership')
+    expect(alert.subject).not.toMatch(/[\r\n]/)
+    expect(alert.pushBody).not.toMatch(/[\r\n]/)
+    expect(alert.htmlBody).not.toContain('<a href=x>')
+    expect(alert.htmlBody).toContain('&lt;a href=x&gt;')
+    expect(alert.htmlBody).not.toContain('<b>')
+    expect(alert.htmlBody).not.toContain('<i>')
+  })
+
   it('a non-retryable thrown refusal is help; a thrown read error is unavailable', async () => {
     mocks.ensureAccount.mockRejectedValueOnce(new Un1tWriteRefused('UN1T_WRITES_OFF', 'off', { retryable: false }))
     expect(await startUn1tOfferCheckout(db, ARGS)).toEqual({ kind: 'help_filed' })
