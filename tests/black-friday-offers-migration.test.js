@@ -22,4 +22,10 @@ describe('mig 827 black friday offers', () => {
   it('grants nothing to anon', () => {
     expect(sql).not.toMatch(/GRANT[^;]*\bTO\b[^;]*\banon\b/i);
   });
+  it('closes both tables to client sessions', () => {
+    expect(sql).toMatch(/REVOKE ALL ON public\.offer_purchases FROM anon, authenticated/);
+    expect(sql).toMatch(/REVOKE ALL ON public\.sale_offers FROM anon, authenticated/);
+    expect(sql).toMatch(/DROP POLICY IF EXISTS offer_purchases_select ON public\.offer_purchases/);
+    expect(sql).toMatch(/DROP POLICY IF EXISTS sale_offers_select ON public\.sale_offers/);
+  });
 });

@@ -14,8 +14,18 @@
 --   (5) un1t_write_events_origin_check admits 'web_offer' (every origin mig
 --       787 allowed is kept).
 --
--- No grants change: both tables keep their mig 503 posture (RLS on, one
--- authenticated SELECT policy, anon nothing since mig 677).
+--   (6) Both tables become service-role only. Live, `authenticated` held
+--       INSERT/SELECT/UPDATE/DELETE on both and offer_purchases_select was
+--       USING (true), so any signed-in session could read every buyer's name,
+--       email and phone. No client code reads either table: every reader is
+--       a service-role route or page. Same pattern as mig 674 / 730: REVOKE
+--       ALL from anon and authenticated, drop the policy, leave RLS on with
+--       no policy.
+
+REVOKE ALL ON public.offer_purchases FROM anon, authenticated;
+REVOKE ALL ON public.sale_offers FROM anon, authenticated;
+DROP POLICY IF EXISTS offer_purchases_select ON public.offer_purchases;
+DROP POLICY IF EXISTS sale_offers_select ON public.sale_offers;
 
 ALTER TABLE public.sale_offers
   DROP CONSTRAINT IF EXISTS sale_offers_slug_key;
@@ -122,5 +132,13 @@ BEGIN
              WHERE table_schema = 'public' AND table_name = 'offer_purchases'
                AND column_name = 'revolut_order_id' AND is_nullable = 'NO') THEN
     RAISE EXCEPTION 'mig 827: offer_purchases.revolut_order_id is still NOT NULL';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.table_privileges
+             WHERE table_schema = 'public' AND table_name IN ('offer_purchases', 'sale_offers')
+               AND grantee IN ('anon', 'authenticated')) THEN
+    RAISE EXCEPTION 'mig 827: anon or authenticated still holds a privilege on offer_purchases or sale_offers';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('offer_purchases', 'sale_offers')) THEN
+    RAISE EXCEPTION 'mig 827: offer_purchases and sale_offers must carry no policy';
   END IF;
 END $$;
