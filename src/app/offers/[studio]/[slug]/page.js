@@ -125,7 +125,10 @@ export default async function OfferPage(props) {
         <div style={{ marginBottom: 18 }}>
           <span className="ofr-display" style={{ fontSize: 56, fontVariantNumeric: 'tabular-nums', display: 'block' }}>{priceLabel}</span>
         </div>
-        {open ? (
+        {/* A ?purchase= return resumes whatever the window says: a late
+            payment is honoured, so a buyer coming back after the close sees
+            the confirmation, never "The sale has ended". */}
+        {open || resumePurchaseId ? (
           <OfferCheckout
             studio={studio.key}
             slug={offer.slug}

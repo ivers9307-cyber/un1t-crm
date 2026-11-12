@@ -16,9 +16,9 @@
 import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
-import { offerIsOpen, offerIsUpcoming, offerHasDeadline, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
+import { offerIsUpcoming, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
 import { resolveOfferStudio, studioForKey, offersPageCopy } from '@/lib/offer-studios'
-import { heroFor, CATEGORY_ORDER } from '@/lib/offers-storefront'
+import { heroFor, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly } from '@/lib/offers-storefront'
 import { legacyOfferRedirect } from '@/lib/offers-legacy-redirect'
 import { displayZoneFor } from '@/lib/display-zone'
 import SaleCountdown from '@/components/offers/SaleCountdown'
@@ -50,13 +50,6 @@ function termFor(offer) {
 const FLAGS = {
   '1-year-membership': 'Biggest bonus',
   '30-class-pack': 'Biggest pack bonus',
-}
-
-const time = (iso) => new Date(iso).getTime()
-
-/** The earliest instant among rows, by one of their timestamp columns. */
-function earliest(rows, column) {
-  return rows.reduce((best, r) => (best === null || time(r[column]) < time(best) ? r[column] : best), null)
 }
 
 function OfferCard({ offer, studio, flag, opensLabel }) {
@@ -157,26 +150,11 @@ export default async function OfferStudioPage(props) {
   const now = new Date()
   const zone = await displayZoneFor(db, null, location.id, 'offers')
   const copy = offersPageCopy(location)
-  const offers = (data || []).filter((o) => offerIsOpen(o, now) || offerIsUpcoming(o, now))
-  const upcoming = offers.filter((o) => offerIsUpcoming(o, now))
+  const offers = storefrontOffers(data, now)
   const hero = heroFor(offers, copy, studio.label)
-
-  // The countdown: the earliest-closing open dated row ("Sale ends"), else
-  // the earliest opening among the upcoming rows ("Opens"). Gift cards have
-  // ends_at NULL and never drive a countdown.
-  const openDated = offers.filter((o) => offerIsOpen(o, now) && offerHasDeadline(o))
-  const countdown = openDated.length
-    ? { label: 'Sale ends', at: earliest(openDated, 'ends_at'), done: 'SALE ENDED' }
-    : upcoming.length
-      ? { label: 'Opens', at: earliest(upcoming, 'starts_at'), done: 'NOW OPEN' }
-      : null
-
-  // A gift card that opens after the memberships do is the Cyber Monday drop.
-  const firstMembershipStart = earliest(offers.filter((o) => o.category === 'membership'), 'starts_at')
-  const flagFor = (o) => {
-    if (o.category === 'gift_card' && firstMembershipStart && time(o.starts_at) > time(firstMembershipStart)) return 'Cyber Monday only'
-    return FLAGS[o.slug] || null
-  }
+  // Decisions in src/lib/offers-storefront.js (tested there).
+  const countdown = storefrontCountdown(offers, now)
+  const flagFor = (o) => (isCyberMondayOnly(o, offers) ? 'Cyber Monday only' : FLAGS[o.slug] || null)
   const opensLabelFor = (o) => (offerIsUpcoming(o, now)
     ? `Opens ${formatSaleDeadline(o.starts_at, { uppercase: false, zone })}`
     : null)
@@ -205,7 +183,7 @@ export default async function OfferStudioPage(props) {
         {countdown && (
           <div className="ofr-deadline">
             <b>{countdown.label}</b>
-            <SaleCountdown endsAt={countdown.at} doneLabel={countdown.done} />
+            <SaleCountdown endsAt={countdown.at} doneLabel={countdown.doneLabel} />
           </div>
         )}
       </header>
