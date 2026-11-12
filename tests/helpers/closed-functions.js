@@ -137,6 +137,8 @@ export const CLOSED_FUNCTIONS = [
     why: 'studio_contacts scoped to an include/exclude contact-id set carried in the rpc body; called only by service-role audience code (AUDIENCEIDS.1)' },
   { fn: 'public.create_configured_pipeline', args: '(uuid, text, text, text, text, text, jsonb, integer, uuid, jsonb)', closedBy: 815,
     why: 'PIPEBUILD.5a: INVOKER create of one offer board and its stages in one transaction, over a bare location id; only the service-role board builder calls it, after its own access check' },
+  { fn: 'public.org_assistant_spend_month_cents', args: '(uuid, date)', closedBy: 806,
+    why: 'ASSISTCAP.1: live staff-assistant spend for an org this billing month, the complement of org_ai_spend_month_cents (mig 421, closed the same way). Read only by the service-role cap check, the usage summary and the rollup cron notice; a client that could call it would learn another org\'s spend by passing its id' },
 ]
 
 /** The client roles a closed function is closed to. */

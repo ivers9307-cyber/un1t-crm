@@ -19,7 +19,7 @@
 //                   → markClassBookingPaymentStatus + the QStash nudge
 //   trial_purchase  trial_purchases payment 'pending', provider 'revolut'
 //                   → markTrialPurchasePaymentStatus + the QStash nudge
-//   offer_purchase  offer_purchases 'created' (always Revolut)
+//   offer_purchase  offer_purchases 'created', provider 'revolut'
 //                   → markOfferPurchaseState (compare-and-set) +
 //                     runOfferPaidSideEffects
 //   donation        donations 'awaiting_payment', provider 'revolut'
@@ -219,10 +219,12 @@ const LISTS = {
     .range(a, b)))
     .map((r) => ({ id: r.id, ref: r.payment_provider_ref, createdAt: r.created_at })),
 
-  // offer_purchases.revolut_order_id is NOT NULL (mig 503): always Revolut.
+  // BLACKFRIDAY.4 — since mig 827 an offer can be paid on un1t.online (a
+  // Hatch membership or pack): no Revolut order, nothing to reconcile here.
   offer_purchase: async (db, fromIso, toIso) => (await paginate((a, b) => db.from('offer_purchases')
     .select('id, revolut_order_id, created_at')
     .eq('state', 'created')
+    .eq('payment_provider', 'revolut')
     .gte('created_at', fromIso)
     .lte('created_at', toIso)
     .order('created_at', { ascending: true })

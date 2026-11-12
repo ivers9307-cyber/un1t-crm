@@ -20,7 +20,8 @@ const SOURCES = [
   { type: 'race_registration', table: 'race_payments', col: 'payment_provider_ref', select: 'id, race:race_event_id ( location_id )', label: 'race registration' },
   { type: 'class_booking', table: 'class_booking_requests', col: 'payment_provider_ref', select: 'id, location_id', label: 'paid class booking' },
   { type: 'trial_purchase', table: 'trial_purchases', col: 'payment_provider_ref', select: 'id, location_id', label: 'paid trial' },
-  { type: 'offer_purchase', table: 'offer_purchases', col: 'revolut_order_id', select: 'id, location_id', label: 'sale offer purchase' },
+  // BLACKFRIDAY.4 — the Revolut rail only (a un1t.online offer row is never a Revolut sale).
+  { type: 'offer_purchase', table: 'offer_purchases', col: 'revolut_order_id', select: 'id, location_id', label: 'sale offer purchase', provider: 'revolut' },
   { type: 'donation', table: 'donations', col: 'payment_provider_ref', select: 'id, location_id', label: 'donation' },
 ]
 
@@ -32,7 +33,9 @@ const SOURCES = [
 export async function resolveDisputeSource(db, orderId) {
   if (!orderId) return null
   for (const s of SOURCES) {
-    const { data, error } = await db.from(s.table).select(s.select).eq(s.col, orderId).limit(1)
+    let q = db.from(s.table).select(s.select).eq(s.col, orderId)
+    if (s.provider) q = q.eq('payment_provider', s.provider)
+    const { data, error } = await q.limit(1)
     if (error) throw error
     const row = Array.isArray(data) ? data[0] : data
     if (row) {

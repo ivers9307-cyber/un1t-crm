@@ -72,7 +72,7 @@ export default function OfferSalesList({ pending, fulfilled, timezone = null }) 
 
       <section>
         <h2 className="text-sm font-semibold uppercase tracking-wide text-un1t-subtle mb-3">
-          Awaiting Glofox setup ({pending.length})
+          Awaiting setup ({pending.length})
         </h2>
         {pending.length === 0 ? (
           <p className="text-sm text-un1t-subtle">Nothing waiting. New sales land here the moment they pay.</p>
@@ -89,6 +89,18 @@ export default function OfferSalesList({ pending, fulfilled, timezone = null }) 
                     {r.offer?.name} ({r.offer?.bonus_headline}) · {euro(r.amount_cents)} · paid {paidAtLabel(r.paid_at, timezone, viewerZone)}
                   </p>
                   <p className="text-sm text-un1t-subtle">{r.buyer_email}{r.buyer_phone ? ` · ${r.buyer_phone}` : ''}</p>
+                  {r.payment_provider === 'un1t_online' && (
+                    <>
+                      <p className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <span className="inline-block px-2 py-0.5 rounded bg-blue-500/10 text-blue-700 text-xs">un1t.online</span>
+                        {r.origin === 'off_page' && (
+                          <span className="inline-block px-2 py-0.5 rounded bg-amber-500/10 text-amber-700 text-xs">Bought in app/desk</span>
+                        )}
+                      </p>
+                      <p className="text-sm text-un1t-text">Paid in un1t.online. Add the bonus there.</p>
+                      {r.last_error && <p className="text-xs text-un1t-muted">{r.last_error}</p>}
+                    </>
+                  )}
                 </div>
                 <div className="shrink-0 flex items-center gap-2">
                   <button

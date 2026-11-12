@@ -396,7 +396,7 @@ describe('runRevolutReconcile — class bookings and trials', () => {
 
 describe('runRevolutReconcile — offers and donations', () => {
   it('an offer is marked with the compare-and-set and its paid side effects run once', async () => {
-    const row = { id: 'op1', state: 'created', revolut_order_id: 'ord-op1', created_at: ago(30 * MIN) }
+    const row = { id: 'op1', state: 'created', payment_provider: 'revolut', revolut_order_id: 'ord-op1', created_at: ago(30 * MIN) }
     const db = makeDb({ offer_purchases: [row] })
     resolveOfferPurchaseByOrderId.mockResolvedValue(row)
     markOfferPurchaseState.mockResolvedValue({ changed: true, state: 'paid' })
@@ -406,13 +406,26 @@ describe('runRevolutReconcile — offers and donations', () => {
   })
 
   it('an offer the webhook settled first gets no second receipt', async () => {
-    const row = { id: 'op1', state: 'created', revolut_order_id: 'ord-op1', created_at: ago(30 * MIN) }
+    const row = { id: 'op1', state: 'created', payment_provider: 'revolut', revolut_order_id: 'ord-op1', created_at: ago(30 * MIN) }
     const db = makeDb({ offer_purchases: [row] })
     resolveOfferPurchaseByOrderId.mockResolvedValue(row)
     markOfferPurchaseState.mockResolvedValue({ changed: false, state: 'created' })
     const r = await runRevolutReconcile({ db, now: NOW, getOrder: async () => ({ state: 'completed' }) })
     expect(runOfferPaidSideEffects).not.toHaveBeenCalled()
     expect(r.counts.not_applied).toBe(1)
+  })
+
+  // BLACKFRIDAY.4 — a Hatch offer row is paid on un1t.online, so the
+  // reconcile must never list it, even one carrying a stray order id (the
+  // null-ref filter alone would not catch that; the provider filter does).
+  it('reconcile skips un1t_online rows', async () => {
+    const row = { id: 'op9', state: 'created', payment_provider: 'un1t_online', revolut_order_id: 'ord-stray', created_at: ago(30 * MIN) }
+    const db = makeDb({ offer_purchases: [row] })
+    const getOrder = vi.fn(async () => ({ state: 'completed' }))
+    await runRevolutReconcile({ db, now: NOW, getOrder })
+    expect(resolveOfferPurchaseByOrderId).not.toHaveBeenCalled()
+    expect(getOrder).not.toHaveBeenCalled()
+    expect(markOfferPurchaseState).not.toHaveBeenCalled()
   })
 
   it('a paid donation is marked, re-read, and its side effects run as the winning observer', async () => {

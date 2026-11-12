@@ -16,6 +16,14 @@
 // heartbeat 'corp-promo-stalled-sweep'): files Glofox promo claims stuck in
 // 'processing' for 15 minutes as help_requested/stalled and alerts staff.
 // Same rule: own try/catch, stamped only when ok, after the other stamps.
+// BLACKFRIDAY.9f — last, the Black Friday offer purchase sweep (an ARM,
+// heartbeat 'un1t-offer-purchase-sweep', mig 828): for each un1t.online
+// studio, records off-page offer sales and settles page rows off the
+// un1t_transactions mirror, then runs the buyer's set-password step. It lives
+// here, not in un1t-online-sync, because that step is a un1t.online write and
+// the sync is write-fenced (tests/un1t-online-write-guard.test.js). Each studio
+// in its own try/catch; stamped only when the studio list was read and every
+// studio's sweep returned ok (failed / passwordPending are counts, not faults).
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
@@ -23,6 +31,8 @@ import { claimAndProcessTrialPurchase, MAX_ATTEMPTS } from '@/lib/trial-purchase
 import { settleUn1tTrialPurchases } from '@/lib/trial-purchase-un1t-settle'
 import { sweepCheckoutTrialPurchases } from '@/lib/trial-checkout-purchase-sweep'
 import { sweepStalledGlofoxCorpClaims } from '@/lib/corp-promo-stalled-sweep'
+import { sweepUn1tOfferPurchases } from '@/lib/un1t-offer-purchases'
+import { locationsWithSource } from '@/lib/membership/locations-for-source'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -33,6 +43,8 @@ const STALE_MS = 10 * 60_000
 const FRESH_ROW_GRACE_MS = 30_000
 const CHECKOUT_SWEEP_HEARTBEAT = 'trial-checkout-purchase-sweep'
 const STALLED_SWEEP_HEARTBEAT = 'corp-promo-stalled-sweep'
+const OFFER_SWEEP_HEARTBEAT = 'un1t-offer-purchase-sweep'
+const OFFER_COUNT_KEYS = ['checked', 'recorded', 'matchedPage', 'expired', 'failed', 'passwordPending']
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -88,7 +100,8 @@ export async function GET(request) {
     if (stats.reap_failed === 0 && stats.un1t_read_failed === 0) await stampHeartbeat('process-trial-purchases', stats)
     const sweep = await runCheckoutPurchaseSweep(db)
     const stalled = await runStalledClaimSweep(db)
-    return NextResponse.json({ success: true, ...stats, ...sweep, ...stalled })
+    const offers = await runOfferPurchaseSweep(db)
+    return NextResponse.json({ success: true, ...stats, ...sweep, ...stalled, ...offers })
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 })
   }
@@ -129,5 +142,42 @@ async function runStalledClaimSweep(db) {
   } catch (e) {
     logError('process-trial-purchases', 'stalled claim sweep threw', { errName: e?.name ?? null })
     return { stalled_claims_ok: false, stalled_claims_checked: 0, stalled_claims_filed: 0 }
+  }
+}
+
+// BLACKFRIDAY.9f — the offer purchase arm. Returns its counts; never throws.
+async function runOfferPurchaseSweep(db) {
+  const totals = { locations: 0, checked: 0, recorded: 0, matchedPage: 0, expired: 0, failed: 0, passwordPending: 0 }
+  const answer = (ok) => ({ offer_sweep_ok: ok, offer_sweep_recorded: totals.recorded, offer_sweep_matched: totals.matchedPage })
+  try {
+    const { eligible, error } = await locationsWithSource(db, 'un1t_online', { module: 'process-trial-purchases' })
+    if (error) {
+      // An unread studio list is not "no studios": no stamp.
+      logError('process-trial-purchases', 'offer purchase sweep: un1t.online studios unreadable', { code: error?.code ?? null })
+      return answer(false)
+    }
+    let clean = true
+    for (const loc of eligible || []) {
+      try {
+        const res = await sweepUn1tOfferPurchases(db, loc.id)
+        if (!res?.ok) { clean = false; continue }
+        totals.locations++
+        for (const k of OFFER_COUNT_KEYS) totals[k] += res[k] || 0
+      } catch (e) {
+        clean = false
+        logError('process-trial-purchases', 'offer purchase sweep threw', { locationId: loc.id, errName: e?.name ?? null })
+      }
+    }
+    if (clean) {
+      try {
+        await stampHeartbeat(OFFER_SWEEP_HEARTBEAT, totals)
+      } catch (e) {
+        logError('process-trial-purchases', 'offer purchase sweep stamp threw', { errName: e?.name ?? null })
+      }
+    }
+    return answer(clean)
+  } catch (e) {
+    logError('process-trial-purchases', 'offer purchase arm threw', { errName: e?.name ?? null })
+    return answer(false)
   }
 }

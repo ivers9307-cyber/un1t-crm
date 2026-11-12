@@ -37,12 +37,10 @@
 .ofr-card:hover .ofr-outline-thin { -webkit-text-stroke-color: var(--ofr-ink); }
 .ofr-card:hover .ofr-go { background: var(--ofr-ink); color: var(--ofr-paper); border-color: var(--ofr-ink); }
 .ofr-card:hover .ofr-meta { color: #0a3d1c; }
-.ofr-card:hover .ofr-was { color: #14532d; }
 .ofr-card:hover .ofr-flag { background: var(--ofr-ink); color: #22c55e; }
 .ofr-meta { color: #9a9a9a; font-size: 14px; line-height: 1.55; flex: 1; }
 .ofr-go { border: 1px solid currentColor; background: var(--ofr-paper); color: var(--ofr-ink); font-family: var(--font-archivo-black); font-size: 12px; letter-spacing: .24em; text-transform: uppercase; padding: 13px 22px; text-align: center; }
 .ofr-flag { position: absolute; top: 0; right: 0; background: var(--ofr-paper); color: var(--ofr-ink); font-family: var(--font-archivo-black); font-size: 10px; letter-spacing: .22em; text-transform: uppercase; padding: 7px 12px; }
-.ofr-was { font-size: 12px; color: #8a8a8a; letter-spacing: .08em; text-decoration: line-through; }
 
 /* Revolut widget panel — white because the widget ships a light theme with
    no dark mode (labels vanish on the black page). On narrow phones the

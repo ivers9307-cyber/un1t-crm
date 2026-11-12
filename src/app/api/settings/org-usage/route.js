@@ -47,6 +47,8 @@ const CapsSchema = z.object({
   organization_id: uuidLike.optional(),
   // null clears a cap; positive number sets it.
   ai_hard_cap_cents: z.number().positive().nullable().optional(),
+  // ASSISTCAP.1 — the staff assistant's OWN cap, separate from Mia's above.
+  assistant_hard_cap_cents: z.number().positive().nullable().optional(),
   email_hard_cap_sends: z.number().int().positive().nullable().optional(),
   // SAAS4-O2 — ops alert recipients. Comma string or array; normalised
   // server-side; null/empty clears (master-push fallback resumes).
@@ -79,6 +81,7 @@ export async function PUT(request) {
 
   const patch = { organization_id: orgId, updated_at: new Date().toISOString(), updated_by: user.id }
   if ('ai_hard_cap_cents' in body) patch.ai_hard_cap_cents = body.ai_hard_cap_cents
+  if ('assistant_hard_cap_cents' in body) patch.assistant_hard_cap_cents = body.assistant_hard_cap_cents
   if ('email_hard_cap_sends' in body) patch.email_hard_cap_sends = body.email_hard_cap_sends
   if ('voice_transcription_enabled' in body) patch.voice_transcription_enabled = body.voice_transcription_enabled
   if ('voice_transcription_monthly_cap_minutes' in body) patch.voice_transcription_monthly_cap_minutes = body.voice_transcription_monthly_cap_minutes
@@ -94,7 +97,7 @@ export async function PUT(request) {
   const { data, error } = await db
     .from('org_settings')
     .upsert(patch, { onConflict: 'organization_id' })
-    .select('ai_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, voice_transcription_enabled, voice_transcription_monthly_cap_minutes, voice_reply_mode, voice_reply_test_phones, voice_reply_monthly_cap')
+    .select('ai_hard_cap_cents, assistant_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, voice_transcription_enabled, voice_transcription_monthly_cap_minutes, voice_reply_mode, voice_reply_test_phones, voice_reply_monthly_cap')
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 

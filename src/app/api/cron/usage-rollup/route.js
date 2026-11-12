@@ -70,8 +70,8 @@ async function sendCapNotices(db, todayStr) {
 
   const { data: orgs } = await db
     .from('org_settings')
-    .select('organization_id, ai_hard_cap_cents, email_hard_cap_sends, ai_cap_notice_month, email_cap_notice_month')
-    .or('ai_hard_cap_cents.not.is.null,email_hard_cap_sends.not.is.null')
+    .select('organization_id, ai_hard_cap_cents, assistant_hard_cap_cents, email_hard_cap_sends, ai_cap_notice_month, assistant_cap_notice_month, email_cap_notice_month')
+    .or('ai_hard_cap_cents.not.is.null,assistant_hard_cap_cents.not.is.null,email_hard_cap_sends.not.is.null')
   if (!orgs || orgs.length === 0) return 0
 
   let sent = 0
@@ -97,6 +97,23 @@ async function sendCapNotices(db, todayStr) {
         }),
         title: 'AI spend at 80% of the hard cap',
         body: `This month's AI spend is at 80%+ of the org hard cap (est. $${((Number(spend) || 0) / 100).toFixed(2)} of $${(Number(org.ai_hard_cap_cents) / 100).toFixed(2)}). At the cap, Mia pauses with a human handoff. Raise the cap in Settings → Usage if that's not intended.`,
+      })
+    }
+    // ASSISTCAP.1 - the staff assistant's own cap gets its own notice, keyed on its
+    // own notice month. Sharing ai_cap_notice_month would mean only whichever cap
+    // crossed 80% first in a month ever emailed anyone.
+    if (org.assistant_hard_cap_cents != null) {
+      const { data: aspend } = await db.rpc('org_assistant_spend_month_cents', {
+        p_org: org.organization_id, p_month_start: monthStart,
+      })
+      checks.push({
+        column: 'assistant_cap_notice_month',
+        decision: capNoticeDecision({
+          cap: Number(org.assistant_hard_cap_cents), current: Number(aspend) || 0,
+          noticeMonth: org.assistant_cap_notice_month, month,
+        }),
+        title: 'Staff assistant spend at 80% of its cap',
+        body: `This month's STAFF ASSISTANT spend is at 80%+ of its own hard cap (est. $${((Number(aspend) || 0) / 100).toFixed(2)} of $${(Number(org.assistant_hard_cap_cents) / 100).toFixed(2)}). At the cap the in-app assistant refuses and tells the operator; Mia, sequences and every other AI path are unaffected, because they are judged on a separate cap and a spend sum that excludes the assistant. Raise it in Settings → Usage if that's not intended.`,
       })
     }
     if (org.email_hard_cap_sends != null) {
