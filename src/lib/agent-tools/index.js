@@ -27,6 +27,7 @@ import getEmailCampaign from './get-email-campaign.js'
 import createEmailDraft from './create-email-draft.js'
 import updateEmailDraft from './update-email-draft.js'
 import cancelEmailCampaign from './cancel-email-campaign.js'
+import sendEmailForApproval from './send-email-for-approval.js'
 
 /** @type {ReadonlyArray<ReturnType<typeof import('./registry.js').defineTool>>} */
 export const TOOLS = Object.freeze([
@@ -56,4 +57,5 @@ export const TOOLS = Object.freeze([
   createEmailDraft,
   updateEmailDraft,
   cancelEmailCampaign,
+  sendEmailForApproval,
 ])
