@@ -114,3 +114,21 @@ describe('storefront decisions (BLACKFRIDAY.3)', () => {
     expect(isCyberMondayOnly({ ...CYBER_GIFT, starts_at: null }, [MEMBERSHIP])).toBe(false)
   })
 })
+
+describe('BLACKFRIDAY.8 card numeral and flag for suffixed slugs', () => {
+  it('reads the term off a -bf-2026 slug', async () => {
+    const { termForSlug } = await import('./offers-storefront')
+    expect(termForSlug('1-year-membership-bf-2026')).toEqual({ num: '12', label: 'MONTHS' })
+    expect(termForSlug('1-year-membership')).toEqual({ num: '12', label: 'MONTHS' })
+    expect(termForSlug('6-month-membership-bf-2026')).toEqual({ num: '6', label: 'MONTHS' })
+    expect(termForSlug('30-class-pack-bf-2026')).toEqual({ num: '30', label: 'CLASSES' })
+    expect(termForSlug('gift-a-reset')).toBeNull()
+  })
+  it('flags the biggest bonus on suffixed and plain slugs', async () => {
+    const { flagForSlug } = await import('./offers-storefront')
+    expect(flagForSlug('1-year-membership-bf-2026')).toBe('Biggest bonus')
+    expect(flagForSlug('30-class-pack-bf-2026')).toBe('Biggest pack bonus')
+    expect(flagForSlug('30-class-pack')).toBe('Biggest pack bonus')
+    expect(flagForSlug('20-class-pack-bf-2026')).toBeNull()
+  })
+})

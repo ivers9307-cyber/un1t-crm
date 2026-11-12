@@ -18,7 +18,7 @@ import { notFound, redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { offerIsUpcoming, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
 import { resolveOfferStudio, studioForKey, offersPageCopy } from '@/lib/offer-studios'
-import { heroFor, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly } from '@/lib/offers-storefront'
+import { heroFor, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, termForSlug, flagForSlug } from '@/lib/offers-storefront'
 import { legacyOfferRedirect } from '@/lib/offers-legacy-redirect'
 import { displayZoneFor } from '@/lib/display-zone'
 import SaleCountdown from '@/components/offers/SaleCountdown'
@@ -39,17 +39,9 @@ function termFor(offer) {
   if (offer.category === 'gift_card') {
     return { num: formatEuro(offer.price_cents), label: 'GIFT CARD' }
   }
-  if (offer.slug === '1-year-membership') return { num: '12', label: 'MONTHS' }
-  const m = offer.slug.match(/^(\d+)-month/)
-  if (m) return { num: m[1], label: 'MONTHS' }
-  const c = offer.slug.match(/^(\d+)-class/)
-  if (c) return { num: c[1], label: 'CLASSES' }
+  const t = termForSlug(offer.slug)
+  if (t) return t
   return { num: '', label: offer.name }
-}
-
-const FLAGS = {
-  '1-year-membership': 'Biggest bonus',
-  '30-class-pack': 'Biggest pack bonus',
 }
 
 function OfferCard({ offer, studio, flag, opensLabel }) {
@@ -154,7 +146,7 @@ export default async function OfferStudioPage(props) {
   const hero = heroFor(offers, copy, studio.label)
   // Decisions in src/lib/offers-storefront.js (tested there).
   const countdown = storefrontCountdown(offers, now)
-  const flagFor = (o) => (isCyberMondayOnly(o, offers) ? 'Cyber Monday only' : FLAGS[o.slug] || null)
+  const flagFor = (o) => (isCyberMondayOnly(o, offers) ? 'Cyber Monday only' : flagForSlug(o.slug))
   const opensLabelFor = (o) => (offerIsUpcoming(o, now)
     ? `Opens ${formatSaleDeadline(o.starts_at, { uppercase: false, zone })}`
     : null)

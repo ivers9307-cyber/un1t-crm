@@ -18,6 +18,25 @@ import { offerIsOpen, offerIsUpcoming, offerHasDeadline } from './sale-offers'
 
 export const CATEGORY_ORDER = ['membership', 'class_pack', 'gift_card']
 
+// The big numeral on a timed-sale card, read off the slug. The Black Friday
+// rows carry a '-bf-2026' suffix (mig 829), so the 12-month row is matched by
+// prefix. Null when the slug names no term (the caller falls back to the name).
+export function termForSlug(slug) {
+  if (slug.startsWith('1-year-membership')) return { num: '12', label: 'MONTHS' }
+  const m = slug.match(/^(\d+)-month/)
+  if (m) return { num: m[1], label: 'MONTHS' }
+  const c = slug.match(/^(\d+)-class/)
+  if (c) return { num: c[1], label: 'CLASSES' }
+  return null
+}
+
+// The corner flag on the two headline bonuses, suffixed slugs included.
+export function flagForSlug(slug) {
+  if (slug.startsWith('1-year-membership')) return 'Biggest bonus'
+  if (slug.startsWith('30-class-pack')) return 'Biggest pack bonus'
+  return null
+}
+
 const GIFT_HERO = {
   marquee: 'UN1T GIFT CARDS · TRAINING THEY WILL ACTUALLY USE · ',
   line1: 'GIVE THE GIFT',
