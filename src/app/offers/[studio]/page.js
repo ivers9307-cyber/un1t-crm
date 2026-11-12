@@ -18,7 +18,7 @@ import { notFound, redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { offerIsUpcoming, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
 import { resolveOfferStudio, studioForKey, offersPageCopy } from '@/lib/offer-studios'
-import { heroFor, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, termForSlug, flagForSlug } from '@/lib/offers-storefront'
+import { heroFor, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, termForSlug, flagForSlug, offerFinePrint } from '@/lib/offers-storefront'
 import { legacyOfferRedirect } from '@/lib/offers-legacy-redirect'
 import { displayZoneFor } from '@/lib/display-zone'
 import SaleCountdown from '@/components/offers/SaleCountdown'
@@ -47,7 +47,8 @@ function termFor(offer) {
 function OfferCard({ offer, studio, flag, opensLabel }) {
   const term = termFor(offer)
   const isGift = offer.category === 'gift_card'
-  const showFinePrint = studio.key === 'hatch-street' && Boolean(offer.fine_print)
+  // BLACKFRIDAY.9 — any studio's offer shows its own fine print when it has some.
+  const finePrint = offerFinePrint(offer)
   return (
     <Link
       href={`/offers/${studio.key}/${offer.slug}`}
@@ -70,7 +71,7 @@ function OfferCard({ offer, studio, flag, opensLabel }) {
           <span className="ofr-display" style={{ fontSize: 'clamp(30px,3.4vw,42px)', fontVariantNumeric: 'tabular-nums', display: 'block' }}>
             {formatEuro(offer.price_cents)}
           </span>
-          {showFinePrint && <span className="ofr-meta" style={{ display: 'block', fontSize: 12, marginTop: 6 }}>{offer.fine_print}</span>}
+          {finePrint && <span className="ofr-meta" style={{ display: 'block', fontSize: 12, marginTop: 6 }}>{finePrint}</span>}
         </span>
       )}
       <span className="ofr-go">{opensLabel || (isGift ? 'Buy this card' : 'Lock it in')}</span>

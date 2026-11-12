@@ -112,3 +112,13 @@ export function isCyberMondayOnly(offer, offers) {
   const t = time(offer.starts_at)
   return !Number.isNaN(t) && t > time(firstMembershipStart)
 }
+
+/**
+ * An offer's fine print, or null when it has none (BLACKFRIDAY.9). The card
+ * shows it for ANY studio's offer that carries some; it used to be gated on
+ * the Hatch Street key, so a Stillorgan row's fine print never appeared.
+ */
+export function offerFinePrint(offer) {
+  const v = offer?.fine_print
+  return typeof v === 'string' && v.trim() !== '' ? v : null
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { heroFor, storefrontTitle, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly } from './offers-storefront'
+import { heroFor, storefrontTitle, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, offerFinePrint } from './offers-storefront'
 import { OFFER_SALE_TAG } from './sale-offers'
 
 const gift = { category: 'gift_card' }
@@ -130,5 +130,19 @@ describe('BLACKFRIDAY.8 card numeral and flag for suffixed slugs', () => {
     expect(flagForSlug('30-class-pack-bf-2026')).toBe('Biggest pack bonus')
     expect(flagForSlug('30-class-pack')).toBe('Biggest pack bonus')
     expect(flagForSlug('20-class-pack-bf-2026')).toBeNull()
+  })
+})
+
+// BLACKFRIDAY.9 — fine print shows for any studio's offer that has some.
+describe('offerFinePrint', () => {
+  it('returns non-empty fine print whatever the studio', () => {
+    expect(offerFinePrint({ fine_print: 'Valid to 31 Jan', location_id: 'loc-stillorgan' })).toBe('Valid to 31 Jan')
+    expect(offerFinePrint({ fine_print: 'Hatch only' })).toBe('Hatch only')
+  })
+  it('null for blank, missing or non-string fine print', () => {
+    expect(offerFinePrint({ fine_print: '   ' })).toBeNull()
+    expect(offerFinePrint({ fine_print: null })).toBeNull()
+    expect(offerFinePrint({})).toBeNull()
+    expect(offerFinePrint(null)).toBeNull()
   })
 })
