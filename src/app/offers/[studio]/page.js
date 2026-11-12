@@ -27,8 +27,8 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const CATEGORY_META = {
-  gift_card:  { title: 'Gift Cards',  tag: 'Valid 5 years · redeem against anything' },
-  membership: { title: 'Memberships', tag: 'Paid upfront' },
+  gift_card:  { title: 'Gift Cards',  tag: 'Give the gift of training' },
+  membership: { title: 'Memberships', tag: 'Bonus time on the house' },
   class_pack: { title: 'Class Packs', tag: 'Stock up · train on your schedule' },
 }
 // Display order + hero copy: src/lib/offers-storefront.js (OFFERS.8).

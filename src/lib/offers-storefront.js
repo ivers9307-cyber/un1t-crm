@@ -24,7 +24,7 @@ export const CATEGORY_ORDER = ['membership', 'class_pack', 'gift_card']
 export function termForSlug(slug) {
   if (slug.startsWith('1-year-membership')) return { num: '12', label: 'MONTHS' }
   const m = slug.match(/^(\d+)-month/)
-  if (m) return { num: m[1], label: 'MONTHS' }
+  if (m) return { num: m[1], label: m[1] === '1' ? 'MONTH' : 'MONTHS' }
   const c = slug.match(/^(\d+)-class/)
   if (c) return { num: c[1], label: 'CLASSES' }
   return null

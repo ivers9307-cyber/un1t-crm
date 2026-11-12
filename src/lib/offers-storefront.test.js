@@ -120,6 +120,8 @@ describe('BLACKFRIDAY.8 card numeral and flag for suffixed slugs', () => {
     const { termForSlug } = await import('./offers-storefront')
     expect(termForSlug('1-year-membership-bf-2026')).toEqual({ num: '12', label: 'MONTHS' })
     expect(termForSlug('1-year-membership')).toEqual({ num: '12', label: 'MONTHS' })
+    expect(termForSlug('1-month-membership-bf-2026')).toEqual({ num: '1', label: 'MONTH' })
+    expect(termForSlug('3-month-membership-bf-2026')).toEqual({ num: '3', label: 'MONTHS' })
     expect(termForSlug('6-month-membership-bf-2026')).toEqual({ num: '6', label: 'MONTHS' })
     expect(termForSlug('30-class-pack-bf-2026')).toEqual({ num: '30', label: 'CLASSES' })
     expect(termForSlug('gift-a-reset')).toBeNull()
