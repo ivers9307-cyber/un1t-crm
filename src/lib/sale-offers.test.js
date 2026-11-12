@@ -249,6 +249,17 @@ describe('notifyStaffOfPaidPurchase', () => {
     expect(alert.htmlBody).toContain('€497')
     expect(alert.htmlBody).toContain('Glofox')
   })
+  it('un1t_online purchase: staff copy says add the bonus there, no Glofox', async () => {
+    const db = {
+      from() { return this }, select() { return this }, eq() { return this },
+      maybeSingle: async () => ({ data: { organization_id: 'org1', name: 'UN1T Hatch Street' } }),
+    }
+    await notifyStaffOfPaidPurchase(db, { ...purchase, payment_provider: 'un1t_online' }, offer)
+    const html = sendOpsAlert.mock.calls[0][0].htmlBody
+    expect(html).toContain('Add the bonus (+2 WEEKS FREE) there')
+    expect(html).toContain('Already paid in un1t.online')
+    expect(html).not.toContain('Glofox')
+  })
   it('missing org → sent:false, no alert', async () => {
     const db = {
       from() { return this }, select() { return this }, eq() { return this },

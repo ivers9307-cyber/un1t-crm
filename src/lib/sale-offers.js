@@ -150,6 +150,9 @@ export async function notifyStaffOfPaidPurchase(db, purchase, offer) {
 
   const amount = formatEuro(purchase.amount_cents)
   const subject = `NEW SALE: ${offer.name} (${amount}) - ${purchase.buyer_name}`
+  const closing = purchase.payment_provider === 'un1t_online'
+    ? `Already paid in un1t.online. Add the bonus (${offer.bonus_headline}) there, then mark the sale fulfilled in Approvals.`
+    : 'Set them up in Glofox, then mark the sale fulfilled in Approvals.'
   const htmlBody = `
     <p><strong>${purchase.buyer_name}</strong> just bought <strong>${offer.name}</strong> (${offer.bonus_headline}) for <strong>${amount}</strong>.</p>
     <ul>
@@ -157,7 +160,7 @@ export async function notifyStaffOfPaidPurchase(db, purchase, offer) {
       <li>Phone: ${purchase.buyer_phone || 'not given'}</li>
       <li>Studio: ${loc.name || purchase.location_id}</li>
     </ul>
-    <p>Set them up in Glofox, then mark the sale fulfilled in Approvals.</p>`
+    <p>${closing}</p>`
   await sendOpsAlert({
     organizationId: loc.organization_id,
     locationId: purchase.location_id,

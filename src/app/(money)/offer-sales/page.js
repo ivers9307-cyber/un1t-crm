@@ -25,6 +25,7 @@ export default async function OfferSalesPage() {
         .select(`
           id, buyer_name, buyer_email, buyer_phone, amount_cents, currency,
           state, paid_at, fulfilled_at, contact_id,
+          payment_provider, origin, un1t_user_id, last_error,
           offer:offer_id ( id, name, bonus_headline )
         `)
         .eq('location_id', activeId)
@@ -39,7 +40,7 @@ export default async function OfferSalesPage() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-un1t-text">Offer sales</h1>
         <p className="text-sm text-un1t-subtle mt-1">
-          Paid sale purchases. Set the member up in Glofox first, then mark the sale fulfilled.
+          Paid Black Friday and sale purchases. Set the member up, add the bonus, then mark the sale fulfilled.
         </p>
       </header>
       <OfferSalesList
