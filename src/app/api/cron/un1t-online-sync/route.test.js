@@ -25,7 +25,6 @@ vi.mock('@/lib/membership/locations-for-source', async (importOriginal) => ({
 vi.mock('@/lib/un1t-online-sync', () => ({ runUn1tSync: vi.fn() }))
 vi.mock('@/lib/un1t-online-welcome', () => ({ sweepUn1tWelcomes: vi.fn() }))
 vi.mock('@/lib/un1t-paid-trial-purchases', () => ({ sweepPaidTrialPurchases: vi.fn() }))
-vi.mock('@/lib/un1t-offer-purchases', () => ({ sweepUn1tOfferPurchases: vi.fn() }))
 vi.mock('@/lib/un1t-pipeline-cadence', () => ({ maybeReclassifyAfterSync: vi.fn(async () => ({ ran: false, reason: 'recent_run' })) }))
 
 import { GET, BUDGET_MS } from './route.js'
@@ -36,7 +35,6 @@ import { runUn1tSync } from '@/lib/un1t-online-sync'
 import { maybeReclassifyAfterSync } from '@/lib/un1t-pipeline-cadence'
 import { sweepUn1tWelcomes } from '@/lib/un1t-online-welcome'
 import { sweepPaidTrialPurchases } from '@/lib/un1t-paid-trial-purchases'
-import { sweepUn1tOfferPurchases } from '@/lib/un1t-offer-purchases'
 import { logError, logWarn } from '@/lib/log'
 
 const req = (token = 'test-secret') => ({
@@ -53,7 +51,6 @@ beforeEach(() => {
   maybeReclassifyAfterSync.mockReset().mockResolvedValue({ ran: false, reason: 'recent_run' })
   sweepUn1tWelcomes.mockReset().mockResolvedValue({ ok: true, skipped_no_sequence: false, checked: 0, enrolled: 0, crm_made: 0, waiting: 0, no_contact: 0, no_email: 0, failed: 0 })
   sweepPaidTrialPurchases.mockReset().mockResolvedValue({ ok: true, skipped_no_sequence: false, checked: 0, enrolled: 0, already: 0, failed: 0 })
-  sweepUn1tOfferPurchases.mockReset().mockResolvedValue({ ok: true, checked: 0, recorded: 0, matchedPage: 0, expired: 0, failed: 0, passwordPending: 0 })
   h.discovery = found([])
 })
 
@@ -324,6 +321,16 @@ describe('GET /api/cron/un1t-online-sync', () => {
   })
 
   // PAIDTRIALTRIGGER.1 — the €39 purchase sweep, an arm with its own row (mig 805).
+  // BLACKFRIDAY.9f — the offer purchase sweep moved to process-trial-purchases:
+  // its set-password step is a un1t.online write, and this cron is write-fenced
+  // (tests/un1t-online-write-guard.test.js). Nothing here stamps its row.
+  it('never stamps the offer purchase sweep row (the arm lives in process-trial-purchases)', async () => {
+    h.discovery = found([loc('hatch')])
+    runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+    await GET(req())
+    expect(stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-offer-purchase-sweep')).toEqual([])
+  })
+
   describe('€39 purchase sweep arm (PAIDTRIALTRIGGER.1)', () => {
     const syncStamps = () => stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-online-sync')
     const purchaseStamps = () => stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-paid-trial-purchase-sweep')
@@ -376,70 +383,6 @@ describe('GET /api/cron/un1t-online-sync', () => {
       runUn1tSync.mockResolvedValue({ ok: false, reason: 'auth', counts: {}, runId: 'r' })
       await GET(req())
       expect(sweepPaidTrialPurchases).not.toHaveBeenCalled()
-    })
-  })
-
-  // BLACKFRIDAY.6 — the offer purchase sweep, an arm with its own row (mig 828).
-  describe('offer purchase sweep arm (BLACKFRIDAY.6)', () => {
-    const syncStamps = () => stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-online-sync')
-    const offerStamps = () => stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-offer-purchase-sweep')
-
-    it('offer purchase sweep stamps its own heartbeat when clean', async () => {
-      h.discovery = found([loc('hatch'), loc('other')])
-      runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
-      sweepUn1tOfferPurchases.mockResolvedValue({ ok: true, checked: 3, recorded: 2, matchedPage: 1, expired: 0, failed: 1, passwordPending: 1 })
-      await GET(req())
-      expect(sweepUn1tOfferPurchases.mock.calls.map((c) => c[1])).toEqual(['hatch', 'other'])
-      expect(offerStamps()).toEqual([['un1t-offer-purchase-sweep', expect.objectContaining({ locations: 2, checked: 6, recorded: 4, matchedPage: 2, failed: 2, passwordPending: 2 })]])
-      expect(syncStamps()).toHaveLength(1)
-    })
-
-    // BLACKFRIDAY.9 — the route passed `{ now: new Date() }`, which the sweep
-    // called as a function, so every run threw. Pin the call shape.
-    it('calls the offer sweep with no options or a function clock', async () => {
-      h.discovery = found([loc('hatch')])
-      runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
-      await GET(req())
-      expect(sweepUn1tOfferPurchases).toHaveBeenCalledTimes(1)
-      const opts = sweepUn1tOfferPurchases.mock.calls[0][2]
-      if (opts !== undefined) expect(typeof opts.now).toBe('function')
-    })
-
-    it('offer sweep failure does not stop the sync heartbeat', async () => {
-      h.discovery = found([loc('hatch')])
-      runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
-      sweepUn1tOfferPurchases.mockRejectedValueOnce(new Error('boom'))
-      let res = await GET(req())
-      expect(res.status).toBe(200)
-      expect(offerStamps()).toHaveLength(0)
-      expect(syncStamps()).toHaveLength(1)
-      expect(logError).toHaveBeenCalled()
-      stampHeartbeat.mockClear()
-      sweepUn1tOfferPurchases.mockResolvedValueOnce({ ok: false })
-      res = await GET(req())
-      expect(res.status).toBe(200)
-      expect(offerStamps()).toHaveLength(0)
-      expect(syncStamps()).toHaveLength(1)
-      // the other arms still stamp
-      expect(stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-paid-trial-purchase-sweep')).toHaveLength(1)
-    })
-
-    it('offer sweep timeout leaves its heartbeat unstamped', async () => {
-      vi.useFakeTimers()
-      try {
-        h.discovery = found([loc('hatch')])
-        runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
-        sweepUn1tOfferPurchases.mockImplementation(() => new Promise(() => {}))
-        const run = GET(req())
-        await vi.advanceTimersByTimeAsync(31_000)
-        const res = await run
-        expect(res.status).toBe(200)
-        expect(offerStamps()).toHaveLength(0)
-        expect(syncStamps()).toHaveLength(1)
-        expect(logWarn).toHaveBeenCalled()
-      } finally {
-        vi.useRealTimers()
-      }
     })
   })
 })

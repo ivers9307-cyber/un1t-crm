@@ -59,15 +59,18 @@
 //                       sweep, independent of it. Seeded by mig 805, applied
 //                       RIGHT AFTER the deploy.
 //
-// BLACKFRIDAY.6 adds another on the same */15 un1t-online-sync cron:
+// BLACKFRIDAY.6 adds another, on the */2 process-trial-purchases cron
+// (BLACKFRIDAY.9f moved it off un1t-online-sync, whose write fence its
+// set-password step broke):
 //
 //   'un1t-offer-purchase-sweep' — sweepUn1tOfferPurchases
 //                       (src/lib/un1t-offer-purchases.js), the Black Friday
 //                       offer purchase arm (records off-page un1t.online sales,
-//                       settles page rows, expires stale ones). Stamped by the
-//                       route only when every studio's sweep returned ok; a
-//                       timeout or throw leaves it unstamped. Seeded by mig
-//                       828, applied RIGHT AFTER the deploy.
+//                       settles page rows, expires stale ones), run last for
+//                       every un1t.online studio. Stamped by the route only
+//                       when the studio list was read and every studio's sweep
+//                       returned ok. Seeded by mig 828, applied RIGHT AFTER
+//                       the deploy.
 //
 // STILL39SEQ.1 adds a ninth, on the */2 process-trial-purchases cron:
 //

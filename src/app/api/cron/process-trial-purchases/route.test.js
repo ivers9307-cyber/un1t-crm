@@ -4,12 +4,14 @@
 // thrown sweeper are counted and do not.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ stamp: vi.fn(), claim: vi.fn(), settle: vi.fn(), sweep: vi.fn(), stalled: vi.fn() }))
+const mocks = vi.hoisted(() => ({ stamp: vi.fn(), claim: vi.fn(), settle: vi.fn(), sweep: vi.fn(), stalled: vi.fn(), offers: vi.fn(), studios: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: mocks.stamp }))
 vi.mock('@/lib/trial-purchase-queue', () => ({ claimAndProcessTrialPurchase: mocks.claim, MAX_ATTEMPTS: 5 }))
 vi.mock('@/lib/trial-purchase-un1t-settle', () => ({ settleUn1tTrialPurchases: mocks.settle }))
 vi.mock('@/lib/trial-checkout-purchase-sweep', () => ({ sweepCheckoutTrialPurchases: mocks.sweep }))
 vi.mock('@/lib/corp-promo-stalled-sweep', () => ({ sweepStalledGlofoxCorpClaims: mocks.stalled }))
+vi.mock('@/lib/un1t-offer-purchases', () => ({ sweepUn1tOfferPurchases: mocks.offers }))
+vi.mock('@/lib/membership/locations-for-source', () => ({ locationsWithSource: mocks.studios }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
@@ -32,6 +34,8 @@ beforeEach(() => {
   mocks.settle.mockResolvedValue({ settled: 0, expired: 0, errors: 0, readFailed: false })
   mocks.sweep.mockResolvedValue({ ok: true, locations: 0, checked: 0, enrolled: 0, already: 0, failed: 0 })
   mocks.stalled.mockResolvedValue({ ok: true, checked: 0, filed: 0, failed: 0 })
+  mocks.studios.mockResolvedValue({ eligible: [], error: null })
+  mocks.offers.mockResolvedValue({ ok: true, checked: 0, recorded: 0, matchedPage: 0, expired: 0, failed: 0, passwordPending: 0 })
 })
 
 describe('process-trial-purchases cron: the un1t settle sweep', () => {
@@ -121,5 +125,61 @@ describe('process-trial-purchases cron: the stalled claim sweep', () => {
     expect(r.status).toBe(200)
     expect(stalledStamps()).toEqual([])
     expect(mocks.stamp.mock.calls.filter((c) => c[0] === 'trial-checkout-purchase-sweep')).toHaveLength(1)
+  })
+})
+
+// BLACKFRIDAY.9f — the offer purchase sweep moved here from un1t-online-sync
+// (whose write fence its set-password step broke). Its own row, stamped only
+// when every un1t.online studio's sweep returned ok.
+describe('process-trial-purchases cron: the offer purchase sweep', () => {
+  const offerStamps = () => mocks.stamp.mock.calls.filter((c) => c[0] === 'un1t-offer-purchase-sweep')
+  const otherStamps = () => mocks.stamp.mock.calls.filter((c) => c[0] !== 'un1t-offer-purchase-sweep').map((c) => c[0])
+
+  it('offer purchase sweep stamps its own heartbeat when clean', async () => {
+    mocks.studios.mockResolvedValue({ eligible: [{ id: 'hatch' }, { id: 'other' }], error: null })
+    mocks.offers.mockResolvedValue({ ok: true, checked: 3, recorded: 2, matchedPage: 1, expired: 0, failed: 1, passwordPending: 1 })
+    const body = await (await call()).json()
+    expect(mocks.studios).toHaveBeenCalledWith(expect.anything(), 'un1t_online', expect.anything())
+    // Called as (db, locationId): no clock option.
+    expect(mocks.offers.mock.calls.map((c) => [c[1], c.length])).toEqual([['hatch', 2], ['other', 2]])
+    expect(offerStamps()).toEqual([['un1t-offer-purchase-sweep', { locations: 2, checked: 6, recorded: 4, matchedPage: 2, expired: 0, failed: 2, passwordPending: 2 }]])
+    expect(body).toMatchObject({ success: true, offer_sweep_ok: true, offer_sweep_recorded: 4, offer_sweep_matched: 2 })
+    expect(otherStamps()).toEqual(['process-trial-purchases', 'trial-checkout-purchase-sweep', 'corp-promo-stalled-sweep'])
+  })
+
+  it('no un1t.online studio is clean and stamps', async () => {
+    await call()
+    expect(mocks.offers).not.toHaveBeenCalled()
+    expect(offerStamps()).toHaveLength(1)
+  })
+
+  it('an offer sweep failure does not stop the other arms; the rest of the studios still run', async () => {
+    mocks.studios.mockResolvedValue({ eligible: [{ id: 'hatch' }, { id: 'other' }], error: null })
+    mocks.offers.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ ok: false })
+    const r = await call()
+    expect(r.status).toBe(200)
+    expect(await r.json()).toMatchObject({ success: true, offer_sweep_ok: false })
+    expect(mocks.offers).toHaveBeenCalledTimes(2)
+    expect(offerStamps()).toEqual([])
+    expect(otherStamps()).toEqual(['process-trial-purchases', 'trial-checkout-purchase-sweep', 'corp-promo-stalled-sweep'])
+  })
+
+  it('an unreadable studio list, or a throw in the arm, skips its stamp and never fails the run', async () => {
+    mocks.studios.mockResolvedValueOnce({ eligible: null, error: { code: '57014' } })
+    let r = await call()
+    expect(r.status).toBe(200)
+    expect(offerStamps()).toEqual([])
+    expect(mocks.offers).not.toHaveBeenCalled()
+
+    vi.clearAllMocks()
+    mocks.settle.mockResolvedValue({ settled: 0, expired: 0, errors: 0, readFailed: false })
+    mocks.sweep.mockResolvedValue({ ok: true })
+    mocks.stalled.mockResolvedValue({ ok: true })
+    mocks.studios.mockRejectedValueOnce(new Error('bug'))
+    r = await call()
+    expect(r.status).toBe(200)
+    expect(await r.json()).toMatchObject({ success: true, offer_sweep_ok: false })
+    expect(offerStamps()).toEqual([])
+    expect(mocks.stamp.mock.calls.map((c) => c[0])).toContain('corp-promo-stalled-sweep')
   })
 })

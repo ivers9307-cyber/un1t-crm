@@ -36,7 +36,6 @@ import { runUn1tSync } from '@/lib/un1t-online-sync'
 import { maybeReclassifyAfterSync } from '@/lib/un1t-pipeline-cadence'
 import { sweepUn1tWelcomes } from '@/lib/un1t-online-welcome'
 import { sweepPaidTrialPurchases } from '@/lib/un1t-paid-trial-purchases'
-import { sweepUn1tOfferPurchases } from '@/lib/un1t-offer-purchases'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -57,9 +56,6 @@ const WELCOME_HEARTBEAT = 'un1t-welcome-sweep'
 // PAIDTRIALTRIGGER.1 — the €39 purchase sweep: at most 30 s a studio, inside the same total.
 const PURCHASE_CAP_MS = 30_000
 const PURCHASE_HEARTBEAT = 'un1t-paid-trial-purchase-sweep'
-// BLACKFRIDAY.6 — the offer purchase sweep: at most 30 s a studio, inside the same total.
-const OFFER_CAP_MS = 30_000
-const OFFER_HEARTBEAT = 'un1t-offer-purchase-sweep'
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -206,46 +202,6 @@ export async function GET(request) {
       await stampHeartbeat(PURCHASE_HEARTBEAT, purchaseTotals)
     } catch (err) {
       logError(CRON_NAME, '€39 purchase heartbeat stamp threw', { errName: err?.name ?? null })
-    }
-  }
-
-  // BLACKFRIDAY.6 — the offer purchase sweep, an arm with a heartbeat row of its
-  // own (mig 828). Placed after the €39 purchase arm; each studio in its own
-  // try/catch and deadline race, so it cannot crash the other arms out of their
-  // stamps. Stamps only when every studio's sweep returned ok (failed and
-  // passwordPending are counts for the payload, not faults); a timeout or throw
-  // leaves it unstamped.
-  let offerClean = true
-  const offerTotals = { locations: 0, checked: 0, recorded: 0, matchedPage: 0, expired: 0, failed: 0, passwordPending: 0 }
-  for (const locationId of okLocationIds) {
-    const left = Math.max(0, Math.min(OFFER_CAP_MS, TOTAL_DEADLINE_MS - (Date.now() - started)))
-    let timer
-    try {
-      const timedOut = new Promise((resolve) => {
-        timer = setTimeout(() => resolve({ timeout: true }), left)
-      })
-      const res = await Promise.race([sweepUn1tOfferPurchases(db, locationId), timedOut])
-      if (res?.timeout) {
-        offerClean = false
-        logWarn(CRON_NAME, 'offer purchase sweep timed out', { locationId })
-      } else if (!res?.ok) {
-        offerClean = false
-      } else {
-        offerTotals.locations++
-        for (const k of ['checked', 'recorded', 'matchedPage', 'expired', 'failed', 'passwordPending']) offerTotals[k] += res[k] || 0
-      }
-    } catch (err) {
-      offerClean = false
-      logError(CRON_NAME, 'offer purchase sweep threw', { locationId, errName: err?.name ?? null })
-    } finally {
-      clearTimeout(timer)
-    }
-  }
-  if (offerClean) {
-    try {
-      await stampHeartbeat(OFFER_HEARTBEAT, offerTotals)
-    } catch (err) {
-      logError(CRON_NAME, 'offer purchase heartbeat stamp threw', { errName: err?.name ?? null })
     }
   }
 
