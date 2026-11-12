@@ -35,7 +35,7 @@
 
 | File | Responsibility | Task |
 |---|---|---|
-| `supabase/migrations/827_mcp_email_campaigns.sql` | `campaign_release_approvals`; `campaigns.agent_blocks`, `campaigns.created_via` | 1 |
+| `supabase/migrations/830_mcp_email_campaigns.sql` | `campaign_release_approvals`; `campaigns.agent_blocks`, `campaigns.created_via` | 1 |
 | `src/lib/agent-email-blocks.js` | Block schema, validation, blocks → HTML | 2 |
 | `src/lib/campaign-release.js` | The one copy of preflight, release and stop | 3 |
 | `src/lib/email-audience-counts.js` | matched / eligible / excluded breakdown | 4 |
@@ -52,14 +52,14 @@
 ### Task 1: Migration 827
 
 **Files:**
-- Create: `supabase/migrations/827_mcp_email_campaigns.sql`
-- Test: `tests/migration-827-mcp-email-campaigns.test.js` (style of `tests/migration-801-mcp-server.test.js`)
+- Create: `supabase/migrations/830_mcp_email_campaigns.sql`
+- Test: `tests/migration-830-mcp-email-campaigns.test.js` (style of `tests/migration-801-mcp-server.test.js`)
 
 **Interfaces:**
 - Produces: `public.campaign_release_approvals (id uuid pk default gen_random_uuid(), campaign_id uuid NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE, profile_id uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, token_hash text NOT NULL UNIQUE, content_key text NOT NULL, audience_eligible integer NOT NULL, send_at timestamptz, expires_at timestamptz NOT NULL, used_at timestamptz, voided_at timestamptz, created_at timestamptz NOT NULL DEFAULT now())`, index `(campaign_id, created_at desc)`; `campaigns.agent_blocks jsonb`; `campaigns.created_via text NOT NULL DEFAULT 'web' CHECK (created_via IN ('web','mcp'))`.
 
 - [ ] **Step 1: Write the failing test** — asserts on the migration text: the table is created; `ENABLE ROW LEVEL SECURITY`; `REVOKE ALL ON public.campaign_release_approvals FROM anon, authenticated`; no `CREATE POLICY` naming it; no column named `token` (only `token_hash`); both `campaigns` columns added with `IF NOT EXISTS`; no `GRANT` on `campaign_release_approvals`.
-- [ ] **Step 2: Run** `npx vitest run tests/migration-827-mcp-email-campaigns.test.js` → FAIL (file missing).
+- [ ] **Step 2: Run** `npx vitest run tests/migration-830-mcp-email-campaigns.test.js` → FAIL (file missing).
 - [ ] **Step 3: Write the migration.** House header comment. Before adding the `campaigns` columns, check whether `campaigns` is a column-granted table for `authenticated` (search `supabase/migrations` for `GRANT SELECT (` … `ON public.campaigns`). If it is, state the grant decision in the file (`-- column-grant: withheld campaigns.agent_blocks`; `created_via` granted if the campaign list reads it from the browser client). `voided_at` is added to the spec's column list so "voided" and "used" stay distinguishable.
 - [ ] **Step 4: Run** the test plus `npm run check:select-columns && npm run check:rls-restrictive` → PASS.
 - [ ] **Step 5: Commit** — `MCPEMAIL.1 — mig 827: release approvals, agent_blocks, created_via`. Do **not** apply it; applying is a rollout step for Richard's go-ahead.

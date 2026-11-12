@@ -1,4 +1,4 @@
--- 827 — MCPEMAIL.1: release approvals and the agent-draft markers for MCP email campaigns.
+-- 830 — MCPEMAIL.1: release approvals and the agent-draft markers for MCP email campaigns.
 -- (docs/superpowers/specs/2026-11-12-mcp-email-campaigns-design.md; plan task 1.)
 --
 -- NOT APPLIED when this file was written. Applying is a rollout step for

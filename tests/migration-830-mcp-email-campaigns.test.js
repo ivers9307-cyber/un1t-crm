@@ -1,4 +1,4 @@
-// MCPEMAIL.1 mig 827: campaign_release_approvals (service role only, token
+// MCPEMAIL.1 mig 830: campaign_release_approvals (service role only, token
 // stored as a hash) and campaigns.agent_blocks / created_via. Reads the
 // migration text, comments stripped by sqlCode.
 
@@ -7,11 +7,11 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { sqlCode } from './helpers/sql-code.js'
 
-const FILE = path.resolve(import.meta.dirname, '../supabase/migrations/827_mcp_email_campaigns.sql')
+const FILE = path.resolve(import.meta.dirname, '../supabase/migrations/830_mcp_email_campaigns.sql')
 const sql = sqlCode(readFileSync(FILE, 'utf8'))
 const flat = sql.replace(/\s+/g, ' ')
 
-describe('mig 827 MCPEMAIL.1', () => {
+describe('mig 830 MCPEMAIL.1', () => {
   it('creates campaign_release_approvals closed to every client role', () => {
     expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS public\.campaign_release_approvals/)
     expect(sql).toMatch(/ALTER TABLE public\.campaign_release_approvals ENABLE ROW LEVEL SECURITY/)

@@ -339,7 +339,7 @@ Returns `{ id, url, events, signing_secret }`. The `signing_secret` (starts `wsk
 
 ### Email campaigns (MCPEMAIL.1)
 
-Staff can prepare marketing email campaigns from Claude and cannot send them from Claude. Design: `docs/superpowers/specs/2026-11-12-mcp-email-campaigns-design.md`. Mig 827 (`campaign_release_approvals`, service-role only) **must be applied before the deploy**; `get_advisors` (security) after.
+Staff can prepare marketing email campaigns from Claude and cannot send them from Claude. Design: `docs/superpowers/specs/2026-11-12-mcp-email-campaigns-design.md`. Mig 830 (`campaign_release_approvals`, service-role only) **must be applied before the deploy**; `get_advisors` (security) after.
 
 **Flow.** Claude drafts (`create_email_draft`, `update_email_draft`), counts the audience, then calls `send_email_for_approval`. That emails the person a test carrying a link to `/communications/campaigns/approve/[token]`; the tool never returns the link or the token (they are in the email and nowhere else), so the agent cannot approve its own work. The person opens it signed in to the CRM and presses **Send to N people now** or **Schedule for <time>**. The page posts to `POST /api/communications/campaigns/approve/[token]` (session cookie auth; the proxy refuses an OAuth token there, and the route refuses any Authorization header), which calls `releaseCampaign` (`src/lib/campaign-release.js`). That is the only way a TOOL-prepared campaign is released. The other code that moves a campaign to `queued` or `scheduled` is the CRM's own, used by people: the send and schedule routes (`/api/campaigns/[id]/send`, `/api/communications/campaigns/[id]/schedule`, which also call `releaseCampaign`) and the `run-campaigns` cron, which promotes a due `scheduled` campaign to `queued`. A "View as" (impersonated) or tenant support session is refused on both the page and the route before any approval is read: under "View as" the session's `user.id` is the target's, so a master holding the link would otherwise press as that person.
 
@@ -353,7 +353,7 @@ Staff can prepare marketing email campaigns from Claude and cannot send them fro
 
 **Known limits.** The approval proves a signed-in CRM session pressed the button; an agent driving the person's own logged-in browser could press it too (same reach as the CRM's own Send button). The CRM's test-send route needs an admin role while the real send needs only `email`; this design uses `email` for both and does not fix the route. The `run-campaigns` cron does not re-check the wallet when it promotes a scheduled campaign (unchanged). An agent-written campaign opens in the web editor's code view. An edit made by a person in the CRM editor is outside the agent fence (the existing logged-in path).
 
-**Rollout.** Apply mig 827 before the deploy. First use from Claude at Test Studio (draft, count, test, press the link; check `draft -> queued -> sent` and the recipient count), then the negative checks (edit after the test and press the old link: refused; press a used link: refused), then one small real audience at Stillorgan.
+**Rollout.** Apply mig 830 before the deploy. First use from Claude at Test Studio (draft, count, test, press the link; check `draft -> queued -> sent` and the recipient count), then the negative checks (edit after the test and press the old link: refused; press a used link: refused), then one small real audience at Stillorgan.
 
 ## Pay subdomain (`pay.ccfautos.com`)
 

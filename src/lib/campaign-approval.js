@@ -4,7 +4,7 @@
 // content key), to one person (profile_id) and is single-use (consume is a
 // compare-and-set). Only the sha256 of the link token is stored.
 //
-// public.campaign_release_approvals is service-role only (mig 827). One live
+// public.campaign_release_approvals is service-role only (mig 830). One live
 // (unused, unvoided) approval per campaign is enforced by the partial unique
 // index campaign_release_approvals_one_live: of two concurrent issues the
 // losing insert gets 23505 and throws (fail closed). An expired but unvoided
