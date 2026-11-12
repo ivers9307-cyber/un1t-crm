@@ -25,7 +25,7 @@ import { computeWhatsAppReachabilitySummary } from '@/lib/whatsapp'
 // so the count, the preview and the send resolve one query path by
 // construction. (The SMS branch that lived here, and taught this lesson by
 // hand-copying its send gates, left with the SMS channel — TWILIO-RETIRE.1.)
-import { buildEligibleAudienceQuery } from '@/lib/audience-eligibility'
+import { emailAudienceCounts } from '@/lib/email-audience-counts'
 
 export const runtime = 'nodejs'
 
@@ -68,54 +68,17 @@ export async function POST(request) {
     }
     const filter = audience_filter || { logic: 'and', filters: [] }
 
-    // Filter-scoped count over the per-location audience view, optionally
-    // refined with extra gates. Single-table (mig 491 view), head:true safe.
-    const viewCount = async (refine) => {
-      const selectOpts = { count: 'exact', head: true }
-      const gate = (source) => {
-        const q = source.eq('audience_location_id', location_id)
-        return refine ? refine(q) : q
-      }
-      const base = gate(db.from('contact_location_audience').select('id', selectOpts))
-      // AUDIENCEIDS.1 — the same count on the view's scoped rpc twin (mig 795)
-      // when the filter's id list does not fit the GET URL.
-      const rebase = (sets) => gate(scopedAudienceSource(db, 'contact_location_audience', { locationId: location_id, ...sets, columns: 'id', selectOpts }))
-      const { query: q } = await applyAudienceFilterAsync({ db, query: base, filter, locationId: location_id, rebase })
-      const { count: c, error: e } = await q
-      if (e) throw new Error(e.message)
-      return c || 0
-    }
-
     if (channel === 'email') {
-      // Order matters — keep aligned with the route test's count sequence.
-      const matched = await viewCount(null)
-      const not_opted_in = await viewCount((q) => q.eq('loc_email_marketing', false))
-      const bounced_or_complained = await viewCount((q) => q.in('email_status', ['bounced', 'complained']))
-      // Marketing suppression (email_suppressed_at), gated on the PER-LOCATION
-      // consent column (the old sub-count read the retired global
-      // contacts.email_marketing): consented AND stamped, matching
-      // buildAudienceQuery's marketing gate.
-      // NOENGSUP.1 — this used to be two populations sharing one column,
-      // engagement-inactivity and repeat bounces. The engagement rule is
-      // retired (mig 537), so it is now bounces only, which is what the UI
-      // label says.
-      const suppressed = await viewCount((q) => q.eq('loc_email_marketing', true).not('email_suppressed_at', 'is', null))
-      // The will-receive number comes from the EXACT send-path builder the
-      // populate step uses (view + loc_email_marketing + email_status +
-      // suppression), so this count equals what a send would enrol — and
-      // equals what the preview lists, which calls the same helper.
-      const { query: eligibleQuery } = await buildEligibleAudienceQuery({
-        db, channel: 'email', filter, locationId: location_id,
-        columns: 'id', selectOpts: { count: 'exact', head: true },
-      })
-      const { count: eligible, error: eligibleErr } = await eligibleQuery
-      if (eligibleErr) return NextResponse.json({ success: false, error: eligibleErr.message }, { status: 400 })
+      // MCPEMAIL.1 — the head-count lives in @/lib/email-audience-counts (the
+      // MCP campaign tools read it too). It throws on a failed count; the
+      // catch below turns that into the same 400 + message as before.
+      const { matched, eligible, excluded } = await emailAudienceCounts(db, { filter, locationId: location_id })
       return NextResponse.json({
         success: true,
-        count: eligible || 0,   // eligible / will receive (back-compat key)
+        count: eligible,        // eligible / will receive (back-compat key)
         matched,                // filter-only
-        suppressed,             // back-compat top-level key (pre-B5 consumers)
-        excluded: { not_opted_in, bounced_or_complained, suppressed },
+        suppressed: excluded.suppressed,   // back-compat top-level key (pre-B5 consumers)
+        excluded,
       })
     }
 
