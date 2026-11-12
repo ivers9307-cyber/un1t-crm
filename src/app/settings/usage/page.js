@@ -137,6 +137,8 @@ export default async function UsageSettingsPage() {
         organizationId={orgId}
         canEdit={canEditCaps}
         initialAiCapCents={aiCap}
+        initialAssistantCapCents={summary.caps.assistant_hard_cap_cents}
+        assistantSpendCents={summary.live.assistant_spend_cents}
         initialEmailCapSends={emailCap}
         initialOpsEmails={summary.caps.ops_alert_emails}
         initialVoice={summary.voice}

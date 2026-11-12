@@ -4,8 +4,20 @@
 // is a SOFT band — exceeding it accrues per-unit overage, nothing
 // stops. Only an operator-set HARD cap interrupts service:
 //   - ai_hard_cap_cents  → Mia pauses for new inbound (soft-handoff
-//     with operator notice; the staff assistant is exempt).
+//     with operator notice; the staff assistant is NOT counted here).
 //   - email_hard_cap_sends → new campaign starts are refused.
+//   - assistant_hard_cap_cents → the in-app staff assistant refuses
+//     before any Anthropic call (ASSISTCAP.1, mig 806).
+//
+// ASSISTCAP.1 (Richard, 2026-11-12): the staff assistant gets its OWN
+// cap, not a share of Mia's. mig 421 excluded source 'assistant_chat'
+// from org_ai_spend_month_cents as a DEFERRAL ("metered but
+// allowance-exempt… track now, allocate cost ~Oct"), and this is the
+// allocation. Two numbers because the halves have opposite cost
+// profiles: Mia answers CUSTOMERS and must not stop mid-conversation
+// because staff spent the month exploring; the assistant is internal
+// tooling whose refusal costs one answer. One shared number lets either
+// starve the other.
 // Both live on org_settings and default NULL = no cap, so shipping
 // this changes nothing until a cap is set. Plan allowances/overage
 // pricing layer on top in the billing build (B1).
@@ -58,7 +70,7 @@ async function resolveOrgId(client, { organizationId, locationId }) {
 async function readOrgCaps(client, orgId) {
   const { data } = await client
     .from('org_settings')
-    .select('ai_hard_cap_cents, email_hard_cap_sends')
+    .select('ai_hard_cap_cents, email_hard_cap_sends, assistant_hard_cap_cents')
     .eq('organization_id', orgId)
     .maybeSingle()
   return data || {}
@@ -82,6 +94,54 @@ export async function getAiCapStatus({ organizationId, locationId }, { db } = {}
     if (capCents == null) return { capped: false, organizationId: orgId }
 
     const { data: spend, error } = await client.rpc('org_ai_spend_month_cents', {
+      p_org: orgId,
+      p_month_start: platformMonthStartStr(),
+    })
+    if (error) return { capped: false, organizationId: orgId }
+
+    const spendCents = Number(spend) || 0
+    return {
+      capped: spendCents >= Number(capCents),
+      capCents: Number(capCents),
+      spendCents,
+      organizationId: orgId,
+    }
+  } catch {
+    return { capped: false }
+  }
+}
+
+/**
+ * ASSISTCAP.1 — is the org at its hard STAFF-ASSISTANT spend cap for the
+ * current platform billing month?
+ *
+ * The complement of getAiCapStatus: that one sums every AI source EXCEPT
+ * 'assistant_chat', this one sums only it (mig 806's
+ * org_assistant_spend_month_cents), so the two never double-count a row and
+ * neither can exhaust the other's budget.
+ *
+ * FAILS OPEN, like its two siblings and for the same reason, which is worth
+ * stating because the trade-off here runs the other way: failing open spends
+ * money on a broken meter, failing closed takes a working tool away from a
+ * staff member mid-task. Spend is bounded (a month, visible on the usage
+ * page, and the 80% notice fires from the rollup cron), while a refusal
+ * caused by our own metering outage is indistinguishable to the operator
+ * from the feature being broken. So an unreadable cap or spend is "no cap",
+ * never "capped".
+ *
+ * @returns {Promise<{capped: boolean, capCents?: number, spendCents?: number, organizationId?: string}>}
+ */
+export async function getAssistantCapStatus({ organizationId, locationId }, { db } = {}) {
+  try {
+    const client = db || createServerClient()
+    const orgId = await resolveOrgId(client, { organizationId, locationId })
+    if (!orgId) return { capped: false }
+
+    const caps = await readOrgCaps(client, orgId)
+    const capCents = caps.assistant_hard_cap_cents
+    if (capCents == null) return { capped: false, organizationId: orgId }
+
+    const { data: spend, error } = await client.rpc('org_assistant_spend_month_cents', {
       p_org: orgId,
       p_month_start: platformMonthStartStr(),
     })
