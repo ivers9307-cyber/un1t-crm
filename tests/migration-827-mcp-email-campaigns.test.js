@@ -20,6 +20,10 @@ describe('mig 827 MCPEMAIL.1', () => {
     expect(sql).not.toMatch(/GRANT[^;]*campaign_release_approvals/i)
   })
 
+  it('allows only one live (unused, unvoided) approval per campaign', () => {
+    expect(flat).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS campaign_release_approvals_one_live ON public\.campaign_release_approvals \(campaign_id\) WHERE used_at IS NULL AND voided_at IS NULL/)
+  })
+
   it('has the columns, foreign keys and index the approval needs', () => {
     expect(flat).toMatch(/campaign_id uuid NOT NULL REFERENCES public\.campaigns\(id\) ON DELETE CASCADE/)
     expect(flat).toMatch(/profile_id uuid NOT NULL REFERENCES public\.profiles\(id\) ON DELETE CASCADE/)

@@ -4,14 +4,18 @@
 // content key), to one person (profile_id) and is single-use (consume is a
 // compare-and-set). Only the sha256 of the link token is stored.
 //
-// public.campaign_release_approvals is service-role only (mig 827).
+// public.campaign_release_approvals is service-role only (mig 827). One live
+// (unused, unvoided) approval per campaign is enforced by the partial unique
+// index campaign_release_approvals_one_live: of two concurrent issues the
+// losing insert gets 23505 and throws (fail closed). An expired but unvoided
+// row is still live for that index, so issuing voids ALL unused rows.
 
 import { createHash, randomBytes } from 'node:crypto'
 
 export const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000
 export const APPROVALS_PER_HOUR = 5
 export const APPROVAL_CONTENT_FIELDS = [
-  'location_id', 'subject', 'preview_text', 'from_name', 'reply_to', 'html_content', 'audience_filter',
+  'location_id', 'subject', 'preview_text', 'from_name', 'from_email', 'reply_to', 'html_content', 'audience_filter',
 ]
 
 const TABLE = 'campaign_release_approvals'
@@ -30,10 +34,14 @@ function stable(v) {
   return v
 }
 
-/** sha256 hex over a stable JSON of the seven fields a release is approved on. */
+/** sha256 hex over a stable JSON of the eight fields a release is approved on. */
 export function campaignContentKey(row) {
   const picked = {}
-  for (const f of APPROVAL_CONTENT_FIELDS) picked[f] = row?.[f]
+  for (const f of APPROVAL_CONTENT_FIELDS) {
+    // A short select must never silently weaken the binding.
+    if (!row || !(f in row)) throw new Error(`campaignContentKey: row is missing field '${f}'`)
+    picked[f] = row[f]
+  }
   return sha256(JSON.stringify(stable(picked)))
 }
 
@@ -55,7 +63,8 @@ export async function issueApproval(db, { campaign, profileId, audienceEligible,
     .eq('campaign_id', campaign.id)
     .gte('created_at', hourAgo)
   if (countError) throw new Error(`approval count failed: ${countError.message}`)
-  if ((count ?? 0) >= APPROVALS_PER_HOUR) return { ok: false, code: 'too_many' }
+  if (typeof count !== 'number') throw new Error('approval count returned no number')
+  if (count >= APPROVALS_PER_HOUR) return { ok: false, code: 'too_many' }
 
   await voidApprovals(db, campaign.id, nowMs)
 
@@ -99,13 +108,14 @@ export async function findApproval(db, { token, profileId, nowMs }) {
 }
 
 /** Spend an approval. True only when this call touched exactly one row. */
-export async function consumeApproval(db, approvalId) {
+export async function consumeApproval(db, approvalId, nowMs = Date.now()) {
   const { data, error } = await db
     .from(TABLE)
-    .update({ used_at: new Date().toISOString() })
+    .update({ used_at: new Date(nowMs).toISOString() })
     .eq('id', approvalId)
     .is('used_at', null)
     .is('voided_at', null)
+    .gt('expires_at', new Date(nowMs).toISOString())
     .select('id')
   if (error) throw new Error(`approval consume failed: ${error.message}`)
   return Array.isArray(data) && data.length === 1

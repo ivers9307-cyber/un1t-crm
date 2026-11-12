@@ -16,7 +16,7 @@ const OTHER = '20000000-0000-4000-8000-000000000002'
 
 // A small stateful stand-in for campaign_release_approvals: it applies the
 // filters the module chains, so the tests judge behaviour, not call shapes.
-function approvalsDb({ failOn = null } = {}) {
+function approvalsDb({ failOn = null, failError = { message: 'boom' }, countOverride } = {}) {
   const rows = []
   const calls = []
   let seq = 0
@@ -27,7 +27,7 @@ function approvalsDb({ failOn = null } = {}) {
       const q = { op: 'select', cols: null, opts: null, payload: null, filters: [], limit: null, order: null }
       const run = () => {
         calls.push(q)
-        if (failOn === q.op) return { data: null, error: { message: 'boom' } }
+        if (failOn === q.op) return { data: null, error: failError }
         const match = (r) => q.filters.every(([k, c, v]) => {
           if (k === 'eq') return r[c] === v
           if (k === 'is') return r[c] === v
@@ -46,7 +46,7 @@ function approvalsDb({ failOn = null } = {}) {
           return { data: hit.map((r) => ({ id: r.id })), error: null }
         }
         let hit = rows.filter(match)
-        if (q.opts?.head) return { data: null, count: hit.length, error: null }
+        if (q.opts?.head) return { data: null, count: countOverride === undefined ? hit.length : countOverride, error: null }
         if (q.order) hit = [...hit].sort((a, b) => (a[q.order] < b[q.order] ? 1 : -1))
         if (q.limit != null) hit = hit.slice(0, q.limit)
         const pick = (r) => Object.fromEntries(q.cols.split(',').map((c) => c.trim()).map((c) => [c, r[c]]))
@@ -71,9 +71,10 @@ function approvalsDb({ failOn = null } = {}) {
 }
 
 const campaign = (over = {}) => ({
-  id: CAMPAIGN, location_id: 'loc', subject: 'S', preview_text: 'P', from_name: 'F', reply_to: 'r@x.com',
+  id: CAMPAIGN, location_id: 'loc', subject: 'S', preview_text: 'P', from_name: 'F', from_email: 'f@x.com', reply_to: 'r@x.com',
   html_content: '<p>Hi</p>', audience_filter: { a: 1, b: [1, 2] }, status: 'draft', updated_at: 'x', ...over,
 })
+const consumeAt = (db, id, ms = NOW) => consumeApproval(db, id, ms)
 const issue = (db, over = {}) => issueApproval(db, {
   campaign: campaign(), profileId: ME, audienceEligible: 100, sendAt: null, nowMs: NOW, ...over,
 })
@@ -82,16 +83,16 @@ describe('constants', () => {
   it('has the briefed values', () => {
     expect(APPROVAL_TTL_MS).toBe(86400000)
     expect(APPROVALS_PER_HOUR).toBe(5)
-    expect(APPROVAL_CONTENT_FIELDS).toEqual(['location_id', 'subject', 'preview_text', 'from_name', 'reply_to', 'html_content', 'audience_filter'])
+    expect(APPROVAL_CONTENT_FIELDS).toEqual(['location_id', 'subject', 'preview_text', 'from_name', 'from_email', 'reply_to', 'html_content', 'audience_filter'])
   })
 })
 
 describe('campaignContentKey', () => {
-  it('changes when any of the seven fields changes and not when updated_at or status does', () => {
+  it('changes when any of the eight fields changes and not when updated_at or status does', () => {
     const base = campaignContentKey(campaign())
     expect(base).toMatch(/^[0-9a-f]{64}$/)
     const changes = {
-      location_id: 'other', subject: 'S2', preview_text: 'P2', from_name: 'F2', reply_to: 'z@x.com',
+      location_id: 'other', subject: 'S2', preview_text: 'P2', from_name: 'F2', from_email: 'g@x.com', reply_to: 'z@x.com',
       html_content: '<p>Bye</p>', audience_filter: { a: 2 },
     }
     for (const [f, v] of Object.entries(changes)) {
@@ -106,10 +107,12 @@ describe('campaignContentKey', () => {
     expect(campaignContentKey(campaign({ audience_filter: { y: [2, 1], x: { q: 2, p: 1 } } }))).not.toBe(a)
   })
 
-  it('treats undefined and missing as null', () => {
-    const { reply_to, ...without } = campaign()
-    void reply_to
-    expect(campaignContentKey(without)).toBe(campaignContentKey(campaign({ reply_to: null })))
+  it('throws naming a field absent from the row, but hashes present undefined/null alike', () => {
+    for (const f of APPROVAL_CONTENT_FIELDS) {
+      const { [f]: _gone, ...without } = campaign()
+      void _gone
+      expect(() => campaignContentKey(without), f).toThrow(new RegExp(f))
+    }
     expect(campaignContentKey(campaign({ reply_to: undefined }))).toBe(campaignContentKey(campaign({ reply_to: null })))
   })
 })
@@ -159,6 +162,25 @@ describe('issueApproval', () => {
     expect(db.rows).toHaveLength(0)
   })
 
+  it('fails closed when the one-live index rejects the insert (23505)', async () => {
+    const db = approvalsDb({ failOn: 'insert', failError: { code: '23505', message: 'duplicate key' } })
+    await expect(issue(db)).rejects.toThrow(/insert failed/)
+  })
+
+  it('issuing after an earlier approval has expired succeeds and voids the expired row', async () => {
+    const db = approvalsDb()
+    await issue(db)
+    const later = NOW + APPROVAL_TTL_MS + 1000
+    const r = await issue(db, { nowMs: later })
+    expect(r.ok).toBe(true)
+    expect(db.rows[0].voided_at).toBe(new Date(later).toISOString())
+    expect(db.rows.filter((x) => !x.used_at && !x.voided_at)).toHaveLength(1)
+  })
+
+  it('throws when the rate-limit count comes back null', async () => {
+    await expect(issue(approvalsDb({ countOverride: null }))).rejects.toThrow()
+  })
+
   it('throws when the insert fails', async () => {
     await expect(issue(approvalsDb({ failOn: 'insert' }))).rejects.toThrow()
   })
@@ -193,7 +215,7 @@ describe('findApproval', () => {
     const b = await issue(db)
     expect(await findApproval(db, { token: a.token, profileId: ME, nowMs: NOW })).toEqual({ ok: false, code: 'voided' })
     const found = await findApproval(db, { token: b.token, profileId: ME, nowMs: NOW })
-    expect(await consumeApproval(db, found.approval.id)).toBe(true)
+    expect(await consumeAt(db, found.approval.id)).toBe(true)
     expect(await findApproval(db, { token: b.token, profileId: ME, nowMs: NOW })).toEqual({ ok: false, code: 'used' })
   })
 
@@ -203,21 +225,29 @@ describe('findApproval', () => {
 })
 
 describe('consumeApproval', () => {
+  it('refuses an approval that expired between find and consume', async () => {
+    const db = approvalsDb()
+    await issue(db)
+    expect(await consumeAt(db, db.rows[0].id, NOW + APPROVAL_TTL_MS)).toBe(false)
+    expect(db.rows[0].used_at).toBeNull()
+    expect(await consumeAt(db, db.rows[0].id, NOW + 1000)).toBe(true)
+  })
+
   it('returns true once and false the second time, and false for a voided one', async () => {
     const db = approvalsDb()
     await issue(db)
     const id = db.rows[0].id
-    expect(await consumeApproval(db, id)).toBe(true)
-    expect(await consumeApproval(db, id)).toBe(false)
+    expect(await consumeAt(db, id)).toBe(true)
+    expect(await consumeAt(db, id)).toBe(false)
     const b = await issue(db)
     void b
     const c = await issue(db)
     void c
-    expect(await consumeApproval(db, db.rows[1].id)).toBe(false)
+    expect(await consumeAt(db, db.rows[1].id)).toBe(false)
   })
 
   it('throws on a database error', async () => {
-    await expect(consumeApproval(approvalsDb({ failOn: 'update' }), 'x')).rejects.toThrow()
+    await expect(consumeAt(approvalsDb({ failOn: 'update' }), 'x')).rejects.toThrow()
   })
 })
 

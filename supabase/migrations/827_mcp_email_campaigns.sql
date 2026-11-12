@@ -63,6 +63,14 @@ CREATE TABLE IF NOT EXISTS public.campaign_release_approvals (
 CREATE INDEX IF NOT EXISTS campaign_release_approvals_campaign_created_idx
   ON public.campaign_release_approvals (campaign_id, created_at DESC);
 
+-- One live approval per campaign, enforced by the database: two concurrent
+-- issues can both pass the rate-limit count and both void, but only one insert
+-- can win; the loser gets 23505 and the app fails closed. An expired but
+-- unvoided, unused row still counts as live, so issuing voids ALL unused rows.
+CREATE UNIQUE INDEX IF NOT EXISTS campaign_release_approvals_one_live
+  ON public.campaign_release_approvals (campaign_id)
+  WHERE used_at IS NULL AND voided_at IS NULL;
+
 ALTER TABLE public.campaign_release_approvals ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.campaign_release_approvals FROM anon, authenticated;
 
