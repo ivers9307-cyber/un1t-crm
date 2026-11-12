@@ -97,8 +97,15 @@ export async function releasePreflight(db, campaign, { statuses = RELEASABLE_STA
  * `sendAt` (an already-validated future Date). One compare-and-set update,
  * narrowed to `statuses`; zero rows means the status moved under us
  * (conflict, carrying the status as it is now).
+ *
+ * `expectUpdatedAt` (optional, the `updated_at` string of the row the caller
+ * checked) pins the row version too. The campaigns_updated_at trigger (mig
+ * 005) bumps updated_at on every update, so an edit that lands after the
+ * caller's check makes this touch zero rows: the same conflict. The approve
+ * route uses it so content edited after its content-key check is never
+ * released untested. Omitted, nothing changes for the other callers.
  */
-export async function releaseCampaign(db, campaign, { sendAt = null, statuses = RELEASABLE_STATUSES } = {}) {
+export async function releaseCampaign(db, campaign, { sendAt = null, statuses = RELEASABLE_STATUSES, expectUpdatedAt } = {}) {
   // Queued: the run-campaigns cron picks it up on its next tick (typically
   // within 60s) and starts the populate → send chunks state machine.
   // Scheduled: the same cron promotes it at scheduled_at.
@@ -112,11 +119,16 @@ export async function releaseCampaign(db, campaign, { sendAt = null, statuses = 
         last_error: null,          // COMMSFIX.C.5 — this attempt starts clean
       }
 
-  const { data, error } = await db.from('campaigns')
+  // A pin asked for but unusable must never silently become no pin.
+  if (expectUpdatedAt !== undefined && (typeof expectUpdatedAt !== 'string' || !expectUpdatedAt)) {
+    return { ok: false, code: 'error', message: 'releaseCampaign: expectUpdatedAt must be a non-empty string' }
+  }
+  let write = db.from('campaigns')
     .update(patch)
     .eq('id', campaign.id)
     .in('status', statuses)
-    .select('id')
+  if (expectUpdatedAt !== undefined) write = write.eq('updated_at', expectUpdatedAt)
+  const { data, error } = await write.select('id')
   if (error) return { ok: false, code: 'error', message: error.message }
   if (!Array.isArray(data) || data.length === 0) {
     return {

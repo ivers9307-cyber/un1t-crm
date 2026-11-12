@@ -8371,6 +8371,26 @@ registry.registerPath({
     ...campaignGateResponses,
   },
 })
+// MCPEMAIL.1 — the approve page's button: the only release of a campaign an
+// agent prepared. Cookie session only (any Authorization header is refused).
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/campaigns/approve/{token}',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Release a campaign from a one-time approval emailed to the signed-in person',
+  description: 'Releases exactly the tested content, audience and timing, once, for the person the approval was issued to: '
+    + 'queued now when the approval has no send time, else scheduled at it. The approval is spent before the release.',
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'Released: { status, scheduled_at }' },
+    401: { description: 'No cookie session, or an Authorization header was sent', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'The person no longer holds Email Marketing at the campaign\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not this person\'s approval, or not a studio they hold (the same answer as a random token)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Used, expired, withdrawn, content changed, time passed, audience grew or empty, status not draft or scheduled, or already approved', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The approval could not be checked or spent', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
 
 // GAPS-P8 — AI copy assist for the composer. Session-only (it costs money per
 // call), rate-limited per user and per location, capped by the per-location

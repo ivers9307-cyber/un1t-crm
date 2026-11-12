@@ -123,6 +123,38 @@ describe('releaseCampaign', () => {
     expect(await releaseCampaign(db, campaign())).toEqual({ ok: false, code: 'error', message: 'boom' })
   })
 
+  it('release with expectUpdatedAt pins the row version too; an edit since makes it a conflict', async () => {
+    const READ_AT = '2026-10-01T08:59:00.123456+00:00'
+    // Answers like Postgres: the row's updated_at moved (an edit landed), so the eq misses.
+    const db = makeFakeDb((call) => {
+      if (call.op === 'select') return { data: { status: 'draft' }, error: null }
+      const pinned = call.filters.find(([op, col]) => op === 'eq' && col === 'updated_at')
+      return { data: pinned && pinned[2] === READ_AT ? [{ id: CAMPAIGN_ID }] : [], error: null }
+    })
+    const r = await releaseCampaign(db, campaign(), { statuses: ['draft', 'scheduled'], expectUpdatedAt: '2026-10-01T08:58:00+00:00' })
+    expect(r).toMatchObject({ ok: false, code: 'conflict', current_status: 'draft' })
+    expect(writesOf(db)[0].filters).toEqual([
+      ['eq', 'id', CAMPAIGN_ID], ['in', 'status', ['draft', 'scheduled']], ['eq', 'updated_at', '2026-10-01T08:58:00+00:00'],
+    ])
+    expect(await releaseCampaign(db, campaign(), { statuses: ['draft', 'scheduled'], expectUpdatedAt: READ_AT }))
+      .toEqual({ ok: true, status: 'queued', scheduled_at: null })
+  })
+
+  it('release refuses an unusable expectUpdatedAt without writing (a pin never silently drops)', async () => {
+    for (const expectUpdatedAt of [null, '', 123]) {
+      const db = okDb()
+      const r = await releaseCampaign(db, campaign(), { expectUpdatedAt })
+      expect(r).toMatchObject({ ok: false, code: 'error' })
+      expect(writesOf(db)).toEqual([])
+    }
+  })
+
+  it('release without expectUpdatedAt adds no updated_at filter (existing callers unchanged)', async () => {
+    const db = okDb()
+    await releaseCampaign(db, campaign(), { sendAt: LATER })
+    expect(writesOf(db)[0].filters.some(([, col]) => col === 'updated_at')).toBe(false)
+  })
+
   it('release with statuses [draft, scheduled] never touches a failed campaign', async () => {
     // The fake answers like Postgres: the row is 'failed', so the IN filter excludes it.
     const db = makeFakeDb((call) => {
