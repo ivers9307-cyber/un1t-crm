@@ -29,11 +29,18 @@ const block = z.discriminatedUnion('type', [
 export const EmailBlocksSchema = z.array(block).min(1).max(60)
 
 // ── merge tags ──────────────────────────────────────────────────────────
-const OFFERED_NAMES = new Set(OFFERED_MERGE_TAGS.map((t) => t.tag.replace(/^\{\{\s*|\s*\}\}$/g, '')))
-const TAG_RE = /\{\{\s*([^{}]*?)\s*\}\}/g
-const TAG_ONLY_RE = /^\{\{\s*[^{}]*?\s*\}\}$/
+// applyMergeTags() substitutes the exact literal `{{name}}` (no inner
+// whitespace), so only that exact form counts as a tag here.
+const OFFERED_NAMES = new Set(OFFERED_MERGE_TAGS.map((t) => t.tag.replace(/^\{\{|\}\}$/g, '')))
+const TAG_RE = /\{\{([^{}]*)\}\}/g
+const TAG_ONLY_RE = /^\{\{([^{}]*)\}\}$/
 
-/** Tag names used in `text` that are not offered tags (unique, in order). */
+// Contact-sourced tag values are substituted UNESCAPED at send time, so a URL
+// position takes only tags whose value is a URL we build (decision F2).
+const URL_ONLY_TAGS = Object.freeze(new Set(['unsubscribe_url', 'preference_url']))
+const URL_INNER_TAGS = Object.freeze(new Set(['booking_token']))
+
+/** Raw inner text of every tag in `value` that is not an exact offered tag (unique, in order). */
 export function unknownMergeTags(value) {
   const out = []
   for (const m of String(value ?? '').matchAll(TAG_RE)) {
@@ -42,11 +49,30 @@ export function unknownMergeTags(value) {
   return out
 }
 
+function tagSentence(inner) {
+  const name = inner.trim()
+  if (name !== inner && OFFERED_NAMES.has(name)) {
+    return `The merge tag {{ ${name} }} must be written with no spaces inside the braces, e.g. {{${name}}}.`
+  }
+  return `The merge tag {{${inner}}} is not available in emails.`
+}
+
 // ── validation ──────────────────────────────────────────────────────────
 const RAW_LINK_RE = /\[([^\]]*)\]\(([^)\s]*)\)/g
 
-function urlProblem(value) {
-  if (TAG_ONLY_RE.test(value)) return null // an offered-tag check runs on every text field
+// kind: 'link' (button / inline link target) or 'image'.
+function urlProblem(value, kind = 'link') {
+  const only = TAG_ONLY_RE.exec(value)
+  if (only) {
+    if (kind === 'link' && URL_ONLY_TAGS.has(only[1])) return null
+    return `The merge tag {{${only[1]}}} cannot be used as a link address; only {{unsubscribe_url}} and {{preference_url}} can.`
+  }
+  for (const m of value.matchAll(TAG_RE)) {
+    if (kind === 'image') return `The image address ${value} may not contain merge tags.`
+    if (!URL_INNER_TAGS.has(m[1])) {
+      return `The merge tag {{${m[1]}}} cannot be used inside a link address; only {{booking_token}} can.`
+    }
+  }
   let parsed
   try {
     parsed = new URL(value)
@@ -74,14 +100,14 @@ export function validateBlocks(blocks, { allowedImageUrls } = {}) {
   for (const b of blocks) {
     for (const t of textsOf(b)) {
       const unknown = unknownMergeTags(t)
-      if (unknown.length) return `The merge tag {{${unknown[0]}}} is not available in emails.`
+      if (unknown.length) return tagSentence(unknown[0])
     }
     if (b.type === 'button') {
       const p = urlProblem(b.url)
       if (p) return p
     }
     if (b.type === 'image') {
-      const p = urlProblem(b.url)
+      const p = urlProblem(b.url, 'image')
       if (p) return p
       if (!allowed.has(b.url)) return `The image ${b.url} is not in this studio's image library.`
     }
@@ -106,7 +132,7 @@ const esc = (s) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
 
-const ESC_LINK_RE = /\[([^\]]+)\]\((https:\/\/[^)\s]+|\{\{[^{}]*\}\})\)/g
+const ESC_LINK_RE = /\[([^\]]+)\]\((https:\/\/[^)\s]+|\{\{(?:unsubscribe_url|preference_url)\}\})\)/g
 const LINK_COLOUR = '#1a1a1a'
 const FONT = "'Helvetica Neue', Arial, sans-serif"
 

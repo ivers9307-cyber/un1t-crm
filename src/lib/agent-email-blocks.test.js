@@ -52,13 +52,32 @@ describe('agent email blocks', () => {
     expect(validateBlocks([{ type: 'paragraph', text: 'Hi {{nope}}' }], lib)).toContain('nope')
     expect(validateBlocks([{ type: 'paragraph', text: 'Hi {{first_name}}' }], lib)).toBeNull()
     expect(validateBlocks([{ type: 'paragraph', text: '{{glofox_passcode}}' }], lib)).toContain('glofox_passcode')
-    expect(unknownMergeTags('{{first_name}} {{ bad }} {{bad}} {{x_y}}')).toEqual(['bad', 'x_y'])
+    expect(unknownMergeTags('{{first_name}} {{ bad }} {{bad}} {{x_y}}')).toEqual([' bad ', 'bad', 'x_y'])
+    expect(validateBlocks([{ type: 'paragraph', text: 'Hi {{ first_name }}' }], lib)).toContain('{{first_name}}')
   })
 
   it('accepts merge tags in button urls, including a url that is only a tag', () => {
     expect(validateBlocks([{ type: 'button', label: 'Go', url: 'https://x.ie/?t={{booking_token}}' }], lib)).toBeNull()
     expect(validateBlocks([{ type: 'button', label: 'Go', url: '{{unsubscribe_url}}' }], lib)).toBeNull()
     expect(validateBlocks([{ type: 'button', label: 'Go', url: '{{nope}}' }], lib)).toContain('nope')
+  })
+
+  it('refuses tags in URL positions other than the two URL tags and booking_token', () => {
+    const btn = (url) => validateBlocks([{ type: 'button', label: 'Go', url }], lib)
+    const lnk = (url) => validateBlocks([{ type: 'paragraph', text: `[x](${url})` }], lib)
+    for (const f of [btn, lnk]) {
+      expect(f('{{first_name}}')).toContain('first_name')
+      expect(f('{{app_download_links}}')).toContain('app_download_links')
+      expect(f('https://x.ie/?n={{first_name}}')).toContain('first_name')
+      expect(f('{{unsubscribe_url}}')).toBeNull()
+      expect(f('{{preference_url}}')).toBeNull()
+      expect(f('https://x.ie/?t={{booking_token}}')).toBeNull()
+    }
+    expect(validateBlocks([{ type: 'image', url: 'https://cdn.example.com/a.jpg?t={{booking_token}}', alt: 'a' }],
+      { allowedImageUrls: new Set(['https://cdn.example.com/a.jpg?t={{booking_token}}']) })).toContain('merge tags')
+    const html = render([{ type: 'paragraph', text: '[u]({{unsubscribe_url}}) [f]({{first_name}})' }])
+    expect(html).toContain('<a href="{{unsubscribe_url}}"')
+    expect(html).not.toContain('href="{{first_name}}"')
   })
 
   it('keeps merge tags verbatim in the output', () => {
