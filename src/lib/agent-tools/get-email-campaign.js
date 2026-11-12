@@ -4,7 +4,7 @@
 import { z } from 'zod'
 import { uuidLike } from '@/lib/schemas'
 import { defineTool } from './registry.js'
-import { InvalidAudienceFilterError } from '@/lib/audience-filter'
+import { InvalidAudienceFilterError, stripUnsetFilterRows } from '@/lib/audience-filter'
 import { emailAudienceCounts } from '@/lib/email-audience-counts'
 import { pendingApproval } from '@/lib/campaign-approval'
 import { describeFromAddress } from '@/lib/from-address'
@@ -38,7 +38,7 @@ export default defineTool({
     } else {
       if (hasFilterRows(campaign.audience_filter)) {
         try {
-          audience = await emailAudienceCounts(db, { filter: campaign.audience_filter, locationId: studio.id })
+          audience = await emailAudienceCounts(db, { filter: stripUnsetFilterRows(campaign.audience_filter), locationId: studio.id })
         } catch (e) {
           if (!(e instanceof InvalidAudienceFilterError)) throw e
         }
@@ -46,7 +46,7 @@ export default defineTool({
       approval = (await pendingApproval(db, campaign.id, nowMs)) ?? null
     }
 
-    const { sends_as } = await describeFromAddress(db, studio.id, null)
+    const { sends_as } = await describeFromAddress(db, studio.id, campaign.from_email ?? null)
     return {
       campaign: {
         id: campaign.id,

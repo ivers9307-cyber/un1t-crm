@@ -227,6 +227,23 @@ describe('email read tools', () => {
     expect(n.data).toMatchObject({ blocks: null, body_edited_in_crm: false })
   })
 
+  it("get_email_campaign's sends_as honours the campaign's from_email, else the studio default", async () => {
+    describeFromAddress.mockImplementation(async (_db, _loc, requested) => ({ sends_as: requested || 'studio@un1t.test' }))
+    const a = makeDb({ campaigns: { data: campaign({ from_email: 'news@un1t.test' }), error: null } })
+    expect((await run(getEmailCampaign, { campaign_id: CAMP }, a.db)).data.campaign.sends_as).toBe('news@un1t.test')
+    expect(describeFromAddress).toHaveBeenLastCalledWith(a.db, DUB, 'news@un1t.test')
+    const b = makeDb({ campaigns: { data: campaign({ from_email: null }), error: null } })
+    expect((await run(getEmailCampaign, { campaign_id: CAMP }, b.db)).data.campaign.sends_as).toBe('studio@un1t.test')
+  })
+
+  it('get_email_campaign counts the stored filter with blank rows stripped', async () => {
+    const stored = { logic: 'and', filters: [{ field: '', op: 'eq' }, ...FILTER.filters] }
+    const { db } = makeDb({ campaigns: { data: campaign({ audience_filter: stored }), error: null } })
+    const r = await run(getEmailCampaign, { campaign_id: CAMP }, db)
+    expect(emailAudienceCounts).toHaveBeenCalledWith(db, { filter: FILTER, locationId: DUB })
+    expect(r.data.audience).toEqual(COUNTS)
+  })
+
   it("count_email_audience's description names every AUDIENCE_FIELDS key", () => {
     for (const key of Object.keys(AUDIENCE_FIELDS)) expect(countEmailAudience.description).toContain(key)
   })

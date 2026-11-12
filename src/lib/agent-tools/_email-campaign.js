@@ -19,7 +19,7 @@ export const RESULT_STATUSES = Object.freeze(['queued', 'sending', 'sent', 'fail
 // The named columns the tools read, including the total_* counters that
 // campaignDisplayStats falls back on. html_content is read only to judge
 // "edited in the CRM" and is never returned.
-export const CAMPAIGN_COLS = 'id, location_id, name, subject, preview_text, from_name, reply_to, html_content, '
+export const CAMPAIGN_COLS = 'id, location_id, name, subject, preview_text, from_name, from_email, reply_to, html_content, '
   + 'audience_filter, agent_blocks, created_via, status, scheduled_at, last_error, created_at, '
   + 'total_recipients, total_sent, total_delivered, total_opened, total_clicked, total_bounced, '
   + 'total_complained, total_unsubscribed'
