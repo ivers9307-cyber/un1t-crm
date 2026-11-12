@@ -17,15 +17,17 @@ export const SYSTEM_PROMPT = `You are the Repset CRM Assistant — a helpful, kn
 ## CRITICAL: Role-Based Access Control
 You MUST respect the user's role. Never attempt a tool the user's role does not permit. If they ask for something outside their role, politely explain they don't have access and suggest they speak to a manager.
 
+The tools you are given are already filtered to what this person may use at their current studio — by their role AND by the same permission (Contacts, Activities, Bookings, Pipeline) the equivalent screen needs. If a tool still answers with an error naming a permission, relay it plainly and say an owner or manager can grant it in Settings → Staff. Never retry a tool that was refused.
+
 **Owner / Manager** — Full access to all tools and data.
 
 **Head Coach** — Can do everything except:
-- Cannot create contacts (create_contact)
+- Cannot create contacts (create_contact), which also needs the Contacts permission
 - Cannot see pay rates or staff cost: cannot run the staff_cost report (generate_report with report_type staff_cost), and must not be told any staff member's salary, hourly rate, overtime rate or labour cost. Head coaches CAN run staff_hours reports and see hours, time off and roster coverage. They cannot see colleagues' contracted hours or the utilisation report (owners and managers only)
 
 **Staff** — Can view the published schedule but cannot make changes:
 - CAN use: navigate_user, get_holiday_allowance (own only), get_time_off (own only)
-- CAN use: get_shifts_for_week (published roster only, all staff visible, read-only)
+- CAN use: get_shifts (published roster only, all staff visible, read-only)
 - CANNOT use: create_shift, create_contact, search_contacts, list_staff, list_shift_templates, create_activity, generate_report
 - Staff can see the published weekly roster (who's working when) but cannot create, edit, or delete shifts. Days the roster has not been published for yet come back in unpublished_days with no shifts for them: say those days are not published yet, never that nobody is working
 - When a staff member asks to change the schedule, create shifts, approve requests, or run reports, tell them to submit a request to their manager or head coach
@@ -192,90 +194,13 @@ Permissions are: dashboard, pipeline, contacts, events, bookings, activities, em
 - If an action fails, explain why and suggest alternatives
 `
 
+// ASSISTREG.2 — the tools still defined HERE are the ones with no twin in
+// src/lib/agent-tools/: navigate_user (a UI action, not data) and
+// generate_report. Every other tool the assistant offers is the registry's,
+// advertised from the registry's own schema by
+// src/lib/assistant/tool-bridge.js, so a tool's shape is declared once and
+// cannot drift between the two callers.
 export const TOOLS = [
-  {
-    name: 'create_contact',
-    description: 'Create a new contact in the CRM. Use when the user asks to add a new member, lead, or contact.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Full name of the contact' },
-        email: { type: 'string', description: 'Email address (required)' },
-        phone: { type: 'string', description: 'Phone number' },
-        lead_source: { type: 'string', enum: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'other'], description: 'How the lead was acquired' },
-      },
-      required: ['name', 'email'],
-    },
-  },
-  {
-    name: 'search_contacts',
-    description: 'Search for contacts by name or email. Use when the user asks about a specific person or wants to find someone.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Name or email to search for' },
-      },
-      required: ['query'],
-    },
-  },
-  {
-    name: 'create_shift',
-    description: 'Add a staff member to a shift on a specific date. Use when the user asks to schedule someone or add them to the roster.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        profile_id: { type: 'string', description: 'The staff member UUID' },
-        shift_template_id: { type: 'string', description: 'The shift template UUID' },
-        shift_date: { type: 'string', description: 'A real calendar date, YYYY-MM-DD' },
-      },
-      required: ['profile_id', 'shift_template_id', 'shift_date'],
-    },
-  },
-  {
-    name: 'list_staff',
-    description: 'Get a list of all staff members. Use when the user asks who is on the team, or you need staff IDs for other actions.',
-    input_schema: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
-    name: 'list_shift_templates',
-    description: 'Get available shift templates for the current location. Use when you need to know what shifts exist.',
-    input_schema: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
-    name: 'get_shifts_for_week',
-    description: 'Get the shifts for a specific week (Monday to Sunday) with each shift\'s real hours. Any date reads the Monday-to-Sunday week it falls in (week_start, week_end). Managers also get draft shifts, marked published: false; staff get published shifts only. unpublished_days lists the days no published roster covers yet. Use when the user asks about the roster or who is working.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Monday of the week (YYYY-MM-DD)' },
-      },
-      required: ['start_date'],
-    },
-  },
-  // FUNNEL.1 — the move_deal tool was removed: pipeline stages are
-  // classifier-derived; a manual move is silently reverted by the next
-  // sync, so offering the affordance would mislead operators.
-  {
-    name: 'create_activity',
-    description: 'Create a task, call reminder, or activity linked to a contact. Use when the user wants to schedule a follow-up.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        subject: { type: 'string', description: 'What the activity is about' },
-        type: { type: 'string', enum: ['call', 'email', 'meeting', 'task'], description: 'Activity type' },
-        contact_id: { type: 'string', description: 'Contact UUID to link to' },
-        due_date: { type: 'string', description: 'Due date (YYYY-MM-DD)' },
-        note: { type: 'string', description: 'Additional notes' },
-      },
-      required: ['subject', 'type'],
-    },
-  },
   {
     name: 'navigate_user',
     description: 'Suggest the user navigate to a specific page. Use when guiding them to a feature.',
@@ -286,30 +211,6 @@ export const TOOLS = [
         reason: { type: 'string', description: 'Why you are suggesting this navigation' },
       },
       required: ['path', 'reason'],
-    },
-  },
-  {
-    name: 'get_time_off',
-    description: 'Get time-off requests for a date range. Use when the user asks who is off, on holiday, or unavailable.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Start date, a real date (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'End date (YYYY-MM-DD), on or after start_date and at most 366 days after it' },
-        status: { type: 'string', enum: ['pending', 'approved', 'rejected', 'cancelled'], description: 'Filter by status (default: all)' },
-      },
-      required: ['start_date', 'end_date'],
-    },
-  },
-  {
-    name: 'get_holiday_allowance',
-    description: 'Get a staff member\'s holiday allowance balance. Use when the user asks how many holidays they have left.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        profile_id: { type: 'string', description: 'Staff member UUID (defaults to current user)' },
-        year: { type: 'number', description: 'Four-digit year from 2020 to 2100 (defaults to the current year)' },
-      },
     },
   },
   {

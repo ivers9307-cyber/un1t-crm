@@ -22,15 +22,37 @@ import { executeTool } from '@/app/api/assistant/chat/route.js'
 import { createServerClient } from '@/lib/supabase'
 import {
   makeWorld, makeTenantDb,
+  ORG_A,
   LOC_A1, LOC_B1,
   C_A1, C_B1,
   SHT_A1, SHT_B1,
   P_STAFF_A1, P_MGR_A1, P_OWNER_A1, P_STAFF_B1,
 } from './fixture.js'
 
-// Manager operating at org-A location A1 — clears the TOOL_PERMISSIONS
-// gate for every tool under test.
-const MANAGER_A1 = { locationId: LOC_A1, role: 'manager', userId: P_MGR_A1 }
+// Manager operating at org-A location A1 — clears the gate for every tool
+// under test.
+//
+// ASSISTREG.2 — the nine tenant-data tools now run the registry bodies in
+// src/lib/agent-tools/ through src/lib/assistant/tool-bridge.js, so the
+// context carries the session `user`: the registry gates read
+// rolesByLocation/assignmentsByLocation, and the studio a tool acts at is
+// ALWAYS user.activeLocation (the model is never offered a studio_id). These
+// cross-tenant assertions are unchanged in substance — they are what proves
+// the swap kept the boundary.
+const LOC_A1_ROW = { id: LOC_A1, organization_id: ORG_A, name: 'A One', timezone: 'Europe/Dublin', active: true }
+const MANAGER_A1 = {
+  locationId: LOC_A1,
+  role: 'manager',
+  userId: P_MGR_A1,
+  user: {
+    id: P_MGR_A1,
+    isMaster: false,
+    rolesByLocation: { [LOC_A1]: 'manager' },
+    assignmentsByLocation: { [LOC_A1]: { role: 'manager', permissions: {} } },
+    activeLocation: LOC_A1_ROW,
+    permissions: {},
+  },
+}
 
 let world
 let db
@@ -86,7 +108,12 @@ describe('executeTool list_shift_templates — canonical two-tenant world', () =
 describe('executeTool create_contact — canonical two-tenant world', () => {
   it('ignores a smuggled cross-tenant location_id and stamps the active location', async () => {
     const res = await executeTool('create_contact', { name: 'New Lead', email: 'x@x.com', location_id: LOC_B1 }, MANAGER_A1)
-    expect(res.success).toBe(true)
+    // The registry body answers { existing, contact } (an email already in the
+    // org is reported, not failed). location_id is not in its schema, so zod
+    // strips the smuggled one before any write; the row is stamped with the
+    // session's active studio.
+    expect(res.error).toBeUndefined()
+    expect(res.existing).toBe(false)
     const insert = db._writesTo('contacts').find((w) => w.op === 'insert')
     expect(insert.payload.location_id).toBe(LOC_A1)
   })

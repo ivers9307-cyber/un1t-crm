@@ -3,21 +3,17 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { anthropicMessages } from '@/lib/anthropic'
 import { recordUsage } from '@/lib/usage'
-import { todayStrIn, addDaysISO, zoneOfLocation } from '@/lib/location-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { fetchScheduledShiftRows } from '@/lib/report-generator'
-import { fetchApiShiftRows } from '@/lib/roster-read'
-import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 import { RATE_REPORT_VIEWER_ROLES } from '@/lib/report-access'
 import { shiftHours } from '@/lib/payroll'
-import { upsertShiftAssignment } from '@/lib/roster-write'
 import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
+import { isBridgedTool, runAssistantTool, allowedBridgedToolDefinitions } from '@/lib/assistant/tool-bridge'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES, ADMIN_ROLES, isRealCalendarDate } from '@/lib/schemas'
+import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { reportPeriodError } from '@/lib/report-period'
-import { parseAllowanceYear } from '@/lib/allowance-year'
-import { sanitizeSearchTerm, MIN_CONTACT_SEARCH_LEN } from '@/lib/command-palette'
 import {
   splitSSEEvents,
   initTurn,
@@ -54,23 +50,18 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const ASSISTANT_MODEL = 'claude-sonnet-4-20250514'
 const MAX_TOOL_ITERATIONS = 5
 
-// Role-based tool permissions — server-side enforcement
+// ASSISTREG.2 — role-based permissions for the tools that are still LOCAL to
+// this route. Every other tool the assistant offers now comes from
+// src/lib/agent-tools/ through the bridge, and carries its OWN gate (role at
+// the studio AND the permission key the equivalent screen needs) — see
+// src/lib/assistant/tool-bridge.js. The flat tiers below judged role alone,
+// which is why a manager or head coach could search contacts here without
+// holding Contacts.
+//
 // 'all' = any role, 'manager' = owner/manager/head_coach, 'admin' = owner/manager only
 const TOOL_PERMISSIONS = {
-  navigate_user:        'all',
-  get_shifts_for_week:  'all',       // staff see filtered results
-  get_time_off:         'all',       // staff see filtered results
-  get_holiday_allowance:'all',       // staff see own only
-  search_contacts:      'manager',
-  list_staff:           'manager',
-  list_shift_templates: 'manager',
-  create_shift:         'manager',
-  create_contact:       'admin',
-  // FUNNEL.1 — move_deal was removed: pipeline stages are classifier-
-  // derived (webhook + nightly cron); a manual deals.stage_id write is
-  // silently reverted by the next sync.
-  create_activity:      'manager',
-  generate_report:      'manager',
+  navigate_user:   'all',
+  generate_report: 'manager',
 }
 
 function checkToolPermission(toolName, role) {
@@ -91,7 +82,14 @@ function checkToolPermission(toolName, role) {
 // see route.test.js for the regression guards.
 export async function executeTool(toolName, input, context) {
   const db = createServerClient()
-  const { locationId, role, userId, timeZone } = context
+  const { locationId, role } = context
+
+  // ASSISTREG.2 — a bridged tool runs the registry body, behind the registry's
+  // own gate, at the session's active location. Before the tier check below,
+  // because these tools are not gated by the tier map at all.
+  if (isBridgedTool(toolName)) {
+    return runAssistantTool(toolName, input, { db, user: context.user })
+  }
 
   // Server-side permission check
   if (!checkToolPermission(toolName, role)) {
@@ -99,199 +97,6 @@ export async function executeTool(toolName, input, context) {
   }
 
   switch (toolName) {
-    case 'create_contact': {
-      // Stamp the active location; never trust an input-supplied one.
-      // Without a location this would insert a tenant-less orphan row.
-      if (!locationId) return { error: 'No active location — switch to a location before creating a contact.' }
-      const { data, error } = await db.from('contacts').insert({
-        name: input.name,
-        email: input.email,
-        phone: input.phone || null,
-        lead_source: input.lead_source || 'other',
-        location_id: locationId,
-      }).select().single()
-      if (error) return { error: error.message }
-      // AUTOMATIONS: glofox_lead_provisioning (assistant-created lead).
-      try {
-        const { maybeProvisionLeadInGlofox } = await import('@/lib/automations/glofox-lead-provisioning')
-        await maybeProvisionLeadInGlofox({ db, locationId, contact: data, source: 'assistant' })
-        const { triggerSequencesForContactCreated } = await import('@/lib/sequences/triggers')
-        await triggerSequencesForContactCreated(data.id)
-      } catch { /* hook never throws */ }
-      return { success: true, contact: { id: data.id, name: data.name, email: data.email } }
-    }
-
-    case 'search_contacts': {
-      // Scope to the active location — an unscoped search would match
-      // contacts in every tenant. No location → no unscoped read.
-      if (!locationId) return { contacts: [], count: 0 }
-      // ASSISTREG.1 — the term is BOTH a LIKE pattern and a value inside the
-      // .or() string, so it is sanitised exactly as the registry's
-      // search-contacts.js does: sanitizeSearchTerm drops , ( ) % * _ and
-      // " \ go too (PostgREST rejects those inside an .or() value). Raw, a
-      // `,` in the term closed the clause and opened another, letting the
-      // caller filter on any contacts column the tool never offered — a
-      // filter oracle over the studio's contacts — and a bare `%` matched
-      // everyone. Reach is deliberately unchanged (still this one studio,
-      // still name + email): this is the sanitiser, not the migration.
-      const term = sanitizeSearchTerm(input.query).replace(/["\\]/g, ' ').replace(/\s+/g, ' ').trim()
-      if (term.length < MIN_CONTACT_SEARCH_LEN) {
-        return { error: `The search term needs at least ${MIN_CONTACT_SEARCH_LEN} characters (commas, brackets, quotes, backslashes, % * and _ are ignored).` }
-      }
-      // Deliberate substring search: the wildcards are spelled here, and the
-      // sanitiser above guarantees the term carries none of its own.
-      const like = `%${term}%`
-      // A failed read is an error, never "no contact by that name" (which
-      // the model would answer by offering to create one).
-      const { data, error } = await db.from('contacts')
-        .select('id, name, email, phone, pipeline_stage_slug, lead_source')
-        .eq('location_id', locationId)
-        .or(`name.ilike.${like},email.ilike.${like}`)
-        .limit(10)
-      if (error) return { error: `Failed to load contacts: ${error.message}` }
-      return { contacts: data || [], count: (data || []).length }
-    }
-
-    case 'create_shift': {
-      if (!locationId) return { error: 'No active location — switch to a location before creating a shift.' }
-      // RANGEVALID.1 — the model writes this date. One the calendar does not
-      // have used to run three reads and then reach Postgres, whose raw text
-      // came back; say what is wrong, before any read, so the model can ask again.
-      if (!isRealCalendarDate(input.shift_date)) return { error: 'shift_date must be a real date, YYYY-MM-DD.' }
-      // RETIRE-SHIFTS-MIRROR.4 — writes the Roster v2 model (find-or-create
-      // block + upsert assignment) instead of the legacy shifts table.
-      // The helper validates template + profile against the location
-      // (SAAS-1): a cross-tenant id errors before anything is written.
-      const { template, error } = await upsertShiftAssignment(db, {
-        locationId,
-        profileId: input.profile_id,
-        shiftTemplateId: input.shift_template_id,
-        shiftDate: input.shift_date,
-        actorId: context.userId,
-      })
-      if (error) return { error: error.message }
-      // Friendly name for the response — the template comes back from the
-      // validated fetch above, and profile_id was checked against
-      // profile_locations inside the helper, so this bare-id read can only
-      // hit an in-location staff member.
-      const { data: prof } = await db.from('profiles').select('full_name').eq('id', input.profile_id).maybeSingle()
-      return { success: true, shift: { date: input.shift_date, staff: prof?.full_name, template: template?.name } }
-    }
-
-    case 'list_staff': {
-      // Scope to staff sharing the active location (mirror the
-      // /api/staff list pattern) — an unscoped profiles read returns
-      // every tenant's staff.
-      if (!locationId) return { staff: [] }
-      const { data: links } = await db.from('profile_locations')
-        .select('profile_id')
-        .eq('location_id', locationId)
-      const profileIds = [...new Set((links || []).map(l => l.profile_id))]
-      if (profileIds.length === 0) return { staff: [] }
-      const { data } = await db.from('profiles')
-        .select('id, full_name, email, role, active')
-        .in('id', profileIds)
-        .eq('active', true)
-        .order('full_name')
-      return { staff: (data || []).map(s => ({ id: s.id, name: s.full_name, role: s.role })) }
-    }
-
-    case 'list_shift_templates': {
-      // No location → no unscoped read.
-      if (!locationId) return { templates: [] }
-      const { data } = await db.from('shift_templates')
-        .select('id, name, start_time, end_time, color')
-        .eq('location_id', locationId)
-        .eq('active', true)
-        .order('display_order')
-      return { templates: data || [] }
-    }
-
-    case 'get_shifts_for_week': {
-      // No location → no unscoped read, and an error rather than
-      // { shifts: [] }, which the model read out as "nobody is on shift".
-      if (!locationId) return { error: 'No active location — switch to a location before looking up shifts.' }
-      if (!isRealCalendarDate(input.start_date)) return { error: 'start_date must be a real date, YYYY-MM-DD.' }
-      // SCHEDHYGIENE.1 — pure date arithmetic, snapped to the Monday of the
-      // week the date falls in (the tool promises Monday to Sunday; a model
-      // that passes a Thursday gets that Thursday's week). The end used to be
-      // a local-midnight Date read back through toISOString, so under Irish
-      // summer time it landed on Saturday and Sunday was never read.
-      const weekday = new Date(`${input.start_date}T00:00:00Z`).getUTCDay() // 0 = Sunday
-      const startDate = addDaysISO(input.start_date, -((weekday + 6) % 7))
-      const endDate = addDaysISO(startDate, 6)
-      // SCHEDHYGIENE.1 — the same read, and the same draft rule, as the
-      // coach's own schedule (GET /api/schedule/shifts): a non-manager sees
-      // published rosters only. This tool used to show a coach the draft
-      // week, which no coach screen shows. A failed read reaches the assistant
-      // as an error, never as an empty week it would narrate as "nobody is
-      // on shift" (ROSTER-FIX.5), and so does a truncated one.
-      const { rows, error: shiftsError, capped } = await fetchApiShiftRows(db, {
-        locationIds: [locationId], startDate, endDate, publishedOnly: !MANAGER_ROLES.includes(role),
-      })
-      if (shiftsError) return { error: `Failed to load shifts: ${shiftsError.message || shiftsError}` }
-      if (capped) return { error: 'Too many shifts to read for this week in one go.' }
-      // SCHEDHYGIENE.1 (review) — which days no published roster covers. A
-      // roster's period is whatever was requested, so a week can be half
-      // published: a coach then gets Monday to Wednesday and nothing after,
-      // which must read as "not published yet", never as "nobody working".
-      // Read here rather than through findPublishedRosterIdsByDate, which
-      // answers a failed read with "no roster" and would call every day
-      // unpublished.
-      const { data: published, error: rostersError } = await db.from('rosters')
-        .select('period_start, period_end')
-        .eq('location_id', locationId)
-        .eq('status', 'published')
-        .lte('period_start', endDate)
-        .gte('period_end', startDate)
-      if (rostersError) return { error: `Failed to load rosters: ${rostersError.message}` }
-      const weekDays = Array.from({ length: 7 }, (_, i) => addDaysISO(startDate, i))
-      const unpublishedDays = weekDays.filter(d => !(published || []).some(r => r.period_start <= d && r.period_end >= d))
-      return {
-        week_start: startDate,
-        week_end: endDate,
-        unpublished_days: unpublishedDays,
-        shifts: rows.map(s => ({
-          date: s.shift_date,
-          staff: s.profiles?.full_name,
-          shift: s.shift_templates?.name,
-          // The hours the calendar shows: the coach's override, then the
-          // block, then the template. Was the template's alone.
-          time: `${effectiveShiftStart(s)?.slice(0, 5)}–${effectiveShiftEnd(s)?.slice(0, 5)}`,
-          status: s.status,
-          published: s.published,
-        })),
-      }
-    }
-
-    case 'create_activity': {
-      if (!locationId) return { error: 'No active location for this action.' }
-      // If linking to a contact, confirm it's in the caller's location
-      // BEFORE inserting — and always stamp the active location_id.
-      let contactId = null
-      if (input.contact_id) {
-        const { data: contact } = await db.from('contacts')
-          .select('id')
-          .eq('id', input.contact_id)
-          .eq('location_id', locationId)
-          .maybeSingle()
-        if (!contact) return { error: 'Contact not found in your active location.' }
-        contactId = contact.id
-      }
-      const record = {
-        subject: input.subject,
-        type: input.type,
-        contact_id: contactId,
-        location_id: locationId,
-        due_date: input.due_date || null,
-        note: input.note || null,
-        done: false,
-      }
-      const { data, error } = await db.from('activities').insert(record).select().single()
-      if (error) return { error: error.message }
-      return { success: true, activity: { id: data.id, subject: data.subject, type: data.type, due_date: data.due_date } }
-    }
-
     case 'navigate_user': {
       // input.path is handed to the client which router.push()es it verbatim.
       // Only allow internal app paths — an absolute or protocol-relative URL
@@ -301,90 +106,6 @@ export async function executeTool(toolName, input, context) {
         return { error: 'navigate_user: path must be an internal path starting with "/"' }
       }
       return { action: 'navigate', path: p, reason: input.reason }
-    }
-
-    case 'get_time_off': {
-      // RANGEVALID.1 — no studio is an error: `.eq('location_id', null)` failed in
-      // Postgres, and the discarded error read as "nobody is off".
-      if (!locationId) return { error: 'No active location — switch to a location before looking up time off.' }
-      // The model supplies the range: real dates, in order, at most a year,
-      // before any read. It went to Postgres as given, so 2026-02-30 failed
-      // there, and a reversed range matched only leave spanning the gap.
-      const periodError = reportPeriodError(input.start_date, input.end_date, {
-        startName: 'start_date', endName: 'end_date', what: 'A time-off lookup',
-      })
-      if (periodError) return { error: periodError }
-      let query = db.from('time_off_requests')
-        .select('start_date, end_date, type, status, total_days, reason, profile_id, profiles!profile_id(full_name)')
-        .eq('location_id', locationId)
-        .lte('start_date', input.end_date)
-        .gte('end_date', input.start_date)
-        .order('start_date')
-      if (input.status) query = query.eq('status', input.status)
-
-      // Staff can only see their own time-off requests
-      if (!MANAGER_ROLES.includes(role)) {
-        query = query.eq('profile_id', userId)
-      }
-
-      // RANGEVALID.1 — a failed read is an error, never an empty list the model
-      // would read out as "nobody is off" (ROSTER-FIX.5's rule for this route).
-      const { data, error } = await query
-      if (error) return { error: `Failed to load time off: ${error.message}` }
-      return {
-        time_off: (data || []).map(t => ({
-          staff: t.profiles?.full_name,
-          type: t.type,
-          start: t.start_date,
-          end: t.end_date,
-          days: t.total_days,
-          status: t.status,
-          reason: t.reason,
-        }))
-      }
-    }
-
-    case 'get_holiday_allowance': {
-      // RANGEVALID.1 — the model supplies the year: the allowances route's rule,
-      // before any read ('abc' used to answer the 20-day default for year 'abc').
-      // TZ.8b — "this year" is the active studio's calendar year.
-      const { year, error: yearError } = parseAllowanceYear(input.year, timeZone)
-      if (yearError) return { error: yearError }
-      // Staff can only check their own allowance
-      const profileId = input.profile_id || userId
-      if (!MANAGER_ROLES.includes(role) && profileId !== userId) {
-        return { error: 'You can only view your own holiday allowance.' }
-      }
-      // Reading anyone else requires them to share the active location —
-      // a bare profile_id would read any tenant's allowance (SAAS-1).
-      // Self-reads skip the check so a caller without an active location
-      // still sees their own.
-      if (profileId !== userId) {
-        if (!locationId) return { error: 'No active location for this action.' }
-        const { data: link } = await db.from('profile_locations')
-          .select('profile_id')
-          .eq('profile_id', profileId)
-          .eq('location_id', locationId)
-          .maybeSingle()
-        if (!link) return { error: 'Staff member not found in your active location.' }
-      }
-      // K8 — `.maybeSingle()`: no allowance row for this person/year is the
-      // ordinary case (the defaults below ARE the answer), so 0 rows must not
-      // arrive as an error we discard. (profile_id, year) is uniquely indexed,
-      // so at most one row is real; the discarded error was hiding only the
-      // query-failed case, which now surfaces as an error instead of silently
-      // handing back the 20-day default.
-      const { data, error: allowanceError } = await db.from('staff_allowances')
-        .select('total_days, used_days, carried_over')
-        .eq('profile_id', profileId)
-        .eq('year', year)
-        .maybeSingle()
-      // RANGEVALID.1 — K8 above says a failed read "now surfaces as an error";
-      // it did not (the error was never destructured), so a failed read answered
-      // the 20-day default. It does now.
-      if (allowanceError) return { error: `Failed to load the holiday allowance: ${allowanceError.message}` }
-      if (!data) return { total_days: 20, used_days: 0, carried_over: 0, remaining: 20, year }
-      return { ...data, remaining: data.total_days + data.carried_over - data.used_days, year }
     }
 
     case 'generate_report': {
@@ -551,7 +272,12 @@ export async function POST(request) {
 
   // Filter tools to only those the user's role permits — using the
   // server-trusted role, not the client-supplied one.
-  const allowedTools = TOOLS.filter(tool => checkToolPermission(tool.name, userContext.role))
+  // Local tools by the tier map; bridged tools by their own gate at the active
+  // studio (ASSISTREG.2). Both are re-checked when the tool actually runs.
+  const allowedTools = [
+    ...TOOLS.filter(tool => checkToolPermission(tool.name, userContext.role)),
+    ...allowedBridgedToolDefinitions(user),
+  ]
 
   // STAFFASSISTPREFILL.1 (C108) — the list is client-sent. The API refuses a
   // request that opens on an assistant turn or ends on one (the "assistant
@@ -574,6 +300,9 @@ export async function POST(request) {
     userId: userContext.userId,
     role: userContext.role,
     timeZone: userContext.timeZone,
+    // ASSISTREG.2 — the bridge needs the session user: the registry gates read
+    // rolesByLocation, and the studio is always user.activeLocation.
+    user,
   }
 
   // ── Streaming path (ASSIST-STREAM.1) ────────────────────────────────
@@ -727,6 +456,9 @@ export async function POST(request) {
             userId: userContext.userId,
             role: userContext.role,
             timeZone: userContext.timeZone,
+            // ASSISTREG.2 — the bridge needs the session user: the registry
+            // gates read rolesByLocation, and the studio is activeLocation.
+            user,
           })
           toolResults.push({
             type: 'tool_result',
