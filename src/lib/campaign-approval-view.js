@@ -25,6 +25,18 @@ export const APPROVAL_CAMPAIGN_COLUMNS = 'id, name, status, scheduled_at, update
   + 'location_id, subject, preview_text, from_name, from_email, reply_to, html_content, audience_filter, '
   + 'postmark_stream, ab_subject_b, ab_test_pct, ab_wait_hours, parent_campaign_id'
 
+/**
+ * True when the session acts as someone other than the person signed in: a
+ * master's "View as" (getCurrentUser sets `impersonatingFrom`, and `user.id`
+ * is then the TARGET's) or a tenant support session. An approval belongs to
+ * one person, so neither may judge or press it.
+ */
+export function actingAsSomeoneElse(user) {
+  return !!(user?.impersonatingFrom || user?.supportSession)
+}
+
+export const OWN_SESSION_MESSAGE = 'You are viewing the CRM as someone else. Approve this campaign from your own session.'
+
 /** The statuses an approval may release (failed campaigns are out of v1). */
 export const APPROVABLE_STATUSES = Object.freeze(['draft', 'scheduled'])
 

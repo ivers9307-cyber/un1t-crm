@@ -17,7 +17,9 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { loadApprovalView, approvalRefusalMessage, APPROVABLE_STATUSES } from '@/lib/campaign-approval-view'
+import {
+  loadApprovalView, approvalRefusalMessage, APPROVABLE_STATUSES, actingAsSomeoneElse, OWN_SESSION_MESSAGE,
+} from '@/lib/campaign-approval-view'
 import { zoneOfLocation, formatInZone } from '@/lib/location-time'
 import { Card } from '@/components/ui'
 import CampaignApproveForm from '@/components/CampaignApproveForm'
@@ -65,6 +67,11 @@ export default async function CampaignApprovePage({ params }) {
   const user = await getCurrentUser()
   if (!user) {
     redirect(`/login?redirect=${encodeURIComponent(`/communications/campaigns/approve/${token}`)}`)
+  }
+
+  // Under "View as" the session is the target's: show nothing about the campaign.
+  if (actingAsSomeoneElse(user)) {
+    return <Refusal text={OWN_SESSION_MESSAGE} href={CAMPAIGNS_HREF} linkLabel="Go to campaigns" />
   }
 
   let view

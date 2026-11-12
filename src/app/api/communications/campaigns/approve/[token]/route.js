@@ -9,7 +9,7 @@
 // refuses ANY Authorization header itself, because getCurrentUser() would
 // otherwise take a Bearer before the cookie.
 //
-// Order: the person → the approval and its campaign (loadApprovalView: theirs,
+// Order: the person (never an impersonated or support session) → the approval and its campaign (loadApprovalView: theirs,
 // unused, unexpired, studio access, the email permission, content key, timing,
 // audience) → the release preflight → spend the approval (compare-and-set) →
 // release (compare-and-set on status AND the updated_at of the row whose
@@ -23,7 +23,9 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { loadApprovalView, approvalRefusalMessage, APPROVABLE_STATUSES } from '@/lib/campaign-approval-view'
+import {
+  loadApprovalView, approvalRefusalMessage, APPROVABLE_STATUSES, actingAsSomeoneElse, OWN_SESSION_MESSAGE,
+} from '@/lib/campaign-approval-view'
 import { consumeApproval, voidApprovals } from '@/lib/campaign-approval'
 import { releasePreflight, releaseCampaign } from '@/lib/campaign-release'
 import { logError } from '@/lib/log'
@@ -44,6 +46,8 @@ export async function POST(request, props) {
   if (request.headers.get('authorization')) return fail(401, 'Unauthorized')
   const user = await getCurrentUser()
   if (!user) return fail(401, 'Unauthorized')
+  // Under "View as" user.id is the target's: refuse before any approval lookup.
+  if (actingAsSomeoneElse(user)) return fail(403, OWN_SESSION_MESSAGE)
 
   const db = createServerClient()
   const nowMs = Date.now()

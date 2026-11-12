@@ -104,4 +104,18 @@ describe('/communications/campaigns/approve/[token]', () => {
     expect(screen.queryByTestId('form-props')).toBeNull()
     expect(container.textContent).toContain('This campaign is a resend. Open it in the CRM.')
   })
+
+  it('an impersonated or support session is told to approve from their own session, with no campaign details', async () => {
+    for (const over of [{ impersonatingFrom: { masterId: 'm1' } }, { supportSession: { mode: 'act_on_behalf', organizationId: 'o1' } }]) {
+      getCurrentUser.mockResolvedValue({ id: 'u1', ...over })
+      loadApprovalView.mockResolvedValue(view())
+      const { container } = await renderPage()
+      expect(container.textContent).toMatch(/your own session/)
+      expect(container.textContent).not.toMatch(/November newsletter|News from the studio|Test Studio/)
+      expect(screen.queryByTestId('form-props')).toBeNull()
+      expect(container.querySelector(`a[href*="${CAMPAIGN_ID}"]`)).toBeNull()
+      cleanup()
+    }
+    expect(loadApprovalView).not.toHaveBeenCalled()
+  })
 })

@@ -290,6 +290,25 @@ describe('POST /api/communications/campaigns/approve/[token]', () => {
     expect(campaignWrites()).toEqual([])
   })
 
+  it('refuses a "View as" (impersonated) or support session with 403 before any approval lookup', async () => {
+    for (const over of [
+      { impersonatingFrom: { masterId: OTHER, masterName: 'Master', masterEmail: 'm@x.test' } },
+      { supportSession: { mode: 'act_on_behalf', organizationId: 'org-1', impersonatedUserId: OWNER } },
+    ]) {
+      db = world()
+      user = owner(over)
+      const res = await press()
+      expect(res.status, JSON.stringify(over)).toBe(403)
+      const body = await res.json()
+      expect(body.error).toMatch(/your own session/)
+      expect(JSON.stringify(body)).not.toMatch(/November newsletter|News from the studio/)
+      expect(db.calls.filter((c) => c.table === 'campaign_release_approvals')).toEqual([])
+      expect(db.calls.filter((c) => c.table === 'campaigns')).toEqual([])
+      expect(approval().used_at).toBeNull()
+      expect(campaign().status).toBe('draft')
+    }
+  })
+
   it('refuses an OAuth-issued bearer (no cookie session) with 401', async () => {
     const jwt = ['eyJhbGciOiJIUzI1NiJ9', Buffer.from(JSON.stringify({ sub: OWNER, client_id: 'mcp-client' })).toString('base64url'), 'sig'].join('.')
     user = null
