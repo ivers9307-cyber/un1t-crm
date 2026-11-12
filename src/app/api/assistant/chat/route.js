@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { anthropicMessages } from '@/lib/anthropic'
 import { recordUsage } from '@/lib/usage'
+import { getAssistantCapStatus } from '@/lib/usage-caps'
 import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { fetchScheduledShiftRows } from '@/lib/report-generator'
 import { RATE_REPORT_VIEWER_ROLES } from '@/lib/report-access'
@@ -224,6 +225,31 @@ export async function POST(request) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
     return NextResponse.json({ success: false, error: 'ANTHROPIC_API_KEY not configured' }, { status: 500 })
+  }
+
+  // ASSISTCAP.1 — the org's OWN staff-assistant spend cap (mig 806), checked
+  // HERE because both answer paths (the SSE stream below and the buffered
+  // anthropicMessages call) are downstream of this point, so one gate covers
+  // both and no future path can slip past by taking the other branch.
+  //
+  // Judged BEFORE any Anthropic call, so a capped org spends nothing more.
+  // 402 Payment Required is the honest status: the request is well-formed and
+  // the caller is authorised, there is simply no budget left. The message
+  // names who can raise it, because the operator seeing this is usually not
+  // the person who can (org admins and masters hold /settings/usage).
+  //
+  // getAssistantCapStatus fails open on any metering error — see its header:
+  // a refusal caused by our own meter breaking is indistinguishable, to the
+  // person typing, from the feature being broken.
+  const assistantCap = await getAssistantCapStatus({ locationId: user.activeLocation?.id || null })
+  if (assistantCap.capped) {
+    return NextResponse.json({
+      success: false,
+      code: 'assistant_spend_cap',
+      error: 'The assistant has reached this month\u2019s spend cap for your organisation. '
+        + 'An owner or master can raise it in Settings \u2192 Usage, or it resets at the start of next month.',
+      data: { capCents: assistantCap.capCents, spendCents: assistantCap.spendCents },
+    }, { status: 402 })
   }
 
   const validation = await validateBody(request, ChatRequestSchema)

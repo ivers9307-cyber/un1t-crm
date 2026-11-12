@@ -48,13 +48,16 @@ async function fetchMonthRollups(db, orgId, monthStart) {
 export async function getOrgUsageSummary(db, orgId) {
   const monthStart = platformMonthStartStr()
 
-  const [{ data: settings }, { data: aiSpend }, { data: emailSends }, rollups, voiceSeconds, voiceReplies] =
+  const [{ data: settings }, { data: aiSpend }, { data: assistantSpend }, { data: emailSends }, rollups, voiceSeconds, voiceReplies] =
     await Promise.all([
       db.from('org_settings')
-        .select('ai_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, ai_cap_notice_month, email_cap_notice_month, voice_transcription_enabled, voice_transcription_monthly_cap_minutes, voice_reply_mode, voice_reply_test_phones, voice_reply_monthly_cap')
+        .select('ai_hard_cap_cents, assistant_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, ai_cap_notice_month, assistant_cap_notice_month, email_cap_notice_month, voice_transcription_enabled, voice_transcription_monthly_cap_minutes, voice_reply_mode, voice_reply_test_phones, voice_reply_monthly_cap')
         .eq('organization_id', orgId)
         .maybeSingle(),
       db.rpc('org_ai_spend_month_cents', { p_org: orgId, p_month_start: monthStart }),
+      // ASSISTCAP.1 — the staff assistant's own live spend, the complement
+      // of the sum above (mig 806). Its own cap, so its own number.
+      db.rpc('org_assistant_spend_month_cents', { p_org: orgId, p_month_start: monthStart }),
       db.rpc('org_email_sends_month', { p_org: orgId, p_month_start: monthStart }),
       fetchMonthRollups(db, orgId, monthStart),
       // VOICENOTE.1 — live from usage_events (the rollup is nightly); null
@@ -69,10 +72,12 @@ export async function getOrgUsageSummary(db, orgId) {
     month_start: monthStart,
     live: {
       ai_spend_cents: Number(aiSpend) || 0,
+      assistant_spend_cents: Number(assistantSpend) || 0,
       email_sends: Number(emailSends) || 0,
     },
     caps: {
       ai_hard_cap_cents: settings?.ai_hard_cap_cents ?? null,
+      assistant_hard_cap_cents: settings?.assistant_hard_cap_cents ?? null,
       email_hard_cap_sends: settings?.email_hard_cap_sends ?? null,
       ops_alert_emails: settings?.ops_alert_emails ?? null,
     },

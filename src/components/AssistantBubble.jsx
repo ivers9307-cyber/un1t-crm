@@ -35,6 +35,15 @@ export default function AssistantBubble({ user }) {
   // Apply a buffered (non-streaming) JSON response. Used both when the
   // server returns JSON and as the fallback when streaming fails.
   function applyBuffered(baseMessages, data) {
+    // ASSISTCAP.1 - a spend cap is not a malfunction. The route answers 402
+    // with code 'assistant_spend_cap' and a message naming who can raise it
+    // and where; wrapping that in "Sorry, something went wrong" would send the
+    // operator off to report a bug and retry, which is the opposite of what
+    // the message says to do. Show it as written.
+    if (data?.code === 'assistant_spend_cap' && data.error) {
+      setMessages([...baseMessages, { role: 'assistant', content: data.error }])
+      return
+    }
     if (!data || data.error) {
       setMessages([...baseMessages, { role: 'assistant', content: `Sorry, something went wrong: ${data?.error || 'unknown error'}` }])
       return

@@ -8,9 +8,11 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
-export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCents, initialEmailCapSends, initialOpsEmails, initialVoice = null, initialVoiceReplies = null }) {
+export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCents, initialEmailCapSends, initialOpsEmails, initialVoice = null, initialVoiceReplies = null, initialAssistantCapCents = null, assistantSpendCents = null }) {
   const router = useRouter()
   const [aiCap, setAiCap] = useState(initialAiCapCents != null ? String(initialAiCapCents / 100) : '')
+  // ASSISTCAP.1 - the staff assistant's own cap, separate from Mia's above.
+  const [assistantCap, setAssistantCap] = useState(initialAssistantCapCents != null ? String(initialAssistantCapCents / 100) : '')
   const [emailCap, setEmailCap] = useState(initialEmailCapSends != null ? String(initialEmailCapSends) : '')
   const [opsEmails, setOpsEmails] = useState(Array.isArray(initialOpsEmails) ? initialOpsEmails.join(', ') : '')
   // VOICENOTE.1 — WhatsApp voice-note transcription (ElevenLabs), per org.
@@ -30,7 +32,8 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
     return (
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 text-sm text-un1t-subtle">
         Hard caps are set by an owner. Current: AI{' '}
-        {initialAiCapCents != null ? `$${(initialAiCapCents / 100).toFixed(2)}/mo` : 'no cap'} · Email{' '}
+        {initialAiCapCents != null ? `$${(initialAiCapCents / 100).toFixed(2)}/mo` : 'no cap'} · Staff assistant{' '}
+        {initialAssistantCapCents != null ? `$${(initialAssistantCapCents / 100).toFixed(2)}/mo` : 'no cap'} · Email{' '}
         {initialEmailCapSends != null ? `${initialEmailCapSends.toLocaleString()} sends/mo` : 'no cap'}.
         {initialVoice && (
           <>
@@ -48,9 +51,15 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
     setSaved(false)
 
     const aiNum = aiCap.trim() === '' ? null : Number(aiCap)
+    const assistantNum = assistantCap.trim() === '' ? null : Number(assistantCap)
     const emailNum = emailCap.trim() === '' ? null : Number(emailCap)
     if (aiNum != null && (!Number.isFinite(aiNum) || aiNum <= 0)) {
       setError('AI cap must be a positive amount, or blank for no cap.')
+      setSaving(false)
+      return
+    }
+    if (assistantNum != null && (!Number.isFinite(assistantNum) || assistantNum <= 0)) {
+      setError('Staff assistant cap must be a positive amount, or blank for no cap.')
       setSaving(false)
       return
     }
@@ -81,6 +90,7 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
         body: JSON.stringify({
           organization_id: organizationId,
           ai_hard_cap_cents: aiNum == null ? null : Math.round(aiNum * 100),
+          assistant_hard_cap_cents: assistantNum == null ? null : Math.round(assistantNum * 100),
           email_hard_cap_sends: emailNum,
           // SAAS4-O2 — comma string; server normalises/validates.
           ops_alert_emails: opsEmails.trim() === '' ? null : opsEmails,
@@ -109,9 +119,11 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
     <form onSubmit={save} className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
       <div className="text-sm font-medium mb-1">Hard caps</div>
       <p className="text-xs text-un1t-subtle mb-4 max-w-xl">
-        Optional monthly brakes. Blank = no cap. At the AI cap, Mia pauses with a human handoff (the
-        staff assistant keeps working). At the email cap, new campaigns are refused (sequences and
-        reminders keep working). Managers get one heads-up at 80%.
+        Optional monthly brakes. Blank = no cap. At the AI cap, Mia pauses with a human handoff.
+        The staff assistant has its OWN cap and its own spend: the two never share a budget, so
+        staff experimenting can never pause Mia, and a busy month of customer replies can never
+        switch the assistant off. At the email cap, new campaigns are refused (sequences and
+        reminders keep working). Managers get one heads-up at 80% of each cap.
       </p>
 
       {error && (
@@ -137,6 +149,23 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
             placeholder="No cap"
             className="mt-1 w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm"
           />
+        </label>
+        <label className="block text-sm">
+          <span className="text-un1t-text">Staff assistant cap ($ per month, est.)</span>
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={assistantCap}
+            onChange={(e) => setAssistantCap(e.target.value)}
+            placeholder="No cap"
+            className="mt-1 w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm"
+          />
+          <span className="mt-1 block text-xs text-un1t-subtle">
+            {assistantSpendCents == null
+              ? 'Separate from the AI cap. At the cap the assistant refuses; Mia is unaffected.'
+              : `$${(assistantSpendCents / 100).toFixed(2)} spent this month. At the cap the assistant refuses; Mia is unaffected.`}
+          </span>
         </label>
         <label className="block text-sm">
           <span className="text-un1t-text">Email hard cap (sends per month)</span>

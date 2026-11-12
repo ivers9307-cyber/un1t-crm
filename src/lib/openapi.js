@@ -6528,6 +6528,7 @@ registry.registerPath({
           schema: z.object({
             organization_id: uuidLike.optional(),
             ai_hard_cap_cents: z.number().positive().nullable().optional(),
+            assistant_hard_cap_cents: z.number().positive().nullable().optional(),
             email_hard_cap_sends: z.number().int().positive().nullable().optional(),
             ops_alert_emails: z.union([z.string().max(2000), z.array(z.string().email()).max(20)]).nullable().optional(),
             voice_transcription_enabled: z.boolean().optional(),
