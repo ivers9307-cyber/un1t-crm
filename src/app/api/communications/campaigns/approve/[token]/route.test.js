@@ -108,6 +108,7 @@ const campaignRow = (over = {}) => ({
   from_email: null, reply_to: null, html_content: '<p>Hello</p>',
   audience_filter: { logic: 'and', filters: [{ field: 'tag', op: 'eq', value: 'members' }] },
   postmark_stream: 'broadcast', ab_subject_b: null, ab_test_pct: 10, ab_wait_hours: 4, parent_campaign_id: null,
+  resend_enabled: false, resend_wait_hours: null, resend_subject: null,
   last_error: null, cancel_requested_at: null, ...over,
 })
 const approvalRow = (over = {}) => ({
@@ -200,6 +201,18 @@ describe('POST /api/communications/campaigns/approve/[token]', () => {
       const res = await press()
       expect(res.status, JSON.stringify(change)).toBe(409)
       expect((await res.json()).error).toMatch(/changed since the test/)
+      expect(campaignWrites()).toEqual([])
+    }
+  })
+
+  it('a resend switched on after the test is refused at the press and nothing is released', async () => {
+    for (const change of [{ resend_enabled: true, resend_wait_hours: 24 }, { resend_wait_hours: 48 }, { resend_subject: 'Again' }]) {
+      db = world({ campaign: change })
+      const res = await press()
+      expect(res.status, JSON.stringify(change)).toBe(409)
+      expect((await res.json()).error).toMatch(/changed since the test/)
+      expect(approval().used_at).toBeNull()
+      expect(campaign().status).toBe('draft')
       expect(campaignWrites()).toEqual([])
     }
   })

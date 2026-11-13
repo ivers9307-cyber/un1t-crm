@@ -9,7 +9,7 @@ import { uuidLike } from '@/lib/schemas'
 import { defineTool, ToolRefusal } from './registry.js'
 import { InvalidAudienceFilterError, stripUnsetFilterRows } from '@/lib/audience-filter'
 import { emailAudienceCounts } from '@/lib/email-audience-counts'
-import { issueApproval, voidApprovals, agentReleaseBlocker } from '@/lib/campaign-approval'
+import { issueApproval, voidApprovals, agentReleaseBlocker, resendSummary } from '@/lib/campaign-approval'
 import { releasePreflight } from '@/lib/campaign-release'
 import { describeFromAddress, withRequestedFrom } from '@/lib/from-address'
 import { resolveEmailSender } from '@/lib/tenant-email'
@@ -123,6 +123,7 @@ export default defineTool({
         audienceEligible: audience.eligible,
         sendsAs,
         sendAtLabel: timing,
+        resendLabel: resendSummary(campaign),
         appUrl,
         emailCopy,
       })

@@ -53,7 +53,7 @@ function personAsContact({ name, email }) {
   }
 }
 
-function banner({ studio, campaign, audienceEligible, sendsAs, sendAtLabel, approveUrl }) {
+function banner({ studio, campaign, audienceEligible, sendsAs, sendAtLabel, resendLabel, approveUrl }) {
   const n = Number(audienceEligible) || 0
   const people = `${n.toLocaleString('en-IE')} ${n === 1 ? 'person' : 'people'}`
   const font = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
@@ -69,6 +69,7 @@ function banner({ studio, campaign, audienceEligible, sendsAs, sendAtLabel, appr
     + `<tr><td style="font-family:${font};font-size:14px;color:#111111;padding:2px 0;"><strong>This will go to ${escapeHtml(people)}</strong></td></tr>`
     + row('Sends as', sendsAs)
     + row('When', sendAtLabel)
+    + (resendLabel ? row('Resend', resendLabel) : '')
     + `<tr><td style="padding-top:12px;"><a href="${escapeHtml(approveUrl)}" `
     + `style="display:inline-block;background:#111111;color:#ffffff;font-family:${font};font-size:15px;font-weight:bold;text-decoration:none;padding:10px 18px;border-radius:4px;">`
     + `Review and approve in the CRM</a></td></tr>`
@@ -88,12 +89,14 @@ function prependInsideBody(html, chunk) {
 /**
  * The test email for one campaign. `emailCopy` is the studio's
  * company_settings email copy (the view-in-browser label); omitted means the
- * defaults, as for the real send.
+ * defaults, as for the real send. `resendLabel` is resendSummary()'s sentence
+ * (src/lib/campaign-approval.js), shown as a "Resend" row; null shows none.
  *
  * @returns {{ subject: string, html: string }}
  */
 export function buildCampaignTestEmail({
   campaign, studio, person, branding, approveUrl, audienceEligible, sendsAs, sendAtLabel, appUrl, emailCopy = null,
+  resendLabel = null,
 }) {
   const contact = personAsContact(person ?? {})
   const unsubscribeUrl = `${appUrl}/unsubscribe/test-token`
@@ -118,7 +121,7 @@ export function buildCampaignTestEmail({
     : null
   const body = previewText ? injectPreheader(withWebView, previewText) : withWebView
 
-  const html = prependInsideBody(body, banner({ studio, campaign, audienceEligible, sendsAs, sendAtLabel, approveUrl }))
+  const html = prependInsideBody(body, banner({ studio, campaign, audienceEligible, sendsAs, sendAtLabel, resendLabel, approveUrl }))
   const subject = '[TEST] ' + applyMergeTags(campaign.subject || '', contact, extras)
   return { subject, html }
 }

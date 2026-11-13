@@ -93,6 +93,16 @@ describe('buildCampaignTestEmail', () => {
     expect(html.split(APPROVE)).toHaveLength(2) // the link appears exactly once
   })
 
+  it('the test email banner shows the resend sentence when given, nothing when null', () => {
+    const sentence = 'Then resends to people who did not open it, 24 hours after it sends, with the subject "<Again>".'
+    const { html } = build({ resendLabel: sentence })
+    const banner = html.slice(html.indexOf('data-campaign-test-banner'), html.indexOf('Hello Pat'))
+    expect(banner).toContain('<strong>Resend:</strong> Then resends to people who did not open it, 24 hours after it sends, '
+      + 'with the subject &quot;&lt;Again&gt;&quot;.')
+    expect(build({ resendLabel: null }).html).not.toContain('Resend:')
+    expect(build().html).not.toContain('Resend:')
+  })
+
   it('says one person in the singular', () => {
     expect(build({ audienceEligible: 1 }).html).toContain('This will go to 1 person')
   })
