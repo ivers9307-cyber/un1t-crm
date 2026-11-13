@@ -58,12 +58,37 @@ function fixture(over = {}) {
 }
 
 describe('email-templates-for-agents', () => {
+  it('excludes templates the automatic emails look up by name, in the list and by id', async () => {
+    const db = makeDb(fixture({ email_templates: { rows: [
+      T('t-promo', 'Promo'), T('t-a', 'trial-purchase-granted'), T('t-b', 'offer-purchase-paid'),
+      T('t-c', 'offer-purchase-ready'), T('t-d', 'member-app-sign-in'),
+    ] } }))
+    expect((await listMarketingTemplates(db, LOC)).templates.map((t) => t.id)).toEqual(['t-promo'])
+    for (const id of ['t-a', 't-b', 't-c', 't-d']) expect(await loadMarketingTemplate(db, LOC, id)).toBeNull()
+  })
+
+  it('excludes a category regardless of case', async () => {
+    const db = makeDb(fixture({ email_templates: { rows: [T('t-x', 'X', 'Transactional'), T('t-y', 'Y', 'REMINDER'), T('t-promo', 'Promo')] } }))
+    expect((await listMarketingTemplates(db, LOC)).templates.map((t) => t.id)).toEqual(['t-promo'])
+    expect(await loadMarketingTemplate(db, LOC, 't-x')).toBeNull()
+  })
+
+  it('reports whether the list was truncated: exactly 50 is not capped, 51 is', async () => {
+    const mk = (n) => makeDb(fixture({ email_templates: { rows: Array.from({ length: n }, (_, i) => T(`t${String(i).padStart(3, '0')}`, `n${String(i).padStart(3, '0')}`)) } }))
+    let out = await listMarketingTemplates(mk(50), LOC)
+    expect(out.templates).toHaveLength(50)
+    expect(out.capped).toBe(false)
+    out = await listMarketingTemplates(mk(51), LOC)
+    expect(out.templates).toHaveLength(50)
+    expect(out.capped).toBe(true)
+  })
+
   it('excludes the transactional and reminder categories', () => {
     expect(EXCLUDED_TEMPLATE_CATEGORIES).toEqual(['transactional', 'reminder'])
   })
 
   it('lists the studio\'s templates without transactional, reminder or confirmation/reminder-linked ones', async () => {
-    const out = await listMarketingTemplates(makeDb(fixture()), LOC)
+    const out = (await listMarketingTemplates(makeDb(fixture()), LOC)).templates
     expect(out.map((t) => t.id)).toEqual(['t-news', 't-promo'])
     expect(Object.keys(out[0]).sort()).toEqual(['category', 'description', 'id', 'name', 'subject'])
   })

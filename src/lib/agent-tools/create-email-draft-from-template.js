@@ -45,6 +45,7 @@ export default defineTool({
     const { db, user, studio } = ctx
     const template = await loadMarketingTemplate(db, studio.id, input.template_id)
     if (!template) throw new ToolRefusal('not_found', 'No such email template at this studio. Check list_email_templates.')
+    if (!String(template.html_content ?? '').trim()) throw new ToolRefusal('invalid_input', 'This template has no body.')
     const subject = input.subject ?? template.subject
     if (!subject) throw new ToolRefusal('invalid_input', 'This template has no subject; pass one.')
     refuseUnknownTags('The template body', template.html_content)

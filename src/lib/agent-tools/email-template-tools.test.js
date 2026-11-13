@@ -68,12 +68,30 @@ beforeEach(() => {
 describe('email template tools', () => {
   it('lists marketing templates and reports a cap', async () => {
     const rows = Array.from({ length: 50 }, (_, i) => ({ id: `t${i}`, name: `n${i}`, subject: 's', category: null, description: null }))
-    listMarketingTemplates.mockResolvedValue(rows)
+    listMarketingTemplates.mockResolvedValue({ templates: rows, capped: true })
     const r = await call(makeDb().db, 'list_email_templates', { studio_id: DUB })
     expect(r.ok).toBe(true)
     expect(r.data.templates).toHaveLength(50)
     expect(r.data.capped).toBe(true)
     expect(listMarketingTemplates).toHaveBeenCalledWith(expect.anything(), DUB)
+  })
+
+  it('does not report a cap for exactly 50 templates', async () => {
+    const rows = Array.from({ length: 50 }, (_, i) => ({ id: `t${i}`, name: `n${i}`, subject: 's', category: null, description: null }))
+    listMarketingTemplates.mockResolvedValue({ templates: rows, capped: false })
+    const r = await call(makeDb().db, 'list_email_templates', { studio_id: DUB })
+    expect(r.data.capped).toBe(false)
+  })
+
+  it('refuses a template with an empty or whitespace body before any insert', async () => {
+    for (const html of ['', '   \n ']) {
+      loadMarketingTemplate.mockResolvedValue({ ...TEMPLATE, html_content: html })
+      const { db, ops } = makeDb()
+      const r = await call(db, 'create_email_draft_from_template', { studio_id: DUB, template_id: TPL, name: 'x' })
+      expect(r).toMatchObject({ ok: false, code: 'invalid_input' })
+      expect(JSON.stringify(r)).toContain('This template has no body.')
+      expect(ops.some((o) => o.kind === 'insert' && o.table === 'campaigns')).toBe(false)
+    }
   })
 
   it('creates a draft from a template with the body editable in the CRM only', async () => {

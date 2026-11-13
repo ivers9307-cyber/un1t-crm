@@ -6,7 +6,18 @@
 // at the studio points at it. A failed read of any of those links throws:
 // never list templates on a guess about what is linked.
 
+import { TRIAL_PURCHASE_EMAIL_TEMPLATES } from './trial-purchase-emails'
+import { PURCHASE_EMAIL_TEMPLATES } from './offer-purchase-emails'
+import { MEMBER_APP_SIGN_IN_TEMPLATE } from './member-app-sign-in-email'
+
 export const EXCLUDED_TEMPLATE_CATEGORIES = ['transactional', 'reminder']
+
+// Templates the CRM's own automatic emails look up BY NAME at the studio.
+export const EXCLUDED_TEMPLATE_NAMES = Object.freeze([
+  ...Object.values(TRIAL_PURCHASE_EMAIL_TEMPLATES),
+  ...Object.values(PURCHASE_EMAIL_TEMPLATES),
+  MEMBER_APP_SIGN_IN_TEMPLATE,
+])
 
 const TEMPLATE_CAP = 50
 const PAGE = 1000
@@ -49,18 +60,21 @@ export async function usedTemplateIds(db, locationId) {
   return used
 }
 
-const isExcludedCategory = (c) => EXCLUDED_TEMPLATE_CATEGORIES.includes(c)
+const isExcludedCategory = (c) => EXCLUDED_TEMPLATE_CATEGORIES.includes(String(c ?? '').toLowerCase())
+const isExcluded = (t) => isExcludedCategory(t.category) || EXCLUDED_TEMPLATE_NAMES.includes(t.name)
 
-/** The studio's marketing templates, by name, at most 50. */
+/** The studio's marketing templates, by name: `{ templates (at most 50), capped }`. */
 export async function listMarketingTemplates(db, locationId) {
   const used = await usedTemplateIds(db, locationId)
   const rows = await allRows(() => db.from('email_templates')
     .select('id, name, subject, category, description').eq('location_id', locationId))
-  return rows
-    .filter((t) => !isExcludedCategory(t.category) && !used.has(t.id))
+  const kept = rows
+    .filter((t) => !isExcluded(t) && !used.has(t.id))
     .sort((a, b) => String(a.name).localeCompare(String(b.name)) || String(a.id).localeCompare(String(b.id)))
-    .slice(0, TEMPLATE_CAP)
-    .map((t) => ({ id: t.id, name: t.name, subject: t.subject ?? null, category: t.category ?? null, description: t.description ?? null }))
+  return {
+    capped: kept.length > TEMPLATE_CAP,
+    templates: kept.slice(0, TEMPLATE_CAP).map((t) => ({ id: t.id, name: t.name, subject: t.subject ?? null, category: t.category ?? null, description: t.description ?? null })),
+  }
 }
 
 /** One marketing template at the studio, or null (other studio, excluded, or linked). */
@@ -69,7 +83,7 @@ export async function loadMarketingTemplate(db, locationId, templateId) {
     .select('id, name, subject, category, html_content, design_json')
     .eq('id', templateId).eq('location_id', locationId).maybeSingle()
   if (error) throw new Error(`Failed to load the email template: ${error.message}`)
-  if (!data || isExcludedCategory(data.category)) return null
+  if (!data || isExcluded(data)) return null
   const used = await usedTemplateIds(db, locationId)
   if (used.has(data.id)) return null
   return { id: data.id, name: data.name, subject: data.subject ?? null, html_content: data.html_content ?? '', design_json: data.design_json ?? null }
