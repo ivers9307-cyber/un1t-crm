@@ -51,9 +51,11 @@ export default defineTool({
     const resend = summary
       ? { after_hours: campaign.resend_wait_hours, subject: campaign.resend_subject || null, summary }
       : null
-    // The resend child exists only once the spawner has fired; read at THIS studio.
+    // The resend child exists only once the spawner has fired, and the spawner
+    // then clears resend_enabled on the parent, so look whatever the flag says.
+    // Read at THIS studio.
     let resendChild
-    if (resend && campaign.status === 'sent') {
+    if (campaign.status === 'sent' && !campaign.parent_campaign_id) {
       const { data: child, error: childError } = await db
         .from('campaigns')
         .select('id, status, total_sent')

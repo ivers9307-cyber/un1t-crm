@@ -61,7 +61,9 @@ function makeDb(answers = {}) {
       const answer = () => {
         if (q.kind === 'insert') return answers.insert ?? { data: [{ id: CAMP, name: q.payload?.name, status: 'draft' }], error: null }
         if (q.kind === 'update') return answers.update ?? { data: [{ id: CAMP }], error: null }
-        if (answers.child !== undefined && q.calls.some((c) => c[1] === 'parent_campaign_id')) return answers.child
+        if (answers.child !== undefined && q.calls.some((c) => c[1] === 'parent_campaign_id')) {
+          return typeof answers.child === 'function' ? answers.child() : answers.child
+        }
         return { data: answers.select ?? null, error: null }
       }
       const b = {}
@@ -373,7 +375,7 @@ describe('cancel_email_campaign', () => {
 
   it('maps not_stoppable to conflict and an error to a failed call', async () => {
     stopCampaign.mockResolvedValue({ ok: false, code: 'not_stoppable', message: 'This campaign is sent, so there is nothing to stop.', current_status: 'sent' })
-    const { db } = makeDb({ select: agentCampaign({ status: 'sent' }) })
+    const { db } = makeDb({ select: agentCampaign({ status: 'sent' }), child: { data: null, error: null } })
     expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db))
       .toEqual({ ok: false, code: 'conflict', message: 'This campaign is sent, so there is nothing to stop.' })
     stopCampaign.mockResolvedValue({ ok: false, code: 'error', message: 'db down' })
@@ -457,9 +459,29 @@ describe('cancel_email_campaign', () => {
     expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, raced.db)).toMatchObject({ ok: false, code: 'conflict' })
   })
 
+  it('a started resend is refused whatever the parent flag says (the spawner clears it)', async () => {
+    const CHILD = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c99'
+    const { db, kind } = makeDb({ select: agentCampaign({ status: 'sent', resend_enabled: false }), child: { data: { id: CHILD }, error: null } })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db))
+      .toEqual({ ok: false, code: 'conflict', message: `The resend has already started. Cancel it instead: ${CHILD}.` })
+    expect(kind('update')).toHaveLength(0)
+    expect(stopCampaign).not.toHaveBeenCalled()
+  })
+
+  it('a child that appears while the flag is being cleared is reported, not resend_cancelled', async () => {
+    const CHILD = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c99'
+    const answers = [{ data: null, error: null }, { data: { id: CHILD }, error: null }]
+    const { db } = makeDb({
+      select: agentCampaign({ status: 'sent', resend_enabled: true, resend_wait_hours: 24 }),
+      child: () => answers.shift(),
+    })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db))
+      .toEqual({ ok: false, code: 'conflict', message: `The resend has already started. Cancel it instead: ${CHILD}.` })
+  })
+
   it('a sent campaign is never voided through cancel', async () => {
     stopCampaign.mockResolvedValue({ ok: false, code: 'not_stoppable', message: 'This campaign is sent, so there is nothing to stop.', current_status: 'sent' })
-    const { db } = makeDb({ select: agentCampaign({ status: 'sent' }) })
+    const { db } = makeDb({ select: agentCampaign({ status: 'sent' }), child: { data: null, error: null } })
     expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db)).toMatchObject({ ok: false, code: 'conflict' })
     expect(pendingApproval).not.toHaveBeenCalled()
     expect(voidApprovals).not.toHaveBeenCalled()

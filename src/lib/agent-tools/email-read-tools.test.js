@@ -242,18 +242,26 @@ describe('email read tools', () => {
     expect(d.resend_child).toBeUndefined()
 
     const CHILD = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c99'
-    const parent = campaign({ status: 'sent', resend_enabled: true, resend_wait_hours: 24, resend_subject: 'Again' })
+    // The spawner clears resend_enabled on the parent once the child exists.
+    const parent = campaign({ status: 'sent', resend_enabled: false, resend_wait_hours: 24, resend_subject: 'Again' })
     const spawned = makeDb({
       campaigns: (q) => (q.calls.some((c) => c[1] === 'parent_campaign_id')
         ? { data: { id: CHILD, status: 'sent', total_sent: 7 }, error: null }
         : { data: parent, error: null }),
     })
     const s = (await run(getEmailCampaign, { campaign_id: CAMP }, spawned.db)).data
-    expect(s.resend).toMatchObject({ after_hours: 24, subject: 'Again' })
+    expect(s.resend).toBeNull()
     expect(s.resend_child).toEqual({ id: CHILD, status: 'sent', sent: 7 })
     const lookup = spawned.on('campaigns').find((q) => q.calls.some((c) => c[1] === 'parent_campaign_id'))
     expect(lookup.calls).toContainEqual(['eq', 'parent_campaign_id', CAMP])
     expect(lookup.calls).toContainEqual(['eq', 'location_id', DUB])
+
+    const none = makeDb({
+      campaigns: (q) => (q.calls.some((c) => c[1] === 'parent_campaign_id')
+        ? { data: null, error: null }
+        : { data: campaign({ status: 'sent' }), error: null }),
+    })
+    expect((await run(getEmailCampaign, { campaign_id: CAMP }, none.db)).data).not.toHaveProperty('resend_child')
 
     const unreadable = makeDb({
       campaigns: (q) => (q.calls.some((c) => c[1] === 'parent_campaign_id')
