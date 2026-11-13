@@ -7,7 +7,8 @@ import { uuidLike } from '@/lib/schemas'
 import { buildCampaignDuplicate } from '@/lib/campaign-duplicate'
 import { defineTool, ToolRefusal } from './registry.js'
 import { emailGate, htmlSha256 } from './_email-campaign.js'
-import { sendsAs, throwWriteError } from './_email-draft.js'
+import { describeFromAddress } from '@/lib/from-address'
+import { throwWriteError } from './_email-draft.js'
 
 // What buildCampaignDuplicate reads, plus agent_blocks (a CRM duplicate has no
 // use for it). Named columns only.
@@ -60,12 +61,14 @@ export default defineTool({
     const { data, error } = await db.from('campaigns').insert(row).select('id, name, status').single()
     if (error || !data) throwWriteError(error, 'duplicate the campaign')
 
+    // What the sender will really use: a stored from_email only counts on the studio's verified domain.
+    const { sends_as: sendsAs } = await describeFromAddress(db, studio.id, source.from_email ?? null)
     const ab = source.agent_blocks
     const editable = ab != null && htmlSha256(source.html_content) === ab.html_sha256
     return {
       campaign: { id: data.id, name: data.name, status: data.status },
       body_editable_from_claude: editable,
-      sends_as: source.from_email || await sendsAs(db, studio),
+      sends_as: sendsAs ?? null,
     }
   },
 })

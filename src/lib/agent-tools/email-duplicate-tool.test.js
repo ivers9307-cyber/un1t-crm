@@ -164,16 +164,20 @@ describe('duplicate_email_campaign', () => {
     expect(kind('insert')).toEqual([])
   })
 
-  it('copies the source from_email and reports it as sends_as', async () => {
+  it('copies the source from_email and reports an on-domain one as sends_as', async () => {
+    describeFromAddress.mockImplementation(async (_d, _l, requested) => ({ sends_as: requested, on_verified_domain: true, verified_domain: 'un1t.test' }))
     const { db, kind } = makeDb({ select: sentSource({ from_email: 'old@un1t.test' }) })
     const r = await run(duplicateEmailCampaign, { campaign_id: CAMP }, db)
     expect(kind('insert')[0].payload.from_email).toBe('old@un1t.test')
     expect(r.data.sends_as).toBe('old@un1t.test')
   })
 
-  it('falls back to the studio address when the source has no from_email', async () => {
-    const { db } = makeDb({ select: sentSource({ from_email: null }) })
-    expect((await run(duplicateEmailCampaign, { campaign_id: CAMP }, db)).data.sends_as).toBe('hello@un1t.test')
+  it('reports the studio default when the source from_email is off the verified domain', async () => {
+    describeFromAddress.mockImplementation(async () => ({ sends_as: 'hello@un1t.test', on_verified_domain: false, verified_domain: 'un1t.test' }))
+    const { db } = makeDb({ select: sentSource({ from_email: 'old@elsewhere.test' }) })
+    const r = await run(duplicateEmailCampaign, { campaign_id: CAMP }, db)
+    expect(describeFromAddress).toHaveBeenCalledWith(db, DUB, 'old@elsewhere.test')
+    expect(r.data.sends_as).toBe('hello@un1t.test')
   })
 
   it('is refused without the email permission', async () => {
