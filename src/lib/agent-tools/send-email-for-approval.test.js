@@ -258,7 +258,7 @@ describe('send_email_for_approval', () => {
     expect(sendEmail).not.toHaveBeenCalled()
   })
 
-  it('is a registered write tool, registered, that tells the agent never to follow the link', () => {
+  it('is a registered write tool that tells the agent never to follow the link', () => {
     expect(TOOLS).toHaveLength(28)
     expect(TOOLS[TOOLS.length - 2]).toBe(sendEmailForApproval)
     expect(sendEmailForApproval.writes).toBe(true)
