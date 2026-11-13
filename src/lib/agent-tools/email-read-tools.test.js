@@ -228,6 +228,41 @@ describe('email read tools', () => {
     expect(n.data).toMatchObject({ blocks: null, body_edited_in_crm: false })
   })
 
+  it('get_email_campaign reports the resend and, once spawned, the child', async () => {
+    const off = makeDb({ campaigns: { data: campaign({ resend_enabled: false }), error: null } })
+    expect((await run(getEmailCampaign, { campaign_id: CAMP }, off.db)).data).toMatchObject({ resend: null })
+    expect(off.on('campaigns')).toHaveLength(1)
+
+    const draft = makeDb({ campaigns: { data: campaign({ resend_enabled: true, resend_wait_hours: 24, resend_subject: null }), error: null } })
+    const d = (await run(getEmailCampaign, { campaign_id: CAMP }, draft.db)).data
+    expect(d.resend).toEqual({
+      after_hours: 24, subject: null,
+      summary: 'Then resends to people who did not open it, 24 hours after it sends, with the subject "Hi".',
+    })
+    expect(d.resend_child).toBeUndefined()
+
+    const CHILD = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c99'
+    const parent = campaign({ status: 'sent', resend_enabled: true, resend_wait_hours: 24, resend_subject: 'Again' })
+    const spawned = makeDb({
+      campaigns: (q) => (q.calls.some((c) => c[1] === 'parent_campaign_id')
+        ? { data: { id: CHILD, status: 'sent', total_sent: 7 }, error: null }
+        : { data: parent, error: null }),
+    })
+    const s = (await run(getEmailCampaign, { campaign_id: CAMP }, spawned.db)).data
+    expect(s.resend).toMatchObject({ after_hours: 24, subject: 'Again' })
+    expect(s.resend_child).toEqual({ id: CHILD, status: 'sent', sent: 7 })
+    const lookup = spawned.on('campaigns').find((q) => q.calls.some((c) => c[1] === 'parent_campaign_id'))
+    expect(lookup.calls).toContainEqual(['eq', 'parent_campaign_id', CAMP])
+    expect(lookup.calls).toContainEqual(['eq', 'location_id', DUB])
+
+    const unreadable = makeDb({
+      campaigns: (q) => (q.calls.some((c) => c[1] === 'parent_campaign_id')
+        ? { data: null, error: { message: 'down' } }
+        : { data: parent, error: null }),
+    })
+    expect(await run(getEmailCampaign, { campaign_id: CAMP }, unreadable.db)).toMatchObject({ ok: false, code: 'tool_failed' })
+  })
+
   it('get_email_campaign says up front when a campaign cannot be released through an approval', async () => {
     const plain = makeDb({ campaigns: { data: campaign(), error: null } })
     expect((await run(getEmailCampaign, { campaign_id: CAMP }, plain.db)).data.release_blocker).toBeNull()

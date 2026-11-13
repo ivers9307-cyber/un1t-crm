@@ -7,7 +7,7 @@ import { uuidLike, audienceFilterSchema } from '@/lib/schemas'
 import { defineTool } from './registry.js'
 import { emailAudienceCounts } from '@/lib/email-audience-counts'
 import { emailGate, resolveAudienceFilter } from './_email-campaign.js'
-import { EmailBlocksSchema, buildBody, checkReplyTo, sendsAs, throwWriteError } from './_email-draft.js'
+import { EmailBlocksSchema, ResendSchema, buildBody, resendColumns, checkReplyTo, sendsAs, throwWriteError } from './_email-draft.js'
 
 export default defineTool({
   name: 'create_email_draft',
@@ -15,7 +15,7 @@ export default defineTool({
   description: 'Creates a marketing email campaign as a draft at the studio: name, subject, optional preview text, '
     + 'from name and reply-to (on the studio\'s verified domain), the body as blocks (heading, paragraph, list, '
     + 'button, image from list_email_images, divider) and optionally an audience (segment_id or filter; check it '
-    + 'with count_email_audience). It never sends: a person releases it from a signed-in page. '
+    + 'with count_email_audience) and a resend to people who did not open it. It never sends: a person releases it from a signed-in page. '
     + 'This writes to the CRM: confirm with the user first.',
   inputSchema: z.object({
     studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
@@ -27,6 +27,7 @@ export default defineTool({
     blocks: EmailBlocksSchema.describe('The email body, 1 to 60 blocks.'),
     segment_id: uuidLike.optional().describe('A saved segment at this studio, instead of filter.'),
     filter: audienceFilterSchema.describe('An inline audience filter, instead of segment_id.'),
+    resend: ResendSchema.describe('Optional: after_hours (1 to 168) and an optional subject. Resends to people who did not open it. A person approves it with the send.'),
   }),
   gate: (user, studioId) => emailGate(user, studioId),
   writes: true,
@@ -35,6 +36,7 @@ export default defineTool({
     if (input.reply_to) await checkReplyTo(db, studio, input.reply_to)
     const wantsAudience = input.segment_id != null || input.filter != null
     const audienceFilter = wantsAudience ? await resolveAudienceFilter(db, studio, user, input) : null
+    const resend = resendColumns(input.resend)
     const body = await buildBody(db, user, studio, input.blocks)
 
     const row = {
@@ -50,6 +52,7 @@ export default defineTool({
       reply_to: input.reply_to ?? null,
       audience_filter: audienceFilter,
       ...body,
+      ...resend,
     }
     const { data, error } = await db.from('campaigns').insert(row).select('id, name, status').single()
     if (error || !data) throwWriteError(error, 'create the draft')

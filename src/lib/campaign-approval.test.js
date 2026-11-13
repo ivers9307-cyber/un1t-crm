@@ -164,6 +164,8 @@ describe('resendSummary', () => {
   it('resendSummary: null when off; "1 hour" singular; falls back to the subject', () => {
     expect(resendSummary(campaign())).toBeNull()
     expect(resendSummary(campaign({ resend_wait_hours: 24, resend_subject: 'X' }))).toBeNull()
+    expect(resendSummary(campaign({ resend_enabled: true, resend_wait_hours: null }))).toBeNull()
+    expect(resendSummary(campaign({ resend_enabled: true, resend_wait_hours: 0 }))).toBeNull()
     expect(resendSummary(campaign({ resend_enabled: true, resend_wait_hours: 1, resend_subject: 'Did you miss this?' })))
       .toBe('Then resends to people who did not open it, 1 hour after it sends, with the subject "Did you miss this?".')
     expect(resendSummary(campaign({ resend_enabled: true, resend_wait_hours: 48, resend_subject: null })))

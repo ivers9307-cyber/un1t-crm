@@ -1,8 +1,10 @@
 // MCPEMAIL.1 — helpers shared by the three email-campaign WRITE tools
 // (create / update / cancel). Not a tool itself (no defineTool).
 
+import { z } from 'zod'
 import { ToolRefusal } from './registry.js'
-import { EmailBlocksSchema, validateBlocks, renderAgentEmail } from '@/lib/agent-email-blocks'
+import { EmailBlocksSchema, validateBlocks, renderAgentEmail, unknownMergeTags } from '@/lib/agent-email-blocks'
+import { RESEND_MIN_WAIT_HOURS, RESEND_MAX_WAIT_HOURS } from '@/lib/campaign-resend'
 import { getLocationBranding } from '@/lib/location-branding'
 import { describeFromAddress } from '@/lib/from-address'
 import { allowedImageUrls, htmlSha256 } from './_email-campaign.js'
@@ -50,4 +52,30 @@ export async function buildBody(db, user, studio, blocks) {
   const b = await getLocationBranding(db, studio.id)
   const html = renderAgentEmail({ blocks, branding: { companyName: b?.companyName ?? '', logoUrl: b?.logoUrl ?? null } })
   return { html_content: html, agent_blocks: { v: 1, blocks, html_sha256: htmlSha256(html) } }
+}
+
+/**
+ * MCPEMAIL.2 — a resend to people who did not open it. `null` switches it off,
+ * `undefined` (omitted) leaves it as it is on an update.
+ */
+export const ResendSchema = z.object({
+  after_hours: z.number().int().min(RESEND_MIN_WAIT_HOURS).max(RESEND_MAX_WAIT_HOURS)
+    .describe(`Hours after the send to resend to people who did not open it, ${RESEND_MIN_WAIT_HOURS} to ${RESEND_MAX_WAIT_HOURS}.`),
+  subject: z.string().trim().min(1).max(200).optional()
+    .describe('Subject for the resend; omit to reuse the campaign subject. Merge tags exactly like {{first_name}}.'),
+}).nullable().optional()
+
+/**
+ * The campaigns columns for a `resend` input. Enabled always carries its hours
+ * (the spawner needs them). Refuses a subject with an unknown or spaced tag.
+ */
+export function resendColumns(resend) {
+  if (resend === undefined) return {}
+  if (resend === null) return { resend_enabled: false, resend_wait_hours: null, resend_subject: null }
+  const unknown = unknownMergeTags(resend.subject)
+  if (unknown.length) {
+    throw new ToolRefusal('invalid_input', `The resend subject has {{${unknown[0]}}}, which is not a merge tag we offer `
+      + 'or has spaces inside the braces. Write tags exactly, like {{first_name}}.')
+  }
+  return { resend_enabled: true, resend_wait_hours: resend.after_hours, resend_subject: resend.subject ?? null }
 }

@@ -73,7 +73,8 @@ export function agentReleaseBlocker(campaign) {
  * resend_subject reuses the campaign's own subject.
  */
 export function resendSummary(campaign) {
-  if (!campaign?.resend_enabled) return null
+  // Judged as the spawner judges it (campaign-resend.js isResendDue): enabled with no hours never fires.
+  if (!campaign?.resend_enabled || !campaign.resend_wait_hours) return null
   const h = campaign.resend_wait_hours
   const wait = h === 1 ? '1 hour' : `${h} hours`
   // Judged as the spawner judges it (campaign-resend.js): an empty string falls back too.

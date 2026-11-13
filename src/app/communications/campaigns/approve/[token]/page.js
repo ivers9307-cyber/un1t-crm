@@ -124,7 +124,14 @@ export default async function CampaignApprovePage({ params }) {
         <Fact label="Studio">{studio.name}</Fact>
         <Fact label="Sends as">{sendsAs || 'The studio\'s default address'}</Fact>
         <Fact label="Timing">{whenLabel || 'As soon as you approve'}</Fact>
-        {resend && <Fact label="Resend">{resend}</Fact>}
+        {resend && (
+          <Fact label="Resend">
+            {resend}
+            {/\{\{[^{}]+\}\}/.test(resend) && (
+              <span className="block text-sm text-un1t-subtle">Text in double curly brackets is filled in for each person when it sends.</span>
+            )}
+          </Fact>
+        )}
         <Fact label="Head count at test">{approval.audience_eligible}</Fact>
         <Fact label="Head count now">{counts.eligible}</Fact>
       </dl>

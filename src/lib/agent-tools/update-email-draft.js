@@ -8,9 +8,9 @@ import { defineTool, ToolRefusal } from './registry.js'
 import { EDITABLE_CAMPAIGN_STATUSES } from '@/lib/campaign-editability'
 import { voidApprovals } from '@/lib/campaign-approval'
 import { emailGate, loadCampaignAtStudio, resolveAudienceFilter, htmlSha256 } from './_email-campaign.js'
-import { BODY_EDITED_IN_CRM, EmailBlocksSchema, buildBody, checkReplyTo, sendsAs, throwWriteError } from './_email-draft.js'
+import { BODY_EDITED_IN_CRM, EmailBlocksSchema, ResendSchema, buildBody, resendColumns, checkReplyTo, sendsAs, throwWriteError } from './_email-draft.js'
 
-const FIELDS = ['name', 'subject', 'preview_text', 'from_name', 'reply_to', 'blocks', 'segment_id', 'filter']
+const FIELDS = ['name', 'subject', 'preview_text', 'from_name', 'reply_to', 'blocks', 'segment_id', 'filter', 'resend']
 
 function notEditable(status) {
   return new ToolRefusal('conflict', `This campaign is ${status}, so it cannot be edited here.`
@@ -22,7 +22,7 @@ export default defineTool({
   title: 'Update email draft',
   description: 'Edits a draft or scheduled email campaign (give the campaign id and at least one field). Passing '
     + 'blocks replaces the body, which is refused if someone edited the body in the CRM since. Passing segment_id or '
-    + 'filter replaces the audience. Editing a scheduled campaign returns it to draft and withdraws any waiting send '
+    + 'filter replaces the audience. Passing resend sets, or with null removes, the resend to people who did not open it. Editing a scheduled campaign returns it to draft and withdraws any waiting send '
     + 'approval. It never sends. This writes to the CRM: confirm with the user first.',
   inputSchema: z.object({
     studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
@@ -35,6 +35,7 @@ export default defineTool({
     blocks: EmailBlocksSchema.optional().describe('The whole new body, 1 to 60 blocks.'),
     segment_id: uuidLike.optional().describe('A saved segment at this studio, instead of filter.'),
     filter: audienceFilterSchema.describe('An inline audience filter, instead of segment_id.'),
+    resend: ResendSchema.describe('after_hours (1 to 168) and an optional subject to resend to people who did not open it; null switches the resend off; omit to leave it.'),
   }),
   gate: (user, studioId) => emailGate(user, studioId),
   writes: true,
@@ -53,6 +54,10 @@ export default defineTool({
       await checkReplyTo(db, studio, input.reply_to)
       patch.reply_to = input.reply_to
     }
+    if (input.resend != null && campaign.parent_campaign_id) {
+      throw new ToolRefusal('invalid_input', 'This campaign is itself a resend, and a resend cannot itself be resent.')
+    }
+    Object.assign(patch, resendColumns(input.resend))
     if (input.segment_id != null || input.filter != null) {
       patch.audience_filter = await resolveAudienceFilter(db, studio, user, input)
     }

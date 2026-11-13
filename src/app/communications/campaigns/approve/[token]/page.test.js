@@ -105,6 +105,13 @@ describe('/communications/campaigns/approve/[token]', () => {
     expect(JSON.parse(screen.getByTestId('form-props').textContent).label).toMatch(/^Schedule for .*09:00, then resend$/)
   })
 
+  it('explains a merge tag in the resend subject the way it does for the subject', async () => {
+    loadApprovalView.mockResolvedValue(view({ campaign: { resend_enabled: true, resend_wait_hours: 24, resend_subject: 'Missed it, {{first_name}}?' } }))
+    const { container } = await renderPage()
+    expect(container.textContent).toContain('with the subject "Missed it, {{first_name}}?"')
+    expect(container.textContent.match(/filled in for each person when it sends/gi)).toHaveLength(1)
+  })
+
   it('shows no Resend fact when the resend is off', async () => {
     loadApprovalView.mockResolvedValue(view({ campaign: { resend_enabled: false, resend_wait_hours: null, resend_subject: null } }))
     const { container } = await renderPage()
