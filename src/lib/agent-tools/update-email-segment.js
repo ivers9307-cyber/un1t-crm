@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { uuidLike, audienceFilterSchema } from '@/lib/schemas'
 import { canWriteSegmentsAt, countSequencesUsingSegment } from '@/lib/segment-access'
 import { emailAudienceCounts } from '@/lib/email-audience-counts'
+import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import { defineTool, ToolRefusal } from './registry.js'
 import { emailGate, cleanSegmentFilter } from './_email-campaign.js'
 
@@ -69,7 +70,15 @@ export default defineTool({
       throw new Error(`Failed to update the segment: ${error.message}`)
     }
     if (!data) throw new Error('Failed to update the segment: no row returned')
-    const { eligible } = await emailAudienceCounts(db, { filter: filter ?? segment.filter, locationId: studio.id })
-    return { segment: { id: data.id, name: data.name }, count: eligible }
+    // The edit has landed: a count that cannot be made (say an old stored filter
+    // that no longer validates) must not report the call as failed.
+    let count = null
+    try {
+      const saved = stripUnsetFilterRows(filter ?? segment.filter)
+      count = (await emailAudienceCounts(db, { filter: saved, locationId: studio.id })).eligible
+    } catch {
+      count = null
+    }
+    return { segment: { id: data.id, name: data.name }, count }
   },
 })

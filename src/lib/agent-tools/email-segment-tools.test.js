@@ -149,6 +149,14 @@ describe('update_email_segment', () => {
     expect(writes('update')).toHaveLength(0)
   })
 
+  it('still succeeds, with count null, when the count cannot be made after the edit', async () => {
+    const { db, writes } = makeDb({ segment: { ...existing, filter: { logic: 'and', filters: [{ field: 'gone', op: 'is', value: 1 }] } } })
+    emailAudienceCounts.mockRejectedValue(new Error('bad stored filter'))
+    const r = await run(updateEmailSegment, { segment_id: SEG, name: 'Renamed' }, db)
+    expect(r).toMatchObject({ ok: true, data: { segment: { id: SEG, name: 'Renamed' }, count: null } })
+    expect(writes('update')).toHaveLength(1)
+  })
+
   it('needs at least one change, and a valid filter', async () => {
     const a = makeDb({ segment: existing })
     expect(await run(updateEmailSegment, { segment_id: SEG }, a.db)).toMatchObject({ ok: false })

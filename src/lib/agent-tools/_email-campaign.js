@@ -73,17 +73,7 @@ export async function resolveAudienceFilter(db, studio, user, { segment_id, filt
     if (!data || !canReadSegmentsAt(user, studio.id)) throw new ToolRefusal('not_found', 'Segment not found.')
     chosen = data.filter ?? {}
   }
-  const cleaned = stripUnsetFilterRows(chosen)
-  try {
-    validateAudienceFilter(cleaned)
-  } catch (e) {
-    if (e instanceof InvalidAudienceFilterError) throw new ToolRefusal('invalid_input', e.message)
-    throw e
-  }
-  if (!hasFilterRows(cleaned)) {
-    throw new ToolRefusal('invalid_input', 'The audience filter needs at least one filter row.')
-  }
-  return cleaned
+  return cleanSegmentFilter(chosen)
 }
 
 /** This studio's image library entries, newest first. */
