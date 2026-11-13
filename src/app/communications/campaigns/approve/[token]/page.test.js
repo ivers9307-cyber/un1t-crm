@@ -38,7 +38,8 @@ beforeEach(() => {
 const view = (over = {}) => ({
   ok: true,
   approval: { id: 'ap1', send_at: null, audience_eligible: 100, ...over.approval },
-  campaign: { id: CAMPAIGN_ID, name: 'November newsletter', subject: 'News from the studio', status: 'draft', html_content: '<p>secret body</p>', ...over.campaign },
+  campaign: { id: CAMPAIGN_ID, name: 'November newsletter', subject: 'News from the studio', status: 'draft', html_content: '<p>secret body</p>',
+    resend_enabled: false, resend_wait_hours: null, resend_subject: null, ...over.campaign },
   studio: { id: 'loc-1', name: 'Test Studio', timezone: 'Europe/Dublin' },
   counts: { eligible: 104, matched: 120 },
   sendsAs: 'hello@studio.test',
@@ -82,6 +83,39 @@ describe('/communications/campaigns/approve/[token]', () => {
     })
     expect(text).not.toContain('secret body')
     expect(container.querySelector(`a[href="/communications/sent/email/${CAMPAIGN_ID}"]`)).not.toBeNull()
+  })
+
+  it('the approve page shows a Resend fact and labels the button "Send to N people now, then resend"', async () => {
+    loadApprovalView.mockResolvedValue(view({ campaign: { resend_enabled: true, resend_wait_hours: 24, resend_subject: null } }))
+    const { container } = await renderPage()
+    expect(container.textContent).toContain('Resend')
+    expect(container.textContent)
+      .toContain('Then resends to people who did not open it, 24 hours after it sends, with the subject "News from the studio".')
+    const props = JSON.parse(screen.getByTestId('form-props').textContent)
+    expect(props.label).toBe('Send to 104 people now, then resend')
+    expect(props.notice).toBe('Nothing has been sent yet. Press the button below to send it.')
+  })
+
+  it('a scheduled approval with a resend appends ", then resend" to the schedule label', async () => {
+    loadApprovalView.mockResolvedValue(view({
+      approval: { send_at: '2026-11-13T09:00:00.000Z' },
+      campaign: { resend_enabled: true, resend_wait_hours: 1, resend_subject: 'Again' },
+    }))
+    await renderPage()
+    expect(JSON.parse(screen.getByTestId('form-props').textContent).label).toMatch(/^Schedule for .*09:00, then resend$/)
+  })
+
+  it('explains a merge tag in the resend subject the way it does for the subject', async () => {
+    loadApprovalView.mockResolvedValue(view({ campaign: { resend_enabled: true, resend_wait_hours: 24, resend_subject: 'Missed it, {{first_name}}?' } }))
+    const { container } = await renderPage()
+    expect(container.textContent).toContain('with the subject "Missed it, {{first_name}}?"')
+    expect(container.textContent.match(/filled in for each person when it sends/gi)).toHaveLength(1)
+  })
+
+  it('shows no Resend fact when the resend is off', async () => {
+    loadApprovalView.mockResolvedValue(view({ campaign: { resend_enabled: false, resend_wait_hours: null, resend_subject: null } }))
+    const { container } = await renderPage()
+    expect(container.textContent).not.toMatch(/resend/i)
   })
 
   // APPROVECOPY.1 — three wording faults seen on the live page (13 Nov 2026).

@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
 import {
   APPROVAL_TTL_MS, APPROVALS_PER_HOUR, APPROVAL_CONTENT_FIELDS,
-  campaignContentKey, audienceGrewTooMuch, agentReleaseBlocker,
+  campaignContentKey, audienceGrewTooMuch, agentReleaseBlocker, resendSummary,
   issueApproval, findApproval, consumeApproval, voidApprovals, pendingApproval,
 } from './campaign-approval.js'
 
@@ -73,7 +73,8 @@ function approvalsDb({ failOn = null, failError = { message: 'boom' }, countOver
 const campaign = (over = {}) => ({
   id: CAMPAIGN, location_id: 'loc', subject: 'S', preview_text: 'P', from_name: 'F', from_email: 'f@x.com', reply_to: 'r@x.com',
   html_content: '<p>Hi</p>', audience_filter: { a: 1, b: [1, 2] }, postmark_stream: 'broadcast', ab_subject_b: null,
-  ab_test_pct: 10, ab_wait_hours: 4, parent_campaign_id: null, status: 'draft', updated_at: 'x', ...over,
+  ab_test_pct: 10, ab_wait_hours: 4, parent_campaign_id: null, resend_enabled: false, resend_wait_hours: null,
+  resend_subject: null, status: 'draft', updated_at: 'x', ...over,
 })
 const consumeAt = (db, id, ms = NOW) => consumeApproval(db, id, ms)
 const issue = (db, over = {}) => issueApproval(db, {
@@ -87,12 +88,13 @@ describe('constants', () => {
     expect(APPROVAL_CONTENT_FIELDS).toEqual([
       'location_id', 'subject', 'preview_text', 'from_name', 'from_email', 'reply_to', 'html_content', 'audience_filter',
       'postmark_stream', 'ab_subject_b', 'ab_test_pct', 'ab_wait_hours', 'parent_campaign_id',
+      'resend_enabled', 'resend_wait_hours', 'resend_subject',
     ])
   })
 })
 
 describe('campaignContentKey', () => {
-  it('changes when any of the thirteen fields changes and not when updated_at or status does', () => {
+  it('changes when any of the sixteen fields changes and not when updated_at or status does', () => {
     const base = campaignContentKey(campaign())
     expect(base).toMatch(/^[0-9a-f]{64}$/)
     const changes = {
@@ -100,12 +102,27 @@ describe('campaignContentKey', () => {
       html_content: '<p>Bye</p>', audience_filter: { a: 2 },
       postmark_stream: 'outbound', ab_subject_b: 'Subject B', ab_test_pct: 20, ab_wait_hours: 8,
       parent_campaign_id: 'c0000000-0000-4000-8000-000000000009',
+      resend_enabled: true, resend_wait_hours: 24, resend_subject: 'Did you miss this?',
     }
     expect(Object.keys(changes).sort()).toEqual([...APPROVAL_CONTENT_FIELDS].sort())
     for (const [f, v] of Object.entries(changes)) {
       expect(campaignContentKey(campaign({ [f]: v })), f).not.toBe(base)
     }
     expect(campaignContentKey(campaign({ updated_at: 'y', status: 'sent' }))).toBe(base)
+  })
+
+  it('the content key changes when resend_enabled, resend_wait_hours or resend_subject changes', () => {
+    const on = campaign({ resend_enabled: true, resend_wait_hours: 24, resend_subject: null })
+    const base = campaignContentKey(on)
+    expect(campaignContentKey(campaign())).not.toBe(base)
+    expect(campaignContentKey({ ...on, resend_wait_hours: 48 })).not.toBe(base)
+    expect(campaignContentKey({ ...on, resend_subject: 'Second chance' })).not.toBe(base)
+  })
+
+  it('the content key throws on a row missing resend_subject', () => {
+    const { resend_subject: _gone, ...without } = campaign()
+    void _gone
+    expect(() => campaignContentKey(without)).toThrow(/resend_subject/)
   })
 
   it('ignores key order inside audience_filter, but not array order', () => {
@@ -140,6 +157,19 @@ describe('agentReleaseBlocker', () => {
   it('judges the B subject the way the sender does (any truthy value is an A/B test)', () => {
     expect(agentReleaseBlocker(campaign({ ab_subject_b: '' }))).toBeNull()
     expect(agentReleaseBlocker(campaign({ ab_subject_b: '   ' }))).toMatch(/subject A\/B test/)
+  })
+})
+
+describe('resendSummary', () => {
+  it('resendSummary: null when off; "1 hour" singular; falls back to the subject', () => {
+    expect(resendSummary(campaign())).toBeNull()
+    expect(resendSummary(campaign({ resend_wait_hours: 24, resend_subject: 'X' }))).toBeNull()
+    expect(resendSummary(campaign({ resend_enabled: true, resend_wait_hours: null }))).toBeNull()
+    expect(resendSummary(campaign({ resend_enabled: true, resend_wait_hours: 0 }))).toBeNull()
+    expect(resendSummary(campaign({ resend_enabled: true, resend_wait_hours: 1, resend_subject: 'Did you miss this?' })))
+      .toBe('Then resends to people who did not open it, 1 hour after it sends, with the subject "Did you miss this?".')
+    expect(resendSummary(campaign({ resend_enabled: true, resend_wait_hours: 48, resend_subject: null })))
+      .toBe('Then resends to people who did not open it, 48 hours after it sends, with the subject "S".')
   })
 })
 

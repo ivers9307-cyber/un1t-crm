@@ -17,6 +17,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { resendSummary } from '@/lib/campaign-approval'
 import {
   loadApprovalView, approvalRefusalMessage, APPROVABLE_STATUSES, actingAsSomeoneElse, OWN_SESSION_MESSAGE,
 } from '@/lib/campaign-approval-view'
@@ -97,7 +98,10 @@ export default async function CampaignApprovePage({ params }) {
   const when = approval.send_at ? whenIn(approval.send_at, zone) : null
   const whenLabel = when ? `${when} (${zone})` : null
   const people = counts.eligible === 1 ? '1 person' : `${counts.eligible} people`
-  const label = when ? `Schedule for ${when}` : `Send to ${people} now`
+  // MCPEMAIL.2 — a non-opener resend is part of what the press releases, so
+  // the page says so and the button names it.
+  const resend = resendSummary(campaign)
+  const label = (when ? `Schedule for ${when}` : `Send to ${people} now`) + (resend ? ', then resend' : '')
   // APPROVECOPY.1 — opening this page releases nothing, and the page did not
   // say so: twice the person opened it and took the send for done.
   const notice = when
@@ -120,6 +124,14 @@ export default async function CampaignApprovePage({ params }) {
         <Fact label="Studio">{studio.name}</Fact>
         <Fact label="Sends as">{sendsAs || 'The studio\'s default address'}</Fact>
         <Fact label="Timing">{whenLabel || 'As soon as you approve'}</Fact>
+        {resend && (
+          <Fact label="Resend">
+            {resend}
+            {/\{\{[^{}]+\}\}/.test(resend) && (
+              <span className="block text-sm text-un1t-subtle">Text in double curly brackets is filled in for each person when it sends.</span>
+            )}
+          </Fact>
+        )}
         <Fact label="Head count at test">{approval.audience_eligible}</Fact>
         <Fact label="Head count now">{counts.eligible}</Fact>
       </dl>

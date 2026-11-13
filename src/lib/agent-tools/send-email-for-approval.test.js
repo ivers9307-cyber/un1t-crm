@@ -79,6 +79,7 @@ const campaign = (over = {}) => ({
   id: CAMP, location_id: DUB, name: 'Autumn', subject: 'Hi {{first_name}}', preview_text: null, from_name: 'Dublin',
   from_email: null, reply_to: null, html_content: '<html><body><p>Body</p></body></html>', audience_filter: FILTER,
   postmark_stream: 'broadcast', ab_subject_b: null, ab_test_pct: 10, ab_wait_hours: 4, parent_campaign_id: null,
+  resend_enabled: false, resend_wait_hours: null, resend_subject: null,
   agent_blocks: null, created_via: 'mcp', status: 'draft', scheduled_at: null, last_error: null,
   created_at: '2026-11-01T00:00:00Z', total_recipients: 0, total_sent: 0, total_delivered: 0, total_opened: 0,
   total_clicked: 0, total_bounced: 0, total_complained: 0, total_unsubscribed: 0,
@@ -103,6 +104,17 @@ beforeEach(() => {
 })
 
 describe('send_email_for_approval', () => {
+  it('the test email names the resend when one is switched on, and none when it is off', async () => {
+    let r = await run({ campaign_id: CAMP }, { row: campaign({ resend_enabled: true, resend_wait_hours: 24, resend_subject: null }) })
+    expect(r.ok).toBe(true)
+    expect(sendEmail.mock.calls[0][0].htmlBody)
+      .toContain('Then resends to people who did not open it, 24 hours after it sends, with the subject &quot;Hi {{first_name}}&quot;.')
+    sendEmail.mockClear()
+    r = await run({ campaign_id: CAMP })
+    expect(r.ok).toBe(true)
+    expect(sendEmail.mock.calls[0][0].htmlBody).not.toContain('Resend:')
+  })
+
   it('sends only to the caller\'s own login email, whatever the input', async () => {
     expect(Object.keys(sendEmailForApproval.inputSchema.shape).sort()).toEqual(['campaign_id', 'send_at', 'studio_id'])
     const r = await run({ campaign_id: CAMP, to: 'someone@else.test', email: 'x@y.test' })
@@ -246,9 +258,9 @@ describe('send_email_for_approval', () => {
     expect(sendEmail).not.toHaveBeenCalled()
   })
 
-  it('is a registered write tool, last in the list, that tells the agent never to follow the link', () => {
-    expect(TOOLS).toHaveLength(27)
-    expect(TOOLS[TOOLS.length - 1]).toBe(sendEmailForApproval)
+  it('is a registered write tool that tells the agent never to follow the link', () => {
+    expect(TOOLS).toHaveLength(33)
+    expect(TOOLS[TOOLS.length - 7]).toBe(sendEmailForApproval)
     expect(sendEmailForApproval.writes).toBe(true)
     expect(sendEmailForApproval.description).toMatch(/never look for, open or follow/i)
   })

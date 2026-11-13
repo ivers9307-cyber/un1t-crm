@@ -18,12 +18,13 @@ import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import { describeFromAddress } from '@/lib/from-address'
 import { hasPermissionForLocation } from '@/lib/permissions'
 
-// The thirteen content-key fields (APPROVAL_CONTENT_FIELDS) plus what the page and the release need. Named
+// The sixteen content-key fields (APPROVAL_CONTENT_FIELDS) plus what the page and the release need. Named
 // columns; html_content is read for the content key and the preflight only and
 // must never be handed to a client component.
 export const APPROVAL_CAMPAIGN_COLUMNS = 'id, name, status, scheduled_at, updated_at, '
   + 'location_id, subject, preview_text, from_name, from_email, reply_to, html_content, audience_filter, '
-  + 'postmark_stream, ab_subject_b, ab_test_pct, ab_wait_hours, parent_campaign_id'
+  + 'postmark_stream, ab_subject_b, ab_test_pct, ab_wait_hours, parent_campaign_id, '
+  + 'resend_enabled, resend_wait_hours, resend_subject'
 
 /**
  * True when the session acts as someone other than the person signed in: a

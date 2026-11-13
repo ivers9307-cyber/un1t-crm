@@ -14,12 +14,56 @@ import { emailGate, loadCampaignAtStudio } from './_email-campaign.js'
 const VOID_AFTER_STOP_FAILED = 'The campaign was stopped, but withdrawing the earlier approval failed. '
   + 'Send a new test before anything is approved.'
 
+// The resend child of a campaign, read at THIS studio. An unreadable child is
+// not "no child": acting on that could hide a running resend.
+async function findResendChild(db, studio, campaign) {
+  const { data: child, error } = await db
+    .from('campaigns')
+    .select('id, status')
+    .eq('parent_campaign_id', campaign.id)
+    .eq('location_id', studio.id)
+    .limit(1)
+    .maybeSingle()
+  if (error) throw new Error(`Failed to check whether the resend has started: ${error.message}`)
+  return child ?? null
+}
+
+const FINISHED_STATUSES = ['sent', 'failed', 'cancelled']
+const resendStarted = (child) => new ToolRefusal('conflict', FINISHED_STATUSES.includes(child.status)
+  ? 'The resend has already been sent.'
+  : `The resend has already started. Cancel it instead: ${child.id}.`)
+
+// A sent root campaign: a started resend is its own campaign (cancel that one);
+// a pending one is just resend_enabled on the parent. Returns null when this
+// campaign has no resend to deal with (the normal stop path then answers).
+async function cancelResendOnSent(db, studio, campaign) {
+  const started = await findResendChild(db, studio, campaign)
+  if (started) throw resendStarted(started)
+  if (!campaign.resend_enabled) return null
+  const { data, error } = await db
+    .from('campaigns')
+    .update({ resend_enabled: false })
+    .eq('id', campaign.id)
+    .eq('location_id', studio.id)
+    .eq('status', 'sent')
+    .eq('resend_enabled', true)
+    .select('id')
+  if (error) throw new Error(`Failed to cancel the resend: ${error.message}`)
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new ToolRefusal('conflict', 'The resend changed while it was being cancelled. Check it with get_email_campaign.')
+  }
+  // The spawner may have inserted the child between our read and the clear.
+  const raced = await findResendChild(db, studio, campaign)
+  if (raced) throw resendStarted(raced)
+  return { outcome: 'resend_cancelled', status: 'sent' }
+}
+
 export default defineTool({
   name: 'cancel_email_campaign',
   title: 'Cancel email campaign',
   description: 'Stops an email campaign: a scheduled one goes back to draft, a queued or sending one is asked to '
     + 'stop (emails already sent cannot be recalled), and a draft waiting for approval has that approval withdrawn. '
-    + 'Any waiting approval is withdrawn either way. Anything else is refused. '
+    + 'Any waiting approval is withdrawn either way. On a sent campaign it switches off a resend to non-openers that has not started. Anything else is refused. '
     + 'This writes to the CRM: confirm with the user first.',
   inputSchema: z.object({
     studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
@@ -31,6 +75,12 @@ export default defineTool({
     const { db, studio, nowMs } = ctx
     // Only a campaign loaded at THIS studio is ever handed to stopCampaign.
     const campaign = await loadCampaignAtStudio(db, studio, input.campaign_id)
+    // A sent campaign has nothing to stop, but a pending resend to non-openers
+    // (just resend_enabled on it until the spawner fires) can still be switched off.
+    if (campaign.status === 'sent' && !campaign.parent_campaign_id) {
+      const resent = await cancelResendOnSent(db, studio, campaign)
+      if (resent) return resent
+    }
     const result = await stopCampaign(db, campaign)
     if (result.ok) {
       try {

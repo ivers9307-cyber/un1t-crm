@@ -21,6 +21,7 @@ export const RESULT_STATUSES = Object.freeze(['queued', 'sending', 'sent', 'fail
 // "edited in the CRM" and is never returned.
 export const CAMPAIGN_COLS = 'id, location_id, name, subject, preview_text, from_name, from_email, reply_to, html_content, '
   + 'audience_filter, postmark_stream, ab_subject_b, ab_test_pct, ab_wait_hours, parent_campaign_id, '
+  + 'resend_enabled, resend_wait_hours, resend_subject, '
   + 'agent_blocks, created_via, status, scheduled_at, last_error, created_at, '
   + 'total_recipients, total_sent, total_delivered, total_opened, total_clicked, total_bounced, '
   + 'total_complained, total_unsubscribed'
@@ -72,17 +73,7 @@ export async function resolveAudienceFilter(db, studio, user, { segment_id, filt
     if (!data || !canReadSegmentsAt(user, studio.id)) throw new ToolRefusal('not_found', 'Segment not found.')
     chosen = data.filter ?? {}
   }
-  const cleaned = stripUnsetFilterRows(chosen)
-  try {
-    validateAudienceFilter(cleaned)
-  } catch (e) {
-    if (e instanceof InvalidAudienceFilterError) throw new ToolRefusal('invalid_input', e.message)
-    throw e
-  }
-  if (!hasFilterRows(cleaned)) {
-    throw new ToolRefusal('invalid_input', 'The audience filter needs at least one filter row.')
-  }
-  return cleaned
+  return cleanSegmentFilter(chosen)
 }
 
 /** This studio's image library entries, newest first. */
@@ -94,4 +85,23 @@ export async function studioImages(db, user, studio) {
 /** The image URLs a campaign at this studio may use. */
 export async function allowedImageUrls(db, user, studio) {
   return new Set((await studioImages(db, user, studio)).map((i) => i.url))
+}
+
+/**
+ * A segment's filter for saving: unset rows stripped, validated, and at least
+ * one real row (the same rule and sentence as resolveAudienceFilter), so a
+ * saved segment can never mean "everyone".
+ */
+export function cleanSegmentFilter(filter) {
+  const cleaned = stripUnsetFilterRows(filter)
+  try {
+    validateAudienceFilter(cleaned)
+  } catch (e) {
+    if (e instanceof InvalidAudienceFilterError) throw new ToolRefusal('invalid_input', e.message)
+    throw e
+  }
+  if (!hasFilterRows(cleaned)) {
+    throw new ToolRefusal('invalid_input', 'The audience filter needs at least one filter row.')
+  }
+  return cleaned
 }

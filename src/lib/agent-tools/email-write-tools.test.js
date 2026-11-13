@@ -61,6 +61,9 @@ function makeDb(answers = {}) {
       const answer = () => {
         if (q.kind === 'insert') return answers.insert ?? { data: [{ id: CAMP, name: q.payload?.name, status: 'draft' }], error: null }
         if (q.kind === 'update') return answers.update ?? { data: [{ id: CAMP }], error: null }
+        if (answers.child !== undefined && q.calls.some((c) => c[1] === 'parent_campaign_id')) {
+          return typeof answers.child === 'function' ? answers.child() : answers.child
+        }
         return { data: answers.select ?? null, error: null }
       }
       const b = {}
@@ -174,6 +177,30 @@ describe('create_email_draft', () => {
     expect(kind('update')).toHaveLength(0)
   })
 
+  it('create writes resend_enabled, resend_wait_hours and resend_subject from resend', async () => {
+    const { db, kind } = makeDb()
+    const r = await run(createEmailDraft, { ...BASE, resend: { after_hours: 48, subject: 'Missed it, {{first_name}}?' } }, db)
+    expect(r.ok).toBe(true)
+    expect(kind('insert')[0].payload).toMatchObject({ resend_enabled: true, resend_wait_hours: 48, resend_subject: 'Missed it, {{first_name}}?' })
+    const none = makeDb()
+    await run(createEmailDraft, { ...BASE, resend: { after_hours: 24 } }, none.db)
+    expect(none.kind('insert')[0].payload).toMatchObject({ resend_enabled: true, resend_wait_hours: 24, resend_subject: null })
+    const off = makeDb()
+    await run(createEmailDraft, { ...BASE }, off.db)
+    expect(off.kind('insert')[0].payload).not.toHaveProperty('resend_enabled')
+  })
+
+  it('refuses after_hours 0 and 169, and a resend subject with {{ first_name }} or {{nope}}', async () => {
+    const { db, kind } = makeDb({ select: agentCampaign() })
+    for (const resend of [{ after_hours: 0 }, { after_hours: 169 }, { after_hours: 1.5 },
+      { after_hours: 24, subject: 'Hi {{ first_name }}' }, { after_hours: 24, subject: 'Hi {{nope}}' }]) {
+      expect(await run(createEmailDraft, { ...BASE, resend }, db), JSON.stringify(resend)).toMatchObject({ ok: false, code: 'invalid_input' })
+      expect(await run(updateEmailDraft, { campaign_id: CAMP, resend }, db), JSON.stringify(resend)).toMatchObject({ ok: false, code: 'invalid_input' })
+    }
+    expect(kind('insert')).toHaveLength(0)
+    expect(kind('update')).toHaveLength(0)
+  })
+
   it('create is refused without the email permission', async () => {
     const { db } = makeDb()
     expect(await run(createEmailDraft, { ...BASE, studio_id: NOEMAIL }, db)).toMatchObject({ ok: false, code: 'forbidden' })
@@ -222,6 +249,38 @@ describe('update_email_draft', () => {
       expect(kind('update')[0].payload).toMatchObject({ status: 'draft', scheduled_at: null })
       expect(r.data.unscheduled).toBe(false)
     }
+  })
+
+  it('update with resend: null switches it off; omitting resend leaves it unchanged', async () => {
+    const off = makeDb({ select: agentCampaign() })
+    expect((await run(updateEmailDraft, { campaign_id: CAMP, resend: null }, off.db)).ok).toBe(true)
+    expect(off.kind('update')[0].payload).toMatchObject({ resend_enabled: false, resend_wait_hours: null, resend_subject: null })
+    const on = makeDb({ select: agentCampaign() })
+    await run(updateEmailDraft, { campaign_id: CAMP, resend: { after_hours: 72, subject: 'Again' } }, on.db)
+    expect(on.kind('update')[0].payload).toMatchObject({ resend_enabled: true, resend_wait_hours: 72, resend_subject: 'Again' })
+    const left = makeDb({ select: agentCampaign() })
+    await run(updateEmailDraft, { campaign_id: CAMP, subject: 'S' }, left.db)
+    const payload = left.kind('update')[0].payload
+    for (const k of ['resend_enabled', 'resend_wait_hours', 'resend_subject']) expect(payload).not.toHaveProperty(k)
+  })
+
+  it('update refuses a resend on a campaign that is itself a resend', async () => {
+    const { db, kind } = makeDb({ select: agentCampaign({ parent_campaign_id: '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d9998' }) })
+    const r = await run(updateEmailDraft, { campaign_id: CAMP, resend: { after_hours: 24 } }, db)
+    expect(r).toMatchObject({ ok: false, code: 'invalid_input' })
+    expect(r.message).toMatch(/cannot itself be resent/)
+    expect(kind('update')).toHaveLength(0)
+  })
+
+  it('an update that changes only the resend still returns the campaign to draft and voids approvals', async () => {
+    const { db, kind } = makeDb({ select: agentCampaign({ status: 'scheduled', scheduled_at: '2031-08-01T10:00:00Z' }) })
+    const r = await run(updateEmailDraft, { campaign_id: CAMP, resend: { after_hours: 24 } }, db)
+    expect(r.ok).toBe(true)
+    expect(r.data.unscheduled).toBe(true)
+    const u = kind('update')[0]
+    expect(u.payload).toMatchObject({ status: 'draft', scheduled_at: null, resend_enabled: true, resend_wait_hours: 24 })
+    expect(u.calls).toContainEqual(['in', 'status', ['draft', 'scheduled']])
+    expect(voidApprovals).toHaveBeenCalledWith(db, CAMP)
   })
 
   it('update refuses a body edit when html_content no longer matches the stored blocks, and still allows a subject edit', async () => {
@@ -316,7 +375,7 @@ describe('cancel_email_campaign', () => {
 
   it('maps not_stoppable to conflict and an error to a failed call', async () => {
     stopCampaign.mockResolvedValue({ ok: false, code: 'not_stoppable', message: 'This campaign is sent, so there is nothing to stop.', current_status: 'sent' })
-    const { db } = makeDb({ select: agentCampaign({ status: 'sent' }) })
+    const { db } = makeDb({ select: agentCampaign({ status: 'sent' }), child: { data: null, error: null } })
     expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db))
       .toEqual({ ok: false, code: 'conflict', message: 'This campaign is sent, so there is nothing to stop.' })
     stopCampaign.mockResolvedValue({ ok: false, code: 'error', message: 'db down' })
@@ -371,9 +430,71 @@ describe('cancel_email_campaign', () => {
       .toEqual({ ok: false, code: 'conflict', message: 'This campaign is draft, so there is nothing to stop.' })
   })
 
+  it('cancel switches off a pending resend on a sent campaign, and refuses once the child exists', async () => {
+    const sent = agentCampaign({ status: 'sent', resend_enabled: true, resend_wait_hours: 24 })
+    const pending = makeDb({ select: sent, child: { data: null, error: null } })
+    const r = await run(cancelEmailCampaign, { campaign_id: CAMP }, pending.db)
+    expect(r).toEqual({ ok: true, data: { outcome: 'resend_cancelled', status: 'sent' } })
+    const child = pending.ops.find((o) => o.calls.some((c) => c[1] === 'parent_campaign_id'))
+    expect(child.calls).toContainEqual(['eq', 'location_id', DUB])
+    const u = pending.kind('update')[0]
+    expect(u.payload).toEqual({ resend_enabled: false })
+    for (const c of [['eq', 'id', CAMP], ['eq', 'location_id', DUB], ['eq', 'status', 'sent'], ['eq', 'resend_enabled', true]]) {
+      expect(u.calls).toContainEqual(c)
+    }
+    expect(stopCampaign).not.toHaveBeenCalled()
+    expect(voidApprovals).not.toHaveBeenCalled()
+
+    const CHILD = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c99'
+    const started = makeDb({ select: sent, child: { data: { id: CHILD }, error: null } })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, started.db))
+      .toEqual({ ok: false, code: 'conflict', message: `The resend has already started. Cancel it instead: ${CHILD}.` })
+    expect(started.kind('update')).toHaveLength(0)
+
+    const unreadable = makeDb({ select: sent, child: { data: null, error: { message: 'down' } } })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, unreadable.db)).toMatchObject({ ok: false, code: 'tool_failed' })
+    expect(unreadable.kind('update')).toHaveLength(0)
+
+    const raced = makeDb({ select: sent, child: { data: null, error: null }, update: { data: [], error: null } })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, raced.db)).toMatchObject({ ok: false, code: 'conflict' })
+  })
+
+  it('a resend child that has already finished is reported as sent, with no cancel hint', async () => {
+    const CHILD = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c99'
+    for (const status of ['sent', 'failed', 'cancelled']) {
+      const { db, kind } = makeDb({ select: agentCampaign({ status: 'sent', resend_enabled: false }), child: { data: { id: CHILD, status }, error: null } })
+      expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db))
+        .toEqual({ ok: false, code: 'conflict', message: 'The resend has already been sent.' })
+      expect(kind('update')).toHaveLength(0)
+    }
+    const live = makeDb({ select: agentCampaign({ status: 'sent', resend_enabled: false }), child: { data: { id: CHILD, status: 'sending' }, error: null } })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, live.db))
+      .toEqual({ ok: false, code: 'conflict', message: `The resend has already started. Cancel it instead: ${CHILD}.` })
+  })
+
+  it('a started resend is refused whatever the parent flag says (the spawner clears it)', async () => {
+    const CHILD = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c99'
+    const { db, kind } = makeDb({ select: agentCampaign({ status: 'sent', resend_enabled: false }), child: { data: { id: CHILD }, error: null } })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db))
+      .toEqual({ ok: false, code: 'conflict', message: `The resend has already started. Cancel it instead: ${CHILD}.` })
+    expect(kind('update')).toHaveLength(0)
+    expect(stopCampaign).not.toHaveBeenCalled()
+  })
+
+  it('a child that appears while the flag is being cleared is reported, not resend_cancelled', async () => {
+    const CHILD = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c99'
+    const answers = [{ data: null, error: null }, { data: { id: CHILD }, error: null }]
+    const { db } = makeDb({
+      select: agentCampaign({ status: 'sent', resend_enabled: true, resend_wait_hours: 24 }),
+      child: () => answers.shift(),
+    })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db))
+      .toEqual({ ok: false, code: 'conflict', message: `The resend has already started. Cancel it instead: ${CHILD}.` })
+  })
+
   it('a sent campaign is never voided through cancel', async () => {
     stopCampaign.mockResolvedValue({ ok: false, code: 'not_stoppable', message: 'This campaign is sent, so there is nothing to stop.', current_status: 'sent' })
-    const { db } = makeDb({ select: agentCampaign({ status: 'sent' }) })
+    const { db } = makeDb({ select: agentCampaign({ status: 'sent' }), child: { data: null, error: null } })
     expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db)).toMatchObject({ ok: false, code: 'conflict' })
     expect(pendingApproval).not.toHaveBeenCalled()
     expect(voidApprovals).not.toHaveBeenCalled()

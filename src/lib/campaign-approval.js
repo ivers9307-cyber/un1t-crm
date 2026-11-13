@@ -15,11 +15,14 @@ import { createHash, randomBytes } from 'node:crypto'
 export const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000
 export const APPROVALS_PER_HOUR = 5
 // Every campaigns column the sender reads that changes who gets what: the
-// eight a tool writes, plus the five a tool never sets but the CRM can (the
-// Duplicate button copies ab_* and postmark_stream onto a draft).
+// eight a tool writes, the five a tool never sets but the CRM can (the
+// Duplicate button copies ab_* and postmark_stream onto a draft), and the
+// three non-opener resend settings (MCPEMAIL.2: a resend switched on, retimed
+// or re-subjected after the test is a different send, so the key changes).
 export const APPROVAL_CONTENT_FIELDS = [
   'location_id', 'subject', 'preview_text', 'from_name', 'from_email', 'reply_to', 'html_content', 'audience_filter',
   'postmark_stream', 'ab_subject_b', 'ab_test_pct', 'ab_wait_hours', 'parent_campaign_id',
+  'resend_enabled', 'resend_wait_hours', 'resend_subject',
 ]
 
 const TABLE = 'campaign_release_approvals'
@@ -62,6 +65,21 @@ export function agentReleaseBlocker(campaign) {
   if (campaign?.parent_campaign_id) return 'This campaign is a resend. Open it in the CRM.'
   if (campaign?.postmark_stream !== 'broadcast') return 'This campaign is not on the marketing stream. Open it in the CRM.'
   return null
+}
+
+/**
+ * The one sentence the test email and the approve page say about a campaign's
+ * non-opener resend, or null when it has none. A null (or empty)
+ * resend_subject reuses the campaign's own subject.
+ */
+export function resendSummary(campaign) {
+  // Judged as the spawner judges it (campaign-resend.js isResendDue): enabled with no hours never fires.
+  if (!campaign?.resend_enabled || !campaign.resend_wait_hours) return null
+  const h = campaign.resend_wait_hours
+  const wait = h === 1 ? '1 hour' : `${h} hours`
+  // Judged as the spawner judges it (campaign-resend.js): an empty string falls back too.
+  const subject = campaign.resend_subject || campaign.subject
+  return `Then resends to people who did not open it, ${wait} after it sends, with the subject "${subject}".`
 }
 
 /** The audience grew past what the person tested: more than 10% AND more than 25 people. */
