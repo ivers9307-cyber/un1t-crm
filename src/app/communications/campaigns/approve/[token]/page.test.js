@@ -76,9 +76,39 @@ describe('/communications/campaigns/approve/[token]', () => {
     }
     expect(text).toMatch(/as soon as you approve/i)
     const props = JSON.parse(screen.getByTestId('form-props').textContent)
-    expect(props).toEqual({ token: TOKEN, label: 'Send to 104 people now', whenLabel: null })
+    expect(props).toEqual({
+      token: TOKEN, label: 'Send to 104 people now', whenLabel: null,
+      notice: 'Nothing has been sent yet. Press the button below to send it.',
+    })
     expect(text).not.toContain('secret body')
     expect(container.querySelector(`a[href="/communications/sent/email/${CAMPAIGN_ID}"]`)).not.toBeNull()
+  })
+
+  // APPROVECOPY.1 — three wording faults seen on the live page (13 Nov 2026).
+  it('says "1 person", not "1 people"', async () => {
+    loadApprovalView.mockResolvedValue({ ...view(), counts: { eligible: 1, matched: 1 } })
+    await renderPage()
+    expect(JSON.parse(screen.getByTestId('form-props').textContent).label).toBe('Send to 1 person now')
+  })
+
+  it('explains a merge tag in the subject instead of leaving it looking broken', async () => {
+    loadApprovalView.mockResolvedValue(view({ campaign: { subject: 'Hello {{first_name}}' } }))
+    const { container } = await renderPage()
+    expect(container.textContent).toContain('Hello {{first_name}}')
+    expect(container.textContent).toMatch(/filled in for each person when it sends/i)
+  })
+
+  it('adds no merge-tag note to a subject without one', async () => {
+    loadApprovalView.mockResolvedValue(view())
+    const { container } = await renderPage()
+    expect(container.textContent).not.toMatch(/filled in for each person/i)
+  })
+
+  it('a scheduled approval says nothing has been scheduled yet', async () => {
+    loadApprovalView.mockResolvedValue(view({ approval: { send_at: '2026-11-13T09:00:00.000Z' } }))
+    await renderPage()
+    expect(JSON.parse(screen.getByTestId('form-props').textContent).notice)
+      .toBe('Nothing has been scheduled yet. Press the button below to schedule it.')
   })
 
   it('names the studio zone and labels the button with the scheduled time', async () => {

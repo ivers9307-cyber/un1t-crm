@@ -96,14 +96,27 @@ export default async function CampaignApprovePage({ params }) {
   const zone = zoneOfLocation(studio)
   const when = approval.send_at ? whenIn(approval.send_at, zone) : null
   const whenLabel = when ? `${when} (${zone})` : null
-  const label = when ? `Schedule for ${when}` : `Send to ${counts.eligible} people now`
+  const people = counts.eligible === 1 ? '1 person' : `${counts.eligible} people`
+  const label = when ? `Schedule for ${when}` : `Send to ${people} now`
+  // APPROVECOPY.1 — opening this page releases nothing, and the page did not
+  // say so: twice the person opened it and took the send for done.
+  const notice = when
+    ? 'Nothing has been scheduled yet. Press the button below to schedule it.'
+    : 'Nothing has been sent yet. Press the button below to send it.'
+  // The stored subject keeps its merge tags; say so, or it reads as broken.
+  const subjectHasTags = /\{\{[^{}]+\}\}/.test(campaign.subject || '')
   const releasable = APPROVABLE_STATUSES.includes(campaign.status)
 
   return (
     <Shell>
       <dl className="space-y-2">
         <Fact label="Campaign">{campaign.name || 'Untitled campaign'}</Fact>
-        <Fact label="Subject">{campaign.subject}</Fact>
+        <Fact label="Subject">
+          {campaign.subject}
+          {subjectHasTags && (
+            <span className="block text-sm text-un1t-subtle">Text in double curly brackets is filled in for each person when it sends.</span>
+          )}
+        </Fact>
         <Fact label="Studio">{studio.name}</Fact>
         <Fact label="Sends as">{sendsAs || 'The studio\'s default address'}</Fact>
         <Fact label="Timing">{whenLabel || 'As soon as you approve'}</Fact>
@@ -111,7 +124,7 @@ export default async function CampaignApprovePage({ params }) {
         <Fact label="Head count now">{counts.eligible}</Fact>
       </dl>
       {releasable ? (
-        <CampaignApproveForm token={token} label={label} whenLabel={whenLabel} />
+        <CampaignApproveForm token={token} label={label} whenLabel={whenLabel} notice={notice} />
       ) : (
         <p className="text-un1t-text">This campaign is {campaign.status}, so it can no longer be released from an approval.</p>
       )}

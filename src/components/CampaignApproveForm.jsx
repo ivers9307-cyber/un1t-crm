@@ -7,7 +7,7 @@
 import { useRef, useState } from 'react'
 import { Button } from '@/components/ui'
 
-export default function CampaignApproveForm({ token, label, whenLabel = null }) {
+export default function CampaignApproveForm({ token, label, whenLabel = null, notice = null }) {
   const [state, setState] = useState('idle') // idle | posting | done | error
   const [message, setMessage] = useState('')
   const inFlight = useRef(false)
@@ -45,6 +45,7 @@ export default function CampaignApproveForm({ token, label, whenLabel = null }) 
   const disabled = state === 'posting' || state === 'done'
   return (
     <div className="space-y-3">
+      {notice && state !== 'done' && <p className="text-sm font-medium text-un1t-text">{notice}</p>}
       <Button type="button" onClick={approve} disabled={disabled}>
         {state === 'posting' ? 'Approving…' : label}
       </Button>
