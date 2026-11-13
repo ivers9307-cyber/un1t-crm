@@ -57,6 +57,30 @@ describe('CampaignApproveForm', () => {
     expect(button.disabled).toBe(false)
   })
 
+  // APPROVECOPY.1 — opening the page sends nothing; the page must say so. The
+  // notice stays until the press succeeds, then gives way to the outcome.
+  it('shows the "nothing has been sent yet" notice until the press succeeds', async () => {
+    const NOTICE = 'Nothing has been sent yet. Press the button below to send it.'
+    let release
+    fetchMock.mockReturnValue(new Promise((r) => { release = r }))
+    render(<CampaignApproveForm token={TOKEN} label="Send to 1 person now" whenLabel={null} notice={NOTICE} />)
+    expect(screen.getByText(NOTICE)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button'))
+    expect(screen.getByText(NOTICE)).toBeTruthy()
+    release(answer(200, { success: true, data: { status: 'queued', scheduled_at: null } }))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/queued/i))
+    expect(screen.queryByText(NOTICE)).toBeNull()
+  })
+
+  it('keeps the notice after a refusal, since nothing was sent', async () => {
+    const NOTICE = 'Nothing has been sent yet. Press the button below to send it.'
+    fetchMock.mockResolvedValue(answer(409, { success: false, error: 'Nothing was sent. Ask Claude to send a new test.' }))
+    render(<CampaignApproveForm token={TOKEN} label="Send to 1 person now" whenLabel={null} notice={NOTICE} />)
+    fireEvent.click(screen.getByRole('button'))
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+    expect(screen.getByText(NOTICE)).toBeTruthy()
+  })
+
   it('the button has type="button"', () => {
     render(<CampaignApproveForm token={TOKEN} label="Send to 104 people now" whenLabel={null} />)
     expect(screen.getByRole('button').getAttribute('type')).toBe('button')
