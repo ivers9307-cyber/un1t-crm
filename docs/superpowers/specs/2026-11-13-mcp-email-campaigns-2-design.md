@@ -200,6 +200,14 @@ for those helpers rather than silence.
    any template used as a booking or event confirmation or reminder.
 4. A template whose body or subject carries a merge tag a campaign cannot
    fill is refused, with the tags named.
+5. Controller rulings made during the build: duplicate's
+   `buildCampaignDuplicate` moved to `src/lib/campaign-duplicate.js`, imported
+   by the route and the tool.
+6. The release button label appends ", then resend" to the existing label.
+7. `resendSummary` is null when the wait hours are missing.
+8. A resend child is found on any sent root campaign whatever the parent's
+   flag, and cancel refuses once it exists.
+9. Templates used by sequence steps stay listable.
 
 ## Left to the builder
 

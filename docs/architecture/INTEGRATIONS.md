@@ -355,6 +355,22 @@ Staff can prepare marketing email campaigns from Claude and cannot send them fro
 
 **Rollout.** Apply mig 830 before the deploy. First use from Claude at Test Studio (draft, count, test, press the link; check `draft -> queued -> sent` and the recipient count), then the negative checks (edit after the test and press the old link: refused; press a used link: refused), then one small real audience at Stillorgan.
 
+### Email campaigns, round two (MCPEMAIL.2)
+
+Design: `docs/superpowers/specs/2026-11-13-mcp-email-campaigns-2-design.md`. No migration. Still no tool can send, and none is in `BRIDGED_TOOL_NAMES`.
+
+**New tools** (six, `src/lib/agent-tools/`, all `emailGate`): `duplicate_email_campaign`, `sample_email_audience`, `create_email_segment`, `update_email_segment`, `list_email_templates`, `create_email_draft_from_template`. `create_email_draft` and `update_email_draft` take `resend` (`after_hours` 1 to 168, optional `subject` <= 200 chars, exact merge tags only). `get_email_campaign` reports `resend` and `resend_child`. `cancel_email_campaign` switches off a pending resend and refuses once the child exists.
+
+**Resend.** A resend to non-openers is approved with the first send, not separately. `APPROVAL_CONTENT_FIELDS` now has 16 fields (adds `resend_enabled`, `resend_wait_hours`, `resend_subject`), so an approval waiting at deploy time is refused once (its key changed) and needs a new test. The test email and the approve page show the resend (the release button reads "...then resend"). The child is created and sent by the existing `run-campaigns` cron (`spawnDueResends`) with no second approval; a child itself is still never released from an approval (`agentReleaseBlocker`).
+
+**Duplicate.** Copies a campaign to a new draft (`buildCampaignDuplicate`, `src/lib/campaign-duplicate.js`, shared with the CRM's Duplicate route). Refuses a source not on the marketing stream. Reports `sends_as` via `describeFromAddress`, so a copied own from address is shown and approved.
+
+**Audience sample.** `sample_email_audience`: at most 50 rows (`PREVIEW_MAX_PAGE_SIZE`) from the eligible audience, each first name, masked email and pipeline stage only; never phone, full email or contact id (`src/lib/email-audience-sample.js`).
+
+**Segments.** `create_email_segment` / `update_email_segment` (name <= 120 chars; a duplicate name is a `conflict`). An edit is refused when any sequence, of any status, starts from the segment. There is no delete tool.
+
+**Templates.** `src/lib/email-templates-for-agents.js` (outside `agent-tools/`). Marketing only: category `transactional`/`reminder` is excluded, as is any template linked as an event-type, event-type-reminder, race confirmation or race reminder template. A template whose body or subject carries a merge tag a campaign cannot fill is refused with the tags named. A template used by sequence steps stays listable. The body is editable in the CRM only.
+
 ## Pay subdomain (`pay.ccfautos.com`)
 
 Buyer-facing deposit pages live on a separate hostname from the CRM. Same Vercel project — multi-domain via hostname-aware middleware. The CRM stays at `crm.un1tdublin.com`; everything except the deposit pages + their backing public API is 404'd on the pay hostname so buyers never see CRM URLs.
