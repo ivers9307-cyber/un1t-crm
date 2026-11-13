@@ -30,6 +30,8 @@ import cancelEmailCampaign from './cancel-email-campaign.js'
 import sendEmailForApproval from './send-email-for-approval.js'
 import duplicateEmailCampaign from './duplicate-email-campaign.js'
 import sampleEmailAudience from './sample-email-audience.js'
+import createEmailSegment from './create-email-segment.js'
+import updateEmailSegment from './update-email-segment.js'
 
 /** @type {ReadonlyArray<ReturnType<typeof import('./registry.js').defineTool>>} */
 export const TOOLS = Object.freeze([
@@ -62,4 +64,6 @@ export const TOOLS = Object.freeze([
   sendEmailForApproval,
   duplicateEmailCampaign,
   sampleEmailAudience,
+  createEmailSegment,
+  updateEmailSegment,
 ])

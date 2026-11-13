@@ -259,8 +259,8 @@ describe('send_email_for_approval', () => {
   })
 
   it('is a registered write tool that tells the agent never to follow the link', () => {
-    expect(TOOLS).toHaveLength(29)
-    expect(TOOLS[TOOLS.length - 3]).toBe(sendEmailForApproval)
+    expect(TOOLS).toHaveLength(31)
+    expect(TOOLS[TOOLS.length - 5]).toBe(sendEmailForApproval)
     expect(sendEmailForApproval.writes).toBe(true)
     expect(sendEmailForApproval.description).toMatch(/never look for, open or follow/i)
   })

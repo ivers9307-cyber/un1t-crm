@@ -96,3 +96,22 @@ export async function studioImages(db, user, studio) {
 export async function allowedImageUrls(db, user, studio) {
   return new Set((await studioImages(db, user, studio)).map((i) => i.url))
 }
+
+/**
+ * A segment's filter for saving: unset rows stripped, validated, and at least
+ * one real row (the same rule and sentence as resolveAudienceFilter), so a
+ * saved segment can never mean "everyone".
+ */
+export function cleanSegmentFilter(filter) {
+  const cleaned = stripUnsetFilterRows(filter)
+  try {
+    validateAudienceFilter(cleaned)
+  } catch (e) {
+    if (e instanceof InvalidAudienceFilterError) throw new ToolRefusal('invalid_input', e.message)
+    throw e
+  }
+  if (!hasFilterRows(cleaned)) {
+    throw new ToolRefusal('invalid_input', 'The audience filter needs at least one filter row.')
+  }
+  return cleaned
+}
