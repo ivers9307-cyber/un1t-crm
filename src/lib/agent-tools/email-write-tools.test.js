@@ -459,6 +459,19 @@ describe('cancel_email_campaign', () => {
     expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, raced.db)).toMatchObject({ ok: false, code: 'conflict' })
   })
 
+  it('a resend child that has already finished is reported as sent, with no cancel hint', async () => {
+    const CHILD = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c99'
+    for (const status of ['sent', 'failed', 'cancelled']) {
+      const { db, kind } = makeDb({ select: agentCampaign({ status: 'sent', resend_enabled: false }), child: { data: { id: CHILD, status }, error: null } })
+      expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, db))
+        .toEqual({ ok: false, code: 'conflict', message: 'The resend has already been sent.' })
+      expect(kind('update')).toHaveLength(0)
+    }
+    const live = makeDb({ select: agentCampaign({ status: 'sent', resend_enabled: false }), child: { data: { id: CHILD, status: 'sending' }, error: null } })
+    expect(await run(cancelEmailCampaign, { campaign_id: CAMP }, live.db))
+      .toEqual({ ok: false, code: 'conflict', message: `The resend has already started. Cancel it instead: ${CHILD}.` })
+  })
+
   it('a started resend is refused whatever the parent flag says (the spawner clears it)', async () => {
     const CHILD = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c99'
     const { db, kind } = makeDb({ select: agentCampaign({ status: 'sent', resend_enabled: false }), child: { data: { id: CHILD }, error: null } })

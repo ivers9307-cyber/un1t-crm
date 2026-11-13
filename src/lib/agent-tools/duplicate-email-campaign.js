@@ -13,7 +13,7 @@ import { throwWriteError } from './_email-draft.js'
 // What buildCampaignDuplicate reads, plus agent_blocks (a CRM duplicate has no
 // use for it). Named columns only.
 const SOURCE_COLS = 'id, location_id, name, subject, preview_text, from_name, from_email, reply_to, design_json, '
-  + 'html_content, audience_filter, template_id, postmark_stream, ab_subject_b, ab_test_pct, ab_wait_hours, agent_blocks'
+  + 'html_content, audience_filter, template_id, postmark_stream, ab_subject_b, ab_test_pct, ab_wait_hours, agent_blocks, parent_campaign_id'
 
 export default defineTool({
   name: 'duplicate_email_campaign',
@@ -40,6 +40,10 @@ export default defineTool({
     if (!source) throw new ToolRefusal('not_found', 'Campaign not found.')
     if (source.postmark_stream !== 'broadcast') {
       throw new ToolRefusal('conflict', 'This is a service email. Duplicate it in the CRM.')
+    }
+
+    if (source.parent_campaign_id) {
+      throw new ToolRefusal('conflict', 'This is a resend. Duplicate the original campaign instead.')
     }
 
     const copy = buildCampaignDuplicate(source, user.id)

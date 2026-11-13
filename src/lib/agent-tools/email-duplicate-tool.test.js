@@ -105,7 +105,7 @@ beforeEach(() => {
 const OTHER = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c99'
 const sentSource = (over = {}) => agentCampaign({
   status: 'sent', name: 'Autumn', design_json: { d: 1 }, template_id: 'tpl-1', postmark_stream: 'broadcast',
-  from_email: 'old@un1t.test', parent_campaign_id: 'p-1', resend_enabled: true, resend_wait_hours: 24, resend_subject: 'Again',
+  from_email: 'old@un1t.test', parent_campaign_id: null, resend_enabled: true, resend_wait_hours: 24, resend_subject: 'Again',
   ab_subject_b: 'B', ab_test_pct: 20, ab_wait_hours: 6, ab_winner: 'a', scheduled_at: '2031-07-02T00:00:00Z',
   total_sent: 50, ...over,
 })
@@ -125,6 +125,13 @@ describe('duplicate_email_campaign', () => {
     const src = ops.find((o) => o.kind === 'select')
     expect(src.calls).toContainEqual(['eq', 'location_id', DUB])
     expect(r.data.campaign).toEqual({ id: CAMP, name: 'Copy of Autumn', status: 'draft' })
+  })
+
+  it('refuses a resend (a source with a parent) and writes nothing', async () => {
+    const { db, kind } = makeDb({ select: sentSource({ parent_campaign_id: 'p-1' }) })
+    const r = await run(duplicateEmailCampaign, { campaign_id: CAMP }, db)
+    expect(r).toEqual({ ok: false, code: 'conflict', message: 'This is a resend. Duplicate the original campaign instead.' })
+    expect(kind('insert')).toHaveLength(0)
   })
 
   it('uses the given name', async () => {

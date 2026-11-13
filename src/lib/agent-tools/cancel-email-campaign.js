@@ -19,7 +19,7 @@ const VOID_AFTER_STOP_FAILED = 'The campaign was stopped, but withdrawing the ea
 async function findResendChild(db, studio, campaign) {
   const { data: child, error } = await db
     .from('campaigns')
-    .select('id')
+    .select('id, status')
     .eq('parent_campaign_id', campaign.id)
     .eq('location_id', studio.id)
     .limit(1)
@@ -28,7 +28,10 @@ async function findResendChild(db, studio, campaign) {
   return child ?? null
 }
 
-const resendStarted = (child) => new ToolRefusal('conflict', `The resend has already started. Cancel it instead: ${child.id}.`)
+const FINISHED_STATUSES = ['sent', 'failed', 'cancelled']
+const resendStarted = (child) => new ToolRefusal('conflict', FINISHED_STATUSES.includes(child.status)
+  ? 'The resend has already been sent.'
+  : `The resend has already started. Cancel it instead: ${child.id}.`)
 
 // A sent root campaign: a started resend is its own campaign (cancel that one);
 // a pending one is just resend_enabled on the parent. Returns null when this
