@@ -86,7 +86,8 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
           ad_provider: a.meta_ad_id ? 'meta' : undefined,
           ad_external_id: a.meta_ad_id,
           utm_campaign: a.utm_campaign, utm_content: a.utm_content, utm_term: a.utm_term,
-          meta: params,
+          // TRIALLEAK.1 — source and medium travel in the event's `meta` (jsonb).
+          meta: { ...params, ...(a.utm_source ? { utm_source: a.utm_source } : {}), ...(a.utm_medium ? { utm_medium: a.utm_medium } : {}) },
         }),
       }).catch(() => {})
     } catch { /* never block the funnel */ }

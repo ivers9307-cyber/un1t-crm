@@ -27,6 +27,7 @@ import TrialTermsTick from './TrialTermsTick'
 import ClassPickStep, { useClassList, ctaLabelFor } from './ClassPickStep'
 import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERROR, TRIAL_LINK, TRIAL_SUMMARY } from './trial-card'
 import { customerErrorText } from '@/lib/page-request-errors'
+import { cleanAdValue } from '@/lib/campaign-funnel-attribution'
 
 const CLAIM_PATH = '/api/public/corp-claims'
 
@@ -35,7 +36,8 @@ function utmFromUrl() {
     const p = new URLSearchParams(window.location.search)
     const out = {}
     for (const k of ['utm_source', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid']) {
-      const v = p.get(k)
+      // TRIALLEAK.1 — an unfilled Meta macro (`{{adset.id}}`) is no value.
+      const v = cleanAdValue(p.get(k))
       if (v) out[k] = v.slice(0, k === 'fbclid' ? 500 : 200)
     }
     const fbp = document.cookie.match(/(?:^|;\s*)_fbp=([^;]+)/)
