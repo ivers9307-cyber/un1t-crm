@@ -296,9 +296,9 @@ describe('reReviewReasons', () => {
   it('returns each reason alone for each of the four edits', () => {
     for (const [reason, changes] of cases) expect(reReviewReasons(published, changes)).toEqual([reason])
   })
-  it('returns every reason in RE_REVIEW_REASONS order when all four change', () => {
-    const all = { race_date: '2026-09-08', non_member_fee_cents: 3000, pricing_tiers: tiersB, waves: [{ id: 'w1', start_time: '11:00' }] }
-    expect(reReviewReasons(published, all)).toEqual(['date', 'price', 'tiers', 'session_time'])
+  it('returns every reason in RE_REVIEW_REASONS order when all of them change', () => {
+    const all = { race_date: '2026-09-08', non_member_fee_cents: 3000, pricing_tiers: tiersB, waves: [{ id: 'w1', start_time: '11:00' }], venue_location_id: 'a-studio' }
+    expect(reReviewReasons(published, all)).toEqual(['date', 'price', 'tiers', 'session_time', 'studio'])
     expect(reReviewReasons(published, all)).toEqual(RE_REVIEW_REASONS)
   })
   it('returns [] for a cosmetic edit, an added session and a removed session', () => {
@@ -338,5 +338,31 @@ describe('editChangesFromInput', () => {
   })
   it('tolerates a body with no sessions array', () => {
     expect(editChangesFromInput({ race_date: '2026-09-01', ticket_price_cents: 0 }).waves).toEqual([])
+  })
+})
+
+describe('reReviewReasons — the studio an event is held at (SHELLYEVENTS.1)', () => {
+  const published = { status: 'published', race_date: '2026-12-05', non_member_fee_cents: 1000, pricing_tiers: null, waves: [], venue_location_id: null }
+  const same = { race_date: '2026-12-05', non_member_fee_cents: 1000, pricing_tiers: null, waves: [] }
+
+  it('moving a published event into a studio, or to another studio, goes back to review', () => {
+    expect(reReviewReasons(published, { ...same, venue_location_id: 'hatch' })).toEqual(['studio'])
+    expect(reReviewReasons({ ...published, venue_location_id: 'hatch' }, { ...same, venue_location_id: 'stillorgan' })).toEqual(['studio'])
+    expect(computeEditTransition(published, { ...same, venue_location_id: 'hatch' })).toEqual({ status: 'pending_review', reReview: true })
+  })
+
+  it('an unchanged studio, a move out to somewhere else, and a body without the key do not', () => {
+    expect(reReviewReasons({ ...published, venue_location_id: 'hatch' }, { ...same, venue_location_id: 'hatch' })).toEqual([])
+    expect(reReviewReasons({ ...published, venue_location_id: 'hatch' }, { ...same, venue_location_id: null })).toEqual([])
+    expect(reReviewReasons({ ...published, venue_location_id: 'hatch' }, same)).toEqual([])
+  })
+
+  it('a draft never re-reviews', () => {
+    expect(reReviewReasons({ ...published, status: 'draft' }, { ...same, venue_location_id: 'hatch' })).toEqual([])
+  })
+
+  it('editChangesFromInput carries the studio only when the body does', () => {
+    expect('venue_location_id' in editChangesFromInput({ sessions: [] })).toBe(false)
+    expect(editChangesFromInput({ sessions: [], venue_location_id: 'hatch' }).venue_location_id).toBe('hatch')
   })
 })

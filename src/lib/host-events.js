@@ -60,13 +60,14 @@ export function hostEventDefaults() {
 // EVENT-SLUG.1 — slugs come from `@/lib/event-slug` (place-date-time);
 // the name-based deriveSlug that lived here is gone.
 
-export const RE_REVIEW_REASONS = ['date', 'price', 'tiers', 'session_time']
+export const RE_REVIEW_REASONS = ['date', 'price', 'tiers', 'session_time', 'studio']
 
 export const RE_REVIEW_REASON_LABEL = {
   date: 'the date',
   price: 'the standard price',
   tiers: 'a pricing tier',
   session_time: "an existing session's start time",
+  studio: 'the studio it is held at',
 }
 
 // HOSTPORTAL.2 — the ONE rule for "this edit takes a published event off
@@ -102,7 +103,17 @@ export function reReviewReasons(current, changes) {
   const tiersChanged = 'pricing_tiers' in changes
     && JSON.stringify(canonicalTiers(changes.pricing_tiers)) !== JSON.stringify(canonicalTiers(current.pricing_tiers))
 
-  const hit = { date: dateChanged, price: priceChanged, tiers: tiersChanged, session_time: waveTimeChanged }
+  // SHELLYEVENTS.1 — moving a published event INTO a studio (or to a different
+  // one) is staff's to approve: the link holds that studio's Shelly timers on
+  // for the event (src/lib/shelly/studio-events.js), and the first review
+  // approved a different place. Moving it OUT to "somewhere else" switches
+  // nothing on, so it does not re-review. Judged only when the body carries
+  // the key (a form loaded before the picker existed sends none).
+  const studioChanged = 'venue_location_id' in changes
+    && changes.venue_location_id != null
+    && changes.venue_location_id !== (current.venue_location_id ?? null)
+
+  const hit = { date: dateChanged, price: priceChanged, tiers: tiersChanged, session_time: waveTimeChanged, studio: studioChanged }
   return RE_REVIEW_REASONS.filter((r) => hit[r])
 }
 
@@ -117,6 +128,7 @@ export function editChangesFromInput(input) {
     non_member_fee_cents: input.ticket_price_cents,
     pricing_tiers: input.pricing_tiers ?? null,
     waves: sessions.filter((s) => s.id).map((s) => ({ id: s.id, start_time: s.start_time })),
+    ...('venue_location_id' in input ? { venue_location_id: input.venue_location_id ?? null } : {}),
   }
 }
 

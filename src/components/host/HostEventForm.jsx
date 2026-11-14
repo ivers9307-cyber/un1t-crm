@@ -196,6 +196,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     non_member_fee_cents: initial?.non_member_fee_cents,
     race_date: initial?.race_date,
     pricing_tiers: initial?.pricing_tiers,
+    venue_location_id: initial?.venue_location_id ?? null,
     waves: (initial?.sessions || []).map((s) => ({ id: s.id, start_time: s.start_time })),
   })
 

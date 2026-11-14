@@ -82,6 +82,7 @@ export async function PUT(request, props) {
     race_date: current.race_date,
     non_member_fee_cents: current.non_member_fee_cents,
     pricing_tiers: current.pricing_tiers ?? null,
+    venue_location_id: current.venue_location_id ?? null,
     waves: sessionsFromWaves(current.race_waves).map((s) => ({ id: s.id, start_time: s.start_time })),
   }
   const transition = computeEditTransition(currentForDiff, changes)
