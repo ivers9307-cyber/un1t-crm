@@ -9,7 +9,8 @@
 //                         and wants `resolve` once staff have checked Glofox.
 //   { action: 'resolve' } staff put the plan on the account by hand in
 //                         Glofox: the row is granted (manual), the buyer gets
-//                         the confirmation email.
+//                         the confirmation email (unless notify:false, which
+//                         marks it granted and sends nothing).
 //   { action: 'handled' } a help_requested row (nobody paid; the buyer asked
 //                         for a call): staff rang them, the row is closed.
 //                         No email.
@@ -30,7 +31,10 @@ import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
-const bodySchema = z.object({ action: z.enum(['retry', 'resolve', 'handled']) })
+const bodySchema = z
+  .object({ action: z.enum(['retry', 'resolve', 'handled']), notify: z.boolean().optional() })
+  // notify:false ("mark granted, no email") only makes sense for resolve.
+  .refine((b) => b.notify !== false || b.action === 'resolve', { message: 'notify:false is only valid with resolve', path: ['notify'] })
 
 // retry/resolve act on a paid row the grant stalled on; handled acts on a help row.
 const REVIEWABLE = new Set(['needs_review', 'failed'])
@@ -44,7 +48,7 @@ export async function POST(request, props) {
   }
   const validation = await validateBody(request, bodySchema)
   if (!validation.ok) return validation.response
-  const { action } = validation.data
+  const { action, notify } = validation.data
 
   const db = createServerClient()
   const { data: row, error: readErr } = await db
@@ -114,6 +118,9 @@ export async function POST(request, props) {
   if (!upd || upd.length === 0) return NextResponse.json({ success: false, error: 'in_progress' }, { status: 409 })
 
   let emailed = false
+  if (notify === false) {
+    return NextResponse.json({ success: true, data: { status: 'granted', emailed: false } })
+  }
   try {
     const r = await sendTrialPurchaseEmail(db, { purchase: { ...row, status: 'granted', granted_at: now }, kind: 'granted' })
     emailed = r?.status === 'sent'

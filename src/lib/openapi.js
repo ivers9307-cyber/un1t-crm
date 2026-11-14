@@ -842,8 +842,8 @@ registry.registerPath({
   path: '/api/trial-purchases/{id}/review',
   tags: ['Approvals'],
   summary: 'Retry or hand-resolve a paid trial purchase whose Glofox grant failed, or close a Needs-a-call help request (PAIDTRIAL.2, TRIALSTUDIO.8)',
-  description: "Session auth + the approvals_offer_purchases grant, judged at the purchase's studio; ids outside the caller's studios return 404. Body { action: 'retry' | 'resolve' | 'handled' }. handled closes a help_requested row (nobody paid; the buyer asked for a call) with no email. retry puts a needs_review row back in the queue (the write-ahead grant marker is kept, so a purchase Glofox never answered is never bought twice); resolve marks it granted by hand and emails the buyer.",
-  request: { body: { content: { 'application/json': { schema: z.object({ action: z.enum(['retry', 'resolve', 'handled']) }) } } } },
+  description: "Session auth + the approvals_offer_purchases grant, judged at the purchase's studio; ids outside the caller's studios return 404. Body { action: 'retry' | 'resolve' | 'handled' }. handled closes a help_requested row (nobody paid; the buyer asked for a call) with no email. retry puts a needs_review row back in the queue (the write-ahead grant marker is kept, so a purchase Glofox never answered is never bought twice); resolve marks it granted by hand and emails the buyer; resolve with notify:false marks it granted without the confirmation email (notify:false with any other action is a 400).",
+  request: { body: { content: { 'application/json': { schema: z.object({ action: z.enum(['retry', 'resolve', 'handled']), notify: z.boolean().optional() }) } } } },
   responses: {
     200: { description: '{ status } (queued or granted), or { already: true }' },
     401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },

@@ -114,6 +114,27 @@ describe('POST /api/trial-purchases/[id]/review (PAIDTRIAL.2)', () => {
     expect(mocks.publish).not.toHaveBeenCalled()
   })
 
+  it('resolve with notify:false grants and sends no email', async () => {
+    const r = await POST(req({ action: 'resolve', notify: false }), props)
+    expect(r.status).toBe(200)
+    expect((await r.json()).data).toEqual({ status: 'granted', emailed: false })
+    expect(mocks.updates[0].status).toBe('granted')
+    expect(mocks.updates[0].granted_at).toBeTruthy()
+    expect(mocks.email).not.toHaveBeenCalled()
+  })
+
+  it('resolve without notify still emails', async () => {
+    const r = await POST(req({ action: 'resolve', notify: true }), props)
+    expect((await r.json()).data).toEqual({ status: 'granted', emailed: true })
+    expect(mocks.email).toHaveBeenCalledTimes(1)
+  })
+
+  it('notify:false with retry or handled is refused', async () => {
+    expect((await POST(req({ action: 'retry', notify: false }), props)).status).toBe(400)
+    expect((await POST(req({ action: 'handled', notify: false }), props)).status).toBe(400)
+    expect(mocks.updates).toHaveLength(0)
+  })
+
   it("handled closes a help_requested row and sends no email", async () => {
     mocks.row = { id: 'tp1', status: 'help_requested', payment_status: null, location_id: 'loc1', customer_email: 'r@x.com' }
     const r = await POST(req({ action: 'handled' }), props)
