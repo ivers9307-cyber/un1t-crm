@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic'
 async function loadOwn(db, session, id) {
   const { data } = await db
     .from('race_events')
-    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, venue_location_id, studio_hold_minutes, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, rating_email_subject, rating_email_intro, series_id, pricing_tiers, registration_questions, duration_minutes, race_waves ( id, start_time, capacity, label, display_order )')
+    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, venue_location_id, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, rating_email_subject, rating_email_intro, series_id, pricing_tiers, registration_questions, duration_minutes, race_waves ( id, start_time, capacity, label, display_order )')
     .eq('id', id)
     .maybeSingle()
   if (!data || data.host_id !== session.host.id) return null
@@ -84,7 +84,6 @@ export async function PUT(request, props) {
     pricing_tiers: current.pricing_tiers ?? null,
     venue_location_id: current.venue_location_id ?? null,
     duration_minutes: current.duration_minutes ?? null,
-    studio_hold_minutes: current.studio_hold_minutes ?? null,
     waves: sessionsFromWaves(current.race_waves).map((s) => ({ id: s.id, start_time: s.start_time })),
   }
   const transition = computeEditTransition(currentForDiff, changes)

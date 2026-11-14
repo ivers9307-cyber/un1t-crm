@@ -19,6 +19,8 @@ vi.mock('@/lib/followup-owned-sequences', () => ({ followupOwnedSequenceIds: vi.
 vi.mock('@/lib/sequence-access', () => ({ canCloneSequenceAt: vi.fn(() => false) }))
 vi.mock('@/components/automations/ClassClimateCard', () => ({ default: (p) => <div>{`climate:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
 vi.mock('@/components/automations/BathroomClimateCard', () => ({ default: (p) => <div>{`bathroom:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
+// SHELLYEVENTS.3 — the studio's event hold card (its own tests: EventHoldCard.test.jsx).
+vi.mock('@/components/automations/EventHoldCard', () => ({ default: (p) => { seen.eventHold = p; return <div>{`event-hold:${p.locationId}`}</div> } }))
 vi.mock('@/components/automations/ScreenModeCard', () => ({
   default: (p) => <div data-testid="screens-card">{`screens:${p.screens.map((s) => s.device_name).join(',')}:timetable=${p.hasTimetable}:enabled=${Boolean(p.initialEnabled)}:loc=${p.locationId}:pkg=${p.initialConfig?.class_app_package ?? ''}`}</div>,
 }))

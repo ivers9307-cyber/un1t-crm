@@ -324,10 +324,9 @@ export async function POST(request) {
       pricing_tiers: body.pricing_tiers ?? null,
       registration_questions: body.registration_questions ?? null,
       duration_minutes: body.duration_minutes ?? null,
-      // SHELLYEVENTS.2 — where it is held and how long it holds the studio on.
+      // SHELLYEVENTS.2 — where it is held.
       venue_location_id: venueStudio.venueLocationId,
       held_offsite: body.held_offsite ?? false,
-      studio_hold_minutes: body.studio_hold_minutes ?? null,
       wave_window_minutes: body.wave_window_minutes ?? null,
       entry_policy: body.entry_policy ?? null,
     })

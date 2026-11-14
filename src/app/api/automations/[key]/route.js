@@ -9,6 +9,7 @@ import { getAutomation } from '@/lib/automations/registry'
 import { SCREEN_MODE_KEY, resolveScreenConfig, PACKAGE_NAME_RE, PACKAGE_NAME_MAX } from '@/lib/screen-mode'
 import { ringScreens } from '@/lib/screen-doorbell'
 import { logWarn } from '@/lib/log'
+import { EVENT_HOLD_KEY, MIN_EVENT_HOLD_MINUTES, MAX_EVENT_HOLD_MINUTES } from '@/lib/event-hold'
 
 export const runtime = 'nodejs'
 
@@ -85,6 +86,16 @@ export async function PUT(request, { params }) {
     config = { ...resolveScreenConfig(raw), device_names: screenNames }
   }
 
+  // SHELLYEVENTS.3 — event_hold is one number: how long an event held at the
+  // studio keeps it on. Stored as exactly { hold_minutes }; anything else in
+  // the body is dropped, and a value the readers would not accept is refused
+  // here rather than silently read as the default.
+  if (key === EVENT_HOLD_KEY) {
+    const n = body.config?.hold_minutes
+    if (!Number.isInteger(n) || n < MIN_EVENT_HOLD_MINUTES || n > MAX_EVENT_HOLD_MINUTES) return bad('bad_hold_minutes')
+    config = { hold_minutes: n }
+  }
+
   const db = createServerClient()
 
   if (screenNames?.length) {
@@ -104,7 +115,7 @@ export async function PUT(request, { params }) {
   }
 
   // device_ids belong to the climate keys; screens never send them.
-  const wanted = key === SCREEN_MODE_KEY ? [] : (body.config?.device_ids || [])
+  const wanted = key === SCREEN_MODE_KEY || key === EVENT_HOLD_KEY ? [] : (body.config?.device_ids || [])
   if (wanted.length) {
     const { data: owned, error: devErr } = await db
       .from('ac_devices')

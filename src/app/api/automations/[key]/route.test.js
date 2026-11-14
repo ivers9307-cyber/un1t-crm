@@ -503,3 +503,37 @@ describe('PUT /api/automations/screen_mode — config validation', () => {
     expect(ringScreens).not.toHaveBeenCalled()
   })
 })
+
+// SHELLYEVENTS.3 — event_hold is one number per studio.
+describe('PUT /api/automations/event_hold', () => {
+  const LOC = 'a0000000-0000-0000-0000-000000000001'
+  const owner = { role: 'owner', id: 'u1', rolesByLocation: { [LOC]: 'owner' } }
+  const put = (config) => PUT(req({ location_id: LOC, enabled: true, config }), { params: Promise.resolve({ key: 'event_hold' }) })
+
+  it('stores exactly { hold_minutes }, dropping anything else in the body', async () => {
+    getCurrentUser.mockResolvedValue(owner)
+    const upsert = vi.fn(() => ({ select: () => ({ single: async () => ({ data: { automation_key: 'event_hold' }, error: null }) }) }))
+    createServerClient.mockReturnValue({ from: () => ({ upsert }) })
+    const res = await put({ hold_minutes: 180, device_ids: ['a0000000-0000-0000-0000-00000000dead'], extra: 'x' })
+    expect((await res.json()).success).toBe(true)
+    expect(upsert.mock.calls[0][0]).toMatchObject({ location_id: LOC, automation_key: 'event_hold', config: { hold_minutes: 180 } })
+    expect(upsert.mock.calls[0][0].config).toEqual({ hold_minutes: 180 })
+  })
+
+  it('refuses a missing, fractional or out-of-range value before any write', async () => {
+    getCurrentUser.mockResolvedValue(owner)
+    const upsert = vi.fn()
+    createServerClient.mockReturnValue({ from: () => ({ upsert }) })
+    for (const config of [undefined, {}, { hold_minutes: 5 }, { hold_minutes: 2000 }, { hold_minutes: 90.5 }, { hold_minutes: '180' }]) {
+      const res = await put(config)
+      expect(res.status, JSON.stringify(config)).toBe(400)
+      expect((await res.json()).error).toBe('bad_hold_minutes')
+    }
+    expect(upsert).not.toHaveBeenCalled()
+  })
+
+  it('a staff member cannot change it', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'staff', id: 'u2', rolesByLocation: { [LOC]: 'staff' } })
+    expect((await put({ hold_minutes: 180 })).status).toBe(403)
+  })
+})

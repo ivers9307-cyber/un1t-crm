@@ -173,10 +173,10 @@ function ReviewItem({ event, onReviewed }) {
           >
             Reject
           </Button>
-          {/* SHELLYEVENTS.2 — the studio it is held at and how long it holds
-              the studio on are staff's to set, on the event's own edit page. */}
+          {/* SHELLYEVENTS.2 — staff can set the studio it is held at on the
+              event's own edit page. */}
           <Link href={`/events/${event.id}/edit`} className="text-xs text-un1t-subtle underline hover:text-un1t-text">
-            Edit event (studio and hold time)
+            Edit event (set the studio)
           </Link>
         </div>
       )}

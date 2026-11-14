@@ -18,6 +18,8 @@ import AutomationsFlowList from '@/components/automations/AutomationsFlowList'
 import ClassClimateCard from '@/components/automations/ClassClimateCard'
 import BathroomClimateCard from '@/components/automations/BathroomClimateCard'
 import ScreenModeCard from '@/components/automations/ScreenModeCard'
+import EventHoldCard from '@/components/automations/EventHoldCard'
+import { EVENT_HOLD_KEY } from '@/lib/event-hold'
 
 export const dynamic = 'force-dynamic'
 
@@ -55,6 +57,8 @@ export default async function AutomationsPage() {
   let screens = []
   let hasTimetable = false
   let screenMode = null
+  // SHELLYEVENTS.3 — the studio's event hold setting (its own card, outside the gate).
+  let eventHoldConfig = null
   if (canCurated) {
     // PROFILESPREAD.1 — Glofox presence read by id (the user object no
     // longer carries settings). Booleans only reach the client; a failed
@@ -72,7 +76,7 @@ export default async function AutomationsPage() {
     const byKey = Object.fromEntries((rows || []).map((r) => [r.automation_key, r]))
 
     cards = AUTOMATIONS
-      .filter((a) => a.key !== 'class_climate' && a.key !== 'bathroom_climate' && a.key !== 'screen_mode')
+      .filter((a) => a.key !== 'class_climate' && a.key !== 'bathroom_climate' && a.key !== 'screen_mode' && a.key !== EVENT_HOLD_KEY)
       .map((a) => ({
         key: a.key, label: a.label, description: a.description,
         supportsBackfill: a.supportsBackfill, reviewBase: a.reviewBase,
@@ -88,6 +92,7 @@ export default async function AutomationsPage() {
     climateDevices = devices || []
     const row = byKey['class_climate']
     climate = { enabled: Boolean(row?.enabled), config: row?.config || {} }
+    eventHoldConfig = byKey[EVENT_HOLD_KEY]?.config || null
     const bathroomRow = byKey['bathroom_climate']
     bathroom = { enabled: Boolean(bathroomRow?.enabled), config: bathroomRow?.config || {} }
 
@@ -219,6 +224,13 @@ export default async function AutomationsPage() {
             />
           </div>
         </MembershipSourceGate>
+      )}
+      {/* SHELLYEVENTS.3 — outside the gate on purpose: events count at every
+          studio, whatever its membership source (Hatch's declares no schedule). */}
+      {canCurated && location?.id && (
+        <div className="space-y-4">
+          <EventHoldCard locationId={location.id} locationName={location.name || ''} initialConfig={eventHoldConfig} />
+        </div>
       )}
       {/* SCREENMODE.12 — outside the gate on purpose; see the reads above. */}
       {canCurated && screens.length > 0 && (
