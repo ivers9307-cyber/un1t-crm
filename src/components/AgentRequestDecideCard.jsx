@@ -183,7 +183,7 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
       const res = await fetch(`/api/agent/membership-requests/${item.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, ...(silent ? { silent: true } : {}), decision_note, ...(item.kind === 'cancellation' && endDate ? { end_date: endDate } : {}) }),
+        body: JSON.stringify({ status, ...(silent ? { silent: true } : {}), decision_note, ...(!silent && item.kind === 'cancellation' && endDate ? { end_date: endDate } : {}) }),
       })
       const data = await res.json()
       if (!data.success) {
@@ -299,6 +299,8 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
         </span>
       )}
       kind={kindLabel}
+      sourceClassName="bg-un1t-border/30 text-mia border border-un1t-border"
+      kindClassName={KIND_CHIP[item.kind] || DEFAULT_KIND_CHIP}
       state={isFailedItem && !outcome ? { label: 'Failed', tone: 'red' } : undefined}
       name={item.contactName || 'Customer'}
       meta={item.channel ? `via ${item.channel}` : undefined}
@@ -377,7 +379,7 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
         </p>
       )}
       {/* CANCEL-FORM.5 — the end date on a membership cancellation. */}
-      {!outcome && item.kind === 'cancellation' && (
+      {!outcome && !clearOpen && item.kind === 'cancellation' && (
         <div className="flex items-center gap-2 flex-wrap text-xs">
           <label className="text-un1t-muted" htmlFor={`end-${item.id}`}>Membership ends</label>
           <input id={`end-${item.id}`} type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)}

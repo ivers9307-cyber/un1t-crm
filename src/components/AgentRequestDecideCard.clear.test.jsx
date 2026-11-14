@@ -65,3 +65,32 @@ describe('AgentRequestDecideCard clear', () => {
     expect(onDecided).toHaveBeenCalledWith('r1', ok.request)
   })
 })
+
+describe('AgentRequestDecideCard chips and bodies', () => {
+  const cancel = { ...base, kind: 'cancellation', details: { requested_end_date: '2026-12-01' } }
+
+  it('clearing a cancellation card sends no end_date', async () => {
+    render(<AgentRequestDecideCard item={cancel} />)
+    expect(screen.getByLabelText('Membership ends')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    expect(screen.queryByLabelText('Membership ends')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    await screen.findByText('Cleared. The customer was not told.')
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ status: 'declined', silent: true, decision_note: null })
+  })
+
+  it("a cancellation card's kind chip is red and the MIA chip keeps text-mia", () => {
+    const { container } = render(<AgentRequestDecideCard item={cancel} />)
+    const chips = [...container.querySelectorAll('span.uppercase')]
+    expect(chips.some((c) => /text-red-700/.test(c.className))).toBe(true)
+    expect(chips.some((c) => c.textContent.includes('MIA') && /text-mia/.test(c.className))).toBe(true)
+  })
+
+  it('Decline and tell them, then Confirm, sends no silent key', async () => {
+    render(<AgentRequestDecideCard item={base} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Decline and tell them' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm decline' }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    expect('silent' in JSON.parse(fetch.mock.calls[0][1].body)).toBe(false)
+  })
+})

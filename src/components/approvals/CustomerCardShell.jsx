@@ -23,13 +23,14 @@ const CHIP = 'text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded'
 export default function CustomerCardShell({
   source, kind, state, name, meta, when, amount,
   summary, children, contact, links, outcome, actions, quietAction, error,
+  sourceClassName, kindClassName,
 }) {
   return (
     <div className="border border-un1t-border rounded-lg p-4 bg-un1t-surface space-y-3">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0 flex items-center gap-2 flex-wrap">
-          {source && <span className={`${CHIP} bg-un1t-border/30 text-un1t-text border border-un1t-border`}>{source}</span>}
-          {kind && <span className={`${CHIP} bg-un1t-border/30 text-un1t-subtle border border-un1t-border`}>{kind}</span>}
+          {source && <span className={`${CHIP} ${sourceClassName || 'bg-un1t-border/30 text-un1t-text border border-un1t-border'}`}>{source}</span>}
+          {kind && <span className={`${CHIP} ${kindClassName || 'bg-un1t-border/30 text-un1t-subtle border border-un1t-border'}`}>{kind}</span>}
           {state && <span className={`${CHIP} ${STATE_TONES[state.tone] || STATE_TONES.neutral}`}>{state.label}</span>}
           <span className="text-sm font-semibold text-un1t-text">{name}</span>
           {meta && <span className={`${CHIP} bg-un1t-border/30 text-un1t-subtle border border-un1t-border`}>{meta}</span>}
