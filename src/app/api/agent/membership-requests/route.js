@@ -3,6 +3,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
+import { logWarn } from '@/lib/log'
 
 // RADAR-AGENT Phase 2 — operator approval queue for agent-captured
 // requests. Two forms:
@@ -15,6 +16,21 @@ import { selectAll } from '@/lib/select-all'
 //   GET (no params) — the full active-location history for the
 //     /settings/customer-agent/requests review page. Manager+ (the
 //     settings surface keeps its manager gate).
+
+// APPROVALSQ.2 — who decided each row. One `profiles` read by id with named
+// columns (server side only: the client gets the name, never the id or the
+// profile row). A failed read leaves every name null and is logged; it never
+// fails the list.
+async function attachDeciderNames(db, rows) {
+  const ids = [...new Set(rows.map(r => r.decided_by).filter(Boolean))]
+  const names = new Map()
+  if (ids.length) {
+    const { data, error } = await db.from('profiles').select('id, full_name').in('id', ids)
+    if (error) logWarn('agent-membership-requests', 'decider name read failed', { err: error.message })
+    else for (const p of data || []) names.set(p.id, p.full_name || null)
+  }
+  return rows.map(({ decided_by, ...rest }) => ({ ...rest, decided_by_name: (decided_by && names.get(decided_by)) || null }))
+}
 
 export async function GET(request) {
   const user = await getCurrentUser()
@@ -31,7 +47,7 @@ export async function GET(request) {
       return NextResponse.json({ success: true, requests: [] })
     }
     const { data, error } = await db.from('agent_membership_requests')
-      .select('id, kind, channel, conversation_id, location_id, contact_id, status, details, customer_note, retention_flagged, decided_at, decision_note, created_at, contacts(id, name, first_name)')
+      .select('id, kind, channel, conversation_id, location_id, contact_id, status, details, customer_note, retention_flagged, decided_at, decided_by, decision_note, created_at, contacts(id, name, first_name)')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true })
       .limit(100)
@@ -48,7 +64,7 @@ export async function GET(request) {
     if (rows.length && allowedIds !== null && !allowedIds.includes(rows[0].location_id)) {
       return NextResponse.json({ success: true, requests: [] })
     }
-    return NextResponse.json({ success: true, requests: rows })
+    return NextResponse.json({ success: true, requests: await attachDeciderNames(db, rows) })
   }
 
   if (!MANAGER_ROLES.includes(user.role)) {
@@ -69,7 +85,7 @@ export async function GET(request) {
       // lookup on the review page (manager+ surface, same fields the
       // /approvals provider exposes). AGENT-FUNNEL-CREDITS.1 adds the synced
       // membership/credit fields for the account summary line.
-      .select('id, kind, channel, conversation_id, status, details, customer_note, retention_flagged, decided_at, decision_note, created_at, contacts(id, name, first_name, email, phone, glofox_member_id, glofox_membership_plan, glofox_membership_status, glofox_membership_state, trial_credits_remaining)')
+      .select('id, kind, channel, conversation_id, status, details, customer_note, retention_flagged, decided_at, decided_by, decision_note, created_at, contacts(id, name, first_name, email, phone, glofox_member_id, glofox_membership_plan, glofox_membership_status, glofox_membership_state, trial_credits_remaining)')
       .eq('location_id', locationId)
       .order('status', { ascending: true })   // pending sorts first alphabetically
       .order('created_at', { ascending: false })
@@ -78,5 +94,5 @@ export async function GET(request) {
   } catch (err) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 })
   }
-  return NextResponse.json({ success: true, requests: data })
+  return NextResponse.json({ success: true, requests: await attachDeciderNames(db, data || []) })
 }

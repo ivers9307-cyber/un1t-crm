@@ -88,4 +88,18 @@ describe('ApprovalActionCard clear', () => {
     expect(container.textContent).not.toContain('please follow up')
     expect(container.textContent).not.toContain('Next steps')
   })
+
+  it('a cleared request shows who cleared it and when, and still no follow-up line', () => {
+    render(<ApprovalActionCard request={{ ...request, status: 'declined', details: { cleared: { silent: true, from_status: 'pending' } }, decided_by_name: 'Sarah', decided_at: '2026-11-14T16:20:00Z' }} />)
+    const line = screen.getByText('Cleared, customer not told.').parentElement.textContent
+    expect(line).toMatch(/Cleared, customer not told\. by Sarah, 14 Nov 2026, \d\d:\d\d/)
+    expect(line).not.toContain('please follow up')
+  })
+
+  it('a cleared request with no name shows only the time', () => {
+    render(<ApprovalActionCard request={{ ...request, status: 'declined', details: { cleared: { silent: true } }, decided_at: '2026-11-14T16:20:00Z' }} />)
+    const line = screen.getByText('Cleared, customer not told.').parentElement.textContent
+    expect(line).toMatch(/14 Nov 2026/)
+    expect(line).not.toContain(' by ')
+  })
 })

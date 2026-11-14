@@ -76,4 +76,27 @@ describe('AgentRequestsClient clear', () => {
     expect(row('d1').queryByText('declined')).toBeNull()
     expect(row('d2').getByText('declined')).toBeTruthy()
   })
+
+  it('shows who decided and when after the status label (cleared, declined, and no name)', async () => {
+    list = [
+      { ...clearedRow, decided_at: '2026-11-14T16:20:00Z', decided_by_name: 'Sarah' },
+      { ...declinedRow, decided_at: '2026-11-13T09:05:00Z', decided_by_name: 'Tom' },
+      { ...declinedRow, id: 'd3', decided_at: '2026-11-12T09:05:00Z', decided_by_name: null },
+    ]
+    render(<AgentRequestsClient />)
+    await screen.findByText('Cleared, customer not told')
+    expect(document.getElementById('agent-req-d1').textContent).toMatch(/Cleared, customer not told\s*· by Sarah, 14 Nov 2026, \d\d:\d\d/)
+    expect(document.getElementById('agent-req-d2').textContent).toMatch(/declined\s*· by Tom, 13 Nov 2026, \d\d:\d\d/)
+    const bare = document.getElementById('agent-req-d3').textContent
+    expect(bare).toMatch(/declined\s*· 12 Nov 2026, \d\d:\d\d/)
+    expect(bare).not.toContain(' by ')
+  })
+
+  it('a decision made here shows the date without inventing a name', async () => {
+    render(<AgentRequestsClient />)
+    await screen.findByText('Needs a retry')
+    fireEvent.click(row('p1').getByRole('button', { name: 'Decline' }))
+    await waitFor(() => expect(row('p1').getByText(/· 14 Nov 2026/)).toBeTruthy())
+    expect(document.getElementById('agent-req-p1').textContent).not.toContain(' by ')
+  })
 })
