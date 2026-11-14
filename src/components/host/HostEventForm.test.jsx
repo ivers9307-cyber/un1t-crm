@@ -579,7 +579,11 @@ describe('HostEventForm off-sale warning', () => {
     tiers: () => fireEvent.change(screen.getByLabelText('Tier 1 name'), { target: { value: 'Early bird 2' } }),
     session_time: () => fireEvent.change(screen.getAllByLabelText(/Start time/)[0], { target: { value: '11:00' } }),
     studio: () => fireEvent.change(screen.getByLabelText('Where is it held?'), { target: { value: STUDIOS[0].id } }),
+    studio_hours: () => fireEvent.change(screen.getByLabelText('Duration (minutes)'), { target: { value: '300' } }),
   }
+  // SHELLYEVENTS.2 — the studio-hours rule only fires on an event already
+  // held at a studio, so that reason's form loads one.
+  const PROPS = { studio_hours: { initial: { ...base, venue_location_id: STUDIOS[0].id } } }
 
   it('shows the notice on a published event only, listing every label', () => {
     stubSave()
@@ -617,7 +621,7 @@ describe('HostEventForm off-sale warning', () => {
   for (const reason of RE_REVIEW_REASONS) {
     it(`asks before saving a ${reason} change, naming it, and sends nothing until confirmed`, async () => {
       const fetchMock = stubSave(true)
-      renderForm()
+      renderForm(PROPS[reason] || {})
       EDITS[reason]()
       clickSave()
       const dialog = await screen.findByRole('dialog')
