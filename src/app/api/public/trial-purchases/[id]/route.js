@@ -11,6 +11,7 @@ import { createServerClient } from '@/lib/supabase'
 import { paymentsFor } from '@/lib/payments'
 import { markTrialPurchasePaymentStatus } from '@/lib/trial-purchase-payments'
 import { trialPurchasePublicState } from '@/lib/paid-trial'
+import { trialCheckoutUsable } from '@/lib/trial-checkout-window'
 import { publishQueuePush, TRIAL_PURCHASES_WORKER_PATH } from '@/lib/qstash'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { logWarn } from '@/lib/log'
@@ -18,9 +19,13 @@ import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 
+// TRIALLEAK.1 — `resumable`: the row is still awaiting payment on the CRM's own
+// embedded checkout and its order is still payable (trialCheckoutUsable, off
+// created_at), so the page can put the checkout back in front of a buyer whose
+// browser reloaded, instead of waiting on a payment that was never made.
 // CLASSFIRST.1 — class_name / class_starts_at / location_id: the class the
 // buyer picked, labelled below on the studio's clock for the done screen.
-const COLS = 'id, status, payment_status, payment_provider, payment_provider_ref, payment_checkout_token, payment_checkout_url, amount_cents, currency, product_name, duration_days, connected_account_id, location_id, class_name, class_starts_at'
+const COLS = 'id, status, payment_status, payment_provider, payment_provider_ref, payment_checkout_token, payment_checkout_url, amount_cents, currency, product_name, duration_days, connected_account_id, location_id, class_name, class_starts_at, created_at'
 
 // The public class shape's labels (public-classes.js shapeAt), so the done
 // screen's class line reads exactly as the tile did. Display only: an
@@ -68,6 +73,7 @@ export async function GET(_request, props) {
     state: trialPurchasePublicState(row),
     purchase_status: row.status,
     payment_status: row.payment_status,
+    resumable: trialCheckoutUsable(row),
     checkout: row.payment_provider === 'un1t_online'
       ? null
       : { provider: row.payment_provider, token: row.payment_checkout_token, url: row.payment_checkout_url },

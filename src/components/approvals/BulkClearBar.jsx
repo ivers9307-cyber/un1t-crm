@@ -8,14 +8,16 @@
 
 import { useRef, useState } from 'react'
 import { Button } from '@/components/ui'
+import { withStudio } from '@/lib/approvals/studio-request'
 import { bookingWarningCount, runBulkClear } from '@/lib/approvals/bulk-clear'
 
-async function clearOne(id, note) {
-  const res = await fetch(`/api/agent/membership-requests/${id}`, {
+// `item` carries its own studio, so each request is judged at that studio.
+async function clearOne(item, note) {
+  const res = await fetch(`/api/agent/membership-requests/${item.id}`, withStudio(item, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status: 'declined', silent: true, decision_note: note || null }),
-  })
+  }))
   const json = await res.json()
   return { ok: !!(res.ok && json?.success) }
 }
@@ -41,17 +43,17 @@ export default function BulkClearBar({ items, onSelectAll, onCancel, onFinished 
     inFlight.current = true
     setRunning(true)
     setProgress(0)
-    const ids = items.map((i) => i.id)
-    setRunTotal(ids.length)
+    const run = [...items]
+    setRunTotal(run.length)
     let counter = 0
     let result = { cleared: [], failed: [] }
     try {
-      result = await runBulkClear(ids, {
+      result = await runBulkClear(run, {
         note: note.trim() || null,
-        clearOne: (id, text) => {
+        clearOne: (item, text) => {
           counter += 1
           setProgress(counter)
-          return clearOne(id, text)
+          return clearOne(item, text)
         },
       })
     } finally {

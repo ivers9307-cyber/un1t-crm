@@ -25,5 +25,5 @@ export default async function AgentRequestsPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/settings')
-  return <AgentRequestsClient />
+  return <AgentRequestsClient timezone={user.activeLocation?.timezone ?? null} />
 }

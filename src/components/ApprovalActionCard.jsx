@@ -16,6 +16,9 @@ import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from 
 // until a later OTA).
 import { approvalSummary, approvalKindLabel, explainFailure } from '@/lib/approvals/event-move-card'
 import SequencePicker from '@/components/SequencePicker'
+import { formatInZone, resolveZone } from '@shared/zoned-time'
+import UndoClearButton from '@/components/approvals/UndoClearButton'
+import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
 
 const STATUS_CHIP = {
   pending:  'bg-amber-500/10 text-amber-700',
@@ -31,12 +34,13 @@ const STATUS_LABELS = {
 }
 
 // APPROVALSQ.2 — "by Sarah, 14 Nov 2026, 16:20" (name unknown: just the time).
-function decidedByLine(request) {
+// APPROVALSQ.3 — rendered on the studio's clock (`zone`), never the browser's.
+function decidedByLine(request, zone) {
   let when = null
   if (request.decided_at) {
     const d = new Date(request.decided_at)
     if (!Number.isNaN(d.getTime())) {
-      when = d.toLocaleString('en-IE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+      when = formatInZone(d, zone, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
     }
   }
   const name = request.decided_by_name || null
@@ -46,9 +50,24 @@ function decidedByLine(request) {
 }
 
 export default function ApprovalActionCard({
-  request, contactId, locationId, contactFirstName,
+  request: requestProp, contactId, locationId, contactFirstName, timezone = null,
   onDecided, onPrefillComposer, onOpenBookTab,
 }) {
+  const zone = resolveZone(timezone)
+  // APPROVALSQ.5 — what an undo put back, laid over the prop so the card
+  // reads the request as restored even if the parent has not caught up.
+  // It is dropped when the prop's own status moves away from the status it had
+  // at the undo (someone else decided it, the parent caught up) and on every
+  // successful decision here; until then a prop that has not caught up keeps
+  // reading as restored. Derived, never set during render.
+  const [restored, setRestored] = useState(null) // { data, base } | null
+  const overlayLive = restored && requestProp.status === restored.base
+  const request = overlayLive ? { ...requestProp, ...restored.data } : requestProp
+  // When this card's quiet clear answered (the Undo window runs from here), and
+  // whether the route said the clear can no longer be undone.
+  const [clearedAt, setClearedAt] = useState(null)
+  const [undoBusy, setUndoBusy] = useState(false)
+  const [undoGone, setUndoGone] = useState(false)
   const [busy, setBusy] = useState(null)          // 'approved' | 'declined' | 'saved' | null
   const [declineOpen, setDeclineOpen] = useState(false)
   // APPROVALSQ.1 — "Clear, don't notify": a confirm step, then one silent PATCH.
@@ -56,7 +75,9 @@ export default function ApprovalActionCard({
   const inFlight = useRef(false)
   const [clearedHere, setClearedHere] = useState(false)
   const [reason, setReason] = useState(BOOKING_KINDS.has(request.kind) ? 'class_full' : 'other')
-  const [note, setNote] = useState('')
+  // APPROVALSQ.3 — separate notes: text typed for a decline never reaches a clear, and the reverse.
+  const [declineNote, setDeclineNote] = useState('')
+  const [clearNote, setClearNote] = useState('')
   const [error, setError] = useState(null)
   const [showSequencePicker, setShowSequencePicker] = useState(false)
   const [suggestion, setSuggestion] = useState(null)
@@ -97,10 +118,10 @@ export default function ApprovalActionCard({
     try {
       const reasonLabel = (DECLINE_REASONS.find(([k]) => k === reason) || [])[1]
       const decision_note = silent
-        ? (note.trim() || null)
+        ? (clearNote.trim() || null)
         : status === 'declined'
-        ? [reasonLabel, note.trim() || null].filter(Boolean).join(' — ')
-        : (note.trim() || null)
+        ? [reasonLabel, declineNote.trim() || null].filter(Boolean).join(' — ')
+        : null
       const res = await fetch(`/api/agent/membership-requests/${request.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -112,7 +133,12 @@ export default function ApprovalActionCard({
         return
       }
       setClearOpen(false)
-      if (silent) setClearedHere(true) // show the result even before the parent re-renders us
+      setRestored(null)
+      if (silent) {
+        setClearedHere(true) // show the result even before the parent re-renders us
+        setClearedAt(Date.now())
+        setUndoGone(false)
+      }
       onDecided?.({ ...request, ...data.request })
       // CANCEL-FORM.5 — whether the member heard about a pause/cancellation decision.
       if (data.customer_notified) setNotified(data.customer_notified)
@@ -131,6 +157,33 @@ export default function ApprovalActionCard({
     } finally {
       inFlight.current = false
       setBusy(null)
+    }
+  }
+
+  // APPROVALSQ.5 — take a quiet clear back. The route puts the request back to
+  // the state it was cleared from; the card shows its buttons again and the
+  // parent's copy of the request is put back through onDecided, the same
+  // "replace this request" hook a decision uses.
+  async function undoClear() {
+    if (inFlight.current || undoBusy || clearedAt == null) return
+    inFlight.current = true
+    setUndoBusy(true)
+    setError(null)
+    try {
+      const res = await undoClearRequest(request.id)
+      if (!res.ok) {
+        setError(res.error)
+        if (res.status === 409) setUndoGone(true)
+        return
+      }
+      setRestored({ data: res.request, base: requestProp.status })
+      setClearedHere(false)
+      setClearedAt(null)
+      setNotified(null)
+      onDecided?.({ ...request, ...res.request })
+    } finally {
+      inFlight.current = false
+      setUndoBusy(false)
     }
   }
 
@@ -205,7 +258,7 @@ export default function ApprovalActionCard({
               className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-2 py-1.5 text-xs text-un1t-text">
               {reasonOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
             </select>
-            <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
+            <input value={declineNote} onChange={e => setDeclineNote(e.target.value)} placeholder="Note (optional)"
               className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
             <div className="flex items-center gap-2">
               <button type="button" disabled={!!busy} onClick={() => decide('declined')}
@@ -226,7 +279,7 @@ export default function ApprovalActionCard({
               <p className="text-xs text-amber-700">Mia told this customer the team would confirm. Clearing sends them nothing.</p>
             )}
             <p className="text-xs text-un1t-muted">Closes this request. The customer is sent nothing.</p>
-            <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
+            <input value={clearNote} onChange={e => setClearNote(e.target.value)} placeholder="Note (optional)"
               className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
             <div className="flex items-center gap-2">
               <button type="button" disabled={!!busy} onClick={() => decide('declined', { silent: true })}
@@ -243,7 +296,10 @@ export default function ApprovalActionCard({
 
         {decided && (
           <div className="mt-1.5 text-xs text-un1t-muted">
-            {wasCleared && <span>{`Cleared, customer not told${decidedByLine(request) ? ` · ${decidedByLine(request)}` : ''}.`}</span>}
+            {wasCleared && <span>{`Cleared, customer not told${decidedByLine(request, zone) ? ` · ${decidedByLine(request, zone)}` : ''}.`}</span>}
+            {wasCleared && clearedAt != null && !undoGone && (
+              <span className="ml-2"><UndoClearButton startedAt={clearedAt} disabled={undoBusy} onClick={undoClear} /></span>
+            )}
             {request.decision_note && <span> {request.decision_note}</span>}
             {failedLine && <span className="text-red-700"> {failedLine}</span>}
             {/* A quiet clear told nobody on purpose: never nag staff to follow up. */}

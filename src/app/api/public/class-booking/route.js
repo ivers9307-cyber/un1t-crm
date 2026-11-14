@@ -14,6 +14,7 @@
 // the body can never set any of them. The queued row records `page_id`.
 // Without `page`, `path` names a STUDIO PAGE by its slug (/stillorgan's own
 // class funnel): its merged class_funnel block decides everything the same way.
+import { cleanAttribution } from '@/lib/campaign-funnel-attribution'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -65,6 +66,11 @@ const Schema = z.object({
     utm_campaign: z.string().max(200).optional(),
     utm_content: z.string().max(200).optional(),
     utm_term: z.string().max(200).optional(),
+    // TRIALLEAK.1 — accepted for measurement. This flow writes no attribution
+    // jsonb (class_booking_requests has none), so they are stored on the
+    // funnel's own events (funnel_events.meta), not here.
+    utm_source: z.string().max(200).optional(),
+    utm_medium: z.string().max(200).optional(),
     ad_provider: z.string().max(50).optional(),
     ad_external_id: z.string().max(200).optional(),
     // METADATASET.1 — the ad click id off the landing URL. Never stored: it
@@ -156,7 +162,8 @@ export async function POST(request) {
   // the limiter — a malformed body 400s without consuming any tenant's window.
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
-  const b = validation.data
+  // TRIALLEAK.1 — an unfilled Meta macro in an ad value is no value.
+  const b = { ...validation.data, attribution: cleanAttribution(validation.data.attribution) }
 
   let landingPath
   let locationId

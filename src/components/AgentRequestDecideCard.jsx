@@ -12,9 +12,9 @@
 // said, and the contact's email/phone for a quick Glofox lookup.
 
 import { useRef, useState } from 'react'
-import Link from 'next/link'
 import { Sparkles, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui'
+import StudioLink from '@/components/approvals/StudioLink'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
 import { DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
@@ -22,6 +22,10 @@ import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
 // event_move module and fall through to the shared helpers for other kinds.
 import { approvalKindLabel, explainFailure, eventMoveDoneLine, EVENT_MOVE_KIND_CHIP } from '@/lib/approvals/event-move-card'
 import { RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
+import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
+import UndoClearButton from '@/components/approvals/UndoClearButton'
+import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
+import { withStudio, studioChip } from '@/lib/approvals/studio-request'
 
 const KIND_CHIP = {
   cancellation: 'bg-red-500/10 text-red-700',
@@ -31,13 +35,6 @@ const KIND_CHIP = {
   event_move: EVENT_MOVE_KIND_CHIP,
 }
 const DEFAULT_KIND_CHIP = 'bg-amber-500/10 text-amber-700'
-
-function formatDateTime(s) {
-  if (!s) return '—'
-  try {
-    return new Date(s).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })
-  } catch { return s }
-}
 
 function CopyValue({ value }) {
   const [copied, setCopied] = useState(false)
@@ -138,18 +135,27 @@ export function outcomeLine(status, item, executed, notified = null, plannedEndD
 
 // APPROVALSQ.2 — `selectable`, `selected` and `onToggle` put a select checkbox
 // in the header while /approvals is in select mode; a decided card has none.
-export default function AgentRequestDecideCard({ item, onDecided, selectable = false, selected = false, onToggle }) {
+export default function AgentRequestDecideCard({ item, onDecided, onUndone, selectable = false, selected = false, onToggle, timezone = null, activeStudioId = null }) {
   const [busy, setBusy] = useState(null)       // 'approved' | 'declined' | 'saved' | 'cleared' | null
   const inFlight = useRef(false)
   const [declineOpen, setDeclineOpen] = useState(false)
   const [clearOpen, setClearOpen] = useState(false)
   const [reason, setReason] = useState(BOOKING_KINDS.has(item.kind) ? 'class_full' : 'other')
-  const [note, setNote] = useState('')
+  // APPROVALSQ.3 — two notes: what staff type for a decline never reaches a
+  // clear, and the reverse. Each goes only with its own action.
+  const [declineNote, setDeclineNote] = useState('')
+  const [clearNote, setClearNote] = useState('')
   // CANCEL-FORM.5 — the end date staff confirm on a membership cancellation.
   const [endDate, setEndDate] = useState(item.kind === 'cancellation' ? (item.details?.requested_end_date || '') : '')
   const [error, setError] = useState(null)
   const [outcome, setOutcome] = useState(null) // { tone, text, failed? } after a decision
   const [countedDecided, setCountedDecided] = useState(false)
+  // APPROVALSQ.5 — when a quiet clear's answer arrived (the Undo window runs
+  // from here), whether an undo is running, and whether the route said the
+  // clear can no longer be undone.
+  const [clearedAt, setClearedAt] = useState(null)
+  const [undoBusy, setUndoBusy] = useState(false)
+  const [undoGone, setUndoGone] = useState(false)
 
   const kindLabel = approvalKindLabel(item.kind) || 'Agent request'
   const why = whyFlagged(item)
@@ -178,15 +184,15 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
     try {
       const reasonLabel = (DECLINE_REASONS.find(([k]) => k === reason) || [])[1]
       const decision_note = silent
-        ? (note.trim() || null)
+        ? (clearNote.trim() || null)
         : status === 'declined'
-        ? [reasonLabel, note.trim() || null].filter(Boolean).join(' — ')
-        : (note.trim() || null)
-      const res = await fetch(`/api/agent/membership-requests/${item.id}`, {
+        ? [reasonLabel, declineNote.trim() || null].filter(Boolean).join(' — ')
+        : null
+      const res = await fetch(`/api/agent/membership-requests/${item.id}`, withStudio(item, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, ...(silent ? { silent: true } : {}), decision_note, ...(!silent && item.kind === 'cancellation' && endDate ? { end_date: endDate } : {}) }),
-      })
+      }))
       const data = await res.json()
       if (!data.success) {
         setError(res.status === 409 ? 'Already decided elsewhere — refresh the list.' : (data.error || 'Decision failed'))
@@ -195,6 +201,10 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
       setDeclineOpen(false)
       setClearOpen(false)
       setOutcome(outcomeLine(data.request?.status || status, item, data.executed, data.customer_notified, data.planned_end_date))
+      if (silent) {
+        setClearedAt(Date.now())
+        setUndoGone(false)
+      }
       // Only the FIRST decision moves the item out of the pending count —
       // a retry re-decides the same (already-counted) item.
       if (!countedDecided) {
@@ -206,6 +216,33 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
     } finally {
       inFlight.current = false
       setBusy(null)
+    }
+  }
+
+  // APPROVALSQ.5 — take a quiet clear back. The route puts the request back to
+  // the state it was cleared from; the card goes back to the buttons it opened
+  // with (a failed card comes back failed) and the parent puts the count back.
+  async function undoClear() {
+    if (inFlight.current || clearedAt == null) return
+    inFlight.current = true
+    setUndoBusy(true)
+    setError(null)
+    try {
+      const res = await undoClearRequest(item)
+      if (!res.ok) {
+        setError(res.error)
+        if (res.status === 409) setUndoGone(true)
+        return
+      }
+      setOutcome(null)
+      setClearedAt(null)
+      if (countedDecided) {
+        setCountedDecided(false)
+        onUndone?.(item.id, res.request)
+      }
+    } finally {
+      inFlight.current = false
+      setUndoBusy(false)
     }
   }
 
@@ -231,7 +268,7 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
         {warnClear && (
           <p className="text-xs text-amber-700">Mia told this customer the team would confirm. Clearing sends them nothing.</p>
         )}
-        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)"
+        <input value={clearNote} onChange={(e) => setClearNote(e.target.value)} placeholder="Note (optional)"
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
         <div className="flex items-center gap-2">
           <button type="button" disabled={!!busy} onClick={() => decide('declined', { silent: true })}
@@ -252,7 +289,7 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text">
           {reasonOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
         </select>
-        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)"
+        <input value={declineNote} onChange={(e) => setDeclineNote(e.target.value)} placeholder="Note (optional)"
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
         <div className="flex items-center gap-2">
           <button type="button" disabled={!!busy} onClick={() => decide('declined')}
@@ -314,9 +351,12 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
       kindClassName={KIND_CHIP[item.kind] || DEFAULT_KIND_CHIP}
       state={isFailedItem && !outcome ? { label: 'Failed', tone: 'red' } : undefined}
       name={item.contactName || 'Customer'}
+      studio={studioChip(item, activeStudioId)}
       meta={item.channel ? `via ${item.channel}` : undefined}
-      when={`Submitted ${formatDateTime(item.submittedAt)}`}
+      metaIsPlace={false}
+      when={`Submitted ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       summary={item.subtitle}
+      summaryClassName="text-sm text-un1t-text"
       contact={(item.contactEmail || item.contactPhone) ? (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] uppercase tracking-wide text-un1t-subtle">Glofox lookup</span>
@@ -327,14 +367,17 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
       links={(
         <>
           {conversationHref && (
-            <Link href={conversationHref} className="text-un1t-muted underline hover:text-un1t-text">Open conversation</Link>
+            <StudioLink item={item} activeStudioId={activeStudioId} href={conversationHref} className="text-un1t-muted underline hover:text-un1t-text">Open conversation</StudioLink>
           )}
           {item.reviewUrl && (
-            <Link href={item.reviewUrl} className="text-un1t-muted underline hover:text-un1t-text">Full history</Link>
+            <StudioLink item={item} activeStudioId={activeStudioId} href={item.reviewUrl} className="text-un1t-muted underline hover:text-un1t-text">Full history</StudioLink>
           )}
         </>
       )}
       outcome={outcome}
+      outcomeAction={outcome && clearedAt != null && !undoGone
+        ? <UndoClearButton startedAt={clearedAt} disabled={undoBusy} onClick={undoClear} />
+        : undefined}
       error={error}
       actions={actions}
       quietAction={quietAction}

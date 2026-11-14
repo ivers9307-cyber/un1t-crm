@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // APPROVALSQ.1 — "Clear, don't notify" on the inbox approval card.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useState } from 'react'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 
 vi.mock('@/components/SequencePicker', () => ({ default: () => null }))
@@ -106,5 +107,120 @@ describe('ApprovalActionCard clear', () => {
     const line = screen.getByText(/^Cleared, customer not told/).parentElement.textContent
     expect(line).toMatch(/Cleared, customer not told · 14 Nov 2026, \d\d:\d\d\./)
     expect(line).not.toContain(' by ')
+  })
+})
+
+describe('ApprovalActionCard separate notes (APPROVALSQ.3)', () => {
+  const noteBox = () => screen.getByPlaceholderText('Note (optional)')
+
+  it('a note typed in decline does not appear in clear', () => {
+    render(<ApprovalActionCard request={request} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    fireEvent.change(noteBox(), { target: { value: 'for decline' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    expect(noteBox().value).toBe('')
+  })
+
+  it('a note typed in clear does not appear in decline', () => {
+    render(<ApprovalActionCard request={request} />)
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.change(noteBox(), { target: { value: 'for clear' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    expect(noteBox().value).toBe('')
+  })
+
+  it('the clear PATCH carries only the clear note and the decline PATCH only the decline note', async () => {
+    reply = cleared
+    const { unmount } = render(<ApprovalActionCard request={request} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    fireEvent.change(noteBox(), { target: { value: 'declinenote' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.change(noteBox(), { target: { value: 'clearnote' } })
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    await screen.findByText('Cleared, customer not told.')
+    expect(JSON.parse(patchCalls()[0][1].body).decision_note).toBe('clearnote')
+    unmount()
+
+    fetch.mockClear()
+    reply = declined
+    render(<ApprovalActionCard request={request} />)
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.change(noteBox(), { target: { value: 'clearnote' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    fireEvent.change(noteBox(), { target: { value: 'declinenote' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm decline' }))
+    await waitFor(() => expect(patchCalls()).toHaveLength(1))
+    const note = JSON.parse(patchCalls()[0][1].body).decision_note
+    expect(note).toMatch(/declinenote$/)
+    expect(note).not.toContain('clearnote')
+  })
+})
+
+
+// APPROVALSQ.5 review fix: the restored overlay must not outlive a decision.
+describe('ApprovalActionCard after an undo', () => {
+  const undone = { success: true, request: { id: request.id, status: 'pending', decided_at: null, decision_note: null, details: {} }, undone: true }
+  const approved = { success: true, request: { id: request.id, status: 'approved' }, executed: null, customer_notified: null, planned_end_date: null }
+  const replyFor = (body, decide) => (body.undo_clear ? undone : body.silent ? cleared : decide)
+
+  // A parent that does what the thread does: replaces the request with what onDecided hands back.
+  function Parent({ initial = request }) {
+    const [req, setReq] = useState(initial)
+    return <ApprovalActionCard request={req} onDecided={setReq} />
+  }
+  async function clearAndUndo(ui) {
+    const view = render(ui)
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    await screen.findByText('Cleared, customer not told.')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByRole('button', { name: 'Approve' })
+    return view
+  }
+
+  it('clear, Undo, Approve shows the approved state and no buttons', async () => {
+    globalThis.fetch = vi.fn(async (url, init) => ({ status: 200, json: async () => replyFor(JSON.parse(init.body), approved) }))
+    await clearAndUndo(<Parent />)
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await screen.findByText('Approved')
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull()
+  })
+
+  it('clear, Undo, Decline shows the declined state and no buttons', async () => {
+    globalThis.fetch = vi.fn(async (url, init) => ({ status: 200, json: async () => replyFor(JSON.parse(init.body), declined) }))
+    await clearAndUndo(<Parent />)
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm decline' }))
+    await screen.findByText('Declined')
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull()
+  })
+
+  it('clear, Undo, then the parent delivers a request someone else actioned: the card shows that', async () => {
+    globalThis.fetch = vi.fn(async (url, init) => ({ status: 200, json: async () => replyFor(JSON.parse(init.body), approved) }))
+    const { rerender } = await clearAndUndo(<ApprovalActionCard request={request} onDecided={() => {}} />)
+    rerender(<ApprovalActionCard request={{ ...request, status: 'actioned' }} onDecided={() => {}} />)
+    expect(screen.getByText('Done')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull()
+  })
+
+  it('clear, Undo, with the parent still sending the stale declined row keeps showing pending', async () => {
+    globalThis.fetch = vi.fn(async (url, init) => ({ status: 200, json: async () => replyFor(JSON.parse(init.body), approved) }))
+    const stale = { ...request, ...cleared.request }
+    const { rerender } = render(<ApprovalActionCard request={request} onDecided={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    await screen.findByText('Cleared, customer not told.')
+    rerender(<ApprovalActionCard request={stale} onDecided={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByRole('button', { name: 'Approve' })
+    rerender(<ApprovalActionCard request={{ ...stale }} onDecided={() => {}} />)
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy()
+    expect(screen.queryByText(/Cleared, customer not told/)).toBeNull()
   })
 })

@@ -5,73 +5,117 @@
 // Two views over /api/approvals/pending, refreshed when the tab regains focus
 // and on a manual refresh. Customers: everything a customer is waiting on
 // (agent requests, paid trials, corporate promo claims, offer purchases) as
-// one queue of cards that are decided in place, with filters. Team and money:
-// the staff-side categories (leave, expenses, invoices and so on), where each
-// row links out to its source page and the real approve/decline happens there.
+// one queue of cards that are decided in place, with filters. Team and money
+// (APPROVALSQ.4): the staff-side categories (leave, expenses, invoices and so
+// on) as one list, oldest first, with filter chips. Six kinds are decided on
+// their card; the rest show an Open button to their own page.
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import Link from 'next/link'
-import { RefreshCw, ChevronRight } from 'lucide-react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { RefreshCw } from 'lucide-react'
 import AgentRequestDecideCard from '@/components/AgentRequestDecideCard'
 import TrialPurchaseReviewCard from '@/components/TrialPurchaseReviewCard'
 import CorpPromoClaimCard from '@/components/CorpPromoClaimCard'
 import OfferPurchaseCard from '@/components/approvals/OfferPurchaseCard'
 import BulkClearBar from '@/components/approvals/BulkClearBar'
-import { isBulkClearable } from '@/lib/approvals/bulk-clear'
+import UndoClearButton from '@/components/approvals/UndoClearButton'
+import { undoWindowOpen } from '@/components/approvals/useUndoWindow'
+import { isBulkClearable, runBulkUndo } from '@/lib/approvals/bulk-clear'
+import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
+import { TEAM_CARDS, TeamLinkCard } from '@/components/approvals/team-cards'
 import { buildCustomerQueue, filterQueue, teamProviders } from '@/lib/approvals/customer-queue'
+import { buildTeamQueue, filterTeamQueue } from '@/lib/approvals/team-queue'
 
-function formatDateTime(s) {
-  if (!s) return '—'
-  try {
-    return new Date(s).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })
-  } catch { return s }
+// APPROVALSQ.6 — "This studio" (the default, exactly as always) or "All my
+// studios" (?scope=all). The choice is kept per browser; it is read in an effect,
+// never during render, so the server and the first client render agree.
+const SCOPE_KEY = 'un1t-approvals-scope'
+const PENDING_URL = '/api/approvals/pending'
+const PENDING_ALL_URL = '/api/approvals/pending?scope=all'
+
+// Exempt from the studio-header guard: the list is about the person, not an item.
+async function fetchPending(pendingUrl) {
+  const r = await fetch(pendingUrl, { cache: 'no-store' })
+  const j = await r.json()
+  if (!j.success) throw new Error(j.error || 'Failed to load')
+  return j.data
 }
 
-function formatAmount(amount, currency) {
-  if (amount == null) return null
-  const sym = currency === 'EUR' ? '€' : currency === 'GBP' ? '£' : currency === 'USD' ? '$' : ''
-  return `${sym}${Number(amount).toFixed(2)}`
-}
-
-export default function ApprovalsInbox() {
+export default function ApprovalsInbox({ timezone = null, activeStudioId = null }) {
+  const [scope, setScope] = useState('studio') // 'studio' | 'all'
+  const [scopeReady, setScopeReady] = useState(false)
+  const [studios, setStudios] = useState([])
+  // What the last answer said about "All my studios".
+  const [allInfo, setAllInfo] = useState({ on: false, failed: [], truncated: false })
   const [providers, setProviders] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [activeKey, setActiveKey] = useState(null)
   const [view, setView] = useState(null) // 'customers' | 'team'; chosen on first load
   const [chip, setChip] = useState('all')
+  const [teamChip, setTeamChip] = useState('all')
+  // Counts successful loads, so a list can tell "a reload has answered".
+  const [loadedCount, setLoadedCount] = useState(0)
+
+  useEffect(() => {
+    try { if (window.localStorage.getItem(SCOPE_KEY) === 'all') setScope('all') } catch { /* storage unavailable: This studio */ }
+    setScopeReady(true)
+  }, [])
+
+  const chooseScope = (next) => {
+    if (next === scope) return
+    try {
+      if (next === 'all') window.localStorage.setItem(SCOPE_KEY, 'all')
+      else window.localStorage.removeItem(SCOPE_KEY)
+    } catch { /* not remembered; the choice still applies */ }
+    setScope(next)
+  }
+
+  // Every load takes a number; an answer is applied only while its number is
+  // still the latest, so a slow "All my studios" reply can never overwrite a
+  // later "This studio" one (loading and error follow the same rule).
+  const latestLoad = useRef(0)
 
   const load = useCallback(async () => {
+    const mine = ++latestLoad.current
+    const isLatest = () => latestLoad.current === mine
     setLoading(true)
     setError(null)
+    let ok = false
     try {
-      const r = await fetch('/api/approvals/pending', { cache: 'no-store' })
-      const j = await r.json()
-      if (!j.success) throw new Error(j.error || 'Failed to load')
+      let data = await fetchPending(scope === 'all' ? PENDING_ALL_URL : PENDING_URL)
+      // One studio is nothing to combine: the plain list, with no studio chips.
+      if (scope === 'all' && (data.studios || []).length < 2) {
+        // The saved choice no longer applies: forget it, so the next visit asks once.
+        if (isLatest()) { try { window.localStorage.removeItem(SCOPE_KEY) } catch { /* storage unavailable */ } }
+        data = await fetchPending(PENDING_URL)
+      }
+      if (!isLatest()) return false
+      const j = { data }
+      setStudios(j.data.studios || [])
+      setAllInfo(j.data.scope === 'all'
+        ? { on: true, failed: j.data.failedStudios || [], truncated: !!j.data.truncated }
+        : { on: false, failed: [], truncated: false })
       setProviders(j.data.providers || [])
       setTotal(j.data.total || 0)
-      // Pick the first non-empty team tab on first load, else first tab.
       const team = teamProviders(j.data.providers || [])
-      setActiveKey((prev) => {
-        if (prev && team.some((p) => p.key === prev)) return prev
-        const firstWithItems = team.find((p) => p.count > 0)
-        return (firstWithItems || team[0])?.key || null
-      })
       // Open on Customers when something waits there or there is no team view.
       setView((prev) => {
         if (prev) return prev
         const q = buildCustomerQueue(j.data.providers || [])
         return q.total > 0 || team.length === 0 ? 'customers' : 'team'
       })
+      ok = true
+      setLoadedCount((n) => n + 1)
     } catch (e) {
-      setError(e.message)
+      if (isLatest()) setError(e.message)
     } finally {
-      setLoading(false)
+      if (isLatest()) setLoading(false)
     }
-  }, [])
+    return ok // true when the response arrived and was applied
+  }, [scope])
 
-  useEffect(() => { load() }, [load])
+  // Loads once the saved choice is known, and again whenever the scope changes.
+  useEffect(() => { if (scopeReady) load() }, [load, scopeReady])
 
   // Refocus → refresh, so coming back from /schedule/expenses after
   // approving something drops the count without a manual click.
@@ -83,13 +127,13 @@ export default function ApprovalsInbox() {
 
   const team = teamProviders(providers)
   const queue = buildCustomerQueue(providers)
+  const teamQueue = buildTeamQueue(providers)
   const hasCustomers = queue.chips.length > 0
   const teamCount = team.reduce((sum, p) => sum + (p.count || 0), 0)
   const hasTeam = team.length > 0
   const shownView = view === 'team' && hasTeam ? 'team'
     : view === 'customers' && hasCustomers ? 'customers'
       : hasCustomers ? 'customers' : 'team'
-  const active = team.find((p) => p.key === activeKey) || null
 
   // AGENT-REQ-UX.1 — an inline decision resolved one pending item. Drop the
   // badge counts immediately; the card itself keeps rendering its outcome
@@ -99,8 +143,33 @@ export default function ApprovalsInbox() {
     setTotal((t) => Math.max(0, t - 1))
   }, [])
 
+  // APPROVALSQ.5 — a quiet clear was undone: the request is waiting again, so
+  // put back the one the decision took off.
+  const onItemUndone = useCallback((providerKey) => {
+    setProviders((ps) => ps.map((p) => p.key === providerKey ? { ...p, count: p.count + 1 } : p))
+    setTotal((t) => t + 1)
+  }, [])
+
+  const showSwitch = studios.length >= 2
+  const allMode = scope === 'all' && allInfo.on
+
   return (
     <div className="space-y-6">
+      {showSwitch && (
+        <div className="space-y-1.5">
+          <div className="inline-flex items-center gap-1 border border-un1t-border rounded-lg p-1 bg-un1t-bg/40">
+            <ViewButton active={scope === 'studio'} onClick={() => chooseScope('studio')}>This studio</ViewButton>
+            <ViewButton active={scope === 'all'} onClick={() => chooseScope('all')}>All my studios</ViewButton>
+          </div>
+          {allMode && (
+            <p className="text-xs text-un1t-subtle">
+              Showing {studios.length} studios. Each decision is made at the studio named on the card.
+              {allInfo.failed.length > 0 && <> Could not load: {allInfo.failed.join(', ')}.</>}
+              {allInfo.truncated && <> Showing the first {studios.length} studios.</>}
+            </p>
+          )}
+        </div>
+      )}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3 flex-wrap">
           {hasCustomers && hasTeam && (
@@ -108,34 +177,6 @@ export default function ApprovalsInbox() {
               <ViewButton active={shownView === 'customers'} count={queue.total} onClick={() => setView('customers')}>Customers</ViewButton>
               <ViewButton active={shownView === 'team'} count={teamCount} onClick={() => setView('team')}>Team and money</ViewButton>
             </div>
-          )}
-          {shownView === 'team' && (
-        <div className="flex items-center gap-1 border border-un1t-border rounded-lg p-1 bg-un1t-bg/40 flex-wrap">
-          {team.map((p) => {
-            const isActive = p.key === activeKey
-            return (
-              <button
-                key={p.key}
-                type="button"
-                onClick={() => setActiveKey(p.key)}
-                className={`px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2 ${
-                  isActive
-                    ? 'bg-un1t-text text-un1t-bg font-medium'
-                    : 'text-un1t-subtle hover:text-un1t-text'
-                }`}
-              >
-                {p.label}
-                {p.count > 0 && (
-                  <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full ${
-                    isActive ? 'bg-un1t-bg text-un1t-text' : 'bg-red-500 text-white'
-                  }`}>
-                    {p.count > 99 ? '99+' : p.count}
-                  </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -160,9 +201,10 @@ export default function ApprovalsInbox() {
         </div>
       )}
 
+      {/* key={scope}: switching the scope drops selection, bulk state and kept cards. */}
       {shownView === 'customers'
-        ? <CustomerList queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} onReload={load} />
-        : <ProviderList provider={active} loading={loading} />}
+        ? <CustomerList key={scope} queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} onItemUndone={onItemUndone} onReload={load} loadedCount={loadedCount} timezone={timezone} activeStudioId={activeStudioId} />
+        : <TeamList key={scope} queue={teamQueue} chip={teamChip} setChip={setTeamChip} loading={loading} onItemDecided={onItemDecided} timezone={timezone} activeStudioId={activeStudioId} />}
     </div>
   )
 }
@@ -200,23 +242,53 @@ const CARDS = {
   offer_purchases: OfferPurchaseCard,
 }
 
-function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }) {
+const chipClass = (on) => `px-3 py-1 text-xs rounded-full border transition-colors flex items-center gap-1.5 ${
+  on ? 'bg-un1t-text text-un1t-bg border-un1t-text font-medium' : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
+}`
+
+function CustomerList({ queue, chip, setChip, loading, onItemDecided, onItemUndone, onReload, loadedCount = 0, timezone, activeStudioId = null }) {
   // A chip whose provider vanished on a reload falls back to All.
   const key = queue.chips.some((c) => c.key === chip) ? chip : 'all'
-  const { needsFixing, waiting } = filterQueue(queue, key)
+  const { needsFixing: liveNeedsFixing, waiting: liveWaiting } = filterQueue(queue, key)
+
+  // APPROVALSQ.5 — a Mia card cleared quietly stays on the page, with its
+  // state and its Undo, for as long as its window is open, even across the
+  // reload the clear triggers (the server no longer returns it). Same React key
+  // and same list slot as before, so the card keeps its own state. Not counted
+  // anywhere: the counts come from `queue`. Once the window has closed, the
+  // next reload that no longer returns it drops it. Keyed like the cards.
+  const [clearedCards, setClearedCards] = useState(() => new Map())
+  const cardKey = (it) => `${it.providerKey}-${it.id}`
+  // A later successful reload settles any undone card whose own reload failed.
+  useEffect(() => {
+    setClearedCards((m) => {
+      let next = null
+      for (const [k, e] of m) if (e.undone && !e.awaiting) { next = next || new Map(m); next.delete(k) }
+      return next || m
+    })
+  }, [loadedCount])
+  const liveKeys = new Set([...liveNeedsFixing, ...liveWaiting].map(cardKey))
+  const nowMs = Date.now()
+  const keptCleared = [...clearedCards.values()]
+    .filter((e) => !liveKeys.has(cardKey(e.item)) && (e.undone || undoWindowOpen(e.at, nowMs)) && (key === 'all' || e.item.providerKey === key))
+    .map((e) => e.item)
+  const needsFixing = [...liveNeedsFixing, ...keptCleared.filter((i) => i.failed)]
+  const waiting = [...liveWaiting, ...keptCleared.filter((i) => !i.failed)]
 
   // APPROVALSQ.2 — select mode: tick several Mia cards and clear them together.
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState(() => new Set())
   const [decided, setDecided] = useState(() => new Set())
+  // `notice` is { error, text, undo?: { items, at } }: `undo` is on the notice of
+  // a bulk clear that cleared something, and its Undo lives while the window
+  // (counted from when the run finished) is open.
   const [notice, setNotice] = useState(null)
+  const [undoRunning, setUndoRunning] = useState(false)
+  const undoInFlight = useRef(false)
   // Switching chip drops the selection (switching view unmounts this list).
   useEffect(() => { setSelected(new Set()) }, [key])
 
-  const clearable = useMemo(
-    () => [...needsFixing, ...waiting].filter((i) => isBulkClearable(i) && !decided.has(i.id)),
-    [needsFixing, waiting, decided],
-  )
+  const clearable = [...needsFixing, ...waiting].filter((i) => isBulkClearable(i) && !decided.has(i.id))
   const selectedItems = clearable.filter((i) => selected.has(i.id))
   const leaveSelect = () => { setSelectMode(false); setSelected(new Set()) }
   const toggle = (id) => setSelected((prev) => {
@@ -229,8 +301,32 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }
     leaveSelect()
     setNotice(cleared.length === 0 && failed.length > 0
       ? { error: true, text: 'None could be cleared (already decided, or an error).' }
-      : { error: false, text: `Cleared ${cleared.length}.${failed.length > 0 ? ` ${failed.length} could not be cleared (already decided, or an error).` : ''}` })
+      : {
+          error: false,
+          text: `Cleared ${cleared.length}.${failed.length > 0 ? ` ${failed.length} could not be cleared (already decided, or an error).` : ''}`,
+          undo: cleared.length > 0 ? { items: cleared, at: Date.now() } : null,
+        })
     onReload?.()
+  }
+  // APPROVALSQ.5 — undo the whole bulk clear: one request after another, then
+  // reload, then say how many went back. One run per press. (APPROVALSQ.6: each
+  // request goes out with its item's own studio.)
+  const undoBulk = async () => {
+    // The cleared items themselves, so each undo carries its own studio.
+    const items = notice?.undo?.items
+    if (undoInFlight.current || !items?.length) return
+    undoInFlight.current = true
+    setUndoRunning(true)
+    try {
+      const { restored, failed } = await runBulkUndo(items, { undoOne: (item) => undoClearRequest(item) })
+      setNotice(restored.length === 0
+        ? { error: true, text: 'None could be restored.' }
+        : { error: false, text: `Restored ${restored.length}.${failed.length > 0 ? ` ${failed.length} could not be restored.` : ''}` })
+      onReload?.()
+    } finally {
+      undoInFlight.current = false
+      setUndoRunning(false)
+    }
   }
 
   const renderCard = (it) => {
@@ -243,18 +339,39 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }
           onToggle: () => toggle(it.id),
         }
       : {}
-    const onDecided = () => {
+    const onDecided = (_id, request) => {
       if (isBulkClearable(it)) {
         setDecided((prev) => new Set(prev).add(it.id))
         setSelected((prev) => { const next = new Set(prev); next.delete(it.id); return next })
+        // The card says it was a quiet clear through the request it got back.
+        if (request?.details?.cleared?.silent === true) {
+          setClearedCards((m) => new Map(m).set(cardKey(it), { item: it, at: Date.now() }))
+        }
       }
       onItemDecided?.(it.providerKey)
     }
-    return <Card key={`${it.providerKey}-${it.id}`} item={it} onDecided={onDecided} {...bulk} />
+    // APPROVALSQ.5 — an undone clear: waiting again and selectable again. The
+    // card must not vanish on Undo, so its kept entry stays (same key) while
+    // the reload this triggers is answered; then the entry is dropped and the
+    // card shows only while the server still returns the request. A failed
+    // reload keeps it until the next successful one (the effect above).
+    const onUndone = () => {
+      setDecided((prev) => { const next = new Set(prev); next.delete(it.id); return next })
+      const k = cardKey(it)
+      setClearedCards((m) => m.has(k) ? new Map(m).set(k, { item: it, at: Date.now(), undone: true, awaiting: true }) : m)
+      Promise.resolve(onReload?.()).then((ok) => {
+        setClearedCards((m) => {
+          const e = m.get(k)
+          if (!e?.undone) return m
+          const next = new Map(m)
+          if (ok) next.delete(k); else next.set(k, { ...e, awaiting: false })
+          return next
+        })
+      })
+      onItemUndone?.(it.providerKey)
+    }
+    return <Card key={cardKey(it)} item={it} onDecided={onDecided} onUndone={onUndone} timezone={timezone} activeStudioId={activeStudioId} {...bulk} />
   }
-  const chipClass = (on) => `px-3 py-1 text-xs rounded-full border transition-colors flex items-center gap-1.5 ${
-    on ? 'bg-un1t-text text-un1t-bg border-un1t-text font-medium' : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
-  }`
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
@@ -268,9 +385,12 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }
         ))}
       </div>
       {notice && !selectMode && (
-        <div className={notice.error
+        <div className={`${notice.error
           ? 'border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm'
-          : 'text-sm rounded-md px-3 py-2 bg-un1t-border/30 text-un1t-text'}>{notice.text}</div>
+          : 'text-sm rounded-md px-3 py-2 bg-un1t-border/30 text-un1t-text'}${notice.undo ? ' flex items-center justify-between gap-3' : ''}`}>
+          {notice.undo ? <span>{notice.text}</span> : notice.text}
+          {notice.undo && <UndoClearButton startedAt={notice.undo.at} disabled={undoRunning} onClick={undoBulk} />}
+        </div>
       )}
       {selectMode ? (
         <BulkClearBar
@@ -283,7 +403,7 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }
         <div>
           <button
             type="button"
-            onClick={() => { setSelectMode(true); setNotice(null) }}
+            onClick={() => { setSelectMode(true); setNotice((n) => (n?.undo && undoWindowOpen(n.undo.at) ? n : null)) }}
             className="px-3 py-1 text-xs rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
           >
             Select
@@ -310,57 +430,57 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }
   )
 }
 
-function ProviderList({ provider, loading }) {
-  if (!provider) {
-    return (
-      <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
-        {loading ? 'Loading…' : 'Nothing waiting on your review.'}
-      </div>
-    )
-  }
-  const failedItems = provider.failedItems || []
-  if (provider.items.length === 0 && failedItems.length === 0) {
-    return (
-      <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
-        Nothing pending in {provider.label.toLowerCase()}. <Link href={provider.reviewBase} className="underline">Open {provider.label}</Link>
-      </div>
-    )
+function TeamList({ queue, chip, setChip, loading, onItemDecided, timezone, activeStudioId = null }) {
+  // A chip whose provider vanished on a reload falls back to All.
+  const key = queue.chips.some((c) => c.key === chip) ? chip : 'all'
+  const live = filterTeamQueue(queue, key)
+  // A decided card stays until this view unmounts, so its follow-up question
+  // (Keep them rostered / Unassign them, a clash notice) survives the reload
+  // that the decision itself triggers. Same React key as before, so the card's
+  // own state is kept. Not counted anywhere: the counts come from `queue`.
+  const [decided, setDecided] = useState(() => new Map())
+  const cardKey = (it) => `${it.providerKey}-${it.id}`
+  const liveKeys = new Set(live.map(cardKey))
+  const kept = [...decided.values()].filter((it) => !liveKeys.has(cardKey(it)) && (key === 'all' || it.providerKey === key))
+  const items = [...live, ...kept]
+  const markDecided = (it) => {
+    setDecided((m) => (m.has(cardKey(it)) ? m : new Map(m).set(cardKey(it), it)))
+    onItemDecided(it.providerKey)
   }
   return (
-    <ul className="border border-un1t-border rounded-lg divide-y divide-un1t-border/50 overflow-hidden">
-      {provider.items.map((it) => (
-        <li key={it.id}>
-          <Link
-            href={it.reviewUrl}
-            className="flex items-center gap-4 p-4 hover:bg-un1t-text/5 transition-colors"
-          >
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm font-medium text-un1t-text truncate">{it.title}</span>
-                {it.meta && (
-                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-un1t-border/30 text-un1t-subtle border border-un1t-border">
-                    {it.meta}
-                  </span>
-                )}
-              </div>
-              <div className="text-xs text-un1t-subtle truncate mt-1">{it.subtitle}</div>
-              {/* LEAVE.1 — e.g. "Clashes with 2 rostered shifts" on time off. */}
-              {it.warning && (
-                <div className="text-xs text-amber-700 mt-1">{it.warning}</div>
-              )}
-              <div className="text-xs text-un1t-subtle mt-1">
-                Submitted {formatDateTime(it.submittedAt)}
-              </div>
-            </div>
-            {formatAmount(it.amount, it.currency) && (
-              <div className="text-sm text-un1t-text font-medium tabular-nums">
-                {formatAmount(it.amount, it.currency)}
-              </div>
-            )}
-            <ChevronRight size={16} className="text-un1t-subtle shrink-0" />
-          </Link>
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button type="button" onClick={() => setChip('all')} className={chipClass(key === 'all')}>
+          All <span className="tabular-nums">{queue.total}</span>
+        </button>
+        {queue.chips.map((c) => (
+          <button key={c.key} type="button" onClick={() => setChip(c.key)} className={chipClass(key === c.key)}>
+            {c.label} <span className="tabular-nums">{c.count}</span>
+          </button>
+        ))}
+      </div>
+      {items.length === 0 ? (
+        <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
+          {loading ? 'Loading…' : 'Nothing waiting on your review.'}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {items.map((it) => {
+            const Card = TEAM_CARDS[it.providerKey] || TeamLinkCard
+            return (
+              <Card
+                key={cardKey(it)}
+                item={it}
+                providerKey={it.providerKey}
+                providerLabel={it.providerLabel}
+                timezone={timezone}
+                activeStudioId={activeStudioId}
+                onDecided={() => markDecided(it)}
+              />
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }

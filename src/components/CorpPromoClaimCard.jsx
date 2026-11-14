@@ -7,18 +7,13 @@
 // (POST /api/corp-promo-claims/[id]/handled).
 // APPROVALSQ.1 — laid out on CustomerCardShell.
 import { useRef, useState } from 'react'
-import Link from 'next/link'
 import { Button } from '@/components/ui'
+import StudioLink from '@/components/approvals/StudioLink'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
+import { withStudio, studioChip } from '@/lib/approvals/studio-request'
+import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 
-function formatDateTime(s) {
-  if (!s) return '—'
-  try {
-    return new Date(s).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })
-  } catch { return s }
-}
-
-export default function CorpPromoClaimCard({ item, onDecided }) {
+export default function CorpPromoClaimCard({ item, onDecided, timezone = null, activeStudioId = null }) {
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState(null) // { tone, text }
   const inFlight = useRef(false)
@@ -29,7 +24,7 @@ export default function CorpPromoClaimCard({ item, onDecided }) {
     setBusy(true)
     setOutcome(null)
     try {
-      const r = await fetch(`/api/corp-promo-claims/${item.id}/handled`, { method: 'POST' })
+      const r = await fetch(`/api/corp-promo-claims/${item.id}/handled`, withStudio(item, { method: 'POST' }))
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) {
         setOutcome({ tone: 'bad', text: `Could not mark it handled (${j.error || `HTTP ${r.status}`}).` })
@@ -50,8 +45,9 @@ export default function CorpPromoClaimCard({ item, onDecided }) {
       source="CORPORATE PROMO"
       state={{ label: 'Credits not added', tone: 'amber' }}
       name={item.title}
+      studio={studioChip(item, activeStudioId)}
       meta={item.meta}
-      when={`Claimed ${formatDateTime(item.submittedAt)}`}
+      when={`Claimed ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       summary={item.subtitle}
       contact={(
         <>
@@ -59,7 +55,7 @@ export default function CorpPromoClaimCard({ item, onDecided }) {
           {item.phone && <span>{item.phone}</span>}
           {item.glofoxMemberId && <span>Glofox member {item.glofoxMemberId}</span>}
           {item.un1tUserId && <span>un1t.online user {item.un1tUserId}</span>}
-          {item.contactId && <Link href={`/contacts/${item.contactId}`} className="underline">Open contact</Link>}
+          {item.contactId && <StudioLink item={item} activeStudioId={activeStudioId} href={`/contacts/${item.contactId}`} className="underline">Open contact</StudioLink>}
         </>
       )}
       outcome={outcome}

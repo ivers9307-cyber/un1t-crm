@@ -10,7 +10,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 
 import { logWarn } from '@/lib/log'
-import { getUserLocationIds } from '@/lib/auth'
+import { getUserLocationIds, getCurrentUser } from '@/lib/auth'
 import { GET } from './route.js'
 
 const rows = [
@@ -47,12 +47,12 @@ beforeEach(() => { vi.clearAllMocks(); profileReads = [] })
 
 describe.each([['history', history], ['conversation', conversation]])('GET %s', (_n, run) => {
   it('attaches names, drops decided_by, reads profiles once by named columns', async () => {
-    db = makeDb(rows, async () => ({ data: [{ id: 'p1', full_name: 'Sarah' }, { id: 'p2', full_name: 'Tom' }], error: null }))
+    db = makeDb(rows, async () => ({ data: [{ id: 'p1', full_name: 'Sarah', role: 'manager' }, { id: 'p2', full_name: 'Tom', role: 'owner' }], error: null }))
     const j = await (await run()).json()
     expect(j.requests.map(r => r.decided_by_name)).toEqual(['Sarah', 'Tom', 'Sarah', null])
     expect(j.requests.every(r => !('decided_by' in r))).toBe(true)
     expect(profileReads).toHaveLength(1)
-    expect(profileReads[0].cols).toBe('id, full_name')
+    expect(profileReads[0].cols).toBe('id, full_name, role')
     expect(profileReads[0].ids.sort()).toEqual(['p1', 'p2'])
   })
 
@@ -70,6 +70,36 @@ describe.each([['history', history], ['conversation', conversation]])('GET %s', 
     const j = await (await run()).json()
     expect(j.requests[0].decided_by_name).toBeNull()
     expect(profileReads).toHaveLength(0)
+  })
+})
+
+describe.each([['history', history], ['conversation', conversation]])('GET %s support names', (_n, run) => {
+  const profiles = async () => ({ data: [{ id: 'p1', full_name: 'Sarah', role: 'master' }, { id: 'p2', full_name: 'Tom', role: 'owner' }], error: null })
+  const viewer = (role, extra = {}) => getCurrentUser.mockResolvedValueOnce({ id: 'u1', role, activeLocation: { id: 'L1' }, locations: [{ id: 'L1' }], ...extra })
+
+  it('shows Support for a master decider to a manager, and leaves others alone', async () => {
+    db = makeDb(rows, profiles); viewer('manager')
+    const j = await (await run()).json()
+    expect(j.requests.map(r => r.decided_by_name)).toEqual(['Support', 'Tom', 'Support', null])
+  })
+
+  it('shows the real name of a master decider to a master', async () => {
+    db = makeDb(rows, profiles); viewer('master')
+    const j = await (await run()).json()
+    expect(j.requests.map(r => r.decided_by_name)).toEqual(['Sarah', 'Tom', 'Sarah', null])
+  })
+
+  it('a master by profileRole counts as a master viewer (same rule as the registry)', async () => {
+    db = makeDb(rows, profiles); viewer('owner', { profileRole: 'master' })
+    const j = await (await run()).json()
+    expect(j.requests[0].decided_by_name).toBe('Sarah')
+  })
+
+  it('never returns role or decided_by', async () => {
+    db = makeDb(rows, profiles); viewer('manager')
+    const j = await (await run()).json()
+    expect(j.requests.every(r => !('role' in r) && !('decided_by' in r))).toBe(true)
+    expect(JSON.stringify(j)).not.toContain('master')
   })
 })
 

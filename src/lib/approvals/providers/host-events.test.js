@@ -12,7 +12,7 @@ vi.mock('../registry', () => ({
 import { hostEventsProvider } from './host-events'
 
 const ROWS = [
-  { id: 'e1', name: 'Pride Training Club', kind: 'masterclass', race_date: '2026-09-20', status: 'pending_review', submitted_at: '2026-07-27T07:20:00Z', created_at: '2026-07-27T07:20:00Z', location_id: 'loc-a', host: { id: 'h1', name: 'Pride Training Club', organization_id: 'org-un1t' } },
+  { id: 'e1', name: 'Pride Training Club', kind: 'masterclass', race_date: '2026-09-20', venue_name: 'Phoenix Park', non_member_fee_cents: 2550, status: 'pending_review', submitted_at: '2026-07-27T07:20:00Z', created_at: '2026-07-27T07:20:00Z', location_id: 'loc-a', host: { id: 'h1', name: 'Pride Training Club', organization_id: 'org-un1t' } },
   { id: 'e2', name: 'Other Org Event', kind: 'race', race_date: '2026-10-01', status: 'pending_review', submitted_at: null, created_at: '2026-07-28T09:00:00Z', location_id: 'loc-b', host: { id: 'h2', name: 'Elsewhere', organization_id: 'org-other' } },
 ]
 
@@ -41,7 +41,19 @@ describe('hostEventsProvider', () => {
       title: 'Pride Training Club — Pride Training Club',
       subtitle: '2026-09-20 · masterclass',
       reviewUrl: '/settings/hosts',
+      venue: 'Phoenix Park',
+      priceLabel: '€25.50',
     })
+  })
+
+  it('no venue is null and a missing or zero price reads Free', async () => {
+    const user = { role: 'master', activeOrganization: { id: 'org-un1t' } }
+    const row = { ...ROWS[0], venue_name: '  ', non_member_fee_cents: null }
+    const { items } = await hostEventsProvider.fetchPending(makeDb([row]), user)
+    expect(items[0].venue).toBeNull()
+    expect(items[0].priceLabel).toBe('Free')
+    const zero = { ...ROWS[0], non_member_fee_cents: 0 }
+    expect((await hostEventsProvider.fetchPending(makeDb([zero]), user)).items[0].priceLabel).toBe('Free')
   })
 
   it('empty without an org', async () => {

@@ -16,18 +16,13 @@
 // third button, Mark granted with no email ({ action: 'resolve', notify: false }).
 
 import { useRef, useState } from 'react'
-import Link from 'next/link'
 import { Button } from '@/components/ui'
+import StudioLink from '@/components/approvals/StudioLink'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
+import { withStudio, studioChip } from '@/lib/approvals/studio-request'
+import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 
-function formatDateTime(s) {
-  if (!s) return '—'
-  try {
-    return new Date(s).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })
-  } catch { return s }
-}
-
-export default function TrialPurchaseReviewCard({ item, onDecided }) {
+export default function TrialPurchaseReviewCard({ item, onDecided, timezone = null, activeStudioId = null }) {
   const [busy, setBusy] = useState(null) // 'retry' | 'resolve' | 'quiet' | 'handled'
   const [outcome, setOutcome] = useState(null) // { tone, text }
   const inFlight = useRef(false)
@@ -39,11 +34,11 @@ export default function TrialPurchaseReviewCard({ item, onDecided }) {
     setBusy(which)
     setOutcome(null)
     try {
-      const r = await fetch(`/api/trial-purchases/${item.id}/review`, {
+      const r = await fetch(`/api/trial-purchases/${item.id}/review`, withStudio(item, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(notify === false ? { action, notify: false } : { action }),
-      })
+      }))
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) {
         const code = j.error || `HTTP ${r.status}`
@@ -109,8 +104,9 @@ export default function TrialPurchaseReviewCard({ item, onDecided }) {
       source="PAID TRIAL"
       state={help ? { label: 'Needs a call', tone: 'amber' } : { label: 'Grant failed', tone: 'red' }}
       name={item.title}
+      studio={studioChip(item, activeStudioId)}
       meta={item.meta}
-      when={`${help ? 'Asked' : 'Paid'} ${formatDateTime(item.submittedAt)}${!help && item.attempts > 1 ? ` · ${item.attempts} attempts` : ''}`}
+      when={`${help ? 'Asked' : 'Paid'} ${formatApprovalDateTime(item.submittedAt, timezone)}${!help && item.attempts > 1 ? ` · ${item.attempts} attempts` : ''}`}
       amount={help ? undefined : `€${Number(item.amount || 0).toFixed(2)}`}
       summary={item.subtitle}
       contact={(
@@ -118,7 +114,7 @@ export default function TrialPurchaseReviewCard({ item, onDecided }) {
           {item.email && <span>{item.email}</span>}
           {item.phone && <span>{item.phone}</span>}
           {!help && item.glofoxMemberId && <span>Glofox member {item.glofoxMemberId}</span>}
-          {item.contactId && <Link href={`/contacts/${item.contactId}`} className="underline">Open contact</Link>}
+          {item.contactId && <StudioLink item={item} activeStudioId={activeStudioId} href={`/contacts/${item.contactId}`} className="underline">Open contact</StudioLink>}
         </>
       )}
       outcome={outcome}
