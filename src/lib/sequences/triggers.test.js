@@ -1240,3 +1240,34 @@ describe('triggerSequencesForCheckoutTrialPurchased', () => {
     expect(seqBuilder.eq).toHaveBeenCalledWith('status', 'active')
   })
 })
+
+// ── paid_trial_checkout_abandoned (TRIALABANDON.1) ──────────────────
+describe('triggerSequencesForTrialCheckoutAbandoned', () => {
+  const checkout = { purchase_id: 'tp-1', studio: 'stillorgan', provider: 'revolut', created_at: '2026-11-14T10:00:00.000Z', resumable: true }
+  const args = { contactId: 'c1', locationId: 'loc-st', purchaseId: 'tp-1', checkout }
+
+  it('enrols from step 0 with the checkout on the run, the abandoned row as the source', async () => {
+    const db = mockDb({ email_sequences: { list: [{ id: 'seq-9', audience_filter: null }] } })
+    const res = await triggers.triggerSequencesForTrialCheckoutAbandoned(db, args)
+    expect(res).toEqual({ ok: true, enrolled: 1 })
+    expect(enrolContacts).toHaveBeenCalledWith({
+      sequenceId: 'seq-9',
+      contactIds: ['c1'],
+      sourceType: 'paid_trial_checkout_abandoned',
+      sourceRef: 'tp-1',
+      startStepOrder: 0,
+      metadata: { trial_checkout: checkout },
+    })
+  })
+
+  it('asks only for this studio\'s active sequences of this trigger type', async () => {
+    const db = mockDb({ email_sequences: { list: [] } })
+    await triggers.triggerSequencesForTrialCheckoutAbandoned(db, args)
+    const seqBuilder = db.from.mock.results
+      .map((r, i) => ({ r: r.value, t: db.from.mock.calls[i][0] }))
+      .find((x) => x.t === 'email_sequences').r
+    expect(seqBuilder.eq).toHaveBeenCalledWith('location_id', 'loc-st')
+    expect(seqBuilder.eq).toHaveBeenCalledWith('trigger_type', 'paid_trial_checkout_abandoned')
+    expect(seqBuilder.eq).toHaveBeenCalledWith('status', 'active')
+  })
+})

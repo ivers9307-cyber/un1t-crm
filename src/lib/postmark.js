@@ -548,6 +548,9 @@ export function applyMergeTags(html, contact, extras = {}) {
     // empty for any other email, so a body that uses them still renders.
     '{{pay_amount_phrase}}': extras.pay_amount_phrase || '',
     '{{payment_cta}}': extras.payment_cta || '',
+    // TRIALABANDON.1 — the link back to the /trial page, resolved by the
+    // sequence email step for an abandoned €39 checkout run. Empty elsewhere.
+    '{{trial_resume_url}}': extras.trial_resume_url || '',
     // UN1TWELCOME.3 — rendered HTML from the sequence email step (store
     // buttons from the studio's app links, the studio logo). Empty elsewhere.
     '{{app_download_links}}': extras.app_download_links || '',

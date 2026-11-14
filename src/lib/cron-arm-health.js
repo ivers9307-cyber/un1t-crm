@@ -101,6 +101,16 @@
 //                       outcome with no read or claim fault. Seeded by mig
 //                       824, applied RIGHT AFTER the deploy.
 //
+// TRIALABANDON.1 adds a twelfth, on the */2 process-trial-purchases cron:
+//
+//   'trial-checkout-abandoned-sweep' — sweepAbandonedTrialCheckouts
+//                       (src/lib/trial-checkout-abandoned.js), the abandoned
+//                       €39 checkout arm (exits buyers, enrols unpaid
+//                       checkouts). Stamped only when the sweep returned ok (a
+//                       held person or a failed read is not ok), right after
+//                       the checkout purchase sweep. Seeded by mig 836,
+//                       applied RIGHT AFTER the deploy.
+//
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
 // fault in the arm's own machinery. A run with nothing to send is healthy (a

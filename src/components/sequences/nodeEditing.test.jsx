@@ -199,7 +199,7 @@ describe('WhatsApp step editor — dynamic URL button field', () => {
   })
 
   it('exports the reserved names with the descriptions the operator reads', () => {
-    expect(STEP_RESERVED_VARIABLES.map(r => r.value)).toEqual(['pay_amount', 'pay_link_suffix'])
+    expect(STEP_RESERVED_VARIABLES.map(r => r.value)).toEqual(['pay_amount', 'pay_link_suffix', 'trial_resume_url', 'trial_resume_suffix'])
     for (const r of STEP_RESERVED_VARIABLES) expect(r.description.length).toBeGreaterThan(0)
   })
 

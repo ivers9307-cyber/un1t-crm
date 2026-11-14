@@ -24,12 +24,20 @@
 // the sync is write-fenced (tests/un1t-online-write-guard.test.js). Each studio
 // in its own try/catch; stamped only when the studio list was read and every
 // studio's sweep returned ok (failed / passwordPending are counts, not faults).
+// TRIALABANDON.1 — and the abandoned checkout sweep (an ARM, heartbeat
+// 'trial-checkout-abandoned-sweep', mig 836): ends the abandoned-checkout
+// sequence for anyone who has since paid, then offers each unpaid /trial
+// checkout of the last 72 hours, once, to the studio's active
+// paid_trial_checkout_abandoned sequences. Run right after the settle and the
+// purchase sweep, so a payment this tick is seen before anyone is enrolled.
+// Same rule: own try/catch, stamped only when it returned ok.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { claimAndProcessTrialPurchase, MAX_ATTEMPTS } from '@/lib/trial-purchase-queue'
 import { settleUn1tTrialPurchases } from '@/lib/trial-purchase-un1t-settle'
 import { sweepCheckoutTrialPurchases } from '@/lib/trial-checkout-purchase-sweep'
+import { sweepAbandonedTrialCheckouts } from '@/lib/trial-checkout-abandoned'
 import { sweepStalledGlofoxCorpClaims } from '@/lib/corp-promo-stalled-sweep'
 import { sweepUn1tOfferPurchases } from '@/lib/un1t-offer-purchases'
 import { locationsWithSource } from '@/lib/membership/locations-for-source'
@@ -42,6 +50,7 @@ export const maxDuration = 300
 const STALE_MS = 10 * 60_000
 const FRESH_ROW_GRACE_MS = 30_000
 const CHECKOUT_SWEEP_HEARTBEAT = 'trial-checkout-purchase-sweep'
+const ABANDONED_SWEEP_HEARTBEAT = 'trial-checkout-abandoned-sweep'
 const STALLED_SWEEP_HEARTBEAT = 'corp-promo-stalled-sweep'
 const OFFER_SWEEP_HEARTBEAT = 'un1t-offer-purchase-sweep'
 const OFFER_COUNT_KEYS = ['checked', 'recorded', 'matchedPage', 'expired', 'failed', 'passwordPending']
@@ -99,9 +108,10 @@ export async function GET(request) {
     }
     if (stats.reap_failed === 0 && stats.un1t_read_failed === 0) await stampHeartbeat('process-trial-purchases', stats)
     const sweep = await runCheckoutPurchaseSweep(db)
+    const abandoned = await runAbandonedCheckoutSweep(db)
     const stalled = await runStalledClaimSweep(db)
     const offers = await runOfferPurchaseSweep(db)
-    return NextResponse.json({ success: true, ...stats, ...sweep, ...stalled, ...offers })
+    return NextResponse.json({ success: true, ...stats, ...sweep, ...abandoned, ...stalled, ...offers })
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 })
   }
@@ -123,6 +133,29 @@ async function runCheckoutPurchaseSweep(db) {
   } catch (e) {
     logError('process-trial-purchases', 'checkout purchase sweep threw', { errName: e?.name ?? null })
     return { checkout_seq_ok: false, checkout_seq_checked: 0, checkout_seq_enrolled: 0 }
+  }
+}
+
+// TRIALABANDON.1 — the abandoned checkout arm. Returns its counts; never throws.
+async function runAbandonedCheckoutSweep(db) {
+  const answer = (res) => ({
+    abandoned_seq_ok: Boolean(res?.ok), abandoned_seq_checked: res?.checked || 0,
+    abandoned_seq_enrolled: res?.enrolled || 0, abandoned_seq_exited: res?.exited || 0,
+  })
+  try {
+    const res = await sweepAbandonedTrialCheckouts(db)
+    if (res?.ok) {
+      const { ok: _ok, ...counts } = res
+      try {
+        await stampHeartbeat(ABANDONED_SWEEP_HEARTBEAT, counts)
+      } catch (e) {
+        logError('process-trial-purchases', 'abandoned checkout sweep stamp threw', { errName: e?.name ?? null })
+      }
+    }
+    return answer(res)
+  } catch (e) {
+    logError('process-trial-purchases', 'abandoned checkout sweep threw', { errName: e?.name ?? null })
+    return answer(null)
   }
 }
 

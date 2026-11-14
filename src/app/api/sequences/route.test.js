@@ -54,4 +54,14 @@ describe('POST /api/sequences', () => {
     expect(res.status).toBe(200)
     expect(insert).toHaveBeenCalledWith(expect.objectContaining({ trigger_type: 'paid_trial_checkout_purchased' }))
   })
+  it('accepts trigger_type paid_trial_checkout_abandoned (TRIALABANDON.1)', async () => {
+    const insert = vi.fn(() => ({ select: () => ({ single: async () => ({ data: { id: 's4' }, error: null }) }) }))
+    createServerClient.mockReturnValue({ from: () => ({ insert }) })
+    const res = await POST(new Request('http://x/api/sequences', {
+      method: 'POST',
+      body: JSON.stringify({ name: '€39 checkout not paid', trigger_type: 'paid_trial_checkout_abandoned', location_id: LOC }),
+    }))
+    expect(res.status).toBe(200)
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ trigger_type: 'paid_trial_checkout_abandoned' }))
+  })
 })

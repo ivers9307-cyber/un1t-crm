@@ -44,6 +44,7 @@ export const TRIGGER_TYPES = [
   'event_reminder', 'segment_added', 'segment_removed', 'membership_state_change', 'anniversary', 'inactivity',
   'race_registered', 'race_finished', 'order_completed', 'order_failed', 'order_abandoned',
   'achievement_unlocked', 'webhook', 'contact_created', 'un1t_account_created', 'un1t_paid_trial_purchased', 'paid_trial_checkout_purchased',
+  'paid_trial_checkout_abandoned',
 ]
 
 // STILL39SEQ.1 — booked_class_at_studio's optional window: absent = every

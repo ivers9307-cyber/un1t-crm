@@ -16,6 +16,7 @@ const triggerLabels = {
   un1t_account_created: 'New un1t.online account',
   un1t_paid_trial_purchased: '€39 trial bought',
   paid_trial_checkout_purchased: '€39 trial bought (checkout)',
+  paid_trial_checkout_abandoned: '€39 trial checkout not paid',
   event_reminder: 'Event reminder', tag_added: 'Tag added',
   segment_added: 'Segment entered', segment_removed: 'Segment exited',
   race_registered: 'Race registered', race_finished: 'Race finished',

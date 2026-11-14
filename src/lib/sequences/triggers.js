@@ -947,8 +947,29 @@ export async function triggerSequencesForCheckoutTrialPurchased(db, { contactId,
   return enrolForPurchase(db, 'paid_trial_checkout_purchased', { contactId, locationId, sourceRef: purchaseId })
 }
 
-// The two €39 purchase triggers differ only in their trigger type and source.
-async function enrolForPurchase(db, triggerType, { contactId, locationId, sourceRef }) {
+// ── paid_trial_checkout_abandoned (TRIALABANDON.1) ───────────────
+//
+// Called by the abandoned-checkout sweep (src/lib/trial-checkout-abandoned.js)
+// for a person whose /trial checkout was started and not paid, at any studio.
+// `checkout` rides on the enrolment (metadata.trial_checkout) so the steps can
+// build the resume link and the exit can tell a later purchase from an earlier
+// one. Same contract as the purchase triggers.
+
+/**
+ * @param {object} db  service-role client
+ * @param {{ contactId: string, locationId: string, purchaseId: string, checkout?: object|null }} args
+ * @returns {Promise<{ ok: true, enrolled: number } | { ok: false, reason: string }>}
+ */
+export async function triggerSequencesForTrialCheckoutAbandoned(db, { contactId, locationId, purchaseId, checkout = null }) {
+  return enrolForPurchase(db, 'paid_trial_checkout_abandoned', {
+    contactId, locationId, sourceRef: purchaseId,
+    metadata: checkout && typeof checkout === 'object' ? { trial_checkout: checkout } : null,
+  })
+}
+
+// The €39 checkout triggers differ only in their trigger type, source and
+// (the abandoned one) the per-run metadata.
+async function enrolForPurchase(db, triggerType, { contactId, locationId, sourceRef, metadata = null }) {
   try {
     const { data: sequences, error } = await db
       .from('email_sequences')
@@ -971,6 +992,7 @@ async function enrolForPurchase(db, triggerType, { contactId, locationId, source
         sourceType: triggerType,
         sourceRef,
         startStepOrder: 0,
+        ...(metadata ? { metadata } : {}),
       })
       enrolled += res?.enrolled || 0
     }
