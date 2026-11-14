@@ -50,7 +50,7 @@ beforeEach(() => {
   stampTenantHeartbeat.mockReset().mockResolvedValue(undefined)
   maybeReclassifyAfterSync.mockReset().mockResolvedValue({ ran: false, reason: 'recent_run' })
   sweepUn1tWelcomes.mockReset().mockResolvedValue({ ok: true, skipped_no_sequence: false, checked: 0, enrolled: 0, crm_made: 0, waiting: 0, no_contact: 0, no_email: 0, failed: 0 })
-  sweepPaidTrialPurchases.mockReset().mockResolvedValue({ ok: true, skipped_no_sequence: false, checked: 0, enrolled: 0, already: 0, failed: 0, skipped_by_staff: 0 })
+  sweepPaidTrialPurchases.mockReset().mockResolvedValue({ ok: true, skipped_no_sequence: false, checked: 0, enrolled: 0, already: 0, failed: 0 })
   h.discovery = found([])
 })
 
@@ -338,10 +338,10 @@ describe('GET /api/cron/un1t-online-sync', () => {
     it('sweeps every studio whose sync completed and stamps its own row with summed counts', async () => {
       h.discovery = found([loc('hatch'), loc('other')])
       runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
-      sweepPaidTrialPurchases.mockResolvedValue({ ok: true, checked: 2, enrolled: 1, already: 1, failed: 0, skipped_by_staff: 1 })
+      sweepPaidTrialPurchases.mockResolvedValue({ ok: true, checked: 2, enrolled: 1, already: 1, failed: 0 })
       await GET(req())
       expect(sweepPaidTrialPurchases.mock.calls.map((c) => c[1])).toEqual(['hatch', 'other'])
-      expect(purchaseStamps()).toEqual([['un1t-paid-trial-purchase-sweep', expect.objectContaining({ locations: 2, checked: 4, enrolled: 2, already: 2, failed: 0, skipped_by_staff: 2 })]])
+      expect(purchaseStamps()).toEqual([['un1t-paid-trial-purchase-sweep', expect.objectContaining({ locations: 2, checked: 4, enrolled: 2, already: 2, failed: 0 })]])
       expect(syncStamps()).toHaveLength(1)
     })
 

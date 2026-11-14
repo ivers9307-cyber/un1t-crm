@@ -20,7 +20,6 @@
 
 import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 import { triggerSequencesForUn1tPaidTrialPurchased } from '@/lib/sequences/triggers'
-import { STAFF_QUIET_GRANT } from '@/lib/trial-checkout-purchase-sweep'
 import { logError } from '@/lib/log'
 
 const MODULE = 'un1t-paid-trial-purchases'
@@ -30,14 +29,14 @@ export const PURCHASE_WINDOW_MS = 48 * 3_600_000
 const PAGE = 1000
 
 function emptyCounts() {
-  return { ok: true, skipped_no_sequence: false, checked: 0, enrolled: 0, already: 0, failed: 0, skipped_by_staff: 0 }
+  return { ok: true, skipped_no_sequence: false, checked: 0, enrolled: 0, already: 0, failed: 0 }
 }
 
 /**
  * @param {object} db service-role client
  * @param {string} locationId a un1t.online studio
  * @param {{ nowMs?: number, trigger?: Function }} [opts]
- * @returns {Promise<{ ok: boolean, skipped_no_sequence: boolean, checked: number, enrolled: number, already: number, failed: number, skipped_by_staff: number }>}
+ * @returns {Promise<{ ok: boolean, skipped_no_sequence: boolean, checked: number, enrolled: number, already: number, failed: number }>}
  */
 export async function sweepPaidTrialPurchases(db, locationId, { nowMs = Date.now(), trigger = triggerSequencesForUn1tPaidTrialPurchased } = {}) {
   const out = emptyCounts()
@@ -58,36 +57,6 @@ export async function sweepPaidTrialPurchases(db, locationId, { nowMs = Date.now
     return out
   }
 
-  // Staff's quiet grants inside the window. Judged on each contact's NEWEST
-  // granted row in this read, so an older marked grant does not silence a
-  // newer normal one (and the reverse).
-  const windowStart = new Date(nowMs - PURCHASE_WINDOW_MS).toISOString()
-  const { data: grants, error: grantErr } = await db
-    .from('trial_purchases')
-    .select('contact_id, granted_at, "grant"')
-    .eq('location_id', locationId)
-    .eq('status', 'granted')
-    .not('contact_id', 'is', null)
-    .gte('granted_at', windowStart)
-    .order('granted_at', { ascending: false })
-    .order('id', { ascending: true })
-    .range(0, PAGE - 1)
-  if (grantErr) {
-    logError(MODULE, 'staff quiet-grant read failed', { locationId, code: grantErr.code ?? null })
-    out.ok = false
-    return out
-  }
-  const newestGrant = new Map()
-  for (const g of grants || []) {
-    if (!g?.contact_id) continue
-    const prev = newestGrant.get(g.contact_id)
-    if (!prev || Date.parse(g.granted_at) > Date.parse(prev.granted_at)) newestGrant.set(g.contact_id, g)
-  }
-  const quietContacts = new Set()
-  for (const [contactId, g] of newestGrant) {
-    if (g.grant?.confirmation_email === STAFF_QUIET_GRANT) quietContacts.add(contactId)
-  }
-
   let productIds
   try {
     productIds = await paidTrialProductIdsFor(db, locationId)
@@ -106,7 +75,7 @@ export async function sweepPaidTrialPurchases(db, locationId, { nowMs = Date.now
     .gt('amount_cents', 0)
     .eq('refunded', false)
     .not('contact_id', 'is', null)
-    .gte('remote_created_at', windowStart)
+    .gte('remote_created_at', new Date(nowMs - PURCHASE_WINDOW_MS).toISOString())
     .order('remote_created_at', { ascending: false })
     .order('id', { ascending: true })
     .range(0, PAGE - 1)
@@ -125,10 +94,6 @@ export async function sweepPaidTrialPurchases(db, locationId, { nowMs = Date.now
     if (!prev || Date.parse(t.remote_created_at) > Date.parse(prev.remote_created_at)) newestByContact.set(t.contact_id, t)
   }
   for (const t of newestByContact.values()) {
-    if (quietContacts.has(t.contact_id)) {
-      out.skipped_by_staff++
-      continue
-    }
     out.checked++
     const res = await trigger(db, { contactId: t.contact_id, locationId, transactionId: t.id })
     if (!res?.ok) {
