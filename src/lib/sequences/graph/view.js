@@ -98,6 +98,7 @@ const TRIGGER_LABELS = {
   un1t_account_created: () => 'When a new un1t.online account is created',
   un1t_paid_trial_purchased: () => 'When someone buys the €39 trial',
   paid_trial_checkout_purchased: () => 'When someone buys the €39 trial on our checkout',
+  paid_trial_checkout_abandoned: () => 'When someone starts the €39 trial checkout and does not pay',
   booking_created: () => 'When a booking is created',
   pipeline_stage_change: (c) => c?.to_status ? `When pipeline stage becomes ${c.to_status}` : 'When pipeline stage changes',
   tag_added: (c) => c?.tag ? `When the tag “${c.tag}” is added` : 'When a tag is added',

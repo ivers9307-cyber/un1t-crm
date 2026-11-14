@@ -47,6 +47,7 @@ import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase, dunningPresendGate } from '@/lib/dunning-payment'
+import { trialCheckoutFromEnrollment, trialResumeLink, trialAbandonPresendGate } from '@/lib/trial-abandoned-purchase'
 import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-template-buttons'
 import { bookedWithinDaysError } from './graph/schema.js'
 import { templateStamp, TEMPLATE_WAIT_STATUSES, TemplateNotApprovedDeferral } from './template-wait.js'
@@ -280,6 +281,17 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
       return null
     }
   }
+  // TRIALABANDON.1 — an abandoned-checkout run stops the moment the person
+  // has paid. The sweep's exit pass is the main stop; this covers the minutes
+  // between a payment and the next pass. No-op for every other enrolment, and
+  // fails open.
+  {
+    const presend = await trialAbandonPresendGate(db, { enrollment, contact, sequence })
+    if (!presend.proceed) {
+      await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: presend.reason })
+      return null
+    }
+  }
 
   // Resolve content: inline OR via template_id reference.
   let subject = step.subject
@@ -381,6 +393,10 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     preference_url: accountStream ? '' : `${baseUrl}/preferences/${unsubscribeUrl.split('/unsubscribe/')[1]}`,
     pay_amount_phrase: payPhrase,
     payment_cta: paymentCtaHtml(payment),
+    // TRIALABANDON.1 — the link back to the /trial page for an abandoned
+    // checkout run ('' for every other enrolment). HTML-escaped: the value
+    // carries '&' and lands in an href.
+    trial_resume_url: trialResumeLink({ baseUrl, checkout: trialCheckoutFromEnrollment(enrollment), medium: 'email' }).url.replaceAll('&', '&amp;'),
     app_download_links: appDownloadLinks,
     studio_logo: studioLogo,
   })
@@ -567,6 +583,14 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
       return null
     }
   }
+  // TRIALABANDON.1 — as on the email step: stop once the person has paid.
+  {
+    const presend = await trialAbandonPresendGate(db, { enrollment, contact, sequence })
+    if (!presend.proceed) {
+      await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: presend.reason })
+      return null
+    }
+  }
 
   // Resolve the template; must be APPROVED to send.
   if (!template) template = await resolveApprovedWhatsappTemplate(db, step, sequence)
@@ -601,12 +625,19 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
     return null
   }
   const branding = await getLocationBranding(db, sequence.location_id)
+  // TRIALABANDON.1 — the resume link for an abandoned checkout run, on the
+  // studio's customer host. Resolved only for such a run (one cached host
+  // read); every other enrolment maps the two reserved names to ''.
+  const trialCheckout = trialCheckoutFromEnrollment(enrollment)
+  const trialResume = trialCheckout
+    ? trialResumeLink({ baseUrl: await resolveCustomerBaseUrl(db, sequence.location_id), checkout: trialCheckout, medium: 'whatsapp' })
+    : null
   const components = buildTemplateComponents(
     template,
     contact,
     variableMapping,
     step.whatsapp_header_media_url || null,
-    { companyName: branding.companyName, locationName: branding.locationName, locationId: sequence.location_id, payment },
+    { companyName: branding.companyName, locationName: branding.locationName, locationId: sequence.location_id, payment, trialResume },
   )
   // PAYLINK.6b — the general case the two checks above cover only for the
   // pay-link feature specifically: ANY template whose approved link ends in
@@ -684,7 +715,7 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
       message_type: 'template',
       template_name: template.name,
       template_variables: variableMapping,
-      body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, locationName: branding.locationName, payment }),
+      body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, locationName: branding.locationName, payment, trialResume }),
       status: 'sent',
       sent_at: new Date().toISOString(),
     }).select('id').single()

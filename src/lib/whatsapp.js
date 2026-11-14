@@ -2166,6 +2166,11 @@ function resolveContactField(fieldName, contact, opts = {}) {
   // from the contact, so a contact column of the same name can't leak in.
   if (fieldName === 'pay_amount') return opts.payment?.amount || ''
   if (fieldName === 'pay_link_suffix') return opts.payment?.link_suffix || ''
+  // TRIALABANDON.1 — reserved names for the abandoned €39 checkout follow-up,
+  // resolved from the RUN (opts.trialResume, built by the sequence step from
+  // sequence_enrollments.metadata), never from the contact. Empty elsewhere.
+  if (fieldName === 'trial_resume_url') return opts.trialResume?.url || ''
+  if (fieldName === 'trial_resume_suffix') return opts.trialResume?.suffix || ''
   return contact[fieldName] || fieldName // literal fallback, as today
 }
 

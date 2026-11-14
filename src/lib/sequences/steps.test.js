@@ -1624,6 +1624,82 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(sent.subject).toBe('Payment failed of €209 — ')
   })
 
+  // ── TRIALABANDON.1 — the abandoned €39 checkout follow-up ────────
+  describe('TRIALABANDON.1 — abandoned checkout run', () => {
+    const PURCHASE = '11111111-2222-3333-4444-555555555555'
+    const abandonedEnrol = (over = {}) => ({
+      id: 'e-ab', source_type: 'paid_trial_checkout_abandoned',
+      metadata: { trial_checkout: { purchase_id: PURCHASE, studio: 'stillorgan', provider: 'revolut', created_at: new Date(Date.now() - 70 * 60_000).toISOString(), resumable: true, ...over } },
+    })
+    const resumeStep = { ...step, html_content: '<p>Hi {{first_name}}, <a href="{{trial_resume_url}}">finish your trial at {{location_name}}</a></p>' }
+    // emailDb plus the pre-send check's two tables.
+    function abandonedDb({ purchases = [], exits = [] } = {}) {
+      const db = emailDb()
+      const inner = db.from.bind(db)
+      db.exits = exits
+      db.from = (table) => {
+        if (table === 'trial_purchases') {
+          const chain = {}
+          for (const op of ['select', 'eq', 'or', 'gte']) chain[op] = () => chain
+          chain.limit = async () => ({ data: purchases, error: null })
+          return chain
+        }
+        if (table === 'sequence_enrollments') {
+          const chain = { update: (patch) => { exits.push(patch); return chain }, eq: () => chain, in: () => chain, select: async () => ({ data: [{ id: 'e-ab' }], error: null }) }
+          return chain
+        }
+        return inner(table)
+      }
+      return db
+    }
+
+    it('renders {{trial_resume_url}}: the studio, the open purchase and the email UTMs, HTML-escaped', async () => {
+      const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
+      pm.applyMergeTags.mockImplementation(realApplyMergeTags)
+      await steps.sendEmailStep(abandonedDb(), { step: resumeStep, sequence, contact: { ...consentedContact, first_name: 'Ada' }, enrollment: abandonedEnrol() })
+      const sent = pm.sendMarketingEmail.mock.calls[0][0]
+      expect(sent.htmlBody).toContain(`<a href="https://crm.test/trial?studio=stillorgan&amp;purchase=${PURCHASE}&amp;utm_source=crm&amp;utm_medium=email&amp;utm_campaign=trial-abandoned">finish your trial at Stillorgan</a>`)
+      expect(sent.htmlBody).toContain('Hi Ada,')
+    })
+
+    it('a closed or Hatch Street checkout links to the studio alone', async () => {
+      const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
+      pm.applyMergeTags.mockImplementation(realApplyMergeTags)
+      await steps.sendEmailStep(abandonedDb(), { step: resumeStep, sequence, contact: consentedContact, enrollment: abandonedEnrol({ studio: 'hatch', provider: 'un1t_online', resumable: false }) })
+      expect(pm.sendMarketingEmail.mock.calls[0][0].htmlBody).toContain('href="https://crm.test/trial?studio=hatch&amp;utm_source=crm&amp;utm_medium=email&amp;utm_campaign=trial-abandoned"')
+    })
+
+    it('the tag is empty on any other run', async () => {
+      const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
+      pm.applyMergeTags.mockImplementation(realApplyMergeTags)
+      await steps.sendEmailStep(emailDb(), { step: resumeStep, sequence, contact: consentedContact, enrollment: { id: 'e1', source_type: 'contact_created' } })
+      expect(pm.sendMarketingEmail.mock.calls[0][0].htmlBody).toContain('<a href="">')
+    })
+
+    it('is MARKETING mail: no email marketing consent at the studio is a recorded skip', async () => {
+      const db = abandonedDb()
+      const noConsent = { ...consentedContact, contact_location_preferences: [{ location_id: 'loc-1', email_marketing: false, sms_marketing: false, whatsapp_marketing: false }] }
+      await expect(steps.sendEmailStep(db, { step: resumeStep, sequence, contact: noConsent, enrollment: abandonedEnrol() })).resolves.toBeNull()
+      expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
+      expect(pm.sendTransactionalEmail).not.toHaveBeenCalled()
+      expect(JSON.stringify(db.activityInserts[0])).toMatch(/no email marketing consent/)
+    })
+
+    it('someone who has paid since the checkout gets nothing: the run is exited and the step is a recorded skip', async () => {
+      const db = abandonedDb({ purchases: [{ id: 'tp-paid' }] })
+      await expect(steps.sendEmailStep(db, { step: resumeStep, sequence, contact: consentedContact, enrollment: abandonedEnrol() })).resolves.toBeNull()
+      expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
+      expect(db.exits).toEqual([expect.objectContaining({ status: 'exited', exit_reason: 'trial_purchased', next_step_at: null })])
+      expect(JSON.stringify(db.activityInserts[0])).toMatch(/bought the trial since the checkout/)
+    })
+
+    it('fails open: a purchase check that cannot run still sends', async () => {
+      // emailDb has no trial_purchases table, so the check throws inside.
+      await steps.sendEmailStep(emailDb(), { step: resumeStep, sequence, contact: consentedContact, enrollment: abandonedEnrol() })
+      expect(pm.sendMarketingEmail).toHaveBeenCalledTimes(1)
+    })
+  })
+
   // ── UN1TWELCOME.3 — account-stream lane + app/logo merge tags ────
   describe('UN1TWELCOME.3 — account stream', () => {
     const welcomeEnrol = { id: 'e-w', source_type: 'un1t_account_created' }

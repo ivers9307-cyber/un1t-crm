@@ -61,6 +61,8 @@ describe('the registry and applyMergeTags() agree', () => {
       // PAYLINK.7 — only non-empty on an overdue-payment reminder run.
       pay_amount_phrase: ' of €209',
       payment_cta: '<a href="https://pay.test/x">pay it now here</a>',
+      // TRIALABANDON.1 — only non-empty on an unpaid €39 trial follow-up run.
+      trial_resume_url: 'https://example.com/trial?studio=stillorgan',
       // UN1TWELCOME.3 — only non-empty in a sequence email step.
       app_download_links: '<table><tr><td>Download</td></tr></table>',
       studio_logo: '<img src="https://cdn.test/logo.png" alt="">',
@@ -95,11 +97,11 @@ describe('the registry is well formed', () => {
     }
   })
 
-  it('withholds exactly the deprecated alias, the retired passcode tag, the payment-reminder tags, and the studio logo tag', () => {
+  it('withholds exactly the deprecated alias, the retired passcode tag, the payment-reminder tags, the studio logo tag and the trial checkout link', () => {
     // Pinned so widening the withheld set is a deliberate edit to this test,
     // not a quiet way to stop advertising something that works.
     expect(MERGE_TAGS.filter((t) => !t.offered).map((t) => t.tag).sort())
-      .toEqual(['{{glofox_passcode}}', '{{lead_status}}', '{{pay_amount_phrase}}', '{{payment_cta}}', '{{studio_logo}}'])
+      .toEqual(['{{glofox_passcode}}', '{{lead_status}}', '{{pay_amount_phrase}}', '{{payment_cta}}', '{{studio_logo}}', '{{trial_resume_url}}'])
   })
 
   it('UN1TWELCOME.3/.7 — the app tag is offered, the logo tag withheld, and both render empty with no extras', () => {

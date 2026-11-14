@@ -507,6 +507,24 @@ describe('Trigger list offers the €39 purchase (PAIDTRIALTRIGGER.1)', () => {
     expect(checkout).toBeTruthy()
     expect(checkout.textContent).toMatch(/€39.*checkout/)
   })
+
+  // TRIALABANDON.1 — the abandoned checkout trigger, with its plain label, and
+  // the help that says who is enrolled, when they leave and which tags to use.
+  it('offers "€39 trial: checkout started, not paid" and explains it once chosen', () => {
+    const { container, getByText } = render(
+      <SequenceSettings sequence={{ id: 'seq-1', location_id: 'loc-1', name: 'x', status: 'draft', trigger_type: 'paid_trial_checkout_abandoned', trigger_config: {} }} />,
+    )
+    fireEvent.click(getByText('Settings & trigger'))
+    const select = Array.from(container.querySelectorAll('select')).find((s) => Array.from(s.options).some((o) => o.value === 'un1t_account_created'))
+    const opt = Array.from(select.options).find((o) => o.value === 'paid_trial_checkout_abandoned')
+    expect(opt.textContent).toBe('€39 trial: checkout started, not paid')
+    expect(container.textContent).toMatch(/has not paid/)
+    expect(container.textContent).toMatch(/once every 14 days/)
+    expect(container.textContent).toMatch(/If they pay, they leave this flow/)
+    expect(container.textContent).toMatch(/marketing consent/)
+    expect(container.textContent).toContain('{{trial_resume_url}}')
+    expect(container.textContent).toContain('trial_resume_suffix')
+  })
 })
 
 describe('Stage pickers — real stages (PIPEBUILD.1e)', () => {

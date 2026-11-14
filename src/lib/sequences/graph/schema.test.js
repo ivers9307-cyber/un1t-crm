@@ -59,6 +59,9 @@ describe('graph schema constants', () => {
   it('includes the checkout €39 purchase trigger (STILL39SEQ.1)', () => {
     expect(TRIGGER_TYPES).toContain('paid_trial_checkout_purchased')
   })
+  it('includes the abandoned €39 checkout trigger (TRIALABANDON.1)', () => {
+    expect(TRIGGER_TYPES).toContain('paid_trial_checkout_abandoned')
+  })
   it('reserves the trigger source id', () => {
     expect(TRIGGER_SOURCE_ID).toBe('trigger')
   })

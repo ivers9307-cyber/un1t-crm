@@ -41,6 +41,7 @@ const TRIGGER_OPTIONS = [
   ['un1t_account_created', 'When a new un1t.online account is created'],
   ['un1t_paid_trial_purchased', 'When someone buys the €39 trial (un1t.online)'],
   ['paid_trial_checkout_purchased', 'When someone buys the €39 trial on our /trial checkout (Glofox studios)'],
+  ['paid_trial_checkout_abandoned', '€39 trial: checkout started, not paid'],
   ['booking_created', 'When a booking is created'],
   ['first_booking', 'On a contact’s first booking'],
   ['pipeline_stage_change', 'When the pipeline stage changes'],
@@ -290,6 +291,21 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
                 From then on anyone who starts matching is enrolled automatically, within five
                 minutes, and you never have to come back. Editing the audience asks you to confirm
                 the new number before it starts again.
+              </p>
+            )}
+            {triggerType === 'paid_trial_checkout_abandoned' && (
+              <p className="text-[11px] text-un1t-subtle leading-relaxed">
+                Starts when someone begins the €39 trial checkout on the /trial page and has not paid:
+                the payment failed or ran out of time, or an hour has passed with no payment. Checked
+                every two minutes. Each person is followed up at most once every 14 days, and anyone
+                who already has or has had a trial here is left out. If they pay, they leave this flow
+                straight away. Only checkouts abandoned after you switch this on are picked up.
+                Emails and WhatsApp messages go only to people with marketing consent at this studio.
+                Use <span className="font-mono">{'{{trial_resume_url}}'}</span> in an email for the link back to
+                the trial page (it reopens their own checkout while that is still open). In a WhatsApp
+                template, map a variable to <span className="font-mono">trial_resume_url</span>, or a link
+                button ending <span className="font-mono">/trial?{'{{1}}'}</span> to{' '}
+                <span className="font-mono">trial_resume_suffix</span>.
               </p>
             )}
             {triggerType === 'contact_created' && (

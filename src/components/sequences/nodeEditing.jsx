@@ -98,6 +98,10 @@ export const STEP_CONTACT_FIELDS = WA_VARIABLE_FIELDS
 export const STEP_RESERVED_VARIABLES = [
   { value: 'pay_amount', description: 'Overdue payment: amount owed' },
   { value: 'pay_link_suffix', description: 'Overdue payment: link suffix' },
+  // TRIALABANDON.1 — filled only on a "€39 trial: checkout started, not paid"
+  // run (src/lib/trial-abandoned-purchase.js trialResumeLink); empty elsewhere.
+  { value: 'trial_resume_url', description: 'Unpaid €39 trial: link back to the trial page' },
+  { value: 'trial_resume_suffix', description: 'Unpaid €39 trial: link suffix (button ending /trial?{{1}})' },
 ]
 
 // The BUTTONS component's dynamic URL button, or null.

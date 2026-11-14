@@ -4,11 +4,12 @@
 // thrown sweeper are counted and do not.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ stamp: vi.fn(), claim: vi.fn(), settle: vi.fn(), sweep: vi.fn(), stalled: vi.fn(), offers: vi.fn(), studios: vi.fn() }))
+const mocks = vi.hoisted(() => ({ stamp: vi.fn(), claim: vi.fn(), settle: vi.fn(), sweep: vi.fn(), abandoned: vi.fn(), stalled: vi.fn(), offers: vi.fn(), studios: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: mocks.stamp }))
 vi.mock('@/lib/trial-purchase-queue', () => ({ claimAndProcessTrialPurchase: mocks.claim, MAX_ATTEMPTS: 5 }))
 vi.mock('@/lib/trial-purchase-un1t-settle', () => ({ settleUn1tTrialPurchases: mocks.settle }))
 vi.mock('@/lib/trial-checkout-purchase-sweep', () => ({ sweepCheckoutTrialPurchases: mocks.sweep }))
+vi.mock('@/lib/trial-checkout-abandoned', () => ({ sweepAbandonedTrialCheckouts: mocks.abandoned }))
 vi.mock('@/lib/corp-promo-stalled-sweep', () => ({ sweepStalledGlofoxCorpClaims: mocks.stalled }))
 vi.mock('@/lib/un1t-offer-purchases', () => ({ sweepUn1tOfferPurchases: mocks.offers }))
 vi.mock('@/lib/membership/locations-for-source', () => ({ locationsWithSource: mocks.studios }))
@@ -33,6 +34,7 @@ beforeEach(() => {
   process.env.CRON_SECRET = 's3cret'
   mocks.settle.mockResolvedValue({ settled: 0, expired: 0, errors: 0, readFailed: false })
   mocks.sweep.mockResolvedValue({ ok: true, locations: 0, checked: 0, enrolled: 0, already: 0, failed: 0 })
+  mocks.abandoned.mockResolvedValue({ ok: true, locations: 0, candidates: 0, checked: 0, enrolled: 0, exited: 0, held: 0, failed: 0 })
   mocks.stalled.mockResolvedValue({ ok: true, checked: 0, filed: 0, failed: 0 })
   mocks.studios.mockResolvedValue({ eligible: [], error: null })
   mocks.offers.mockResolvedValue({ ok: true, checked: 0, recorded: 0, matchedPage: 0, expired: 0, failed: 0, passwordPending: 0 })
@@ -144,7 +146,7 @@ describe('process-trial-purchases cron: the offer purchase sweep', () => {
     expect(mocks.offers.mock.calls.map((c) => [c[1], c.length])).toEqual([['hatch', 2], ['other', 2]])
     expect(offerStamps()).toEqual([['un1t-offer-purchase-sweep', { locations: 2, checked: 6, recorded: 4, matchedPage: 2, expired: 0, failed: 2, passwordPending: 2 }]])
     expect(body).toMatchObject({ success: true, offer_sweep_ok: true, offer_sweep_recorded: 4, offer_sweep_matched: 2 })
-    expect(otherStamps()).toEqual(['process-trial-purchases', 'trial-checkout-purchase-sweep', 'corp-promo-stalled-sweep'])
+    expect(otherStamps()).toEqual(['process-trial-purchases', 'trial-checkout-purchase-sweep', 'trial-checkout-abandoned-sweep', 'corp-promo-stalled-sweep'])
   })
 
   it('no un1t.online studio is clean and stamps', async () => {
@@ -161,7 +163,7 @@ describe('process-trial-purchases cron: the offer purchase sweep', () => {
     expect(await r.json()).toMatchObject({ success: true, offer_sweep_ok: false })
     expect(mocks.offers).toHaveBeenCalledTimes(2)
     expect(offerStamps()).toEqual([])
-    expect(otherStamps()).toEqual(['process-trial-purchases', 'trial-checkout-purchase-sweep', 'corp-promo-stalled-sweep'])
+    expect(otherStamps()).toEqual(['process-trial-purchases', 'trial-checkout-purchase-sweep', 'trial-checkout-abandoned-sweep', 'corp-promo-stalled-sweep'])
   })
 
   it('an unreadable studio list, or a throw in the arm, skips its stamp and never fails the run', async () => {
@@ -181,5 +183,52 @@ describe('process-trial-purchases cron: the offer purchase sweep', () => {
     expect(await r.json()).toMatchObject({ success: true, offer_sweep_ok: false })
     expect(offerStamps()).toEqual([])
     expect(mocks.stamp.mock.calls.map((c) => c[0])).toContain('corp-promo-stalled-sweep')
+  })
+})
+
+// TRIALABANDON.1 — the abandoned checkout sweep is its own arm with its own
+// heartbeat row: stamped only on a clean sweep, and never able to stop the
+// parent's stamp or the arms after it.
+describe('process-trial-purchases cron: the abandoned checkout sweep', () => {
+  const armStamps = () => mocks.stamp.mock.calls.filter((c) => c[0] === 'trial-checkout-abandoned-sweep')
+
+  it('a clean sweep stamps its own row with its counts (no ok flag), after the purchase sweep', async () => {
+    mocks.abandoned.mockResolvedValue({ ok: true, locations: 1, candidates: 3, checked: 2, enrolled: 1, exited: 1, held: 0, failed: 0 })
+    const body = await (await call()).json()
+    expect(body).toMatchObject({ success: true, abandoned_seq_ok: true, abandoned_seq_checked: 2, abandoned_seq_enrolled: 1, abandoned_seq_exited: 1 })
+    expect(armStamps()).toEqual([['trial-checkout-abandoned-sweep', { locations: 1, candidates: 3, checked: 2, enrolled: 1, exited: 1, held: 0, failed: 0 }]])
+    expect(mocks.sweep.mock.invocationCallOrder[0]).toBeLessThan(mocks.abandoned.mock.invocationCallOrder[0])
+    expect(mocks.stamp).toHaveBeenCalledWith('process-trial-purchases', expect.any(Object))
+  })
+
+  it('a run with nothing to do is clean and stamps', async () => {
+    await call()
+    expect(armStamps()).toHaveLength(1)
+  })
+
+  it('a sweep that was not ok (a held person, a failed read) does not stamp its row; everything else still runs', async () => {
+    mocks.abandoned.mockResolvedValue({ ok: false, locations: 1, candidates: 1, checked: 1, enrolled: 0, exited: 0, held: 1, failed: 0 })
+    const body = await (await call()).json()
+    expect(body).toMatchObject({ success: true, abandoned_seq_ok: false })
+    expect(armStamps()).toEqual([])
+    expect(mocks.stamp).toHaveBeenCalledWith('process-trial-purchases', expect.any(Object))
+    expect(mocks.stamp.mock.calls.some((c) => c[0] === 'trial-checkout-purchase-sweep')).toBe(true)
+    expect(mocks.stalled).toHaveBeenCalledTimes(1)
+  })
+
+  it('a sweep that throws is caught: no stamp for it, the run still answers 200 and the later arms run', async () => {
+    mocks.abandoned.mockRejectedValue(new Error('bug'))
+    const r = await call()
+    expect(r.status).toBe(200)
+    expect(await r.json()).toMatchObject({ success: true, abandoned_seq_ok: false, abandoned_seq_enrolled: 0 })
+    expect(armStamps()).toEqual([])
+    expect(mocks.stalled).toHaveBeenCalledTimes(1)
+  })
+
+  it('a stamp that throws does not fail the run', async () => {
+    mocks.stamp.mockImplementation(async (name) => { if (name === 'trial-checkout-abandoned-sweep') throw new Error('db') })
+    const r = await call()
+    expect(r.status).toBe(200)
+    expect(mocks.stalled).toHaveBeenCalledTimes(1)
   })
 })

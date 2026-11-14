@@ -101,6 +101,15 @@ export const MERGE_TAGS = Object.freeze([
     why: 'only populated on an overdue-payment reminder run — empty in a broadcast',
   },
   {
+    tag: '{{trial_resume_url}}',
+    name: 'Trial checkout link',
+    description: 'Unpaid €39 trial follow-ups: the link back to the trial page, or empty',
+    offered: false,
+    // TRIALABANDON.1 — only non-empty on a paid_trial_checkout_abandoned run
+    // (sendEmailStep resolves it from sequence_enrollments.metadata.trial_checkout).
+    why: 'only populated on an unpaid €39 trial follow-up run — empty in a broadcast',
+  },
+  {
     tag: '{{app_download_links}}',
     name: 'App download links',
     description: "The studio's App Store and Google Play buttons. Empty outside sequence emails",
