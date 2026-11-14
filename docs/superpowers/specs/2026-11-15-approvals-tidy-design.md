@@ -11,21 +11,19 @@ Every date and time shown on `/settings/customer-agent/requests`
 (`ApprovalActionCard.jsx`) renders in the studio's zone, not the browser's:
 `formatInZone` from `shared/zoned-time` with the active studio's `timezone`
 (already in `CLIENT_LOCATION_COLUMNS`). All stamps in both files convert
-together so none disagrees with its neighbour. The zone reaches each component
+together so none disagrees with its neighbour. The four customer cards on
+`/approvals` (Mia, paid trial, corporate promo, offer sale) convert too. The zone reaches each component
 as a prop from its parent; a missing zone falls back to the platform zone
 through the existing helper, never a hard-coded zone name.
 
-## 2. Quiet trial grant at Hatch
+## 2. Quiet trial grant at Hatch — dropped
 
-"Mark granted, no confirmation email" stamps
-`grant.confirmation_email = 'skipped_by_staff'` on the `trial_purchases` row.
-The Stillorgan sweep already skips such buyers. The un1t.online sweep
-(`src/lib/un1t-paid-trial-purchases.js`) now does too: before offering, it
-reads the studio's `trial_purchases` rows granted inside the window that carry
-the marker and skips those contacts (counted as `skipped_by_staff`). A failed
-read of that list makes the run not ok and offers nobody that tick; the next
-tick retries inside the 48 hour window, so no welcome is lost and none is sent
-against staff's wishes.
+Built, reviewed, then removed. "Mark granted, no confirmation email" is only
+offered on a paid trial whose grant needed a hand, and only the Glofox
+(Stillorgan) processor produces those. A Hatch purchase is settled off
+un1t.online's records and never reaches that card, so there is nothing at
+Hatch for the welcome sweep to skip. If Hatch ever gets a paid review card,
+this comes back with it.
 
 ## 3. Card polish
 
