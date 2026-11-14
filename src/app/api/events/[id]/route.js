@@ -11,6 +11,7 @@ import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES, MANAGER_ROLES } from '@/lib/schemas'
 import { judgeEventOwnerChange } from '@/lib/event-owner'
 import { EventUpdateSchema } from '@/lib/event-save-schemas'
+import { judgeVenueStudioForEventLocation } from '@/lib/event-venue-studio'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,6 +37,7 @@ async function loadRace(db, id) {
       waitlist_email_subject, waitlist_email_intro,
       confirmation_email_template_id, reminder_email_template_id,
       sending_location_id, charity_enabled, charity, find_team, entry_policy, pricing_tiers, registration_questions, duration_minutes, wave_window_minutes,
+      venue_location_id, held_offsite, studio_hold_minutes,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,
@@ -212,6 +214,13 @@ export async function PUT(request, props) {
     if (!loc || !send || send.is_host_anchor || send.organization_id !== loc.organization_id) {
       return NextResponse.json({ success: false, error: 'invalid_sending_location' }, { status: 400 })
     }
+  }
+
+  // SHELLYEVENTS.2 — same guard for the studio the event is held at (it holds
+  // that studio's power on). Reaches the DB through the same generic patch.
+  if (body.venue_location_id) {
+    const venueStudio = await judgeVenueStudioForEventLocation(db, { eventLocationId: ownerLocationId, venueLocationId: body.venue_location_id })
+    if (!venueStudio.ok) return NextResponse.json({ success: false, error: venueStudio.error }, { status: 400 })
   }
 
   // Pull waves out before building the race_events update payload —

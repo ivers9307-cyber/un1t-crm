@@ -25,7 +25,7 @@ const MODULE = 'event-venue-studio'
  *
  * @returns {Promise<Array<{ id: string, name: string, address: string }>>}
  */
-export async function listVenueStudios(db, organizationId) {
+export async function listVenueStudios(db, organizationId, { requireAddress = true } = {}) {
   if (!organizationId) return []
   const { data, error } = await db
     .from('locations')
@@ -39,8 +39,8 @@ export async function listVenueStudios(db, organizationId) {
     return []
   }
   return (data || [])
-    .filter((l) => !l.is_host_anchor && typeof l.address === 'string' && l.address.trim())
-    .map((l) => ({ id: l.id, name: String(l.name || '').trim(), address: l.address.trim() }))
+    .filter((l) => !l.is_host_anchor && (!requireAddress || (typeof l.address === 'string' && l.address.trim())))
+    .map((l) => ({ id: l.id, name: String(l.name || '').trim(), address: typeof l.address === 'string' ? l.address.trim() : '' }))
 }
 
 /**
@@ -51,10 +51,29 @@ export async function listVenueStudios(db, organizationId) {
  *   organisation's pickable studios is refused, and so is any id when the
  *   studio list cannot be read: an unverified link is never written.
  */
-export async function judgeVenueStudio(db, { organizationId, venueLocationId }) {
+export async function judgeVenueStudio(db, { organizationId, venueLocationId, requireAddress = true }) {
   if (venueLocationId == null || venueLocationId === '') return { ok: true, venueLocationId: null }
-  const studios = await listVenueStudios(db, organizationId)
+  const studios = await listVenueStudios(db, organizationId, { requireAddress })
   return studios.some((s) => s.id === venueLocationId)
     ? { ok: true, venueLocationId }
     : { ok: false, error: 'invalid_venue_studio' }
+}
+
+/**
+ * The STAFF form's check (SHELLYEVENTS.2): the studio must be an active,
+ * non-anchor studio of the organisation that owns the event's own location.
+ * Staff may pick a studio with no address on file (they are not filling a
+ * customer-facing venue from it), a host may not.
+ *
+ * @returns same shape as judgeVenueStudio
+ */
+export async function judgeVenueStudioForEventLocation(db, { eventLocationId, venueLocationId }) {
+  if (venueLocationId == null || venueLocationId === '') return { ok: true, venueLocationId: null }
+  const { data: loc, error } = await db
+    .from('locations')
+    .select('organization_id')
+    .eq('id', eventLocationId)
+    .maybeSingle()
+  if (error || !loc?.organization_id) return { ok: false, error: 'invalid_venue_studio' }
+  return judgeVenueStudio(db, { organizationId: loc.organization_id, venueLocationId, requireAddress: false })
 }

@@ -197,6 +197,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     race_date: initial?.race_date,
     pricing_tiers: initial?.pricing_tiers,
     venue_location_id: initial?.venue_location_id ?? null,
+    duration_minutes: initial?.duration_minutes ?? null,
     waves: (initial?.sessions || []).map((s) => ({ id: s.id, start_time: s.start_time })),
   })
 
@@ -356,7 +357,9 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
 
     if (isEdit && onSale) {
       const reasons = reReviewReasons(
-        { status, ...serverHolds.current },
+        // studio_hold_minutes is staff's: the form never sends it, so it is
+        // read from the loaded event on every check.
+        { status, ...serverHolds.current, studio_hold_minutes: initial?.studio_hold_minutes ?? null },
         predictedChanges(buildBody()),
       )
       if (reasons.length > 0) {

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
-import { eventToOccurrence, loadDayEvents, DEFAULT_EVENT_MINUTES, MAX_DAY_EVENTS } from './studio-events'
+import { eventToOccurrence, eventToSessions, holdMinutes, loadDayEvents, loadEventSessionsBetween, DEFAULT_EVENT_MINUTES, MAX_DAY_EVENTS } from './studio-events'
 import { resolveDayWindows } from '@/lib/schedule/desired-state'
 
 const TZ = 'Europe/Dublin'
@@ -10,7 +10,7 @@ const TZ = 'Europe/Dublin'
 function makeDb({ rows = [], error = null } = {}) {
   const calls = []
   const self = { calls, then: (ok, err) => Promise.resolve({ data: error ? null : rows, error }).then(ok, err) }
-  for (const m of ['select', 'eq', 'or', 'order', 'limit']) self[m] = (...a) => { calls.push([m, a]); return self }
+  for (const m of ['select', 'eq', 'or', 'gte', 'lte', 'order', 'limit']) self[m] = (...a) => { calls.push([m, a]); return self }
   return { calls, from: (t) => { calls.push(['from', [t]]); return self } }
 }
 
@@ -64,6 +64,7 @@ describe('loadDayEvents', () => {
     expect(db.calls).toContainEqual(['eq', ['race_date', '2026-11-14']])
     expect(db.calls).toContainEqual(['eq', ['active', true]])
     expect(db.calls).toContainEqual(['eq', ['status', 'published']])
+    expect(db.calls).toContainEqual(['eq', ['held_offsite', false]])
     expect(db.calls).toContainEqual(['or', ['venue_location_id.eq.loc-A,and(location_id.eq.loc-A,host_id.is.null,venue_location_id.is.null)']])
     expect(db.calls).toContainEqual(['limit', [MAX_DAY_EVENTS + 1]])
   })
@@ -76,5 +77,45 @@ describe('loadDayEvents', () => {
   it('skips an event with no start time', async () => {
     const db = makeDb({ rows: [{ id: 'e1', race_date: '2026-11-14', start_time: null, waves: [] }] })
     expect(await loadDayEvents(db, 'loc-A', TZ, '2026-11-14')).toEqual({ ok: true, occurrences: [] })
+  })
+})
+
+describe('holdMinutes — the studio hold is staff\'s, the duration is the customer\'s (SHELLYEVENTS.2)', () => {
+  it('prefers the studio hold, then the duration, then the default', () => {
+    expect(holdMinutes({ studio_hold_minutes: 180, duration_minutes: 45 })).toBe(180)
+    expect(holdMinutes({ studio_hold_minutes: null, duration_minutes: 45 })).toBe(45)
+    expect(holdMinutes({})).toBe(120)
+    expect(holdMinutes({ studio_hold_minutes: 0, duration_minutes: -5 })).toBe(120)
+  })
+
+  it('a 3 hour hold keeps the studio on 3 hours after the last start', () => {
+    const occ = eventToOccurrence({ race_date: '2026-12-05', studio_hold_minutes: 180, duration_minutes: 45, waves: [{ start_time: '10:30:00' }] }, TZ)
+    expect(occ.ends_at).toBe('2026-12-05T13:30:00.000Z')
+  })
+})
+
+describe('eventToSessions / loadEventSessionsBetween — the climate shape', () => {
+  const event = { id: 'e1', name: 'PTC', race_date: '2026-11-14', waves: [{ start_time: '12:15:00' }, { start_time: '10:30:00' }] }
+
+  it('gives one keyed span per session, in time order', () => {
+    expect(eventToSessions(event, TZ)).toEqual([
+      { glofox_event_id: 'event:e1:10:30', name: 'PTC', starts_at: '2026-11-14T10:30:00.000Z', ends_at: '2026-11-14T12:30:00.000Z', kind: 'event' },
+      { glofox_event_id: 'event:e1:12:15', name: 'PTC', starts_at: '2026-11-14T12:15:00.000Z', ends_at: '2026-11-14T14:15:00.000Z', kind: 'event' },
+    ])
+  })
+
+  it('keeps only the sessions that start inside the window', async () => {
+    const db = makeDb({ rows: [event] })
+    const out = await loadEventSessionsBetween(db, 'loc-A', TZ, Date.parse('2026-11-14T11:00:00Z'), Date.parse('2026-11-14T17:00:00Z'))
+    expect(out.ok).toBe(true)
+    expect(out.occurrences.map((o) => o.glofox_event_id)).toEqual(['event:e1:12:15'])
+    expect(db.calls).toContainEqual(['gte', ['race_date', '2026-11-14']])
+    expect(db.calls).toContainEqual(['lte', ['race_date', '2026-11-14']])
+    expect(db.calls).toContainEqual(['eq', ['held_offsite', false]])
+  })
+
+  it('reports a failed read as a failure', async () => {
+    const db = makeDb({ error: { message: 'pg down' } })
+    expect(await loadEventSessionsBetween(db, 'loc-A', TZ, 1, 2)).toEqual({ ok: false, error: 'pg down' })
   })
 })

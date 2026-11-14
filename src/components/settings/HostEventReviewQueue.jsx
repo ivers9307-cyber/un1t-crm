@@ -9,6 +9,7 @@
 // the section header count doubles as the "pending review" badge.
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { Clock, MapPin, Calendar, Users, Check, X, AlertTriangle } from 'lucide-react'
 import { Button, Card, Loading } from '@/components/ui'
 
@@ -172,6 +173,11 @@ function ReviewItem({ event, onReviewed }) {
           >
             Reject
           </Button>
+          {/* SHELLYEVENTS.2 — the studio it is held at and how long it holds
+              the studio on are staff's to set, on the event's own edit page. */}
+          <Link href={`/events/${event.id}/edit`} className="text-xs text-un1t-subtle underline hover:text-un1t-text">
+            Edit event (studio and hold time)
+          </Link>
         </div>
       )}
     </div>

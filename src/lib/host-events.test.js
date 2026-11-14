@@ -297,9 +297,12 @@ describe('reReviewReasons', () => {
     for (const [reason, changes] of cases) expect(reReviewReasons(published, changes)).toEqual([reason])
   })
   it('returns every reason in RE_REVIEW_REASONS order when all of them change', () => {
-    const all = { race_date: '2026-09-08', non_member_fee_cents: 3000, pricing_tiers: tiersB, waves: [{ id: 'w1', start_time: '11:00' }], venue_location_id: 'a-studio' }
-    expect(reReviewReasons(published, all)).toEqual(['date', 'price', 'tiers', 'session_time', 'studio'])
-    expect(reReviewReasons(published, all)).toEqual(RE_REVIEW_REASONS)
+    // studio_hours needs an event already linked to a studio, so the linked
+    // event moves to ANOTHER studio and takes a longer duration.
+    const linked = { ...published, venue_location_id: 'old-studio' }
+    const all = { race_date: '2026-09-08', non_member_fee_cents: 3000, pricing_tiers: tiersB, waves: [{ id: 'w1', start_time: '11:00' }], venue_location_id: 'a-studio', duration_minutes: 300 }
+    expect(reReviewReasons(linked, all)).toEqual(['date', 'price', 'tiers', 'session_time', 'studio', 'studio_hours'])
+    expect(reReviewReasons(linked, all)).toEqual(RE_REVIEW_REASONS)
   })
   it('returns [] for a cosmetic edit, an added session and a removed session', () => {
     for (const [, changes] of quiet) expect(reReviewReasons(published, changes)).toEqual([])
@@ -334,6 +337,8 @@ describe('editChangesFromInput', () => {
       non_member_fee_cents: 2500,
       pricing_tiers: null,
       waves: [{ id: 'w1', start_time: '10:00' }],
+      // SHELLYEVENTS.2 — the sessions with no id yet, for the studio-hours rule.
+      new_session_times: ['14:00'],
     })
   })
   it('tolerates a body with no sessions array', () => {
@@ -364,5 +369,47 @@ describe('reReviewReasons — the studio an event is held at (SHELLYEVENTS.1)', 
   it('editChangesFromInput carries the studio only when the body does', () => {
     expect('venue_location_id' in editChangesFromInput({ sessions: [] })).toBe(false)
     expect(editChangesFromInput({ sessions: [], venue_location_id: 'hatch' }).venue_location_id).toBe('hatch')
+  })
+})
+
+describe('reReviewReasons — longer studio hours on a linked event (SHELLYEVENTS.2)', () => {
+  const linked = {
+    status: 'published', race_date: '2026-12-05', non_member_fee_cents: 1000, pricing_tiers: null,
+    venue_location_id: 'hatch', duration_minutes: 60, studio_hold_minutes: null,
+    waves: [{ id: 'w1', start_time: '10:30:00' }, { id: 'w2', start_time: '12:15:00' }],
+  }
+  const same = { race_date: '2026-12-05', non_member_fee_cents: 1000, pricing_tiers: null, waves: [{ id: 'w1', start_time: '10:30' }, { id: 'w2', start_time: '12:15' }] }
+
+  it('a new session before the first or after the last goes back to review', () => {
+    expect(reReviewReasons(linked, { ...same, new_session_times: ['14:00'] })).toEqual(['studio_hours'])
+    expect(reReviewReasons(linked, { ...same, new_session_times: ['09:00'] })).toEqual(['studio_hours'])
+  })
+
+  it('a new session inside the approved hours does not', () => {
+    expect(reReviewReasons(linked, { ...same, new_session_times: ['11:30'] })).toEqual([])
+  })
+
+  it('a longer duration does; a shorter or equal one does not', () => {
+    expect(reReviewReasons(linked, { ...same, duration_minutes: 180 })).toEqual(['studio_hours'])
+    expect(reReviewReasons(linked, { ...same, duration_minutes: 60 })).toEqual([])
+    expect(reReviewReasons(linked, { ...same, duration_minutes: 30 })).toEqual([])
+    // No duration is the 120 minute default: 90 is shorter, 150 is longer.
+    expect(reReviewReasons({ ...linked, duration_minutes: null }, { ...same, duration_minutes: 90 })).toEqual([])
+    expect(reReviewReasons({ ...linked, duration_minutes: null }, { ...same, duration_minutes: 150 })).toEqual(['studio_hours'])
+  })
+
+  it('a duration change is nothing when staff set the hold time', () => {
+    expect(reReviewReasons({ ...linked, studio_hold_minutes: 180 }, { ...same, duration_minutes: 600 })).toEqual([])
+  })
+
+  it('an event held somewhere else, or moved out in the same save, never does', () => {
+    expect(reReviewReasons({ ...linked, venue_location_id: null }, { ...same, duration_minutes: 600, new_session_times: ['20:00'] })).toEqual([])
+    expect(reReviewReasons(linked, { ...same, venue_location_id: null, duration_minutes: 600 })).toEqual([])
+  })
+
+  it('editChangesFromInput carries the new session times and the duration', () => {
+    const changes = editChangesFromInput({ sessions: [{ id: 'w1', start_time: '10:30' }, { start_time: '14:00' }], duration_minutes: 90 })
+    expect(changes.new_session_times).toEqual(['14:00'])
+    expect(changes.duration_minutes).toBe(90)
   })
 })
