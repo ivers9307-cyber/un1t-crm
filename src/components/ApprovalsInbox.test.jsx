@@ -634,19 +634,61 @@ describe('ApprovalsInbox undo of a single clear', () => {
     expect(boxes()).toContain('select-mia-1')
   })
 
-  it('an undone card is no longer kept: gone once the server stops returning it, shown once while it does', async () => {
-    const api = mockReloadable()
+  // The initial load answers at once; every later load waits on a gate the test opens.
+  function mockGated() {
+    const base = miaItems()
+    const gates = []
+    let first = true
+    vi.stubGlobal('fetch', vi.fn(() => {
+      if (first) { first = false; return Promise.resolve({ json: async () => ({ success: true, data: { providers: base, total: 7 } }) }) }
+      return new Promise((resolve, reject) => gates.push({
+        ok: (providers) => resolve({ json: async () => ({ success: true, data: { providers, total: providers.reduce((n, q) => n + q.count, 0) } }) }),
+        fail: () => reject(new Error('offline')),
+      }))
+    }))
+    return { gates }
+  }
+  async function clearThenUndo() {
+    const g = mockGated()
     render(<ApprovalsInbox />)
     await screen.findByText('mia-1')
     fireEvent.click(screen.getByRole('button', { name: 'clear-mia-1' }))
     fireEvent.click(screen.getByRole('button', { name: 'undo-mia-1' }))
-    // someone else decides it: the next reload no longer returns it
-    api.set(without('mia-1'))
-    await refresh()
+    return g
+  }
+
+  it('Undo starts a reload and the card stays rendered while it is pending', async () => {
+    const { gates } = await clearThenUndo()
+    expect(gates).toHaveLength(1)
+    expect(screen.getAllByText('mia-1')).toHaveLength(1)
+  })
+
+  it('the reload answers with the request: shown once', async () => {
+    const { gates } = await clearThenUndo()
+    await act(async () => { gates[0].ok(miaItems()) })
+    expect(screen.getAllByText('mia-1')).toHaveLength(1)
+  })
+
+  it('the reload answers without the request (someone else decided it): gone', async () => {
+    const { gates } = await clearThenUndo()
+    await act(async () => { gates[0].ok(without('mia-1')) })
     expect(screen.queryByText('mia-1')).toBeNull()
-    // and the card shows once when the server still returns it
-    api.set(miaItems())
-    await refresh()
+  })
+
+  it('a failed reload keeps the card; the next successful one drops it if the server no longer returns it', async () => {
+    const { gates } = await clearThenUndo()
+    await act(async () => { gates[0].fail() })
+    expect(screen.getAllByText('mia-1')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await act(async () => { gates[1].ok(without('mia-1')) })
+    expect(screen.queryByText('mia-1')).toBeNull()
+  })
+
+  it('a failed reload keeps the card; the next successful one that returns it shows it once', async () => {
+    const { gates } = await clearThenUndo()
+    await act(async () => { gates[0].fail() })
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await act(async () => { gates[1].ok(miaItems()) })
     expect(screen.getAllByText('mia-1')).toHaveLength(1)
   })
 

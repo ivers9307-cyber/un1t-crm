@@ -33,10 +33,13 @@ export default function ApprovalsInbox({ timezone = null }) {
   const [view, setView] = useState(null) // 'customers' | 'team'; chosen on first load
   const [chip, setChip] = useState('all')
   const [teamChip, setTeamChip] = useState('all')
+  // Counts successful loads, so a list can tell "a reload has answered".
+  const [loadedCount, setLoadedCount] = useState(0)
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    let ok = false
     try {
       const r = await fetch('/api/approvals/pending', { cache: 'no-store' })
       const j = await r.json()
@@ -50,11 +53,14 @@ export default function ApprovalsInbox({ timezone = null }) {
         const q = buildCustomerQueue(j.data.providers || [])
         return q.total > 0 || team.length === 0 ? 'customers' : 'team'
       })
+      ok = true
+      setLoadedCount((n) => n + 1)
     } catch (e) {
       setError(e.message)
     } finally {
       setLoading(false)
     }
+    return ok // true when the response arrived and was applied
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -126,7 +132,7 @@ export default function ApprovalsInbox({ timezone = null }) {
       )}
 
       {shownView === 'customers'
-        ? <CustomerList queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} onItemUndone={onItemUndone} onReload={load} timezone={timezone} />
+        ? <CustomerList queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} onItemUndone={onItemUndone} onReload={load} loadedCount={loadedCount} timezone={timezone} />
         : <TeamList queue={teamQueue} chip={teamChip} setChip={setTeamChip} loading={loading} onItemDecided={onItemDecided} timezone={timezone} />}
     </div>
   )
@@ -169,7 +175,7 @@ const chipClass = (on) => `px-3 py-1 text-xs rounded-full border transition-colo
   on ? 'bg-un1t-text text-un1t-bg border-un1t-text font-medium' : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
 }`
 
-function CustomerList({ queue, chip, setChip, loading, onItemDecided, onItemUndone, onReload, timezone }) {
+function CustomerList({ queue, chip, setChip, loading, onItemDecided, onItemUndone, onReload, loadedCount = 0, timezone }) {
   // A chip whose provider vanished on a reload falls back to All.
   const key = queue.chips.some((c) => c.key === chip) ? chip : 'all'
   const { needsFixing: liveNeedsFixing, waiting: liveWaiting } = filterQueue(queue, key)
@@ -182,10 +188,18 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onItemUndo
   // next reload that no longer returns it drops it. Keyed like the cards.
   const [clearedCards, setClearedCards] = useState(() => new Map())
   const cardKey = (it) => `${it.providerKey}-${it.id}`
+  // A later successful reload settles any undone card whose own reload failed.
+  useEffect(() => {
+    setClearedCards((m) => {
+      let next = null
+      for (const [k, e] of m) if (e.undone && !e.awaiting) { next = next || new Map(m); next.delete(k) }
+      return next || m
+    })
+  }, [loadedCount])
   const liveKeys = new Set([...liveNeedsFixing, ...liveWaiting].map(cardKey))
   const nowMs = Date.now()
   const keptCleared = [...clearedCards.values()]
-    .filter((e) => !liveKeys.has(cardKey(e.item)) && undoWindowOpen(e.at, nowMs) && (key === 'all' || e.item.providerKey === key))
+    .filter((e) => !liveKeys.has(cardKey(e.item)) && (e.undone || undoWindowOpen(e.at, nowMs)) && (key === 'all' || e.item.providerKey === key))
     .map((e) => e.item)
   const needsFixing = [...liveNeedsFixing, ...keptCleared.filter((i) => i.failed)]
   const waiting = [...liveWaiting, ...keptCleared.filter((i) => !i.failed)]
@@ -263,13 +277,24 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onItemUndo
       }
       onItemDecided?.(it.providerKey)
     }
-    // APPROVALSQ.5 — an undone clear: waiting again and selectable again. Its
-    // kept entry is removed outright, so from then on the card shows only while
-    // the server still returns the request (a colleague who decides it next
-    // makes it leave on the next reload, not up to 120 seconds later).
+    // APPROVALSQ.5 — an undone clear: waiting again and selectable again. The
+    // card must not vanish on Undo, so its kept entry stays (same key) while
+    // the reload this triggers is answered; then the entry is dropped and the
+    // card shows only while the server still returns the request. A failed
+    // reload keeps it until the next successful one (the effect above).
     const onUndone = () => {
       setDecided((prev) => { const next = new Set(prev); next.delete(it.id); return next })
-      setClearedCards((m) => { if (!m.has(cardKey(it))) return m; const next = new Map(m); next.delete(cardKey(it)); return next })
+      const k = cardKey(it)
+      setClearedCards((m) => m.has(k) ? new Map(m).set(k, { item: it, at: Date.now(), undone: true, awaiting: true }) : m)
+      Promise.resolve(onReload?.()).then((ok) => {
+        setClearedCards((m) => {
+          const e = m.get(k)
+          if (!e?.undone) return m
+          const next = new Map(m)
+          if (ok) next.delete(k); else next.set(k, { ...e, awaiting: false })
+          return next
+        })
+      })
       onItemUndone?.(it.providerKey)
     }
     return <Card key={cardKey(it)} item={it} onDecided={onDecided} onUndone={onUndone} timezone={timezone} {...bulk} />
