@@ -36,3 +36,22 @@ export async function runBulkClear(ids, { note, clearOne }) {
   }
   return { cleared, failed }
 }
+
+// APPROVALSQ.5 — undo a bulk clear: the same walk, one request at a time, never
+// in parallel, never stopping early. `undoOne` resolves `{ ok: true }` for a
+// restored request; anything else, a throw included, is a failure.
+export async function runBulkUndo(ids, { undoOne }) {
+  const restored = []
+  const failed = []
+  for (const id of ids) {
+    let ok = false
+    try {
+      const res = await undoOne(id)
+      ok = res?.ok === true
+    } catch {
+      ok = false
+    }
+    ;(ok ? restored : failed).push(id)
+  }
+  return { restored, failed }
+}

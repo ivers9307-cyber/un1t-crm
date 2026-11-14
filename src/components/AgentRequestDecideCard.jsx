@@ -23,6 +23,8 @@ import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
 import { approvalKindLabel, explainFailure, eventMoveDoneLine, EVENT_MOVE_KIND_CHIP } from '@/lib/approvals/event-move-card'
 import { RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
 import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
+import UndoClearButton from '@/components/approvals/UndoClearButton'
+import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
 
 const KIND_CHIP = {
   cancellation: 'bg-red-500/10 text-red-700',
@@ -132,7 +134,7 @@ export function outcomeLine(status, item, executed, notified = null, plannedEndD
 
 // APPROVALSQ.2 — `selectable`, `selected` and `onToggle` put a select checkbox
 // in the header while /approvals is in select mode; a decided card has none.
-export default function AgentRequestDecideCard({ item, onDecided, selectable = false, selected = false, onToggle, timezone = null }) {
+export default function AgentRequestDecideCard({ item, onDecided, onUndone, selectable = false, selected = false, onToggle, timezone = null }) {
   const [busy, setBusy] = useState(null)       // 'approved' | 'declined' | 'saved' | 'cleared' | null
   const inFlight = useRef(false)
   const [declineOpen, setDeclineOpen] = useState(false)
@@ -147,6 +149,12 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
   const [error, setError] = useState(null)
   const [outcome, setOutcome] = useState(null) // { tone, text, failed? } after a decision
   const [countedDecided, setCountedDecided] = useState(false)
+  // APPROVALSQ.5 — when a quiet clear's answer arrived (the Undo window runs
+  // from here), whether an undo is running, and whether the route said the
+  // clear can no longer be undone.
+  const [clearedAt, setClearedAt] = useState(null)
+  const [undoBusy, setUndoBusy] = useState(false)
+  const [undoGone, setUndoGone] = useState(false)
 
   const kindLabel = approvalKindLabel(item.kind) || 'Agent request'
   const why = whyFlagged(item)
@@ -192,6 +200,10 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
       setDeclineOpen(false)
       setClearOpen(false)
       setOutcome(outcomeLine(data.request?.status || status, item, data.executed, data.customer_notified, data.planned_end_date))
+      if (silent) {
+        setClearedAt(Date.now())
+        setUndoGone(false)
+      }
       // Only the FIRST decision moves the item out of the pending count —
       // a retry re-decides the same (already-counted) item.
       if (!countedDecided) {
@@ -203,6 +215,33 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
     } finally {
       inFlight.current = false
       setBusy(null)
+    }
+  }
+
+  // APPROVALSQ.5 — take a quiet clear back. The route puts the request back to
+  // the state it was cleared from; the card goes back to the buttons it opened
+  // with (a failed card comes back failed) and the parent puts the count back.
+  async function undoClear() {
+    if (inFlight.current || clearedAt == null) return
+    inFlight.current = true
+    setUndoBusy(true)
+    setError(null)
+    try {
+      const res = await undoClearRequest(item.id)
+      if (!res.ok) {
+        setError(res.error)
+        if (res.status === 409) setUndoGone(true)
+        return
+      }
+      setOutcome(null)
+      setClearedAt(null)
+      if (countedDecided) {
+        setCountedDecided(false)
+        onUndone?.(item.id, res.request)
+      }
+    } finally {
+      inFlight.current = false
+      setUndoBusy(false)
     }
   }
 
@@ -333,6 +372,9 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
         </>
       )}
       outcome={outcome}
+      outcomeAction={outcome && clearedAt != null && !undoGone
+        ? <UndoClearButton startedAt={clearedAt} disabled={undoBusy} onClick={undoClear} />
+        : undefined}
       error={error}
       actions={actions}
       quietAction={quietAction}

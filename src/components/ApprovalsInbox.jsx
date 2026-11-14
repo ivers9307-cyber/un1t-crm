@@ -10,14 +10,17 @@
 // on) as one list, oldest first, with filter chips. Six kinds are decided on
 // their card; the rest show an Open button to their own page.
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { RefreshCw } from 'lucide-react'
 import AgentRequestDecideCard from '@/components/AgentRequestDecideCard'
 import TrialPurchaseReviewCard from '@/components/TrialPurchaseReviewCard'
 import CorpPromoClaimCard from '@/components/CorpPromoClaimCard'
 import OfferPurchaseCard from '@/components/approvals/OfferPurchaseCard'
 import BulkClearBar from '@/components/approvals/BulkClearBar'
-import { isBulkClearable } from '@/lib/approvals/bulk-clear'
+import UndoClearButton from '@/components/approvals/UndoClearButton'
+import { undoWindowOpen } from '@/components/approvals/useUndoWindow'
+import { isBulkClearable, runBulkUndo } from '@/lib/approvals/bulk-clear'
+import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
 import { TEAM_CARDS, TeamLinkCard } from '@/components/approvals/team-cards'
 import { buildCustomerQueue, filterQueue, teamProviders } from '@/lib/approvals/customer-queue'
 import { buildTeamQueue, filterTeamQueue } from '@/lib/approvals/team-queue'
@@ -82,6 +85,13 @@ export default function ApprovalsInbox({ timezone = null }) {
     setTotal((t) => Math.max(0, t - 1))
   }, [])
 
+  // APPROVALSQ.5 — a quiet clear was undone: the request is waiting again, so
+  // put back the one the decision took off.
+  const onItemUndone = useCallback((providerKey) => {
+    setProviders((ps) => ps.map((p) => p.key === providerKey ? { ...p, count: p.count + 1 } : p))
+    setTotal((t) => t + 1)
+  }, [])
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -116,7 +126,7 @@ export default function ApprovalsInbox({ timezone = null }) {
       )}
 
       {shownView === 'customers'
-        ? <CustomerList queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} onReload={load} timezone={timezone} />
+        ? <CustomerList queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} onItemUndone={onItemUndone} onReload={load} timezone={timezone} />
         : <TeamList queue={teamQueue} chip={teamChip} setChip={setTeamChip} loading={loading} onItemDecided={onItemDecided} timezone={timezone} />}
     </div>
   )
@@ -159,23 +169,41 @@ const chipClass = (on) => `px-3 py-1 text-xs rounded-full border transition-colo
   on ? 'bg-un1t-text text-un1t-bg border-un1t-text font-medium' : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
 }`
 
-function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload, timezone }) {
+function CustomerList({ queue, chip, setChip, loading, onItemDecided, onItemUndone, onReload, timezone }) {
   // A chip whose provider vanished on a reload falls back to All.
   const key = queue.chips.some((c) => c.key === chip) ? chip : 'all'
-  const { needsFixing, waiting } = filterQueue(queue, key)
+  const { needsFixing: liveNeedsFixing, waiting: liveWaiting } = filterQueue(queue, key)
+
+  // APPROVALSQ.5 — a Mia card cleared quietly stays on the page, with its
+  // state and its Undo, for as long as its window is open, even across the
+  // reload the clear triggers (the server no longer returns it). Same React key
+  // and same list slot as before, so the card keeps its own state. Not counted
+  // anywhere: the counts come from `queue`. Once the window has closed, the
+  // next reload that no longer returns it drops it. Keyed like the cards.
+  const [clearedCards, setClearedCards] = useState(() => new Map())
+  const cardKey = (it) => `${it.providerKey}-${it.id}`
+  const liveKeys = new Set([...liveNeedsFixing, ...liveWaiting].map(cardKey))
+  const nowMs = Date.now()
+  const keptCleared = [...clearedCards.values()]
+    .filter((e) => !liveKeys.has(cardKey(e.item)) && undoWindowOpen(e.at, nowMs) && (key === 'all' || e.item.providerKey === key))
+    .map((e) => e.item)
+  const needsFixing = [...liveNeedsFixing, ...keptCleared.filter((i) => i.failed)]
+  const waiting = [...liveWaiting, ...keptCleared.filter((i) => !i.failed)]
 
   // APPROVALSQ.2 — select mode: tick several Mia cards and clear them together.
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState(() => new Set())
   const [decided, setDecided] = useState(() => new Set())
+  // `notice` is { error, text, undo?: { ids, at } }: `undo` is on the notice of
+  // a bulk clear that cleared something, and its Undo lives while the window
+  // (counted from when the run finished) is open.
   const [notice, setNotice] = useState(null)
+  const [undoRunning, setUndoRunning] = useState(false)
+  const undoInFlight = useRef(false)
   // Switching chip drops the selection (switching view unmounts this list).
   useEffect(() => { setSelected(new Set()) }, [key])
 
-  const clearable = useMemo(
-    () => [...needsFixing, ...waiting].filter((i) => isBulkClearable(i) && !decided.has(i.id)),
-    [needsFixing, waiting, decided],
-  )
+  const clearable = [...needsFixing, ...waiting].filter((i) => isBulkClearable(i) && !decided.has(i.id))
   const selectedItems = clearable.filter((i) => selected.has(i.id))
   const leaveSelect = () => { setSelectMode(false); setSelected(new Set()) }
   const toggle = (id) => setSelected((prev) => {
@@ -188,8 +216,30 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload, 
     leaveSelect()
     setNotice(cleared.length === 0 && failed.length > 0
       ? { error: true, text: 'None could be cleared (already decided, or an error).' }
-      : { error: false, text: `Cleared ${cleared.length}.${failed.length > 0 ? ` ${failed.length} could not be cleared (already decided, or an error).` : ''}` })
+      : {
+          error: false,
+          text: `Cleared ${cleared.length}.${failed.length > 0 ? ` ${failed.length} could not be cleared (already decided, or an error).` : ''}`,
+          undo: cleared.length > 0 ? { ids: cleared, at: Date.now() } : null,
+        })
     onReload?.()
+  }
+  // APPROVALSQ.5 — undo the whole bulk clear: one request after another, then
+  // reload, then say how many went back. One run per press.
+  const undoBulk = async () => {
+    const ids = notice?.undo?.ids
+    if (undoInFlight.current || !ids?.length) return
+    undoInFlight.current = true
+    setUndoRunning(true)
+    try {
+      const { restored, failed } = await runBulkUndo(ids, { undoOne: (id) => undoClearRequest(id) })
+      setNotice(restored.length === 0
+        ? { error: true, text: 'None could be restored.' }
+        : { error: false, text: `Restored ${restored.length}.${failed.length > 0 ? ` ${failed.length} could not be restored.` : ''}` })
+      onReload?.()
+    } finally {
+      undoInFlight.current = false
+      setUndoRunning(false)
+    }
   }
 
   const renderCard = (it) => {
@@ -202,14 +252,26 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload, 
           onToggle: () => toggle(it.id),
         }
       : {}
-    const onDecided = () => {
+    const onDecided = (_id, request) => {
       if (isBulkClearable(it)) {
         setDecided((prev) => new Set(prev).add(it.id))
         setSelected((prev) => { const next = new Set(prev); next.delete(it.id); return next })
+        // The card says it was a quiet clear through the request it got back.
+        if (request?.details?.cleared?.silent === true) {
+          setClearedCards((m) => new Map(m).set(cardKey(it), { item: it, at: Date.now() }))
+        }
       }
       onItemDecided?.(it.providerKey)
     }
-    return <Card key={`${it.providerKey}-${it.id}`} item={it} onDecided={onDecided} timezone={timezone} {...bulk} />
+    // APPROVALSQ.5 — an undone clear: waiting again and selectable again. Its
+    // kept entry restarts its clock, so the restored card is not dropped by a
+    // reload that has not caught up with the undo.
+    const onUndone = () => {
+      setDecided((prev) => { const next = new Set(prev); next.delete(it.id); return next })
+      setClearedCards((m) => (m.has(cardKey(it)) ? new Map(m).set(cardKey(it), { item: it, at: Date.now() }) : m))
+      onItemUndone?.(it.providerKey)
+    }
+    return <Card key={cardKey(it)} item={it} onDecided={onDecided} onUndone={onUndone} timezone={timezone} {...bulk} />
   }
   return (
     <div className="space-y-4">
@@ -224,9 +286,12 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload, 
         ))}
       </div>
       {notice && !selectMode && (
-        <div className={notice.error
+        <div className={`${notice.error
           ? 'border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm'
-          : 'text-sm rounded-md px-3 py-2 bg-un1t-border/30 text-un1t-text'}>{notice.text}</div>
+          : 'text-sm rounded-md px-3 py-2 bg-un1t-border/30 text-un1t-text'}${notice.undo ? ' flex items-center justify-between gap-3' : ''}`}>
+          {notice.undo ? <span>{notice.text}</span> : notice.text}
+          {notice.undo && <UndoClearButton startedAt={notice.undo.at} disabled={undoRunning} onClick={undoBulk} />}
+        </div>
       )}
       {selectMode ? (
         <BulkClearBar
@@ -239,7 +304,7 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload, 
         <div>
           <button
             type="button"
-            onClick={() => { setSelectMode(true); setNotice(null) }}
+            onClick={() => { setSelectMode(true); setNotice((n) => (n?.undo && undoWindowOpen(n.undo.at) ? n : null)) }}
             className="px-3 py-1 text-xs rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
           >
             Select

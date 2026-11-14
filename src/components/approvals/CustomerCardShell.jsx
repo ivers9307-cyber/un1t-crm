@@ -22,7 +22,7 @@ const CHIP = 'text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded'
 
 export default function CustomerCardShell({
   source, kind, state, name, meta, when, amount,
-  summary, children, contact, links, outcome, actions, quietAction, error,
+  summary, children, contact, links, outcome, outcomeAction, actions, quietAction, error,
   sourceClassName, kindClassName, leading, summaryClassName,
 }) {
   return (
@@ -48,8 +48,10 @@ export default function CustomerCardShell({
       {links && <div className="text-xs flex flex-wrap gap-x-4 gap-y-1">{links}</div>}
 
       {outcome && (
-        <div className={`text-sm rounded-md px-3 py-2 ${OUTCOME_TONES[outcome.tone] || OUTCOME_TONES.neutral}`}>
-          {outcome.text}
+        <div className={`text-sm rounded-md px-3 py-2 ${OUTCOME_TONES[outcome.tone] || OUTCOME_TONES.neutral}${outcomeAction ? ' flex items-center justify-between gap-3' : ''}`}>
+          {/* APPROVALSQ.5 — an Undo beside the result; plain text otherwise. */}
+          {outcomeAction ? <span>{outcome.text}</span> : outcome.text}
+          {outcomeAction}
         </div>
       )}
       {error && <div className="text-sm rounded-md px-3 py-2 bg-red-500/10 text-red-700">{error}</div>}

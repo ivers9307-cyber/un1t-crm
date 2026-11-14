@@ -8,6 +8,8 @@ import { isStuckExecuting, retryOffered } from '@/lib/agent/request-recovery'
 import { whyFlagged, customerWords, accountSummaryLine } from '@/lib/approvals/agent-request-why'
 import { approvalSummary, explainFailure } from '@/lib/approvals/event-move-card'
 import { BOOKING_KINDS } from '@shared/approvals-next-steps'
+import UndoClearButton from '@/components/approvals/UndoClearButton'
+import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
 import { formatInZone, resolveZone, zonedWallClockToInstant } from '@shared/zoned-time'
 
 // RADAR-AGENT Phase 2 — operator approval queue. Manager+ reviews the
@@ -61,6 +63,10 @@ export default function AgentRequestsClient({ timezone = null }) {
   const [busyId, setBusyId] = useState(null)
   const [error, setError] = useState(null)
   const [focusId, setFocusId] = useState(null)
+  // APPROVALSQ.5 — rows cleared quietly in THIS visit, id -> when the answer
+  // arrived (their Undo window runs from there). A row cleared before this
+  // page opened has no entry and no Undo.
+  const [clearedAt, setClearedAt] = useState({})
 
   async function load() {
     try {
@@ -99,6 +105,7 @@ export default function AgentRequestsClient({ timezone = null }) {
       })
       const j = await res.json()
       if (j.success) {
+        if (silent) setClearedAt(m => ({ ...m, [id]: Date.now() }))
         setRequests(rs => rs.map(r => r.id === id ? {
           ...r,
           status: j.request.status,
@@ -110,6 +117,32 @@ export default function AgentRequestsClient({ timezone = null }) {
       } else setError(j.error || 'Failed to update')
     } catch { setError('Failed to update') }
     finally { inFlight.current = false; setBusyId(null) }
+  }
+
+  // APPROVALSQ.5 — take a quiet clear back: the route puts the request back to
+  // the state it was cleared from, so it returns to its own list with its
+  // normal buttons. A 409 means it can no longer be undone: drop the button.
+  async function undo(id) {
+    if (inFlight.current) return
+    inFlight.current = true
+    setBusyId(id)
+    setError(null)
+    try {
+      const res = await undoClearRequest(id)
+      if (res.ok) {
+        setClearedAt(m => { const { [id]: _gone, ...rest } = m; return rest })
+        setRequests(rs => rs.map(r => r.id === id ? {
+          ...r,
+          status: res.request.status,
+          decided_at: res.request.decided_at ?? null,
+          decision_note: res.request.decision_note ?? null,
+          details: res.request.details ?? {},
+        } : r))
+      } else {
+        setError(res.error)
+        if (res.status === 409) setClearedAt(m => { const { [id]: _gone, ...rest } = m; return rest })
+      }
+    } finally { inFlight.current = false; setBusyId(null) }
   }
 
   if (loading) return <div className="p-6 text-sm text-un1t-muted">Loading…</div>
@@ -202,6 +235,9 @@ export default function AgentRequestsClient({ timezone = null }) {
                     {r.details?.cleared?.silent ? 'Cleared, customer not told' : r.status}
                   </span>
                   {decidedByText(r, zone) && <span className="text-xs text-un1t-muted">· {decidedByText(r, zone)}</span>}
+                  {r.details?.cleared?.silent && clearedAt[r.id] != null && (
+                    <UndoClearButton startedAt={clearedAt[r.id]} disabled={busyId === r.id} onClick={() => undo(r.id)} />
+                  )}
                 </div>
               </div>
             ))}
