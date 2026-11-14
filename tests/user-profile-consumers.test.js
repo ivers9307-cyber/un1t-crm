@@ -83,8 +83,20 @@ describe('no reader takes a dropped profile column off the user object (PROFILES
   }, SCAN_TIMEOUT_MS)
 
   it('no file spreads the user object into another object', () => {
-    const hits = files.filter((f) => userSpreads(readFileSync(f, 'utf8')) > 0).map((f) => path.relative(ROOT, f))
+    // APPROVALSQ.6: the ONE allowed spread. userAtLocation (src/lib/auth.js)
+    // returns a copy of the user with its active-studio fields recomputed: a
+    // user object in, a user object of the same shape out, never the user
+    // poured into some other object. Pinned to exactly one spread in that one
+    // file, so a second spread there, or any spread elsewhere, still fails.
+    const ALLOWED_USER_SPREADS = { 'src/lib/auth.js': 1 }
+    const hits = files
+      .map((f) => [path.relative(ROOT, f), userSpreads(readFileSync(f, 'utf8'))])
+      .filter(([rel, n]) => n > (ALLOWED_USER_SPREADS[rel] || 0))
+      .map(([rel]) => rel)
     expect(hits).toEqual([])
+    const authText = readFileSync(path.join(ROOT, 'src/lib/auth.js'), 'utf8')
+    expect(userSpreads(authText)).toBe(1)
+    expect(authText).toMatch(/export function userAtLocation[\s\S]*?return \{\s*\.\.\.user,/)
   }, SCAN_TIMEOUT_MS)
 
   it('the matcher sees the forms it must', () => {
