@@ -37,7 +37,9 @@ describe('ApprovalActionCard clear', () => {
     expect(fetch).not.toHaveBeenCalled()
     fireEvent.change(screen.getByPlaceholderText('Note (optional)'), { target: { value: 'dup' } })
     fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
-    expect(await screen.findByText(/Cleared, customer not told/)).toBeTruthy()
+    const line = await screen.findByText('Cleared, customer not told.')
+    expect(line.parentElement.textContent).not.toContain('please follow up')
+    expect(document.body.textContent).not.toContain('NOT told')
     expect(JSON.parse(patchCalls()[0][1].body)).toEqual({ status: 'declined', silent: true, decision_note: 'dup' })
     expect(suggestCalls()).toHaveLength(0)
     expect(onPrefillComposer).not.toHaveBeenCalled()
@@ -67,7 +69,8 @@ describe('ApprovalActionCard clear', () => {
 
   it('a cleared request seen again shows the cleared line and no next steps', () => {
     const { container } = render(<ApprovalActionCard request={{ ...request, status: 'declined', details: { cleared: { silent: true, from_status: 'pending' } } }} />)
-    expect(screen.getByText(/Cleared, customer not told/)).toBeTruthy()
+    expect(screen.getByText('Cleared, customer not told.')).toBeTruthy()
+    expect(container.textContent).not.toContain('please follow up')
     expect(container.textContent).not.toContain('Next steps')
   })
 })

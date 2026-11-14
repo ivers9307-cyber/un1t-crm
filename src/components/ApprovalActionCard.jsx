@@ -228,7 +228,8 @@ export default function ApprovalActionCard({
             {wasCleared && <span>Cleared, customer not told.</span>}
             {request.decision_note && <span>{request.decision_note}</span>}
             {failedLine && <span className="text-red-700"> {failedLine}</span>}
-            {notified && (
+            {/* A quiet clear told nobody on purpose: never nag staff to follow up. */}
+            {notified && !wasCleared && notified.reason !== 'cleared' && (
               <span className={notified.sent ? ' text-green-700' : ' text-amber-700'}>
                 {notified.sent
                   ? ` Member ${notified.channel === 'email' ? 'emailed' : 'messaged'}.`
