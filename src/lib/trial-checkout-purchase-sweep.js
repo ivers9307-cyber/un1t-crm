@@ -20,6 +20,13 @@
 // Switching a sequence on later greets only buyers of the last 48 hours.
 // A purchase counts once it is GRANTED: before that the buyer has no trial to
 // book with (a failed grant is staff's card, not a greeting).
+//
+// APPROVALSQ.1 — a purchase staff marked granted with "no confirmation email"
+// (grant.confirmation_email = 'skipped_by_staff', written by the review route)
+// is never offered: staff sorted that buyer by hand and asked for quiet, so the
+// welcome sequence stays quiet too (Richard, 14 Nov 2026). Judged on the
+// buyer's NEWEST grant, so an older normal grant in the window does not greet
+// them either.
 
 import { triggerSequencesForCheckoutTrialPurchased } from '@/lib/sequences/triggers'
 import { logError } from '@/lib/log'
@@ -28,16 +35,18 @@ const MODULE = 'trial-checkout-purchase-sweep'
 export const CHECKOUT_PURCHASE_TRIGGER = 'paid_trial_checkout_purchased'
 /** How far back a grant is still offered (48 hours: many retries, no backlog). */
 export const CHECKOUT_PURCHASE_WINDOW_MS = 48 * 3_600_000
+/** The marker the review route writes on a grant staff made without the confirmation email. */
+export const STAFF_QUIET_GRANT = 'skipped_by_staff'
 /** One page holds every grant of the window by a wide margin (four in the first ten days). */
 const PAGE = 1000
 
 /**
  * @param {object} db service-role client
  * @param {{ nowMs?: number, trigger?: Function }} [opts]
- * @returns {Promise<{ ok: boolean, locations: number, checked: number, enrolled: number, already: number, failed: number }>}
+ * @returns {Promise<{ ok: boolean, locations: number, checked: number, enrolled: number, already: number, failed: number, skipped_by_staff: number }>}
  */
 export async function sweepCheckoutTrialPurchases(db, { nowMs = Date.now(), trigger = triggerSequencesForCheckoutTrialPurchased } = {}) {
-  const out = { ok: true, locations: 0, checked: 0, enrolled: 0, already: 0, failed: 0 }
+  const out = { ok: true, locations: 0, checked: 0, enrolled: 0, already: 0, failed: 0, skipped_by_staff: 0 }
 
   const { data: sequences, error: seqErr } = await db
     .from('email_sequences')
@@ -55,7 +64,7 @@ export async function sweepCheckoutTrialPurchases(db, { nowMs = Date.now(), trig
 
   const { data: rows, error: tpErr } = await db
     .from('trial_purchases')
-    .select('id, location_id, contact_id, amount_cents, granted_at')
+    .select('id, location_id, contact_id, amount_cents, granted_at, "grant"')
     .in('location_id', locationIds)
     .eq('payment_status', 'paid')
     .eq('status', 'granted')
@@ -82,6 +91,10 @@ export async function sweepCheckoutTrialPurchases(db, { nowMs = Date.now(), trig
     if (!prev || Date.parse(t.granted_at) > Date.parse(prev.granted_at)) newest.set(key, t)
   }
   for (const t of newest.values()) {
+    if (t.grant?.confirmation_email === STAFF_QUIET_GRANT) {
+      out.skipped_by_staff++
+      continue
+    }
     out.checked++
     let res
     try {

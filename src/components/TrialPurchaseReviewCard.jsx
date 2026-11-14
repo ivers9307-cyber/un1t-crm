@@ -62,7 +62,7 @@ export default function TrialPurchaseReviewCard({ item, onDecided }) {
       } else if (action === 'retry') {
         setOutcome({ tone: 'ok', text: 'Back in the queue. The grant runs within two minutes; if Glofox refuses again this card returns.' })
       } else if (notify === false) {
-        setOutcome({ tone: 'ok', text: 'Marked granted. The confirmation email was not sent. Any welcome sequence still runs.' })
+        setOutcome({ tone: 'ok', text: 'Marked granted. No confirmation email was sent and the welcome sequence will not start.' })
       } else {
         setOutcome({ tone: 'ok', text: j.data?.emailed ? 'Marked granted. The buyer has been emailed.' : 'Marked granted. The confirmation email was not sent (no address, or opted out).' })
       }
