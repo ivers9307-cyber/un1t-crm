@@ -96,7 +96,12 @@ describe('no reader takes a dropped profile column off the user object (PROFILES
     expect(hits).toEqual([])
     const authText = readFileSync(path.join(ROOT, 'src/lib/auth.js'), 'utf8')
     expect(userSpreads(authText)).toBe(1)
-    expect(authText).toMatch(/export function userAtLocation[\s\S]*?return \{\s*\.\.\.user,/)
+    // The one spread must sit INSIDE userAtLocation: cut that function's own
+    // body (up to its closing brace at column 0) and count there.
+    const start = authText.indexOf('export function userAtLocation')
+    expect(start).toBeGreaterThan(-1)
+    const body = authText.slice(start, authText.indexOf('\n}\n', start))
+    expect(userSpreads(body)).toBe(1)
   }, SCAN_TIMEOUT_MS)
 
   it('the matcher sees the forms it must', () => {
