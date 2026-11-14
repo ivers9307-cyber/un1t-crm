@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
 import { logWarn } from '@/lib/log'
+import { userIsMaster } from '@/lib/approvals/registry'
 
 // RADAR-AGENT Phase 2 — operator approval queue for agent-captured
 // requests. Two forms:
@@ -21,13 +22,16 @@ import { logWarn } from '@/lib/log'
 // columns (server side only: the client gets the name, never the id or the
 // profile row). A failed read leaves every name null and is logged; it never
 // fails the list.
-async function attachDeciderNames(db, rows) {
+// A platform (master) decider reads "Support" to anyone who is not themselves
+// a master (APPROVALSQ.3); `role` is read only to decide that and never leaves.
+async function attachDeciderNames(db, rows, viewer) {
   const ids = [...new Set(rows.map(r => r.decided_by).filter(Boolean))]
   const names = new Map()
+  const viewerIsMaster = userIsMaster(viewer)
   if (ids.length) {
-    const { data, error } = await db.from('profiles').select('id, full_name').in('id', ids)
+    const { data, error } = await db.from('profiles').select('id, full_name, role').in('id', ids)
     if (error) logWarn('agent-membership-requests', 'decider name read failed', { err: error.message })
-    else for (const p of data || []) names.set(p.id, p.full_name || null)
+    else for (const p of data || []) names.set(p.id, p.role === 'master' && !viewerIsMaster ? 'Support' : (p.full_name || null))
   }
   return rows.map(({ decided_by, ...rest }) => ({ ...rest, decided_by_name: (decided_by && names.get(decided_by)) || null }))
 }
@@ -64,7 +68,7 @@ export async function GET(request) {
     if (rows.length && allowedIds !== null && !allowedIds.includes(rows[0].location_id)) {
       return NextResponse.json({ success: true, requests: [] })
     }
-    return NextResponse.json({ success: true, requests: await attachDeciderNames(db, rows) })
+    return NextResponse.json({ success: true, requests: await attachDeciderNames(db, rows, user) })
   }
 
   if (!MANAGER_ROLES.includes(user.role)) {
@@ -94,5 +98,5 @@ export async function GET(request) {
   } catch (err) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 })
   }
-  return NextResponse.json({ success: true, requests: await attachDeciderNames(db, data || []) })
+  return NextResponse.json({ success: true, requests: await attachDeciderNames(db, data || [], user) })
 }

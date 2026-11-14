@@ -16,6 +16,7 @@ import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from 
 // until a later OTA).
 import { approvalSummary, approvalKindLabel, explainFailure } from '@/lib/approvals/event-move-card'
 import SequencePicker from '@/components/SequencePicker'
+import { formatInZone, resolveZone } from '@shared/zoned-time'
 
 const STATUS_CHIP = {
   pending:  'bg-amber-500/10 text-amber-700',
@@ -31,12 +32,13 @@ const STATUS_LABELS = {
 }
 
 // APPROVALSQ.2 — "by Sarah, 14 Nov 2026, 16:20" (name unknown: just the time).
-function decidedByLine(request) {
+// APPROVALSQ.3 — rendered on the studio's clock (`zone`), never the browser's.
+function decidedByLine(request, zone) {
   let when = null
   if (request.decided_at) {
     const d = new Date(request.decided_at)
     if (!Number.isNaN(d.getTime())) {
-      when = d.toLocaleString('en-IE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+      when = formatInZone(d, zone, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
     }
   }
   const name = request.decided_by_name || null
@@ -46,9 +48,10 @@ function decidedByLine(request) {
 }
 
 export default function ApprovalActionCard({
-  request, contactId, locationId, contactFirstName,
+  request, contactId, locationId, contactFirstName, timezone = null,
   onDecided, onPrefillComposer, onOpenBookTab,
 }) {
+  const zone = resolveZone(timezone)
   const [busy, setBusy] = useState(null)          // 'approved' | 'declined' | 'saved' | null
   const [declineOpen, setDeclineOpen] = useState(false)
   // APPROVALSQ.1 — "Clear, don't notify": a confirm step, then one silent PATCH.
@@ -243,7 +246,7 @@ export default function ApprovalActionCard({
 
         {decided && (
           <div className="mt-1.5 text-xs text-un1t-muted">
-            {wasCleared && <span>{`Cleared, customer not told${decidedByLine(request) ? ` · ${decidedByLine(request)}` : ''}.`}</span>}
+            {wasCleared && <span>{`Cleared, customer not told${decidedByLine(request, zone) ? ` · ${decidedByLine(request, zone)}` : ''}.`}</span>}
             {request.decision_note && <span> {request.decision_note}</span>}
             {failedLine && <span className="text-red-700"> {failedLine}</span>}
             {/* A quiet clear told nobody on purpose: never nag staff to follow up. */}

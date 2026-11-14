@@ -56,7 +56,7 @@ function initialsOf(name) {
 
 // `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
 // the internal list is hidden and selection follows initialConversationId.
-export default function IGInbox({ locationId, initialConversationId, embedded = false, onOpenBookTab }) {
+export default function IGInbox({ locationId, timezone = null, initialConversationId, embedded = false, onOpenBookTab }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [conversation, setConversation] = useState(null)
@@ -440,6 +440,7 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
                       request={item.request}
                       contactId={conversation?.contact_id || null}
                       locationId={locationId}
+                      timezone={timezone}
                       contactFirstName={conversation?.contacts?.first_name || conversation?.ig_username || null}
                       onDecided={updated => setApprovals(prev => prev.map(r => (r.id === updated.id ? updated : r)))}
                       onPrefillComposer={text => setNewMessage(text)}
