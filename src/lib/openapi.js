@@ -55,6 +55,7 @@ import {
   CampaignContentSchema as CampaignContentSessionSchema,
   CampaignScheduleSchema as CampaignScheduleSessionSchema,
 } from '@/lib/campaign-session-schemas'
+import { StudioConsentSchema } from '@/lib/studio-consent-schema'
 // SHELLY-UI.9 — the /api/shelly/* request vocabulary. Aliased on import so
 // the .openapi()-decorated re-derivations below can carry the canonical
 // names; see the Shelly block for why .extend({}) is required.
@@ -4177,6 +4178,26 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — contact_linking permission required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// STAFFCONSENT.1 — staff switch one studio's marketing email, with a reason.
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/studio-consent',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: "Switch a contact's marketing email on or off for one studio, with a recorded reason (ADMIN_ROLES at that studio, or a master). Writes that studio's list only.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: StudioConsentSchema } } },
+  },
+  responses: {
+    200: { description: 'The channels that changed (empty when the studio was already in that state)', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ changed: z.array(z.string()) }) }) } } },
+    400: { description: 'Validation error (reason off the list, missing note for other, note over 500 characters)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found, not at that studio, or the caller may not act there', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The studio preference could not be read or written; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
