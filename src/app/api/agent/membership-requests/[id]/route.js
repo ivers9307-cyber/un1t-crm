@@ -14,6 +14,7 @@ import {
   finishedMarker,
 } from '@/lib/agent/request-recovery'
 import { approvalGrantsTrialCredit } from '@/lib/approvals/agent-request-why'
+import { UNDO_CLEAR_WINDOW_MS } from '@/lib/approvals/undo-clear'
 import { logWarn } from '@/lib/log'
 import { isHandBookedEventId } from '@/lib/manual-timetable'
 import { UN1T_RECORD_ONLY_REASONS } from '@/lib/un1t-online-approval'
@@ -82,9 +83,8 @@ const BodySchema = z.any().transform((raw, ctx) => {
 
 const MEMBERSHIP_KINDS = new Set(['cancellation', 'pause'])
 
-// APPROVALSQ.5 — how long after a quiet clear its author may undo it, and how
-// far into the future a decided_at may sit (clock skew) and still count.
-export const UNDO_CLEAR_WINDOW_MS = 120_000
+// APPROVALSQ.5 — how far into the future a decided_at may sit (clock skew)
+// and still count for an undo; the window itself is in approvals/undo-clear.
 const UNDO_CLEAR_SKEW_MS = 5_000
 
 // EVENT-MOVE.7 — approving an event_move writes at the source AND the target

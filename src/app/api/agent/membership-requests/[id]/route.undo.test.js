@@ -23,7 +23,8 @@ vi.mock('@/lib/cancellation-form/confirm', () => ({
 import { createBooking, cancelBooking } from '@/lib/glofox'
 import { sendAgentThreadMessage } from '@/lib/agent/notify'
 import { sendMembershipOutcomeMessage } from '@/lib/cancellation-form/confirm'
-import { PATCH, UNDO_CLEAR_WINDOW_MS } from './route.js'
+import { PATCH } from './route.js'
+import { UNDO_CLEAR_WINDOW_MS } from '@/lib/approvals/undo-clear'
 
 const NOW = Date.parse('2026-11-15T12:00:00.000Z')
 const ago = (s) => new Date(NOW - s * 1000).toISOString()
