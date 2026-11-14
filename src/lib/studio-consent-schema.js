@@ -2,10 +2,9 @@
 import { z } from 'zod'
 import { uuidLike } from '@/lib/schemas'
 
-/** Why staff made the change. Shown in the reason dialog; stored on consent_log.reason. */
-export const STUDIO_CONSENT_REASONS = Object.freeze(['in_person', 'phone', 'email', 'signed_form', 'other'])
+import { STUDIO_CONSENT_REASONS, STUDIO_CONSENT_NOTE_MAX } from '@/lib/studio-consent-reasons'
 
-export const STUDIO_CONSENT_NOTE_MAX = 500
+export { STUDIO_CONSENT_REASONS, STUDIO_CONSENT_NOTE_MAX }
 
 export const StudioConsentSchema = z.object({
   location_id: uuidLike,

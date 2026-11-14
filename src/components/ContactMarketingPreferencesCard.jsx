@@ -18,6 +18,18 @@
 
 import { useState, useEffect } from 'react'
 import { Mail, MessageSquare, MessageCircle, Loader2, Lock, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Modal, Button, Field } from '@/components/ui'
+import { STUDIO_CONSENT_REASONS, STUDIO_CONSENT_NOTE_MAX } from '@/lib/studio-consent-reasons'
+
+// STAFFCONSENT.1 — the words staff pick from when switching one studio's
+// marketing email. The keys are stored on consent_log.reason.
+const REASON_LABELS = {
+  in_person: 'They asked in person',
+  phone: 'They asked by phone',
+  email: 'They asked by email',
+  signed_form: 'They signed a form',
+  other: 'Other (say why below)',
+}
 
 const MARKETING_CHANNELS = [
   {
@@ -60,6 +72,14 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
   const [error, setError] = useState(null)
   const [savingKey, setSavingKey] = useState(null)
   const [savedKey, setSavedKey] = useState(null)
+  // STAFFCONSENT.1 — per-studio lists and the reason dialog.
+  const [studios, setStudios] = useState([])
+  const [studiosError, setStudiosError] = useState(false)
+  const [pending, setPending] = useState(null) // { location_id, name, next }
+  const [reason, setReason] = useState('')
+  const [note, setNote] = useState('')
+  const [studioSaving, setStudioSaving] = useState(false)
+  const [studioError, setStudioError] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -68,8 +88,11 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
         const r = await fetch(`/api/contacts/${contactId}/marketing-preferences`)
         const j = await r.json()
         if (cancelled) return
-        if (j.success) setPrefs(j.preferences)
-        else setError(j.error || 'Failed to load preferences')
+        if (j.success) {
+          setPrefs(j.preferences)
+          setStudios(Array.isArray(j.studios) ? j.studios : [])
+          setStudiosError(Boolean(j.studios_error))
+        } else setError(j.error || 'Failed to load preferences')
       } catch (e) {
         if (!cancelled) setError(e?.message || 'Network error')
       } finally {
@@ -108,6 +131,46 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
       setError(e?.message || 'Network error')
     } finally {
       setSavingKey(null)
+    }
+  }
+
+  function openStudioSwitch(studio) {
+    if (!studio.can_edit) return
+    setPending({ location_id: studio.location_id, name: studio.name, next: !studio.email_marketing })
+    setReason('')
+    setNote('')
+    setStudioError(null)
+  }
+
+  const noteTrimmed = note.trim()
+  const canSaveStudio = Boolean(pending && reason && (reason !== 'other' || noteTrimmed.length > 0) && !studioSaving)
+
+  async function saveStudioSwitch() {
+    if (!canSaveStudio) return
+    setStudioSaving(true)
+    setStudioError(null)
+    try {
+      const r = await fetch(`/api/contacts/${contactId}/studio-consent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location_id: pending.location_id,
+          email_marketing: pending.next,
+          reason,
+          ...(noteTrimmed ? { note: noteTrimmed } : {}),
+        }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || !j.success) {
+        setStudioError(j.error || `Could not save (HTTP ${r.status})`)
+        return
+      }
+      setStudios((list) => list.map((s) => (s.location_id === pending.location_id ? { ...s, email_marketing: pending.next } : s)))
+      setPending(null)
+    } catch (e) {
+      setStudioError(e?.message || 'Network error')
+    } finally {
+      setStudioSaving(false)
     }
   }
 
@@ -195,6 +258,59 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
             })}
           </div>
 
+          {/* STAFFCONSENT.1 — each studio's own marketing email list. A
+              person can be on one studio's list and off another's; the
+              overall switch above does not change these. */}
+          {(studios.length > 0 || studiosError) && (
+            <div className="mt-4 pt-3 border-t border-un1t-border/60">
+              <div className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
+                Studio lists (marketing email)
+              </div>
+              {studiosError && (
+                <div className="text-[11px] text-red-700 bg-red-500/10 rounded p-2 mb-2">
+                  Could not load the studio lists. Reload to try again.
+                </div>
+              )}
+              <div className="space-y-2">
+                {studios.map((studio) => {
+                  const on = !!studio.email_marketing
+                  return (
+                    <div key={studio.location_id} className="flex items-center justify-between gap-2 py-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Mail size={14} className={`shrink-0 ${on ? 'text-emerald-500' : 'text-un1t-muted'}`} />
+                        <span className="text-sm text-un1t-text truncate">{studio.name}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${on ? 'bg-emerald-500/10 text-emerald-700' : 'bg-gray-500/10 text-gray-700'}`}>
+                          {on ? 'On' : 'Off'}
+                        </span>
+                      </div>
+                      {studio.can_edit ? (
+                        <button
+                          type="button"
+                          onClick={() => openStudioSwitch(studio)}
+                          aria-pressed={on}
+                          aria-label={`${on ? 'Switch off' : 'Switch on'} marketing email at ${studio.name}`}
+                          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                            on ? 'bg-emerald-500' : 'bg-un1t-border'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                              on ? 'translate-x-4' : 'translate-x-0.5'
+                            }`}
+                          />
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-un1t-muted inline-flex items-center gap-1">
+                          <Lock size={10} /> read-only
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Transactional / utility — explicitly always-on per the
               CLAUDE.md "opting out of marketing should never block a
               booking reminder" convention. Shown for reassurance so
@@ -219,6 +335,70 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
           </div>
         </>
       )}
+
+      <Modal
+        open={Boolean(pending)}
+        onClose={() => { if (!studioSaving) setPending(null) }}
+        title={pending ? `${pending.next ? 'Switch on' : 'Switch off'} marketing email at ${pending.name}` : ''}
+        size="sm"
+        footer={(
+          <>
+            <Button type="button" variant="secondary" onClick={() => setPending(null)} disabled={studioSaving}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={saveStudioSwitch} disabled={!canSaveStudio} loading={studioSaving}>
+              Save
+            </Button>
+          </>
+        )}
+      >
+        {pending && (
+          <div className="space-y-3">
+            <p className="text-sm text-un1t-subtle">
+              {pending.next
+                ? `This person will get ${pending.name}'s marketing emails again. Only do this if they asked.`
+                : `This person will stop getting ${pending.name}'s marketing emails. Other studios are not changed.`}
+            </p>
+            <fieldset className="space-y-1.5">
+              <legend className="text-sm font-medium text-un1t-text mb-1">Why?</legend>
+              {STUDIO_CONSENT_REASONS.map((key) => (
+                <label key={key} className="flex items-center gap-2 text-sm text-un1t-text">
+                  <input
+                    type="radio"
+                    name="studio-consent-reason"
+                    value={key}
+                    checked={reason === key}
+                    onChange={() => setReason(key)}
+                  />
+                  {REASON_LABELS[key]}
+                </label>
+              ))}
+            </fieldset>
+            <Field
+              id="studio-consent-note"
+              label={reason === 'other' ? 'Note (required)' : 'Note (optional)'}
+              hint={`At most ${STUDIO_CONSENT_NOTE_MAX} characters.`}
+            >
+              {(controlProps) => (
+              <textarea
+                {...controlProps}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                maxLength={STUDIO_CONSENT_NOTE_MAX}
+                rows={3}
+                className="w-full rounded border border-un1t-border bg-un1t-bg px-2 py-1.5 text-sm text-un1t-text"
+              />
+              )}
+            </Field>
+            {studioError && (
+              <div className="flex items-start gap-2 text-xs text-red-700 bg-red-500/10 rounded p-2">
+                <AlertCircle size={12} className="mt-0.5 shrink-0" />
+                <span>{studioError}</span>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }
