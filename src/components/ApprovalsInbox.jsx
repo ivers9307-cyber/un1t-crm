@@ -9,13 +9,15 @@
 // the staff-side categories (leave, expenses, invoices and so on), where each
 // row links out to its source page and the real approve/decline happens there.
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { RefreshCw, ChevronRight } from 'lucide-react'
 import AgentRequestDecideCard from '@/components/AgentRequestDecideCard'
 import TrialPurchaseReviewCard from '@/components/TrialPurchaseReviewCard'
 import CorpPromoClaimCard from '@/components/CorpPromoClaimCard'
 import OfferPurchaseCard from '@/components/approvals/OfferPurchaseCard'
+import BulkClearBar from '@/components/approvals/BulkClearBar'
+import { isBulkClearable } from '@/lib/approvals/bulk-clear'
 import { buildCustomerQueue, filterQueue, teamProviders } from '@/lib/approvals/customer-queue'
 
 function formatDateTime(s) {
@@ -159,7 +161,7 @@ export default function ApprovalsInbox() {
       )}
 
       {shownView === 'customers'
-        ? <CustomerList queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} />
+        ? <CustomerList queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} onReload={load} />
         : <ProviderList provider={active} loading={loading} />}
     </div>
   )
@@ -198,14 +200,55 @@ const CARDS = {
   offer_purchases: OfferPurchaseCard,
 }
 
-function CustomerList({ queue, chip, setChip, loading, onItemDecided }) {
+function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }) {
   // A chip whose provider vanished on a reload falls back to All.
   const key = queue.chips.some((c) => c.key === chip) ? chip : 'all'
   const { needsFixing, waiting } = filterQueue(queue, key)
+
+  // APPROVALSQ.2 — select mode: tick several Mia cards and clear them together.
+  const [selectMode, setSelectMode] = useState(false)
+  const [selected, setSelected] = useState(() => new Set())
+  const [decided, setDecided] = useState(() => new Set())
+  const [notice, setNotice] = useState(null)
+  // Switching chip drops the selection (switching view unmounts this list).
+  useEffect(() => { setSelected(new Set()) }, [key])
+
+  const clearable = useMemo(
+    () => [...needsFixing, ...waiting].filter((i) => isBulkClearable(i) && !decided.has(i.id)),
+    [needsFixing, waiting, decided],
+  )
+  const selectedItems = clearable.filter((i) => selected.has(i.id))
+  const leaveSelect = () => { setSelectMode(false); setSelected(new Set()) }
+  const toggle = (id) => setSelected((prev) => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+  const finished = ({ cleared, failed }) => {
+    leaveSelect()
+    setNotice(`Cleared ${cleared.length}.${failed.length > 0 ? ` ${failed.length} could not be cleared (already decided, or an error).` : ''}`)
+    onReload?.()
+  }
+
   const renderCard = (it) => {
     const Card = CARDS[it.providerKey]
     if (!Card) return null
-    return <Card key={`${it.providerKey}-${it.id}`} item={it} onDecided={() => onItemDecided?.(it.providerKey)} />
+    const bulk = isBulkClearable(it)
+      ? {
+          selectable: selectMode && !decided.has(it.id),
+          selected: selected.has(it.id),
+          onToggle: () => toggle(it.id),
+        }
+      : {}
+    const onDecided = () => {
+      if (isBulkClearable(it)) {
+        setDecided((prev) => new Set(prev).add(it.id))
+        setSelected((prev) => { const next = new Set(prev); next.delete(it.id); return next })
+      }
+      onItemDecided?.(it.providerKey)
+    }
+    return <Card key={`${it.providerKey}-${it.id}`} item={it} onDecided={onDecided} {...bulk} />
   }
   const chipClass = (on) => `px-3 py-1 text-xs rounded-full border transition-colors flex items-center gap-1.5 ${
     on ? 'bg-un1t-text text-un1t-bg border-un1t-text font-medium' : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
@@ -222,6 +265,27 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided }) {
           </button>
         ))}
       </div>
+      {notice && !selectMode && (
+        <div className="text-sm rounded-md px-3 py-2 bg-un1t-border/30 text-un1t-text">{notice}</div>
+      )}
+      {selectMode ? (
+        <BulkClearBar
+          items={selectedItems}
+          onSelectAll={() => setSelected(new Set(clearable.map((i) => i.id)))}
+          onCancel={leaveSelect}
+          onFinished={finished}
+        />
+      ) : clearable.length > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={() => { setSelectMode(true); setNotice(null) }}
+            className="px-3 py-1 text-xs rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
+          >
+            Select
+          </button>
+        </div>
+      )}
       {needsFixing.length === 0 && waiting.length === 0 ? (
         <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
           {loading ? 'Loading…' : 'Nothing waiting on customers.'}

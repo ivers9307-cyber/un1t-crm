@@ -136,7 +136,9 @@ export function outcomeLine(status, item, executed, notified = null, plannedEndD
   return { tone: 'neutral', text: status }
 }
 
-export default function AgentRequestDecideCard({ item, onDecided }) {
+// APPROVALSQ.2 — `selectable`, `selected` and `onToggle` put a select checkbox
+// in the header while /approvals is in select mode; a decided card has none.
+export default function AgentRequestDecideCard({ item, onDecided, selectable = false, selected = false, onToggle }) {
   const [busy, setBusy] = useState(null)       // 'approved' | 'declined' | 'saved' | 'cleared' | null
   const inFlight = useRef(false)
   const [declineOpen, setDeclineOpen] = useState(false)
@@ -292,6 +294,15 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
 
   return (
     <CustomerCardShell
+      leading={selectable && !outcome ? (
+        <input
+          type="checkbox"
+          checked={!!selected}
+          onChange={() => onToggle?.()}
+          aria-label={`Select ${item.contactName || 'customer'}`}
+          className="h-4 w-4 rounded border-un1t-border"
+        />
+      ) : undefined}
       source={(
         <span className="inline-flex items-center gap-1">
           <Sparkles size={11} />
