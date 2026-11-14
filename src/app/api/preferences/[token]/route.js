@@ -8,6 +8,7 @@ import { propagateOptOut } from '@/lib/consent-propagation'
 import { emailStatusNormaliseForOptIn } from '@/lib/email-reputation'
 import { suppressAtPostmark, unsuppressAtPostmark } from '@/lib/postmark-suppressions'
 import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
+import { applyStudioPreferenceChange, STUDIO_CONSENT_CHANNELS } from '@/lib/studio-consent'
 import { resolveOrgChrome } from '@/lib/host-brand'
 import {
   REFUSAL_REASONS,
@@ -172,6 +173,40 @@ export async function PUT(request, props) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
+  // STAFFCONSENT.1 — a change to ONE studio's list goes through the shared
+  // per-studio write (src/lib/studio-consent.js), which staff use too. It
+  // writes the studio row only (never contact_preferences, whose mig 489
+  // trigger fans an opt-out to every studio), and keeps every rule this branch
+  // used to carry inline: the write error is a failure, the log row is
+  // secondary, opt-outs propagate, an opt-in normalises reputation and lifts a
+  // manual Postmark suppression, a studio opt-out never suppresses there.
+  if (body.locationId) {
+    const changes = {}
+    for (const channel of STUDIO_CONSENT_CHANNELS) {
+      if (typeof body[channel] === 'boolean') changes[channel] = body[channel]
+    }
+    const result = await applyStudioPreferenceChange(db, {
+      contact: { ...(pref.contacts || {}), id: pref.contact_id },
+      locationId: body.locationId,
+      changes,
+      source: 'preference_centre',
+      ipAddress: ip,
+    })
+    if (!result.ok && result.status === 404) {
+      return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
+    }
+    if (!result.ok) {
+      return NextResponse.json(
+        { success: false, error: 'Could not record your preference' },
+        { status: 500 },
+      )
+    }
+    if (result.changed.length === 0) {
+      return NextResponse.json({ success: true, message: 'No changes' })
+    }
+    return NextResponse.json({ success: true, message: 'Preferences updated' })
+  }
+
   const allowed = [
     'email_marketing', 'email_administrative',
     'whatsapp_marketing', 'whatsapp_administrative',
@@ -180,23 +215,8 @@ export async function PUT(request, props) {
   const updates = {}
   const logEntries = []
 
-  // LOCCOMMS.4 — a scoped update compares against THAT location's row, not the
-  // global one. Someone opted out globally but opted in at one location (the
-  // shape of the leads recovered in LEADCAP.1) would otherwise produce an empty
-  // patch and their change would silently do nothing.
-  let current = pref
-  if (body.locationId) {
-    const { data: locRow } = await db
-      .from('contact_location_preferences')
-      .select('email_marketing, sms_marketing, whatsapp_marketing')
-      .eq('contact_id', pref.contact_id)
-      .eq('location_id', body.locationId)
-      .maybeSingle()
-    if (!locRow) {
-      return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
-    }
-    current = locRow
-  }
+  // From here on the change is to the GLOBAL row (a studio change returned above).
+  const current = pref
 
   for (const channel of allowed) {
     if (typeof body[channel] === 'boolean' && body[channel] !== current[channel]) {
@@ -207,7 +227,7 @@ export async function PUT(request, props) {
         action: consentActionFor(body[channel]),
         source: 'preference_centre',
         ip_address: ip,
-        location_id: body.locationId || null,
+        location_id: null,
       })
     }
   }
@@ -218,10 +238,10 @@ export async function PUT(request, props) {
 
   updates.updated_at = new Date().toISOString()
 
-  // LOCCOMMS.4 — scoped writes go to the location row ONLY. Writing
-  // contact_preferences would trip the mig 489 trigger, which fans any channel
-  // going FALSE out to every location — turning "leave the Hatch list" into
-  // "leave every UN1T list", which is the harm this PR exists to prevent.
+  // The global write. It trips the mig 489 trigger, which fans any channel
+  // going FALSE out to every location: that is the "unsubscribe from
+  // everything" control. A one-studio change never reaches here (see
+  // applyStudioPreferenceChange above, LOCCOMMS.4).
   //
   // UNSUBAUTO.3 — THE ASYMMETRY BETWEEN THIS WRITE AND THE consent_log INSERT
   // BELOW IS DELIBERATE. Do not tidy it into consistency.
@@ -232,25 +252,14 @@ export async function PUT(request, props) {
   // PreferenceCentre's toggles and UnsubscribePage's Resubscribe button —
   // render their confirmation off that flag, so a failed write told the
   // person the opposite of what the database holds.
-  let writeError = null
-  if (body.locationId) {
-    const { error: locWriteErr } = await db
-      .from('contact_location_preferences')
-      .update(updates)
-      .eq('contact_id', pref.contact_id)
-      .eq('location_id', body.locationId)
-    writeError = locWriteErr
-  } else {
-    const { error: globalWriteErr } = await db
-      .from('contact_preferences')
-      .update(updates)
-      .eq('id', pref.id)
-    writeError = globalWriteErr
-  }
+  const { error: writeError } = await db
+    .from('contact_preferences')
+    .update(updates)
+    .eq('id', pref.id)
   if (writeError) {
     console.error('[preferences] preference write failed — change NOT recorded:', {
       contactId: pref.contact_id,
-      locationId: body.locationId || null,
+      locationId: null,
       channels: Object.keys(updates).filter((k) => k !== 'updated_at'),
       message: writeError.message,
     })
@@ -271,7 +280,7 @@ export async function PUT(request, props) {
     if (logErr) {
       console.error('[preferences] consent_log insert failed (the change itself IS recorded):', {
         contactId: pref.contact_id,
-        locationId: body.locationId || null,
+        locationId: null,
         message: logErr.message,
       })
     }
@@ -287,7 +296,7 @@ export async function PUT(request, props) {
       email: pref.contacts?.email,
       waPhone: pref.contacts?.wa_phone,
       channels: optedOut,
-      locationId: body.locationId || null,
+      locationId: null,
     })
   }
 
@@ -380,8 +389,7 @@ export async function PUT(request, props) {
     // W1.E4 — both directions act on the server the person's mail comes from:
     // the org's own Postmark server when it has a live tenant_email_domains
     // row, else the global one. Resolved from the contact's home location.
-    const scopedOptOut = updates.email_marketing === false && Boolean(body.locationId)
-    if (pref.contacts?.email && !scopedOptOut) {
+    if (pref.contacts?.email) {
       try {
         const serverToken = await serverTokenForLocation(db, pref.contacts.location_id)
         if (updates.email_marketing === false) {

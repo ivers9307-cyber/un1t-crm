@@ -95,6 +95,9 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   // still that person's decision; the desk is just the surface it arrived on.
   admin_panel:                    VOLUNTARY,
   manual:                         VOLUNTARY,
+  // STAFFCONSENT.1 — staff switching one studio's marketing email on or off
+  // from the contact page, with a recorded reason (consent_log.reason/note).
+  staff_studio:                   VOLUNTARY,
 
   // HOST-CONSENT.1 — a host's own mailing list, per-host, never touching
   // UN1T marketing consent. See src/lib/host-consent.js.
