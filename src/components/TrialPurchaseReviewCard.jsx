@@ -56,7 +56,7 @@ export default function TrialPurchaseReviewCard({ item, onDecided }) {
         return
       }
       if (j.data?.already) {
-        setOutcome({ tone: 'ok', text: 'Already granted.' })
+        setOutcome({ tone: 'ok', text: action === 'handled' ? 'Already handled.' : 'Already granted.' })
       } else if (action === 'handled') {
         setOutcome({ tone: 'ok', text: 'Marked handled.' })
       } else if (action === 'retry') {

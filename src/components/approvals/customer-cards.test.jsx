@@ -60,6 +60,14 @@ describe('customer cards', () => {
     }
   })
 
+  it('an already answer to Mark handled shows "Already handled."', async () => {
+    reply({ success: true, data: { already: true, status: 'handled' } })
+    render(<TrialPurchaseReviewCard item={help} />)
+    fireEvent.click(screen.getByText('Mark handled'))
+    await waitFor(() => expect(screen.getByText('Already handled.')).toBeTruthy())
+    expect(document.body.textContent).not.toContain('Already granted')
+  })
+
   it('Mark granted in Glofox still posts only { action:"resolve" }', async () => {
     reply({ success: true, data: { emailed: true } })
     render(<TrialPurchaseReviewCard item={grant} />)
