@@ -1,9 +1,11 @@
-// Staff approve/reject a host event pending review. ADMIN_ROLES; the event's
+// Staff approve/reject a host event pending review. Master, owner or manager,
+// by global role or by the role at the active studio (canReviewHostEvents, the
+// same rule the approvals provider shows the item by); the event's
 // host must be in the caller's org (IDOR guard). (HOST-PORTAL.3)
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { ADMIN_ROLES } from '@/lib/schemas'
+import { canReviewHostEvents } from '@/lib/host-event-review-access'
 import { loadHostForOrg } from '@/lib/hosts'
 import { notifyHostEventReviewed } from '@/lib/host-notifications'
 import { logError } from '@/lib/log'
@@ -21,7 +23,7 @@ export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!ADMIN_ROLES.includes(user.role)) return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  if (!canReviewHostEvents(user)) return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
   if (!orgId) return NextResponse.json({ success: false, error: 'no_active_organization' }, { status: 400 })
 

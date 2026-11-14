@@ -4,6 +4,7 @@
 // for team and money items. The four cards are stubbed; this is about the page.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { useState } from 'react'
 import { render, cleanup, screen, fireEvent, within, waitFor } from '@testing-library/react'
 
 vi.mock('next/link', () => ({ default: ({ href, children, ...r }) => <a href={href} {...r}>{children}</a> }))
@@ -25,6 +26,24 @@ vi.mock('@/components/AgentRequestDecideCard', () => ({ default: stub('agent') }
 vi.mock('@/components/TrialPurchaseReviewCard', () => ({ default: stub('trial') }))
 vi.mock('@/components/CorpPromoClaimCard', () => ({ default: stub('corp') }))
 vi.mock('@/components/approvals/OfferPurchaseCard', () => ({ default: stub('offer') }))
+
+// APPROVALSQ.4 — team cards stubbed: id, provider key, zone, and a decide button.
+function teamStub(name) {
+  return function TeamStub({ item, providerKey, timezone, onDecided }) {
+    const [outcome, setOutcome] = useState(null)
+    return (
+      <div data-testid={`team-${name}`} data-provider={providerKey} data-tz={timezone ?? ''}>
+        <span>{item.id}</span>
+        {outcome && <em>outcome-{item.id}</em>}
+        <button type="button" onClick={() => { setOutcome('done'); onDecided?.() }}>decide-{item.id}</button>
+      </div>
+    )
+  }
+}
+vi.mock('@/components/approvals/team-cards', () => ({
+  TEAM_CARDS: { time_off: teamStub('decide'), fte_expenses: teamStub('decide'), shift_swaps: teamStub('decide') },
+  TeamLinkCard: teamStub('link'),
+}))
 
 import ApprovalsInbox from './ApprovalsInbox.jsx'
 
@@ -95,17 +114,6 @@ describe('ApprovalsInbox customers view', () => {
     render(<ApprovalsInbox />)
     await screen.findByText('leave-1')
     expect(screen.queryByRole('button', { name: /^Customers/ })).toBeNull()
-  })
-
-  it('Team and money shows the old tabs without the four customer keys', async () => {
-    mockApi([...customers(), ...team()])
-    render(<ApprovalsInbox />)
-    await screen.findByText('mia-fail')
-    fireEvent.click(screen.getByRole('button', { name: /^Team and money/ }))
-    expect(screen.getByText('leave-1')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /^trial_purchases/ })).toBeNull()
-    expect(screen.queryByRole('button', { name: /^agent_requests/ })).toBeNull()
-    expect(screen.getByRole('button', { name: /^Time off/ })).toBeTruthy()
   })
 
   it('deciding a card drops the Customers badge by one', async () => {
@@ -422,12 +430,116 @@ describe('ApprovalsInbox bulk clear', () => {
     await screen.findByText('mia-fail')
     for (const c of screen.getAllByTestId(/^card-/)) expect(c.getAttribute('data-tz')).toBe('')
   })
+})
 
-  it('shows the Submitted line of a team row on the studio clock', async () => {
-    mockApi([...customers(), prov('time_off', [it_('leave-1', { reviewUrl: '/leave/1', subtitle: 's', submittedAt: '2026-11-14T16:20:00Z' })], [], { label: 'Time off' })])
+// APPROVALSQ.4 — Team and money is one list of cards with filter chips.
+const teamMix = () => [
+  prov('time_off', [it_('leave-1', { submittedAt: '2026-11-03T10:00:00Z' })], [], { label: 'Time off' }),
+  prov('fte_expenses', [it_('exp-1', { submittedAt: '2026-11-01T10:00:00Z' })], [], { label: 'Expenses' }),
+  prov('rosters', [it_('roster-1', { submittedAt: '2026-11-02T10:00:00Z' })], [], { label: 'Rosters' }),
+]
+const teamIds = () => screen.getAllByTestId(/^team-/).map((n) => n.querySelector('span').textContent)
+
+describe('ApprovalsInbox team view', () => {
+  it('shows one list mixing providers, oldest first', async () => {
+    mockApi(teamMix())
+    render(<ApprovalsInbox />)
+    await screen.findByText('exp-1')
+    expect(teamIds()).toEqual(['exp-1', 'roster-1', 'leave-1'])
+  })
+
+  it('a chip narrows the list and All restores it', async () => {
+    mockApi(teamMix())
+    render(<ApprovalsInbox />)
+    await screen.findByText('exp-1')
+    fireEvent.click(screen.getByRole('button', { name: /^Rosters/ }))
+    expect(teamIds()).toEqual(['roster-1'])
+    fireEvent.click(screen.getByRole('button', { name: /^All/ }))
+    expect(teamIds()).toHaveLength(3)
+  })
+
+  it('decidable providers render their mapped card and link-only providers the link card, with the zone', async () => {
+    mockApi(teamMix())
     render(<ApprovalsInbox timezone="America/New_York" />)
+    await screen.findByText('exp-1')
+    expect(screen.getAllByTestId('team-decide')).toHaveLength(2)
+    const links = screen.getAllByTestId('team-link')
+    expect(links).toHaveLength(1)
+    expect(links[0].getAttribute('data-provider')).toBe('rosters')
+    for (const c of screen.getAllByTestId(/^team-/)) expect(c.getAttribute('data-tz')).toBe('America/New_York')
+  })
+
+  it('deciding a card drops the Team badge and the page total by one', async () => {
+    mockApi([...customers(), ...teamMix()])
+    render(<ApprovalsInbox />)
     await screen.findByText('mia-fail')
     fireEvent.click(screen.getByRole('button', { name: /^Team and money/ }))
-    expect(document.body.textContent).toContain('Submitted 14 Nov 2026, 11:20')
+    const view = screen.getByRole('button', { name: /^Team and money/ })
+    expect(within(view).getByText('3')).toBeTruthy()
+    expect(screen.getByText('8 pending')).toBeTruthy()
+    fireEvent.click(screen.getByText('decide-leave-1'))
+    expect(within(view).getByText('2')).toBeTruthy()
+    expect(screen.getByText('7 pending')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^All 2/ })).toBeTruthy()
+  })
+
+  it('a chip whose provider disappears on reload falls back to All', async () => {
+    const first = teamMix()
+    let current = first
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      json: async () => ({ success: true, data: { providers: current, total: current.reduce((s, p) => s + p.count, 0) } }),
+    })))
+    render(<ApprovalsInbox />)
+    await screen.findByText('exp-1')
+    fireEvent.click(screen.getByRole('button', { name: /^Rosters/ }))
+    expect(teamIds()).toEqual(['roster-1'])
+    current = first.filter((p) => p.key !== 'rosters')
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(teamIds()).toEqual(['exp-1', 'leave-1']))
+    expect(screen.queryByRole('button', { name: /^Rosters/ })).toBeNull()
+  })
+
+  it('a decided card stays after a reload that no longer returns it, once, uncounted, with its state', async () => {
+    const first = teamMix()
+    let current = first
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      json: async () => ({ success: true, data: { providers: current, total: current.reduce((s, p) => s + p.count, 0) } }),
+    })))
+    render(<ApprovalsInbox />)
+    await screen.findByText('exp-1')
+    fireEvent.click(screen.getByText('decide-leave-1'))
+    expect(screen.getByText('outcome-leave-1')).toBeTruthy()
+    current = [
+      prov('fte_expenses', [it_('exp-1', { submittedAt: '2026-11-01T10:00:00Z' })], [], { label: 'Expenses' }),
+      prov('rosters', [it_('roster-1', { submittedAt: '2026-11-02T10:00:00Z' })], [], { label: 'Rosters' }),
+    ]
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Time off/ })).toBeNull())
+    expect(teamIds().filter((i) => i === 'leave-1')).toHaveLength(1)
+    expect(screen.getByText('outcome-leave-1')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^All 2/ })).toBeTruthy()
+    // a reload that still returns it does not duplicate it
+    current = first
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Time off/ })).toBeTruthy())
+    expect(teamIds().filter((i) => i === 'leave-1')).toHaveLength(1)
+    expect(screen.getByText('outcome-leave-1')).toBeTruthy()
+  })
+
+  it('works with no customer providers, and has no tab strip beyond the chips', async () => {
+    mockApi(teamMix())
+    render(<ApprovalsInbox />)
+    await screen.findByText('exp-1')
+    expect(screen.queryByRole('button', { name: /^Customers/ })).toBeNull()
+    const names = screen.getAllByRole('button').map((b) => b.textContent.trim())
+    expect(names.filter((n) => /^(Time off|Expenses|Rosters)/.test(n))).toHaveLength(3)
+    // chips each carry a count; the old tab strip had a second row of the same labels
+    expect(screen.getAllByRole('button', { name: /^Time off/ })).toHaveLength(1)
+  })
+
+  it('shows the empty state when nothing is waiting', async () => {
+    mockApi([prov('time_off', [], [], { label: 'Time off' })])
+    render(<ApprovalsInbox />)
+    await screen.findByText('Nothing waiting on your review.')
   })
 })
