@@ -7,11 +7,11 @@
 // approve that gives something back, and the route's own words on failure.
 // No <form>: every button is type="button".
 import { useRef, useState } from 'react'
-import Link from 'next/link'
 import { Button } from '@/components/ui'
 import { TEAM_ACTIONS } from '@/lib/approvals/team-actions'
 import { studioChip } from '@/lib/approvals/studio-request'
 import CustomerCardShell from './CustomerCardShell'
+import StudioLink from './StudioLink'
 import { formatApprovalDateTime } from './format-date-time'
 import { formatAmount } from './format-amount'
 
@@ -154,7 +154,7 @@ export default function TeamDecideCard({
       when={`Submitted ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       amount={amount}
       summary={item.subtitle}
-      links={item.reviewUrl && <Link href={item.reviewUrl} className="underline text-un1t-subtle">Open in {cfg.pageLabel}</Link>}
+      links={item.reviewUrl && <StudioLink item={item} activeStudioId={activeStudioId} href={item.reviewUrl} className="underline text-un1t-subtle">Open in {cfg.pageLabel}</StudioLink>}
       outcome={done ? { tone: 'ok', text: done.text } : null}
       error={error}
       actions={actions}

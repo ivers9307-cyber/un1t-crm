@@ -16,8 +16,8 @@
 // third button, Mark granted with no email ({ action: 'resolve', notify: false }).
 
 import { useRef, useState } from 'react'
-import Link from 'next/link'
 import { Button } from '@/components/ui'
+import StudioLink from '@/components/approvals/StudioLink'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
 import { withStudio, studioChip } from '@/lib/approvals/studio-request'
 import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
@@ -114,7 +114,7 @@ export default function TrialPurchaseReviewCard({ item, onDecided, timezone = nu
           {item.email && <span>{item.email}</span>}
           {item.phone && <span>{item.phone}</span>}
           {!help && item.glofoxMemberId && <span>Glofox member {item.glofoxMemberId}</span>}
-          {item.contactId && <Link href={`/contacts/${item.contactId}`} className="underline">Open contact</Link>}
+          {item.contactId && <StudioLink item={item} activeStudioId={activeStudioId} href={`/contacts/${item.contactId}`} className="underline">Open contact</StudioLink>}
         </>
       )}
       outcome={outcome}

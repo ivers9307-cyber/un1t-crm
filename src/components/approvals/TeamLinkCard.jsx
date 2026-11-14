@@ -3,10 +3,9 @@
 // APPROVALSQ.4 — a team-and-money item that is NOT decided on /approvals
 // (invoices queue, rosters, issues, hyrox sessions: each needs what only its own
 // page shows). Same card layout as the decide cards, one Open button, no actions.
-import Link from 'next/link'
-import { Button } from '@/components/ui'
 import { studioChip } from '@/lib/approvals/studio-request'
 import CustomerCardShell from './CustomerCardShell'
+import StudioLink from './StudioLink'
 import { formatApprovalDateTime } from './format-date-time'
 import { formatAmount } from './format-amount'
 
@@ -21,7 +20,7 @@ export default function TeamLinkCard({ item, providerLabel, timezone = null, act
       amount={formatAmount(item.amount, item.currency)}
       summary={item.subtitle}
       actions={item.reviewUrl && (
-        <Button as={Link} href={item.reviewUrl} size="sm" variant="primary">Open</Button>
+        <StudioLink asButton item={item} activeStudioId={activeStudioId} href={item.reviewUrl}>Open</StudioLink>
       )}
     >
       {item.warning && <div className="text-xs rounded-md px-3 py-2 bg-amber-500/10 text-amber-700">{item.warning}</div>}

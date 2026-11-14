@@ -19,6 +19,7 @@ import BulkClearBar from './BulkClearBar'
 import { runBulkUndo } from '@/lib/approvals/bulk-clear'
 import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
 
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }))
 vi.mock('next/link', () => ({ default: ({ href, children, ...r }) => <a href={href} {...r}>{children}</a> }))
 
 const H = 'x-active-location'

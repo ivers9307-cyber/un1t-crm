@@ -12,9 +12,9 @@
 // said, and the contact's email/phone for a quick Glofox lookup.
 
 import { useRef, useState } from 'react'
-import Link from 'next/link'
 import { Sparkles, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui'
+import StudioLink from '@/components/approvals/StudioLink'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
 import { DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
@@ -366,10 +366,10 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
       links={(
         <>
           {conversationHref && (
-            <Link href={conversationHref} className="text-un1t-muted underline hover:text-un1t-text">Open conversation</Link>
+            <StudioLink item={item} activeStudioId={activeStudioId} href={conversationHref} className="text-un1t-muted underline hover:text-un1t-text">Open conversation</StudioLink>
           )}
           {item.reviewUrl && (
-            <Link href={item.reviewUrl} className="text-un1t-muted underline hover:text-un1t-text">Full history</Link>
+            <StudioLink item={item} activeStudioId={activeStudioId} href={item.reviewUrl} className="text-un1t-muted underline hover:text-un1t-text">Full history</StudioLink>
           )}
         </>
       )}
