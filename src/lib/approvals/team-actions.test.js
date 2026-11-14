@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { TEAM_ACTIONS, TEAM_LINK_ONLY_KEYS, isDecidableInPlace } from './team-actions'
+import { TEAM_ACTIONS, TEAM_LINK_ONLY_KEYS, isDecidableInPlace, loadInvoiceRosterCheck, unassignLeaveClashes, approveSwapAnyway } from './team-actions'
 
 let fetchMock
 function reply(body, { ok = true, status = 200, json = true } = {}) {
@@ -90,5 +90,67 @@ describe('call() result handling', () => {
   it('success carries data', async () => {
     reply({ success: true, data: { id: 'e1', status: 'published' } })
     expect((await TEAM_ACTIONS.host_events.approve({ id: 'e1' })).data).toEqual({ id: 'e1', status: 'published' })
+  })
+})
+
+describe('APPROVALSQ.4 task 2: invoices, time off, swaps', () => {
+  it('invoice approve and decline', async () => {
+    reply({ success: true })
+    await TEAM_ACTIONS.contractor_invoices.approve({ id: 'v1' })
+    expect(lastCall()).toEqual({ url: '/api/invoices/v1/approve', method: 'POST', body: undefined })
+    await TEAM_ACTIONS.contractor_invoices.decline({ id: 'v1' }, ' Wrong month ')
+    expect(lastCall()).toEqual({ url: '/api/invoices/v1/decline', method: 'POST', body: { reason: 'Wrong month' } })
+    expect(TEAM_ACTIONS.contractor_invoices.reasonRequired).toBe(true)
+  })
+  it('loadInvoiceRosterCheck GETs the invoice with no cache', async () => {
+    reply({ success: true, data: { id: 'v1', roster_unavailable: false } })
+    const r = await loadInvoiceRosterCheck('v1')
+    const [url, init] = fetchMock.mock.calls.at(-1)
+    expect(url).toBe('/api/invoices/v1')
+    expect(init.method).toBe('GET')
+    expect(init.cache).toBe('no-store')
+    expect(r).toMatchObject({ ok: true, data: { id: 'v1' } })
+  })
+  it('time off approve and reject (review_note optional)', async () => {
+    reply({ success: true })
+    await TEAM_ACTIONS.time_off.approve({ id: 't1' })
+    expect(lastCall()).toEqual({ url: '/api/schedule/time-off/t1', method: 'PUT', body: { status: 'approved' } })
+    await TEAM_ACTIONS.time_off.decline({ id: 't1' }, '')
+    expect(lastCall()).toEqual({ url: '/api/schedule/time-off/t1', method: 'PUT', body: { status: 'rejected', review_note: null } })
+    await TEAM_ACTIONS.time_off.decline({ id: 't1' }, 'Short staffed')
+    expect(lastCall().body).toEqual({ status: 'rejected', review_note: 'Short staffed' })
+    expect(TEAM_ACTIONS.time_off.reasonRequired).toBe(false)
+  })
+  it('time off approve result carries the clashes the route returns at the top level', async () => {
+    reply({ success: true, data: { id: 't1' }, clashes: [{ id: 'a1' }] })
+    const r = await TEAM_ACTIONS.time_off.approve({ id: 't1' })
+    expect(r.body.clashes).toEqual([{ id: 'a1' }])
+  })
+  it('unassignLeaveClashes POSTs the ids', async () => {
+    reply({ success: true, data: { removed: [{ assignment_id: 'a1' }], already_removed: [], skipped: [], failed: [] } })
+    const r = await unassignLeaveClashes('t1', ['a1', 'a2'])
+    expect(lastCall()).toEqual({ url: '/api/schedule/time-off/t1/unassign-clashes', method: 'POST', body: { assignment_ids: ['a1', 'a2'] } })
+    expect(r.ok).toBe(true)
+  })
+  it('swap approve, reject and approve anyway', async () => {
+    reply({ success: true })
+    await TEAM_ACTIONS.shift_swaps.approve({ id: 's1' })
+    expect(lastCall()).toEqual({ url: '/api/schedule/swaps/s1', method: 'PUT', body: { status: 'approved' } })
+    await TEAM_ACTIONS.shift_swaps.decline({ id: 's1' }, 'No cover')
+    expect(lastCall()).toEqual({ url: '/api/schedule/swaps/s1', method: 'PUT', body: { status: 'rejected', review_note: 'No cover' } })
+    await approveSwapAnyway({ id: 's1' })
+    expect(lastCall()).toEqual({ url: '/api/schedule/swaps/s1', method: 'PUT', body: { status: 'approved', confirm_conflicts: true } })
+    expect(TEAM_ACTIONS.shift_swaps.reasonRequired).toBe(false)
+  })
+  it('a swap conflict 409 keeps its code and conflicts on the result', async () => {
+    reply({ success: false, code: 'swap_conflicts', error: 'On leave.', conflicts: [{ message: 'On leave.' }] }, { ok: false, status: 409 })
+    const r = await TEAM_ACTIONS.shift_swaps.approve({ id: 's1' })
+    expect(r).toMatchObject({ ok: false, status: 409, error: 'On leave.' })
+    expect(r.body).toMatchObject({ code: 'swap_conflicts', conflicts: [{ message: 'On leave.' }] })
+  })
+  it('every new entry has the copy fields', () => {
+    for (const k of ['contractor_invoices', 'time_off', 'shift_swaps']) {
+      for (const f of ['approveLabel', 'declineLabel', 'reasonLabel', 'approvedText', 'declinedText', 'pageLabel']) expect(typeof TEAM_ACTIONS[k][f], `${k}.${f}`).toBe('string')
+    }
   })
 })

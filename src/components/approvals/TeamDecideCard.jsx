@@ -16,7 +16,7 @@ import { formatAmount } from './format-amount'
 
 export default function TeamDecideCard({
   item, providerKey, providerLabel, timezone = null, onDecided, extra,
-  approveDisabledReason, afterApprove,
+  approveDisabledReason, afterApprove, onApproveFailure,
 }) {
   const cfg = TEAM_ACTIONS[providerKey]
   const [mode, setMode] = useState('idle') // 'idle' | 'confirm' | 'decline'
@@ -24,22 +24,35 @@ export default function TeamDecideCard({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [done, setDone] = useState(null) // { text, node }
+  const [failureNode, setFailureNode] = useState(null) // set by onApproveFailure
   const inFlight = useRef(false)
 
-  async function run(kind) {
+  // `perform` is the request this press makes; it returns a Result. Shared by
+  // the Approve and Decline buttons and by a follow-up step (approveAgain).
+  async function settle(kind, perform) {
     if (inFlight.current) return
     inFlight.current = true
     setBusy(true)
     setError(null)
     try {
-      const result = kind === 'approve'
-        ? await cfg.approve(item)
-        : await cfg.decline(item, reason.trim() || null)
+      const result = await perform()
       if (!result?.ok) {
-        setError(result?.error || 'Something went wrong. Please try again.')
+        // A card may take over a failed approve with its own step (a swap
+        // conflict). The node replaces the generic error line; it gets the
+        // result and controls to run another approve or go back.
+        const node = kind === 'approve' && onApproveFailure
+          ? onApproveFailure(result, { approveAgain, dismiss: () => setFailureNode(null) })
+          : null
+        if (node) {
+          setFailureNode(node)
+        } else {
+          setFailureNode(null)
+          setError(result?.error || 'Something went wrong. Please try again.')
+        }
         if (kind === 'approve') setMode('idle')
         return
       }
+      setFailureNode(null)
       setDone({
         text: kind === 'approve' ? cfg.approvedText : cfg.declinedText,
         node: kind === 'approve' && afterApprove ? afterApprove(result) : null,
@@ -54,6 +67,12 @@ export default function TeamDecideCard({
     }
   }
 
+  function approveAgain(perform) { return settle('approve', perform) }
+
+  function run(kind) {
+    return settle(kind, () => (kind === 'approve' ? cfg.approve(item) : cfg.decline(item, reason.trim() || null)))
+  }
+
   function pressApprove() {
     if (cfg.approveConfirm) { setError(null); setMode('confirm'); return }
     run('approve')
@@ -66,6 +85,8 @@ export default function TeamDecideCard({
   let actions
   if (done) {
     actions = done.node || null
+  } else if (failureNode) {
+    actions = null
   } else if (mode === 'confirm') {
     actions = (
       <>
@@ -117,6 +138,7 @@ export default function TeamDecideCard({
     >
       {item.warning && <div className="text-xs rounded-md px-3 py-2 bg-amber-500/10 text-amber-700">{item.warning}</div>}
       {extra}
+      {!done && failureNode}
     </CustomerCardShell>
   )
 }
