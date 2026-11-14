@@ -89,6 +89,11 @@ function ReviewItem({ event, onReviewed }) {
           <MapPin size={13} className="text-un1t-muted shrink-0" />
           <span className="truncate">{event.venue_name || 'No venue'}</span>
         </span>
+        {/* SHELLYEVENTS.1 — a studio link keeps that studio's timers on for the event. */}
+        <span className="inline-flex items-center gap-1.5">
+          <span className="text-un1t-muted">Held at</span>
+          {event.venue_studio?.name || 'Not one of our studios'}
+        </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="text-un1t-muted">Price</span>
           {fmtEuro(event.non_member_fee_cents)}

@@ -6,6 +6,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
+import { listVenueStudios } from '@/lib/event-venue-studio'
 import GuardedLink from '@/components/host/GuardedLink'
 import HostEventForm from '@/components/host/HostEventForm'
 import { HOST_H1 } from '@/components/host/host-ui'
@@ -15,7 +16,9 @@ export const dynamic = 'force-dynamic'
 export default async function HostNewEventPage() {
   const session = await getCurrentHost()
   if (!session) redirect('/host/login')
-  const brand = await resolveHostOrgBrand(createServerClient(), session.host)
+  const db = createServerClient()
+  const brand = await resolveHostOrgBrand(db, session.host)
+  const studios = await listVenueStudios(db, session.host.organization_id)
 
   return (
     <div>
@@ -26,7 +29,7 @@ export default async function HostNewEventPage() {
       </p>
 
       <div className="mt-8">
-        <HostEventForm mode="create" brandName={brand.name} />
+        <HostEventForm mode="create" brandName={brand.name} studios={studios} />
       </div>
     </div>
   )
