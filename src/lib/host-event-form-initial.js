@@ -35,6 +35,8 @@ export function hostEventFormInitial(event) {
     accent_hex: event.accent_hex,
     venue_name: event.venue_name,
     venue_address: event.venue_address,
+    // SHELLYEVENTS.1 — the studio it is held at (null = somewhere else).
+    venue_location_id: event.venue_location_id ?? null,
     confirmation_email_subject: event.confirmation_email_subject,
     confirmation_email_intro: event.confirmation_email_intro,
     reminder_email_subject: event.reminder_email_subject,

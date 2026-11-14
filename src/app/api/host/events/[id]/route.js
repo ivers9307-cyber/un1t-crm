@@ -11,6 +11,7 @@ import { eventSlug, uniqueEventSlug, shouldRederiveSlug } from '@/lib/event-slug
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import { syncEventSessions, judgeSessions, sessionsFromWaves } from '@/lib/event-sessions'
 import { hostOwnsSeries } from '@/lib/event-series'
+import { judgeVenueStudio } from '@/lib/event-venue-studio'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -18,7 +19,7 @@ export const dynamic = 'force-dynamic'
 async function loadOwn(db, session, id) {
   const { data } = await db
     .from('race_events')
-    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, rating_email_subject, rating_email_intro, series_id, pricing_tiers, registration_questions, duration_minutes, race_waves ( id, start_time, capacity, label, display_order )')
+    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, venue_location_id, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, rating_email_subject, rating_email_intro, series_id, pricing_tiers, registration_questions, duration_minutes, race_waves ( id, start_time, capacity, label, display_order )')
     .eq('id', id)
     .maybeSingle()
   if (!data || data.host_id !== session.host.id) return null
@@ -61,6 +62,16 @@ export async function PUT(request, props) {
     }
   }
 
+  // SHELLYEVENTS.1 — the studio it is held at must be one of the host's
+  // organisation's own. Only judged (and only written, below) when the body
+  // carries the key: a form loaded before the picker existed must not clear it.
+  let venuePatch = {}
+  if ('venue_location_id' in input) {
+    const venue = await judgeVenueStudio(db, { organizationId: session.host.organization_id, venueLocationId: input.venue_location_id })
+    if (!venue.ok) return NextResponse.json({ success: false, error: venue.error, message: 'That studio is not available. Pick another, or choose somewhere else.' }, { status: 400 })
+    venuePatch = { venue_location_id: venue.venueLocationId }
+  }
+
   // HOSTSERIES.1 — normalise to DB-column names so computeEditTransition
   // compares like-for-like: existing sessions by id (HH:MM on both sides;
   // race_waves.start_time is a Postgres TIME, "HH:MM:SS" from PostgREST), a
@@ -71,6 +82,7 @@ export async function PUT(request, props) {
     race_date: current.race_date,
     non_member_fee_cents: current.non_member_fee_cents,
     pricing_tiers: current.pricing_tiers ?? null,
+    venue_location_id: current.venue_location_id ?? null,
     waves: sessionsFromWaves(current.race_waves).map((s) => ({ id: s.id, start_time: s.start_time })),
   }
   const transition = computeEditTransition(currentForDiff, changes)
@@ -107,6 +119,7 @@ export async function PUT(request, props) {
     accent_hex: input.accent_hex ?? null,
     venue_name: input.venue_name,
     venue_address: input.venue_address ?? null,
+    ...venuePatch,
     confirmation_email_subject: input.confirmation_email_subject ?? null,
     confirmation_email_intro: input.confirmation_email_intro ?? null,
     reminder_email_subject: input.reminder_email_subject ?? null,

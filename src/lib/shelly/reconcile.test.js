@@ -123,7 +123,7 @@ function makeDb(state = {}) {
   const chain = (op, args, run) => {
     const calls = [[op, args]]
     const self = { calls, then: (ok, err) => Promise.resolve().then(() => run(calls)).then(ok, err) }
-    for (const m of ['select', 'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is', 'in', 'order', 'limit']) {
+    for (const m of ['select', 'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is', 'in', 'or', 'order', 'limit']) {
       self[m] = (...a) => { calls.push([m, a]); return self }
     }
     return self
@@ -204,6 +204,15 @@ function makeDb(state = {}) {
             reads.occurrenceCalls = calls
             if (fail.occurrences) return err(fail.occurrences)
             return { data: occurrences, error: null }
+          }),
+        }
+      }
+      // SHELLYEVENTS.1 — the events held at the studio (./studio-events.js).
+      if (table === 'race_events') {
+        return {
+          select: (...a) => chain('select', a, (calls) => {
+            reads.eventCalls = calls
+            return fail.events ? err(fail.events) : { data: state.events || [], error: null }
           }),
         }
       }
@@ -1270,6 +1279,24 @@ describe('loadDayOccurrences', () => {
     expect(out).toEqual({ ok: true, occurrences: [] })
     // 25 Oct 2026 is the Dublin DST end: a 25-hour local day, never ±24h.
     expect(db.reads.occurrenceBounds).toEqual(['2026-10-24T23:00:00.000Z', '2026-10-26T00:00:00.000Z'])
+  })
+
+  it('adds the events held at the studio that day, in time order', async () => {
+    const db = makeDb({
+      occurrences: [{ starts_at: '2026-11-14T16:00:00.000Z', ends_at: '2026-11-14T17:00:00.000Z', cancelled_at: null, name: 'HIIT' }],
+      events: [{ id: 'e1', name: 'PTC', race_date: '2026-11-14', waves: [{ start_time: '10:30:00' }, { start_time: '12:15:00' }] }],
+    })
+    const out = await loadDayOccurrences(db, 'loc-A', 'Europe/Dublin', '2026-11-14')
+    expect(out.ok).toBe(true)
+    expect(out.occurrences.map((o) => [o.name, o.kind ?? 'class', o.starts_at, o.ends_at])).toEqual([
+      ['PTC', 'event', '2026-11-14T10:30:00.000Z', '2026-11-14T14:15:00.000Z'],
+      ['HIIT', 'class', '2026-11-14T16:00:00.000Z', '2026-11-14T17:00:00.000Z'],
+    ])
+  })
+
+  it('fails the whole load when the events cannot be read (unknown is never "no event")', async () => {
+    const db = makeDb({ occurrences: [], fail: { events: 'pg down' } })
+    expect(await loadDayOccurrences(db, 'loc-A', 'Europe/Dublin', '2026-11-14')).toEqual({ ok: false, error: 'events: pg down' })
   })
 
   it('refuses a malformed day before any query', async () => {
