@@ -58,6 +58,11 @@ const DecisionSchema = z.object({
   decision_note: z.string().max(2000).nullable().optional(),
   // CANCEL-FORM.5 — cancellation only: the end date staff confirm/set.
   end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  // APPROVALSQ.1 — quiet clear: close the request and tell nobody.
+  silent: z.boolean().optional(),
+}).refine((b) => b.silent !== true || b.status === 'declined', {
+  message: 'silent applies to a decline only',
+  path: ['silent'],
 })
 
 const MEMBERSHIP_KINDS = new Set(['cancellation', 'pause'])
@@ -130,6 +135,9 @@ export async function PATCH(request, { params }) {
 
   const v = await validateBody(request, DecisionSchema)
   if (!v.ok) return v.response
+
+  // APPROVALSQ.1 — a quiet clear returns before any location read, claim or send.
+  if (v.data.silent) return clearSilently(db, user, row, v.data)
 
   // CANCEL-FORM.5 — membership kinds read the location once: the auto-cancel
   // toggle (a COLUMN, mig 585) and the operator's confirmation copy.
@@ -939,6 +947,34 @@ export async function PATCH(request, { params }) {
     ? (details?.result?.local_planned_end_date || details?.requested_end_date || details?.end_date || null)
     : null
   return NextResponse.json({ success: true, request: data, executed, customer_notified: customerNotified, planned_end_date: plannedEndDate })
+}
+
+// APPROVALSQ.1 — close a pending or failed request without telling the
+// customer: no thread message, no email, no push, nothing to Glofox or
+// un1t.online. Imports no send helper on purpose.
+async function clearSilently(db, user, row, body) {
+  if (row.status !== 'pending' && row.status !== 'failed') {
+    return NextResponse.json({ success: false, error: 'Already decided' }, { status: 409 })
+  }
+  const nowIso = new Date().toISOString()
+  const { data, error } = await db.from('agent_membership_requests').update({
+    status: 'declined',
+    decision_note: body.decision_note?.trim() || null,
+    decided_by: user.id,
+    decided_at: nowIso,
+    updated_at: nowIso,
+    details: { ...(row.details || {}), cleared: { silent: true, from_status: row.status } },
+  }).eq('id', row.id).eq('status', row.status)
+    .select('id, status, decided_at, decision_note, details').maybeSingle()
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (!data) return NextResponse.json({ success: false, error: 'Already decided' }, { status: 409 })
+  return NextResponse.json({
+    success: true,
+    request: data,
+    executed: null,
+    customer_notified: { sent: false, channel: null, reason: 'cleared' },
+    planned_end_date: null,
+  })
 }
 
 // MIAORG.1 — the cancellation form's copy block from the studio's RESOLVED Mia

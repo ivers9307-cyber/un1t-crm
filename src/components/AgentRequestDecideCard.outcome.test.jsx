@@ -42,3 +42,11 @@ describe('outcomeLine — refund_request', () => {
     expect(line.text).not.toMatch(/—/)
   })
 })
+
+// APPROVALSQ.1 — a quiet clear.
+describe('outcomeLine — cleared', () => {
+  it('says cleared and not told for a silent decline', () => {
+    const line = outcomeLine('declined', { kind: 'refund_request', conversationId: 'c' }, null, { sent: false, channel: null, reason: 'cleared' })
+    expect(line).toEqual({ tone: 'neutral', text: 'Cleared. The customer was not told.' })
+  })
+})

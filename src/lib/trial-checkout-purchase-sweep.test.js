@@ -64,7 +64,7 @@ describe('sweepCheckoutTrialPurchases', () => {
     const trigger = vi.fn().mockResolvedValue({ ok: true, enrolled: 1 })
     const db = fakeDb({ purchases: [tp(), tp({ id: 'tp-2', contact_id: 'c2', granted_at: at(5) })] })
     const out = await sweepCheckoutTrialPurchases(db, { nowMs: NOW, trigger })
-    expect(out).toEqual({ ok: true, locations: 1, checked: 2, enrolled: 2, already: 0, failed: 0 })
+    expect(out).toEqual({ ok: true, locations: 1, checked: 2, enrolled: 2, already: 0, failed: 0, skipped_by_staff: 0 })
     expect(trigger).toHaveBeenCalledWith(db, { contactId: 'c1', locationId: STILL, purchaseId: 'tp-1' })
     expect(trigger).toHaveBeenCalledWith(db, { contactId: 'c2', locationId: STILL, purchaseId: 'tp-2' })
   })
@@ -81,7 +81,7 @@ describe('sweepCheckoutTrialPurchases', () => {
     const db = fakeDb({ sequences: [] })
     const trigger = vi.fn()
     const out = await sweepCheckoutTrialPurchases(db, { nowMs: NOW, trigger })
-    expect(out).toEqual({ ok: true, locations: 0, checked: 0, enrolled: 0, already: 0, failed: 0 })
+    expect(out).toEqual({ ok: true, locations: 0, checked: 0, enrolled: 0, already: 0, failed: 0, skipped_by_staff: 0 })
     expect(db.calls.some((c) => c.table === 'trial_purchases')).toBe(false)
     expect(trigger).not.toHaveBeenCalled()
   })
@@ -115,6 +115,32 @@ describe('sweepCheckoutTrialPurchases', () => {
     expect(out.checked).toBe(1)
     expect(trigger).toHaveBeenCalledTimes(1)
     expect(trigger).toHaveBeenCalledWith(db, { contactId: 'c1', locationId: STILL, purchaseId: 'tp-new' })
+  })
+
+  // APPROVALSQ.1 — staff marked it granted with "no confirmation email": the
+  // buyer was sorted by hand, so the welcome sequence stays quiet too.
+  it('a purchase staff granted without the confirmation email is never offered', async () => {
+    const trigger = vi.fn().mockResolvedValue({ ok: true, enrolled: 1 })
+    const db = fakeDb({ purchases: [
+      tp({ id: 'tp-quiet', contact_id: 'c1', grant: { manual: true, confirmation_email: 'skipped_by_staff' } }),
+      tp({ id: 'tp-normal', contact_id: 'c2', grant: { manual: true } }),
+    ] })
+    const out = await sweepCheckoutTrialPurchases(db, { nowMs: NOW, trigger })
+    expect(trigger).toHaveBeenCalledTimes(1)
+    expect(trigger).toHaveBeenCalledWith(db, { contactId: 'c2', locationId: STILL, purchaseId: 'tp-normal' })
+    expect(out).toMatchObject({ ok: true, checked: 1, enrolled: 1, skipped_by_staff: 1 })
+    expect(db.calls.find((c) => c.table === 'trial_purchases').cols).toMatch(/"grant"/)
+  })
+
+  it('a quiet newest grant silences the buyer even with an older normal grant in the window', async () => {
+    const trigger = vi.fn().mockResolvedValue({ ok: true, enrolled: 1 })
+    const db = fakeDb({ purchases: [
+      tp({ id: 'tp-old', granted_at: at(30), grant: { manual: true } }),
+      tp({ id: 'tp-new', granted_at: at(2), grant: { confirmation_email: 'skipped_by_staff' } }),
+    ] })
+    const out = await sweepCheckoutTrialPurchases(db, { nowMs: NOW, trigger })
+    expect(trigger).not.toHaveBeenCalled()
+    expect(out).toMatchObject({ ok: true, checked: 0, skipped_by_staff: 1 })
   })
 
   it('an already-enrolled buyer counts as already; a refused offer counts as failed and makes the run not ok', async () => {
