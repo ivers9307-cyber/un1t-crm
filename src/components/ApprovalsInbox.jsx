@@ -2,16 +2,12 @@
 
 // APPROVALS.1 — central inbox view.
 //
-// Tabbed list of pending items grouped by category. Source data
-// from /api/approvals/pending. Refreshes when the tab regains
-// focus + on a manual refresh button. Clicking an item navigates
-// to the existing source page where the actual approve/decline
-// happens — this view is master/detail-by-link, not inline review.
-//
-// AGENT-REQ-UX.1 exception: the agent_requests tab decides INLINE
-// (AgentRequestDecideCard, same PATCH as everywhere else) — a customer
-// is waiting on those, so the extra hop to the settings page was pure
-// friction. Other categories keep the link-out model.
+// Two views over /api/approvals/pending, refreshed when the tab regains focus
+// and on a manual refresh. Customers: everything a customer is waiting on
+// (agent requests, paid trials, corporate promo claims, offer purchases) as
+// one queue of cards that are decided in place, with filters. Team and money:
+// the staff-side categories (leave, expenses, invoices and so on), where each
+// row links out to its source page and the real approve/decline happens there.
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'

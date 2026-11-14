@@ -36,6 +36,16 @@ describe('AgentRequestsClient clear', () => {
     expect(row('s1').queryByRole('button', { name: CLEAR })).toBeNull()
   })
 
+  it('the clear confirm warns on a pending class booking and not on a pause', async () => {
+    list = [pending, { ...pending, id: 'q1', kind: 'pause' }]
+    render(<AgentRequestsClient />)
+    await screen.findAllByText(/Ann/)
+    fireEvent.click(row('p1').getByRole('button', { name: CLEAR }))
+    expect(row('p1').getByText('Mia told this customer the team would confirm. Clearing sends them nothing.')).toBeTruthy()
+    fireEvent.click(row('q1').getByRole('button', { name: CLEAR }))
+    expect(row('q1').queryByText(/Mia told this customer/)).toBeNull()
+  })
+
   it('never fires from a single click, then sends one silent decline with the note', async () => {
     render(<AgentRequestsClient />)
     await screen.findByText('Needs a retry')

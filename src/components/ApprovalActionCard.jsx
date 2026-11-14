@@ -207,6 +207,9 @@ export default function ApprovalActionCard({
 
         {!decided && clearOpen && (
           <div className="mt-2.5 space-y-2">
+            {(BOOKING_KINDS.has(request.kind) || request.kind === 'consultation') && request.status !== 'failed' && (
+              <p className="text-xs text-amber-700">Mia told this customer the team would confirm. Clearing sends them nothing.</p>
+            )}
             <p className="text-xs text-un1t-muted">Closes this request. The customer is sent nothing.</p>
             <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
               className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
@@ -226,7 +229,7 @@ export default function ApprovalActionCard({
         {decided && (
           <div className="mt-1.5 text-xs text-un1t-muted">
             {wasCleared && <span>Cleared, customer not told.</span>}
-            {request.decision_note && <span>{request.decision_note}</span>}
+            {request.decision_note && <span> {request.decision_note}</span>}
             {failedLine && <span className="text-red-700"> {failedLine}</span>}
             {/* A quiet clear told nobody on purpose: never nag staff to follow up. */}
             {notified && !wasCleared && notified.reason !== 'cleared' && (

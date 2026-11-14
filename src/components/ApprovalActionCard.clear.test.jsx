@@ -46,6 +46,16 @@ describe('ApprovalActionCard clear', () => {
     expect(onDecided).toHaveBeenCalledTimes(1)
   })
 
+  it('the clear confirm warns on a pending class booking and not on a pause', () => {
+    const { unmount } = render(<ApprovalActionCard request={request} />)
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    expect(screen.getByText('Mia told this customer the team would confirm. Clearing sends them nothing.')).toBeTruthy()
+    unmount()
+    render(<ApprovalActionCard request={{ ...request, kind: 'pause' }} />)
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    expect(screen.queryByText(/Mia told this customer/)).toBeNull()
+  })
+
   it('a double click on confirm sends one request', async () => {
     render(<ApprovalActionCard request={request} />)
     fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
@@ -65,6 +75,11 @@ describe('ApprovalActionCard clear', () => {
     await waitFor(() => expect(suggestCalls()).toHaveLength(1))
     expect(JSON.parse(patchCalls()[0][1].body)).toEqual({ status: 'declined', decision_note: 'Class full' })
     expect(onPrefillComposer).toHaveBeenCalledTimes(1)
+  })
+
+  it('a cleared request with a staff note separates it from the cleared line', () => {
+    const { container } = render(<ApprovalActionCard request={{ ...request, status: 'declined', decision_note: 'dup', details: { cleared: { silent: true, from_status: 'pending' } } }} />)
+    expect(container.textContent).toContain('Cleared, customer not told. dup')
   })
 
   it('a cleared request seen again shows the cleared line and no next steps', () => {

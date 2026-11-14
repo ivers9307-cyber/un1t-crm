@@ -30,22 +30,34 @@ beforeEach(() => { fetchMock = vi.fn(); globalThis.fetch = fetchMock })
 afterEach(cleanup)
 
 describe('customer cards', () => {
-  it('trial grant card shows Retry grant, Mark granted in Glofox, Mark granted, no email, in that order', () => {
+  it('trial grant card shows Retry grant, Mark granted in Glofox, Mark granted, no confirmation email, in that order', () => {
     render(<TrialPurchaseReviewCard item={grant} />)
     const labels = screen.getAllByRole('button').map((b) => b.textContent.trim())
-    expect(labels).toEqual(['Retry grant', 'Mark granted in Glofox', 'Mark granted, no email'])
+    expect(labels).toEqual(['Retry grant', 'Mark granted in Glofox', 'Mark granted, no confirmation email'])
   })
 
-  it('Mark granted, no email posts { action:"resolve", notify:false } and shows "Marked granted. No email was sent."', async () => {
+  it('Mark granted, no email posts { action:"resolve", notify:false } and shows "Marked granted. The confirmation email was not sent. Any welcome sequence still runs."', async () => {
     reply({ success: true, data: { status: 'granted', emailed: false } })
     const onDecided = vi.fn()
     render(<TrialPurchaseReviewCard item={grant} onDecided={onDecided} />)
-    fireEvent.click(screen.getByText('Mark granted, no email'))
-    await waitFor(() => expect(screen.getByText('Marked granted. No email was sent.')).toBeTruthy())
+    fireEvent.click(screen.getByText('Mark granted, no confirmation email'))
+    await waitFor(() => expect(screen.getByText('Marked granted. The confirmation email was not sent. Any welcome sequence still runs.')).toBeTruthy())
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls[0][0]).toBe('/api/trial-purchases/t1/review')
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ action: 'resolve', notify: false })
     expect(onDecided).toHaveBeenCalledTimes(1)
+  })
+
+  it('an already-granted answer shows "Already granted." for both resolve buttons', async () => {
+    for (const label of ['Mark granted in Glofox', 'Mark granted, no confirmation email']) {
+      reply({ success: true, data: { already: true, status: 'granted' } })
+      const { unmount } = render(<TrialPurchaseReviewCard item={grant} />)
+      fireEvent.click(screen.getByText(label))
+      await waitFor(() => expect(screen.getByText('Already granted.')).toBeTruthy())
+      expect(document.body.textContent).not.toContain('confirmation email was not sent')
+      expect(document.body.textContent).not.toContain('emailed')
+      unmount()
+    }
   })
 
   it('Mark granted in Glofox still posts only { action:"resolve" }', async () => {
@@ -56,13 +68,13 @@ describe('customer cards', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ action: 'resolve' })
   })
 
-  it('a double click on Mark granted, no email sends one request', async () => {
+  it('a double click on Mark granted, no confirmation email sends one request', async () => {
     reply({ success: true, data: { emailed: false } })
     render(<TrialPurchaseReviewCard item={grant} />)
-    const b = screen.getByText('Mark granted, no email')
+    const b = screen.getByText('Mark granted, no confirmation email')
     fireEvent.click(b)
     fireEvent.click(b)
-    await waitFor(() => expect(screen.getByText('Marked granted. No email was sent.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Marked granted. The confirmation email was not sent. Any welcome sequence still runs.')).toBeTruthy())
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 

@@ -7,6 +7,7 @@ import { formatMoneyMinor } from '@/lib/money-format'
 import { isStuckExecuting, retryOffered } from '@/lib/agent/request-recovery'
 import { whyFlagged, customerWords, accountSummaryLine } from '@/lib/approvals/agent-request-why'
 import { approvalSummary, explainFailure } from '@/lib/approvals/event-move-card'
+import { BOOKING_KINDS } from '@shared/approvals-next-steps'
 
 // RADAR-AGENT Phase 2 — operator approval queue. Manager+ reviews the
 // pause / cancellation requests the customer agent captured, and decides:
@@ -320,6 +321,9 @@ function RequestCard({ r, busy, onDecide, focused = false, retryMode = false, ca
       </div>
       {canClear && clearOpen && (
         <div className="mt-3 space-y-2 max-w-sm">
+          {(BOOKING_KINDS.has(r.kind) || r.kind === 'consultation') && r.status !== 'failed' && (
+            <p className="text-xs text-amber-700">Mia told this customer the team would confirm. Clearing sends them nothing.</p>
+          )}
           <p className="text-xs text-un1t-muted">Closes this request. The customer is sent nothing.</p>
           <input value={clearNote} onChange={(e) => setClearNote(e.target.value)} placeholder="Note (optional)"
             className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />

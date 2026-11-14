@@ -55,12 +55,14 @@ export default function TrialPurchaseReviewCard({ item, onDecided }) {
         setOutcome({ tone: 'bad', text })
         return
       }
-      if (action === 'handled') {
+      if (j.data?.already) {
+        setOutcome({ tone: 'ok', text: 'Already granted.' })
+      } else if (action === 'handled') {
         setOutcome({ tone: 'ok', text: 'Marked handled.' })
       } else if (action === 'retry') {
         setOutcome({ tone: 'ok', text: 'Back in the queue. The grant runs within two minutes; if Glofox refuses again this card returns.' })
       } else if (notify === false) {
-        setOutcome({ tone: 'ok', text: 'Marked granted. No email was sent.' })
+        setOutcome({ tone: 'ok', text: 'Marked granted. The confirmation email was not sent. Any welcome sequence still runs.' })
       } else {
         setOutcome({ tone: 'ok', text: j.data?.emailed ? 'Marked granted. The buyer has been emailed.' : 'Marked granted. The confirmation email was not sent (no address, or opted out).' })
       }
@@ -97,7 +99,7 @@ export default function TrialPurchaseReviewCard({ item, onDecided }) {
     )
     quietAction = (
       <Button type="button" size="sm" variant="secondary" loading={busy === 'quiet'} disabled={!!busy} onClick={() => act('quiet', 'resolve', false)}>
-        Mark granted, no email
+        Mark granted, no confirmation email
       </Button>
     )
   }

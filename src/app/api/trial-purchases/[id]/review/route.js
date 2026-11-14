@@ -108,6 +108,8 @@ export async function POST(request, props) {
 
   // resolve
   const grant = { ...(row.grant && typeof row.grant === 'object' ? row.grant : {}), ok: true, manual: true, by: user.id, at: now }
+  // Record that staff chose to skip the confirmation email.
+  if (notify === false) grant.confirmation_email = 'skipped_by_staff'
   const { data: upd, error } = await db
     .from('trial_purchases')
     .update({ status: 'granted', granted_at: now, grant, last_error: null })

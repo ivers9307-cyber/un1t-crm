@@ -110,6 +110,7 @@ describe('POST /api/trial-purchases/[id]/review (PAIDTRIAL.2)', () => {
     expect(u.granted_at).toBeTruthy()
     expect(u.last_error).toBeNull()
     expect(u.grant).toMatchObject({ stage: 'purchasing', ok: true, manual: true, by: 'u1' })
+    expect(u.grant).not.toHaveProperty('confirmation_email')
     expect(mocks.email).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'granted' }))
     expect(mocks.publish).not.toHaveBeenCalled()
   })
@@ -120,6 +121,7 @@ describe('POST /api/trial-purchases/[id]/review (PAIDTRIAL.2)', () => {
     expect((await r.json()).data).toEqual({ status: 'granted', emailed: false })
     expect(mocks.updates[0].status).toBe('granted')
     expect(mocks.updates[0].granted_at).toBeTruthy()
+    expect(mocks.updates[0].grant).toMatchObject({ manual: true, confirmation_email: 'skipped_by_staff' })
     expect(mocks.email).not.toHaveBeenCalled()
   })
 
