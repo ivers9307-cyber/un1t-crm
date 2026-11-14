@@ -5,15 +5,17 @@
 // page shows). Same card layout as the decide cards, one Open button, no actions.
 import Link from 'next/link'
 import { Button } from '@/components/ui'
+import { studioChip } from '@/lib/approvals/studio-request'
 import CustomerCardShell from './CustomerCardShell'
 import { formatApprovalDateTime } from './format-date-time'
 import { formatAmount } from './format-amount'
 
-export default function TeamLinkCard({ item, providerLabel, timezone = null }) {
+export default function TeamLinkCard({ item, providerLabel, timezone = null, activeStudioId = null }) {
   return (
     <CustomerCardShell
       source={providerLabel}
       name={item.title}
+      studio={studioChip(item, activeStudioId)}
       meta={item.meta}
       when={`Submitted ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       amount={formatAmount(item.amount, item.currency)}

@@ -33,7 +33,7 @@ export default async function ApprovalsPage() {
           Everything waiting on you. Most items are decided right here; a few open their own page.
         </p>
       </header>
-      <ApprovalsInbox timezone={user.activeLocation?.timezone ?? null} />
+      <ApprovalsInbox timezone={user.activeLocation?.timezone ?? null} activeStudioId={user.activeLocation?.id ?? null} />
     </div>
   )
 }

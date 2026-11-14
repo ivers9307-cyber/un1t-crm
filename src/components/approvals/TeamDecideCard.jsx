@@ -10,6 +10,7 @@ import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui'
 import { TEAM_ACTIONS } from '@/lib/approvals/team-actions'
+import { studioChip } from '@/lib/approvals/studio-request'
 import CustomerCardShell from './CustomerCardShell'
 import { formatApprovalDateTime } from './format-date-time'
 import { formatAmount } from './format-amount'
@@ -31,7 +32,7 @@ function answerWarnings(body) {
 }
 
 export default function TeamDecideCard({
-  item, providerKey, providerLabel, timezone = null, onDecided, extra,
+  item, providerKey, providerLabel, timezone = null, onDecided, extra, activeStudioId = null,
   approveDisabledReason, afterApprove, onApproveFailure,
 }) {
   const cfg = TEAM_ACTIONS[providerKey]
@@ -148,6 +149,7 @@ export default function TeamDecideCard({
     <CustomerCardShell
       source={providerLabel}
       name={item.title}
+      studio={studioChip(item, activeStudioId)}
       meta={item.meta}
       when={`Submitted ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       amount={amount}

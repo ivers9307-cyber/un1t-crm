@@ -8,7 +8,7 @@ import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui'
 import CustomerCardShell from './CustomerCardShell'
-import { withStudio } from '@/lib/approvals/studio-request'
+import { withStudio, studioChip } from '@/lib/approvals/studio-request'
 import { formatApprovalDateTime } from './format-date-time'
 
 // The provider's subtitle is "<offer name> · <price>" (formatEuro in
@@ -23,7 +23,7 @@ export function summaryWithoutPrice(subtitle, amount) {
   return subtitle.length > suffix.length && subtitle.endsWith(suffix) ? subtitle.slice(0, -suffix.length) : subtitle
 }
 
-export default function OfferPurchaseCard({ item, onDecided, timezone = null }) {
+export default function OfferPurchaseCard({ item, onDecided, timezone = null, activeStudioId = null }) {
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState(null) // { tone, text }
   const inFlight = useRef(false)
@@ -62,6 +62,7 @@ export default function OfferPurchaseCard({ item, onDecided, timezone = null }) 
       source="OFFER SALE"
       state={{ label: 'Paid, not set up', tone: 'amber' }}
       name={item.title}
+      studio={studioChip(item, activeStudioId)}
       meta={item.meta}
       when={`Paid ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       amount={`€${Number(item.amount || 0).toFixed(2)}`}

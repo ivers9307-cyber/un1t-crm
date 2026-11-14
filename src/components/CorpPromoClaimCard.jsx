@@ -10,10 +10,10 @@ import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
-import { withStudio } from '@/lib/approvals/studio-request'
+import { withStudio, studioChip } from '@/lib/approvals/studio-request'
 import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 
-export default function CorpPromoClaimCard({ item, onDecided, timezone = null }) {
+export default function CorpPromoClaimCard({ item, onDecided, timezone = null, activeStudioId = null }) {
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState(null) // { tone, text }
   const inFlight = useRef(false)
@@ -45,6 +45,7 @@ export default function CorpPromoClaimCard({ item, onDecided, timezone = null })
       source="CORPORATE PROMO"
       state={{ label: 'Credits not added', tone: 'amber' }}
       name={item.title}
+      studio={studioChip(item, activeStudioId)}
       meta={item.meta}
       when={`Claimed ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       summary={item.subtitle}

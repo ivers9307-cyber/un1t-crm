@@ -19,12 +19,19 @@ const OUTCOME_TONES = {
 }
 
 const CHIP = 'text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded'
+// APPROVALSQ.6 — the studio a card belongs to ("All my studios"): neutral at
+// the studio the person is in, blue at any other, so it stands out.
+const STUDIO_CHIP_HERE = 'bg-un1t-border/30 text-un1t-subtle border border-un1t-border'
+const STUDIO_CHIP_OTHER = 'bg-blue-500/10 text-blue-700'
 
 export default function CustomerCardShell({
   source, kind, state, name, meta, when, amount,
   summary, children, contact, links, outcome, outcomeAction, actions, quietAction, error,
-  sourceClassName, kindClassName, leading, summaryClassName,
+  sourceClassName, kindClassName, leading, summaryClassName, studio,
 }) {
+  // The studio chip replaces a provider meta that is only the studio's name,
+  // so the studio is never shown twice.
+  const showMeta = meta && !(studio && meta === studio.name)
   return (
     <div className="border border-un1t-border rounded-lg p-4 bg-un1t-surface space-y-3">
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -34,7 +41,8 @@ export default function CustomerCardShell({
           {kind && <span className={`${CHIP} ${kindClassName || 'bg-un1t-border/30 text-un1t-subtle border border-un1t-border'}`}>{kind}</span>}
           {state && <span className={`${CHIP} ${STATE_TONES[state.tone] || STATE_TONES.neutral}`}>{state.label}</span>}
           <span className="text-sm font-semibold text-un1t-text">{name}</span>
-          {meta && <span className={`${CHIP} bg-un1t-border/30 text-un1t-subtle border border-un1t-border`}>{meta}</span>}
+          {studio?.name && <span title="Studio" className={`${CHIP} ${studio.other ? STUDIO_CHIP_OTHER : STUDIO_CHIP_HERE}`}>{studio.name}</span>}
+          {showMeta && <span className={`${CHIP} bg-un1t-border/30 text-un1t-subtle border border-un1t-border`}>{meta}</span>}
         </div>
         <div className="text-right">
           {amount && <div className="text-sm font-medium text-un1t-text tabular-nums">{amount}</div>}

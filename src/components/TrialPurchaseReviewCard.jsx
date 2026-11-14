@@ -19,10 +19,10 @@ import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
-import { withStudio } from '@/lib/approvals/studio-request'
+import { withStudio, studioChip } from '@/lib/approvals/studio-request'
 import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 
-export default function TrialPurchaseReviewCard({ item, onDecided, timezone = null }) {
+export default function TrialPurchaseReviewCard({ item, onDecided, timezone = null, activeStudioId = null }) {
   const [busy, setBusy] = useState(null) // 'retry' | 'resolve' | 'quiet' | 'handled'
   const [outcome, setOutcome] = useState(null) // { tone, text }
   const inFlight = useRef(false)
@@ -104,6 +104,7 @@ export default function TrialPurchaseReviewCard({ item, onDecided, timezone = nu
       source="PAID TRIAL"
       state={help ? { label: 'Needs a call', tone: 'amber' } : { label: 'Grant failed', tone: 'red' }}
       name={item.title}
+      studio={studioChip(item, activeStudioId)}
       meta={item.meta}
       when={`${help ? 'Asked' : 'Paid'} ${formatApprovalDateTime(item.submittedAt, timezone)}${!help && item.attempts > 1 ? ` · ${item.attempts} attempts` : ''}`}
       amount={help ? undefined : `€${Number(item.amount || 0).toFixed(2)}`}

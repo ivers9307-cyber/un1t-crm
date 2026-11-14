@@ -25,7 +25,7 @@ import { RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
 import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 import UndoClearButton from '@/components/approvals/UndoClearButton'
 import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
-import { withStudio } from '@/lib/approvals/studio-request'
+import { withStudio, studioChip } from '@/lib/approvals/studio-request'
 
 const KIND_CHIP = {
   cancellation: 'bg-red-500/10 text-red-700',
@@ -135,7 +135,7 @@ export function outcomeLine(status, item, executed, notified = null, plannedEndD
 
 // APPROVALSQ.2 — `selectable`, `selected` and `onToggle` put a select checkbox
 // in the header while /approvals is in select mode; a decided card has none.
-export default function AgentRequestDecideCard({ item, onDecided, onUndone, selectable = false, selected = false, onToggle, timezone = null }) {
+export default function AgentRequestDecideCard({ item, onDecided, onUndone, selectable = false, selected = false, onToggle, timezone = null, activeStudioId = null }) {
   const [busy, setBusy] = useState(null)       // 'approved' | 'declined' | 'saved' | 'cleared' | null
   const inFlight = useRef(false)
   const [declineOpen, setDeclineOpen] = useState(false)
@@ -351,6 +351,7 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
       kindClassName={KIND_CHIP[item.kind] || DEFAULT_KIND_CHIP}
       state={isFailedItem && !outcome ? { label: 'Failed', tone: 'red' } : undefined}
       name={item.contactName || 'Customer'}
+      studio={studioChip(item, activeStudioId)}
       meta={item.channel ? `via ${item.channel}` : undefined}
       when={`Submitted ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       summary={item.subtitle}
