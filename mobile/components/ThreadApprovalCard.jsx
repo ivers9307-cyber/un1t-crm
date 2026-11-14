@@ -13,7 +13,7 @@
 // Deliberately thinner than the web card: no book-tab / sequence-picker
 // steps (mobile has no Command Centre rail or sequence surface) — next
 // steps are filtered to type === 'composer' only.
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { View, Text, Pressable, TextInput, ActivityIndicator } from 'react-native'
 import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from 'shared/approvals-next-steps'
 import { approvalCardSummary, APPROVAL_KIND_LABELS } from 'shared/approval-cards'
@@ -59,9 +59,12 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
   // APPROVALSQ.2 — quiet clear: confirmed in the shared sheet, never one tap.
   const [clearOpen, setClearOpen] = useState(false)
   const [clearedHere, setClearedHere] = useState(false)
+  // A ref, not state: a second tap before the re-render must not send a second PATCH.
+  const clearInFlight = useRef(false)
 
   async function clearRequest(note) {
-    if (busy) return
+    if (busy || clearInFlight.current) return
+    clearInFlight.current = true
     setClearOpen(false)
     setBusy('declined')
     setError(null)
@@ -76,6 +79,7 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
     } catch {
       setError('Network error, try again')
     } finally {
+      clearInFlight.current = false
       setBusy(null)
     }
   }

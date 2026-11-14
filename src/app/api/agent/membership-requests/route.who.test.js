@@ -10,6 +10,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 
 import { logWarn } from '@/lib/log'
+import { getUserLocationIds } from '@/lib/auth'
 import { GET } from './route.js'
 
 const rows = [
@@ -68,6 +69,16 @@ describe.each([['history', history], ['conversation', conversation]])('GET %s', 
     db = makeDb([{ id: 'r4', location_id: 'L1', status: 'pending', decided_by: null }], async () => ({ data: [], error: null }))
     const j = await (await run()).json()
     expect(j.requests[0].decided_by_name).toBeNull()
+    expect(profileReads).toHaveLength(0)
+  })
+})
+
+describe('GET conversation outside the caller\'s studios', () => {
+  it('returns no requests and never reads profiles', async () => {
+    getUserLocationIds.mockReturnValueOnce(['L2'])
+    db = makeDb(rows, async () => ({ data: [{ id: 'p1', full_name: 'Sarah' }], error: null }))
+    const res = await conversation()
+    expect(await res.json()).toEqual({ success: true, requests: [] })
     expect(profileReads).toHaveLength(0)
   })
 })

@@ -204,7 +204,7 @@ describe('ApprovalsInbox bulk clear', () => {
     expect(screen.getByText("Clear 4 requests without telling the customers?")).toBeTruthy()
     // mia-1 class_booking and mia-3 consultation wait; mia-fail is failed; mia-2 is a pause
     expect(screen.getByText('Mia told 2 of these customers the team would confirm. Clearing sends them nothing.')).toBeTruthy()
-    expect(screen.getByRole('button', { name: "Clear 4, don't notify" })).toBeTruthy()
+    expect(screen.getByRole('button', { name: "Clear 4 requests, don't notify" })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Back' })).toBeTruthy()
   })
 
@@ -214,8 +214,70 @@ describe('ApprovalsInbox bulk clear', () => {
     await enterSelect()
     fireEvent.click(screen.getByLabelText('select-mia-2'))
     fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
-    expect(screen.getByText('Clear 1 requests without telling the customers?')).toBeTruthy()
+    expect(screen.getByText('Clear 1 request without telling the customer?')).toBeTruthy()
     expect(screen.queryByText(/Clearing sends them nothing/)).toBeNull()
+  })
+
+  it('one waiting booking selected: singular question, button and warning', async () => {
+    mockBulkApi(miaItems())
+    render(<ApprovalsInbox />)
+    await enterSelect()
+    fireEvent.click(screen.getByLabelText('select-mia-1'))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    expect(screen.getByText('Clear 1 request without telling the customer?')).toBeTruthy()
+    expect(screen.getByText('Mia told this customer the team would confirm. Clearing sends them nothing.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: "Clear 1 request, don't notify" })).toBeTruthy()
+  })
+
+  it('the progress total is the confirmed count even when the selection changes mid-run', async () => {
+    let release
+    const gate = new Promise((r) => { release = r })
+    const providers = miaItems()
+    const total = providers.reduce((s, p) => s + p.count, 0)
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      if (init?.method === 'PATCH') { await gate; return { ok: true, status: 200, json: async () => ({ success: true }) } }
+      return { json: async () => ({ success: true, data: { providers, total } }) }
+    }))
+    render(<ApprovalsInbox />)
+    await enterSelect()
+    fireEvent.click(screen.getByLabelText('select-mia-1'))
+    fireEvent.click(screen.getByLabelText('select-mia-2'))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear 2 requests, don't notify" }))
+    await screen.findByText('Clearing 1 of 2')
+    // the selection empties under the run (chip switch)
+    fireEvent.click(screen.getByRole('button', { name: /^Paid trials/ }))
+    expect(screen.getByText(/^Clearing \d of 2$/)).toBeTruthy()
+    release()
+    await screen.findByText(/Cleared 2\./)
+  })
+
+  it('a card decided in place drops out of the selection and the bulk run', async () => {
+    const { patches } = mockBulkApi(miaItems())
+    render(<ApprovalsInbox />)
+    await enterSelect()
+    fireEvent.click(screen.getByRole('button', { name: 'Select all' }))
+    expect(screen.getByText('4 selected')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'decide-mia-2' }))
+    expect(screen.getByText('3 selected')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear 3 requests, don't notify" }))
+    await screen.findByText(/Cleared 3\./)
+    expect(patches.map((p) => p.id)).not.toContain('mia-2')
+    expect(patches).toHaveLength(3)
+  })
+
+  it('when every request fails the notice says none could be cleared, in the red style', async () => {
+    mockBulkApi(miaItems(), () => 409)
+    render(<ApprovalsInbox />)
+    await enterSelect()
+    fireEvent.click(screen.getByLabelText('select-mia-1'))
+    fireEvent.click(screen.getByLabelText('select-mia-2'))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear 2 requests, don't notify" }))
+    const notice = await screen.findByText('None could be cleared (already decided, or an error).')
+    expect(notice.className).toContain('text-red-700')
+    expect(screen.queryByText(/Cleared 0/)).toBeNull()
   })
 
   it('confirming sends one silent PATCH per selected id, in order, with the note, and never for other kinds', async () => {
@@ -225,7 +287,7 @@ describe('ApprovalsInbox bulk clear', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Select all' }))
     fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
     fireEvent.change(screen.getByPlaceholderText('Note (optional)'), { target: { value: 'old backlog' } })
-    fireEvent.click(screen.getByRole('button', { name: "Clear 4, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear 4 requests, don't notify" }))
     await screen.findByText(/Cleared 4\./)
     expect(patches.map((p) => p.id)).toEqual(['mia-fail', 'mia-1', 'mia-2', 'mia-3'])
     for (const p of patches) expect(p.body).toEqual({ status: 'declined', silent: true, decision_note: 'old backlog' })
@@ -239,7 +301,7 @@ describe('ApprovalsInbox bulk clear', () => {
     await enterSelect()
     fireEvent.click(screen.getByLabelText('select-mia-2'))
     fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
-    fireEvent.click(screen.getByRole('button', { name: "Clear 1, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear 1 request, don't notify" }))
     await screen.findByText(/Cleared 1\./)
     expect(patches[0].body.decision_note).toBeNull()
   })
@@ -251,7 +313,7 @@ describe('ApprovalsInbox bulk clear', () => {
     fireEvent.click(screen.getByLabelText('select-mia-1'))
     fireEvent.click(screen.getByLabelText('select-mia-2'))
     fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
-    const confirm = screen.getByRole('button', { name: "Clear 2, don't notify" })
+    const confirm = screen.getByRole('button', { name: "Clear 2 requests, don't notify" })
     fireEvent.click(confirm)
     fireEvent.click(confirm)
     await screen.findByText(/Cleared 2\./)
@@ -267,7 +329,7 @@ describe('ApprovalsInbox bulk clear', () => {
     fireEvent.click(screen.getByLabelText('select-mia-3'))
     fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
     const listCallsBefore = fn.mock.calls.filter(([, i]) => !i?.method).length
-    fireEvent.click(screen.getByRole('button', { name: "Clear 3, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear 3 requests, don't notify" }))
     await screen.findByText(/Cleared 2\./)
     expect(screen.getByText(/1 could not be cleared \(already decided, or an error\)\./)).toBeTruthy()
     expect(patches.map((p) => p.id)).toEqual(['mia-1', 'mia-2', 'mia-3'])
@@ -291,7 +353,7 @@ describe('ApprovalsInbox bulk clear', () => {
     fireEvent.click(screen.getByLabelText('select-mia-1'))
     fireEvent.click(screen.getByLabelText('select-mia-2'))
     fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
-    fireEvent.click(screen.getByRole('button', { name: "Clear 2, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear 2 requests, don't notify" }))
     expect(await screen.findByText('Clearing 1 of 2')).toBeTruthy()
     for (const b of screen.getAllByRole('button')) {
       if (/^(Select all|Cancel|Back)$/.test(b.textContent.trim())) expect(b.disabled).toBe(true)

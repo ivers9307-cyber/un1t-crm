@@ -243,8 +243,7 @@ export default function ApprovalActionCard({
 
         {decided && (
           <div className="mt-1.5 text-xs text-un1t-muted">
-            {wasCleared && <span>Cleared, customer not told.</span>}
-            {wasCleared && decidedByLine(request) && <span> {decidedByLine(request)}</span>}
+            {wasCleared && <span>{`Cleared, customer not told${decidedByLine(request) ? ` · ${decidedByLine(request)}` : ''}.`}</span>}
             {request.decision_note && <span> {request.decision_note}</span>}
             {failedLine && <span className="text-red-700"> {failedLine}</span>}
             {/* A quiet clear told nobody on purpose: never nag staff to follow up. */}

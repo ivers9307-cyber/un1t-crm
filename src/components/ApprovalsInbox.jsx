@@ -227,7 +227,9 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }
   })
   const finished = ({ cleared, failed }) => {
     leaveSelect()
-    setNotice(`Cleared ${cleared.length}.${failed.length > 0 ? ` ${failed.length} could not be cleared (already decided, or an error).` : ''}`)
+    setNotice(cleared.length === 0 && failed.length > 0
+      ? { error: true, text: 'None could be cleared (already decided, or an error).' }
+      : { error: false, text: `Cleared ${cleared.length}.${failed.length > 0 ? ` ${failed.length} could not be cleared (already decided, or an error).` : ''}` })
     onReload?.()
   }
 
@@ -266,7 +268,9 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }
         ))}
       </div>
       {notice && !selectMode && (
-        <div className="text-sm rounded-md px-3 py-2 bg-un1t-border/30 text-un1t-text">{notice}</div>
+        <div className={notice.error
+          ? 'border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm'
+          : 'text-sm rounded-md px-3 py-2 bg-un1t-border/30 text-un1t-text'}>{notice.text}</div>
       )}
       {selectMode ? (
         <BulkClearBar

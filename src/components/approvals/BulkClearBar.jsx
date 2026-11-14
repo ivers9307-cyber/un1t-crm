@@ -27,6 +27,8 @@ export default function BulkClearBar({ items, onSelectAll, onCancel, onFinished 
   const [note, setNote] = useState('')
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState(0)
+  // The run's own total: the live selection can change while it runs.
+  const [runTotal, setRunTotal] = useState(0)
   const inFlight = useRef(false)
 
   const n = items.length
@@ -40,6 +42,7 @@ export default function BulkClearBar({ items, onSelectAll, onCancel, onFinished 
     setRunning(true)
     setProgress(0)
     const ids = items.map((i) => i.id)
+    setRunTotal(ids.length)
     let counter = 0
     let result = { cleared: [], failed: [] }
     try {
@@ -64,7 +67,7 @@ export default function BulkClearBar({ items, onSelectAll, onCancel, onFinished 
     <div className="border border-un1t-border rounded-lg p-3 bg-un1t-surface space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm font-medium text-un1t-text mr-2">
-          {running ? `Clearing ${progress} of ${n}` : `${n} selected`}
+          {running ? `Clearing ${progress} of ${runTotal}` : `${n} selected`}
         </span>
         <Button type="button" size="sm" variant="secondary" disabled={running} onClick={onSelectAll}>
           Select all
@@ -80,11 +83,13 @@ export default function BulkClearBar({ items, onSelectAll, onCancel, onFinished 
       {showConfirm && (
         <div className="border border-un1t-border rounded-md p-3 space-y-3 bg-un1t-bg/40">
           <p className="text-sm font-medium text-un1t-text">
-            Clear {n} requests without telling the customers?
+            {n === 1 ? 'Clear 1 request without telling the customer?' : `Clear ${n} requests without telling the customers?`}
           </p>
           {told > 0 && (
             <p className="text-sm rounded-md px-3 py-2 bg-amber-500/10 text-amber-700">
-              Mia told {told} of these customers the team would confirm. Clearing sends them nothing.
+              {n === 1 && told === 1
+                ? 'Mia told this customer the team would confirm. Clearing sends them nothing.'
+                : `Mia told ${told} of these customers the team would confirm. Clearing sends them nothing.`}
             </p>
           )}
           <input
@@ -97,7 +102,7 @@ export default function BulkClearBar({ items, onSelectAll, onCancel, onFinished 
           />
           <div className="flex gap-2 flex-wrap">
             <Button type="button" size="sm" disabled={running} onClick={confirm}>
-              Clear {n}, don&apos;t notify
+              Clear {n} {n === 1 ? 'request' : 'requests'}, don&apos;t notify
             </Button>
             <Button type="button" size="sm" variant="secondary" disabled={running} onClick={() => setConfirmOpen(false)}>
               Back
