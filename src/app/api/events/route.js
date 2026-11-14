@@ -18,6 +18,7 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
+import { judgeVenueStudioForEventLocation } from '@/lib/event-venue-studio'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
@@ -223,6 +224,11 @@ export async function POST(request) {
   // organization (resolved from the event's location). Without this, an
   // operator could point an event's SMS/email identity at another org's
   // location. NULL/absent = no override, no check needed.
+  // SHELLYEVENTS.2 — the studio the event is held at must be one of this
+  // organisation's own (it holds that studio's power on).
+  const venueStudio = await judgeVenueStudioForEventLocation(db, { eventLocationId: body.location_id, venueLocationId: body.venue_location_id })
+  if (!venueStudio.ok) return NextResponse.json({ success: false, error: venueStudio.error }, { status: 400 })
+
   if (body.sending_location_id) {
     const { data: loc } = await db.from('locations')
       .select('organization_id').eq('id', body.location_id).single()
@@ -318,6 +324,10 @@ export async function POST(request) {
       pricing_tiers: body.pricing_tiers ?? null,
       registration_questions: body.registration_questions ?? null,
       duration_minutes: body.duration_minutes ?? null,
+      // SHELLYEVENTS.2 — where it is held and how long it holds the studio on.
+      venue_location_id: venueStudio.venueLocationId,
+      held_offsite: body.held_offsite ?? false,
+      studio_hold_minutes: body.studio_hold_minutes ?? null,
       wave_window_minutes: body.wave_window_minutes ?? null,
       entry_policy: body.entry_policy ?? null,
     })

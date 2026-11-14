@@ -60,13 +60,25 @@ export function hostEventDefaults() {
 // EVENT-SLUG.1 — slugs come from `@/lib/event-slug` (place-date-time);
 // the name-based deriveSlug that lived here is gone.
 
-export const RE_REVIEW_REASONS = ['date', 'price', 'tiers', 'session_time']
+export const RE_REVIEW_REASONS = ['date', 'price', 'tiers', 'session_time', 'studio', 'studio_hours']
 
 export const RE_REVIEW_REASON_LABEL = {
   date: 'the date',
   price: 'the standard price',
   tiers: 'a pricing tier',
   session_time: "an existing session's start time",
+  studio: 'the studio it is held at',
+  studio_hours: 'how long it needs the studio',
+}
+
+// SHELLYEVENTS.2 — how long an event holds its studio on after its last start
+// time, the same order src/lib/shelly/studio-events.js reads (kept in step by
+// host-events.test.js; not imported from there because this module also runs
+// in the browser and that one carries the server's zone reads).
+const DEFAULT_STUDIO_HOLD_MINUTES = 120
+const studioHold = ({ studio_hold_minutes: hold, duration_minutes: duration }) => {
+  const pick = (v) => (v != null && Number(v) > 0 ? Number(v) : null)
+  return pick(hold) ?? pick(duration) ?? DEFAULT_STUDIO_HOLD_MINUTES
 }
 
 // HOSTPORTAL.2 — the ONE rule for "this edit takes a published event off
@@ -102,7 +114,35 @@ export function reReviewReasons(current, changes) {
   const tiersChanged = 'pricing_tiers' in changes
     && JSON.stringify(canonicalTiers(changes.pricing_tiers)) !== JSON.stringify(canonicalTiers(current.pricing_tiers))
 
-  const hit = { date: dateChanged, price: priceChanged, tiers: tiersChanged, session_time: waveTimeChanged }
+  // SHELLYEVENTS.1 — moving a published event INTO a studio (or to a different
+  // one) is staff's to approve: the link holds that studio's Shelly timers on
+  // for the event (src/lib/shelly/studio-events.js), and the first review
+  // approved a different place. Moving it OUT to "somewhere else" switches
+  // nothing on, so it does not re-review. Judged only when the body carries
+  // the key (a form loaded before the picker existed sends none).
+  const studioChanged = 'venue_location_id' in changes
+    && changes.venue_location_id != null
+    && changes.venue_location_id !== (current.venue_location_id ?? null)
+
+  // SHELLYEVENTS.2 — an event already approved at a studio that now needs the
+  // studio for LONGER is staff's to approve too: a new session before the
+  // first or after the last one, or a longer hold (the duration, unless staff
+  // set studio_hold_minutes, which a host cannot change). A new session inside
+  // the approved hours, a shorter duration and a removed session do not.
+  const linked = current.venue_location_id != null
+    && !('venue_location_id' in changes && changes.venue_location_id == null)
+  const hhmm = (t) => String(t || '').slice(0, 5)
+  const approvedTimes = (Array.isArray(current.waves) ? current.waves : []).map((w) => hhmm(w?.start_time)).filter(Boolean).sort()
+  const outsideHours = approvedTimes.length > 0
+    && (Array.isArray(changes.new_session_times) ? changes.new_session_times : [])
+      .map(hhmm).filter(Boolean)
+      .some((t) => t < approvedTimes[0] || t > approvedTimes[approvedTimes.length - 1])
+  const longerHold = 'duration_minutes' in changes
+    && studioHold({ studio_hold_minutes: current.studio_hold_minutes, duration_minutes: changes.duration_minutes })
+      > studioHold(current)
+  const studioHoursChanged = linked && (outsideHours || longerHold)
+
+  const hit = { date: dateChanged, price: priceChanged, tiers: tiersChanged, session_time: waveTimeChanged, studio: studioChanged, studio_hours: studioHoursChanged }
   return RE_REVIEW_REASONS.filter((r) => hit[r])
 }
 
@@ -117,6 +157,13 @@ export function editChangesFromInput(input) {
     non_member_fee_cents: input.ticket_price_cents,
     pricing_tiers: input.pricing_tiers ?? null,
     waves: sessions.filter((s) => s.id).map((s) => ({ id: s.id, start_time: s.start_time })),
+    ...('venue_location_id' in input ? { venue_location_id: input.venue_location_id ?? null } : {}),
+    // SHELLYEVENTS.2 — what the studio-hours rule reads.
+    new_session_times: sessions.filter((s) => !s.id).map((s) => s.start_time),
+    // ALWAYS present, as the PUT route writes it (`input.duration_minutes ??
+    // null`): a body that leaves the key out is written as "no duration",
+    // which is the 2 hour default hold and can be LONGER than what was approved.
+    duration_minutes: input.duration_minutes ?? null,
   }
 }
 
@@ -183,6 +230,9 @@ export const HostEventSchema = z
     accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().nullable(),
     venue_name: z.string().trim().min(1).max(200),
     venue_address: z.string().trim().max(500).optional().nullable(),
+    // SHELLYEVENTS.1 — the studio the event is held at (mig 832); null =
+    // somewhere else. Judged by judgeVenueStudio before it is written.
+    venue_location_id: uuidLike.nullable().optional(),
     confirmation_email_subject: z.string().max(300).optional().nullable(),
     confirmation_email_intro: z.string().max(5000).optional().nullable(),
     reminder_email_subject: z.string().max(300).optional().nullable(),

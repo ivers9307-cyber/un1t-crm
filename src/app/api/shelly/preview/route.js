@@ -88,7 +88,10 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ user, db,
   return NextResponse.json({
     success: true,
     date,
-    classes: occ.occurrences.map((o) => ({ starts_at: o.starts_at, ends_at: o.ends_at, name: o.name ?? null })),
+    classes: occ.occurrences.filter((o) => o.kind !== 'event').map((o) => ({ starts_at: o.starts_at, ends_at: o.ends_at, name: o.name ?? null })),
+    // SHELLYEVENTS.1 — events held at the studio that day; they hold a
+    // class-mode group on exactly like a class.
+    events: occ.occurrences.filter((o) => o.kind === 'event').map((o) => ({ starts_at: o.starts_at, ends_at: o.ends_at, name: o.name ?? null })),
     groups: groups.map((g) => ({
       id: g.id,
       windows: g.enabled && g.schedule_mode !== 'none'

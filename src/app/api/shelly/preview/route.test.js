@@ -86,6 +86,18 @@ describe('GET /api/shelly/preview', () => {
     expect(byId[GRP_F]).toEqual([{ on_at: '2026-08-29T06:00:00.000Z', off_at: '2026-08-29T08:00:00.000Z' }])
   })
 
+  it('counts an event held at the studio like a class, and lists it apart (SHELLYEVENTS.1)', async () => {
+    // Saturday 29 Aug: weekday-only classes, so only the event opens the group.
+    const w = world([groupRow({ enabled: true, schedule_mode: 'class', class_rule: { lead_min: 30, lag_min: 45, merge_gap_min: 30 } })], [])
+    w.rows.race_events = [{ id: 'ev1', name: 'PTC', race_date: '2026-08-29', active: true, status: 'published', held_offsite: false, waves: [{ start_time: '10:30:00' }, { start_time: '12:15:00' }] }]
+    useDb(w)
+    const body = await (await get('?date=2026-08-29')).json()
+    expect(body.classes).toEqual([])
+    // Dublin summer time: 10:30 wall clock is 09:30Z; 2 hours after the last start.
+    expect(body.events).toEqual([{ starts_at: '2026-08-29T09:30:00.000Z', ends_at: '2026-08-29T13:15:00.000Z', name: 'PTC' }])
+    expect(body.groups).toEqual([{ id: GRP_A, windows: [{ on_at: '2026-08-29T09:00:00.000Z', off_at: '2026-08-29T14:00:00.000Z' }] }])
+  })
+
   it('a disabled or scheduleless group has no windows', async () => {
     useDb(world([groupRow({ enabled: false, schedule_mode: 'fixed', fixed_windows: [{ days: [1], on: '07:00', off: '09:00' }] })], []))
     expect((await (await get()).json()).groups).toEqual([{ id: GRP_A, windows: [] }])

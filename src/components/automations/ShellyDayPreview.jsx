@@ -157,6 +157,17 @@ export default function ShellyDayPreview({ groups = [], tz }) {
             })}
           </Lane>
 
+          {(data.events || []).length > 0 && (
+            <Lane label="Events">
+              {data.events.map((c, i) => {
+                const p = placeBlock(c.starts_at, c.ends_at, dayStart, dayEnd)
+                if (!p) return null
+                const label = `${c.name ? `${c.name}, ` : ''}${timeLabelIn(c.starts_at, tz)}–${timeLabelIn(c.ends_at, tz)}`
+                return <div key={i} title={label} aria-label={`Event ${label}`} role="img" className="absolute inset-y-1 rounded-sm bg-purple-500/10 ring-1 ring-purple-500/40" style={{ left: `${p.left}%`, width: `${p.width}%` }} />
+              })}
+            </Lane>
+          )}
+
           {ordered.map((g) => (
             <Lane key={g.id} label={g.name}>
               {windowsOf(g.id).map((w, i) => {

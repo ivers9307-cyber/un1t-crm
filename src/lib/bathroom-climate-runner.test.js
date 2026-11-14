@@ -8,6 +8,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+// SHELLYEVENTS.2 — the event sessions read is its own module (tested in
+// src/lib/shelly/studio-events.test.js); here it is a stub, empty by default.
+const loadEventSessionsBetween = vi.fn(async () => ({ ok: true, occurrences: [] }))
+vi.mock('@/lib/shelly/studio-events', () => ({ loadEventSessionsBetween: (...a) => loadEventSessionsBetween(...a) }))
+vi.mock('@/lib/location-time', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getLocationZone: vi.fn(async () => 'Europe/Dublin'),
+}))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(() => Promise.resolve()) }))
 
 const vendorTurnOn = vi.fn()
@@ -130,6 +138,25 @@ describe('runBathroomClimateForLocation', () => {
     expect(fire.automation_key).toBe('bathroom_climate')
     expect(fire.status).toBe('fired')
     expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'ac.bathroom_auto_on' }))
+  })
+
+  it('fires for an event session held at the studio, keyed by the session (SHELLYEVENTS.2)', async () => {
+    loadEventSessionsBetween.mockResolvedValueOnce({ ok: true, occurrences: [
+      { glofox_event_id: 'event:e1:10:00', name: 'Host workshop', starts_at: '2026-07-27T10:00:00.000Z', ends_at: '2026-07-27T12:00:00.000Z', kind: 'event' },
+    ] })
+    const db = makeDb({ class_occurrences: [] })
+    const out = await runBathroomClimateForLocation(db, ROW, { nowMs: NOW })
+    expect(out.actions).toEqual([expect.objectContaining({ glofox_event_id: 'event:e1:10:00', class_name: 'Host workshop', status: 'fired' })])
+    expect(loadEventSessionsBetween).toHaveBeenCalledWith(db, LOC, 'Europe/Dublin', expect.any(Number), expect.any(Number))
+    expect(db.calls.upserts.find((c) => c.table === 'automation_fire_log').rows.glofox_event_id).toBe('event:e1:10:00')
+  })
+
+  it('a failed event read is recorded and the classes still run', async () => {
+    loadEventSessionsBetween.mockResolvedValueOnce({ ok: false, error: 'pg down' })
+    const db = makeDb({ class_occurrences: [OCC] })
+    const out = await runBathroomClimateForLocation(db, ROW, { nowMs: NOW })
+    expect(out.errors).toEqual(['events_read_failed: pg down'])
+    expect(out.actions).toEqual([expect.objectContaining({ glofox_event_id: 'ev1', status: 'fired' })])
   })
 
   it('does nothing before the window opens', async () => {

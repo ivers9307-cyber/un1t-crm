@@ -163,7 +163,9 @@ export function project(row, cols) {
   if (!cols || cols === '*') return { ...row }
   const out = {}
   for (const col of splitCols(cols)) {
-    const embed = col.match(/^([A-Za-z_]+)(?:!\w+)?\(/)
+    // An embed, bare (`t(…)`) or aliased (`alias:t ( … )`): the key is the
+    // alias when there is one, and the fixture row carries the embed under it.
+    const embed = col.match(/^([A-Za-z_]+)(?:!\w+)?\(/) || col.match(/^([A-Za-z_]+):[A-Za-z_]+(?:!\w+)?\s*\(/)
     // `alias:col->a->b` (a JSON path, as the safety-timer switch reads it):
     // the alias is the key, and the path is walked into the jsonb column.
     const aliased = !embed && col.match(/^([A-Za-z_]+):(.+)$/)
@@ -370,6 +372,10 @@ export function makeDb(cfg = {}) {
         neq: (col, val) => { st.neqs[col] = val; return b },
         is: (col, val) => { st.iss[col] = val; return b },
         ilike: (col, val) => { st.ilikes[col] = val; return b },
+        // Recorded, not applied: this fake does not parse PostgREST's or() grammar.
+        // A test that seeds race_events rows (SHELLYEVENTS.1) seeds only the ones
+        // the real or() would admit; studio-events.test.js pins the expression.
+        or: (expr) => { st.or = expr; return b },
         order: (col, opts) => { st.orders.push([col, opts]); return b },
         limit: (n) => { st.limit = n; return b },
         update: (payload) => { st.op = 'update'; st.payload = payload; calls.updates.push(st); return b },

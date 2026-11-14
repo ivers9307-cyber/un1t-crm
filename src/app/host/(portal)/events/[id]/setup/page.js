@@ -14,6 +14,7 @@ import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import { loadHostEvent } from '@/lib/host-portal'
 import HostEventForm from '@/components/host/HostEventForm'
 import { hostEventFormInitial } from '@/lib/host-event-form-initial'
+import { listVenueStudios } from '@/lib/event-venue-studio'
 import { HOST_NOTICE, HOST_NOTICE_TONE } from '@/components/host/host-ui'
 
 export const dynamic = 'force-dynamic'
@@ -30,13 +31,14 @@ export default async function HostEventSetup(props) {
     params.id,
     'id, host_id, status, rejected_reason, kind, name, description, race_date, ' +
       'registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, pricing_tiers, registration_questions, duration_minutes, ' +
-      'hero_image_url, accent_hex, venue_name, venue_address, ' +
+      'hero_image_url, accent_hex, venue_name, venue_address, venue_location_id, studio_hold_minutes, ' +
       'confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, rating_email_subject, rating_email_intro, series_id, ' +
       'race_waves ( id, start_time, capacity, label, display_order )'
   )
   if (!event) notFound()
   const brand = await resolveHostOrgBrand(db, session.host)
 
+  const studios = await listVenueStudios(db, session.host.organization_id)
   const initial = hostEventFormInitial(event)
 
   return (
@@ -46,7 +48,7 @@ export default async function HostEventSetup(props) {
           <span className="font-semibold">{brand.name} asked for changes:</span> {event.rejected_reason}
         </div>
       )}
-      <HostEventForm mode="edit" eventId={event.id} initial={initial} brandName={brand.name} status={event.status} />
+      <HostEventForm mode="edit" eventId={event.id} initial={initial} brandName={brand.name} status={event.status} studios={studios} />
     </div>
   )
 }

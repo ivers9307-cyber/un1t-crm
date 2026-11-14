@@ -567,7 +567,9 @@ describe('HostEventForm off-sale warning', () => {
     return fetchMock
   }
   const saves = (fetchMock) => fetchMock.mock.calls.filter(([u]) => String(u) === '/api/host/events/E1')
-  const renderForm = (props = {}) => render(<HostEventForm mode="edit" eventId="E1" initial={base} brandName="UN1T" status="published" {...props} />)
+  const renderForm = (props = {}) => render(<HostEventForm mode="edit" eventId="E1" initial={base} brandName="UN1T" status="published" studios={STUDIOS} {...props} />)
+  // SHELLYEVENTS.1 — the studios the picker offers.
+  const STUDIOS = [{ id: 'a0000000-0000-0000-0000-000000000001', name: 'UN1T Stillorgan', address: 'Stillorgan Shopping Centre' }]
   const clickSave = () => fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
 
   // The single edit that triggers each reason.
@@ -576,7 +578,12 @@ describe('HostEventForm off-sale warning', () => {
     price: () => fireEvent.change(screen.getByLabelText(/Standard price/), { target: { value: '30.00' } }),
     tiers: () => fireEvent.change(screen.getByLabelText('Tier 1 name'), { target: { value: 'Early bird 2' } }),
     session_time: () => fireEvent.change(screen.getAllByLabelText(/Start time/)[0], { target: { value: '11:00' } }),
+    studio: () => fireEvent.change(screen.getByLabelText('Where is it held?'), { target: { value: STUDIOS[0].id } }),
+    studio_hours: () => fireEvent.change(screen.getByLabelText('Duration (minutes)'), { target: { value: '300' } }),
   }
+  // SHELLYEVENTS.2 — the studio-hours rule only fires on an event already
+  // held at a studio, so that reason's form loads one.
+  const PROPS = { studio_hours: { initial: { ...base, venue_location_id: STUDIOS[0].id } } }
 
   it('shows the notice on a published event only, listing every label', () => {
     stubSave()
@@ -614,7 +621,7 @@ describe('HostEventForm off-sale warning', () => {
   for (const reason of RE_REVIEW_REASONS) {
     it(`asks before saving a ${reason} change, naming it, and sends nothing until confirmed`, async () => {
       const fetchMock = stubSave(true)
-      renderForm()
+      renderForm(PROPS[reason] || {})
       EDITS[reason]()
       clickSave()
       const dialog = await screen.findByRole('dialog')

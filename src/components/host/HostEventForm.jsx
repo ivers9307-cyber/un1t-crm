@@ -83,7 +83,7 @@ function predictedChanges(body) {
 }
 
 // brandName (W1.S1c): the host's organisation, resolved by the server page.
-export default function HostEventForm({ mode = 'create', initial = null, eventId = null, brandName = PLATFORM_NAME, status = null }) {
+export default function HostEventForm({ mode = 'create', initial = null, eventId = null, brandName = PLATFORM_NAME, status = null, studios = [] }) {
   const router = useRouter()
   const isEdit = mode === 'edit'
 
@@ -91,6 +91,22 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   const [name, setName] = useState(initial?.name || '')
   const [venueName, setVenueName] = useState(initial?.venue_name || '')
   const [venueAddress, setVenueAddress] = useState(initial?.venue_address || '')
+  // SHELLYEVENTS.1 — the studio the event is held at ('' = somewhere else).
+  // A stored studio that is no longer on the list is kept as-is on the row
+  // (the key is only sent when the list can express the choice, see buildBody).
+  const [venueStudioId, setVenueStudioId] = useState(
+    studios.some((s) => s.id === initial?.venue_location_id) ? initial.venue_location_id : ''
+  )
+  // Picking a studio fills the venue name and address from it; both stay
+  // editable ("next to the Luas stop"). Somewhere else leaves what is typed.
+  function pickVenueStudio(id) {
+    setVenueStudioId(id)
+    const studio = studios.find((s) => s.id === id)
+    if (studio) {
+      setVenueName(studio.name)
+      setVenueAddress(studio.address)
+    }
+  }
   const [raceDate, setRaceDate] = useState(initial?.race_date || '')
   // HOSTSERIES.1 — one row per session time (each a race_waves row). `key`
   // is the React key for a row that has no id yet.
@@ -180,6 +196,8 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     non_member_fee_cents: initial?.non_member_fee_cents,
     race_date: initial?.race_date,
     pricing_tiers: initial?.pricing_tiers,
+    venue_location_id: initial?.venue_location_id ?? null,
+    duration_minutes: initial?.duration_minutes ?? null,
     waves: (initial?.sessions || []).map((s) => ({ id: s.id, start_time: s.start_time })),
   })
 
@@ -310,6 +328,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
       accent_hex: trimmedText(accentHex),
       venue_name: venueName.trim(),
       venue_address: trimmedText(venueAddress),
+      ...(studios.length > 0 ? { venue_location_id: venueStudioId || null } : {}),
       confirmation_email_subject: trimmedText(confirmSubject),
       confirmation_email_intro: trimmedText(confirmIntro),
       reminder_email_subject: trimmedText(reminderSubject),
@@ -338,7 +357,9 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
 
     if (isEdit && onSale) {
       const reasons = reReviewReasons(
-        { status, ...serverHolds.current },
+        // studio_hold_minutes is staff's: the form never sends it, so it is
+        // read from the loaded event on every check.
+        { status, ...serverHolds.current, studio_hold_minutes: initial?.studio_hold_minutes ?? null },
         predictedChanges(buildBody()),
       )
       if (reasons.length > 0) {
@@ -519,6 +540,25 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
               required
             />
           </div>
+          {studios.length > 0 && (
+            <div>
+              <label htmlFor="he-venue-studio" className={labelCls}>Where is it held?</label>
+              <select
+                id="he-venue-studio"
+                value={venueStudioId}
+                onChange={(e) => pickVenueStudio(e.target.value)}
+                className={`${input} appearance-none`}
+              >
+                <option value="">Somewhere else</option>
+                {studios.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-host-hint">
+                Choose the studio if your event is in one of ours.
+              </p>
+            </div>
+          )}
           <div>
             <label htmlFor="he-venue" className={labelCls}>Venue name</label>
             <input
