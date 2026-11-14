@@ -2,6 +2,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { getPendingApprovalsAllStudios, listEligibleStudios } from './all-studios.js'
 
+// Leaf imports of the real auth.js, so the real userAtLocation can load here.
+vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined, getAll: () => [], set: () => {} }), headers: async () => ({ get: () => null }) }))
+vi.mock('@supabase/ssr', () => ({ createServerClient: vi.fn() }))
+vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
+vi.mock('@/lib/log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+
 const S1 = { id: 's1', name: 'Zed Studio' }
 const S2 = { id: 's2', name: 'Alpha Studio' }
 const S3 = { id: 's3', name: 'Middle Studio' }
@@ -206,5 +212,53 @@ describe('getPendingApprovalsAllStudios', () => {
     const getPendingApprovals = resultFor({ s1: { providers: [prov('p', [item])], total: 1 } })
     await getPendingApprovalsAllStudios({}, user, {}, deps({ getPendingApprovals }))
     expect(item).toEqual({ id: 'a' })
+  })
+})
+
+// APPROVALSQ.6 review fix — the tests above inject a fake gate; this one runs the
+// REAL userAtLocation (src/lib/auth.js) and the REAL hasPermission (src/lib/
+// permissions.js) over a user shaped as getCurrentUser() returns it. Only the
+// leaf imports auth.js drags in (next/headers, the supabase clients, the logger)
+// and getPendingApprovals are doubled.
+describe('getPendingApprovalsAllStudios with the real gate', () => {
+  const A = { id: 'loc-a', name: 'Alpha Studio', organization_id: 'org-1', features: {} }
+  const B_FEATURE_OFF = { id: 'loc-b', name: 'Bravo Studio', organization_id: 'org-1', features: { approvals_inbox: false } }
+  const C_NO_GRANT = { id: 'loc-c', name: 'Charlie Studio', organization_id: 'org-1', features: {} }
+
+  // The shape getCurrentUser returns: a global profile role (`profileRole`), the
+  // role at each studio, per-studio assignments, and the active studio's fields.
+  const user = {
+    id: 'u-real',
+    profileRole: 'staff',
+    role: 'manager',
+    rolesByLocation: { 'loc-a': 'manager', 'loc-b': 'manager', 'loc-c': 'staff' },
+    assignmentsByLocation: {
+      'loc-a': { location_id: 'loc-a', role: 'manager', permissions: {} },
+      'loc-b': { location_id: 'loc-b', role: 'manager', permissions: {} },
+      'loc-c': { location_id: 'loc-c', role: 'staff', permissions: {} },
+    },
+    roleTemplatesByLocation: {},
+    acDeviceTemplatesByLocation: {},
+    organizationsById: { 'org-1': { id: 'org-1', name: 'Org' } },
+    locations: [A, B_FEATURE_OFF, C_NO_GRANT],
+    activeLocation: A,
+    activeAssignment: { location_id: 'loc-a', role: 'manager', permissions: {} },
+    activeRoleTemplate: null,
+    activeAcDeviceTemplate: null,
+    activeOrganization: { id: 'org-1', name: 'Org' },
+  }
+
+  it('lists only the studio where the feature is on and an approvals grant is held, and runs no provider elsewhere', async () => {
+    const { getPendingApprovalsAllStudios: realFn } = await import('./all-studios.js')
+    const getPendingApprovals = vi.fn(async () => ({ providers: [], total: 0 }))
+    const r = await realFn({}, user, {}, { getPendingApprovals }) // userAtLocation + hasPermission stay the real ones
+    expect(r.studios.map((s) => s.id)).toEqual(['loc-a'])
+    expect(JSON.stringify(r)).not.toContain('Bravo Studio')
+    expect(JSON.stringify(r)).not.toContain('Charlie Studio')
+    expect(getPendingApprovals).toHaveBeenCalledTimes(1)
+    const askedAt = getPendingApprovals.mock.calls.map((c) => c[1].activeLocation.id)
+    expect(askedAt).toEqual(['loc-a'])
+    expect(askedAt).not.toContain('loc-b')
+    expect(askedAt).not.toContain('loc-c')
   })
 })

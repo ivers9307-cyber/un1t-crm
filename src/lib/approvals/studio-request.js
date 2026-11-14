@@ -31,3 +31,9 @@ export function studioChip(item, activeStudioId) {
   if (!item?.studioId || !item?.studioName) return null
   return { id: item.studioId, name: item.studioName, other: item.studioId !== activeStudioId }
 }
+
+// Providers whose `meta` is a description ("via the customer agent"), not the
+// place the item was filed at. A card in "All my studios" shows a place as
+// "Filed at <place>" when it differs from the studio chip; a description stays a chip.
+const DESCRIPTIVE_META_PROVIDERS = new Set(['agent_requests', 'host_events', 'hyrox_sessions'])
+export const metaIsPlace = (providerKey) => !DESCRIPTIVE_META_PROVIDERS.has(providerKey)

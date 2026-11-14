@@ -353,6 +353,7 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
       name={item.contactName || 'Customer'}
       studio={studioChip(item, activeStudioId)}
       meta={item.channel ? `via ${item.channel}` : undefined}
+      metaIsPlace={false}
       when={`Submitted ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       summary={item.subtitle}
       summaryClassName="text-sm text-un1t-text"

@@ -27,11 +27,17 @@ const STUDIO_CHIP_OTHER = 'bg-blue-500/10 text-blue-700'
 export default function CustomerCardShell({
   source, kind, state, name, meta, when, amount,
   summary, children, contact, links, outcome, outcomeAction, actions, quietAction, error,
-  sourceClassName, kindClassName, leading, summaryClassName, studio,
+  sourceClassName, kindClassName, leading, summaryClassName, studio, metaIsPlace = true,
 }) {
-  // The studio chip replaces a provider meta that is only the studio's name,
-  // so the studio is never shown twice.
-  const showMeta = meta && !(studio && meta === studio.name)
+  // One studio per card. With a studio chip (All my studios) the chip is the studio
+  // the item was listed under and decided at. A provider meta that is a PLACE
+  // (where the leave was filed) and differs from it is said once, in the body, as
+  // "Filed at <place>"; one equal to the chip is not repeated; a description
+  // ("via the customer agent", metaIsPlace false) stays a chip. Without a studio
+  // chip (This studio) the meta is the chip it always was.
+  const hasPlaceMeta = !!studio && metaIsPlace && typeof meta === 'string' && meta.length > 0
+  const filedAt = hasPlaceMeta && meta !== studio.name ? meta : null
+  const showMeta = meta && !(studio && (hasPlaceMeta || meta === studio.name))
   return (
     <div className="border border-un1t-border rounded-lg p-4 bg-un1t-surface space-y-3">
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -50,6 +56,7 @@ export default function CustomerCardShell({
         </div>
       </div>
 
+      {filedAt && <div className="text-xs text-un1t-subtle">Filed at {filedAt}</div>}
       {summary && <div className={summaryClassName || 'text-xs text-un1t-subtle'}>{summary}</div>}
       {children}
       {contact && <div className="text-xs text-un1t-subtle flex flex-wrap gap-x-4 gap-y-1">{contact}</div>}

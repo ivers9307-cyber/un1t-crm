@@ -6,15 +6,23 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }))
 vi.mock('next/navigation', () => ({ useRouter: () => router }))
+const cookieWrite = vi.hoisted(() => ({ setActiveLocation: vi.fn() }))
+vi.mock('@/lib/active-location', async (orig) => {
+  const real = await orig()
+  return { ...real, setActiveLocation: (id) => { cookieWrite.setActiveLocation(id); return real.setActiveLocation(id) } }
+})
 vi.mock('next/link', () => ({ default: ({ href, children, ...r }) => <a href={href} {...r}>{children}</a> }))
 
 import StudioLink from './StudioLink'
 
+const assign = vi.fn()
+const realLocation = window.location
 beforeEach(() => {
-  router.push.mockReset(); router.refresh.mockReset()
+  router.push.mockReset(); router.refresh.mockReset(); assign.mockReset(); cookieWrite.setActiveLocation.mockClear()
+  Object.defineProperty(window, 'location', { configurable: true, value: { assign } })
   document.cookie = 'un1t_active_location=; path=/; max-age=0'
 })
-afterEach(cleanup)
+afterEach(() => { cleanup(); Object.defineProperty(window, 'location', { configurable: true, value: realLocation }) })
 
 const here = { studioId: 'studio-1', studioName: 'Stillorgan' }
 const there = { studioId: 'studio-2', studioName: 'Hatch Street' }
@@ -38,12 +46,25 @@ describe('StudioLink', () => {
     expect(router.push).not.toHaveBeenCalled()
     expect(document.cookie).not.toContain('un1t_active_location=studio-2')
   })
-  it('pressing it sets the active studio cookie, then navigates', () => {
+  it('pressing it sets the active studio cookie, then loads the page afresh (no client navigation)', () => {
     render(<StudioLink item={there} activeStudioId="studio-1" href="/schedule/invoices?focus=v1">Open in Invoices</StudioLink>)
     fireEvent.click(screen.getByRole('button', { name: 'Switch to Hatch Street and open' }))
     expect(document.cookie).toContain('un1t_active_location=studio-2')
-    expect(router.push).toHaveBeenCalledWith('/schedule/invoices?focus=v1')
-    expect(router.refresh).toHaveBeenCalled()
+    expect(assign).toHaveBeenCalledWith('/schedule/invoices?focus=v1')
+    expect(router.push).not.toHaveBeenCalled()
+    expect(router.refresh).not.toHaveBeenCalled()
+  })
+  it('a failed cookie write does not navigate, and says so beside the control', () => {
+    cookieWrite.setActiveLocation.mockImplementationOnce(() => { throw new Error('blocked') })
+    render(<StudioLink item={there} activeStudioId="studio-1" href="/x">Open</StudioLink>)
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Hatch Street and open' }))
+    expect(assign).not.toHaveBeenCalled()
+    expect(screen.getByText('Could not switch studio.')).toBeTruthy()
+  })
+  it('a same-studio link is still an ordinary client link', () => {
+    render(<StudioLink item={here} activeStudioId="studio-1" href="/x">Open</StudioLink>)
+    fireEvent.click(screen.getByRole('link', { name: 'Open' }))
+    expect(assign).not.toHaveBeenCalled()
   })
   it('without an active studio id it still switches (never opens another studio unswitched)', () => {
     render(<StudioLink item={there} activeStudioId={null} href="/x">Open</StudioLink>)

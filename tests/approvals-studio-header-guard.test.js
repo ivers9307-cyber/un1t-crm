@@ -12,18 +12,30 @@ import { join } from 'node:path'
 
 const ROOT = join(__dirname, '..')
 
-const FILES = [
-  ...readdirSync(join(ROOT, 'src/components/approvals'))
-    .filter((f) => /\.(jsx?|mjs)$/.test(f) && !/\.test\./.test(f))
-    .map((f) => `src/components/approvals/${f}`),
-  'src/components/AgentRequestDecideCard.jsx',
-  'src/components/TrialPurchaseReviewCard.jsx',
-  'src/components/CorpPromoClaimCard.jsx',
+// Every non-test source file in a directory (not recursive).
+const sourcesIn = (dir) => readdirSync(join(ROOT, dir))
+  .filter((f) => /\.(jsx?|mjs)$/.test(f) && !/\.test\./.test(f))
+  .map((f) => `${dir}/${f}`)
+
+// The components ApprovalsInbox.jsx imports (the cards), read from its import
+// lines, so a card added to the page later is scanned without touching this test.
+function importedComponents(file) {
+  const src = readFileSync(join(ROOT, file), 'utf8')
+  const out = []
+  for (const m of src.matchAll(/^import\s[^'"]*from\s+'@\/(components\/[^']+)'/gm)) {
+    const base = `src/${m[1]}`
+    const found = ['.jsx', '.js', '/index.jsx', '/index.js'].map((e) => base + e).find((f) => { try { readFileSync(join(ROOT, f)); return true } catch { return false } })
+    if (found) out.push(found)
+  }
+  return out
+}
+
+const FILES = [...new Set([
+  ...sourcesIn('src/components/approvals'),
+  ...sourcesIn('src/lib/approvals'),
+  ...importedComponents('src/components/ApprovalsInbox.jsx'),
   'src/components/ApprovalsInbox.jsx',
-  'src/lib/approvals/team-actions.js',
-  'src/lib/approvals/bulk-clear.js',
-  'src/lib/approvals/undo-clear-request.js',
-]
+])]
 
 // A fetch that is not about an item. Keyed `file:snippet`; the reason is the value.
 export const EXEMPT = {
@@ -42,7 +54,8 @@ function callText(src, start) {
 
 export function findViolations(file, src) {
   const out = []
-  const re = /(^|[^\w.$])fetch\(/g
+  // fetch(, window.fetch( and globalThis.fetch( (a `.fetch(` on anything else is not ours).
+  const re = /(^|[^\w.$])((?:window\.|globalThis\.)?fetch)\(/g
   let m
   while ((m = re.exec(src))) {
     const start = m.index + m[1].length
@@ -60,6 +73,14 @@ describe('approvals cards name the item studio on every request', () => {
   it('scans the files it means to', () => {
     expect(FILES).toContain('src/components/approvals/BulkClearBar.jsx')
     expect(FILES).toContain('src/components/approvals/OfferPurchaseCard.jsx')
+    // Every non-test file in the two directories, and the cards the page imports.
+    expect(FILES).toContain('src/lib/approvals/team-actions.js')
+    expect(FILES).toContain('src/lib/approvals/studio-request.js')
+    expect(FILES).toContain('src/components/AgentRequestDecideCard.jsx')
+    expect(FILES).toContain('src/components/TrialPurchaseReviewCard.jsx')
+    expect(FILES).toContain('src/components/CorpPromoClaimCard.jsx')
+    expect(FILES).toContain('src/components/ApprovalsInbox.jsx')
+    expect(FILES.some((f) => /\.test\./.test(f))).toBe(false)
     expect(FILES.every((f) => { try { readFileSync(join(ROOT, f)); return true } catch { return false } })).toBe(true)
   })
 
@@ -73,5 +94,15 @@ describe('approvals cards name the item studio on every request', () => {
     expect(findViolations('src/components/approvals/X.jsx', src)).toHaveLength(1)
     const ok = "async function a(item) {\n  return fetch(`/api/x/${item.id}`, withStudio(item, { method: 'POST' }))\n}\n"
     expect(findViolations('src/components/approvals/X.jsx', ok)).toEqual([])
+  })
+
+  it('also sees window.fetch( and globalThis.fetch(', () => {
+    const w = "const a = () => window.fetch('/api/x', { method: 'POST' })\n"
+    const g = "const a = () => globalThis.fetch('/api/x', { method: 'POST' })\n"
+    expect(findViolations('src/components/approvals/X.jsx', w)).toHaveLength(1)
+    expect(findViolations('src/components/approvals/X.jsx', g)).toHaveLength(1)
+    expect(findViolations('src/components/approvals/X.jsx', "window.fetch('/x', withStudio(item, {}))")).toEqual([])
+    // Not a global fetch: some other object's .fetch( is left alone.
+    expect(findViolations('src/components/approvals/X.jsx', "client.fetch('/x')")).toEqual([])
   })
 })

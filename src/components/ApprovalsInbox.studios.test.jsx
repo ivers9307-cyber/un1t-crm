@@ -165,5 +165,7 @@ describe('the studio switch', () => {
     await screen.findByText('mia-1')
     expect(urls()).toEqual(['/api/approvals/pending?scope=all', '/api/approvals/pending'])
     expect(screen.queryByRole('button', { name: 'All my studios' })).toBeNull()
+    // The saved choice is dropped, so the next visit makes one request, not two.
+    expect(localStorage.getItem('un1t-approvals-scope')).toBeNull()
   })
 })

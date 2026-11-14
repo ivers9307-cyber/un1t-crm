@@ -70,14 +70,26 @@ export default function ApprovalsInbox({ timezone = null, activeStudioId = null 
     setScope(next)
   }
 
+  // Every load takes a number; an answer is applied only while its number is
+  // still the latest, so a slow "All my studios" reply can never overwrite a
+  // later "This studio" one (loading and error follow the same rule).
+  const latestLoad = useRef(0)
+
   const load = useCallback(async () => {
+    const mine = ++latestLoad.current
+    const isLatest = () => latestLoad.current === mine
     setLoading(true)
     setError(null)
     let ok = false
     try {
       let data = await fetchPending(scope === 'all' ? PENDING_ALL_URL : PENDING_URL)
       // One studio is nothing to combine: the plain list, with no studio chips.
-      if (scope === 'all' && (data.studios || []).length < 2) data = await fetchPending(PENDING_URL)
+      if (scope === 'all' && (data.studios || []).length < 2) {
+        // The saved choice no longer applies: forget it, so the next visit asks once.
+        if (isLatest()) { try { window.localStorage.removeItem(SCOPE_KEY) } catch { /* storage unavailable */ } }
+        data = await fetchPending(PENDING_URL)
+      }
+      if (!isLatest()) return false
       const j = { data }
       setStudios(j.data.studios || [])
       setAllInfo(j.data.scope === 'all'
@@ -95,9 +107,9 @@ export default function ApprovalsInbox({ timezone = null, activeStudioId = null 
       ok = true
       setLoadedCount((n) => n + 1)
     } catch (e) {
-      setError(e.message)
+      if (isLatest()) setError(e.message)
     } finally {
-      setLoading(false)
+      if (isLatest()) setLoading(false)
     }
     return ok // true when the response arrived and was applied
   }, [scope])

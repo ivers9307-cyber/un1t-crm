@@ -9,7 +9,7 @@
 import { useRef, useState } from 'react'
 import { Button } from '@/components/ui'
 import { TEAM_ACTIONS } from '@/lib/approvals/team-actions'
-import { studioChip } from '@/lib/approvals/studio-request'
+import { studioChip, metaIsPlace } from '@/lib/approvals/studio-request'
 import CustomerCardShell from './CustomerCardShell'
 import StudioLink from './StudioLink'
 import { formatApprovalDateTime } from './format-date-time'
@@ -151,6 +151,7 @@ export default function TeamDecideCard({
       name={item.title}
       studio={studioChip(item, activeStudioId)}
       meta={item.meta}
+      metaIsPlace={metaIsPlace(providerKey)}
       when={`Submitted ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       amount={amount}
       summary={item.subtitle}
