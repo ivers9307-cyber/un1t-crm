@@ -339,6 +339,8 @@ describe('editChangesFromInput', () => {
       waves: [{ id: 'w1', start_time: '10:00' }],
       // SHELLYEVENTS.2 — the sessions with no id yet, for the studio-hours rule.
       new_session_times: ['14:00'],
+      // Always present, null when the body leaves it out (as the route writes it).
+      duration_minutes: null,
     })
   })
   it('tolerates a body with no sessions array', () => {
@@ -396,6 +398,12 @@ describe('reReviewReasons — longer studio hours on a linked event (SHELLYEVENT
     // No duration is the 120 minute default: 90 is shorter, 150 is longer.
     expect(reReviewReasons({ ...linked, duration_minutes: null }, { ...same, duration_minutes: 90 })).toEqual([])
     expect(reReviewReasons({ ...linked, duration_minutes: null }, { ...same, duration_minutes: 150 })).toEqual(['studio_hours'])
+  })
+
+  it('a body that leaves the duration out is judged as "no duration", the 2 hour default', () => {
+    // Approved at 60 minutes; the route would write null, which holds for 120.
+    expect(reReviewReasons(linked, { ...same, duration_minutes: editChangesFromInput({ sessions: [] }).duration_minutes })).toEqual(['studio_hours'])
+    expect(editChangesFromInput({ sessions: [] }).duration_minutes).toBeNull()
   })
 
   it('a duration change is nothing when staff set the hold time', () => {

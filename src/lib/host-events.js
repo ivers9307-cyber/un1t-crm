@@ -160,7 +160,10 @@ export function editChangesFromInput(input) {
     ...('venue_location_id' in input ? { venue_location_id: input.venue_location_id ?? null } : {}),
     // SHELLYEVENTS.2 — what the studio-hours rule reads.
     new_session_times: sessions.filter((s) => !s.id).map((s) => s.start_time),
-    ...('duration_minutes' in input ? { duration_minutes: input.duration_minutes ?? null } : {}),
+    // ALWAYS present, as the PUT route writes it (`input.duration_minutes ??
+    // null`): a body that leaves the key out is written as "no duration",
+    // which is the 2 hour default hold and can be LONGER than what was approved.
+    duration_minutes: input.duration_minutes ?? null,
   }
 }
 
