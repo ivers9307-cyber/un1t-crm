@@ -444,6 +444,11 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       .catch(() => {})
     return () => { cancelled = true }
   }, [locationId, hostId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // SHELLYEVENTS.2 — where the event is held, and how long it holds that
+  // studio on. '' = the default (a studio's own event: this studio; a host
+  // event: somewhere else), a studio id, or 'offsite' (own events only).
+  const [venueChoice, setVenueChoice] = useState(race?.held_offsite ? 'offsite' : (race?.venue_location_id || ''))
+  const [studioHold, setStudioHold] = useState(race?.studio_hold_minutes != null ? String(race.studio_hold_minutes) : '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -658,6 +663,11 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       pricing_tiers: pricingTiers.length > 0 ? pricingTiers : null,
       registration_questions: registrationQuestions.length > 0 ? registrationQuestions : null,
       duration_minutes: durationMinutes.trim() === '' ? null : parseInt(durationMinutes, 10),
+      // SHELLYEVENTS.2 — a host event has no "off-site" choice ('' already
+      // means somewhere else), so the flag is only ever set on an own event.
+      venue_location_id: venueChoice && venueChoice !== 'offsite' ? venueChoice : null,
+      held_offsite: !hostId && venueChoice === 'offsite',
+      studio_hold_minutes: studioHold.trim() === '' ? null : parseInt(studioHold, 10),
       // WAVEWIN.2 — race only; the default and every other kind save null.
       wave_window_minutes: meta.showWaves && waveWindow !== '' ? parseInt(waveWindow, 10) : null,
       // TV logos: race-only. For non-race kinds we send an empty
@@ -1316,6 +1326,44 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
           />
           <p className="text-[11px] text-un1t-muted mt-1">For the calendar entry customers add. Blank = {kind === 'race' ? '2 hours' : '1 hour'}.</p>
         </div>
+
+        {/* SHELLYEVENTS.2 — the studio it is held at keeps that studio's
+            lights, power and air conditioning on for the event. */}
+        {!meta.isLeadGen && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="re-held-at" className="block text-sm text-un1t-subtle mb-1">Where is it held?</label>
+              <select
+                id="re-held-at"
+                value={venueChoice}
+                onChange={(e) => setVenueChoice(e.target.value)}
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              >
+                <option value="">{hostId ? 'Somewhere else' : 'This studio'}</option>
+                {locationOptions.filter((o) => hostId || o.id !== locationId).map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+                {!hostId && <option value="offsite">Somewhere else</option>}
+              </select>
+              <p className="text-[11px] text-un1t-muted mt-1">The studio is kept on while the event runs. Somewhere else leaves every studio alone.</p>
+            </div>
+            <div>
+              <label htmlFor="re-studio-hold" className="block text-sm text-un1t-subtle mb-1">Keep the studio on for (minutes) <span className="text-un1t-muted">(optional)</span></label>
+              <input
+                id="re-studio-hold"
+                type="number"
+                min={15}
+                max={1440}
+                step={5}
+                value={studioHold}
+                onChange={(e) => setStudioHold(e.target.value)}
+                placeholder="120"
+                className="w-40 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              />
+              <p className="text-[11px] text-un1t-muted mt-1">Counted from the last start time. Customers never see it. Blank = the duration above, or 2 hours.</p>
+            </div>
+          </div>
+        )}
 
         {/* QUESTIONS.1 — asked at signup; answers appear on the Teams page and in the export. */}
         <div>

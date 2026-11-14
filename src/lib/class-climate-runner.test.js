@@ -8,6 +8,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+// SHELLYEVENTS.2 — the event sessions read is its own module (tested in
+// src/lib/shelly/studio-events.test.js); here it is a stub, empty by default.
+const loadEventSessionsBetween = vi.fn(async () => ({ ok: true, occurrences: [] }))
+vi.mock('@/lib/shelly/studio-events', () => ({ loadEventSessionsBetween: (...a) => loadEventSessionsBetween(...a) }))
+vi.mock('@/lib/location-time', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getLocationZone: vi.fn(async () => 'Europe/Dublin'),
+}))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(() => Promise.resolve()) }))
 
 const vendorTurnOn = vi.fn()
