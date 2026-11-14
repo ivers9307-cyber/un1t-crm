@@ -20,8 +20,7 @@
 // location's features in one query and filters row-by-row.
 
 import { viewerActiveLocationId, filterRowsByLocationBundle } from '../registry'
-
-const REVIEWER_ROLES = ['master', 'owner', 'manager']
+import { canReviewHostEvents } from '@/lib/host-event-review-access'
 
 function viewerOrgId(user) {
   return user?.activeOrganization?.id || user?.activeLocation?.organization_id || null
@@ -39,11 +38,10 @@ export const hostEventsProvider = {
   label: 'Host events',
   reviewBase: '/settings/hosts',
 
-  // Reviewer roles only — mirrors the review route's ADMIN_ROLES gate
-  // (+ master). Others see no tab rather than an inert one.
+  // Reviewer roles only. The review route uses the same function
+  // (canReviewHostEvents), so what is shown is what can be decided.
   isVisible(user) {
-    return REVIEWER_ROLES.includes(user?.role) ||
-      REVIEWER_ROLES.includes(user?.rolesByLocation?.[viewerActiveLocationId(user)])
+    return canReviewHostEvents(user, viewerActiveLocationId(user))
   },
 
   async fetchPending(db, user) {
