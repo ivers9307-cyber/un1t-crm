@@ -264,11 +264,12 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onItemUndo
       onItemDecided?.(it.providerKey)
     }
     // APPROVALSQ.5 — an undone clear: waiting again and selectable again. Its
-    // kept entry restarts its clock, so the restored card is not dropped by a
-    // reload that has not caught up with the undo.
+    // kept entry is removed outright, so from then on the card shows only while
+    // the server still returns the request (a colleague who decides it next
+    // makes it leave on the next reload, not up to 120 seconds later).
     const onUndone = () => {
       setDecided((prev) => { const next = new Set(prev); next.delete(it.id); return next })
-      setClearedCards((m) => (m.has(cardKey(it)) ? new Map(m).set(cardKey(it), { item: it, at: Date.now() }) : m))
+      setClearedCards((m) => { if (!m.has(cardKey(it))) return m; const next = new Map(m); next.delete(cardKey(it)); return next })
       onItemUndone?.(it.providerKey)
     }
     return <Card key={cardKey(it)} item={it} onDecided={onDecided} onUndone={onUndone} timezone={timezone} {...bulk} />

@@ -621,7 +621,7 @@ describe('ApprovalsInbox undo of a single clear', () => {
   })
 
   it('an undo puts the count and the total back up by one, and the card is selectable again', async () => {
-    const api = mockReloadable()
+    mockReloadable()
     render(<ApprovalsInbox />)
     await screen.findByText('mia-1')
     fireEvent.click(screen.getByRole('button', { name: 'clear-mia-1' }))
@@ -632,10 +632,22 @@ describe('ApprovalsInbox undo of a single clear', () => {
     expect(screen.getByRole('button', { name: /^All 7/ })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Select' }))
     expect(boxes()).toContain('select-mia-1')
-    // the restored card survives a reload that has not caught up yet
+  })
+
+  it('an undone card is no longer kept: gone once the server stops returning it, shown once while it does', async () => {
+    const api = mockReloadable()
+    render(<ApprovalsInbox />)
+    await screen.findByText('mia-1')
+    fireEvent.click(screen.getByRole('button', { name: 'clear-mia-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'undo-mia-1' }))
+    // someone else decides it: the next reload no longer returns it
     api.set(without('mia-1'))
     await refresh()
-    expect(screen.getByText('mia-1')).toBeTruthy()
+    expect(screen.queryByText('mia-1')).toBeNull()
+    // and the card shows once when the server still returns it
+    api.set(miaItems())
+    await refresh()
+    expect(screen.getAllByText('mia-1')).toHaveLength(1)
   })
 
   it('a cleared card is not selectable in select mode', async () => {

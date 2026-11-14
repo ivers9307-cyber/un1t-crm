@@ -56,8 +56,13 @@ export default function ApprovalActionCard({
   const zone = resolveZone(timezone)
   // APPROVALSQ.5 — what an undo put back, laid over the prop so the card
   // reads the request as restored even if the parent has not caught up.
-  const [restored, setRestored] = useState(null)
-  const request = restored ? { ...requestProp, ...restored } : requestProp
+  // It is dropped when the prop's own status moves away from the status it had
+  // at the undo (someone else decided it, the parent caught up) and on every
+  // successful decision here; until then a prop that has not caught up keeps
+  // reading as restored. Derived, never set during render.
+  const [restored, setRestored] = useState(null) // { data, base } | null
+  const overlayLive = restored && requestProp.status === restored.base
+  const request = overlayLive ? { ...requestProp, ...restored.data } : requestProp
   // When this card's quiet clear answered (the Undo window runs from here), and
   // whether the route said the clear can no longer be undone.
   const [clearedAt, setClearedAt] = useState(null)
@@ -128,11 +133,11 @@ export default function ApprovalActionCard({
         return
       }
       setClearOpen(false)
+      setRestored(null)
       if (silent) {
         setClearedHere(true) // show the result even before the parent re-renders us
         setClearedAt(Date.now())
         setUndoGone(false)
-        setRestored(null)
       }
       onDecided?.({ ...request, ...data.request })
       // CANCEL-FORM.5 — whether the member heard about a pause/cancellation decision.
@@ -171,7 +176,7 @@ export default function ApprovalActionCard({
         if (res.status === 409) setUndoGone(true)
         return
       }
-      setRestored(res.request)
+      setRestored({ data: res.request, base: requestProp.status })
       setClearedHere(false)
       setClearedAt(null)
       setNotified(null)
