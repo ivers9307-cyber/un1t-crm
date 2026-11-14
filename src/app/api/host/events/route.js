@@ -14,6 +14,7 @@ import { HostEventSchema, hostEventDefaults, ensureAnchorLocation } from '@/lib/
 import { eventSlug, uniqueEventSlug } from '@/lib/event-slug'
 import { syncEventSessions } from '@/lib/event-sessions'
 import { hostOwnsSeries } from '@/lib/event-series'
+import { judgeVenueStudio } from '@/lib/event-venue-studio'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -60,6 +61,11 @@ export async function POST(request) {
     .single()
   if (!host) return NextResponse.json({ success: false, error: 'Host not found' }, { status: 404 })
 
+  // SHELLYEVENTS.1 — the studio it is held at must be one of the host's
+  // organisation's own.
+  const venue = await judgeVenueStudio(db, { organizationId: host.organization_id, venueLocationId: input.venue_location_id })
+  if (!venue.ok) return NextResponse.json({ success: false, error: venue.error, message: 'That studio is not available. Pick another, or choose somewhere else.' }, { status: 400 })
+
   const locationId = await ensureAnchorLocation(db, host)
 
   // EVENT-SLUG.1 — /event/hatch-oct18-1100: venue + date + session time.
@@ -95,6 +101,7 @@ export async function POST(request) {
       accent_hex: input.accent_hex ?? null,
       venue_name: input.venue_name,
       venue_address: input.venue_address ?? null,
+      venue_location_id: venue.venueLocationId,
       confirmation_email_subject: input.confirmation_email_subject ?? null,
       confirmation_email_intro: input.confirmation_email_intro ?? null,
       reminder_email_subject: input.reminder_email_subject ?? null,

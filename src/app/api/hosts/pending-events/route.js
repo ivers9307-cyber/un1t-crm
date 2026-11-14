@@ -22,7 +22,7 @@ export async function GET() {
 
   const { data: events } = await db
     .from('race_events')
-    .select('id, host_id, name, venue_name, venue_address, race_date, non_member_fee_cents, description, submitted_at, race_waves ( start_time, capacity )')
+    .select('id, host_id, name, venue_name, venue_address, venue_studio:locations!venue_location_id ( name ), race_date, non_member_fee_cents, description, submitted_at, race_waves ( start_time, capacity )')
     .in('host_id', hostIds)
     .eq('status', 'pending_review')
     .order('submitted_at', { ascending: true })

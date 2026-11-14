@@ -183,6 +183,9 @@ export const HostEventSchema = z
     accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().nullable(),
     venue_name: z.string().trim().min(1).max(200),
     venue_address: z.string().trim().max(500).optional().nullable(),
+    // SHELLYEVENTS.1 — the studio the event is held at (mig 832); null =
+    // somewhere else. Judged by judgeVenueStudio before it is written.
+    venue_location_id: uuidLike.nullable().optional(),
     confirmation_email_subject: z.string().max(300).optional().nullable(),
     confirmation_email_intro: z.string().max(5000).optional().nullable(),
     reminder_email_subject: z.string().max(300).optional().nullable(),

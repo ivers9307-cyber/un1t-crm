@@ -90,6 +90,7 @@ import { AUTH_ERROR, HOST_ERROR } from './connections'
 import { effectiveTarget, GROUP_COLUMNS } from './effective'
 import { safetyTimersOn } from './safety-timers'
 import { runShellyAlerts } from './alerts'
+import { loadDayEvents } from './studio-events'
 
 const MODULE = 'shelly-reconcile'
 
@@ -257,7 +258,8 @@ export async function loadTodayOccurrences(db, locationId, tz, nowMs) {
 
 /**
  * One LOCAL day's live class occurrences for one location (SHELLYGROUPS.5:
- * the day preview asks for a date that is not today).
+ * the day preview asks for a date that is not today), plus the events held at
+ * the studio that day (SHELLYEVENTS.1, ./studio-events.js).
  *
  * The end bound is the next local midnight resolved in the zone, never
  * start + 24h: on a DST day the local day is 23 or 25 hours long, and a flat
@@ -291,12 +293,21 @@ export async function loadDayOccurrences(db, locationId, tz, dayStr) {
     // a missing occurrence is a class whose window never opens.
     .limit(MAX_OCCURRENCES + 1)
   if (error) return { ok: false, error: error.message }
-  const rows = data || []
+  let rows = data || []
   if (rows.length > MAX_OCCURRENCES) {
     logWarn(MODULE, 'occurrence cap exceeded, excess occurrences skipped this tick', { locationId, cap: MAX_OCCURRENCES })
-    return { ok: true, occurrences: rows.slice(0, MAX_OCCURRENCES) }
+    rows = rows.slice(0, MAX_OCCURRENCES)
   }
-  return { ok: true, occurrences: rows }
+  // SHELLYEVENTS.1 — events held at the studio count like classes (each row
+  // carries kind 'event'; the engine reads only the instants). A failed event
+  // read fails the whole load: "unknown" must hold the studio's state, never
+  // read as "no event" and switch it off mid-event.
+  const events = await loadDayEvents(db, locationId, tz, dayStr)
+  if (!events.ok) return { ok: false, error: `events: ${events.error}` }
+  if (!events.occurrences.length) return { ok: true, occurrences: rows }
+  const merged = [...rows, ...events.occurrences]
+    .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime())
+  return { ok: true, occurrences: merged }
 }
 
 /**
