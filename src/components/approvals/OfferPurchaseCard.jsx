@@ -8,13 +8,7 @@ import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui'
 import CustomerCardShell from './CustomerCardShell'
-
-function formatDateTime(s) {
-  if (!s) return '—'
-  try {
-    return new Date(s).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })
-  } catch { return s }
-}
+import { formatApprovalDateTime } from './format-date-time'
 
 // The provider's subtitle is "<offer name> · <price>" (formatEuro in
 // src/lib/sale-offers.js: whole euros, en-IE). The card already shows the
@@ -28,7 +22,7 @@ export function summaryWithoutPrice(subtitle, amount) {
   return subtitle.length > suffix.length && subtitle.endsWith(suffix) ? subtitle.slice(0, -suffix.length) : subtitle
 }
 
-export default function OfferPurchaseCard({ item, onDecided }) {
+export default function OfferPurchaseCard({ item, onDecided, timezone = null }) {
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState(null) // { tone, text }
   const inFlight = useRef(false)
@@ -68,7 +62,7 @@ export default function OfferPurchaseCard({ item, onDecided }) {
       state={{ label: 'Paid, not set up', tone: 'amber' }}
       name={item.title}
       meta={item.meta}
-      when={`Paid ${formatDateTime(item.submittedAt)}`}
+      when={`Paid ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       amount={`€${Number(item.amount || 0).toFixed(2)}`}
       summary={summaryWithoutPrice(item.subtitle, item.amount)}
       links={item.reviewUrl && <Link href={item.reviewUrl} className="underline text-un1t-subtle">Open offer sales</Link>}

@@ -34,7 +34,7 @@ export default async function ApprovalsPage() {
           Everything waiting on you. Customer items are decided right here; team and money items open their own page.
         </p>
       </header>
-      <ApprovalsInbox />
+      <ApprovalsInbox timezone={user.activeLocation?.timezone ?? null} />
     </div>
   )
 }

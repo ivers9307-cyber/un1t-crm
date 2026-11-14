@@ -10,15 +10,9 @@ import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
+import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 
-function formatDateTime(s) {
-  if (!s) return '—'
-  try {
-    return new Date(s).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })
-  } catch { return s }
-}
-
-export default function CorpPromoClaimCard({ item, onDecided }) {
+export default function CorpPromoClaimCard({ item, onDecided, timezone = null }) {
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState(null) // { tone, text }
   const inFlight = useRef(false)
@@ -51,7 +45,7 @@ export default function CorpPromoClaimCard({ item, onDecided }) {
       state={{ label: 'Credits not added', tone: 'amber' }}
       name={item.title}
       meta={item.meta}
-      when={`Claimed ${formatDateTime(item.submittedAt)}`}
+      when={`Claimed ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       summary={item.subtitle}
       contact={(
         <>

@@ -59,4 +59,12 @@ describe('AgentRequestsClient studio clock', () => {
     await screen.findByText('Ann')
     expect(text()).toContain('From 1 Dec 2026 to 15 Dec 2026')
   })
+
+  it('leaves an impossible calendar date as written, never 1970', async () => {
+    list = [{ ...decided(null), status: 'pending', details: { start_date: '2026-02-30', end_date: '2026-12-15' } }]
+    render(<AgentRequestsClient timezone="America/New_York" />)
+    await screen.findByText('Ann')
+    expect(text()).toContain('From 2026-02-30 to 15 Dec 2026')
+    expect(text()).not.toContain('1970')
+  })
 })

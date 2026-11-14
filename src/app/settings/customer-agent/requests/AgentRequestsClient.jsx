@@ -32,6 +32,8 @@ function fmtDate(d, zone) {
   if (!d) return null
   try {
     const instant = CALENDAR_DAY.test(d) ? zonedWallClockToInstant(d, '12:00', zone) : new Date(d)
+    // An impossible day (2026-02-30) solves to null; formatting null would print the epoch.
+    if (instant == null) return d
     return formatInZone(instant, zone, { day: 'numeric', month: 'short', year: 'numeric' })
   } catch { return d }
 }
