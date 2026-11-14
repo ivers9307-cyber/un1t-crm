@@ -19,6 +19,8 @@ import { RefreshCw, ChevronRight } from 'lucide-react'
 import AgentRequestDecideCard from '@/components/AgentRequestDecideCard'
 import TrialPurchaseReviewCard from '@/components/TrialPurchaseReviewCard'
 import CorpPromoClaimCard from '@/components/CorpPromoClaimCard'
+import OfferPurchaseCard from '@/components/approvals/OfferPurchaseCard'
+import { buildCustomerQueue, filterQueue, teamProviders } from '@/lib/approvals/customer-queue'
 
 function formatDateTime(s) {
   if (!s) return '—'
@@ -39,6 +41,8 @@ export default function ApprovalsInbox() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [activeKey, setActiveKey] = useState(null)
+  const [view, setView] = useState(null) // 'customers' | 'team'; chosen on first load
+  const [chip, setChip] = useState('all')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -49,11 +53,18 @@ export default function ApprovalsInbox() {
       if (!j.success) throw new Error(j.error || 'Failed to load')
       setProviders(j.data.providers || [])
       setTotal(j.data.total || 0)
-      // Pick the first non-empty tab on first load, else first tab.
+      // Pick the first non-empty team tab on first load, else first tab.
+      const team = teamProviders(j.data.providers || [])
       setActiveKey((prev) => {
-        if (prev && (j.data.providers || []).some((p) => p.key === prev)) return prev
-        const firstWithItems = (j.data.providers || []).find((p) => p.count > 0)
-        return (firstWithItems || j.data.providers?.[0])?.key || null
+        if (prev && team.some((p) => p.key === prev)) return prev
+        const firstWithItems = team.find((p) => p.count > 0)
+        return (firstWithItems || team[0])?.key || null
+      })
+      // Open on Customers when something waits there or there is no team view.
+      setView((prev) => {
+        if (prev) return prev
+        const q = buildCustomerQueue(j.data.providers || [])
+        return q.total > 0 || team.length === 0 ? 'customers' : 'team'
       })
     } catch (e) {
       setError(e.message)
@@ -72,7 +83,15 @@ export default function ApprovalsInbox() {
     return () => window.removeEventListener('focus', onFocus)
   }, [load])
 
-  const active = providers.find((p) => p.key === activeKey) || null
+  const team = teamProviders(providers)
+  const queue = buildCustomerQueue(providers)
+  const hasCustomers = queue.chips.length > 0
+  const teamCount = team.reduce((sum, p) => sum + (p.count || 0), 0)
+  const hasTeam = team.length > 0
+  const shownView = view === 'team' && hasTeam ? 'team'
+    : view === 'customers' && hasCustomers ? 'customers'
+      : hasCustomers ? 'customers' : 'team'
+  const active = team.find((p) => p.key === activeKey) || null
 
   // AGENT-REQ-UX.1 — an inline decision resolved one pending item. Drop the
   // badge counts immediately; the card itself keeps rendering its outcome
@@ -85,8 +104,16 @@ export default function ApprovalsInbox() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {hasCustomers && hasTeam && (
+            <div className="flex items-center gap-1 border border-un1t-border rounded-lg p-1 bg-un1t-bg/40">
+              <ViewButton active={shownView === 'customers'} count={queue.total} onClick={() => setView('customers')}>Customers</ViewButton>
+              <ViewButton active={shownView === 'team'} count={teamCount} onClick={() => setView('team')}>Team and money</ViewButton>
+            </div>
+          )}
+          {shownView === 'team' && (
         <div className="flex items-center gap-1 border border-un1t-border rounded-lg p-1 bg-un1t-bg/40 flex-wrap">
-          {providers.map((p) => {
+          {team.map((p) => {
             const isActive = p.key === activeKey
             return (
               <button
@@ -111,6 +138,8 @@ export default function ApprovalsInbox() {
             )
           })}
         </div>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-un1t-subtle">
             {total === 0 ? 'All clear' : `${total} pending`}
@@ -133,12 +162,91 @@ export default function ApprovalsInbox() {
         </div>
       )}
 
-      <ProviderList provider={active} loading={loading} onItemDecided={onItemDecided} />
+      {shownView === 'customers'
+        ? <CustomerList queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} />
+        : <ProviderList provider={active} loading={loading} />}
     </div>
   )
 }
 
-function ProviderList({ provider, loading, onItemDecided }) {
+function Badge({ count, active }) {
+  if (!(count > 0)) return null
+  return (
+    <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full ${
+      active ? 'bg-un1t-bg text-un1t-text' : 'bg-red-500 text-white'
+    }`}>
+      {count > 99 ? '99+' : count}
+    </span>
+  )
+}
+
+function ViewButton({ active, count, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2 ${
+        active ? 'bg-un1t-text text-un1t-bg font-medium' : 'text-un1t-subtle hover:text-un1t-text'
+      }`}
+    >
+      {children}
+      <Badge count={count} active={active} />
+    </button>
+  )
+}
+
+const CARDS = {
+  agent_requests: AgentRequestDecideCard,
+  trial_purchases: TrialPurchaseReviewCard,
+  corp_promo_claims: CorpPromoClaimCard,
+  offer_purchases: OfferPurchaseCard,
+}
+
+function CustomerList({ queue, chip, setChip, loading, onItemDecided }) {
+  // A chip whose provider vanished on a reload falls back to All.
+  const key = queue.chips.some((c) => c.key === chip) ? chip : 'all'
+  const { needsFixing, waiting } = filterQueue(queue, key)
+  const renderCard = (it) => {
+    const Card = CARDS[it.providerKey]
+    if (!Card) return null
+    return <Card key={`${it.providerKey}-${it.id}`} item={it} onDecided={() => onItemDecided?.(it.providerKey)} />
+  }
+  const chipClass = (on) => `px-3 py-1 text-xs rounded-full border transition-colors flex items-center gap-1.5 ${
+    on ? 'bg-un1t-text text-un1t-bg border-un1t-text font-medium' : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
+  }`
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button type="button" onClick={() => setChip('all')} className={chipClass(key === 'all')}>
+          All <span className="tabular-nums">{queue.total}</span>
+        </button>
+        {queue.chips.map((c) => (
+          <button key={c.key} type="button" onClick={() => setChip(c.key)} className={chipClass(key === c.key)}>
+            {c.label} <span className="tabular-nums">{c.count}</span>
+          </button>
+        ))}
+      </div>
+      {needsFixing.length === 0 && waiting.length === 0 ? (
+        <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
+          {loading ? 'Loading…' : 'Nothing waiting on customers.'}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {needsFixing.length > 0 && (
+            <p className="text-xs font-semibold text-red-700 uppercase tracking-wider">Needs fixing</p>
+          )}
+          {needsFixing.map(renderCard)}
+          {needsFixing.length > 0 && waiting.length > 0 && (
+            <p className="text-xs font-semibold text-un1t-subtle uppercase tracking-wider pt-2">Waiting</p>
+          )}
+          {waiting.map(renderCard)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ProviderList({ provider, loading }) {
   if (!provider) {
     return (
       <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
@@ -151,60 +259,6 @@ function ProviderList({ provider, loading, onItemDecided }) {
     return (
       <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
         Nothing pending in {provider.label.toLowerCase()}. <Link href={provider.reviewBase} className="underline">Open {provider.label}</Link>
-      </div>
-    )
-  }
-  // AGENT-REQ-UX.1 — agent requests decide in place; a customer is waiting.
-  // AGENT-RETRY.2 — failed executions render first (that customer has been
-  // waiting longest and was told nothing), as fix-&-retry cards.
-  if (provider.key === 'agent_requests') {
-    return (
-      <div className="space-y-3">
-        {failedItems.length > 0 && (
-          <p className="text-xs font-semibold text-red-700 uppercase tracking-wider">Failed — fix &amp; retry</p>
-        )}
-        {failedItems.map((it) => (
-          <AgentRequestDecideCard
-            key={it.id}
-            item={it}
-            onDecided={() => onItemDecided?.(provider.key)}
-          />
-        ))}
-        {failedItems.length > 0 && provider.items.length > 0 && (
-          <p className="text-xs font-semibold text-un1t-subtle uppercase tracking-wider pt-2">Waiting for review</p>
-        )}
-        {provider.items.map((it) => (
-          <AgentRequestDecideCard
-            key={it.id}
-            item={it}
-            onDecided={() => onItemDecided?.(provider.key)}
-          />
-        ))}
-      </div>
-    )
-  }
-  // PAIDTRIAL.2 — paid trials whose Glofox grant needs a hand are resolved in
-  // place (retry the processor, or mark granted after doing it in Glofox).
-  if (provider.key === 'trial_purchases') {
-    return (
-      <div className="space-y-3">
-        {provider.items.map((it) => (
-          <TrialPurchaseReviewCard
-            key={it.id}
-            item={it}
-            onDecided={() => onItemDecided?.(provider.key)}
-          />
-        ))}
-      </div>
-    )
-  }
-  // CORPPROMO.1 — a /corp claim whose credits need a hand: Mark handled in place.
-  if (provider.key === 'corp_promo_claims') {
-    return (
-      <div className="space-y-3">
-        {provider.items.map((it) => (
-          <CorpPromoClaimCard key={it.id} item={it} onDecided={() => onItemDecided?.(provider.key)} />
-        ))}
       </div>
     )
   }
