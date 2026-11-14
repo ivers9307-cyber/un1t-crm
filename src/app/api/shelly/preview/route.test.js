@@ -89,7 +89,7 @@ describe('GET /api/shelly/preview', () => {
   it('counts an event held at the studio like a class, and lists it apart (SHELLYEVENTS.1)', async () => {
     // Saturday 29 Aug: weekday-only classes, so only the event opens the group.
     const w = world([groupRow({ enabled: true, schedule_mode: 'class', class_rule: { lead_min: 30, lag_min: 45, merge_gap_min: 30 } })], [])
-    w.rows.race_events = [{ id: 'ev1', name: 'PTC', race_date: '2026-08-29', active: true, status: 'published', waves: [{ start_time: '10:30:00' }, { start_time: '12:15:00' }] }]
+    w.rows.race_events = [{ id: 'ev1', name: 'PTC', race_date: '2026-08-29', active: true, status: 'published', held_offsite: false, waves: [{ start_time: '10:30:00' }, { start_time: '12:15:00' }] }]
     useDb(w)
     const body = await (await get('?date=2026-08-29')).json()
     expect(body.classes).toEqual([])

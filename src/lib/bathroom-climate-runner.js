@@ -17,6 +17,7 @@ import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 import { logAuditEvent } from '@/lib/audit'
 import { logWarn, logError } from '@/lib/log'
 import { getLocationZone, getLocationZones, LocationZoneReadError } from '@/lib/location-time'
+import { loadEventSessionsBetween } from '@/lib/shelly/studio-events'
 import { resolveConfig, planBathroomClimate, autoOffAtFor } from '@/lib/bathroom-climate'
 
 export const AUTOMATION_KEY = 'bathroom_climate'
@@ -85,7 +86,15 @@ export async function runBathroomClimateForLocation(db, automationRow, { nowMs =
     return result
   }
 
-  const planned = planBathroomClimate({ occurrences: occurrences || [], config, nowMs, zone: slotZone || undefined })
+  // SHELLYEVENTS.2 — events held at the studio count like classes: one row per
+  // event SESSION, keyed `event:<id>:<HH:MM>` where a class carries its
+  // glofox_event_id (src/lib/shelly/studio-events.js). A failed event or zone
+  // read is recorded and the classes still run: it must not stop the classes'
+  // own air conditioning, and the next tick retries the events.
+  const eventSessions = await loadEventSessions(db, locationId, slotZone, Date.parse(sinceIso), Date.parse(untilIso), result)
+  const allOccurrences = [...(occurrences || []), ...eventSessions]
+
+  const planned = planBathroomClimate({ occurrences: allOccurrences, config, nowMs, zone: slotZone || undefined })
   result.planned = planned.map((p) => ({
     glofox_event_id: p.glofox_event_id, name: p.occurrence.name, starts_at: p.occurrence.starts_at,
   }))
@@ -257,4 +266,28 @@ export async function runBathroomClimate(db, { nowMs = Date.now(), dryRun = fals
     locations.push(await runBathroomClimateForLocation(db, row, { nowMs, dryRun, zone: zones.get(row.location_id) || null }))
   }
   return { ok: true, locations }
+}
+
+// SHELLYEVENTS.2 — the event sessions held at this studio inside the window.
+// [] (with the reason pushed onto result.errors) when the zone or the events
+// cannot be read.
+async function loadEventSessions(db, locationId, zone, sinceMs, untilMs, result) {
+  let tz = zone
+  if (!tz) {
+    try {
+      tz = await getLocationZone(db, locationId)
+    } catch (err) {
+      if (!(err instanceof LocationZoneReadError)) throw err
+      logWarn('bathroom-climate', 'location timezone unreadable; events skipped this tick', { locationId, error: err.message })
+      result.errors.push('events_zone_unreadable')
+      return []
+    }
+  }
+  const events = await loadEventSessionsBetween(db, locationId, tz, sinceMs, untilMs)
+  if (!events.ok) {
+    logWarn('bathroom-climate', 'event read failed; events skipped this tick', { locationId, error: events.error })
+    result.errors.push(`events_read_failed: ${events.error}`)
+    return []
+  }
+  return events.occurrences
 }

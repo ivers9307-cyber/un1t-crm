@@ -30,7 +30,7 @@ const START = '2026-03-08T10:00:00.000Z'
 const occFor = (loc, id) => ({ glofox_event_id: id, location_id: loc, name: 'HIIT', starts_at: START, ends_at: '2026-03-08T10:45:00.000Z', cancelled_at: null })
 
 function makeDb(tables, { locationsError = null } = {}) {
-  const store = { automation_fire_log: [], ac_sessions: [], class_occurrences: [], location_automations: [], ...tables }
+  const store = { automation_fire_log: [], ac_sessions: [], class_occurrences: [], location_automations: [], race_events: [], ...tables }
   const reads = { locations: 0 }
   function builder(table) {
     const filters = []
@@ -60,6 +60,10 @@ function makeDb(tables, { locationsError = null } = {}) {
       lte(c, v) { filters.push(['lte', c, v]); return chain },
       in(c, v) { filters.push(['in', c, v]); return chain },
       is(c, v) { filters.push(['is', c, v]); return chain },
+      // SHELLYEVENTS.2 — the runners also read the events held at the studio
+      // (race_events, empty here). or() is recorded-nothing: this fake does not
+      // parse it, and studio-events.test.js pins the expression.
+      or() { return chain },
       order() { return chain },
       limit() { return chain },
       insert(p) { op = 'insert'; payload = p; return chain },
@@ -132,11 +136,15 @@ describe('TZ.10 class-climate: excluded slots are the studio\'s wall clock', () 
     expect(logWarn).toHaveBeenCalledWith('class-climate', expect.stringMatching(/timezone unreadable; location skipped/), expect.objectContaining({ locationId: NY_LOC }))
   })
 
-  it('no excluded slots: no zone is read at all', async () => {
+  // SHELLYEVENTS.2 — the zone is now read once for the studio's EVENTS (their
+  // start times are wall clock), but a class needs no zone when no slot is
+  // excluded: an unreadable zone skips the events only, and the class still runs.
+  it('no excluded slots: an unreadable zone skips the events, never the classes', async () => {
     const db = makeDb({ class_occurrences: [occFor(DUB_LOC, 'dub1')] }, { locationsError: { message: 'down' } })
     const out = await runClassClimateForLocation(db, { location_id: DUB_LOC, config: classCfg([]) }, { nowMs, dryRun: true })
     expect(out.planned.map((p) => p.glofox_event_id)).toEqual(['dub1'])
-    expect(db.reads.locations).toBe(0)
+    expect(out.errors).toEqual(['events_zone_unreadable'])
+    expect(db.reads.locations).toBe(1)
   })
 })
 

@@ -37,6 +37,9 @@ export function hostEventFormInitial(event) {
     venue_address: event.venue_address,
     // SHELLYEVENTS.1 — the studio it is held at (null = somewhere else).
     venue_location_id: event.venue_location_id ?? null,
+    // SHELLYEVENTS.2 — staff's hold time: read-only here (the off-sale
+    // warning needs it); the form never sends it back.
+    studio_hold_minutes: event.studio_hold_minutes ?? null,
     confirmation_email_subject: event.confirmation_email_subject,
     confirmation_email_intro: event.confirmation_email_intro,
     reminder_email_subject: event.reminder_email_subject,
