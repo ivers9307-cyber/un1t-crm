@@ -321,46 +321,79 @@ describe('POST /api/public/trial-purchases', () => {
     expect((await POST(req(BODY))).status).toBe(502)
   })
 
-  const OPEN_ROW = { id: 'tp-open', amount_cents: 3900, currency: 'EUR', product_name: '2 Week Trial', payment_checkout_token: 'tok-open', payment_checkout_url: null, connected_account_id: null, lead_event_id: 'lead-old12345' }
-  it("TRIALLEAK.1: a buyer with an open checkout gets that row and token back: no second row, no second order", async () => {
-    mocks.reuse.mockResolvedValue({ row: OPEN_ROW, error: null })
-    mocks.updated.mockImplementation(async (table, patch) => (table === 'trial_purchases' && 'class_event_id' in patch ? { data: [{ id: 'tp-open' }], error: null } : { error: null }))
+  const OPEN_ID = '22222222-2222-4222-8222-222222222222'
+  const OPEN_ROW = { id: OPEN_ID, amount_cents: 3900, currency: 'EUR', product_name: '2 Week Trial', payment_checkout_token: 'tok-open', payment_checkout_url: null, connected_account_id: null, lead_event_id: 'lead-old12345' }
+  // The reuse is only for a caller that PROVES it holds the row (the security review of TRIALLEAK.1).
+  it('TRIALLEAK.1: the same email with NO purchase id always gets a fresh row: the open row is never looked up, returned or changed', async () => {
+    mocks.reuse.mockResolvedValue({ row: OPEN_ROW, error: null }) // even if a lookup would find one
     const r = await POST(req({ ...BODY, event_id: 'ev9' }))
+    const { data } = await r.json()
+    expect(mocks.reuse).not.toHaveBeenCalled()
+    expect(data.purchaseId).toBe('tp1')
+    expect(data.checkout.token).toBe('tok')
+    expect(data.resumed).toBeUndefined()
+    expect(JSON.stringify(data)).not.toContain('tok-open')
+    expect(mocks.inserted).toHaveBeenCalledTimes(1)
+    expect(mocks.payment).toHaveBeenCalledTimes(1)
+    expect(trialUpdates().filter((u) => 'class_event_id' in u.patch)).toHaveLength(0)
+  })
+  it("TRIALLEAK.1: a purchase id that is not this buyer's open row gets a fresh row, and the other row is untouched", async () => {
+    // The lookup is pinned to the named id AND the contact, so it finds nothing.
+    mocks.reuse.mockResolvedValue({ row: null, error: null })
+    const WRONG = '33333333-3333-4333-8333-333333333333'
+    const r = await POST(req({ ...BODY, event_id: 'ev9', resume_purchase_id: WRONG }))
+    const { data } = await r.json()
+    expect(mocks.reuse).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ purchaseId: WRONG, contactId: 'c1' }))
+    expect(data.purchaseId).toBe('tp1')
+    expect(data.resumed).toBeUndefined()
+    expect(mocks.inserted).toHaveBeenCalledTimes(1)
+    const touched = trialUpdates().filter((u) => u.filters.some((f) => f[1] === 'id' && f[2] !== 'tp1'))
+    expect(touched).toHaveLength(0)
+    expect(trialUpdates().filter((u) => 'class_event_id' in u.patch)).toHaveLength(0)
+  })
+  it('TRIALLEAK.1: a malformed resume_purchase_id is a 400 before anything is read', async () => {
+    expect((await POST(req({ ...BODY, resume_purchase_id: "x' or 1=1" }))).status).toBe(400)
+    expect(mocks.contact).not.toHaveBeenCalled()
+  })
+  it("TRIALLEAK.1: a buyer who names their own open checkout gets that row and token back: no second row, no second order", async () => {
+    mocks.reuse.mockResolvedValue({ row: OPEN_ROW, error: null })
+    mocks.updated.mockImplementation(async (table, patch) => (table === 'trial_purchases' && 'class_event_id' in patch ? { data: [{ id: OPEN_ID }], error: null } : { error: null }))
+    const r = await POST(req({ ...BODY, event_id: 'ev9', resume_purchase_id: OPEN_ID }))
     expect(r.status).toBe(200)
     expect((await r.json()).data).toEqual({
-      purchaseId: 'tp-open', resumed: true, amount_cents: 3900, currency: 'EUR', product_name: '2 Week Trial',
+      purchaseId: OPEN_ID, resumed: true, amount_cents: 3900, currency: 'EUR', product_name: '2 Week Trial',
       checkout: { provider: 'revolut', token: 'tok-open', url: null, connectedAccountId: null },
     })
-    expect(mocks.reuse).toHaveBeenCalledWith(expect.anything(), { contactId: 'c1', locationId: 'loc1', landingPath: 'stillorgan', pageId: null, membershipId: 'm1', planCode: 'p1', amountCents: 3900, currency: 'EUR' })
+    expect(mocks.reuse).toHaveBeenCalledWith(expect.anything(), { purchaseId: OPEN_ID, contactId: 'c1', locationId: 'loc1', landingPath: 'stillorgan', pageId: null, membershipId: 'm1', planCode: 'p1', amountCents: 3900, currency: 'EUR' })
     expect(mocks.inserted).not.toHaveBeenCalled()
     expect(mocks.payment).not.toHaveBeenCalled()
     // The class picked THIS time goes on the kept row, guarded on its studio and status.
     const keep = trialUpdates().find((u) => 'class_event_id' in u.patch)
     expect(keep.patch).toEqual({ class_event_id: 'ev9', class_name: 'S&C', class_starts_at: '2099-01-05T11:00:00.000Z', lead_event_id: 'lead-abcdefgh' })
-    expect(keep.filters).toEqual(expect.arrayContaining([['eq', 'id', 'tp-open'], ['eq', 'location_id', 'loc1'], ['eq', 'status', 'awaiting_payment']]))
+    expect(keep.filters).toEqual(expect.arrayContaining([['eq', 'id', OPEN_ID], ['eq', 'contact_id', 'c1'], ['eq', 'location_id', 'loc1'], ['eq', 'status', 'awaiting_payment']]))
     expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'InitiateCheckout' }))
   })
   it('TRIALLEAK.1: no class this time clears the class on the kept row', async () => {
     mocks.reuse.mockResolvedValue({ row: OPEN_ROW, error: null })
-    mocks.updated.mockImplementation(async (table, patch) => (table === 'trial_purchases' && 'class_event_id' in patch ? { data: [{ id: 'tp-open' }], error: null } : { error: null }))
-    await POST(req(BODY))
+    mocks.updated.mockImplementation(async (table, patch) => (table === 'trial_purchases' && 'class_event_id' in patch ? { data: [{ id: OPEN_ID }], error: null } : { error: null }))
+    await POST(req({ ...BODY, resume_purchase_id: OPEN_ID }))
     expect(trialUpdates().find((u) => 'class_event_id' in u.patch).patch).toMatchObject({ class_event_id: null, class_name: null, class_starts_at: null })
   })
   it('TRIALLEAK.1: when the kept row cannot be updated (an error, or it moved on), or the read fails, a fresh row and order are made', async () => {
     mocks.reuse.mockResolvedValue({ row: OPEN_ROW, error: null })
     mocks.updated.mockImplementation(async (table, patch) => (table === 'trial_purchases' && 'class_event_id' in patch ? { data: null, error: { code: '57014' } } : { error: null }))
-    expect((await (await POST(req(BODY))).json()).data.purchaseId).toBe('tp1')
+    expect((await (await POST(req({ ...BODY, resume_purchase_id: OPEN_ID }))).json()).data.purchaseId).toBe('tp1')
     mocks.updated.mockImplementation(async (table, patch) => (table === 'trial_purchases' && 'class_event_id' in patch ? { data: [], error: null } : { error: null }))
-    expect((await (await POST(req(BODY))).json()).data.purchaseId).toBe('tp1')
+    expect((await (await POST(req({ ...BODY, resume_purchase_id: OPEN_ID }))).json()).data.purchaseId).toBe('tp1')
     mocks.reuse.mockResolvedValue({ row: null, error: { code: '57014' } })
     mocks.updated.mockResolvedValue({ error: null })
-    expect((await (await POST(req(BODY))).json()).data.purchaseId).toBe('tp1')
+    expect((await (await POST(req({ ...BODY, resume_purchase_id: OPEN_ID }))).json()).data.purchaseId).toBe('tp1')
     expect(mocks.inserted).toHaveBeenCalledTimes(3)
     expect(mocks.payment).toHaveBeenCalledTimes(3)
   })
   it('TRIALLEAK.1: Hatch never looks for an open checkout (its URL is never stored)', async () => {
     mocks.state.contact.un1t_user_id = null
-    const r = await POST(req(HATCH_BODY))
+    const r = await POST(req({ ...HATCH_BODY, resume_purchase_id: OPEN_ID }))
     expect(r.status).toBe(200)
     expect(mocks.reuse).not.toHaveBeenCalled()
     expect(mocks.inserted).toHaveBeenCalledTimes(1)

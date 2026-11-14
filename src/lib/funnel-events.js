@@ -22,10 +22,16 @@ export const VALID_STEPS = [
 const cap = (v, n = 200) => (v == null ? null : String(v).slice(0, n))
 // TRIALLEAK.1 — an ad value that is still an unfilled Meta macro
 // (`{{adset.id}}`) is stored as nothing, not as a campaign of that name.
-const adCap = (v) => cap(cleanAdValue(v))
+// cleanAdValue cuts to the same 200 characters first, then tests the cut value.
+const adCap = (v) => cleanAdValue(v) ?? null
 const cleanMeta = (meta) => {
   const out = { ...meta }
-  for (const k of ['utm_source', 'utm_medium']) if (k in out && cleanAdValue(out[k]) === undefined) delete out[k]
+  for (const k of ['utm_source', 'utm_medium']) {
+    if (!(k in out)) continue
+    const v = cleanAdValue(out[k])
+    if (v === undefined) delete out[k]
+    else out[k] = v
+  }
   return out
 }
 

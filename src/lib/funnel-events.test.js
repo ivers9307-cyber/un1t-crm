@@ -23,6 +23,16 @@ describe('parseFunnelEvent', () => {
     expect(out.meta).toEqual({ utm_medium: 'paid', count: 1 })
   })
 
+  it('TRIALLEAK.1: a very long hostile value is capped to 200 before it is judged, quickly', () => {
+    const hostile = '{'.repeat(2_000_000)
+    const started = Date.now()
+    const out = parseFunnelEvent({ step: 'view', session_id: 's', utm_term: hostile, ad_external_id: hostile, meta: { utm_source: hostile } })
+    expect(Date.now() - started).toBeLessThan(500)
+    expect(out.utm_term).toHaveLength(200)
+    expect(out.ad_external_id).toHaveLength(200)
+    expect(out.meta.utm_source).toHaveLength(200)
+  })
+
   it('defaults funnel to start and infers ad_provider=meta from an ad id', () => {
     const out = parseFunnelEvent({ step: 'view', session_id: 's', ad_external_id: '9' })
     expect(out.funnel).toBe('start')

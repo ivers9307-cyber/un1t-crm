@@ -323,6 +323,9 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
           visit: readVisitOrigin() || undefined,
           lead_event_id: leadEventId,
           return_path: returnPath,
+          // TRIALLEAK.1 — the purchase this browser already holds: the proof
+          // that lets the server hand the same open checkout back.
+          ...(purchaseIdRef.current ? { resume_purchase_id: purchaseIdRef.current } : {}),
         }),
       })
       const j = await r.json().catch(() => ({}))

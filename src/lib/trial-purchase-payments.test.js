@@ -104,26 +104,25 @@ describe('createTrialPurchasePayment (REVPAY.7)', () => {
 
 describe('findReusableTrialCheckout (TRIALLEAK.1)', () => {
   const NOW = Date.parse('2026-11-14T12:00:00.000Z')
-  const ARGS = { contactId: 'c1', locationId: 'loc1', landingPath: 'stillorgan', pageId: null, membershipId: 'm1', planCode: 'p1', amountCents: 3900, currency: 'EUR', nowMs: NOW }
-  const OPEN = { id: 'tp1', status: 'awaiting_payment', payment_status: 'pending', payment_provider: 'revolut', payment_checkout_token: 'tok', created_at: '2026-11-14T11:30:00.000Z' }
+  const ARGS = { purchaseId: 'tp1', contactId: 'c1', locationId: 'loc1', landingPath: 'stillorgan', pageId: null, membershipId: 'm1', planCode: 'p1', amountCents: 3900, currency: 'EUR', nowMs: NOW }
+  const OPEN = { id: 'tp1', contact_id: 'c1', status: 'awaiting_payment', payment_status: 'pending', payment_provider: 'revolut', payment_checkout_token: 'tok', created_at: '2026-11-14T11:30:00.000Z' }
   function reader(answer) {
     const filters = []
     const b = { select: () => b, maybeSingle: async () => answer }
-    for (const op of ['eq', 'is', 'gte', 'order', 'limit']) b[op] = (...a) => { filters.push([op, ...a]); return b }
+    for (const op of ['eq', 'is', 'gte']) b[op] = (...a) => { filters.push([op, ...a]); return b }
     return { client: { from: (t) => { filters.push(['from', t]); return b } }, filters }
   }
   const has = (filters, ...f) => filters.some((x) => JSON.stringify(x) === JSON.stringify(f))
 
-  it("hands back the buyer's own open Revolut checkout, scoped to the contact, studio, page, product and price, inside the window", async () => {
+  it("hands back the open Revolut checkout the caller NAMES, and only as this contact's, at this studio, page, product and price, inside the window", async () => {
     const { client, filters } = reader({ data: OPEN, error: null })
     expect(await findReusableTrialCheckout(client, ARGS)).toEqual({ row: OPEN, error: null })
     expect(has(filters, 'from', 'trial_purchases')).toBe(true)
     for (const f of [
-      ['eq', 'contact_id', 'c1'], ['eq', 'location_id', 'loc1'], ['eq', 'landing_path', 'stillorgan'],
+      ['eq', 'id', 'tp1'], ['eq', 'contact_id', 'c1'], ['eq', 'location_id', 'loc1'], ['eq', 'landing_path', 'stillorgan'],
       ['eq', 'status', 'awaiting_payment'], ['eq', 'payment_status', 'pending'], ['eq', 'payment_provider', 'revolut'],
       ['eq', 'membership_id', 'm1'], ['eq', 'plan_code', 'p1'], ['eq', 'amount_cents', 3900], ['eq', 'currency', 'EUR'],
       ['is', 'page_id', null], ['gte', 'created_at', new Date(NOW - TRIAL_CHECKOUT_REUSE_MS).toISOString()],
-      ['order', 'created_at', { ascending: false }], ['limit', 1],
     ]) expect(has(filters, ...f), JSON.stringify(f)).toBe(true)
   })
   it('a page purchase is matched on its page', async () => {
@@ -141,9 +140,16 @@ describe('findReusableTrialCheckout (TRIALLEAK.1)', () => {
     const error = { code: '57014' }
     expect(await findReusableTrialCheckout(reader({ data: null, error }).client, ARGS)).toEqual({ row: null, error })
   })
-  it('no contact or studio asks nothing', async () => {
+  it('no purchase id (an email or phone alone), no contact or no studio asks nothing and finds nothing', async () => {
     const { client, filters } = reader({ data: OPEN, error: null })
-    expect(await findReusableTrialCheckout(client, { ...ARGS, contactId: null })).toEqual({ row: null, error: null })
+    for (const missing of ['purchaseId', 'contactId', 'locationId']) {
+      expect(await findReusableTrialCheckout(client, { ...ARGS, [missing]: null })).toEqual({ row: null, error: null })
+    }
+    expect(await findReusableTrialCheckout(client, { ...ARGS, purchaseId: undefined })).toEqual({ row: null, error: null })
     expect(filters).toHaveLength(0)
+  })
+  it("a row that is not the named id, or not this contact's, is never returned even if the database answered with it", async () => {
+    expect((await findReusableTrialCheckout(reader({ data: { ...OPEN, id: 'tp-other' }, error: null }).client, ARGS)).row).toBeNull()
+    expect((await findReusableTrialCheckout(reader({ data: { ...OPEN, contact_id: 'c2' }, error: null }).client, ARGS)).row).toBeNull()
   })
 })

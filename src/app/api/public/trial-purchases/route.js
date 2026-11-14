@@ -89,6 +89,10 @@ const Schema = z.object({
     referrer: z.string().max(2000).optional(),
     landing_path: z.string().max(500).optional(),
   }).optional(),
+  // TRIALLEAK.1 — the purchase this browser already holds (its own state or
+  // `?purchase=`). It is the only thing that lets an open checkout be handed
+  // back: an email or phone alone never does.
+  resume_purchase_id: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i).optional(),
   // Hatch Street only: the un1t.online terms and waiver tick, required (true)
   // when the studio's un1t.online writes are on; judged below.
   terms_accepted: z.boolean().optional(),
@@ -343,12 +347,17 @@ export async function POST(request) {
 
   // TRIALLEAK.1 — the buyer's own open checkout, handed back: a second press
   // of the pay button (after Back, a failed card or a reload) gets the SAME
-  // row and order, never a second of each. Stillorgan only (a Hatch checkout
-  // URL is never stored). The class they picked this time goes on the row; if
-  // that write fails, or the read does, a fresh row is made as before.
-  if (!isHatch) {
+  // row and order, never a second of each. ONLY for a caller that proves it
+  // holds the row: the body names the purchase id its browser was given, and
+  // the row must be that id AND this contact, studio, page, product and
+  // price. A request matched by email or phone alone always gets a fresh row
+  // (as before TRIALLEAK.1) and never sees, or changes, an existing one.
+  // Stillorgan only (a Hatch checkout URL is never stored). The class they
+  // picked this time goes on the row; if that write fails, or the read does,
+  // a fresh row is made.
+  if (!isHatch && b.resume_purchase_id) {
     const reuse = await findReusableTrialCheckout(db, {
-      contactId, locationId, landingPath, pageId,
+      purchaseId: b.resume_purchase_id, contactId, locationId, landingPath, pageId,
       membershipId: product.membershipId, planCode: product.planCode,
       amountCents: product.priceCents, currency: product.currency,
     })
@@ -356,7 +365,7 @@ export async function POST(request) {
     if (reuse.row) {
       const { data: kept, error: keepErr } = await db.from('trial_purchases')
         .update({ class_event_id: null, class_name: null, class_starts_at: null, ...classColumnsFor(choice.chosen), lead_event_id: b.lead_event_id || reuse.row.lead_event_id || null })
-        .eq('id', reuse.row.id).eq('location_id', locationId).eq('status', 'awaiting_payment')
+        .eq('id', reuse.row.id).eq('contact_id', contactId).eq('location_id', locationId).eq('status', 'awaiting_payment')
         .select('id')
       if (keepErr || !kept?.length) {
         logWarn('trialbuy', 'open checkout not updated; a new one is made', { code: keepErr?.code ?? null, purchaseId: reuse.row.id })

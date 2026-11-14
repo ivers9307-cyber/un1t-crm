@@ -72,27 +72,31 @@ export async function createTrialPurchasePayment({ db, purchase, location, amoun
 
 /**
  * TRIALLEAK.1 — the buyer's own open checkout, to hand back instead of opening
- * a second row and a second order when they press pay again: the newest
- * `awaiting_payment` Revolut row of this contact at this studio and page, for
- * the same product and price, whose order is still payable
- * (trialCheckoutUsable). Never a Hatch Street row (its checkout URL is not
- * stored). A failed read is "none" (logged by the caller's choice of a fresh
- * row): reuse is a saving, never a gate.
+ * a second row and a second order when they press pay again. The caller must
+ * PROVE it holds the row: `purchaseId` is the id its own browser was given
+ * (its state, or `?purchase=`), and the row is matched on that id AND this
+ * contact, studio, page, product and price, still `awaiting_payment` on
+ * Revolut with a payable order (trialCheckoutUsable). An email or phone alone
+ * never finds a row: without the id this asks nothing, so nobody who merely
+ * knows a buyer's email is handed that buyer's checkout. Never a Hatch Street
+ * row (its checkout URL is not stored). A failed read is "none": reuse is a
+ * saving, never a gate.
  * @returns {Promise<{ row: object|null, error: object|null }>}
  */
-export async function findReusableTrialCheckout(db, { contactId, locationId, landingPath, pageId = null, membershipId, planCode, amountCents, currency, nowMs = Date.now() }) {
-  if (!contactId || !locationId) return { row: null, error: null }
+export async function findReusableTrialCheckout(db, { purchaseId, contactId, locationId, landingPath, pageId = null, membershipId, planCode, amountCents, currency, nowMs = Date.now() }) {
+  if (!purchaseId || !contactId || !locationId) return { row: null, error: null }
   let q = db.from('trial_purchases').select('*')
-    .eq('contact_id', contactId).eq('location_id', locationId).eq('landing_path', landingPath)
+    .eq('id', purchaseId).eq('contact_id', contactId).eq('location_id', locationId).eq('landing_path', landingPath)
     .eq('status', 'awaiting_payment').eq('payment_status', 'pending').eq('payment_provider', 'revolut')
     .eq('membership_id', membershipId).eq('plan_code', planCode)
     .eq('amount_cents', amountCents).eq('currency', currency || 'EUR')
     .gte('created_at', new Date(nowMs - TRIAL_CHECKOUT_REUSE_MS).toISOString())
   q = pageId ? q.eq('page_id', pageId) : q.is('page_id', null)
-  // Newest first, one row: 0 rows is the usual answer (maybeSingle).
-  const { data, error } = await q.order('created_at', { ascending: false }).limit(1).maybeSingle()
+  // Pinned by the primary key: 0 rows is the usual answer (maybeSingle).
+  const { data, error } = await q.maybeSingle()
   if (error) return { row: null, error }
-  return { row: trialCheckoutUsable(data, nowMs) ? data : null, error: null }
+  const held = data && data.id === purchaseId && data.contact_id === contactId
+  return { row: held && trialCheckoutUsable(data, nowMs) ? data : null, error: null }
 }
 
 /**

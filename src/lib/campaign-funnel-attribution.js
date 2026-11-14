@@ -16,6 +16,9 @@ const AD_PARAMS = ['utm_campaign', 'utm_content', 'utm_term', 'utm_source', 'utm
 /** The attribution keys that carry an ad's URL parameter (and so may carry an unfilled macro). */
 export const AD_VALUE_KEYS = Object.freeze(['utm_campaign', 'utm_content', 'utm_term', 'utm_source', 'utm_medium', 'meta_ad_id', 'ad_id', 'ad_external_id'])
 
+/** The longest ad value any route stores. */
+export const AD_VALUE_MAX = 200
+
 /**
  * TRIALLEAK.1 — an ad's URL parameters are macros (`{{ad.id}}`,
  * `{{adset.id}}`, `{{campaign.name}}`). Meta leaves them unfilled when the
@@ -25,21 +28,34 @@ export const AD_VALUE_KEYS = Object.freeze(['utm_campaign', 'utm_content', 'utm_
  */
 export function isUnfilledAdMacro(value) {
   if (typeof value !== 'string') return false
-  const v = value.replace(/%7B/gi, '{').replace(/%7D/gi, '}')
-  return /\{\{[^]*\}\}/.test(v)
+  // Low-trust input: only a bounded prefix is ever looked at (three times the
+  // cap, since an encoded brace is three characters), and the test is two
+  // indexOf scans (linear, no backtracking).
+  const v = value.slice(0, AD_VALUE_MAX * 3).replace(/%7B/gi, '{').replace(/%7D/gi, '}')
+  const open = v.indexOf('{{')
+  return open !== -1 && v.indexOf('}}', open + 2) !== -1
 }
 
-/** The value, or undefined when it is empty or an unfilled macro. */
+/**
+ * The value cut to AD_VALUE_MAX, or undefined when it is empty or an unfilled
+ * macro. The cut comes first, so what is tested is what would be stored.
+ */
 export function cleanAdValue(value) {
   if (value == null || value === '') return undefined
-  return isUnfilledAdMacro(String(value)) ? undefined : value
+  const capped = String(value).slice(0, AD_VALUE_MAX)
+  return isUnfilledAdMacro(capped) ? undefined : capped
 }
 
 /** A copy of an attribution object with every unfilled-macro ad value removed. */
 export function cleanAttribution(attribution) {
   if (!attribution || typeof attribution !== 'object') return attribution
   const out = { ...attribution }
-  for (const k of AD_VALUE_KEYS) if (k in out && cleanAdValue(out[k]) === undefined) delete out[k]
+  for (const k of AD_VALUE_KEYS) {
+    if (!(k in out)) continue
+    const v = cleanAdValue(out[k])
+    if (v === undefined) delete out[k]
+    else out[k] = v
+  }
   return out
 }
 

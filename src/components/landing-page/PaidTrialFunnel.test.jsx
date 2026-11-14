@@ -574,6 +574,9 @@ describe('TRIALLEAK.1 — persist, resume, fail back', () => {
     await screen.findByTestId('checkout')
     expect(posts).toHaveLength(2)
     expect(posts[1].body).toMatchObject({ first_name: 'Sam', email: 'sam@example.com', event_id: 'a' })
+    // The first press held no purchase; the second names the one this browser was given.
+    expect('resume_purchase_id' in posts[0].body).toBe(false)
+    expect(posts[1].body.resume_purchase_id).toBe(PURCHASE_ID)
   })
 
   it('a refused payment says the payment did not go through', async () => {
