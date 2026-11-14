@@ -11,9 +11,11 @@
 // (machine codes translated by whyFlagged), what the customer actually
 // said, and the contact's email/phone for a quick Glofox lookup.
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Sparkles, Copy, Check } from 'lucide-react'
+import { Button } from '@/components/ui'
+import CustomerCardShell from '@/components/approvals/CustomerCardShell'
 import { DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
 // EVENT-MOVE.7 — label, failure line and done line prefer the web-only
@@ -75,6 +77,10 @@ function notifiedSentence(notified) {
 export function outcomeLine(status, item, executed, notified = null, plannedEndDate = null) {
   const hasThread = !!item.conversationId
   const isMembership = item.kind === 'cancellation' || item.kind === 'pause'
+  // APPROVALSQ.1 — a quiet clear: closed with nothing sent. Before every other declined branch.
+  if (status === 'declined' && notified?.reason === 'cleared') {
+    return { tone: 'neutral', text: 'Cleared. The customer was not told.' }
+  }
   if (status === 'actioned' && item.kind === 'cancellation') {
     return { tone: 'ok', text: `Done. The cancellation was sent to Glofox${plannedEndDate ? ` (ends ${plannedEndDate})` : ''}.${notifiedSentence(notified)}` }
   }
@@ -131,8 +137,10 @@ export function outcomeLine(status, item, executed, notified = null, plannedEndD
 }
 
 export default function AgentRequestDecideCard({ item, onDecided }) {
-  const [busy, setBusy] = useState(null)       // 'approved' | 'declined' | 'saved' | null
+  const [busy, setBusy] = useState(null)       // 'approved' | 'declined' | 'saved' | 'cleared' | null
+  const inFlight = useRef(false)
   const [declineOpen, setDeclineOpen] = useState(false)
+  const [clearOpen, setClearOpen] = useState(false)
   const [reason, setReason] = useState(BOOKING_KINDS.has(item.kind) ? 'class_full' : 'other')
   const [note, setNote] = useState('')
   // CANCEL-FORM.5 — the end date staff confirm on a membership cancellation.
@@ -160,19 +168,22 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
   // AGENT-RETRY.1 — `retry` re-approves a just-failed execution (the route
   // accepts approve on status='failed' for executing kinds); everything
   // else decides at most once per card.
-  async function decide(status, { retry = false } = {}) {
-    if (busy || (outcome && !retry)) return
-    setBusy(status)
+  async function decide(status, { retry = false, silent = false } = {}) {
+    if (inFlight.current || (outcome && !retry)) return
+    inFlight.current = true
+    setBusy(silent ? 'cleared' : status)
     setError(null)
     try {
       const reasonLabel = (DECLINE_REASONS.find(([k]) => k === reason) || [])[1]
-      const decision_note = status === 'declined'
+      const decision_note = silent
+        ? (note.trim() || null)
+        : status === 'declined'
         ? [reasonLabel, note.trim() || null].filter(Boolean).join(' — ')
         : (note.trim() || null)
       const res = await fetch(`/api/agent/membership-requests/${item.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, decision_note, ...(item.kind === 'cancellation' && endDate ? { end_date: endDate } : {}) }),
+        body: JSON.stringify({ status, ...(silent ? { silent: true } : {}), decision_note, ...(!silent && item.kind === 'cancellation' && endDate ? { end_date: endDate } : {}) }),
       })
       const data = await res.json()
       if (!data.success) {
@@ -180,6 +191,7 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
         return
       }
       setDeclineOpen(false)
+      setClearOpen(false)
       setOutcome(outcomeLine(data.request?.status || status, item, data.executed, data.customer_notified, data.planned_end_date))
       // Only the FIRST decision moves the item out of the pending count —
       // a retry re-decides the same (already-counted) item.
@@ -190,6 +202,7 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
     } catch {
       setError('Network error — try again')
     } finally {
+      inFlight.current = false
       setBusy(null)
     }
   }
@@ -198,53 +211,143 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
     ? `/communications/inbox?c=${item.conversationId}&ch=${item.channel === 'instagram' ? 'ig' : 'wa'}`
     : null
 
-  return (
-    <div className="border border-un1t-border rounded-lg p-4 bg-un1t-surface">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="flex items-center gap-1 text-[10px] font-semibold text-mia">
-            <Sparkles size={11} />
-            MIA
-          </span>
-          <span className={`text-xs px-2 py-0.5 rounded-full ${KIND_CHIP[item.kind] || DEFAULT_KIND_CHIP}`}>
-            {kindLabel}
-          </span>
-          {isFailedItem && !outcome && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/10 text-red-700 font-semibold">Failed</span>
-          )}
-          <span className="text-sm font-medium text-un1t-text">{item.contactName || 'Customer'}</span>
-          {item.channel && <span className="text-xs text-un1t-muted">via {item.channel}</span>}
+  const showRetry = (outcome?.failed || (isFailedItem && !outcome)) && RETRYABLE_KINDS.has(item.kind)
+  const warnClear = (BOOKING_KINDS.has(item.kind) || item.kind === 'consultation') && !isFailedItem
+
+  let actions = null
+  let quietAction = null
+  if (showRetry) {
+    actions = (
+      <Button type="button" size="sm" variant="primary" disabled={!!busy} onClick={() => decide('approved', { retry: true })}>
+        {busy === 'approved' ? 'Retrying…' : 'Fixed it, retry'}
+      </Button>
+    )
+  }
+  if (!outcome && clearOpen) {
+    actions = (
+      <div className="space-y-2 max-w-sm">
+        {warnClear && (
+          <p className="text-xs text-amber-700">Mia told this customer the team would confirm. Clearing sends them nothing.</p>
+        )}
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
+        <div className="flex items-center gap-2">
+          <button type="button" disabled={!!busy} onClick={() => decide('declined', { silent: true })}
+            className="text-sm border border-red-600 text-red-700 px-3 py-1.5 rounded-md font-medium disabled:opacity-50">
+            {busy === 'cleared' ? 'Clearing…' : "Clear, don't notify"}
+          </button>
+          <button type="button" disabled={!!busy} onClick={() => { setClearOpen(false); setError(null) }}
+            className="text-sm text-un1t-muted hover:text-un1t-text">
+            Back
+          </button>
         </div>
-        <span className="text-xs text-un1t-muted shrink-0">Submitted {formatDateTime(item.submittedAt)}</span>
       </div>
+    )
+  } else if (!outcome && declineOpen) {
+    actions = (
+      <div className="space-y-2 max-w-sm">
+        <select value={reason} onChange={(e) => setReason(e.target.value)}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text">
+          {reasonOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </select>
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
+        <div className="flex items-center gap-2">
+          <button type="button" disabled={!!busy} onClick={() => decide('declined')}
+            className="text-sm bg-red-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-50">
+            {busy === 'declined' ? 'Declining…' : 'Confirm decline'}
+          </button>
+          <button type="button" onClick={() => { setDeclineOpen(false); setError(null) }}
+            className="text-sm text-un1t-muted hover:text-un1t-text">
+            Back
+          </button>
+        </div>
+      </div>
+    )
+  } else if (!outcome && !isFailedItem) {
+    actions = (
+      <>
+        <Button type="button" size="sm" variant="primary" disabled={!!busy} onClick={() => decide('approved')}>
+          {busy === 'approved' ? 'Approving…' : 'Approve'}
+        </Button>
+        {item.retentionFlagged && item.kind === 'cancellation' && (
+          <button type="button" disabled={!!busy} onClick={() => decide('saved')}
+            className="text-sm border border-blue-300 text-blue-700 px-3 py-1.5 rounded-md disabled:opacity-50">
+            {busy === 'saved' ? 'Saving…' : 'Saved (kept)'}
+          </button>
+        )}
+        <Button type="button" size="sm" variant="secondary" disabled={!!busy} onClick={() => { setDeclineOpen(true); setError(null) }}>
+          Decline and tell them
+        </Button>
+      </>
+    )
+  }
+  if (!outcome && !clearOpen && !declineOpen) {
+    quietAction = (
+      <Button type="button" size="sm" variant="secondary" disabled={!!busy} onClick={() => { setClearOpen(true); setError(null) }}>
+        Clear, don&apos;t notify
+      </Button>
+    )
+  }
 
-      <p className="text-sm text-un1t-text mt-2">{item.subtitle}</p>
-
-      {/* AGENT-FUNNEL-CREDITS.1 — what the account can book with, so the
-          decision is one glance, not a Glofox lookup. */}
+  return (
+    <CustomerCardShell
+      source={(
+        <span className="inline-flex items-center gap-1">
+          <Sparkles size={11} />
+          MIA
+        </span>
+      )}
+      kind={kindLabel}
+      sourceClassName="bg-un1t-border/30 text-mia border border-un1t-border"
+      kindClassName={KIND_CHIP[item.kind] || DEFAULT_KIND_CHIP}
+      state={isFailedItem && !outcome ? { label: 'Failed', tone: 'red' } : undefined}
+      name={item.contactName || 'Customer'}
+      meta={item.channel ? `via ${item.channel}` : undefined}
+      when={`Submitted ${formatDateTime(item.submittedAt)}`}
+      summary={item.subtitle}
+      contact={(item.contactEmail || item.contactPhone) ? (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] uppercase tracking-wide text-un1t-subtle">Glofox lookup</span>
+          <CopyValue value={item.contactEmail} />
+          <CopyValue value={item.contactPhone} />
+        </div>
+      ) : undefined}
+      links={(
+        <>
+          {conversationHref && (
+            <Link href={conversationHref} className="text-un1t-muted underline hover:text-un1t-text">Open conversation</Link>
+          )}
+          {item.reviewUrl && (
+            <Link href={item.reviewUrl} className="text-un1t-muted underline hover:text-un1t-text">Full history</Link>
+          )}
+        </>
+      )}
+      outcome={outcome}
+      error={error}
+      actions={actions}
+      quietAction={quietAction}
+    >
+      {/* AGENT-FUNNEL-CREDITS.1 — what the account can book with. */}
       {item.accountLine && (
-        <p className="text-xs text-un1t-muted mt-1">
+        <p className="text-xs text-un1t-muted">
           <span className="font-semibold text-un1t-text">Account:</span> {item.accountLine}
         </p>
       )}
-
       {failWhy && !outcome && (
-        <p className="text-xs text-red-700 mt-1.5">
+        <p className="text-xs text-red-700">
           <span className="font-semibold">What went wrong:</span> {failWhy}
         </p>
       )}
       {why && (
-        <p className="text-xs text-un1t-muted mt-1.5">
+        <p className="text-xs text-un1t-muted">
           <span className="font-semibold text-un1t-text">Why it needs review:</span> {why}
         </p>
       )}
-      {/* PERSON-ACCT.7 — an account_conflict row carries the accounts Mia
-          refused to choose between, live-verified at the moment of the
-          escalation. Rendered so the operator can decide from the card
-          instead of reconstructing the ambiguity in Glofox. `credits: null`
-          means the balance could not be read — never shown as zero. */}
+      {/* PERSON-ACCT.7 — the accounts Mia refused to choose between.
+          `credits: null` means unreadable, never shown as zero. */}
       {candidates.length > 0 && (
-        <div className="mt-2.5">
+        <div>
           <p className="text-[10px] uppercase tracking-wide text-un1t-subtle">Accounts found</p>
           <ul className="mt-1 space-y-1">
             {candidates.map((c, i) => (
@@ -263,118 +366,27 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
           </ul>
         </div>
       )}
-
       {said && (
-        <p className="text-xs text-un1t-muted mt-1.5 border-l-2 border-un1t-border pl-2">
+        <p className="text-xs text-un1t-muted border-l-2 border-un1t-border pl-2">
           <span className="font-semibold text-un1t-text">Customer said:</span> “{said}”
         </p>
       )}
-
-      {(item.contactEmail || item.contactPhone) && (
-        <div className="flex items-center gap-2 flex-wrap mt-2.5">
-          <span className="text-[10px] uppercase tracking-wide text-un1t-subtle">Glofox lookup</span>
-          <CopyValue value={item.contactEmail} />
-          <CopyValue value={item.contactPhone} />
-        </div>
-      )}
-
-      {/* VISIT-ORIGIN.1 — where this person came from, when known. */}
+      {/* VISIT-ORIGIN.1 */}
       {item.contactOrigin && (
-        <p className="text-xs text-un1t-muted mt-2">
+        <p className="text-xs text-un1t-muted">
           <span className="text-[10px] uppercase tracking-wide text-un1t-subtle mr-2">Came via</span>
           {item.contactOrigin}
         </p>
       )}
-
-      {outcome && (
-        <p className={`text-sm mt-3 ${outcome.tone === 'ok' ? 'text-green-700' : outcome.tone === 'bad' ? 'text-red-700' : 'text-un1t-muted'}`}>
-          {outcome.text}
-        </p>
-      )}
-
-      {/* AGENT-RETRY.1/.2 — a failed execution offers a retry in place:
-          the operator fixes the problem in Glofox, then re-runs the
-          action. Reached from a just-failed approve (outcome.failed) OR
-          from a provider-shipped failed item (isFailedItem). */}
-      {(outcome?.failed || (isFailedItem && !outcome)) && RETRYABLE_KINDS.has(item.kind) && (
-        <div className="flex items-center gap-2 flex-wrap mt-2">
-          <button type="button" disabled={!!busy} onClick={() => decide('approved', { retry: true })}
-            className="text-sm bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md font-medium disabled:opacity-50">
-            {busy === 'approved' ? 'Retrying…' : 'Fixed it — retry'}
-          </button>
-          {conversationHref && (
-            <Link href={conversationHref} className="text-xs text-un1t-muted underline hover:text-un1t-text">
-              Open conversation
-            </Link>
-          )}
-          <Link href={item.reviewUrl} className="text-xs text-un1t-muted underline hover:text-un1t-text">
-            Full history
-          </Link>
-        </div>
-      )}
-
-      {/* CANCEL-FORM.5 — the end date on a membership cancellation. Prefilled
-          from the form; Mia rows carry only free text, so staff type it. It
-          is what the confirmation quotes and what Glofox is told when the
-          location's auto-cancel toggle is on. */}
-      {!outcome && item.kind === 'cancellation' && (
-        <div className="flex items-center gap-2 flex-wrap mt-3 text-xs">
+      {/* CANCEL-FORM.5 — the end date on a membership cancellation. */}
+      {!outcome && !clearOpen && item.kind === 'cancellation' && (
+        <div className="flex items-center gap-2 flex-wrap text-xs">
           <label className="text-un1t-muted" htmlFor={`end-${item.id}`}>Membership ends</label>
           <input id={`end-${item.id}`} type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)}
             className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-xs text-un1t-text" />
           {!endDate && <span className="text-amber-700">No date on this request. Set one before approving.</span>}
         </div>
       )}
-
-      {!outcome && !declineOpen && !isFailedItem && (
-        <div className="flex items-center gap-2 flex-wrap mt-3">
-          <button type="button" disabled={!!busy} onClick={() => decide('approved')}
-            className="text-sm bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md font-medium disabled:opacity-50">
-            {busy === 'approved' ? 'Approving…' : 'Approve'}
-          </button>
-          {item.retentionFlagged && item.kind === 'cancellation' && (
-            <button type="button" disabled={!!busy} onClick={() => decide('saved')}
-              className="text-sm border border-blue-300 text-blue-700 px-3 py-1.5 rounded-md disabled:opacity-50">
-              {busy === 'saved' ? 'Saving…' : 'Saved (kept)'}
-            </button>
-          )}
-          <button type="button" disabled={!!busy} onClick={() => { setDeclineOpen(true); setError(null) }}
-            className="text-sm border border-un1t-border text-un1t-muted px-3 py-1.5 rounded-md disabled:opacity-50">
-            Decline
-          </button>
-          {conversationHref && (
-            <Link href={conversationHref} className="text-xs text-un1t-muted underline hover:text-un1t-text ml-1">
-              Open conversation
-            </Link>
-          )}
-          <Link href={item.reviewUrl} className="text-xs text-un1t-muted underline hover:text-un1t-text">
-            Full history
-          </Link>
-        </div>
-      )}
-
-      {!outcome && declineOpen && (
-        <div className="mt-3 space-y-2 max-w-sm">
-          <select value={reason} onChange={(e) => setReason(e.target.value)}
-            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text">
-            {reasonOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-          </select>
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)"
-            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
-          <div className="flex items-center gap-2">
-            <button type="button" disabled={!!busy} onClick={() => decide('declined')}
-              className="text-sm bg-red-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-50">
-              {busy === 'declined' ? 'Declining…' : 'Confirm decline'}
-            </button>
-            <button type="button" onClick={() => { setDeclineOpen(false); setError(null) }}
-              className="text-sm text-un1t-muted hover:text-un1t-text">
-              Back
-            </button>
-          </div>
-        </div>
-      )}
-
-      {error && <p className="text-xs text-red-700 mt-2">{error}</p>}
-    </div>
+    </CustomerCardShell>
   )
 }

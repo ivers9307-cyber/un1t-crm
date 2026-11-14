@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { Copy, Check } from 'lucide-react'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { isStuckExecuting, retryOffered } from '@/lib/agent/request-recovery'
 import { whyFlagged, customerWords, accountSummaryLine } from '@/lib/approvals/agent-request-why'
 import { approvalSummary, explainFailure } from '@/lib/approvals/event-move-card'
+import { BOOKING_KINDS } from '@shared/approvals-next-steps'
 
 // RADAR-AGENT Phase 2 — operator approval queue. Manager+ reviews the
 // pause / cancellation requests the customer agent captured, and decides:
@@ -57,19 +58,31 @@ export default function AgentRequestsClient() {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [focusId, loading, requests])
 
-  async function decide(id, status) {
+  // APPROVALSQ.1 — `silent` is the quiet clear ("Clear, don't notify"): the
+  // route closes the request and sends the customer nothing. One request per
+  // click, enforced by a ref (state would lag a fast double click).
+  const inFlight = useRef(false)
+  async function decide(id, status, { silent = false, note = '' } = {}) {
+    if (inFlight.current) return
+    inFlight.current = true
     setBusyId(id)
     try {
       const res = await fetch(`/api/agent/membership-requests/${id}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(silent ? { status, silent: true, decision_note: note.trim() || null } : { status }),
       })
       const j = await res.json()
       if (j.success) {
-        setRequests(rs => rs.map(r => r.id === id ? { ...r, status: j.request.status, decided_at: j.request.decided_at } : r))
+        setRequests(rs => rs.map(r => r.id === id ? {
+          ...r,
+          status: j.request.status,
+          decided_at: j.request.decided_at,
+          // The cleared label is read off details, so take them back on a clear.
+          ...(silent ? { details: j.request.details ?? r.details, decision_note: j.request.decision_note ?? null } : {}),
+        } : r))
       } else setError(j.error || 'Failed to update')
     } catch { setError('Failed to update') }
-    finally { setBusyId(null) }
+    finally { inFlight.current = false; setBusyId(null) }
   }
 
   if (loading) return <div className="p-6 text-sm text-un1t-muted">Loading…</div>
@@ -128,7 +141,7 @@ export default function AgentRequestsClient() {
           </p>
           <div className="space-y-3">
             {failedRetryable.map(r => (
-              <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} retryMode />
+              <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} retryMode canClear />
             ))}
           </div>
         </div>
@@ -136,7 +149,7 @@ export default function AgentRequestsClient() {
 
       <div className="space-y-3">
         {pending.map(r => (
-          <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} />
+          <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} canClear />
         ))}
       </div>
 
@@ -158,7 +171,9 @@ export default function AgentRequestsClient() {
                       Open conversation
                     </Link>
                   )}
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_STYLE[r.status] || ''}`}>{r.status}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_STYLE[r.status] || ''}`}>
+                    {r.details?.cleared?.silent ? 'Cleared, customer not told' : r.status}
+                  </span>
                 </div>
               </div>
             ))}
@@ -192,7 +207,10 @@ function CopyValue({ value }) {
   )
 }
 
-function RequestCard({ r, busy, onDecide, focused = false, retryMode = false }) {
+function RequestCard({ r, busy, onDecide, focused = false, retryMode = false, canClear = false }) {
+  // APPROVALSQ.1 — the clear needs a confirm step; it never fires from one click.
+  const [clearOpen, setClearOpen] = useState(false)
+  const [clearNote, setClearNote] = useState('')
   const name = r.contacts?.name || r.contacts?.first_name || 'Unknown member'
   const d = r.details || {}
   const isCancel = r.kind === 'cancellation'
@@ -286,6 +304,12 @@ function RequestCard({ r, busy, onDecide, focused = false, retryMode = false }) 
             Decline
           </button>
         )}
+        {canClear && !clearOpen && (
+          <button type="button" onClick={() => setClearOpen(true)} disabled={busy}
+            className="text-sm border border-un1t-border text-un1t-muted px-3 py-1.5 rounded-md disabled:opacity-50">
+            Clear, don&apos;t notify
+          </button>
+        )}
         {r.conversation_id && (
           <Link
             href={`/communications/inbox?c=${r.conversation_id}&ch=${r.channel === 'instagram' ? 'ig' : 'wa'}`}
@@ -295,6 +319,26 @@ function RequestCard({ r, busy, onDecide, focused = false, retryMode = false }) 
           </Link>
         )}
       </div>
+      {canClear && clearOpen && (
+        <div className="mt-3 space-y-2 max-w-sm">
+          {(BOOKING_KINDS.has(r.kind) || r.kind === 'consultation') && r.status !== 'failed' && (
+            <p className="text-xs text-amber-700">Mia told this customer the team would confirm. Clearing sends them nothing.</p>
+          )}
+          <p className="text-xs text-un1t-muted">Closes this request. The customer is sent nothing.</p>
+          <input value={clearNote} onChange={(e) => setClearNote(e.target.value)} placeholder="Note (optional)"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
+          <div className="flex items-center gap-2">
+            <button type="button" disabled={busy} onClick={() => onDecide(r.id, 'declined', { silent: true, note: clearNote })}
+              className="text-sm border border-red-600 text-red-700 px-3 py-1.5 rounded-md font-medium disabled:opacity-50">
+              {busy ? 'Clearing…' : "Clear, don't notify"}
+            </button>
+            <button type="button" disabled={busy} onClick={() => setClearOpen(false)}
+              className="text-sm text-un1t-muted hover:text-un1t-text">
+              Back
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

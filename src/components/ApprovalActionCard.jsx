@@ -8,7 +8,7 @@
 // execution, Mia's in-thread confirmation) is identical everywhere.
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Sparkles } from 'lucide-react'
 import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 // EVENT-MOVE.7 — event_move reads from the web-only module; every other kind
@@ -36,6 +36,10 @@ export default function ApprovalActionCard({
 }) {
   const [busy, setBusy] = useState(null)          // 'approved' | 'declined' | 'saved' | null
   const [declineOpen, setDeclineOpen] = useState(false)
+  // APPROVALSQ.1 — "Clear, don't notify": a confirm step, then one silent PATCH.
+  const [clearOpen, setClearOpen] = useState(false)
+  const inFlight = useRef(false)
+  const [clearedHere, setClearedHere] = useState(false)
   const [reason, setReason] = useState(BOOKING_KINDS.has(request.kind) ? 'class_full' : 'other')
   const [note, setNote] = useState('')
   const [error, setError] = useState(null)
@@ -70,28 +74,36 @@ export default function ApprovalActionCard({
 
   const [notified, setNotified] = useState(null)
 
-  async function decide(status) {
-    if (busy) return
-    setBusy(status)
+  async function decide(status, { silent = false } = {}) {
+    if (inFlight.current || busy) return
+    inFlight.current = true
+    setBusy(silent ? 'cleared' : status)
     setError(null)
     try {
       const reasonLabel = (DECLINE_REASONS.find(([k]) => k === reason) || [])[1]
-      const decision_note = status === 'declined'
+      const decision_note = silent
+        ? (note.trim() || null)
+        : status === 'declined'
         ? [reasonLabel, note.trim() || null].filter(Boolean).join(' — ')
         : (note.trim() || null)
       const res = await fetch(`/api/agent/membership-requests/${request.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, decision_note }),
+        body: JSON.stringify({ status, ...(silent ? { silent: true } : {}), decision_note }),
       })
       const data = await res.json()
       if (!data.success) {
         setError(data.error || 'Decision failed')
         return
       }
+      setClearOpen(false)
+      if (silent) setClearedHere(true) // show the result even before the parent re-renders us
       onDecided?.({ ...request, ...data.request })
       // CANCEL-FORM.5 — whether the member heard about a pause/cancellation decision.
       if (data.customer_notified) setNotified(data.customer_notified)
+      // A quiet clear closes the request and nothing else: no suggestion
+      // fetch, no composer draft (the customer is not being written to).
+      if (silent) return
       fetchSuggestion() // fire-and-forget — never blocks the decision UX
       if (status === 'declined') {
         // An empty draft (a refund_request: Mia already answered) must not
@@ -102,6 +114,7 @@ export default function ApprovalActionCard({
     } catch {
       setError('Network error — try again')
     } finally {
+      inFlight.current = false
       setBusy(null)
     }
   }
@@ -112,9 +125,10 @@ export default function ApprovalActionCard({
     else if (step.type === 'sequence') setShowSequencePicker(true)
   }
 
-  const status = request.status
+  const status = clearedHere ? 'declined' : request.status
   const decided = status !== 'pending'
-  const steps = decided ? getNextSteps(request.kind, status, ctx) : []
+  const wasCleared = decided && (clearedHere || !!request.details?.cleared?.silent || notified?.reason === 'cleared')
+  const steps = decided && !wasCleared ? getNextSteps(request.kind, status, ctx) : []
   const kindLabel = approvalKindLabel(request.kind) || 'Agent request'
   // C117 APPROVALCODEWEB.1 — a failed card explains its code in the
   // operator's words (it printed the raw code, e.g. TRIAL_GRANT_FAILED).
@@ -139,7 +153,7 @@ export default function ApprovalActionCard({
         <div className="flex items-center justify-between gap-2">
           <span className="font-medium text-un1t-text">{kindLabel}</span>
           <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${STATUS_CHIP[status] || STATUS_CHIP.pending}`}>
-            {STATUS_LABELS[status] || status}
+            {wasCleared ? 'Cleared' : (STATUS_LABELS[status] || status)}
           </span>
         </div>
         <p className="text-un1t-text mt-1">{approvalSummary(request)}</p>
@@ -147,7 +161,7 @@ export default function ApprovalActionCard({
           <p className="text-xs text-un1t-muted mt-1 border-l-2 border-un1t-border pl-2">“{request.customer_note}”</p>
         )}
 
-        {!decided && !declineOpen && (
+        {!decided && !declineOpen && !clearOpen && (
           <div className="flex items-center gap-2 mt-2.5">
             <button type="button" disabled={!!busy} onClick={() => decide('approved')}
               className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-600 text-white hover:bg-green-700 disabled:opacity-50">
@@ -156,6 +170,10 @@ export default function ApprovalActionCard({
             <button type="button" disabled={!!busy} onClick={() => { setDeclineOpen(true); setError(null) }}
               className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-un1t-border text-un1t-text hover:bg-un1t-border/30 disabled:opacity-50">
               Decline
+            </button>
+            <button type="button" disabled={!!busy} onClick={() => { setClearOpen(true); setError(null) }}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-un1t-border text-un1t-muted hover:bg-un1t-border/30 disabled:opacity-50">
+              Clear, don&apos;t notify
             </button>
             {request.retention_flagged && request.kind === 'cancellation' && (
               <button type="button" disabled={!!busy} onClick={() => decide('saved')}
@@ -187,11 +205,34 @@ export default function ApprovalActionCard({
           </div>
         )}
 
+        {!decided && clearOpen && (
+          <div className="mt-2.5 space-y-2">
+            {(BOOKING_KINDS.has(request.kind) || request.kind === 'consultation') && request.status !== 'failed' && (
+              <p className="text-xs text-amber-700">Mia told this customer the team would confirm. Clearing sends them nothing.</p>
+            )}
+            <p className="text-xs text-un1t-muted">Closes this request. The customer is sent nothing.</p>
+            <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
+            <div className="flex items-center gap-2">
+              <button type="button" disabled={!!busy} onClick={() => decide('declined', { silent: true })}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-600 text-red-700 disabled:opacity-50">
+                {busy === 'cleared' ? 'Clearing…' : "Clear, don't notify"}
+              </button>
+              <button type="button" disabled={!!busy} onClick={() => { setClearOpen(false); setError(null) }}
+                className="px-3 py-1.5 rounded-lg text-xs text-un1t-muted hover:text-un1t-text">
+                Back
+              </button>
+            </div>
+          </div>
+        )}
+
         {decided && (
           <div className="mt-1.5 text-xs text-un1t-muted">
-            {request.decision_note && <span>{request.decision_note}</span>}
+            {wasCleared && <span>Cleared, customer not told.</span>}
+            {request.decision_note && <span> {request.decision_note}</span>}
             {failedLine && <span className="text-red-700"> {failedLine}</span>}
-            {notified && (
+            {/* A quiet clear told nobody on purpose: never nag staff to follow up. */}
+            {notified && !wasCleared && notified.reason !== 'cleared' && (
               <span className={notified.sent ? ' text-green-700' : ' text-amber-700'}>
                 {notified.sent
                   ? ` Member ${notified.channel === 'email' ? 'emailed' : 'messaged'}.`
