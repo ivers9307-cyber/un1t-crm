@@ -80,6 +80,22 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
   const [note, setNote] = useState('')
   const [studioSaving, setStudioSaving] = useState(false)
   const [studioError, setStudioError] = useState(null)
+  const [studioNotice, setStudioNotice] = useState(null)
+
+  // The overall email switch fans an opt-out to every studio row (mig 489),
+  // so after it changes the studio list is re-read rather than guessed.
+  async function reloadStudios() {
+    try {
+      const r = await fetch(`/api/contacts/${contactId}/marketing-preferences`)
+      const j = await r.json()
+      if (j.success) {
+        setStudios(Array.isArray(j.studios) ? j.studios : [])
+        setStudiosError(Boolean(j.studios_error))
+      }
+    } catch {
+      setStudiosError(true)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -124,6 +140,7 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
         setError(j.error || `HTTP ${r.status}`)
       } else {
         setSavedKey(key)
+        if (key === 'email_marketing') reloadStudios()
         setTimeout(() => setSavedKey((k) => (k === key ? null : k)), 1500)
       }
     } catch (e) {
@@ -140,6 +157,7 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
     setReason('')
     setNote('')
     setStudioError(null)
+    setStudioNotice(null)
   }
 
   const noteTrimmed = note.trim()
@@ -165,7 +183,12 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
         setStudioError(j.error || `Could not save (HTTP ${r.status})`)
         return
       }
+      // Either way the studio now holds pending.next: a change, or it already did.
       setStudios((list) => list.map((s) => (s.location_id === pending.location_id ? { ...s, email_marketing: pending.next } : s)))
+      const changed = Array.isArray(j.data?.changed) ? j.data.changed : []
+      setStudioNotice(changed.length === 0
+        ? `${pending.name} was already ${pending.next ? 'on' : 'off'}. Nothing changed and no reason was recorded.`
+        : null)
       setPending(null)
     } catch (e) {
       setStudioError(e?.message || 'Network error')
@@ -266,6 +289,9 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
               <div className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
                 Studio lists (marketing email)
               </div>
+              {studioNotice && (
+                <div className="text-[11px] text-amber-700 bg-amber-500/10 rounded p-2 mb-2">{studioNotice}</div>
+              )}
               {studiosError && (
                 <div className="text-[11px] text-red-700 bg-red-500/10 rounded p-2 mb-2">
                   Could not load the studio lists. Reload to try again.

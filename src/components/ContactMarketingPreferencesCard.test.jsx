@@ -103,3 +103,29 @@ describe('ContactMarketingPreferencesCard studio lists', () => {
     for (const b of document.querySelectorAll('button')) expect(b.getAttribute('type')).toBe('button')
   })
 })
+
+describe('ContactMarketingPreferencesCard studio lists, refresh and no-op', () => {
+  it('says so when the studio was already in that state', async () => {
+    postResponse = { ok: true, status: 200, body: { success: true, data: { changed: [] } } }
+    renderCard()
+    await screen.findByText('Stillorgan')
+    fireEvent.click(stillSwitch())
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByLabelText('They asked by email'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await screen.findByText(/already on\. Nothing changed/)
+  })
+
+  it('re-reads the studio list after the overall email switch changes', async () => {
+    global.fetch = vi.fn(async (url, opts) => {
+      if (opts?.method === 'PATCH') return { ok: true, status: 200, json: async () => ({ success: true }) }
+      return { ok: true, status: 200, json: async () => GET_BODY }
+    })
+    renderCard()
+    await screen.findByText('Stillorgan')
+    const gets = () => global.fetch.mock.calls.filter(([, o]) => !o?.method).length
+    expect(gets()).toBe(1)
+    fireEvent.click(screen.getAllByRole('button', { pressed: true })[0])
+    await waitFor(() => expect(gets()).toBe(2))
+  })
+})
