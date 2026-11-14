@@ -19,15 +19,9 @@ import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
+import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 
-function formatDateTime(s) {
-  if (!s) return '—'
-  try {
-    return new Date(s).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })
-  } catch { return s }
-}
-
-export default function TrialPurchaseReviewCard({ item, onDecided }) {
+export default function TrialPurchaseReviewCard({ item, onDecided, timezone = null }) {
   const [busy, setBusy] = useState(null) // 'retry' | 'resolve' | 'quiet' | 'handled'
   const [outcome, setOutcome] = useState(null) // { tone, text }
   const inFlight = useRef(false)
@@ -110,7 +104,7 @@ export default function TrialPurchaseReviewCard({ item, onDecided }) {
       state={help ? { label: 'Needs a call', tone: 'amber' } : { label: 'Grant failed', tone: 'red' }}
       name={item.title}
       meta={item.meta}
-      when={`${help ? 'Asked' : 'Paid'} ${formatDateTime(item.submittedAt)}${!help && item.attempts > 1 ? ` · ${item.attempts} attempts` : ''}`}
+      when={`${help ? 'Asked' : 'Paid'} ${formatApprovalDateTime(item.submittedAt, timezone)}${!help && item.attempts > 1 ? ` · ${item.attempts} attempts` : ''}`}
       amount={help ? undefined : `€${Number(item.amount || 0).toFixed(2)}`}
       summary={item.subtitle}
       contact={(

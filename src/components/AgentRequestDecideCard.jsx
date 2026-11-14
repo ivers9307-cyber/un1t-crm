@@ -22,6 +22,7 @@ import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
 // event_move module and fall through to the shared helpers for other kinds.
 import { approvalKindLabel, explainFailure, eventMoveDoneLine, EVENT_MOVE_KIND_CHIP } from '@/lib/approvals/event-move-card'
 import { RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
+import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 
 const KIND_CHIP = {
   cancellation: 'bg-red-500/10 text-red-700',
@@ -31,13 +32,6 @@ const KIND_CHIP = {
   event_move: EVENT_MOVE_KIND_CHIP,
 }
 const DEFAULT_KIND_CHIP = 'bg-amber-500/10 text-amber-700'
-
-function formatDateTime(s) {
-  if (!s) return '—'
-  try {
-    return new Date(s).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })
-  } catch { return s }
-}
 
 function CopyValue({ value }) {
   const [copied, setCopied] = useState(false)
@@ -138,13 +132,16 @@ export function outcomeLine(status, item, executed, notified = null, plannedEndD
 
 // APPROVALSQ.2 — `selectable`, `selected` and `onToggle` put a select checkbox
 // in the header while /approvals is in select mode; a decided card has none.
-export default function AgentRequestDecideCard({ item, onDecided, selectable = false, selected = false, onToggle }) {
+export default function AgentRequestDecideCard({ item, onDecided, selectable = false, selected = false, onToggle, timezone = null }) {
   const [busy, setBusy] = useState(null)       // 'approved' | 'declined' | 'saved' | 'cleared' | null
   const inFlight = useRef(false)
   const [declineOpen, setDeclineOpen] = useState(false)
   const [clearOpen, setClearOpen] = useState(false)
   const [reason, setReason] = useState(BOOKING_KINDS.has(item.kind) ? 'class_full' : 'other')
-  const [note, setNote] = useState('')
+  // APPROVALSQ.3 — two notes: what staff type for a decline never reaches a
+  // clear, and the reverse. Each goes only with its own action.
+  const [declineNote, setDeclineNote] = useState('')
+  const [clearNote, setClearNote] = useState('')
   // CANCEL-FORM.5 — the end date staff confirm on a membership cancellation.
   const [endDate, setEndDate] = useState(item.kind === 'cancellation' ? (item.details?.requested_end_date || '') : '')
   const [error, setError] = useState(null)
@@ -178,10 +175,10 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
     try {
       const reasonLabel = (DECLINE_REASONS.find(([k]) => k === reason) || [])[1]
       const decision_note = silent
-        ? (note.trim() || null)
+        ? (clearNote.trim() || null)
         : status === 'declined'
-        ? [reasonLabel, note.trim() || null].filter(Boolean).join(' — ')
-        : (note.trim() || null)
+        ? [reasonLabel, declineNote.trim() || null].filter(Boolean).join(' — ')
+        : null
       const res = await fetch(`/api/agent/membership-requests/${item.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -231,7 +228,7 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
         {warnClear && (
           <p className="text-xs text-amber-700">Mia told this customer the team would confirm. Clearing sends them nothing.</p>
         )}
-        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)"
+        <input value={clearNote} onChange={(e) => setClearNote(e.target.value)} placeholder="Note (optional)"
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
         <div className="flex items-center gap-2">
           <button type="button" disabled={!!busy} onClick={() => decide('declined', { silent: true })}
@@ -252,7 +249,7 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text">
           {reasonOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
         </select>
-        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)"
+        <input value={declineNote} onChange={(e) => setDeclineNote(e.target.value)} placeholder="Note (optional)"
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
         <div className="flex items-center gap-2">
           <button type="button" disabled={!!busy} onClick={() => decide('declined')}
@@ -315,8 +312,9 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
       state={isFailedItem && !outcome ? { label: 'Failed', tone: 'red' } : undefined}
       name={item.contactName || 'Customer'}
       meta={item.channel ? `via ${item.channel}` : undefined}
-      when={`Submitted ${formatDateTime(item.submittedAt)}`}
+      when={`Submitted ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       summary={item.subtitle}
+      summaryClassName="text-sm text-un1t-text"
       contact={(item.contactEmail || item.contactPhone) ? (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] uppercase tracking-wide text-un1t-subtle">Glofox lookup</span>

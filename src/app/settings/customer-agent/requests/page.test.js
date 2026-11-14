@@ -35,6 +35,7 @@ vi.mock('./AgentRequestsClient', () => ({
 
 import AgentRequestsPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
+import AgentRequestsClient from './AgentRequestsClient'
 
 function user(role) {
   return { id: 'u1', role, activeLocation: { id: 'loc1' } }
@@ -65,4 +66,12 @@ describe('/settings/customer-agent/requests page', () => {
       expect(html).toContain('agent-requests-client-rendered')
     })
   }
+
+  // APPROVALSQ.3 — a dropped prop would silently put every date on the platform zone.
+  it('passes the active studio timezone to the client', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', activeLocation: { id: 'loc1', timezone: 'America/New_York' } })
+    const el = await AgentRequestsPage()
+    expect(el.type).toBe(AgentRequestsClient)
+    expect(el.props.timezone).toBe('America/New_York')
+  })
 })

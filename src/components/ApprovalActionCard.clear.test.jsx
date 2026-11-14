@@ -108,3 +108,54 @@ describe('ApprovalActionCard clear', () => {
     expect(line).not.toContain(' by ')
   })
 })
+
+describe('ApprovalActionCard separate notes (APPROVALSQ.3)', () => {
+  const noteBox = () => screen.getByPlaceholderText('Note (optional)')
+
+  it('a note typed in decline does not appear in clear', () => {
+    render(<ApprovalActionCard request={request} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    fireEvent.change(noteBox(), { target: { value: 'for decline' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    expect(noteBox().value).toBe('')
+  })
+
+  it('a note typed in clear does not appear in decline', () => {
+    render(<ApprovalActionCard request={request} />)
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.change(noteBox(), { target: { value: 'for clear' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    expect(noteBox().value).toBe('')
+  })
+
+  it('the clear PATCH carries only the clear note and the decline PATCH only the decline note', async () => {
+    reply = cleared
+    const { unmount } = render(<ApprovalActionCard request={request} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    fireEvent.change(noteBox(), { target: { value: 'declinenote' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.change(noteBox(), { target: { value: 'clearnote' } })
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    await screen.findByText('Cleared, customer not told.')
+    expect(JSON.parse(patchCalls()[0][1].body).decision_note).toBe('clearnote')
+    unmount()
+
+    fetch.mockClear()
+    reply = declined
+    render(<ApprovalActionCard request={request} />)
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.change(noteBox(), { target: { value: 'clearnote' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    fireEvent.change(noteBox(), { target: { value: 'declinenote' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm decline' }))
+    await waitFor(() => expect(patchCalls()).toHaveLength(1))
+    const note = JSON.parse(patchCalls()[0][1].body).decision_note
+    expect(note).toMatch(/declinenote$/)
+    expect(note).not.toContain('clearnote')
+  })
+})
+

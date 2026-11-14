@@ -88,7 +88,7 @@ function initialsOf(name) {
 // `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
 // the internal conversation list is hidden and selection is driven by
 // the `initialConversationId` prop (synced on change, not just mount).
-export default function WAInbox({ locationId, userId, initialConversationId, embedded = false, onOpenBookTab, onMoved }) {
+export default function WAInbox({ locationId, timezone = null, userId, initialConversationId, embedded = false, onOpenBookTab, onMoved }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [messages, setMessages] = useState([])
@@ -1176,6 +1176,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                       request={item.request}
                       contactId={conversation?.contact_id || null}
                       locationId={locationId}
+                      timezone={timezone}
                       contactFirstName={conversation?.contacts?.first_name || conversation?.wa_profile_name?.split(' ')[0] || null}
                       onDecided={updated => setApprovals(prev => prev.map(r => (r.id === updated.id ? updated : r)))}
                       onPrefillComposer={text => setNewMessage(text)}

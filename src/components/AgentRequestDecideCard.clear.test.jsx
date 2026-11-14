@@ -118,3 +118,59 @@ describe('AgentRequestDecideCard chips and bodies', () => {
     expect(screen.queryByRole('checkbox')).toBeNull()
   })
 })
+
+describe('AgentRequestDecideCard separate notes (APPROVALSQ.3)', () => {
+  const body = (i = 0) => JSON.parse(fetch.mock.calls[i][1].body)
+
+  it('a note typed in decline does not appear in clear', () => {
+    render(<AgentRequestDecideCard item={base} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Decline and tell them' }))
+    fireEvent.change(screen.getByPlaceholderText('Note (optional)'), { target: { value: 'for decline' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    expect(screen.getByPlaceholderText('Note (optional)').value).toBe('')
+  })
+
+  it('a note typed in clear does not appear in decline', () => {
+    render(<AgentRequestDecideCard item={base} />)
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.change(screen.getByPlaceholderText('Note (optional)'), { target: { value: 'for clear' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Decline and tell them' }))
+    expect(screen.getByPlaceholderText('Note (optional)').value).toBe('')
+  })
+
+  it('each PATCH carries only its own note', async () => {
+    const { unmount } = render(<AgentRequestDecideCard item={base} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Decline and tell them' }))
+    fireEvent.change(screen.getByPlaceholderText('Note (optional)'), { target: { value: 'declinenote' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.change(screen.getByPlaceholderText('Note (optional)'), { target: { value: 'clearnote' } })
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    await screen.findByText('Cleared. The customer was not told.')
+    expect(body().decision_note).toBe('clearnote')
+    unmount()
+
+    fetch.mockClear()
+    render(<AgentRequestDecideCard item={base} />)
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.change(screen.getByPlaceholderText('Note (optional)'), { target: { value: 'clearnote' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Decline and tell them' }))
+    fireEvent.change(screen.getByPlaceholderText('Note (optional)'), { target: { value: 'declinenote' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm decline' }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    expect(body().decision_note).toMatch(/declinenote$/)
+    expect(body().decision_note).not.toContain('clearnote')
+  })
+
+  it('the main line is normal size and colour', () => {
+    render(<AgentRequestDecideCard item={base} />)
+    const line = screen.getByText('Wants a class')
+    expect(line.className).toContain('text-sm')
+    expect(line.className).toContain('text-un1t-text')
+    expect(line.className).not.toContain('text-un1t-subtle')
+  })
+})
+

@@ -16,6 +16,7 @@ import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from 
 // until a later OTA).
 import { approvalSummary, approvalKindLabel, explainFailure } from '@/lib/approvals/event-move-card'
 import SequencePicker from '@/components/SequencePicker'
+import { formatInZone, resolveZone } from '@shared/zoned-time'
 
 const STATUS_CHIP = {
   pending:  'bg-amber-500/10 text-amber-700',
@@ -31,12 +32,13 @@ const STATUS_LABELS = {
 }
 
 // APPROVALSQ.2 — "by Sarah, 14 Nov 2026, 16:20" (name unknown: just the time).
-function decidedByLine(request) {
+// APPROVALSQ.3 — rendered on the studio's clock (`zone`), never the browser's.
+function decidedByLine(request, zone) {
   let when = null
   if (request.decided_at) {
     const d = new Date(request.decided_at)
     if (!Number.isNaN(d.getTime())) {
-      when = d.toLocaleString('en-IE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+      when = formatInZone(d, zone, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
     }
   }
   const name = request.decided_by_name || null
@@ -46,9 +48,10 @@ function decidedByLine(request) {
 }
 
 export default function ApprovalActionCard({
-  request, contactId, locationId, contactFirstName,
+  request, contactId, locationId, contactFirstName, timezone = null,
   onDecided, onPrefillComposer, onOpenBookTab,
 }) {
+  const zone = resolveZone(timezone)
   const [busy, setBusy] = useState(null)          // 'approved' | 'declined' | 'saved' | null
   const [declineOpen, setDeclineOpen] = useState(false)
   // APPROVALSQ.1 — "Clear, don't notify": a confirm step, then one silent PATCH.
@@ -56,7 +59,9 @@ export default function ApprovalActionCard({
   const inFlight = useRef(false)
   const [clearedHere, setClearedHere] = useState(false)
   const [reason, setReason] = useState(BOOKING_KINDS.has(request.kind) ? 'class_full' : 'other')
-  const [note, setNote] = useState('')
+  // APPROVALSQ.3 — separate notes: text typed for a decline never reaches a clear, and the reverse.
+  const [declineNote, setDeclineNote] = useState('')
+  const [clearNote, setClearNote] = useState('')
   const [error, setError] = useState(null)
   const [showSequencePicker, setShowSequencePicker] = useState(false)
   const [suggestion, setSuggestion] = useState(null)
@@ -97,10 +102,10 @@ export default function ApprovalActionCard({
     try {
       const reasonLabel = (DECLINE_REASONS.find(([k]) => k === reason) || [])[1]
       const decision_note = silent
-        ? (note.trim() || null)
+        ? (clearNote.trim() || null)
         : status === 'declined'
-        ? [reasonLabel, note.trim() || null].filter(Boolean).join(' — ')
-        : (note.trim() || null)
+        ? [reasonLabel, declineNote.trim() || null].filter(Boolean).join(' — ')
+        : null
       const res = await fetch(`/api/agent/membership-requests/${request.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -205,7 +210,7 @@ export default function ApprovalActionCard({
               className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-2 py-1.5 text-xs text-un1t-text">
               {reasonOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
             </select>
-            <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
+            <input value={declineNote} onChange={e => setDeclineNote(e.target.value)} placeholder="Note (optional)"
               className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
             <div className="flex items-center gap-2">
               <button type="button" disabled={!!busy} onClick={() => decide('declined')}
@@ -226,7 +231,7 @@ export default function ApprovalActionCard({
               <p className="text-xs text-amber-700">Mia told this customer the team would confirm. Clearing sends them nothing.</p>
             )}
             <p className="text-xs text-un1t-muted">Closes this request. The customer is sent nothing.</p>
-            <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
+            <input value={clearNote} onChange={e => setClearNote(e.target.value)} placeholder="Note (optional)"
               className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
             <div className="flex items-center gap-2">
               <button type="button" disabled={!!busy} onClick={() => decide('declined', { silent: true })}
@@ -243,7 +248,7 @@ export default function ApprovalActionCard({
 
         {decided && (
           <div className="mt-1.5 text-xs text-un1t-muted">
-            {wasCleared && <span>{`Cleared, customer not told${decidedByLine(request) ? ` · ${decidedByLine(request)}` : ''}.`}</span>}
+            {wasCleared && <span>{`Cleared, customer not told${decidedByLine(request, zone) ? ` · ${decidedByLine(request, zone)}` : ''}.`}</span>}
             {request.decision_note && <span> {request.decision_note}</span>}
             {failedLine && <span className="text-red-700"> {failedLine}</span>}
             {/* A quiet clear told nobody on purpose: never nag staff to follow up. */}

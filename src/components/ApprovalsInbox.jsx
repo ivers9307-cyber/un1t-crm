@@ -18,14 +18,8 @@ import CorpPromoClaimCard from '@/components/CorpPromoClaimCard'
 import OfferPurchaseCard from '@/components/approvals/OfferPurchaseCard'
 import BulkClearBar from '@/components/approvals/BulkClearBar'
 import { isBulkClearable } from '@/lib/approvals/bulk-clear'
+import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 import { buildCustomerQueue, filterQueue, teamProviders } from '@/lib/approvals/customer-queue'
-
-function formatDateTime(s) {
-  if (!s) return '—'
-  try {
-    return new Date(s).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })
-  } catch { return s }
-}
 
 function formatAmount(amount, currency) {
   if (amount == null) return null
@@ -33,7 +27,7 @@ function formatAmount(amount, currency) {
   return `${sym}${Number(amount).toFixed(2)}`
 }
 
-export default function ApprovalsInbox() {
+export default function ApprovalsInbox({ timezone = null }) {
   const [providers, setProviders] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -161,8 +155,8 @@ export default function ApprovalsInbox() {
       )}
 
       {shownView === 'customers'
-        ? <CustomerList queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} onReload={load} />
-        : <ProviderList provider={active} loading={loading} />}
+        ? <CustomerList queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} onReload={load} timezone={timezone} />
+        : <ProviderList provider={active} loading={loading} timezone={timezone} />}
     </div>
   )
 }
@@ -200,7 +194,7 @@ const CARDS = {
   offer_purchases: OfferPurchaseCard,
 }
 
-function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }) {
+function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload, timezone }) {
   // A chip whose provider vanished on a reload falls back to All.
   const key = queue.chips.some((c) => c.key === chip) ? chip : 'all'
   const { needsFixing, waiting } = filterQueue(queue, key)
@@ -250,7 +244,7 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }
       }
       onItemDecided?.(it.providerKey)
     }
-    return <Card key={`${it.providerKey}-${it.id}`} item={it} onDecided={onDecided} {...bulk} />
+    return <Card key={`${it.providerKey}-${it.id}`} item={it} onDecided={onDecided} timezone={timezone} {...bulk} />
   }
   const chipClass = (on) => `px-3 py-1 text-xs rounded-full border transition-colors flex items-center gap-1.5 ${
     on ? 'bg-un1t-text text-un1t-bg border-un1t-text font-medium' : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
@@ -310,7 +304,7 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload }
   )
 }
 
-function ProviderList({ provider, loading }) {
+function ProviderList({ provider, loading, timezone }) {
   if (!provider) {
     return (
       <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
@@ -349,7 +343,7 @@ function ProviderList({ provider, loading }) {
                 <div className="text-xs text-amber-700 mt-1">{it.warning}</div>
               )}
               <div className="text-xs text-un1t-subtle mt-1">
-                Submitted {formatDateTime(it.submittedAt)}
+                Submitted {formatApprovalDateTime(it.submittedAt, timezone)}
               </div>
             </div>
             {formatAmount(it.amount, it.currency) && (

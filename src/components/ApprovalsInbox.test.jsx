@@ -9,9 +9,9 @@ import { render, cleanup, screen, fireEvent, within, waitFor } from '@testing-li
 vi.mock('next/link', () => ({ default: ({ href, children, ...r }) => <a href={href} {...r}>{children}</a> }))
 
 function stub(name) {
-  return function Stub({ item, onDecided, selectable, selected, onToggle }) {
+  return function Stub({ item, onDecided, selectable, selected, onToggle, timezone }) {
     return (
-      <div data-testid={`card-${name}`}>
+      <div data-testid={`card-${name}`} data-tz={timezone ?? ''}>
         <span>{item.id}</span>
         {selectable && (
           <input type="checkbox" aria-label={`select-${item.id}`} checked={!!selected} onChange={() => onToggle?.()} />
@@ -403,5 +403,31 @@ describe('ApprovalsInbox bulk clear', () => {
     await screen.findByText('mia-1')
     fireEvent.click(screen.getByRole('button', { name: /^Team and money/ }))
     expect(screen.queryByRole('button', { name: 'Select' })).toBeNull()
+  })
+
+  // APPROVALSQ.3 — the studio's zone reaches every card and the link rows.
+  it('passes its timezone to all four customer cards', async () => {
+    mockApi(customers())
+    render(<ApprovalsInbox timezone="America/New_York" />)
+    await screen.findByText('mia-fail')
+    const cards = screen.getAllByTestId(/^card-/)
+    expect(cards.length).toBe(5)
+    for (const c of cards) expect(c.getAttribute('data-tz')).toBe('America/New_York')
+    expect(new Set(cards.map((c) => c.getAttribute('data-testid')))).toEqual(new Set(['card-agent', 'card-trial', 'card-corp', 'card-offer']))
+  })
+
+  it('passes no zone when it has none, so cards fall back to the platform zone', async () => {
+    mockApi(customers())
+    render(<ApprovalsInbox />)
+    await screen.findByText('mia-fail')
+    for (const c of screen.getAllByTestId(/^card-/)) expect(c.getAttribute('data-tz')).toBe('')
+  })
+
+  it('shows the Submitted line of a team row on the studio clock', async () => {
+    mockApi([...customers(), prov('time_off', [it_('leave-1', { reviewUrl: '/leave/1', subtitle: 's', submittedAt: '2026-11-14T16:20:00Z' })], [], { label: 'Time off' })])
+    render(<ApprovalsInbox timezone="America/New_York" />)
+    await screen.findByText('mia-fail')
+    fireEvent.click(screen.getByRole('button', { name: /^Team and money/ }))
+    expect(document.body.textContent).toContain('Submitted 14 Nov 2026, 11:20')
   })
 })

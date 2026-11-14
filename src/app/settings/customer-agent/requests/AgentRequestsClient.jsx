@@ -8,6 +8,7 @@ import { isStuckExecuting, retryOffered } from '@/lib/agent/request-recovery'
 import { whyFlagged, customerWords, accountSummaryLine } from '@/lib/approvals/agent-request-why'
 import { approvalSummary, explainFailure } from '@/lib/approvals/event-move-card'
 import { BOOKING_KINDS } from '@shared/approvals-next-steps'
+import { formatInZone, resolveZone, zonedWallClockToInstant } from '@shared/zoned-time'
 
 // RADAR-AGENT Phase 2 — operator approval queue. Manager+ reviews the
 // pause / cancellation requests the customer agent captured, and decides:
@@ -23,29 +24,38 @@ const STATUS_STYLE = {
   actioned: 'bg-green-100 text-green-700',
 }
 
-function fmtDate(d) {
+// APPROVALSQ.3 — every stamp renders on the studio's clock (`zone`), never the
+// browser's. A bare calendar date ('2026-12-01', a pause start) is a day, not an
+// instant: it is read as noon on that day in the studio zone so no zone shifts it.
+const CALENDAR_DAY = /^\d{4}-\d{2}-\d{2}$/
+function fmtDate(d, zone) {
   if (!d) return null
-  try { return new Date(d).toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' }) }
-  catch { return d }
+  try {
+    const instant = CALENDAR_DAY.test(d) ? zonedWallClockToInstant(d, '12:00', zone) : new Date(d)
+    // An impossible day (2026-02-30) solves to null; formatting null would print the epoch.
+    if (instant == null) return d
+    return formatInZone(instant, zone, { day: 'numeric', month: 'short', year: 'numeric' })
+  } catch { return d }
 }
 
 // APPROVALSQ.2 — the decided row's "by Sarah, 14 Nov 2026, 16:20". No name
 // (unknown decider, or a decision made on this page whose PATCH carries none)
 // shows the date and time alone; a name is never invented.
-function fmtDateTime(d) {
+function fmtDateTime(d, zone) {
   if (!d) return null
   const dt = new Date(d)
   if (Number.isNaN(dt.getTime())) return null
-  return dt.toLocaleString('en-IE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return formatInZone(dt, zone, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
-function decidedByText(r) {
-  const when = fmtDateTime(r.decided_at)
+function decidedByText(r, zone) {
+  const when = fmtDateTime(r.decided_at, zone)
   if (r.decided_by_name && when) return `by ${r.decided_by_name}, ${when}`
   if (r.decided_by_name) return `by ${r.decided_by_name}`
   return when
 }
 
-export default function AgentRequestsClient() {
+export default function AgentRequestsClient({ timezone = null }) {
+  const zone = resolveZone(timezone)
   const [requests, setRequests] = useState([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
@@ -143,7 +153,7 @@ export default function AgentRequestsClient() {
           </p>
           <div className="space-y-3">
             {stuck.map(r => (
-              <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} />
+              <RequestCard zone={zone} key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} />
             ))}
           </div>
         </div>
@@ -158,7 +168,7 @@ export default function AgentRequestsClient() {
           </p>
           <div className="space-y-3">
             {failedRetryable.map(r => (
-              <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} retryMode canClear />
+              <RequestCard zone={zone} key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} retryMode canClear />
             ))}
           </div>
         </div>
@@ -166,7 +176,7 @@ export default function AgentRequestsClient() {
 
       <div className="space-y-3">
         {pending.map(r => (
-          <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} canClear />
+          <RequestCard zone={zone} key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} canClear />
         ))}
       </div>
 
@@ -191,7 +201,7 @@ export default function AgentRequestsClient() {
                   <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_STYLE[r.status] || ''}`}>
                     {r.details?.cleared?.silent ? 'Cleared, customer not told' : r.status}
                   </span>
-                  {decidedByText(r) && <span className="text-xs text-un1t-muted">· {decidedByText(r)}</span>}
+                  {decidedByText(r, zone) && <span className="text-xs text-un1t-muted">· {decidedByText(r, zone)}</span>}
                 </div>
               </div>
             ))}
@@ -225,7 +235,7 @@ function CopyValue({ value }) {
   )
 }
 
-function RequestCard({ r, busy, onDecide, focused = false, retryMode = false, canClear = false }) {
+function RequestCard({ zone, r, busy, onDecide, focused = false, retryMode = false, canClear = false }) {
   // APPROVALSQ.1 — the clear needs a confirm step; it never fires from one click.
   const [clearOpen, setClearOpen] = useState(false)
   const [clearNote, setClearNote] = useState('')
@@ -256,15 +266,15 @@ function RequestCard({ r, busy, onDecide, focused = false, retryMode = false, ca
           {r.channel && <span className="text-xs text-un1t-muted">· via {r.channel}</span>}
           {isCancel && r.retention_flagged && <span className="text-xs text-blue-600">· retention</span>}
         </div>
-        <span className="text-xs text-un1t-muted">{fmtDate(r.created_at)}</span>
+        <span className="text-xs text-un1t-muted">{fmtDate(r.created_at, zone)}</span>
       </div>
 
       <div className="text-xs text-un1t-subtle space-y-0.5 mb-3">
         {r.kind === 'pause' && (d.start_date || d.end_date) && (
-          <p>{d.start_date ? `From ${fmtDate(d.start_date)}` : ''}{d.end_date ? ` to ${fmtDate(d.end_date)}` : ''}</p>
+          <p>{d.start_date ? `From ${fmtDate(d.start_date, zone)}` : ''}{d.end_date ? ` to ${fmtDate(d.end_date, zone)}` : ''}</p>
         )}
-        {isCancel && d.desired_date && <p>Requested date: {fmtDate(d.desired_date)}</p>}
-        {isCancel && d.requested_end_date && <p>Ends: {fmtDate(d.requested_end_date)}{d.result?.local_planned_end_date ? ` · Glofox: ${fmtDate(d.result.local_planned_end_date)}` : ''}</p>}
+        {isCancel && d.desired_date && <p>Requested date: {fmtDate(d.desired_date, zone)}</p>}
+        {isCancel && d.requested_end_date && <p>Ends: {fmtDate(d.requested_end_date, zone)}{d.result?.local_planned_end_date ? ` · Glofox: ${fmtDate(d.result.local_planned_end_date, zone)}` : ''}</p>}
         {d.source === 'cancellation_form' && <p className="text-un1t-muted">Submitted through the cancellation form{d.pause_taken ? ' (chose a pause instead)' : ''}.</p>}
         {/* EVENT-MOVE.7 — Mia's move request: one-line summary (web-only module). */}
         {r.kind === 'event_move' && <p>{approvalSummary(r)}</p>}

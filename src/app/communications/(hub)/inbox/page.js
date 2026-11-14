@@ -32,6 +32,7 @@ export default async function InboxPage(props) {
   return (
     <UnifiedInbox
       locationId={user.activeLocation?.id}
+      timezone={user.activeLocation?.timezone ?? null}
       userId={user.id}
       initialConversationId={searchParams?.c || null}
       initialChannel={searchParams?.ch === 'ig' ? 'ig' : 'wa'}

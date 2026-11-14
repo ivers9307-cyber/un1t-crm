@@ -78,7 +78,7 @@ function isPendingApproval(conv) {
 
 const VALID_CHANNELS = new Set(['wa', 'ig'])
 
-export default function UnifiedInbox({ locationId, userId, initialConversationId, initialChannel, canEditConsent = false }) {
+export default function UnifiedInbox({ locationId, timezone = null, userId, initialConversationId, initialChannel, canEditConsent = false }) {
   const [waConvs, setWaConvs] = useState([])
   const [igConvs, setIgConvs] = useState([])
   const [loading, setLoading] = useState(true)
@@ -416,6 +416,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                 <WAInbox
                   embedded
                   locationId={locationId}
+                  timezone={timezone}
                   userId={userId}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
@@ -430,6 +431,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                 <IGInbox
                   embedded
                   locationId={locationId}
+                  timezone={timezone}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
                 />
