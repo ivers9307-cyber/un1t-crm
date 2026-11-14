@@ -22,10 +22,13 @@
 //
 // WHEN: an event has start times (its race_waves rows, else its own
 // start_time). It runs from its FIRST start time to holdMinutes() after its
-// LAST one: studio_hold_minutes (mig 833, staff-only), else duration_minutes
-// (customer-facing: the calendar entry's length), else DEFAULT_EVENT_MINUTES.
-// The two are separate columns so that holding a studio on for 3 hours never
-// tells an attendee their session is 3 hours long.
+// LAST one: the STUDIO's event hold setting (src/lib/event-hold.js, one number
+// per studio, default 120), or the event's own duration_minutes when that is
+// longer. The duration is customer-facing (the calendar entry's length), so
+// the hold is never set through it: holding a studio on for 3 hours must not
+// tell an attendee their session is 3 hours long. (race_events.
+// studio_hold_minutes, mig 833, was a per-event version of this; DEPRECATED
+// by mig 834 and no longer read.)
 //
 // TWO SHAPES. The Shelly timers want ONE span per event (eventToOccurrence).
 // The climate automations act per class START (bathroom fans run N minutes
@@ -39,26 +42,30 @@
 // their state) instead of switching a studio off mid-event on a database blip.
 import { zonedWallClockToInstant, strictDayStrIn } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
+import { loadEventHoldMinutes, DEFAULT_EVENT_HOLD_MINUTES } from '@/lib/event-hold'
 
 const MODULE = 'shelly-studio-events'
 
-/** How long an event with no hold and no duration runs after its last start time. */
-export const DEFAULT_EVENT_MINUTES = 120
+/** The hold when a studio has set none (re-exported for the tests' sake). */
+export const DEFAULT_EVENT_MINUTES = DEFAULT_EVENT_HOLD_MINUTES
 
 // Several times any real day. The sentinel row (cap + 1) tells "exactly at
 // the cap" from "the limit dropped the rest", like every select in reconcile.
 export const MAX_DAY_EVENTS = 50
 
-const EVENT_COLUMNS = 'id, name, race_date, start_time, duration_minutes, studio_hold_minutes, waves:race_waves ( start_time )'
+const EVENT_COLUMNS = 'id, name, race_date, start_time, duration_minutes, waves:race_waves ( start_time )'
 
 const positive = (v) => {
   const n = Number(v)
   return v != null && Number.isFinite(n) && n > 0 ? n : null
 }
 
-/** Minutes the studio is held on after an event's last start time. Pure. */
-export function holdMinutes(event) {
-  return positive(event?.studio_hold_minutes) ?? positive(event?.duration_minutes) ?? DEFAULT_EVENT_MINUTES
+/**
+ * Minutes the studio is held on after an event's last start time: the studio's
+ * setting, or the event's own duration when that is longer. Pure.
+ */
+export function holdMinutes(event, studioHold = DEFAULT_EVENT_MINUTES) {
+  return Math.max(positive(studioHold) ?? DEFAULT_EVENT_MINUTES, positive(event?.duration_minutes) ?? 0)
 }
 
 // The event's start instants (ms), in time order, with their HH:MM. [] when it
@@ -80,16 +87,17 @@ function sessionStarts(event, tz) {
  * One event row → one occurrence-shaped span, or null when it has no usable
  * start time. Pure.
  *
- * @param event { name, race_date, start_time, duration_minutes, studio_hold_minutes, waves: [{ start_time }] }
+ * @param event { name, race_date, start_time, duration_minutes, waves: [{ start_time }] }
  * @param tz the STUDIO's zone (the one the timers run on)
+ * @param studioHold the studio's event hold setting, minutes
  * @returns {{ starts_at, ends_at, cancelled_at: null, name, kind: 'event' } | null}
  */
-export function eventToOccurrence(event, tz) {
+export function eventToOccurrence(event, tz, studioHold = DEFAULT_EVENT_MINUTES) {
   const starts = sessionStarts(event, tz)
   if (!starts.length) return null
   return {
     starts_at: new Date(starts[0].ms).toISOString(),
-    ends_at: new Date(starts[starts.length - 1].ms + holdMinutes(event) * 60 * 1000).toISOString(),
+    ends_at: new Date(starts[starts.length - 1].ms + holdMinutes(event, studioHold) * 60 * 1000).toISOString(),
     cancelled_at: null,
     name: event.name ?? null,
     kind: 'event',
@@ -100,8 +108,8 @@ export function eventToOccurrence(event, tz) {
  * One event row → one span per SESSION, shaped like the class rows the climate
  * runners read (`glofox_event_id` is their idempotency key). Pure.
  */
-export function eventToSessions(event, tz) {
-  const runMs = holdMinutes(event) * 60 * 1000
+export function eventToSessions(event, tz, studioHold = DEFAULT_EVENT_MINUTES) {
+  const runMs = holdMinutes(event, studioHold) * 60 * 1000
   return sessionStarts(event, tz).map(({ ms, hhmm }) => ({
     glofox_event_id: `event:${event.id}:${hhmm}`,
     name: event.name ?? null,
@@ -131,6 +139,8 @@ function heldAtStudio(db, locationId) {
  */
 export async function loadDayEvents(db, locationId, tz, dayStr) {
   if (!locationId) return { ok: true, occurrences: [] }
+  const hold = await loadEventHoldMinutes(db, locationId)
+  if (!hold.ok) return { ok: false, error: `event hold setting: ${hold.error}` }
   const { data, error } = await heldAtStudio(db, locationId)
     .eq('race_date', dayStr)
     .order('id')
@@ -143,7 +153,7 @@ export async function loadDayEvents(db, locationId, tz, dayStr) {
   }
   const occurrences = []
   for (const row of rows) {
-    const occ = eventToOccurrence(row, tz)
+    const occ = eventToOccurrence(row, tz, hold.minutes)
     if (occ) occurrences.push(occ)
     else logWarn(MODULE, 'event has no start time, not counted by the timers', { locationId, eventId: row?.id })
   }
@@ -159,6 +169,8 @@ export async function loadDayEvents(db, locationId, tz, dayStr) {
 export async function loadEventSessionsBetween(db, locationId, tz, sinceMs, untilMs) {
   if (!locationId) return { ok: true, occurrences: [] }
   if (!Number.isFinite(sinceMs) || !Number.isFinite(untilMs)) return { ok: false, error: 'unusable window' }
+  const hold = await loadEventHoldMinutes(db, locationId)
+  if (!hold.ok) return { ok: false, error: `event hold setting: ${hold.error}` }
   const { data, error } = await heldAtStudio(db, locationId)
     .gte('race_date', strictDayStrIn(sinceMs, tz))
     .lte('race_date', strictDayStrIn(untilMs, tz))
@@ -170,7 +182,7 @@ export async function loadEventSessionsBetween(db, locationId, tz, sinceMs, unti
     logWarn(MODULE, 'event cap exceeded, excess events skipped', { locationId, cap: MAX_DAY_EVENTS })
   }
   const occurrences = rows
-    .flatMap((row) => eventToSessions(row, tz))
+    .flatMap((row) => eventToSessions(row, tz, hold.minutes))
     .filter((o) => {
       const ms = new Date(o.starts_at).getTime()
       return ms >= sinceMs && ms <= untilMs

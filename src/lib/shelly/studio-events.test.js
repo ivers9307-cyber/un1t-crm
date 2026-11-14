@@ -1,6 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
+// SHELLYEVENTS.3 — the studio's hold setting is its own module (event-hold.test.js);
+// here it answers the default unless a test says otherwise.
+const loadEventHoldMinutes = vi.fn(async () => ({ ok: true, minutes: 120 }))
+vi.mock('@/lib/event-hold', async (importOriginal) => ({
+  ...(await importOriginal()),
+  loadEventHoldMinutes: (...a) => loadEventHoldMinutes(...a),
+}))
 
 import { eventToOccurrence, eventToSessions, holdMinutes, loadDayEvents, loadEventSessionsBetween, DEFAULT_EVENT_MINUTES, MAX_DAY_EVENTS } from './studio-events'
 import { resolveDayWindows } from '@/lib/schedule/desired-state'
@@ -28,10 +35,10 @@ describe('eventToOccurrence', () => {
     expect(DEFAULT_EVENT_MINUTES).toBe(120)
   })
 
-  it('uses the event length when one is set, and the studio wall clock in summer', () => {
-    const occ = eventToOccurrence({ race_date: '2026-07-11', duration_minutes: 45, waves: [{ start_time: '10:00:00' }] }, TZ)
+  it('a longer event length wins over the studio hold; the studio wall clock in summer', () => {
+    const occ = eventToOccurrence({ race_date: '2026-07-11', duration_minutes: 240, waves: [{ start_time: '10:00:00' }] }, TZ)
     expect(occ.starts_at).toBe('2026-07-11T09:00:00.000Z')
-    expect(occ.ends_at).toBe('2026-07-11T09:45:00.000Z')
+    expect(occ.ends_at).toBe('2026-07-11T13:00:00.000Z')
   })
 
   it('falls back to the event start time when it has no waves', () => {
@@ -80,17 +87,34 @@ describe('loadDayEvents', () => {
   })
 })
 
-describe('holdMinutes — the studio hold is staff\'s, the duration is the customer\'s (SHELLYEVENTS.2)', () => {
-  it('prefers the studio hold, then the duration, then the default', () => {
-    expect(holdMinutes({ studio_hold_minutes: 180, duration_minutes: 45 })).toBe(180)
-    expect(holdMinutes({ studio_hold_minutes: null, duration_minutes: 45 })).toBe(45)
+describe('holdMinutes — the studio setting, or a longer event (SHELLYEVENTS.3)', () => {
+  it('is the studio hold, the default when none is given, and never shorter than the event', () => {
+    expect(holdMinutes({}, 180)).toBe(180)
+    expect(holdMinutes({ duration_minutes: 45 }, 180)).toBe(180)
+    expect(holdMinutes({ duration_minutes: 240 }, 180)).toBe(240)
     expect(holdMinutes({})).toBe(120)
-    expect(holdMinutes({ studio_hold_minutes: 0, duration_minutes: -5 })).toBe(120)
+    expect(holdMinutes({ duration_minutes: 45 })).toBe(120)
+    expect(holdMinutes({ duration_minutes: -5 }, 0)).toBe(120)
   })
 
-  it('a 3 hour hold keeps the studio on 3 hours after the last start', () => {
-    const occ = eventToOccurrence({ race_date: '2026-12-05', studio_hold_minutes: 180, duration_minutes: 45, waves: [{ start_time: '10:30:00' }] }, TZ)
-    expect(occ.ends_at).toBe('2026-12-05T13:30:00.000Z')
+  it('the per-event studio_hold_minutes column is no longer read', () => {
+    expect(holdMinutes({ studio_hold_minutes: 600 }, 180)).toBe(180)
+  })
+
+  it('loadDayEvents holds for the studio setting', async () => {
+    loadEventHoldMinutes.mockResolvedValueOnce({ ok: true, minutes: 180 })
+    const db = makeDb({ rows: [{ id: 'e1', name: 'PTC', race_date: '2026-12-05', duration_minutes: null, waves: [{ start_time: '10:30:00' }] }] })
+    const out = await loadDayEvents(db, 'loc-A', TZ, '2026-12-05')
+    expect(out.occurrences[0].ends_at).toBe('2026-12-05T13:30:00.000Z')
+    expect(loadEventHoldMinutes).toHaveBeenCalledWith(db, 'loc-A')
+  })
+
+  it('an unreadable setting fails the load, for the timers and for the climate runners', async () => {
+    loadEventHoldMinutes.mockResolvedValue({ ok: false, error: 'pg down' })
+    const db = makeDb({ rows: [] })
+    expect(await loadDayEvents(db, 'loc-A', TZ, '2026-12-05')).toEqual({ ok: false, error: 'event hold setting: pg down' })
+    expect(await loadEventSessionsBetween(db, 'loc-A', TZ, 1, 2)).toEqual({ ok: false, error: 'event hold setting: pg down' })
+    loadEventHoldMinutes.mockResolvedValue({ ok: true, minutes: 120 })
   })
 })
 

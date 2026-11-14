@@ -29,7 +29,7 @@ export const DUPLICATE_COLUMNS = Object.freeze([
   'allowed_team_sizes', 'capacity_mode',
   'member_pricing_enabled', 'members_only', 'member_fee_cents', 'non_member_fee_cents', 'payment_currency',
   'registration_opens_at', 'registration_closes_at',
-  'hero_image_url', 'accent_hex', 'venue_name', 'venue_address', 'venue_location_id', 'held_offsite', 'studio_hold_minutes',
+  'hero_image_url', 'accent_hex', 'venue_name', 'venue_address', 'venue_location_id', 'held_offsite',
   'confirmation_email_subject', 'confirmation_email_intro', 'confirmation_email_template_id',
   'reminder_email_subject', 'reminder_email_intro',
   'rating_email_subject', 'rating_email_intro',

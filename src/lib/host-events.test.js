@@ -377,7 +377,7 @@ describe('reReviewReasons — the studio an event is held at (SHELLYEVENTS.1)', 
 describe('reReviewReasons — longer studio hours on a linked event (SHELLYEVENTS.2)', () => {
   const linked = {
     status: 'published', race_date: '2026-12-05', non_member_fee_cents: 1000, pricing_tiers: null,
-    venue_location_id: 'hatch', duration_minutes: 60, studio_hold_minutes: null,
+    venue_location_id: 'hatch', duration_minutes: 60,
     waves: [{ id: 'w1', start_time: '10:30:00' }, { id: 'w2', start_time: '12:15:00' }],
   }
   const same = { race_date: '2026-12-05', non_member_fee_cents: 1000, pricing_tiers: null, waves: [{ id: 'w1', start_time: '10:30' }, { id: 'w2', start_time: '12:15' }] }
@@ -391,23 +391,25 @@ describe('reReviewReasons — longer studio hours on a linked event (SHELLYEVENT
     expect(reReviewReasons(linked, { ...same, new_session_times: ['11:30'] })).toEqual([])
   })
 
-  it('a longer duration does; a shorter or equal one does not', () => {
+  // SHELLYEVENTS.3 — the studio is held for its own setting, or for the
+  // event's duration when that is longer. The setting is not known here, so
+  // the rule measures against the 120 minute default.
+  it('a duration that grows past the default hold and past what was approved does; anything else does not', () => {
     expect(reReviewReasons(linked, { ...same, duration_minutes: 180 })).toEqual(['studio_hours'])
     expect(reReviewReasons(linked, { ...same, duration_minutes: 60 })).toEqual([])
     expect(reReviewReasons(linked, { ...same, duration_minutes: 30 })).toEqual([])
-    // No duration is the 120 minute default: 90 is shorter, 150 is longer.
-    expect(reReviewReasons({ ...linked, duration_minutes: null }, { ...same, duration_minutes: 90 })).toEqual([])
+    // 60 -> 90 stays under the default hold, so the studio is on no longer.
+    expect(reReviewReasons(linked, { ...same, duration_minutes: 90 })).toEqual([])
     expect(reReviewReasons({ ...linked, duration_minutes: null }, { ...same, duration_minutes: 150 })).toEqual(['studio_hours'])
+    // Approved at 240: 200 is shorter, 300 is longer.
+    expect(reReviewReasons({ ...linked, duration_minutes: 240 }, { ...same, duration_minutes: 200 })).toEqual([])
+    expect(reReviewReasons({ ...linked, duration_minutes: 240 }, { ...same, duration_minutes: 300 })).toEqual(['studio_hours'])
   })
 
-  it('a body that leaves the duration out is judged as "no duration", the 2 hour default', () => {
-    // Approved at 60 minutes; the route would write null, which holds for 120.
-    expect(reReviewReasons(linked, { ...same, duration_minutes: editChangesFromInput({ sessions: [] }).duration_minutes })).toEqual(['studio_hours'])
+  it('a body that leaves the duration out is judged as "no duration", which is never longer', () => {
     expect(editChangesFromInput({ sessions: [] }).duration_minutes).toBeNull()
-  })
-
-  it('a duration change is nothing when staff set the hold time', () => {
-    expect(reReviewReasons({ ...linked, studio_hold_minutes: 180 }, { ...same, duration_minutes: 600 })).toEqual([])
+    expect(reReviewReasons(linked, { ...same, duration_minutes: null })).toEqual([])
+    expect(reReviewReasons({ ...linked, duration_minutes: 240 }, { ...same, duration_minutes: null })).toEqual([])
   })
 
   it('an event held somewhere else, or moved out in the same save, never does', () => {
