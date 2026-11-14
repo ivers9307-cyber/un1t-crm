@@ -20,6 +20,7 @@ import ClassFunnelCheckout from '@/components/landing-page/ClassFunnelCheckout'
 import { classFunnelConsentDefault } from '@/lib/landing-page-blocks'
 import { termsLabelSegments, stripDashes } from '@/lib/un1t-online-funnel-copy'
 import { customerErrorText } from '@/lib/page-request-errors'
+import { cleanAdValue } from '@/lib/campaign-funnel-attribution'
 
 // MATCHQUALITY.1 — Meta's `_fbp` cookie, or null. Never throws (no document
 // during SSR, cookies blocked, no Pixel yet).
@@ -131,13 +132,16 @@ export default function ClassFunnel(props) {
     // Lead and does not make anyone an ad lead (ad_provider stays tied to
     // an actual ad signal).
     const fbp = readFbpCookie()
-    if (!hasSignal && !fbp) return undefined
+    if (!hasSignal && !fbp && !p.utm_source && !p.utm_medium) return undefined
     return {
       ...(hasSignal ? {
         utm_campaign: p.utm_campaign, utm_content: p.utm_content, utm_term: p.utm_term,
         ad_provider: 'meta', ad_external_id: p.meta_ad_id,
         fbclid: p.fbclid,
       } : {}),
+      // TRIALLEAK.1 — measurement only; never an ad signal on their own.
+      ...(p.utm_source ? { utm_source: p.utm_source } : {}),
+      ...(p.utm_medium ? { utm_medium: p.utm_medium } : {}),
       ...(fbp ? { fbp } : {}),
     }
   }
@@ -159,7 +163,8 @@ export default function ClassFunnel(props) {
           ad_provider: a.meta_ad_id ? 'meta' : undefined,
           ad_external_id: a.meta_ad_id,
           utm_campaign: a.utm_campaign, utm_content: a.utm_content, utm_term: a.utm_term,
-          meta: params,
+          // TRIALLEAK.1 — source and medium travel in the event's `meta` (jsonb).
+          meta: { ...params, ...(a.utm_source ? { utm_source: a.utm_source } : {}), ...(a.utm_medium ? { utm_medium: a.utm_medium } : {}) },
         }),
       }).catch(() => {})
     } catch { /* never block the funnel */ }
@@ -172,11 +177,15 @@ export default function ClassFunnel(props) {
   // here are expected and intentional.
   useEffect(() => {
     const p = new URLSearchParams(window.location.search)
+    // TRIALLEAK.1 — cleanAdValue drops an unfilled Meta macro (`{{adset.id}}`),
+    // and utm_source / utm_medium ride along for measurement only.
     attributionRef.current = {
-      utm_campaign: p.get('utm_campaign') || undefined,
-      utm_content: p.get('utm_content') || undefined,
-      utm_term: p.get('utm_term') || undefined,
-      meta_ad_id: p.get('meta_ad_id') || undefined,
+      utm_campaign: cleanAdValue(p.get('utm_campaign') || undefined),
+      utm_content: cleanAdValue(p.get('utm_content') || undefined),
+      utm_term: cleanAdValue(p.get('utm_term') || undefined),
+      utm_source: cleanAdValue(p.get('utm_source') || undefined),
+      utm_medium: cleanAdValue(p.get('utm_medium') || undefined),
+      meta_ad_id: cleanAdValue(p.get('meta_ad_id') || undefined),
       // METADATASET.1 — Meta's click id, appended to every ad link.
       fbclid: p.get('fbclid') || undefined,
     }

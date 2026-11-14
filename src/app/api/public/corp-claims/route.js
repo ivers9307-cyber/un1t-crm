@@ -29,6 +29,7 @@
 // studio holds is not available here. A failed read is 503 with nothing
 // written; a Glofox promo with no plan binding is 409 glofox_plan_missing
 // before any Glofox call; every claim row records the promo's platform.
+import { cleanAttribution } from '@/lib/campaign-funnel-attribution'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -119,7 +120,8 @@ export async function POST(request) {
 
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
-  const b = validation.data
+  // TRIALLEAK.1 — an unfilled Meta macro in an ad value is no value.
+  const b = { ...validation.data, attribution: cleanAttribution(validation.data.attribution) }
 
   let promo
   let copy

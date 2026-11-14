@@ -6,10 +6,13 @@
 // route's provider re-check calls markTrialPurchasePaymentStatus(): 'paid'
 // RELEASES the row (status → 'queued') for the processor to put the Glofox
 // plan on the account; failed/cancelled/expired are terminal, no money taken.
+// TRIALLEAK.1 — a trial order lives two hours and the buyer's open checkout is
+// handed back rather than re-made (findReusableTrialCheckout).
 import { paymentsFor } from './payments'
 import { resolveLocationPaymentProvider } from './location-payments'
 import { resolveCustomerBaseUrl } from './tenant-host'
 import { getLocationBranding } from './location-branding'
+import { TRIAL_CHECKOUT_EXPIRE_AFTER, TRIAL_CHECKOUT_REUSE_MS, trialCheckoutUsable, trialPaymentFailure } from './trial-checkout-window'
 
 /** "UN1T Stillorgan: The UN1T 14 Day Reset" on the checkout and the statement. */
 export function trialPurchaseDescription(brand, productName) {
@@ -37,8 +40,11 @@ export async function createTrialPurchasePayment({ db, purchase, location, amoun
     returnUrl: `${baseUrl}${returnPath}?purchase=${purchase.id}`,
     metadata: { trial_purchase_id: purchase.id, domain: 'un1t_trial_purchase', location_id: purchase.location_id },
     idempotencyKey: purchase.id,
-    // REVPAY.7 — buyer, our row id, and what was bought on the statement. Paid
-    // in-page straight after the form: the 30-minute default expiry applies.
+    // REVPAY.7 — buyer, our row id, and what was bought on the statement.
+    // TRIALLEAK.1 — two hours, not the 30-minute default: an ad buyer's in-app
+    // browser reloads on the way back from their banking app, and the page
+    // then resumes this same order (trial-checkout-window.js).
+    expirePendingAfter: TRIAL_CHECKOUT_EXPIRE_AFTER,
     customer: { email: purchase.customer_email, fullName: purchase.customer_name },
     merchantReference: `trial:${purchase.id}`,
     statementDescriptorSuffix: 'TRIAL',
@@ -62,6 +68,35 @@ export async function createTrialPurchasePayment({ db, purchase, location, amoun
     purchaseId: purchase.id,
     checkout: { provider, token: created.checkoutToken || null, url: created.checkoutUrl || null, connectedAccountId },
   }
+}
+
+/**
+ * TRIALLEAK.1 — the buyer's own open checkout, to hand back instead of opening
+ * a second row and a second order when they press pay again. The caller must
+ * PROVE it holds the row: `purchaseId` is the id its own browser was given
+ * (its state, or `?purchase=`), and the row is matched on that id AND this
+ * contact, studio, page, product and price, still `awaiting_payment` on
+ * Revolut with a payable order (trialCheckoutUsable). An email or phone alone
+ * never finds a row: without the id this asks nothing, so nobody who merely
+ * knows a buyer's email is handed that buyer's checkout. Never a Hatch Street
+ * row (its checkout URL is not stored). A failed read is "none": reuse is a
+ * saving, never a gate.
+ * @returns {Promise<{ row: object|null, error: object|null }>}
+ */
+export async function findReusableTrialCheckout(db, { purchaseId, contactId, locationId, landingPath, pageId = null, membershipId, planCode, amountCents, currency, nowMs = Date.now() }) {
+  if (!purchaseId || !contactId || !locationId) return { row: null, error: null }
+  let q = db.from('trial_purchases').select('*')
+    .eq('id', purchaseId).eq('contact_id', contactId).eq('location_id', locationId).eq('landing_path', landingPath)
+    .eq('status', 'awaiting_payment').eq('payment_status', 'pending').eq('payment_provider', 'revolut')
+    .eq('membership_id', membershipId).eq('plan_code', planCode)
+    .eq('amount_cents', amountCents).eq('currency', currency || 'EUR')
+    .gte('created_at', new Date(nowMs - TRIAL_CHECKOUT_REUSE_MS).toISOString())
+  q = pageId ? q.eq('page_id', pageId) : q.is('page_id', null)
+  // Pinned by the primary key: 0 rows is the usual answer (maybeSingle).
+  const { data, error } = await q.maybeSingle()
+  if (error) return { row: null, error }
+  const held = data && data.id === purchaseId && data.contact_id === contactId
+  return { row: held && trialCheckoutUsable(data, nowMs) ? data : null, error: null }
 }
 
 /**
@@ -93,9 +128,15 @@ export async function markTrialPurchasePaymentStatus({ db, purchase, providerSta
     if (error) throw error
     return { released: updates.status === 'queued' }
   }
-  if (state === 'failed' || state === 'cancelled' || state === 'expired') {
-    const payment_status = state === 'cancelled' ? 'expired' : state
-    const { error } = await db.from('trial_purchases').update({ payment_status, status: 'payment_failed' }).eq('id', purchase.id)
+  // TRIALLEAK.1 — which it was goes on the row: a checkout that ran out of
+  // time (or was cancelled) is `expired` with last_error checkout_expired /
+  // checkout_cancelled; a refused payment is `failed` with payment_declined.
+  // The status is payment_failed either way, as before.
+  const failure = trialPaymentFailure(state, purchase, Date.parse(now()) || Date.now())
+  if (failure) {
+    const { error } = await db.from('trial_purchases')
+      .update({ payment_status: failure.payment_status, status: 'payment_failed', last_error: failure.reason })
+      .eq('id', purchase.id)
     if (error) throw error
     return { released: false }
   }
