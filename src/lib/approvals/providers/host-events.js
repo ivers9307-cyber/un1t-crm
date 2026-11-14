@@ -27,6 +27,13 @@ function viewerOrgId(user) {
   return user?.activeOrganization?.id || user?.activeLocation?.organization_id || null
 }
 
+// The public (non-member) entry price, in euros. No fee or a zero fee is Free.
+function priceLabel(cents) {
+  const n = Number(cents)
+  if (!Number.isFinite(n) || n <= 0) return 'Free'
+  return `€${(n / 100).toFixed(2)}`
+}
+
 export const hostEventsProvider = {
   key: 'host_events',
   label: 'Host events',
@@ -47,6 +54,7 @@ export const hostEventsProvider = {
       .from('race_events')
       .select(`
         id, name, kind, race_date, status, submitted_at, created_at, location_id,
+        venue_name, non_member_fee_cents,
         host:event_hosts!host_id ( id, name, organization_id )
       `)
       .eq('status', 'pending_review')
@@ -68,6 +76,9 @@ export const hostEventsProvider = {
       amount: null,
       currency: null,
       reviewUrl: `/settings/hosts`,
+      // APPROVALSQ.4 — shown on the in-place card so the reviewer need not open the page.
+      venue: typeof r.venue_name === 'string' && r.venue_name.trim() ? r.venue_name.trim() : null,
+      priceLabel: priceLabel(r.non_member_fee_cents),
     }))
     return { count: items.length, items }
   },

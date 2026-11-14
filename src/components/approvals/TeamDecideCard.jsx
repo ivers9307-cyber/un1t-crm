@@ -1,0 +1,122 @@
+'use client'
+
+// APPROVALSQ.4 — one card for a team-and-money item that is decided in place on
+// /approvals. The provider's TEAM_ACTIONS entry says which route each button
+// calls; this component owns only the presses: one request per press (in-flight
+// ref), Decline always through a small panel, an optional confirm before an
+// approve that gives something back, and the route's own words on failure.
+// No <form>: every button is type="button".
+import { useRef, useState } from 'react'
+import Link from 'next/link'
+import { Button } from '@/components/ui'
+import { TEAM_ACTIONS } from '@/lib/approvals/team-actions'
+import CustomerCardShell from './CustomerCardShell'
+import { formatApprovalDateTime } from './format-date-time'
+import { formatAmount } from './format-amount'
+
+export default function TeamDecideCard({
+  item, providerKey, providerLabel, timezone = null, onDecided, extra,
+  approveDisabledReason, afterApprove,
+}) {
+  const cfg = TEAM_ACTIONS[providerKey]
+  const [mode, setMode] = useState('idle') // 'idle' | 'confirm' | 'decline'
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  const [done, setDone] = useState(null) // { text, node }
+  const inFlight = useRef(false)
+
+  async function run(kind) {
+    if (inFlight.current) return
+    inFlight.current = true
+    setBusy(true)
+    setError(null)
+    try {
+      const result = kind === 'approve'
+        ? await cfg.approve(item)
+        : await cfg.decline(item, reason.trim() || null)
+      if (!result?.ok) {
+        setError(result?.error || 'Something went wrong. Please try again.')
+        if (kind === 'approve') setMode('idle')
+        return
+      }
+      setDone({
+        text: kind === 'approve' ? cfg.approvedText : cfg.declinedText,
+        node: kind === 'approve' && afterApprove ? afterApprove(result) : null,
+      })
+      onDecided?.()
+    } catch (e) {
+      setError(e?.message || 'Something went wrong. Please try again.')
+      if (kind === 'approve') setMode('idle')
+    } finally {
+      inFlight.current = false
+      setBusy(false)
+    }
+  }
+
+  function pressApprove() {
+    if (cfg.approveConfirm) { setError(null); setMode('confirm'); return }
+    run('approve')
+  }
+
+  const reasonMissing = cfg.reasonRequired && !reason.trim()
+  const blocked = typeof approveDisabledReason === 'string' && approveDisabledReason.length > 0
+  const amount = formatAmount(item.amount, item.currency)
+
+  let actions
+  if (done) {
+    actions = done.node || null
+  } else if (mode === 'confirm') {
+    actions = (
+      <>
+        <span className="text-sm text-un1t-text">{cfg.approveConfirm}</span>
+        <Button type="button" size="sm" variant="primary" loading={busy} disabled={busy} onClick={() => run('approve')}>Confirm</Button>
+        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => setMode('idle')}>Back</Button>
+      </>
+    )
+  } else if (mode === 'decline') {
+    const inputId = `decline-reason-${providerKey}-${item.id}`
+    actions = (
+      <>
+        <label htmlFor={inputId} className="text-xs text-un1t-subtle">{cfg.reasonLabel}</label>
+        <input
+          id={inputId}
+          type="text"
+          value={reason}
+          maxLength={1000}
+          disabled={busy}
+          onChange={(e) => setReason(e.target.value)}
+          className="flex-1 min-w-[200px] text-sm bg-un1t-surface border border-un1t-border rounded px-2 py-1.5 text-un1t-text"
+        />
+        <Button type="button" size="sm" variant="primary" loading={busy} disabled={busy || reasonMissing} onClick={() => run('decline')}>Confirm</Button>
+        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => { setMode('idle'); setError(null) }}>Back</Button>
+      </>
+    )
+  } else {
+    actions = (
+      <>
+        <Button type="button" size="sm" variant="primary" loading={busy} disabled={busy || blocked} onClick={pressApprove}>{cfg.approveLabel}</Button>
+        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => { setError(null); setMode('decline') }}>{cfg.declineLabel}</Button>
+        {blocked && <span className="text-xs text-un1t-subtle">{approveDisabledReason}</span>}
+      </>
+    )
+  }
+
+  return (
+    <CustomerCardShell
+      source={providerLabel}
+      name={item.title}
+      meta={item.meta}
+      when={`Submitted ${formatApprovalDateTime(item.submittedAt, timezone)}`}
+      amount={amount}
+      summary={item.subtitle}
+      links={item.reviewUrl && <Link href={item.reviewUrl} className="underline text-un1t-subtle">Open in {cfg.pageLabel}</Link>}
+      outcome={done ? { tone: 'ok', text: done.text } : null}
+      error={error}
+      actions={actions}
+    >
+      {item.warning && <div className="text-xs rounded-md px-3 py-2 bg-amber-500/10 text-amber-700">{item.warning}</div>}
+      {extra}
+    </CustomerCardShell>
+  )
+}

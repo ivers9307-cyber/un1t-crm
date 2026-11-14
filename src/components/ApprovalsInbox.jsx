@@ -20,12 +20,7 @@ import BulkClearBar from '@/components/approvals/BulkClearBar'
 import { isBulkClearable } from '@/lib/approvals/bulk-clear'
 import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 import { buildCustomerQueue, filterQueue, teamProviders } from '@/lib/approvals/customer-queue'
-
-function formatAmount(amount, currency) {
-  if (amount == null) return null
-  const sym = currency === 'EUR' ? '€' : currency === 'GBP' ? '£' : currency === 'USD' ? '$' : ''
-  return `${sym}${Number(amount).toFixed(2)}`
-}
+import { formatAmount } from '@/components/approvals/format-amount'
 
 export default function ApprovalsInbox({ timezone = null }) {
   const [providers, setProviders] = useState([])
