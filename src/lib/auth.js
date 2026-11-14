@@ -122,6 +122,97 @@ export function resolveActiveLocationRole({ profile, rolesByLocation, activeLoca
   return highest || profile?.role
 }
 
+/**
+ * The fields of a user object that depend on WHICH studio is active
+ * (APPROVALSQ.6). One function builds them for getCurrentUser() and for
+ * userAtLocation(), so a derived user can never drift from a real one.
+ *
+ *   - role:                  master always 'master'; else the role at the
+ *                            active studio (mig 051), falling back as
+ *                            resolveActiveLocationRole() says. Overrides
+ *                            the global value, which stays on `profileRole`.
+ *   - activeAssignment:      the per-studio assignment (mig 058), incl.
+ *                            the per-user permission overrides.
+ *   - activeRoleTemplate:    the operator-edited role template for the
+ *                            role the person holds there (PERM-AUDIT.2).
+ *   - activeAcDeviceTemplate access-control device template there.
+ *   - activeOrganization:    the active studio's organisation.
+ *
+ * Pure: reads only the maps getCurrentUser has already built.
+ *
+ * @param {object} args
+ * @param {{role?: string} | null | undefined} args.profile  needs `role` only
+ * @param {{id?: string, organization_id?: string} | null} args.activeLocation
+ * @param {Record<string,string>} args.rolesByLocation
+ * @param {Record<string,object>} args.assignmentsByLocation
+ * @param {Record<string,object>} args.roleTemplatesByLocation
+ * @param {Record<string,any>} args.acDeviceTemplatesByLocation
+ * @param {Record<string,object>} args.organizationsById
+ */
+export function resolveActiveFields({
+  profile,
+  activeLocation,
+  rolesByLocation,
+  assignmentsByLocation,
+  roleTemplatesByLocation,
+  acDeviceTemplatesByLocation,
+  organizationsById,
+}) {
+  const locId = activeLocation?.id
+  return {
+    role: resolveActiveLocationRole({
+      profile,
+      rolesByLocation,
+      activeLocationId: locId,
+    }),
+    activeAssignment: locId ? assignmentsByLocation?.[locId] || null : null,
+    activeRoleTemplate: locId ? roleTemplatesByLocation?.[locId] || null : null,
+    activeAcDeviceTemplate: locId ? (acDeviceTemplatesByLocation?.[locId] ?? null) : null,
+    // Active organization mirrors active location — useful for any UI
+    // that wants to badge "you're operating inside CCF Autos right now".
+    activeOrganization: activeLocation?.organization_id
+      ? organizationsById?.[activeLocation.organization_id] || null
+      : null,
+  }
+}
+
+/**
+ * The user as getCurrentUser() would have returned it had `locationId`
+ * been the active studio (APPROVALSQ.6: the "all my studios" approvals
+ * list runs the registry once per studio with this). Returns a copy;
+ * null when the studio is not one of the user's `locations`. No database
+ * read: every input already sits on the user object.
+ *
+ * @param {object | null | undefined} user  a getCurrentUser() result
+ * @param {string | null | undefined} locationId
+ */
+export function userAtLocation(user, locationId) {
+  if (!user || !locationId) return null
+  const location = (user.locations || []).find(l => l.id === locationId)
+  if (!location) return null
+  // getCurrentUser overrides `role` after spreading the profile; the global
+  // value lives on `profileRole`, which is what the resolver wants.
+  const { role, activeAssignment, activeRoleTemplate, activeAcDeviceTemplate, activeOrganization } =
+    resolveActiveFields({
+      profile: { role: user.profileRole },
+      activeLocation: location,
+      rolesByLocation: user.rolesByLocation || {},
+      assignmentsByLocation: user.assignmentsByLocation,
+      roleTemplatesByLocation: user.roleTemplatesByLocation,
+      acDeviceTemplatesByLocation: user.acDeviceTemplatesByLocation,
+      organizationsById: user.organizationsById,
+    })
+  return {
+    ...user,
+    activeLocation: location,
+    activeAssignment,
+    activeRoleTemplate,
+    activeAcDeviceTemplate,
+    activeOrganization,
+    role,
+  }
+}
+
 // Auth-aware server client for SSR pages (reads session from cookies).
 //
 // Next 15+: `cookies()` returns a Promise, so this is now async and
@@ -542,24 +633,7 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   const activeLocation =
     headerLocation || cookieLocation || defaultLink?.locations || locations[0] || null
 
-  // Resolve effective role for THIS request (mig 051):
-  //   - master:        always 'master' (platform-wide)
-  //   - non-master:    role at the active location, fallback to
-  //                    highest assignment role (so legacy callers
-  //                    reading user.role without location context
-  //                    get the same answer pre-mig-051), final
-  //                    fallback to profiles.role.
-  //
-  // Override `role` AFTER the spread of `...profile` so `user.role`
-  // is the active-location-aware value. Original global value is
-  // preserved on `user.profileRole` for the rare caller that wants
-  // canonical/highest role without location context.
   const isMaster = profile.role === 'master'
-  const activeLocationRole = resolveActiveLocationRole({
-    profile,
-    rolesByLocation,
-    activeLocationId: activeLocation?.id,
-  })
 
   // Per-location user permission overrides (mig 058). The user-level
   // override layer moved off profile.permissions (profile-wide) onto
@@ -595,10 +669,6 @@ export const getCurrentUser = cache(async function getCurrentUser() {
       }
     }
   }
-  const activeAssignment = activeLocation?.id
-    ? assignmentsByLocation[activeLocation.id] || null
-    : null
-
   // PERM-AUDIT.2 (mig 364) / RECEPTION.2 (mig 367) — operator-edited role
   // permission templates, resolved by the shared resolver between the
   // per-user override and the code role default. The mechanics (per-location
@@ -611,18 +681,24 @@ export const getCurrentUser = cache(async function getCurrentUser() {
       rolesByLocation,
       employmentType: profile.employment_type || null,
     })
-  const activeRoleTemplate = activeLocation?.id
-    ? roleTemplatesByLocation[activeLocation.id] || null
-    : null
-  const activeAcDeviceTemplate = activeLocation?.id
-    ? (acDeviceTemplatesByLocation[activeLocation.id] ?? null)
-    : null
-
-  // Active organization mirrors active location — useful for any UI
-  // that wants to badge "you're operating inside CCF Autos right now".
-  const activeOrganization = activeLocation?.organization_id
-    ? organizationsById[activeLocation.organization_id] || null
-    : null
+  // Everything that depends on WHICH studio is active comes out of one
+  // function (APPROVALSQ.6), shared with userAtLocation(), so the two can
+  // never drift.
+  const {
+    role: activeLocationRole,
+    activeAssignment,
+    activeRoleTemplate,
+    activeAcDeviceTemplate,
+    activeOrganization,
+  } = resolveActiveFields({
+    profile,
+    activeLocation,
+    rolesByLocation,
+    assignmentsByLocation,
+    roleTemplatesByLocation,
+    acDeviceTemplatesByLocation,
+    organizationsById,
+  })
 
   // SUPPORT-ACCESS (Repset Phase 3) — surface an active tenant support
   // session for the banner. Only the REAL underlying session being a

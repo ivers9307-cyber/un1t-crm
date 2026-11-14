@@ -783,3 +783,70 @@ describe('ApprovalsInbox undo of a bulk clear', () => {
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
   })
 })
+
+// APPROVALSQ.6 — responses are sequenced: only the latest request may settle the page.
+describe('ApprovalsInbox response order', () => {
+  const S1 = { id: 'studio-1', name: 'Stillorgan' }
+  const S2 = { id: 'studio-2', name: 'Hatch Street' }
+  const plainData = { providers: [prov('agent_requests', [it_('here-1')])], total: 1, studios: [S1, S2] }
+  const allData = {
+    providers: [prov('agent_requests', [it_('here-1', { studioId: 'studio-1' }), it_('other-1', { studioId: 'studio-2' })])],
+    total: 2, scope: 'all', studios: [S1, S2], failedStudios: [], truncated: false,
+  }
+  const reply = (data) => ({ json: async () => ({ success: true, data }) })
+
+  // The first (plain) load answers at once; later ones wait to be resolved by hand.
+  function deferredApi() {
+    const pending = []
+    let first = true
+    vi.stubGlobal('fetch', vi.fn((url) => {
+      if (first) { first = false; return Promise.resolve(reply(plainData)) }
+      return new Promise((resolve) => pending.push({ url: String(url), resolve }))
+    }))
+    return pending
+  }
+
+  async function startBoth() {
+    localStorage.clear()
+    const pending = deferredApi()
+    render(<ApprovalsInbox />)
+    await screen.findByText('here-1')
+    fireEvent.click(screen.getByRole('button', { name: 'All my studios' }))
+    await waitFor(() => expect(pending).toHaveLength(1))
+    fireEvent.click(screen.getByRole('button', { name: 'This studio' }))
+    await waitFor(() => expect(pending).toHaveLength(2))
+    expect(pending[0].url).toContain('scope=all')
+    expect(pending[1].url).not.toContain('scope=all')
+    return pending
+  }
+
+  it('a slow all-studios answer arriving after the this-studio one does not overwrite it', async () => {
+    const pending = await startBoth()
+    await act(async () => { pending[1].resolve(reply(plainData)) })
+    await screen.findByText('here-1')
+    await act(async () => { pending[0].resolve(reply(allData)) })
+    expect(screen.queryByText('other-1')).toBeNull()
+    expect(screen.getByText('here-1')).toBeTruthy()
+    expect(screen.getByText('1 pending')).toBeTruthy()
+    expect(screen.queryByText(/Each decision is made at the studio named on the card/)).toBeNull()
+  })
+
+  it('the reverse order lands on the same page', async () => {
+    const pending = await startBoth()
+    await act(async () => { pending[0].resolve(reply(allData)) })
+    expect(screen.queryByText('other-1')).toBeNull()
+    await act(async () => { pending[1].resolve(reply(plainData)) })
+    await screen.findByText('here-1')
+    expect(screen.queryByText('other-1')).toBeNull()
+    expect(screen.getByText('1 pending')).toBeTruthy()
+  })
+
+  it('a stale failure neither shows an error nor stops the spinner of the latest request', async () => {
+    const pending = await startBoth()
+    await act(async () => { pending[0].resolve({ json: async () => ({ success: false, error: 'stale boom' }) }) })
+    expect(screen.queryByText('stale boom')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Refresh' }).disabled).toBe(true)
+    await act(async () => { pending[1].resolve(reply(plainData)) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh' }).disabled).toBe(false))
+  })
+})

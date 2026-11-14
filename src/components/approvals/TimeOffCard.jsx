@@ -11,7 +11,7 @@ import { leaveClashPrompt } from '@shared/time-off'
 import { unassignLeaveClashes } from '@/lib/approvals/team-actions'
 import TeamDecideCard from './TeamDecideCard'
 
-function ClashStep({ requestId, name, prompt }) {
+function ClashStep({ item, name, prompt }) {
   const [phase, setPhase] = useState('ask') // 'ask' | 'kept' | 'done'
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -25,7 +25,7 @@ function ClashStep({ requestId, name, prompt }) {
     setBusy(true)
     setError(null)
     try {
-      const r = await unassignLeaveClashes(requestId, prompt.assignmentIds)
+      const r = await unassignLeaveClashes(item, prompt.assignmentIds)
       if (!r?.ok) { setError(r?.error || 'The shifts were not changed.'); return }
       const removed = (r.data?.removed?.length || 0) + (r.data?.already_removed?.length || 0)
       const skipped = r.data?.skipped?.length || 0
@@ -69,7 +69,7 @@ export default function TimeOffCard({ item, ...rest }) {
         const prompt = leaveClashPrompt(result?.body?.clashes)
         if (prompt) {
           const name = result?.body?.data?.profiles?.full_name || item.title
-          return <ClashStep requestId={item.id} name={name} prompt={prompt} />
+          return <ClashStep item={item} name={name} prompt={prompt} />
         }
         const err = result?.body?.clashes_error
         return err ? <div className="w-full text-sm rounded-md px-3 py-2 bg-amber-500/10 text-amber-700">{`${err}.`}</div> : null

@@ -5,17 +5,21 @@
 //
 // Result = { ok, error?, data?, status }. status 0 means no answer arrived.
 
+import { withStudio } from '@/lib/approvals/studio-request'
+
 const GENERIC_ERROR = 'Something went wrong. Please try again.'
 const NETWORK_ERROR = 'Network error. Please try again.'
 
-async function call(url, { method = 'POST', body, cache } = {}) {
+// `item` is the item the request is about: its studio (if it has one) goes out as
+// x-active-location (APPROVALSQ.6), so the route judges it at that studio.
+async function call(item, url, { method = 'POST', body, cache } = {}) {
   let res
   try {
-    res = await fetch(url, {
+    res = await fetch(url, withStudio(item, {
       method,
       ...(cache ? { cache } : {}),
       ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
-    })
+    }))
   } catch {
     return { ok: false, error: NETWORK_ERROR, status: 0 }
   }
@@ -41,8 +45,8 @@ export const TEAM_ACTIONS = {
     declineLabel: 'Decline',
     reasonLabel: 'Reason for declining',
     reasonRequired: true,
-    approve: (item) => call(`/api/expenses/${item.id}/approve`),
-    decline: (item, reason) => call(`/api/expenses/${item.id}/decline`, { body: { reason: orNull(reason) } }),
+    approve: (item) => call(item, `/api/expenses/${item.id}/approve`),
+    decline: (item, reason) => call(item, `/api/expenses/${item.id}/decline`, { body: { reason: orNull(reason) } }),
     approvedText: 'Approved. It goes to the accountant queue.',
     declinedText: 'Declined. They can submit a new claim.',
     pageLabel: 'Expenses',
@@ -52,8 +56,8 @@ export const TEAM_ACTIONS = {
     declineLabel: 'Decline',
     reasonLabel: 'Reason for declining (the host is told)',
     reasonRequired: true,
-    approve: (item) => call(`/api/events/${item.id}/review`, { body: { action: 'approve' } }),
-    decline: (item, reason) => call(`/api/events/${item.id}/review`, { body: { action: 'reject', reason: orNull(reason) } }),
+    approve: (item) => call(item, `/api/events/${item.id}/review`, { body: { action: 'approve' } }),
+    decline: (item, reason) => call(item, `/api/events/${item.id}/review`, { body: { action: 'reject', reason: orNull(reason) } }),
     approvedText: 'Approved. The event is published and the host has been told.',
     declinedText: 'Declined. The host has been told.',
     pageLabel: 'Hosts',
@@ -64,8 +68,8 @@ export const TEAM_ACTIONS = {
     approveConfirm: 'Cancel this approved leave?',
     reasonLabel: 'Note to them (optional)',
     reasonRequired: false,
-    approve: (item) => call(`/api/schedule/time-off/${item.id}/cancel-request`, { body: { decision: 'approve', note: null } }),
-    decline: (item, reason) => call(`/api/schedule/time-off/${item.id}/cancel-request`, { body: { decision: 'reject', note: orNull(reason) } }),
+    approve: (item) => call(item, `/api/schedule/time-off/${item.id}/cancel-request`, { body: { decision: 'approve', note: null } }),
+    decline: (item, reason) => call(item, `/api/schedule/time-off/${item.id}/cancel-request`, { body: { decision: 'reject', note: orNull(reason) } }),
     approvedText: 'Leave cancelled. Any holiday days go back to their allowance.',
     declinedText: 'Kept. Their leave stays approved.',
     pageLabel: 'Time Off',
@@ -75,8 +79,8 @@ export const TEAM_ACTIONS = {
     declineLabel: 'Decline',
     reasonLabel: 'Reason for the contractor',
     reasonRequired: true,
-    approve: (item) => call(`/api/invoices/${item.id}/approve`),
-    decline: (item, reason) => call(`/api/invoices/${item.id}/decline`, { body: { reason: orNull(reason) } }),
+    approve: (item) => call(item, `/api/invoices/${item.id}/approve`),
+    decline: (item, reason) => call(item, `/api/invoices/${item.id}/decline`, { body: { reason: orNull(reason) } }),
     approvedText: 'Approved. It goes to the accountant queue.',
     declinedText: 'Declined. The contractor has been told.',
     approvedTextWithWarnings: 'Approved.',
@@ -88,8 +92,8 @@ export const TEAM_ACTIONS = {
     declineLabel: 'Reject',
     reasonLabel: 'Note to them (optional)',
     reasonRequired: false,
-    approve: (item) => call(`/api/schedule/time-off/${item.id}`, { method: 'PUT', body: { status: 'approved' } }),
-    decline: (item, reason) => call(`/api/schedule/time-off/${item.id}`, { method: 'PUT', body: { status: 'rejected', review_note: orNull(reason) } }),
+    approve: (item) => call(item, `/api/schedule/time-off/${item.id}`, { method: 'PUT', body: { status: 'approved' } }),
+    decline: (item, reason) => call(item, `/api/schedule/time-off/${item.id}`, { method: 'PUT', body: { status: 'rejected', review_note: orNull(reason) } }),
     approvedText: 'Approved.',
     declinedText: 'Rejected.',
     pageLabel: 'Time Off',
@@ -99,8 +103,8 @@ export const TEAM_ACTIONS = {
     declineLabel: 'Reject',
     reasonLabel: 'Note to them (optional)',
     reasonRequired: false,
-    approve: (item) => call(`/api/schedule/swaps/${item.id}`, { method: 'PUT', body: { status: 'approved' } }),
-    decline: (item, reason) => call(`/api/schedule/swaps/${item.id}`, { method: 'PUT', body: { status: 'rejected', review_note: orNull(reason) } }),
+    approve: (item) => call(item, `/api/schedule/swaps/${item.id}`, { method: 'PUT', body: { status: 'approved' } }),
+    decline: (item, reason) => call(item, `/api/schedule/swaps/${item.id}`, { method: 'PUT', body: { status: 'rejected', review_note: orNull(reason) } }),
     approvedText: 'Approved. The roster is updated.',
     declinedText: 'Rejected.',
     pageLabel: 'Swaps',
@@ -108,17 +112,17 @@ export const TEAM_ACTIONS = {
 }
 
 // Follow-up helpers the three extra-step cards use.
-export function loadInvoiceRosterCheck(id) {
-  return call(`/api/invoices/${id}`, { method: 'GET', cache: 'no-store' })
+export function loadInvoiceRosterCheck(item) {
+  return call(item, `/api/invoices/${item.id}`, { method: 'GET', cache: 'no-store' })
 }
 
-export function unassignLeaveClashes(id, assignmentIds) {
-  return call(`/api/schedule/time-off/${id}/unassign-clashes`, { body: { assignment_ids: assignmentIds } })
+export function unassignLeaveClashes(item, assignmentIds) {
+  return call(item, `/api/schedule/time-off/${item.id}/unassign-clashes`, { body: { assignment_ids: assignmentIds } })
 }
 
 // The same approval, re-sent after the person has seen the conflicts.
 export function approveSwapAnyway(item) {
-  return call(`/api/schedule/swaps/${item.id}`, { method: 'PUT', body: { status: 'approved', confirm_conflicts: true } })
+  return call(item, `/api/schedule/swaps/${item.id}`, { method: 'PUT', body: { status: 'approved', confirm_conflicts: true } })
 }
 
 export const TEAM_LINK_ONLY_KEYS = ['invoices_queue', 'rosters', 'issues', 'hyrox_sessions']

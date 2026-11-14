@@ -61,7 +61,7 @@ describe('TimeOffCard', () => {
     fireEvent.click(btn)
     expect(await screen.findByText('Unassigned from 2 shifts.')).toBeTruthy()
     expect(mocks.unassign).toHaveBeenCalledTimes(1)
-    expect(mocks.unassign).toHaveBeenCalledWith('t1', ['a1', 'a2'])
+    expect(mocks.unassign).toHaveBeenCalledWith(item, ['a1', 'a2'])
   })
 
   it('Keep sends nothing and dismisses the step', async () => {

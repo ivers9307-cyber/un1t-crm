@@ -12,9 +12,9 @@
 // said, and the contact's email/phone for a quick Glofox lookup.
 
 import { useRef, useState } from 'react'
-import Link from 'next/link'
 import { Sparkles, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui'
+import StudioLink from '@/components/approvals/StudioLink'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
 import { DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
@@ -25,6 +25,7 @@ import { RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
 import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 import UndoClearButton from '@/components/approvals/UndoClearButton'
 import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
+import { withStudio, studioChip } from '@/lib/approvals/studio-request'
 
 const KIND_CHIP = {
   cancellation: 'bg-red-500/10 text-red-700',
@@ -134,7 +135,7 @@ export function outcomeLine(status, item, executed, notified = null, plannedEndD
 
 // APPROVALSQ.2 — `selectable`, `selected` and `onToggle` put a select checkbox
 // in the header while /approvals is in select mode; a decided card has none.
-export default function AgentRequestDecideCard({ item, onDecided, onUndone, selectable = false, selected = false, onToggle, timezone = null }) {
+export default function AgentRequestDecideCard({ item, onDecided, onUndone, selectable = false, selected = false, onToggle, timezone = null, activeStudioId = null }) {
   const [busy, setBusy] = useState(null)       // 'approved' | 'declined' | 'saved' | 'cleared' | null
   const inFlight = useRef(false)
   const [declineOpen, setDeclineOpen] = useState(false)
@@ -187,11 +188,11 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
         : status === 'declined'
         ? [reasonLabel, declineNote.trim() || null].filter(Boolean).join(' — ')
         : null
-      const res = await fetch(`/api/agent/membership-requests/${item.id}`, {
+      const res = await fetch(`/api/agent/membership-requests/${item.id}`, withStudio(item, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, ...(silent ? { silent: true } : {}), decision_note, ...(!silent && item.kind === 'cancellation' && endDate ? { end_date: endDate } : {}) }),
-      })
+      }))
       const data = await res.json()
       if (!data.success) {
         setError(res.status === 409 ? 'Already decided elsewhere — refresh the list.' : (data.error || 'Decision failed'))
@@ -227,7 +228,7 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
     setUndoBusy(true)
     setError(null)
     try {
-      const res = await undoClearRequest(item.id)
+      const res = await undoClearRequest(item)
       if (!res.ok) {
         setError(res.error)
         if (res.status === 409) setUndoGone(true)
@@ -350,7 +351,9 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
       kindClassName={KIND_CHIP[item.kind] || DEFAULT_KIND_CHIP}
       state={isFailedItem && !outcome ? { label: 'Failed', tone: 'red' } : undefined}
       name={item.contactName || 'Customer'}
+      studio={studioChip(item, activeStudioId)}
       meta={item.channel ? `via ${item.channel}` : undefined}
+      metaIsPlace={false}
       when={`Submitted ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       summary={item.subtitle}
       summaryClassName="text-sm text-un1t-text"
@@ -364,10 +367,10 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
       links={(
         <>
           {conversationHref && (
-            <Link href={conversationHref} className="text-un1t-muted underline hover:text-un1t-text">Open conversation</Link>
+            <StudioLink item={item} activeStudioId={activeStudioId} href={conversationHref} className="text-un1t-muted underline hover:text-un1t-text">Open conversation</StudioLink>
           )}
           {item.reviewUrl && (
-            <Link href={item.reviewUrl} className="text-un1t-muted underline hover:text-un1t-text">Full history</Link>
+            <StudioLink item={item} activeStudioId={activeStudioId} href={item.reviewUrl} className="text-un1t-muted underline hover:text-un1t-text">Full history</StudioLink>
           )}
         </>
       )}
