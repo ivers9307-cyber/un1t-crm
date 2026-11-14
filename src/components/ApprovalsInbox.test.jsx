@@ -4,6 +4,7 @@
 // for team and money items. The four cards are stubbed; this is about the page.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { useState } from 'react'
 import { render, cleanup, screen, fireEvent, within, waitFor } from '@testing-library/react'
 
 vi.mock('next/link', () => ({ default: ({ href, children, ...r }) => <a href={href} {...r}>{children}</a> }))
@@ -29,10 +30,12 @@ vi.mock('@/components/approvals/OfferPurchaseCard', () => ({ default: stub('offe
 // APPROVALSQ.4 — team cards stubbed: id, provider key, zone, and a decide button.
 function teamStub(name) {
   return function TeamStub({ item, providerKey, timezone, onDecided }) {
+    const [outcome, setOutcome] = useState(null)
     return (
       <div data-testid={`team-${name}`} data-provider={providerKey} data-tz={timezone ?? ''}>
         <span>{item.id}</span>
-        <button type="button" onClick={() => onDecided?.()}>decide-{item.id}</button>
+        {outcome && <em>outcome-{item.id}</em>}
+        <button type="button" onClick={() => { setOutcome('done'); onDecided?.() }}>decide-{item.id}</button>
       </div>
     )
   }
@@ -494,6 +497,33 @@ describe('ApprovalsInbox team view', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(teamIds()).toEqual(['exp-1', 'leave-1']))
     expect(screen.queryByRole('button', { name: /^Rosters/ })).toBeNull()
+  })
+
+  it('a decided card stays after a reload that no longer returns it, once, uncounted, with its state', async () => {
+    const first = teamMix()
+    let current = first
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      json: async () => ({ success: true, data: { providers: current, total: current.reduce((s, p) => s + p.count, 0) } }),
+    })))
+    render(<ApprovalsInbox />)
+    await screen.findByText('exp-1')
+    fireEvent.click(screen.getByText('decide-leave-1'))
+    expect(screen.getByText('outcome-leave-1')).toBeTruthy()
+    current = [
+      prov('fte_expenses', [it_('exp-1', { submittedAt: '2026-11-01T10:00:00Z' })], [], { label: 'Expenses' }),
+      prov('rosters', [it_('roster-1', { submittedAt: '2026-11-02T10:00:00Z' })], [], { label: 'Rosters' }),
+    ]
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Time off/ })).toBeNull())
+    expect(teamIds().filter((i) => i === 'leave-1')).toHaveLength(1)
+    expect(screen.getByText('outcome-leave-1')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^All 2/ })).toBeTruthy()
+    // a reload that still returns it does not duplicate it
+    current = first
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Time off/ })).toBeTruthy())
+    expect(teamIds().filter((i) => i === 'leave-1')).toHaveLength(1)
+    expect(screen.getByText('outcome-leave-1')).toBeTruthy()
   })
 
   it('works with no customer providers, and has no tab strip beyond the chips', async () => {

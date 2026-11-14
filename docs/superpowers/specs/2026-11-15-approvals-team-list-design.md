@@ -45,11 +45,10 @@ itself).
 
 ## Bug fixed on the way
 
-`POST /api/events/[id]/review` checks only the global `user.role`, while the
-provider shows host events to someone who is manager or owner at a studio by
-per-location role. Such a person sees the item and is refused. The route's
-check is brought in line with the provider's visibility rule (same roles,
-judged the same way), and nothing wider.
+The review found the route and the provider already admitted the same people,
+because a login's role is its role at the active studio. They now share one
+function (`src/lib/host-event-review-access.js`) so they cannot drift, and
+nobody's access changed.
 
 ## Must not happen
 

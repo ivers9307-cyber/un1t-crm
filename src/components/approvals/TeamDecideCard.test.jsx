@@ -9,9 +9,9 @@ const mocks = vi.hoisted(() => {
     approvedText: 'Approved it.', declinedText: 'Declined it.', pageLabel: 'Things',
     ...extra,
   })
-  return { req: mk(), opt: mk({ reasonRequired: false, reasonLabel: 'Note' }), confirm: mk({ approveLabel: 'Cancel their leave', declineLabel: 'Keep their leave', approveConfirm: 'Cancel this approved leave?', reasonRequired: false }) }
+  return { req: mk(), opt: mk({ reasonRequired: false, reasonLabel: 'Note' }), warn: mk({ approvedText: 'Approved. It goes to the queue.', declinedText: 'Declined. They were told.', approvedTextWithWarnings: 'Approved.', declinedTextWithWarnings: 'Declined.' }), confirm: mk({ approveLabel: 'Cancel their leave', declineLabel: 'Keep their leave', approveConfirm: 'Cancel this approved leave?', reasonRequired: false }) }
 })
-vi.mock('@/lib/approvals/team-actions', () => ({ TEAM_ACTIONS: { req: mocks.req, opt: mocks.opt, confirm: mocks.confirm } }))
+vi.mock('@/lib/approvals/team-actions', () => ({ TEAM_ACTIONS: { req: mocks.req, opt: mocks.opt, confirm: mocks.confirm, warn: mocks.warn } }))
 
 import TeamDecideCard from './TeamDecideCard'
 
@@ -32,6 +32,53 @@ beforeEach(() => { for (const a of Object.values(mocks)) { a.approve.mockReset()
 afterEach(cleanup)
 
 const renderCard = (props = {}) => render(<TeamDecideCard item={item} providerKey="req" providerLabel="Employee expenses" timezone="Europe/Dublin" {...props} />)
+
+describe('TeamDecideCard warnings and disabled guard', () => {
+  it('approve with warnings shows each in amber under the short outcome', async () => {
+    mocks.warn.approve.mockResolvedValue({ ok: true, status: 200, body: { success: true, warnings: ['Queue insert failed', 'Email failed'] } })
+    renderCard({ providerKey: 'warn' })
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await screen.findByText('Approved.')
+    expect(screen.queryByText('Approved. It goes to the queue.')).toBeNull()
+    expect(screen.getByText('Queue insert failed').className).toMatch(/amber/)
+    expect(screen.getByText('Email failed').className).toMatch(/amber/)
+  })
+
+  it('approve with no warnings shows the full sentence', async () => {
+    mocks.warn.approve.mockResolvedValue({ ok: true, status: 200, body: { success: true, warnings: [] } })
+    renderCard({ providerKey: 'warn' })
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await screen.findByText('Approved. It goes to the queue.')
+  })
+
+  it('decline with a warning shows it and the short outcome', async () => {
+    mocks.warn.decline.mockResolvedValue({ ok: true, status: 200, body: { success: true, warnings: ['Email failed'] } })
+    renderCard({ providerKey: 'warn' })
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'x' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    await screen.findByText('Declined.')
+    expect(screen.getByText('Email failed').className).toMatch(/amber/)
+  })
+
+  it('a singular warning string is shown for a provider with no warnings-specific text (default short outcome)', async () => {
+    mocks.req.approve.mockResolvedValue({ ok: true, status: 200, body: { success: true, warning: 'Accountant not told' } })
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await screen.findByText('Approved.')
+    expect(screen.getByText('Accountant not told').className).toMatch(/amber/)
+  })
+
+  it('Confirm sends nothing when approve is disabled by a reason (not only the button)', async () => {
+    mocks.confirm.approve.mockResolvedValue(ok())
+    const { rerender } = renderCard({ providerKey: 'confirm' })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel their leave' }))
+    rerender(<TeamDecideCard item={item} providerKey="confirm" providerLabel="x" approveDisabledReason="Checking the roster…" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    await Promise.resolve()
+    expect(mocks.confirm.approve).not.toHaveBeenCalled()
+  })
+})
 
 describe('TeamDecideCard', () => {
   it('renders the shell: source, name, meta, summary, when, amount, warning, extra, link', () => {

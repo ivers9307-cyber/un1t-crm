@@ -79,6 +79,8 @@ export const TEAM_ACTIONS = {
     decline: (item, reason) => call(`/api/invoices/${item.id}/decline`, { body: { reason: orNull(reason) } }),
     approvedText: 'Approved. It goes to the accountant queue.',
     declinedText: 'Declined. The contractor has been told.',
+    approvedTextWithWarnings: 'Approved.',
+    declinedTextWithWarnings: 'Declined.',
     pageLabel: 'Invoices',
   },
   time_off: {

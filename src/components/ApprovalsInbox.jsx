@@ -269,7 +269,20 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload, 
 function TeamList({ queue, chip, setChip, loading, onItemDecided, timezone }) {
   // A chip whose provider vanished on a reload falls back to All.
   const key = queue.chips.some((c) => c.key === chip) ? chip : 'all'
-  const items = filterTeamQueue(queue, key)
+  const live = filterTeamQueue(queue, key)
+  // A decided card stays until this view unmounts, so its follow-up question
+  // (Keep them rostered / Unassign them, a clash notice) survives the reload
+  // that the decision itself triggers. Same React key as before, so the card's
+  // own state is kept. Not counted anywhere: the counts come from `queue`.
+  const [decided, setDecided] = useState(() => new Map())
+  const cardKey = (it) => `${it.providerKey}-${it.id}`
+  const liveKeys = new Set(live.map(cardKey))
+  const kept = [...decided.values()].filter((it) => !liveKeys.has(cardKey(it)) && (key === 'all' || it.providerKey === key))
+  const items = [...live, ...kept]
+  const markDecided = (it) => {
+    setDecided((m) => (m.has(cardKey(it)) ? m : new Map(m).set(cardKey(it), it)))
+    onItemDecided(it.providerKey)
+  }
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
@@ -292,12 +305,12 @@ function TeamList({ queue, chip, setChip, loading, onItemDecided, timezone }) {
             const Card = TEAM_CARDS[it.providerKey] || TeamLinkCard
             return (
               <Card
-                key={`${it.providerKey}-${it.id}`}
+                key={cardKey(it)}
                 item={it}
                 providerKey={it.providerKey}
                 providerLabel={it.providerLabel}
                 timezone={timezone}
-                onDecided={() => onItemDecided(it.providerKey)}
+                onDecided={() => markDecided(it)}
               />
             )
           })}

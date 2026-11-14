@@ -47,10 +47,21 @@ describe('ContractorInvoiceCard', () => {
     expect(await screen.findByText(/€42\.00 over roster \(\+11\.1%\)/)).toBeTruthy()
   })
 
-  it('shows the roster-unavailable note from RosterCheckNotes', async () => {
+  it('roster_unavailable with no comparison is the failed state: Approve off, message and Retry shown', async () => {
     mocks.load.mockResolvedValue(check({ roster_unavailable: true, review_comparison: null }))
     renderCard()
-    expect((await screen.findByRole('alert')).textContent).toMatch(/Could not read the roster/)
+    expect(await screen.findByText('The roster check could not be loaded.')).toBeTruthy()
+    expect(approveBtn().disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+  })
+
+  it('an unknown verdict (no hourly rate) says so and leaves Approve enabled', async () => {
+    mocks.load.mockResolvedValue(check({
+      review_comparison: { primary: { source: 'live', comparison: { verdict: 'unknown', diff: null, pct: null } } },
+    }))
+    renderCard()
+    expect(await screen.findByText(/No roster estimate \(hourly rate not set\)/)).toBeTruthy()
+    await waitFor(() => expect(approveBtn().disabled).toBe(false))
   })
 
   it('a failed check keeps Approve disabled and Retry reloads it', async () => {

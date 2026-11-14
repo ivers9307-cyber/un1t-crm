@@ -19,7 +19,10 @@ export default function ContractorInvoiceCard({ item, ...rest }) {
     setCheck({ state: 'loading', data: null })
     try {
       const r = await loadInvoiceRosterCheck(item.id)
-      setCheck(r?.ok && r.data ? { state: 'ready', data: r.data } : { state: 'failed', data: null })
+      // An answer that says the roster was unavailable and carries no stored
+      // comparison has nothing to judge the invoice by: same as a failed load.
+      const unusable = !r?.ok || !r.data || (r.data.roster_unavailable && !r.data.review_comparison)
+      setCheck(unusable ? { state: 'failed', data: null } : { state: 'ready', data: r.data })
     } catch {
       setCheck({ state: 'failed', data: null })
     }
@@ -30,7 +33,7 @@ export default function ContractorInvoiceCard({ item, ...rest }) {
   const comparison = check.data?.review_comparison?.primary?.comparison
   const extra = (
     <div className="space-y-2">
-      {check.state === 'ready' && comparison && comparison.verdict !== 'unknown' && (
+      {check.state === 'ready' && comparison && (
         <div className={`text-sm rounded-md px-3 py-2 ${comparison.verdict === 'matches' ? 'bg-green-500/10 text-green-700' : 'bg-amber-500/10 text-amber-700'}`}>
           Roster check: {rosterComparisonSummary(comparison)}
         </div>

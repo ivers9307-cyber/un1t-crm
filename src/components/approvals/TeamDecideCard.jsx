@@ -14,6 +14,22 @@ import CustomerCardShell from './CustomerCardShell'
 import { formatApprovalDateTime } from './format-date-time'
 import { formatAmount } from './format-amount'
 
+// An action may define approvedTextWithWarnings / declinedTextWithWarnings: the
+// outcome shown when the success answer carried warnings, so the sentence never
+// asserts what a warning denies. Default is the bare word.
+function outcomeText(cfg, kind, warned) {
+  if (kind === 'approve') return warned ? (cfg.approvedTextWithWarnings || 'Approved.') : cfg.approvedText
+  return warned ? (cfg.declinedTextWithWarnings || 'Declined.') : cfg.declinedText
+}
+
+// Every warning a success answer carries: `warnings` (array) and/or `warning`.
+function answerWarnings(body) {
+  const out = []
+  if (Array.isArray(body?.warnings)) for (const w of body.warnings) if (typeof w === 'string' && w.trim()) out.push(w)
+  if (typeof body?.warning === 'string' && body.warning.trim()) out.push(body.warning)
+  return out
+}
+
 export default function TeamDecideCard({
   item, providerKey, providerLabel, timezone = null, onDecided, extra,
   approveDisabledReason, afterApprove, onApproveFailure,
@@ -23,7 +39,7 @@ export default function TeamDecideCard({
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  const [done, setDone] = useState(null) // { text, node }
+  const [done, setDone] = useState(null) // { text, node, warnings }
   const [failureNode, setFailureNode] = useState(null) // set by onApproveFailure
   const inFlight = useRef(false)
 
@@ -53,8 +69,10 @@ export default function TeamDecideCard({
         return
       }
       setFailureNode(null)
+      const warnings = answerWarnings(result.body)
       setDone({
-        text: kind === 'approve' ? cfg.approvedText : cfg.declinedText,
+        text: outcomeText(cfg, kind, warnings.length > 0),
+        warnings,
         node: kind === 'approve' && afterApprove ? afterApprove(result) : null,
       })
       onDecided?.()
@@ -69,17 +87,20 @@ export default function TeamDecideCard({
 
   function approveAgain(perform) { return settle('approve', perform) }
 
+  const blocked = typeof approveDisabledReason === 'string' && approveDisabledReason.length > 0
+
   function run(kind) {
+    if (kind === 'approve' && blocked) return undefined
     return settle(kind, () => (kind === 'approve' ? cfg.approve(item) : cfg.decline(item, reason.trim() || null)))
   }
 
   function pressApprove() {
+    if (blocked) return
     if (cfg.approveConfirm) { setError(null); setMode('confirm'); return }
     run('approve')
   }
 
   const reasonMissing = cfg.reasonRequired && !reason.trim()
-  const blocked = typeof approveDisabledReason === 'string' && approveDisabledReason.length > 0
   const amount = formatAmount(item.amount, item.currency)
 
   let actions
@@ -137,6 +158,9 @@ export default function TeamDecideCard({
       actions={actions}
     >
       {item.warning && <div className="text-xs rounded-md px-3 py-2 bg-amber-500/10 text-amber-700">{item.warning}</div>}
+      {done?.warnings?.map((w, i) => (
+        <div key={i} className="text-xs rounded-md px-3 py-2 bg-amber-500/10 text-amber-700">{w}</div>
+      ))}
       {extra}
       {!done && failureNode}
     </CustomerCardShell>

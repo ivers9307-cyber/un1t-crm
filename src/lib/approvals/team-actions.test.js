@@ -154,3 +154,10 @@ describe('APPROVALSQ.4 task 2: invoices, time off, swaps', () => {
     }
   })
 })
+
+describe('warning texts', () => {
+  it('contractor invoices define the short outcomes shown when the answer carries warnings', () => {
+    expect(TEAM_ACTIONS.contractor_invoices.approvedTextWithWarnings).toBe('Approved.')
+    expect(TEAM_ACTIONS.contractor_invoices.declinedTextWithWarnings).toBe('Declined.')
+  })
+})
