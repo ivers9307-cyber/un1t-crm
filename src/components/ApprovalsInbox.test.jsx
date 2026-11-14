@@ -5,15 +5,21 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useState } from 'react'
-import { render, cleanup, screen, fireEvent, within, waitFor } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, within, waitFor, act } from '@testing-library/react'
+import { UNDO_CLEAR_WINDOW_MS } from '@/lib/approvals/undo-clear'
 
 vi.mock('next/link', () => ({ default: ({ href, children, ...r }) => <a href={href} {...r}>{children}</a> }))
 
 function stub(name) {
-  return function Stub({ item, onDecided, selectable, selected, onToggle, timezone }) {
+  return function Stub({ item, onDecided, onUndone, selectable, selected, onToggle, timezone }) {
+    // APPROVALSQ.5 — a quiet clear is reported through the request the card got back.
+    const [cleared, setCleared] = useState(false)
     return (
       <div data-testid={`card-${name}`} data-tz={timezone ?? ''}>
         <span>{item.id}</span>
+        {cleared && <em>cleared-{item.id}</em>}
+        <button type="button" onClick={() => { setCleared(true); onDecided?.(item.id, { details: { cleared: { silent: true } } }) }}>clear-{item.id}</button>
+        <button type="button" onClick={() => { setCleared(false); onUndone?.(item.id, { status: 'pending' }) }}>undo-{item.id}</button>
         {selectable && (
           <input type="checkbox" aria-label={`select-${item.id}`} checked={!!selected} onChange={() => onToggle?.()} />
         )}
@@ -153,7 +159,7 @@ function mockBulkApi(providers, statusFor = () => 200) {
     if (init?.method === 'PATCH') {
       const id = String(url).split('/').pop()
       patches.push({ id, body: JSON.parse(init.body) })
-      const status = statusFor(id)
+      const status = statusFor(id, JSON.parse(init.body))
       return { ok: status < 300, status, json: async () => ({ success: status < 300 }) }
     }
     return { json: async () => ({ success: true, data: { providers, total } }) }
@@ -541,5 +547,306 @@ describe('ApprovalsInbox team view', () => {
     mockApi([prov('time_off', [], [], { label: 'Time off' })])
     render(<ApprovalsInbox />)
     await screen.findByText('Nothing waiting on your review.')
+  })
+})
+
+
+// APPROVALSQ.5 — Undo on a quiet clear.
+// Click Refresh and wait for the reload to land (the button is disabled while loading).
+async function refresh() {
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh' }).disabled).toBe(false))
+}
+const waitingCount = () => screen.getByText(/\d+ pending|All clear/).textContent
+
+describe('ApprovalsInbox undo of a single clear', () => {
+  function mockReloadable() {
+    let current = miaItems()
+    const total = () => current.reduce((s, p) => s + p.count, 0)
+    vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ success: true, data: { providers: current, total: total() } }) })))
+    return { set: (next) => { current = next } }
+  }
+  const without = (id) => miaItems().map((p) => p.key === 'agent_requests'
+    ? { ...p, items: p.items.filter((i) => i.id !== id), failedItems: p.failedItems.filter((i) => i.id !== id), count: p.count - 1 }
+    : p)
+
+  beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }) })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a cleared card stays mounted, with its state, across a reload that no longer returns it, and is not counted', async () => {
+    const api = mockReloadable()
+    render(<ApprovalsInbox />)
+    await screen.findByText('mia-1')
+    expect(waitingCount()).toBe('7 pending')
+    fireEvent.click(screen.getByRole('button', { name: 'clear-mia-1' }))
+    expect(waitingCount()).toBe('6 pending')
+    api.set(without('mia-1'))
+    await refresh()
+    expect(screen.getAllByText('mia-1')).toHaveLength(1)
+    expect(screen.getByText('cleared-mia-1')).toBeTruthy()
+    expect(waitingCount()).toBe('6 pending')
+  })
+
+  it('does not keep a card that was decided in any other way', async () => {
+    const api = mockReloadable()
+    render(<ApprovalsInbox />)
+    await screen.findByText('mia-1')
+    fireEvent.click(screen.getByRole('button', { name: 'decide-mia-1' }))
+    api.set(without('mia-1'))
+    await refresh()
+    expect(screen.queryByText('mia-1')).toBeNull()
+  })
+
+  it('keeps a failed card under Needs fixing', async () => {
+    const api = mockReloadable()
+    render(<ApprovalsInbox />)
+    await screen.findByText('mia-fail')
+    fireEvent.click(screen.getByRole('button', { name: 'clear-mia-fail' }))
+    api.set(without('mia-fail'))
+    await refresh()
+    expect(screen.getByText('cleared-mia-fail')).toBeTruthy()
+  })
+
+  it('drops the card on the first reload after its window has closed', async () => {
+    const api = mockReloadable()
+    render(<ApprovalsInbox />)
+    await screen.findByText('mia-1')
+    fireEvent.click(screen.getByRole('button', { name: 'clear-mia-1' }))
+    api.set(without('mia-1'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_CLEAR_WINDOW_MS + 1000) })
+    // still on the page until something reloads
+    expect(screen.getByText('mia-1')).toBeTruthy()
+    await refresh()
+    expect(screen.queryByText('mia-1')).toBeNull()
+  })
+
+  it('an undo puts the count and the total back up by one, and the card is selectable again', async () => {
+    mockReloadable()
+    render(<ApprovalsInbox />)
+    await screen.findByText('mia-1')
+    fireEvent.click(screen.getByRole('button', { name: 'clear-mia-1' }))
+    expect(waitingCount()).toBe('6 pending')
+    expect(screen.getByRole('button', { name: /^All 6/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'undo-mia-1' }))
+    expect(waitingCount()).toBe('7 pending')
+    expect(screen.getByRole('button', { name: /^All 7/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+    expect(boxes()).toContain('select-mia-1')
+  })
+
+  // The initial load answers at once; every later load waits on a gate the test opens.
+  function mockGated() {
+    const base = miaItems()
+    const gates = []
+    let first = true
+    vi.stubGlobal('fetch', vi.fn(() => {
+      if (first) { first = false; return Promise.resolve({ json: async () => ({ success: true, data: { providers: base, total: 7 } }) }) }
+      return new Promise((resolve, reject) => gates.push({
+        ok: (providers) => resolve({ json: async () => ({ success: true, data: { providers, total: providers.reduce((n, q) => n + q.count, 0) } }) }),
+        fail: () => reject(new Error('offline')),
+      }))
+    }))
+    return { gates }
+  }
+  async function clearThenUndo() {
+    const g = mockGated()
+    render(<ApprovalsInbox />)
+    await screen.findByText('mia-1')
+    fireEvent.click(screen.getByRole('button', { name: 'clear-mia-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'undo-mia-1' }))
+    return g
+  }
+
+  it('Undo starts a reload and the card stays rendered while it is pending', async () => {
+    const { gates } = await clearThenUndo()
+    expect(gates).toHaveLength(1)
+    expect(screen.getAllByText('mia-1')).toHaveLength(1)
+  })
+
+  it('the reload answers with the request: shown once', async () => {
+    const { gates } = await clearThenUndo()
+    await act(async () => { gates[0].ok(miaItems()) })
+    expect(screen.getAllByText('mia-1')).toHaveLength(1)
+  })
+
+  it('the reload answers without the request (someone else decided it): gone', async () => {
+    const { gates } = await clearThenUndo()
+    await act(async () => { gates[0].ok(without('mia-1')) })
+    expect(screen.queryByText('mia-1')).toBeNull()
+  })
+
+  it('a failed reload keeps the card; the next successful one drops it if the server no longer returns it', async () => {
+    const { gates } = await clearThenUndo()
+    await act(async () => { gates[0].fail() })
+    expect(screen.getAllByText('mia-1')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await act(async () => { gates[1].ok(without('mia-1')) })
+    expect(screen.queryByText('mia-1')).toBeNull()
+  })
+
+  it('a failed reload keeps the card; the next successful one that returns it shows it once', async () => {
+    const { gates } = await clearThenUndo()
+    await act(async () => { gates[0].fail() })
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await act(async () => { gates[1].ok(miaItems()) })
+    expect(screen.getAllByText('mia-1')).toHaveLength(1)
+  })
+
+  it('a cleared card is not selectable in select mode', async () => {
+    mockReloadable()
+    render(<ApprovalsInbox />)
+    await screen.findByText('mia-1')
+    fireEvent.click(screen.getByRole('button', { name: 'clear-mia-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+    expect(boxes()).not.toContain('select-mia-1')
+  })
+})
+
+describe('ApprovalsInbox undo of a bulk clear', () => {
+  const clearBulk = async (ids) => {
+    await enterSelect()
+    for (const id of ids) fireEvent.click(screen.getByLabelText(`select-${id}`))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: `Clear ${ids.length} ${ids.length === 1 ? 'request' : 'requests'}, don't notify` }))
+    await screen.findByText(/Cleared \d+\./)
+  }
+  const undoBodies = (patches) => patches.filter((p) => p.body.undo_clear)
+
+  it('the notice carries Undo, which sends the undo for each cleared id one after another, reloads and reports', async () => {
+    const { patches, fn } = mockBulkApi(miaItems())
+    render(<ApprovalsInbox />)
+    await clearBulk(['mia-1', 'mia-2', 'mia-3'])
+    const listCalls = () => fn.mock.calls.filter(([, i]) => !i?.method).length
+    const before = listCalls()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Restored 3.')
+    expect(undoBodies(patches).map((p) => p.id)).toEqual(['mia-1', 'mia-2', 'mia-3'])
+    for (const p of undoBodies(patches)) expect(p.body).toEqual({ undo_clear: true })
+    await waitFor(() => expect(listCalls()).toBeGreaterThan(before))
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+
+  it('reports the ones that could not be restored', async () => {
+    mockBulkApi(miaItems(), (id, body) => (body.undo_clear && id === 'mia-2' ? 409 : 200))
+    render(<ApprovalsInbox />)
+    await clearBulk(['mia-1', 'mia-2', 'mia-3'])
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText(/Restored 2\./)
+    expect(screen.getByText(/1 could not be restored\./)).toBeTruthy()
+  })
+
+  it('when none could be restored the notice is red', async () => {
+    mockBulkApi(miaItems(), (id, body) => (body.undo_clear ? 409 : 200))
+    render(<ApprovalsInbox />)
+    await clearBulk(['mia-1', 'mia-2'])
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    const notice = await screen.findByText('None could be restored.')
+    expect(notice.className).toContain('text-red-700')
+    expect(screen.queryByText(/Restored 0/)).toBeNull()
+  })
+
+  it('a double press runs one undo, and the button is disabled while it runs', async () => {
+    const { patches } = mockBulkApi(miaItems())
+    render(<ApprovalsInbox />)
+    await clearBulk(['mia-1', 'mia-2'])
+    const undo = screen.getByRole('button', { name: 'Undo' })
+    fireEvent.click(undo)
+    fireEvent.click(undo)
+    expect(undo.disabled).toBe(true)
+    await screen.findByText('Restored 2.')
+    expect(undoBodies(patches)).toHaveLength(2)
+  })
+
+  it('the Undo is gone after 120 seconds', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      mockBulkApi(miaItems())
+      render(<ApprovalsInbox />)
+      await clearBulk(['mia-1'])
+      expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy()
+      await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_CLEAR_WINDOW_MS + 1000) })
+      expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+      expect(screen.getByText(/Cleared 1\./)).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a run that cleared nothing has no Undo', async () => {
+    mockBulkApi(miaItems(), () => 409)
+    render(<ApprovalsInbox />)
+    await enterSelect()
+    fireEvent.click(screen.getByLabelText('select-mia-1'))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear 1 request, don't notify" }))
+    await screen.findByText('None could be cleared (already decided, or an error).')
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+})
+
+// APPROVALSQ.6 — responses are sequenced: only the latest request may settle the page.
+describe('ApprovalsInbox response order', () => {
+  const S1 = { id: 'studio-1', name: 'Stillorgan' }
+  const S2 = { id: 'studio-2', name: 'Hatch Street' }
+  const plainData = { providers: [prov('agent_requests', [it_('here-1')])], total: 1, studios: [S1, S2] }
+  const allData = {
+    providers: [prov('agent_requests', [it_('here-1', { studioId: 'studio-1' }), it_('other-1', { studioId: 'studio-2' })])],
+    total: 2, scope: 'all', studios: [S1, S2], failedStudios: [], truncated: false,
+  }
+  const reply = (data) => ({ json: async () => ({ success: true, data }) })
+
+  // The first (plain) load answers at once; later ones wait to be resolved by hand.
+  function deferredApi() {
+    const pending = []
+    let first = true
+    vi.stubGlobal('fetch', vi.fn((url) => {
+      if (first) { first = false; return Promise.resolve(reply(plainData)) }
+      return new Promise((resolve) => pending.push({ url: String(url), resolve }))
+    }))
+    return pending
+  }
+
+  async function startBoth() {
+    localStorage.clear()
+    const pending = deferredApi()
+    render(<ApprovalsInbox />)
+    await screen.findByText('here-1')
+    fireEvent.click(screen.getByRole('button', { name: 'All my studios' }))
+    await waitFor(() => expect(pending).toHaveLength(1))
+    fireEvent.click(screen.getByRole('button', { name: 'This studio' }))
+    await waitFor(() => expect(pending).toHaveLength(2))
+    expect(pending[0].url).toContain('scope=all')
+    expect(pending[1].url).not.toContain('scope=all')
+    return pending
+  }
+
+  it('a slow all-studios answer arriving after the this-studio one does not overwrite it', async () => {
+    const pending = await startBoth()
+    await act(async () => { pending[1].resolve(reply(plainData)) })
+    await screen.findByText('here-1')
+    await act(async () => { pending[0].resolve(reply(allData)) })
+    expect(screen.queryByText('other-1')).toBeNull()
+    expect(screen.getByText('here-1')).toBeTruthy()
+    expect(screen.getByText('1 pending')).toBeTruthy()
+    expect(screen.queryByText(/Each decision is made at the studio named on the card/)).toBeNull()
+  })
+
+  it('the reverse order lands on the same page', async () => {
+    const pending = await startBoth()
+    await act(async () => { pending[0].resolve(reply(allData)) })
+    expect(screen.queryByText('other-1')).toBeNull()
+    await act(async () => { pending[1].resolve(reply(plainData)) })
+    await screen.findByText('here-1')
+    expect(screen.queryByText('other-1')).toBeNull()
+    expect(screen.getByText('1 pending')).toBeTruthy()
+  })
+
+  it('a stale failure neither shows an error nor stops the spinner of the latest request', async () => {
+    const pending = await startBoth()
+    await act(async () => { pending[0].resolve({ json: async () => ({ success: false, error: 'stale boom' }) }) })
+    expect(screen.queryByText('stale boom')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Refresh' }).disabled).toBe(true)
+    await act(async () => { pending[1].resolve(reply(plainData)) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh' }).disabled).toBe(false))
   })
 })

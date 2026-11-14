@@ -37,7 +37,7 @@ async function loadRace(db, id) {
       waitlist_email_subject, waitlist_email_intro,
       confirmation_email_template_id, reminder_email_template_id,
       sending_location_id, charity_enabled, charity, find_team, entry_policy, pricing_tiers, registration_questions, duration_minutes, wave_window_minutes,
-      venue_location_id, held_offsite, studio_hold_minutes,
+      venue_location_id, held_offsite,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,

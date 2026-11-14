@@ -74,7 +74,11 @@ describe('quiet clear', () => {
     const json = await res.json()
     expect(updates).toHaveLength(1)
     expect(updates[0].patch).toMatchObject({ status: 'declined', decided_by: 'staff-1', decision_note: 'duplicate' })
-    expect(updates[0].patch.details.cleared).toEqual({ silent: true, from_status: 'pending' })
+    expect(updates[0].patch.details.cleared).toEqual({
+      silent: true,
+      from_status: 'pending',
+      previous: { decided_by: null, decided_at: null, decision_note: null },
+    })
     expect(updates[0].filters).toContainEqual(['status', 'pending'])
     expect(json.customer_notified).toEqual({ sent: false, channel: null, reason: 'cleared' })
     expect(json.executed).toBeNull()
@@ -90,6 +94,15 @@ describe('quiet clear', () => {
     expect(updates[0].patch.details.cleared.from_status).toBe('failed')
     expect(updates[0].filters).toContainEqual(['status', 'failed'])
     expectNothingSent()
+  })
+
+  it('stores what a failed row had before the clear, for an undo', async () => {
+    const row = { ...BASE, status: 'failed', decided_by: 'staff-9', decided_at: '2026-11-10T09:00:00.000Z', decision_note: 'glofox said no' }
+    db = makeDb(row, updates)
+    await call({ status: 'declined', silent: true, decision_note: 'tidy' })
+    expect(updates[0].patch.details.cleared.previous).toEqual({
+      decided_by: 'staff-9', decided_at: '2026-11-10T09:00:00.000Z', decision_note: 'glofox said no',
+    })
   })
 
   it('sends no email for an email-delivered cancellation', async () => {

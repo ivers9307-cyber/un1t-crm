@@ -127,12 +127,12 @@ export const EventCreateFields = z.object({
   registration_questions: RegistrationQuestionsSchema.nullable().optional(),
   // CALENDAR.1 (mig 820) — the calendar entry's length; null = the kind's default.
   duration_minutes: z.number().int().min(5).max(1440).nullable().optional(),
-  // SHELLYEVENTS.2 (migs 832/833) — where the event is held and how long it
-  // holds that studio on. Staff-only (HostEventSchema carries only the studio).
-  // venue_location_id is judged in the route (an org studio, never an anchor).
+  // SHELLYEVENTS.2 (migs 832/833) — where the event is held. held_offsite is
+  // staff-only (HostEventSchema carries only the studio). venue_location_id is
+  // judged in the route (an org studio, never an anchor). How long the studio
+  // is held on is a per-studio setting (src/lib/event-hold.js), not an event field.
   venue_location_id: uuidLike.nullable().optional(),
   held_offsite: z.boolean().optional(),
-  studio_hold_minutes: z.number().int().min(15).max(1440).nullable().optional(),
   // WAVEWIN.2 (mig 825) — the public wave picker's release window; null = 90 minutes.
   wave_window_minutes: z.number().int().min(WAVE_WINDOW_MIN_MINUTES).max(WAVE_WINDOW_ALL_MINUTES).nullable().optional(),
   // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
@@ -229,12 +229,12 @@ export const EventUpdateFields = z.object({
   registration_questions: RegistrationQuestionsSchema.nullable().optional(),
   // CALENDAR.1 (mig 820) — the calendar entry's length; null = the kind's default.
   duration_minutes: z.number().int().min(5).max(1440).nullable().optional(),
-  // SHELLYEVENTS.2 (migs 832/833) — where the event is held and how long it
-  // holds that studio on. Staff-only (HostEventSchema carries only the studio).
-  // venue_location_id is judged in the route (an org studio, never an anchor).
+  // SHELLYEVENTS.2 (migs 832/833) — where the event is held. held_offsite is
+  // staff-only (HostEventSchema carries only the studio). venue_location_id is
+  // judged in the route (an org studio, never an anchor). How long the studio
+  // is held on is a per-studio setting (src/lib/event-hold.js), not an event field.
   venue_location_id: uuidLike.nullable().optional(),
   held_offsite: z.boolean().optional(),
-  studio_hold_minutes: z.number().int().min(15).max(1440).nullable().optional(),
   // WAVEWIN.2 (mig 825) — the public wave picker's release window; null = 90 minutes.
   wave_window_minutes: z.number().int().min(WAVE_WINDOW_MIN_MINUTES).max(WAVE_WINDOW_ALL_MINUTES).nullable().optional(),
   // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy

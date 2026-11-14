@@ -12,9 +12,9 @@
 // said, and the contact's email/phone for a quick Glofox lookup.
 
 import { useRef, useState } from 'react'
-import Link from 'next/link'
 import { Sparkles, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui'
+import StudioLink from '@/components/approvals/StudioLink'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
 import { DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
@@ -23,6 +23,9 @@ import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
 import { approvalKindLabel, explainFailure, eventMoveDoneLine, EVENT_MOVE_KIND_CHIP } from '@/lib/approvals/event-move-card'
 import { RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
 import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
+import UndoClearButton from '@/components/approvals/UndoClearButton'
+import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
+import { withStudio, studioChip } from '@/lib/approvals/studio-request'
 
 const KIND_CHIP = {
   cancellation: 'bg-red-500/10 text-red-700',
@@ -132,7 +135,7 @@ export function outcomeLine(status, item, executed, notified = null, plannedEndD
 
 // APPROVALSQ.2 — `selectable`, `selected` and `onToggle` put a select checkbox
 // in the header while /approvals is in select mode; a decided card has none.
-export default function AgentRequestDecideCard({ item, onDecided, selectable = false, selected = false, onToggle, timezone = null }) {
+export default function AgentRequestDecideCard({ item, onDecided, onUndone, selectable = false, selected = false, onToggle, timezone = null, activeStudioId = null }) {
   const [busy, setBusy] = useState(null)       // 'approved' | 'declined' | 'saved' | 'cleared' | null
   const inFlight = useRef(false)
   const [declineOpen, setDeclineOpen] = useState(false)
@@ -147,6 +150,12 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
   const [error, setError] = useState(null)
   const [outcome, setOutcome] = useState(null) // { tone, text, failed? } after a decision
   const [countedDecided, setCountedDecided] = useState(false)
+  // APPROVALSQ.5 — when a quiet clear's answer arrived (the Undo window runs
+  // from here), whether an undo is running, and whether the route said the
+  // clear can no longer be undone.
+  const [clearedAt, setClearedAt] = useState(null)
+  const [undoBusy, setUndoBusy] = useState(false)
+  const [undoGone, setUndoGone] = useState(false)
 
   const kindLabel = approvalKindLabel(item.kind) || 'Agent request'
   const why = whyFlagged(item)
@@ -179,11 +188,11 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
         : status === 'declined'
         ? [reasonLabel, declineNote.trim() || null].filter(Boolean).join(' — ')
         : null
-      const res = await fetch(`/api/agent/membership-requests/${item.id}`, {
+      const res = await fetch(`/api/agent/membership-requests/${item.id}`, withStudio(item, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, ...(silent ? { silent: true } : {}), decision_note, ...(!silent && item.kind === 'cancellation' && endDate ? { end_date: endDate } : {}) }),
-      })
+      }))
       const data = await res.json()
       if (!data.success) {
         setError(res.status === 409 ? 'Already decided elsewhere — refresh the list.' : (data.error || 'Decision failed'))
@@ -192,6 +201,10 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
       setDeclineOpen(false)
       setClearOpen(false)
       setOutcome(outcomeLine(data.request?.status || status, item, data.executed, data.customer_notified, data.planned_end_date))
+      if (silent) {
+        setClearedAt(Date.now())
+        setUndoGone(false)
+      }
       // Only the FIRST decision moves the item out of the pending count —
       // a retry re-decides the same (already-counted) item.
       if (!countedDecided) {
@@ -203,6 +216,33 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
     } finally {
       inFlight.current = false
       setBusy(null)
+    }
+  }
+
+  // APPROVALSQ.5 — take a quiet clear back. The route puts the request back to
+  // the state it was cleared from; the card goes back to the buttons it opened
+  // with (a failed card comes back failed) and the parent puts the count back.
+  async function undoClear() {
+    if (inFlight.current || clearedAt == null) return
+    inFlight.current = true
+    setUndoBusy(true)
+    setError(null)
+    try {
+      const res = await undoClearRequest(item)
+      if (!res.ok) {
+        setError(res.error)
+        if (res.status === 409) setUndoGone(true)
+        return
+      }
+      setOutcome(null)
+      setClearedAt(null)
+      if (countedDecided) {
+        setCountedDecided(false)
+        onUndone?.(item.id, res.request)
+      }
+    } finally {
+      inFlight.current = false
+      setUndoBusy(false)
     }
   }
 
@@ -311,7 +351,9 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
       kindClassName={KIND_CHIP[item.kind] || DEFAULT_KIND_CHIP}
       state={isFailedItem && !outcome ? { label: 'Failed', tone: 'red' } : undefined}
       name={item.contactName || 'Customer'}
+      studio={studioChip(item, activeStudioId)}
       meta={item.channel ? `via ${item.channel}` : undefined}
+      metaIsPlace={false}
       when={`Submitted ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       summary={item.subtitle}
       summaryClassName="text-sm text-un1t-text"
@@ -325,14 +367,17 @@ export default function AgentRequestDecideCard({ item, onDecided, selectable = f
       links={(
         <>
           {conversationHref && (
-            <Link href={conversationHref} className="text-un1t-muted underline hover:text-un1t-text">Open conversation</Link>
+            <StudioLink item={item} activeStudioId={activeStudioId} href={conversationHref} className="text-un1t-muted underline hover:text-un1t-text">Open conversation</StudioLink>
           )}
           {item.reviewUrl && (
-            <Link href={item.reviewUrl} className="text-un1t-muted underline hover:text-un1t-text">Full history</Link>
+            <StudioLink item={item} activeStudioId={activeStudioId} href={item.reviewUrl} className="text-un1t-muted underline hover:text-un1t-text">Full history</StudioLink>
           )}
         </>
       )}
       outcome={outcome}
+      outcomeAction={outcome && clearedAt != null && !undoGone
+        ? <UndoClearButton startedAt={clearedAt} disabled={undoBusy} onClick={undoClear} />
+        : undefined}
       error={error}
       actions={actions}
       quietAction={quietAction}

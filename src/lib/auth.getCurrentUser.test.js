@@ -53,7 +53,7 @@ vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
 // PROFILESPREAD.1 — auth.js logs a failed profile read.
 vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
-import { getCurrentUser, getOwnerOrganizationIds } from './auth.js'
+import { getCurrentUser, getOwnerOrganizationIds, userAtLocation } from './auth.js'
 import { createClient } from '@supabase/supabase-js'
 import { USER_LOCATION_COLUMNS } from './location-secrets.js'
 import { PROFILE_AUTH_SELECT, USER_PROFILE_COLUMNS } from './user-profile.js'
@@ -806,5 +806,113 @@ describe('getCurrentUser — user.user is { id, email } on every source (AUTHUSE
     expect(user.id).toBe(T_ID)
     expect(user.user).toEqual({ id: M_ID, email: master.email })
     expect(JSON.stringify(user)).not.toMatch(LEAK)
+  })
+})
+
+
+// APPROVALSQ.6 — userAtLocation(): the user as getCurrentUser() would have
+// returned it had another studio been the active one.
+describe('userAtLocation (APPROVALSQ.6)', () => {
+  const staffProfile = {
+    id: 'two-1', role: 'staff', full_name: 'Two Studios',
+    email: 'two@tenant.ie', employment_type: 'fte', active: true,
+  }
+  const twoStudioScenario = (extra = {}) => ({
+    profile: staffProfile,
+    links: [
+      link({ loc: LOC_A1, role: 'staff', is_default: true, permissions: { events: true } }),
+      link({ loc: LOC_A2, role: 'manager', permissions: { approvals: true, rosters: false } }),
+    ],
+    orgs: [ORG_A],
+    roleTemplateRows: [
+      { location_id: 'loc-a1', role: 'staff', employment_type: 'all', permissions: { events: false }, ac_device_ids: ['door-1'] },
+      { location_id: 'loc-a2', role: 'manager', employment_type: 'all', permissions: { contacts: false }, ac_device_ids: null },
+    ],
+    ...extra,
+  })
+
+  async function atHeader(scenario, locId) {
+    setup(scenario)
+    if (locId) headerMap.set('x-active-location', locId)
+    const user = await getCurrentUser()
+    headerMap.clear()
+    return user
+  }
+
+  const ACTIVE_FIELDS = [
+    'activeLocation', 'activeAssignment', 'activeRoleTemplate',
+    'activeAcDeviceTemplate', 'activeOrganization', 'role',
+  ]
+
+  it('equals getCurrentUser under x-active-location: B on every active-only field and role, and on the whole object', async () => {
+    const asDefault = await atHeader(twoStudioScenario(), null)
+    expect(asDefault.activeLocation.id).toBe('loc-a1')
+    const asB = await atHeader(twoStudioScenario(), 'loc-a2')
+    expect(asB.activeLocation.id).toBe('loc-a2')
+
+    const derived = userAtLocation(asDefault, 'loc-a2')
+    for (const f of ACTIVE_FIELDS) expect(derived[f], f).toEqual(asB[f])
+    expect(derived.role).toBe('manager')
+    expect(derived.activeAssignment.permissions).toEqual({ approvals: true, rosters: false })
+    expect(derived.activeRoleTemplate).toEqual({ contacts: false })
+    expect(derived).toEqual(asB)
+  })
+
+  it('goes the other way too (B back to A)', async () => {
+    const asB = await atHeader(twoStudioScenario(), 'loc-a2')
+    const asA = await atHeader(twoStudioScenario(), 'loc-a1')
+    expect(userAtLocation(asB, 'loc-a1')).toEqual(asA)
+    expect(userAtLocation(asB, 'loc-a1').activeAcDeviceTemplate).toEqual(asA.activeAcDeviceTemplate)
+  })
+
+  it('a master stays master at every studio', async () => {
+    const master = { id: 'master-1', role: 'master', full_name: 'The Master', email: 'm@un1t.ie', employment_type: null, active: true }
+    const scenario = { profile: master, links: [], allLocations: [LOC_A1, LOC_A2], orgs: [ORG_A] }
+    const asDefault = await atHeader(scenario, null)
+    const asB = await atHeader(scenario, 'loc-a2')
+    const derived = userAtLocation(asDefault, 'loc-a2')
+    expect(derived.role).toBe('master')
+    expect(derived.isMaster).toBe(true)
+    expect(derived).toEqual(asB)
+  })
+
+  it('an org admin with no membership at B gets what getCurrentUser gives them at B', async () => {
+    const oa = { id: 'oa-1', role: 'staff', full_name: 'Org Admin', email: 'oa@tenant.ie', employment_type: 'fte', active: true }
+    const scenario = {
+      profile: oa,
+      links: [link({ loc: LOC_A1, role: 'staff', is_default: true })],
+      orgLinks: [{ profile_id: 'oa-1', organization_id: 'org-a', role: 'org_admin' }],
+      orgLocations: [LOC_A1, LOC_A2],
+      orgs: [ORG_A],
+      roleTemplateRows: [
+        { location_id: 'loc-a2', role: 'owner', employment_type: 'all', permissions: { events: false }, ac_device_ids: null },
+      ],
+    }
+    const asDefault = await atHeader(scenario, null)
+    const asB = await atHeader(scenario, 'loc-a2')
+    expect(asB.role).toBe('owner')
+    const derived = userAtLocation(asDefault, 'loc-a2')
+    expect(derived.role).toBe('owner')
+    expect(derived).toEqual(asB)
+  })
+
+  it('a studio not in user.locations gives null', async () => {
+    const asDefault = await atHeader(twoStudioScenario(), null)
+    expect(userAtLocation(asDefault, 'loc-b1')).toBeNull()
+    expect(userAtLocation(asDefault, '')).toBeNull()
+    expect(userAtLocation(asDefault, undefined)).toBeNull()
+    expect(userAtLocation(null, 'loc-a2')).toBeNull()
+  })
+
+  it('does not mutate the input user and does not query the database', async () => {
+    const { queries } = setup(twoStudioScenario())
+    const user = await getCurrentUser()
+    const before = JSON.stringify(user)
+    const queriesBefore = queries.length
+    const derived = userAtLocation(user, 'loc-a2')
+    expect(derived).not.toBe(user)
+    expect(JSON.stringify(user)).toBe(before)
+    expect(user.activeLocation.id).toBe('loc-a1')
+    expect(queries.length).toBe(queriesBefore)
   })
 })

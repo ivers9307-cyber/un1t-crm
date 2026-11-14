@@ -40,6 +40,15 @@ export const AUTOMATIONS = Object.freeze([
     supportsBackfill: false,
     reviewBase: '/automations',
   },
+  {
+    // SHELLYEVENTS.3 — not a switch: one number per studio (src/lib/event-hold.js),
+    // rendered by its own card (EventHoldCard), never the generic toggle list.
+    key: 'event_hold',
+    label: 'Events keep the studio on',
+    description: 'How long an event held at this studio keeps its lights, power and air conditioning on after its last start time.',
+    supportsBackfill: false,
+    reviewBase: '/automations',
+  },
 ])
 
 export function getAutomation(key) {

@@ -71,14 +71,17 @@ export const RE_REVIEW_REASON_LABEL = {
   studio_hours: 'how long it needs the studio',
 }
 
-// SHELLYEVENTS.2 — how long an event holds its studio on after its last start
-// time, the same order src/lib/shelly/studio-events.js reads (kept in step by
-// host-events.test.js; not imported from there because this module also runs
-// in the browser and that one carries the server's zone reads).
+// SHELLYEVENTS.3 — an event holds its studio on for the studio's setting, or
+// for its own duration when that is longer (src/lib/shelly/studio-events.js).
+// The studio's setting is not known here (this module also runs in the host's
+// browser), so the rule below measures against the DEFAULT: a duration that
+// grows past the default hold and past what was approved can lengthen the
+// hold. Where the studio's setting is higher that asks for a review the hold
+// did not strictly need, which is the safe direction.
 const DEFAULT_STUDIO_HOLD_MINUTES = 120
-const studioHold = ({ studio_hold_minutes: hold, duration_minutes: duration }) => {
-  const pick = (v) => (v != null && Number(v) > 0 ? Number(v) : null)
-  return pick(hold) ?? pick(duration) ?? DEFAULT_STUDIO_HOLD_MINUTES
+const studioHold = ({ duration_minutes: duration }) => {
+  const d = duration != null && Number(duration) > 0 ? Number(duration) : 0
+  return Math.max(DEFAULT_STUDIO_HOLD_MINUTES, d)
 }
 
 // HOSTPORTAL.2 — the ONE rule for "this edit takes a published event off
@@ -126,9 +129,9 @@ export function reReviewReasons(current, changes) {
 
   // SHELLYEVENTS.2 — an event already approved at a studio that now needs the
   // studio for LONGER is staff's to approve too: a new session before the
-  // first or after the last one, or a longer hold (the duration, unless staff
-  // set studio_hold_minutes, which a host cannot change). A new session inside
-  // the approved hours, a shorter duration and a removed session do not.
+  // first or after the last one, or a duration longer than the default hold
+  // and longer than what was approved. A new session inside the approved
+  // hours, a shorter duration and a removed session do not.
   const linked = current.venue_location_id != null
     && !('venue_location_id' in changes && changes.venue_location_id == null)
   const hhmm = (t) => String(t || '').slice(0, 5)
@@ -138,8 +141,7 @@ export function reReviewReasons(current, changes) {
       .map(hhmm).filter(Boolean)
       .some((t) => t < approvedTimes[0] || t > approvedTimes[approvedTimes.length - 1])
   const longerHold = 'duration_minutes' in changes
-    && studioHold({ studio_hold_minutes: current.studio_hold_minutes, duration_minutes: changes.duration_minutes })
-      > studioHold(current)
+    && studioHold({ duration_minutes: changes.duration_minutes }) > studioHold(current)
   const studioHoursChanged = linked && (outsideHours || longerHold)
 
   const hit = { date: dateChanged, price: priceChanged, tiers: tiersChanged, session_time: waveTimeChanged, studio: studioChanged, studio_hours: studioHoursChanged }

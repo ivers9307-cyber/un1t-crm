@@ -18,7 +18,7 @@ export default function ContractorInvoiceCard({ item, ...rest }) {
   const load = useCallback(async () => {
     setCheck({ state: 'loading', data: null })
     try {
-      const r = await loadInvoiceRosterCheck(item.id)
+      const r = await loadInvoiceRosterCheck({ id: item.id, studioId: item.studioId })
       // An answer that says the roster was unavailable and carries no stored
       // comparison has nothing to judge the invoice by: same as a failed load.
       const unusable = !r?.ok || !r.data || (r.data.roster_unavailable && !r.data.review_comparison)
@@ -26,7 +26,7 @@ export default function ContractorInvoiceCard({ item, ...rest }) {
     } catch {
       setCheck({ state: 'failed', data: null })
     }
-  }, [item.id])
+  }, [item.id, item.studioId])
 
   useEffect(() => { load() }, [load])
 

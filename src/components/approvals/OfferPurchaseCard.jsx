@@ -5,9 +5,10 @@
 // which emails the buyer; the route answers { fulfilled, emailed } (or
 // { already: true } if someone got there first), and the outcome says which.
 import { useRef, useState } from 'react'
-import Link from 'next/link'
 import { Button } from '@/components/ui'
 import CustomerCardShell from './CustomerCardShell'
+import StudioLink from './StudioLink'
+import { withStudio, studioChip } from '@/lib/approvals/studio-request'
 import { formatApprovalDateTime } from './format-date-time'
 
 // The provider's subtitle is "<offer name> · <price>" (formatEuro in
@@ -22,7 +23,7 @@ export function summaryWithoutPrice(subtitle, amount) {
   return subtitle.length > suffix.length && subtitle.endsWith(suffix) ? subtitle.slice(0, -suffix.length) : subtitle
 }
 
-export default function OfferPurchaseCard({ item, onDecided, timezone = null }) {
+export default function OfferPurchaseCard({ item, onDecided, timezone = null, activeStudioId = null }) {
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState(null) // { tone, text }
   const inFlight = useRef(false)
@@ -33,7 +34,7 @@ export default function OfferPurchaseCard({ item, onDecided, timezone = null }) 
     setBusy(true)
     setOutcome(null)
     try {
-      const r = await fetch(`/api/offer-purchases/${item.id}/fulfil`, { method: 'POST' })
+      const r = await fetch(`/api/offer-purchases/${item.id}/fulfil`, withStudio(item, { method: 'POST' }))
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) {
         setOutcome({ tone: 'bad', text: `Could not mark it fulfilled (${j.error || `HTTP ${r.status}`}).` })
@@ -61,11 +62,12 @@ export default function OfferPurchaseCard({ item, onDecided, timezone = null }) 
       source="OFFER SALE"
       state={{ label: 'Paid, not set up', tone: 'amber' }}
       name={item.title}
+      studio={studioChip(item, activeStudioId)}
       meta={item.meta}
       when={`Paid ${formatApprovalDateTime(item.submittedAt, timezone)}`}
       amount={`€${Number(item.amount || 0).toFixed(2)}`}
       summary={summaryWithoutPrice(item.subtitle, item.amount)}
-      links={item.reviewUrl && <Link href={item.reviewUrl} className="underline text-un1t-subtle">Open offer sales</Link>}
+      links={item.reviewUrl && <StudioLink item={item} activeStudioId={activeStudioId} href={item.reviewUrl} className="underline text-un1t-subtle">Open offer sales</StudioLink>}
       outcome={outcome}
       actions={!done && (
         <Button type="button" size="sm" variant="primary" loading={busy} disabled={busy} onClick={fulfil}>

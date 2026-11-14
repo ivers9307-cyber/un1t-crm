@@ -216,6 +216,12 @@ function makeDb(state = {}) {
           }),
         }
       }
+      // SHELLYEVENTS.3 — the studio's event hold setting (src/lib/event-hold.js).
+      if (table === 'location_automations') {
+        const row = () => (fail.eventHold ? err(fail.eventHold) : { data: state.eventHold ? { config: state.eventHold } : null, error: null })
+        const self = { select: () => self, eq: () => self, maybeSingle: () => Promise.resolve(row()) }
+        return self
+      }
       throw new Error(`unexpected table ${table}`)
     },
   }
@@ -1292,6 +1298,21 @@ describe('loadDayOccurrences', () => {
       ['PTC', 'event', '2026-11-14T10:30:00.000Z', '2026-11-14T14:15:00.000Z'],
       ['HIIT', 'class', '2026-11-14T16:00:00.000Z', '2026-11-14T17:00:00.000Z'],
     ])
+  })
+
+  it('holds for the studio event hold setting (SHELLYEVENTS.3)', async () => {
+    const db = makeDb({
+      occurrences: [],
+      eventHold: { hold_minutes: 180 },
+      events: [{ id: 'e1', name: 'PTC', race_date: '2026-12-05', waves: [{ start_time: '10:30:00' }] }],
+    })
+    const out = await loadDayOccurrences(db, 'loc-A', 'Europe/Dublin', '2026-12-05')
+    expect(out.occurrences.map((o) => o.ends_at)).toEqual(['2026-12-05T13:30:00.000Z'])
+  })
+
+  it('fails the whole load when the hold setting cannot be read', async () => {
+    const db = makeDb({ occurrences: [], fail: { eventHold: 'pg down' } })
+    expect(await loadDayOccurrences(db, 'loc-A', 'Europe/Dublin', '2026-11-14')).toEqual({ ok: false, error: 'events: event hold setting: pg down' })
   })
 
   it('fails the whole load when the events cannot be read (unknown is never "no event")', async () => {

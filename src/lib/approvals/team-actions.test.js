@@ -12,6 +12,7 @@ function lastCall() {
   const [url, init] = fetchMock.mock.calls.at(-1)
   return { url, method: init.method, body: init.body === undefined ? undefined : JSON.parse(init.body) }
 }
+const lastHeaders = () => fetchMock.mock.calls.at(-1)[1].headers || {}
 beforeEach(() => { fetchMock = vi.fn(); globalThis.fetch = fetchMock })
 
 describe('TEAM_ACTIONS requests', () => {
@@ -104,7 +105,7 @@ describe('APPROVALSQ.4 task 2: invoices, time off, swaps', () => {
   })
   it('loadInvoiceRosterCheck GETs the invoice with no cache', async () => {
     reply({ success: true, data: { id: 'v1', roster_unavailable: false } })
-    const r = await loadInvoiceRosterCheck('v1')
+    const r = await loadInvoiceRosterCheck({ id: 'v1' })
     const [url, init] = fetchMock.mock.calls.at(-1)
     expect(url).toBe('/api/invoices/v1')
     expect(init.method).toBe('GET')
@@ -128,7 +129,7 @@ describe('APPROVALSQ.4 task 2: invoices, time off, swaps', () => {
   })
   it('unassignLeaveClashes POSTs the ids', async () => {
     reply({ success: true, data: { removed: [{ assignment_id: 'a1' }], already_removed: [], skipped: [], failed: [] } })
-    const r = await unassignLeaveClashes('t1', ['a1', 'a2'])
+    const r = await unassignLeaveClashes({ id: 't1' }, ['a1', 'a2'])
     expect(lastCall()).toEqual({ url: '/api/schedule/time-off/t1/unassign-clashes', method: 'POST', body: { assignment_ids: ['a1', 'a2'] } })
     expect(r.ok).toBe(true)
   })
@@ -159,5 +160,37 @@ describe('warning texts', () => {
   it('contractor invoices define the short outcomes shown when the answer carries warnings', () => {
     expect(TEAM_ACTIONS.contractor_invoices.approvedTextWithWarnings).toBe('Approved.')
     expect(TEAM_ACTIONS.contractor_invoices.declinedTextWithWarnings).toBe('Declined.')
+  })
+})
+
+// APPROVALSQ.6 — an item with a studio sends it as x-active-location on every request.
+describe('every request names the item studio (APPROVALSQ.6)', () => {
+  const at = (id) => ({ id, studioId: 'studio-2' })
+  const H = { 'x-active-location': 'studio-2' }
+  it('each action, approve and decline, carries the header (and keeps Content-Type)', async () => {
+    reply({ success: true })
+    for (const [key, cfg] of Object.entries(TEAM_ACTIONS)) {
+      await cfg.approve(at('i1'))
+      expect(lastHeaders(), `${key} approve`).toMatchObject(H)
+      await cfg.decline(at('i1'), 'why')
+      expect(lastHeaders(), `${key} decline`).toMatchObject(H)
+      expect(lastHeaders(), `${key} decline content-type`).toMatchObject({ 'Content-Type': 'application/json' })
+    }
+  })
+  it('the roster check, unassign clashes and approve anyway carry it', async () => {
+    reply({ success: true, data: {} })
+    await loadInvoiceRosterCheck(at('v1'))
+    expect(lastHeaders()).toEqual(H)
+    await unassignLeaveClashes(at('t1'), ['a1'])
+    expect(lastHeaders()).toMatchObject(H)
+    await approveSwapAnyway(at('s1'))
+    expect(lastHeaders()).toMatchObject(H)
+  })
+  it('an item with no studio sends no such header', async () => {
+    reply({ success: true, data: {} })
+    await TEAM_ACTIONS.fte_expenses.approve({ id: 'c1' })
+    await loadInvoiceRosterCheck({ id: 'v1' })
+    await unassignLeaveClashes({ id: 't1' }, ['a1'])
+    for (const [, init] of fetchMock.mock.calls) expect(init.headers || {}).not.toHaveProperty('x-active-location')
   })
 })

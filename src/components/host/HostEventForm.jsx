@@ -357,9 +357,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
 
     if (isEdit && onSale) {
       const reasons = reReviewReasons(
-        // studio_hold_minutes is staff's: the form never sends it, so it is
-        // read from the loaded event on every check.
-        { status, ...serverHolds.current, studio_hold_minutes: initial?.studio_hold_minutes ?? null },
+        { status, ...serverHolds.current },
         predictedChanges(buildBody()),
       )
       if (reasons.length > 0) {
