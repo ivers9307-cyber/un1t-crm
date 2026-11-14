@@ -73,11 +73,19 @@ export async function GET(_request, props) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
+  // STAFFCONSENT.1 — each studio list the contact is on, with whether THIS
+  // viewer may switch it (ADMIN_ROLES there, or master). Only studios of the
+  // contact's own organisation are listed. A failed read is an empty list
+  // plus a flag, never a wrong state.
+  const { studios, studiosError } = await loadStudioLists(db, user, params.id, contact.location_id)
+
   // contact_preferences row is created on contact insert via trigger
   // (mig 005). If it's missing, return defaults — toggles will write
   // a fresh row on first save via upsert.
   return NextResponse.json({
     success: true,
+    studios,
+    studios_error: studiosError,
     preferences: pref || {
       email_marketing: true,
       sms_marketing: true,
@@ -88,6 +96,35 @@ export async function GET(_request, props) {
       updated_at: null,
     },
   })
+}
+
+async function loadStudioLists(db, user, contactId, homeLocationId) {
+  const [{ data: rows, error }, { data: home, error: homeErr }] = await Promise.all([
+    db
+      .from('contact_location_preferences')
+      .select('location_id, email_marketing, locations(name, organization_id)')
+      .eq('contact_id', contactId),
+    db
+      .from('locations')
+      .select('organization_id')
+      .eq('id', homeLocationId)
+      .maybeSingle(),
+  ])
+  if (error || homeErr) {
+    console.error('[marketing-preferences] studio lists read failed:', { contactId, message: (error || homeErr).message })
+    return { studios: [], studiosError: true }
+  }
+  const orgId = home?.organization_id || null
+  const studios = (rows || [])
+    .filter((r) => orgId && r.locations?.organization_id === orgId)
+    .map((r) => ({
+      location_id: r.location_id,
+      name: r.locations?.name || '',
+      email_marketing: r.email_marketing,
+      can_edit: Boolean(user.isMaster || hasRoleAtLocation(user, r.location_id, ADMIN_ROLES)),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+  return { studios, studiosError: false }
 }
 
 export async function PATCH(request, props) {

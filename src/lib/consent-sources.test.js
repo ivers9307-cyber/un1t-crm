@@ -36,6 +36,7 @@ const LIVE_VOCABULARY = [
   ['postmark_suppression_backfill', 23, 'bulk'],
   ['postmark_hard_bounce', 18, 'deliverability'],
   ['admin_panel', 4, 'voluntary'],
+  ['staff_studio', 0, 'voluntary'],
   ['booking_form', 2, 'voluntary'],
   ['leadcap1_scope_correction', 2, 'bulk'],
   ['postmark_spam_complaint', 1, 'deliverability'],
