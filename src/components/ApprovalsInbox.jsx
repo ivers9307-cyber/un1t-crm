@@ -5,31 +5,31 @@
 // Two views over /api/approvals/pending, refreshed when the tab regains focus
 // and on a manual refresh. Customers: everything a customer is waiting on
 // (agent requests, paid trials, corporate promo claims, offer purchases) as
-// one queue of cards that are decided in place, with filters. Team and money:
-// the staff-side categories (leave, expenses, invoices and so on), where each
-// row links out to its source page and the real approve/decline happens there.
+// one queue of cards that are decided in place, with filters. Team and money
+// (APPROVALSQ.4): the staff-side categories (leave, expenses, invoices and so
+// on) as one list, oldest first, with filter chips. Six kinds are decided on
+// their card; the rest show an Open button to their own page.
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import Link from 'next/link'
-import { RefreshCw, ChevronRight } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import AgentRequestDecideCard from '@/components/AgentRequestDecideCard'
 import TrialPurchaseReviewCard from '@/components/TrialPurchaseReviewCard'
 import CorpPromoClaimCard from '@/components/CorpPromoClaimCard'
 import OfferPurchaseCard from '@/components/approvals/OfferPurchaseCard'
 import BulkClearBar from '@/components/approvals/BulkClearBar'
 import { isBulkClearable } from '@/lib/approvals/bulk-clear'
-import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
+import { TEAM_CARDS, TeamLinkCard } from '@/components/approvals/team-cards'
 import { buildCustomerQueue, filterQueue, teamProviders } from '@/lib/approvals/customer-queue'
-import { formatAmount } from '@/components/approvals/format-amount'
+import { buildTeamQueue, filterTeamQueue } from '@/lib/approvals/team-queue'
 
 export default function ApprovalsInbox({ timezone = null }) {
   const [providers, setProviders] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [activeKey, setActiveKey] = useState(null)
   const [view, setView] = useState(null) // 'customers' | 'team'; chosen on first load
   const [chip, setChip] = useState('all')
+  const [teamChip, setTeamChip] = useState('all')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -40,13 +40,7 @@ export default function ApprovalsInbox({ timezone = null }) {
       if (!j.success) throw new Error(j.error || 'Failed to load')
       setProviders(j.data.providers || [])
       setTotal(j.data.total || 0)
-      // Pick the first non-empty team tab on first load, else first tab.
       const team = teamProviders(j.data.providers || [])
-      setActiveKey((prev) => {
-        if (prev && team.some((p) => p.key === prev)) return prev
-        const firstWithItems = team.find((p) => p.count > 0)
-        return (firstWithItems || team[0])?.key || null
-      })
       // Open on Customers when something waits there or there is no team view.
       setView((prev) => {
         if (prev) return prev
@@ -72,13 +66,13 @@ export default function ApprovalsInbox({ timezone = null }) {
 
   const team = teamProviders(providers)
   const queue = buildCustomerQueue(providers)
+  const teamQueue = buildTeamQueue(providers)
   const hasCustomers = queue.chips.length > 0
   const teamCount = team.reduce((sum, p) => sum + (p.count || 0), 0)
   const hasTeam = team.length > 0
   const shownView = view === 'team' && hasTeam ? 'team'
     : view === 'customers' && hasCustomers ? 'customers'
       : hasCustomers ? 'customers' : 'team'
-  const active = team.find((p) => p.key === activeKey) || null
 
   // AGENT-REQ-UX.1 — an inline decision resolved one pending item. Drop the
   // badge counts immediately; the card itself keeps rendering its outcome
@@ -97,34 +91,6 @@ export default function ApprovalsInbox({ timezone = null }) {
               <ViewButton active={shownView === 'customers'} count={queue.total} onClick={() => setView('customers')}>Customers</ViewButton>
               <ViewButton active={shownView === 'team'} count={teamCount} onClick={() => setView('team')}>Team and money</ViewButton>
             </div>
-          )}
-          {shownView === 'team' && (
-        <div className="flex items-center gap-1 border border-un1t-border rounded-lg p-1 bg-un1t-bg/40 flex-wrap">
-          {team.map((p) => {
-            const isActive = p.key === activeKey
-            return (
-              <button
-                key={p.key}
-                type="button"
-                onClick={() => setActiveKey(p.key)}
-                className={`px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2 ${
-                  isActive
-                    ? 'bg-un1t-text text-un1t-bg font-medium'
-                    : 'text-un1t-subtle hover:text-un1t-text'
-                }`}
-              >
-                {p.label}
-                {p.count > 0 && (
-                  <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full ${
-                    isActive ? 'bg-un1t-bg text-un1t-text' : 'bg-red-500 text-white'
-                  }`}>
-                    {p.count > 99 ? '99+' : p.count}
-                  </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -151,7 +117,7 @@ export default function ApprovalsInbox({ timezone = null }) {
 
       {shownView === 'customers'
         ? <CustomerList queue={queue} chip={chip} setChip={setChip} loading={loading} onItemDecided={onItemDecided} onReload={load} timezone={timezone} />
-        : <ProviderList provider={active} loading={loading} timezone={timezone} />}
+        : <TeamList queue={teamQueue} chip={teamChip} setChip={setTeamChip} loading={loading} onItemDecided={onItemDecided} timezone={timezone} />}
     </div>
   )
 }
@@ -188,6 +154,10 @@ const CARDS = {
   corp_promo_claims: CorpPromoClaimCard,
   offer_purchases: OfferPurchaseCard,
 }
+
+const chipClass = (on) => `px-3 py-1 text-xs rounded-full border transition-colors flex items-center gap-1.5 ${
+  on ? 'bg-un1t-text text-un1t-bg border-un1t-text font-medium' : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
+}`
 
 function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload, timezone }) {
   // A chip whose provider vanished on a reload falls back to All.
@@ -241,9 +211,6 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload, 
     }
     return <Card key={`${it.providerKey}-${it.id}`} item={it} onDecided={onDecided} timezone={timezone} {...bulk} />
   }
-  const chipClass = (on) => `px-3 py-1 text-xs rounded-full border transition-colors flex items-center gap-1.5 ${
-    on ? 'bg-un1t-text text-un1t-bg border-un1t-text font-medium' : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
-  }`
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
@@ -299,57 +266,43 @@ function CustomerList({ queue, chip, setChip, loading, onItemDecided, onReload, 
   )
 }
 
-function ProviderList({ provider, loading, timezone }) {
-  if (!provider) {
-    return (
-      <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
-        {loading ? 'Loading…' : 'Nothing waiting on your review.'}
-      </div>
-    )
-  }
-  const failedItems = provider.failedItems || []
-  if (provider.items.length === 0 && failedItems.length === 0) {
-    return (
-      <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
-        Nothing pending in {provider.label.toLowerCase()}. <Link href={provider.reviewBase} className="underline">Open {provider.label}</Link>
-      </div>
-    )
-  }
+function TeamList({ queue, chip, setChip, loading, onItemDecided, timezone }) {
+  // A chip whose provider vanished on a reload falls back to All.
+  const key = queue.chips.some((c) => c.key === chip) ? chip : 'all'
+  const items = filterTeamQueue(queue, key)
   return (
-    <ul className="border border-un1t-border rounded-lg divide-y divide-un1t-border/50 overflow-hidden">
-      {provider.items.map((it) => (
-        <li key={it.id}>
-          <Link
-            href={it.reviewUrl}
-            className="flex items-center gap-4 p-4 hover:bg-un1t-text/5 transition-colors"
-          >
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm font-medium text-un1t-text truncate">{it.title}</span>
-                {it.meta && (
-                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-un1t-border/30 text-un1t-subtle border border-un1t-border">
-                    {it.meta}
-                  </span>
-                )}
-              </div>
-              <div className="text-xs text-un1t-subtle truncate mt-1">{it.subtitle}</div>
-              {/* LEAVE.1 — e.g. "Clashes with 2 rostered shifts" on time off. */}
-              {it.warning && (
-                <div className="text-xs text-amber-700 mt-1">{it.warning}</div>
-              )}
-              <div className="text-xs text-un1t-subtle mt-1">
-                Submitted {formatApprovalDateTime(it.submittedAt, timezone)}
-              </div>
-            </div>
-            {formatAmount(it.amount, it.currency) && (
-              <div className="text-sm text-un1t-text font-medium tabular-nums">
-                {formatAmount(it.amount, it.currency)}
-              </div>
-            )}
-            <ChevronRight size={16} className="text-un1t-subtle shrink-0" />
-          </Link>
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button type="button" onClick={() => setChip('all')} className={chipClass(key === 'all')}>
+          All <span className="tabular-nums">{queue.total}</span>
+        </button>
+        {queue.chips.map((c) => (
+          <button key={c.key} type="button" onClick={() => setChip(c.key)} className={chipClass(key === c.key)}>
+            {c.label} <span className="tabular-nums">{c.count}</span>
+          </button>
+        ))}
+      </div>
+      {items.length === 0 ? (
+        <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
+          {loading ? 'Loading…' : 'Nothing waiting on your review.'}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {items.map((it) => {
+            const Card = TEAM_CARDS[it.providerKey] || TeamLinkCard
+            return (
+              <Card
+                key={`${it.providerKey}-${it.id}`}
+                item={it}
+                providerKey={it.providerKey}
+                providerLabel={it.providerLabel}
+                timezone={timezone}
+                onDecided={() => onItemDecided(it.providerKey)}
+              />
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }

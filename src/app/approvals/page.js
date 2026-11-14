@@ -1,10 +1,9 @@
 // APPROVALS.1 — central approvals dashboard.
 //
 // Aggregates everything awaiting the operator's review across the
-// platform: contractor invoices, FTE expense claims, time-off
-// requests, shift swaps. Each tab shows a list with a "Review →"
-// link to the existing source page (operators can also visit those
-// pages directly — this is an aggregator, not a replacement).
+// platform: customer items and team and money items (invoices, expenses,
+// time off, swaps...). Most are decided on their card; a few open their
+// own page.
 //
 // Access (APPROVALS-PERCAT.1): `approvals_inbox` is now a DERIVED
 // permission — visible iff the Approvals feature is enabled at the
@@ -31,7 +30,7 @@ export default async function ApprovalsPage() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-un1t-text">Approvals</h1>
         <p className="text-sm text-un1t-subtle mt-1">
-          Everything waiting on you. Customer items are decided right here; team and money items open their own page.
+          Everything waiting on you. Most items are decided right here; a few open their own page.
         </p>
       </header>
       <ApprovalsInbox timezone={user.activeLocation?.timezone ?? null} />
