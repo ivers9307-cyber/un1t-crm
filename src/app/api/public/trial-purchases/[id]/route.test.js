@@ -61,4 +61,22 @@ describe('GET /api/public/trial-purchases/[id]', () => {
     expect(mocks.getPayment).toHaveBeenCalledWith('ord1', { connectedAccountId: null })
     expect(data.checkout).toEqual({ provider: 'revolut', token: 'tok', url: null })
   })
+
+  // TRIALLEAK.1 — `resumable`: may the page put the checkout back?
+  const OPEN_REVOLUT = { ...BASE, status: 'awaiting_payment', payment_status: 'pending', payment_provider: 'revolut', payment_provider_ref: 'ord1', payment_checkout_token: 'tok', payment_checkout_url: null }
+  const minutesAgo = (m) => new Date(Date.now() - m * 60_000).toISOString()
+  it('a young, unpaid Revolut row is resumable; past the reuse window it is not', async () => {
+    mocks.row = { ...OPEN_REVOLUT, created_at: minutesAgo(20) }
+    expect((await (await call('tp1')).json()).data).toMatchObject({ state: 'pending', resumable: true, checkout: { token: 'tok' } })
+    mocks.row = { ...OPEN_REVOLUT, created_at: minutesAgo(115) }
+    expect((await (await call('tp1')).json()).data).toMatchObject({ state: 'pending', resumable: false })
+  })
+  it('a Hatch row, a paid row and a failed row are never resumable', async () => {
+    mocks.row = { ...OPEN_REVOLUT, payment_provider: 'un1t_online', payment_checkout_token: null, created_at: minutesAgo(5) }
+    expect((await (await call('tp1')).json()).data.resumable).toBe(false)
+    mocks.row = { ...OPEN_REVOLUT, status: 'queued', payment_status: 'paid', created_at: minutesAgo(5) }
+    expect((await (await call('tp1')).json()).data).toMatchObject({ state: 'paid', resumable: false })
+    mocks.row = { ...OPEN_REVOLUT, status: 'payment_failed', payment_status: 'expired', created_at: minutesAgo(5) }
+    expect((await (await call('tp1')).json()).data).toMatchObject({ state: 'failed', payment_status: 'expired', resumable: false })
+  })
 })

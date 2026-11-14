@@ -19,7 +19,9 @@ vi.mock('@/lib/meta-pixel-lead', () => ({
 }))
 vi.mock('@/lib/meta-pixel-paths', () => ({ metaPixelIdsForPath: () => [], pageLocationIdFromDocument: () => null }))
 vi.mock('@/lib/visit-origin', () => ({ readVisitOrigin: () => null }))
-vi.mock('@/components/landing-page/ClassFunnelCheckout', () => ({ default: () => null }))
+// TRIALLEAK.1 — the checkout is a stub that keeps the props it was mounted with.
+const checkout = vi.hoisted(() => ({ props: null }))
+vi.mock('@/components/landing-page/ClassFunnelCheckout', () => ({ default: (props) => { checkout.props = props; return <div data-testid="checkout" /> } }))
 
 import PaidTrialFunnel from './PaidTrialFunnel'
 import { fireBrowserLead, fireBrowserInitiateCheckout } from '@/lib/meta-pixel-lead'
@@ -55,7 +57,12 @@ let pollState
 let pollClass
 let classList
 let fetchMock
+let pollData
 beforeEach(() => {
+  pollData = {}
+  checkout.props = null
+  window.sessionStorage.clear()
+  window.history.replaceState(null, '', '/trial')
   posts = []
   answers = {}
   pollState = 'pending'
@@ -72,7 +79,7 @@ beforeEach(() => {
       return { ok: a.status < 400, status: a.status, json: async () => a.body }
     }
     if (u.startsWith('/api/public/classes')) return { ok: true, status: 200, json: async () => classList }
-    return { ok: true, status: 200, json: async () => ({ success: true, data: { state: pollState, amount_cents: 3900, currency: 'EUR', product_name: 'The UN1T Trial', class: pollClass } }) }
+    return { ok: true, status: 200, json: async () => ({ success: true, data: { state: pollState, amount_cents: 3900, currency: 'EUR', product_name: 'The UN1T Trial', class: pollClass, ...pollData } }) }
   })
   vi.stubGlobal('fetch', fetchMock)
 })
@@ -229,17 +236,18 @@ describe('TRIALSTUDIO.10 / CLASSFIRST.1 — PaidTrialFunnel', () => {
     expect(screen.queryByRole('checkbox', { name: /I accept/ })).toBeNull()
   })
 
-  it('cancelled return shows the class step with Hatch preselected and no error', async () => {
+  it('cancelled return (a fresh tab, no details kept) shows the class step with Hatch preselected and says nothing was charged', async () => {
     vi.useFakeTimers()
     render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} cancelled hatchTerms={HATCH_TERMS} />)
     expect(screen.getByRole('heading', { name: 'Pick your first class' })).toBeTruthy()
     expect(screen.getByText('Hatch Street')).toBeTruthy()
     expect(screen.queryByPlaceholderText('First name')).toBeNull()
-    expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.queryByText(/Confirming/)).toBeNull()
     // A cancelled checkout is not polled.
     await advance(5000)
     expect(pollCalls()).toHaveLength(0)
+    // TRIALLEAK.1 — once the timetable is in, the step says what happened.
+    expect(screen.getByRole('alert').textContent).toMatch(/Your checkout wasn't completed\. Nothing was charged\./)
   })
 
   it('an unsellable studio tile is disabled', () => {
@@ -509,5 +517,204 @@ describe('PAGES.1 — page prop', () => {
     fireEvent.click(submitButton())
     await waitFor(() => expect(assign).toHaveBeenCalled())
     expect(posts[0].body).toMatchObject({ page: 'trial', studio: 'hatch-street', terms_accepted: true, event_id: 'a' })
+  })
+})
+
+// TRIALLEAK.1 — a checkout survives the browser: the purchase rides the URL, a
+// reload gets the checkout back, a dead order hands the buyer back with their
+// details, and the in-app browser gets a link to finish elsewhere.
+describe('TRIALLEAK.1 — persist, resume, fail back', () => {
+  const PAY = { status: 200, body: { success: true, data: { purchaseId: PURCHASE_ID, checkout: { provider: 'revolut', token: 'tok' }, amount_cents: 3900, currency: 'EUR', product_name: 'The 14 Day Reset' } } }
+  const stubUserAgent = (ua) => vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(ua)
+  const FB_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) Mobile/15E148 [FBAN/FBIOS;FBAV/480.0]'
+  afterEach(() => { vi.restoreAllMocks() })
+
+  async function toPayment() {
+    answers['/api/public/trial-purchases'] = [PAY, PAY]
+    render(<PaidTrialFunnel studios={[STILLORGAN]} initialStudio="stillorgan" />)
+    await pickClass(0)
+    fillDetails()
+    fireEvent.click(submitButton())
+    await screen.findByTestId('checkout')
+  }
+
+  it('entering the payment step puts ?purchase= in the URL and keeps the other params', async () => {
+    window.history.replaceState(null, '', '/trial?utm_source=ig&utm_medium=paid&utm_campaign=reset&fbclid=abc#trial')
+    await toPayment()
+    const u = new URL(window.location.href)
+    expect(u.searchParams.get('purchase')).toBe(PURCHASE_ID)
+    expect(u.searchParams.get('utm_source')).toBe('ig')
+    expect(u.searchParams.get('utm_campaign')).toBe('reset')
+    expect(u.searchParams.get('fbclid')).toBe('abc')
+    expect(u.hash).toBe('#trial')
+    // …and the POST carried the source and medium.
+    expect(posts[0].body.attribution).toMatchObject({ utm_source: 'ig', utm_medium: 'paid', utm_campaign: 'reset', fbclid: 'abc' })
+  })
+
+  it('an unfilled Meta macro in the URL is not sent as attribution', async () => {
+    window.history.replaceState(null, '', '/trial?utm_campaign={{campaign.name}}&utm_term=%7B%7Badset.id%7D%7D&ad_id={{ad.id}}&utm_medium=paid')
+    await toPayment()
+    expect(posts[0].body.attribution).toEqual({ utm_medium: 'paid' })
+  })
+
+  it('a dead order (the checkout poll) returns to the form with every detail kept, says so plainly, and the next press pays again', async () => {
+    await toPayment()
+    expect(checkout.props).toMatchObject({ paymentId: PURCHASE_ID, checkout: { provider: 'revolut', token: 'tok' } })
+    act(() => { checkout.props.onFailed({ state: 'failed', payment_status: 'expired' }) })
+    expect(screen.queryByTestId('checkout')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toMatch(/Your checkout wasn't completed\. Nothing was charged\./)
+    expect(screen.getByPlaceholderText('First name').value).toBe('Sam')
+    expect(screen.getByPlaceholderText('Last name').value).toBe('Byrne')
+    expect(screen.getByPlaceholderText('Email').value).toBe('sam@example.com')
+    expect(screen.getByPlaceholderText('Phone').value).toBe('0871234567')
+    expect(screen.getByRole('checkbox').checked).toBe(true)
+    expect(screen.getByText(/Mon, 5 Jan/)).toBeTruthy() // the chosen class
+    expect(new URL(window.location.href).searchParams.get('purchase')).toBeNull()
+    fireEvent.click(submitButton())
+    await screen.findByTestId('checkout')
+    expect(posts).toHaveLength(2)
+    expect(posts[1].body).toMatchObject({ first_name: 'Sam', email: 'sam@example.com', event_id: 'a' })
+  })
+
+  it('a refused payment says the payment did not go through', async () => {
+    await toPayment()
+    act(() => { checkout.props.onFailed({ state: 'failed', payment_status: 'failed' }) })
+    expect(screen.getByRole('alert').textContent).toBe('That payment did not go through. Nothing was charged; please try again.')
+    expect(screen.getByPlaceholderText('First name').value).toBe('Sam')
+  })
+
+  it('Back from the checkout keeps the details and takes the purchase out of the URL', async () => {
+    await toPayment()
+    act(() => { checkout.props.onCancel() })
+    expect(screen.getByPlaceholderText('Email').value).toBe('sam@example.com')
+    expect(new URL(window.location.href).searchParams.get('purchase')).toBeNull()
+  })
+
+  it('a reload with ?purchase= for a still-unpaid, still-payable Stillorgan row gets the checkout back (after two polls), with that token', async () => {
+    vi.useFakeTimers()
+    pollData = { resumable: true, checkout: { provider: 'revolut', token: 'tok-resume', url: null }, product_name: 'The 14 Day Reset' }
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} resumePurchaseId={PURCHASE_ID} />)
+    expect(screen.getByText('One moment while we check with the bank.')).toBeTruthy()
+    await advance(300) // the first poll: the money may be on its way
+    expect(screen.queryByTestId('checkout')).toBeNull()
+    await advance(3000) // the second: still unpaid
+    expect(screen.getByTestId('checkout')).toBeTruthy()
+    expect(checkout.props).toMatchObject({ paymentId: PURCHASE_ID, checkout: { provider: 'revolut', token: 'tok-resume' } })
+    expect(vi.mocked(trackFunnelStep)).toHaveBeenCalledWith('trial_checkout_resumed', { studio: 'stillorgan' })
+    // The confirming poll has handed over to the checkout's own.
+    const polled = pollCalls().length
+    await advance(9000)
+    expect(pollCalls()).toHaveLength(polled)
+  })
+
+  it('a payment that lands during those two polls is never shown a checkout', async () => {
+    vi.useFakeTimers()
+    pollData = { resumable: true, checkout: { provider: 'revolut', token: 'tok-resume', url: null } }
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} resumePurchaseId={PURCHASE_ID} />)
+    await advance(300)
+    pollState = 'paid'
+    pollData = { resumable: false }
+    await advance(3000)
+    expect(screen.getByText('Payment received')).toBeTruthy()
+    expect(screen.queryByTestId('checkout')).toBeNull()
+  })
+
+  it('a reload restores the details typed in this tab, so a failed resume lands on a filled form', async () => {
+    vi.useFakeTimers()
+    window.sessionStorage.setItem('trial_checkout_draft', JSON.stringify({ studioKey: 'stillorgan', form: { first_name: 'Sam', last_name: 'Byrne', email: 'sam@example.com', phone: '0871234567', consent: true }, chosen: CLASSES[1] }))
+    pollState = 'failed'
+    pollData = { payment_status: 'expired' }
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} resumePurchaseId={PURCHASE_ID} />)
+    await advance(300)
+    expect(screen.getByRole('alert').textContent).toMatch(/Your checkout wasn't completed\. Nothing was charged\./)
+    expect(screen.getByPlaceholderText('First name').value).toBe('Sam')
+    expect(screen.getByPlaceholderText('Phone').value).toBe('0871234567')
+    expect(screen.getByText(/Wed, 7 Jan/)).toBeTruthy()
+  })
+
+  it('a pending Stillorgan return that cannot be resumed never spins for ever: after the poll budget it says so and hands them back', async () => {
+    vi.useFakeTimers()
+    pollData = { resumable: false, checkout: { provider: 'revolut', token: 'tok', url: null } }
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} resumePurchaseId={PURCHASE_ID} />)
+    await advance(300 + 3000 * 38)
+    expect(screen.getByText('One moment while we check with the bank.')).toBeTruthy()
+    await advance(3000)
+    expect(screen.queryByText('One moment while we check with the bank.')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toBe('We have not received a payment for that checkout. If you did pay, your confirmation email is on its way; otherwise please try again.')
+    expect(screen.getByRole('heading', { name: 'Pick your first class' })).toBeTruthy()
+    const polled = pollCalls().length
+    expect(polled).toBe(40)
+    await advance(9000)
+    expect(pollCalls()).toHaveLength(polled)
+  })
+
+  it('a Hatch return is never given a CRM checkout, whatever the status route says', async () => {
+    vi.useFakeTimers()
+    pollData = { resumable: true, checkout: { provider: 'revolut', token: 'x', url: null } }
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} hatchTerms={HATCH_TERMS} />)
+    await advance(300 + 3000 * 3)
+    expect(screen.queryByTestId('checkout')).toBeNull()
+    expect(screen.getByText('Confirming your payment')).toBeTruthy()
+  })
+
+  it('a cancelled Hatch checkout comes back to the filled form with the message, and is not polled', async () => {
+    vi.useFakeTimers()
+    window.sessionStorage.setItem('trial_checkout_draft', JSON.stringify({ studioKey: 'hatch', form: { first_name: 'Sam', last_name: 'Byrne', email: 'sam@example.com', phone: '0871234567', consent: true }, chosen: CLASSES[0] }))
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} cancelled hatchTerms={HATCH_TERMS} />)
+    await advance(0)
+    expect(screen.getByRole('alert').textContent).toMatch(/Your checkout wasn't completed\. Nothing was charged\./)
+    expect(screen.getByPlaceholderText('First name').value).toBe('Sam')
+    expect(screen.getByPlaceholderText('Email').value).toBe('sam@example.com')
+    expect(screen.getByText(/Mon, 5 Jan/)).toBeTruthy()
+    await advance(5000)
+    expect(pollCalls()).toHaveLength(0)
+  })
+
+  it("another studio's kept details are not restored", async () => {
+    vi.useFakeTimers()
+    window.sessionStorage.setItem('trial_checkout_draft', JSON.stringify({ studioKey: 'stillorgan', form: { first_name: 'Sam', last_name: 'Byrne', email: 'sam@example.com', phone: '0871234567', consent: true }, chosen: null }))
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} cancelled hatchTerms={HATCH_TERMS} />)
+    await advance(0)
+    expect(screen.getByRole('heading', { name: 'Pick your first class' })).toBeTruthy()
+  })
+
+  it('paying clears the kept details', async () => {
+    await toPayment()
+    expect(window.sessionStorage.getItem('trial_checkout_draft')).toContain('sam@example.com')
+    act(() => { checkout.props.onPaid() })
+    expect(screen.getByText('Payment received')).toBeTruthy()
+    expect(window.sessionStorage.getItem('trial_checkout_draft')).toBeNull()
+  })
+
+  it('inside Facebook the payment step says a wallet may not show and copies a link that carries the purchase', async () => {
+    stubUserAgent(FB_UA)
+    const writeText = vi.fn(async () => {})
+    vi.stubGlobal('navigator', Object.assign(Object.create(window.navigator), { clipboard: { writeText } }))
+    window.history.replaceState(null, '', '/trial?utm_source=fb')
+    await toPayment()
+    expect(screen.getByText(/Apple Pay and Google Pay may not show inside Facebook/)).toBeTruthy()
+    const btn = screen.getByRole('button', { name: 'Copy link to open in your browser' })
+    expect(btn.getAttribute('type')).toBe('button')
+    fireEvent.click(btn)
+    await screen.findByRole('button', { name: /Link copied/ })
+    const copied = new URL(writeText.mock.calls[0][0])
+    expect(copied.pathname).toBe('/trial')
+    expect(copied.searchParams.get('purchase')).toBe(PURCHASE_ID)
+    expect(copied.searchParams.get('utm_source')).toBe('fb')
+  })
+
+  it('with no clipboard the link is shown to copy by hand', async () => {
+    stubUserAgent('Mozilla/5.0 (iPhone) Instagram 350.0.0.0')
+    await toPayment()
+    expect(screen.getByText(/may not show inside Instagram/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link to open in your browser' }))
+    const field = await screen.findByLabelText('Link to this checkout')
+    expect(field.value).toContain(`purchase=${PURCHASE_ID}`)
+  })
+
+  it('an ordinary browser sees no hint', async () => {
+    await toPayment()
+    expect(screen.queryByText(/may not show inside/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /Copy link/ })).toBeNull()
   })
 })

@@ -38,7 +38,9 @@ import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 import { studioByKey, loadTrialStudios, trialEntryFromRow } from '@/lib/trial-studios'
 import { resolvePublicPageRequest, pageRequestRefusal, studioTermsCopy, listStudioPageSlugs, publicOrgIdForHost } from '@/lib/landing-pages'
 import { stillorganTrialHistory, hatchActiveMembership } from '@/lib/trial-eligibility'
-import { createTrialPurchasePayment } from '@/lib/trial-purchase-payments'
+import { createTrialPurchasePayment, findReusableTrialCheckout } from '@/lib/trial-purchase-payments'
+import { inAppBrowserFromUserAgent } from '@/lib/trial-checkout-window'
+import { cleanAttribution } from '@/lib/campaign-funnel-attribution'
 import { startUn1tTrialCheckout } from '@/lib/trial-purchase-un1t-checkout'
 import { normalizeTrialReturnPath } from '@/lib/trial-return-path'
 import { locationCanTakePayments } from '@/lib/location-payments'
@@ -74,6 +76,9 @@ const Schema = z.object({
     utm_campaign: z.string().max(200).optional(),
     utm_content: z.string().max(200).optional(),
     utm_term: z.string().max(200).optional(),
+    // TRIALLEAK.1 — measurement only (stored in trial_purchases.attribution).
+    utm_source: z.string().max(200).optional(),
+    utm_medium: z.string().max(200).optional(),
     ad_provider: z.string().max(50).optional(),
     ad_external_id: z.string().max(200).optional(),
     fbclid: z.string().max(500).optional(),
@@ -100,7 +105,8 @@ export async function POST(request) {
 
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
-  const b = validation.data
+  // TRIALLEAK.1 — an unfilled Meta macro (`{{adset.id}}`) in an ad value is no value.
+  const b = { ...validation.data, attribution: cleanAttribution(validation.data.attribution) }
   // PAGES.1 — the return path is /trial or a live studio page of the HOST's
   // organisation, read once per request (only when the body names one; a
   // failed read is [], so only /trial validates). Never a free-form path.
@@ -329,8 +335,45 @@ export async function POST(request) {
     ...(b.attribution || {}),
     fbc,
     event_source_url: product.eventSourceUrl,
+    // TRIALLEAK.1 — Facebook's or Instagram's in-app browser (where an ad
+    // buyer lands, and where a wallet button may not show), from the request.
+    in_app_browser: inAppBrowserFromUserAgent(request.headers.get('user-agent')),
   }
   delete attribution.fbclid
+
+  // TRIALLEAK.1 — the buyer's own open checkout, handed back: a second press
+  // of the pay button (after Back, a failed card or a reload) gets the SAME
+  // row and order, never a second of each. Stillorgan only (a Hatch checkout
+  // URL is never stored). The class they picked this time goes on the row; if
+  // that write fails, or the read does, a fresh row is made as before.
+  if (!isHatch) {
+    const reuse = await findReusableTrialCheckout(db, {
+      contactId, locationId, landingPath, pageId,
+      membershipId: product.membershipId, planCode: product.planCode,
+      amountCents: product.priceCents, currency: product.currency,
+    })
+    if (reuse.error) logWarn('trialbuy', 'open checkout read failed; a new one is made', { code: reuse.error.code ?? null, contactId })
+    if (reuse.row) {
+      const { data: kept, error: keepErr } = await db.from('trial_purchases')
+        .update({ class_event_id: null, class_name: null, class_starts_at: null, ...classColumnsFor(choice.chosen), lead_event_id: b.lead_event_id || reuse.row.lead_event_id || null })
+        .eq('id', reuse.row.id).eq('location_id', locationId).eq('status', 'awaiting_payment')
+        .select('id')
+      if (keepErr || !kept?.length) {
+        logWarn('trialbuy', 'open checkout not updated; a new one is made', { code: keepErr?.code ?? null, purchaseId: reuse.row.id })
+      } else {
+        await sendConversions({ initiateCheckout: true })
+        return NextResponse.json({ success: true, data: {
+          purchaseId: reuse.row.id,
+          checkout: { provider: 'revolut', token: reuse.row.payment_checkout_token, url: reuse.row.payment_checkout_url || null, connectedAccountId: reuse.row.connected_account_id || null },
+          amount_cents: reuse.row.amount_cents,
+          currency: reuse.row.currency,
+          product_name: reuse.row.product_name,
+          resumed: true,
+        } })
+      }
+    }
+  }
+
   const { data: row, error: insErr } = await db.from('trial_purchases').insert({
     ...(pageId ? { page_id: pageId } : {}),
     location_id: locationId,
@@ -374,6 +417,14 @@ export async function POST(request) {
       payment = await createTrialPurchasePayment({ db, purchase: row, location, amountCents: product.priceCents, currency: product.currency, returnPath })
     } catch (e) {
       logError('trialbuy', 'payment create failed', { err: e, purchaseId: row.id })
+      // TRIALLEAK.1 — no order was opened (or its ref was not saved), so this
+      // row can never be paid: close it rather than leave it awaiting_payment
+      // with nothing to sweep it. Guarded on the status, so a row the webhook
+      // has somehow already moved is left alone.
+      const { error: closeErr } = await db.from('trial_purchases')
+        .update({ status: 'failed', last_error: 'checkout_not_opened' })
+        .eq('id', row.id).eq('location_id', locationId).eq('status', 'awaiting_payment')
+      if (closeErr) logError('trialbuy', 'unopened checkout row not marked failed', { code: closeErr.code ?? null, purchaseId: row.id })
       return NextResponse.json({ success: false, code: 'checkout_failed', error: 'Could not start checkout. Please try again.' }, { status: 502 })
     }
   }

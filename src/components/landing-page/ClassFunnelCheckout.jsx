@@ -25,12 +25,16 @@ const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ||
 // TRIALFIRST.1 — `tone="light"` puts the heading, price, error and Back in
 // black for the white trial card; the default 'dark' is the class funnel's
 // and the donate card's frosted dark card, unchanged.
+// TRIALLEAK.1 — `onFailed(data)`: when given, the status poll also watches for
+// an order that failed or ran out of time (`data.state` failed | expired) and
+// hands the buyer back, instead of polling a dead order for ever. A widget
+// error with a way back shows "Try again" (it used to show nothing to press).
 const TONES = {
   dark: { heading: 'uppercase', price: 'text-white/60', error: 'text-red-300', back: 'text-white/50 hover:text-white/80', mount: 'rounded-xl bg-white p-3' },
   light: { heading: 'text-black', price: TRIAL_MUTED, error: 'text-red-700', back: 'text-black/50 hover:text-black', mount: 'rounded border border-black/10 bg-white p-3' },
 }
 
-export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, onPaid, onCancel, statusPath = '/api/public/class-booking-payments', tone = 'dark' }) {
+export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, onPaid, onCancel, onFailed, statusPath = '/api/public/class-booking-payments', tone = 'dark' }) {
   const cls = TONES[tone] || TONES.dark
   const targetRef = useRef(null)
   const instanceRef = useRef(null)
@@ -100,6 +104,7 @@ export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, o
         const r = await fetch(`${statusPath}/${paymentId}`, { cache: 'no-store' })
         const j = await r.json().catch(() => ({}))
         if (!stopped && j?.data?.paid) { markPaid(); return }
+        if (!stopped && onFailed && (j?.data?.state === 'failed' || j?.data?.state === 'expired')) { onFailed(j.data); return }
       } catch { /* keep polling */ }
       if (!stopped) setTimeout(tick, 3000)
     }
@@ -124,8 +129,8 @@ export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, o
           <div ref={targetRef} className="min-h-[320px]" />
         </div>
       )}
-      {onCancel && !error && (
-        <button type="button" onClick={onCancel} className={`mt-4 w-full text-sm ${cls.back}`}>← Back</button>
+      {onCancel && (
+        <button type="button" onClick={onCancel} className={`mt-4 w-full text-sm ${cls.back}`}>{error ? 'Try again' : '← Back'}</button>
       )}
     </div>
   )

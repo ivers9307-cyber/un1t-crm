@@ -8,13 +8,48 @@
 // the Pixel's browser id (_fbp) is sent for organic visitors too, because it
 // raises the server Lead's match quality and makes nobody an ad lead.
 
-const AD_PARAMS = ['utm_campaign', 'utm_content', 'utm_term', 'meta_ad_id', 'fbclid']
+// TRIALLEAK.1 — utm_source / utm_medium ride along for measurement (which
+// placement, which medium). They are NOT an ad signal: on their own they make
+// nobody a Meta ad lead.
+const AD_PARAMS = ['utm_campaign', 'utm_content', 'utm_term', 'utm_source', 'utm_medium', 'meta_ad_id', 'fbclid']
 
-/** The ad params off a landing URL's search string. Absent ones are undefined. */
+/** The attribution keys that carry an ad's URL parameter (and so may carry an unfilled macro). */
+export const AD_VALUE_KEYS = Object.freeze(['utm_campaign', 'utm_content', 'utm_term', 'utm_source', 'utm_medium', 'meta_ad_id', 'ad_id', 'ad_external_id'])
+
+/**
+ * TRIALLEAK.1 — an ad's URL parameters are macros (`{{ad.id}}`,
+ * `{{adset.id}}`, `{{campaign.name}}`). Meta leaves them unfilled when the
+ * ad's post is seen organically, and the literal text was being stored as if
+ * it were a campaign. A value that still holds `{{ … }}` (or its URL-encoded
+ * form) is no value at all.
+ */
+export function isUnfilledAdMacro(value) {
+  if (typeof value !== 'string') return false
+  const v = value.replace(/%7B/gi, '{').replace(/%7D/gi, '}')
+  return /\{\{[^]*\}\}/.test(v)
+}
+
+/** The value, or undefined when it is empty or an unfilled macro. */
+export function cleanAdValue(value) {
+  if (value == null || value === '') return undefined
+  return isUnfilledAdMacro(String(value)) ? undefined : value
+}
+
+/** A copy of an attribution object with every unfilled-macro ad value removed. */
+export function cleanAttribution(attribution) {
+  if (!attribution || typeof attribution !== 'object') return attribution
+  const out = { ...attribution }
+  for (const k of AD_VALUE_KEYS) if (k in out && cleanAdValue(out[k]) === undefined) delete out[k]
+  return out
+}
+
+/** The ad params off a landing URL's search string. Absent ones (and unfilled macros) are undefined. */
 export function readAttributionFromUrl(search) {
   const p = new URLSearchParams(typeof search === 'string' ? search : '')
   const out = {}
-  for (const k of AD_PARAMS) out[k] = p.get(k) || undefined
+  for (const k of AD_PARAMS) out[k] = cleanAdValue(p.get(k) || undefined)
+  // The trial page's older links name the ad `ad_id`.
+  if (!out.meta_ad_id) out.meta_ad_id = cleanAdValue(p.get('ad_id') || undefined)
   return out
 }
 
@@ -22,13 +57,15 @@ export function readAttributionFromUrl(search) {
 export function buildAttribution(raw, fbp) {
   const p = raw && typeof raw === 'object' ? raw : {}
   const hasSignal = p.meta_ad_id || p.utm_campaign || p.utm_content || p.utm_term || p.fbclid
-  if (!hasSignal && !fbp) return undefined
+  if (!hasSignal && !fbp && !p.utm_source && !p.utm_medium) return undefined
   return {
     ...(hasSignal ? {
       utm_campaign: p.utm_campaign, utm_content: p.utm_content, utm_term: p.utm_term,
       ad_provider: 'meta', ad_external_id: p.meta_ad_id,
       fbclid: p.fbclid,
     } : {}),
+    ...(p.utm_source ? { utm_source: p.utm_source } : {}),
+    ...(p.utm_medium ? { utm_medium: p.utm_medium } : {}),
     ...(fbp ? { fbp } : {}),
   }
 }

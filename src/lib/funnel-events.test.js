@@ -14,6 +14,15 @@ describe('parseFunnelEvent', () => {
     expect(out.meta).toEqual({ count: 3 })
   })
 
+  it('TRIALLEAK.1: an unfilled Meta macro is stored as nothing, and names no ad', () => {
+    const out = parseFunnelEvent({
+      step: 'view', session_id: 's', ad_external_id: '{{ad.id}}', utm_campaign: 'real', utm_content: '%7B%7Bad.name%7D%7D', utm_term: '{{adset.id}}',
+      meta: { utm_source: '{{site_source_name}}', utm_medium: 'paid', count: 1 },
+    })
+    expect(out).toMatchObject({ ad_external_id: null, ad_provider: null, utm_campaign: 'real', utm_content: null, utm_term: null })
+    expect(out.meta).toEqual({ utm_medium: 'paid', count: 1 })
+  })
+
   it('defaults funnel to start and infers ad_provider=meta from an ad id', () => {
     const out = parseFunnelEvent({ step: 'view', session_id: 's', ad_external_id: '9' })
     expect(out.funnel).toBe('start')

@@ -2,6 +2,8 @@
 // public capture endpoint (/api/public/funnel-event). Pure; the route handles
 // location resolution + the DB insert. Low-trust input (public endpoint), so
 // every field is allowlisted/capped and an unknown step is rejected.
+import { cleanAdValue } from './campaign-funnel-attribution'
+
 export const VALID_STEPS = [
   'view',
   'path_class',
@@ -18,21 +20,29 @@ export const VALID_STEPS = [
 ]
 
 const cap = (v, n = 200) => (v == null ? null : String(v).slice(0, n))
+// TRIALLEAK.1 — an ad value that is still an unfilled Meta macro
+// (`{{adset.id}}`) is stored as nothing, not as a campaign of that name.
+const adCap = (v) => cap(cleanAdValue(v))
+const cleanMeta = (meta) => {
+  const out = { ...meta }
+  for (const k of ['utm_source', 'utm_medium']) if (k in out && cleanAdValue(out[k]) === undefined) delete out[k]
+  return out
+}
 
 export function parseFunnelEvent(body = {}) {
   if (!VALID_STEPS.includes(body.step)) return null
   const session_id = cap(body.session_id)
   if (!session_id) return null
-  const ad_external_id = cap(body.ad_external_id)
+  const ad_external_id = adCap(body.ad_external_id)
   return {
     funnel: cap(body.funnel) || 'start',
     step: body.step,
     session_id,
     ad_external_id,
     ad_provider: cap(body.ad_provider) || (ad_external_id ? 'meta' : null),
-    utm_campaign: cap(body.utm_campaign),
-    utm_content: cap(body.utm_content),
-    utm_term: cap(body.utm_term),
-    meta: body.meta && typeof body.meta === 'object' && !Array.isArray(body.meta) ? body.meta : {},
+    utm_campaign: adCap(body.utm_campaign),
+    utm_content: adCap(body.utm_content),
+    utm_term: adCap(body.utm_term),
+    meta: body.meta && typeof body.meta === 'object' && !Array.isArray(body.meta) ? cleanMeta(body.meta) : {},
   }
 }

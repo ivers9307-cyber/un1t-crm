@@ -44,6 +44,22 @@
 // `trialpurchase-<id>` with the server's CAPI Purchase for the same reason.
 // Funnel steps go out as custom `trial_*` events for drop-off diagnostics,
 // never as optimisation events.
+//
+// TRIALLEAK.1 — a checkout survives the browser. Most buyers arrive from a Meta
+// ad inside Facebook's or Instagram's in-app browser, which reloads the page
+// on the way back from a banking app:
+//   - entering the payment step puts `?purchase=<id>` in the URL (the other
+//     params kept); a load with it for a Stillorgan row that still awaits
+//     payment (`resumable` on the status route) puts the embedded checkout
+//     back, after two polls in case the money is already on its way;
+//   - a pending Stillorgan return never spins for ever: after the poll budget
+//     the buyer is told and handed back to try again;
+//   - a failed or timed-out order (the checkout's own poll, or the confirming
+//     poll) returns to the form with the details kept. They are also kept in
+//     sessionStorage for this tab, so a reload or a cancelled Hatch checkout
+//     (`?cancelled=1`) comes back to a filled form and a plain message;
+//   - inside Facebook or Instagram the payment step says a wallet button may
+//     not show and offers a link to copy, which resumes in Safari or Chrome.
 import { useEffect, useRef, useState } from 'react'
 import { trackFunnelStep } from '@/lib/funnel-track'
 import { readVisitOrigin } from '@/lib/visit-origin'
@@ -58,10 +74,47 @@ import ClassPickStep, { useClassList, ctaLabelFor } from './ClassPickStep'
 import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERROR, TRIAL_LINK, TRIAL_SUMMARY } from './trial-card'
 import { customerErrorText } from '@/lib/page-request-errors'
 import { classFirstStepCopy, classLine } from '@/lib/class-first-funnel'
+import { inAppBrowserFromUserAgent } from '@/lib/trial-checkout-window'
+import { readAttributionFromUrl, buildAttribution as buildAdAttribution } from '@/lib/campaign-funnel-attribution'
 
 const STATUS_PATH = '/api/public/trial-purchases'
 const HELP_PATH = '/api/public/trial-purchases/help'
 const REFUSALS = new Set(['trial_used', 'active_member'])
+// TRIALLEAK.1 — polls spent on "is the money already on its way?" before a
+// still-unpaid Stillorgan return gets its checkout back.
+const RESUME_AFTER_POLLS = 2
+const DRAFT_KEY = 'trial_checkout_draft'
+const INCOMPLETE_TEXT = "Your checkout wasn't completed. Nothing was charged. You can try again whenever you're ready."
+const DECLINED_TEXT = 'That payment did not go through. Nothing was charged; please try again.'
+const UNCONFIRMED_TEXT = 'We have not received a payment for that checkout. If you did pay, your confirmation email is on its way; otherwise please try again.'
+const IN_APP_NAMES = { facebook: 'Facebook', instagram: 'Instagram' }
+
+// The buyer's typed details and class, for this tab only: a reload (or a
+// cancelled Hatch checkout) comes back to a filled form. Storage may throw.
+function saveDraft(draft) {
+  try { window.sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft)) } catch { /* private mode */ }
+}
+function readDraft() {
+  try {
+    const d = JSON.parse(window.sessionStorage.getItem(DRAFT_KEY) || 'null')
+    return d && typeof d === 'object' && d.form && typeof d.form === 'object' ? d : null
+  } catch { return null }
+}
+function clearDraft() {
+  try { window.sessionStorage.removeItem(DRAFT_KEY) } catch { /* private mode */ }
+}
+const hasDetails = (f) => Boolean(f && String(f.first_name || '').trim() && String(f.email || '').trim())
+
+// `?purchase=<id>` in the address bar (or out of it), every other param kept.
+function setUrlPurchase(id) {
+  try {
+    const u = new URL(window.location.href)
+    if (id) u.searchParams.set('purchase', id)
+    else u.searchParams.delete('purchase')
+    u.searchParams.delete('cancelled')
+    window.history.replaceState(null, '', `${u.pathname}${u.search}${u.hash}`)
+  } catch { /* never block the page */ }
+}
 
 function readFbpCookie() {
   try {
@@ -117,7 +170,12 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
   const [termsOverride, setTermsOverride] = useState(null)
   const [termsAccepted, setTermsAccepted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState(null)
+  // TRIALLEAK.1 — a cancelled checkout says so (it used to say nothing).
+  const [error, setError] = useState(cancelled && !preview ? INCOMPLETE_TEXT : null)
+  const [inApp, setInApp] = useState(null) // 'facebook' | 'instagram' | null
+  const [copied, setCopied] = useState(null) // null | 'copied' | 'manual'
+  const formRef = useRef(form)
+  useEffect(() => { formRef.current = form }, [form])
   const attributionRef = useRef(null)
   const purchaseIdRef = useRef(resuming ? resumePurchaseId : null)
   const purchaseFiredRef = useRef(false)
@@ -143,16 +201,24 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
 
   useEffect(() => {
     try {
-      const p = new URLSearchParams(window.location.search)
-      attributionRef.current = {
-        utm_campaign: p.get('utm_campaign') || undefined,
-        utm_content: p.get('utm_content') || undefined,
-        utm_term: p.get('utm_term') || undefined,
-        meta_ad_id: p.get('meta_ad_id') || p.get('ad_id') || undefined,
-        fbclid: p.get('fbclid') || undefined,
-      }
+      // TRIALLEAK.1 — the shared reader: utm_source / utm_medium too, and an
+      // unfilled Meta macro (`{{adset.id}}`) is no value.
+      attributionRef.current = readAttributionFromUrl(window.location.search)
     } catch { /* never block the page */ }
-    if (!preview) trackFunnelStep('trial_view') // the editor's preview tracks nothing
+    if (preview) return // the editor's preview tracks nothing and restores nothing
+    try { setInApp(inAppBrowserFromUserAgent(window.navigator?.userAgent)) } catch { /* never block the page */ }
+    // TRIALLEAK.1 — back from a checkout (a reload, a return, a cancel): the
+    // details they typed in this tab, for the same studio.
+    if (resuming || cancelled) {
+      const draft = readDraft()
+      if (draft && (!draft.studioKey || draft.studioKey === studioKey)) {
+        setForm((f) => ({ ...f, ...draft.form }))
+        if (draft.chosen && typeof draft.chosen === 'object') setChosen(draft.chosen)
+        if (cancelled && studio?.sellable && hasDetails(draft.form)) setStep('form')
+      }
+    }
+    trackFunnelStep('trial_view')
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on mount: the return this page was loaded with
   }, [preview])
 
   // Back from un1t.online's checkout restores this page from the back-forward
@@ -164,14 +230,30 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
   }, [])
 
   function buildAttribution() {
-    const p = attributionRef.current || {}
-    const hasSignal = p.meta_ad_id || p.utm_campaign || p.utm_content || p.utm_term || p.fbclid
-    const fbp = readFbpCookie()
-    if (!hasSignal && !fbp) return undefined
-    return {
-      ...(hasSignal ? { utm_campaign: p.utm_campaign, utm_content: p.utm_content, utm_term: p.utm_term, ad_provider: 'meta', ad_external_id: p.meta_ad_id, fbclid: p.fbclid } : {}),
-      ...(fbp ? { fbp } : {}),
-    }
+    return buildAdAttribution(attributionRef.current, readFbpCookie())
+  }
+
+  // TRIALLEAK.1 — back to the form (the details kept) with a reason, or the
+  // class step when there are none (a fresh page), or the choice when the
+  // studio is no longer for sale. The dead purchase leaves the address bar.
+  function backToStart(msg) {
+    setUrlPurchase(null)
+    setPayment(null)
+    setStep(!studio?.sellable ? 'choose' : hasDetails(formRef.current) ? 'form' : 'pick')
+    setError(msg)
+  }
+  // What a failed or timed-out order says: a refusal is one thing, a checkout
+  // nobody finished another.
+  const failureText = (d) => (d?.payment_status === 'failed' ? DECLINED_TEXT : INCOMPLETE_TEXT)
+
+  async function copyResumeLink() {
+    try {
+      const u = new URL(window.location.href)
+      if (purchaseIdRef.current) u.searchParams.set('purchase', purchaseIdRef.current)
+      await window.navigator.clipboard.writeText(u.toString())
+      setCopied('copied')
+    } catch { setCopied('manual') } // no clipboard here: show the link to copy by hand
+    trackFunnelStep('trial_copy_link', { studio: studioKey })
   }
 
   function choose(key) {
@@ -286,6 +368,7 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
       })
       trackFunnelStep('trial_checkout_view', { studio: studioKey })
       purchaseIdRef.current = j.data.purchaseId
+      saveDraft({ studioKey, form, chosen })
       if (j.data.redirect_url) {
         // Hatch Street: un1t.online takes the money on its own checkout.
         trackFunnelStep('trial_hatch_redirect', { studio: studioKey })
@@ -295,6 +378,8 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
       }
       setPayment(j.data)
       setStep('payment')
+      // TRIALLEAK.1 — a reload now comes back to this checkout.
+      setUrlPurchase(j.data.purchaseId)
     } catch {
       setError('Network error. Please try again.')
     } finally {
@@ -329,6 +414,7 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
   function onPaid() {
     const p = payment || {}
     firePurchaseOnce({ purchaseId: purchaseIdRef.current, amountCents: p.amount_cents ?? studio?.priceCents, currency: p.currency || studio?.currency, contentName: p.product_name || studio?.productName })
+    clearDraft()
     setDone({ state: 'paid' })
     setStep('done')
   }
@@ -341,14 +427,15 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
   useEffect(() => {
     if (step !== 'confirming' && step !== 'done') return
     const id = purchaseIdRef.current
-    // Back to the start with a reason: the class step (CLASSFIRST.1: a fresh
-    // page holds no details), or the choice when the studio is no longer for sale.
-    const restart = (msg) => { setStep(studio?.sellable ? 'pick' : 'choose'); setError(msg) }
+    // Back to the start with a reason (backToStart: the form when the details
+    // are still here, else the class step, else the choice).
+    const restart = backToStart
     if (!id) { restart(null); return }
     let stopped = false
     let polls = 0
     const tick = async () => {
       if (stopped) return
+      polls += 1
       try {
         const r = await fetch(`${STATUS_PATH}/${id}`, { cache: 'no-store' })
         if (r.status === 404) { if (!stopped) restart('We could not find that purchase. Please start again.'); return }
@@ -358,10 +445,21 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
         if (d.class && d.class.name) setDoneClass(d.class)
         if (d.state === 'granted') {
           firePurchaseOnce({ purchaseId: id, amountCents: d.amount_cents, currency: d.currency, contentName: d.product_name })
+          clearDraft()
           setDone({ state: 'granted' }); setStep('done'); return
         }
-        if (d.state === 'failed') { restart('That payment did not go through. Nothing was charged; please try again.'); return }
+        if (d.state === 'failed') { restart(failureText(d)); return }
         if (d.state === 'expired') { restart('That checkout expired. Nothing was charged; please start again.'); return }
+        // TRIALLEAK.1 — still unpaid and still payable (a reload, or the copied
+        // link in another browser): the checkout goes back in front of them.
+        // Two polls first, each of which re-asks the provider, so a payment
+        // already on its way lands as paid instead.
+        if (step === 'confirming' && !isHatch && d.state === 'pending' && d.resumable === true && d.checkout?.token && polls >= RESUME_AFTER_POLLS) {
+          setPayment({ purchaseId: id, checkout: d.checkout, amount_cents: d.amount_cents, currency: d.currency, product_name: d.product_name })
+          setStep('payment')
+          trackFunnelStep('trial_checkout_resumed', { studio: studioKey })
+          return
+        }
         if (d.state === 'help') { setHelpMessage(block.help_sent_text); setStep('help_sent'); return }
         if (d.state === 'paid' && step === 'confirming') {
           firePurchaseOnce({ purchaseId: id, amountCents: d.amount_cents, currency: d.currency, contentName: d.product_name })
@@ -371,8 +469,10 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
       if (stopped) return
       // Give the grant up to ~2 minutes of polling, then leave the screen as is
       // (a Hatch purchase moves to its "being confirmed" screen).
-      if (++polls < 40) setTimeout(tick, 3000)
+      if (polls < 40) setTimeout(tick, 3000)
       else if (step === 'confirming' && isHatch) { setDone({ state: 'pending' }); setStep('done') }
+      // TRIALLEAK.1 — Stillorgan never spins for ever: say so, and hand them back.
+      else if (step === 'confirming') restart(UNCONFIRMED_TEXT)
     }
     const t = setTimeout(tick, step === 'confirming' ? 300 : 3000)
     return () => { stopped = true; clearTimeout(t) }
@@ -481,8 +581,23 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
           priceLabel={`${payment.product_name || studio?.productName} · ${formatTrialPrice(payment.amount_cents, payment.currency)}`}
           statusPath={STATUS_PATH}
           onPaid={onPaid}
-          onCancel={() => { setStep('form') }}
+          onCancel={() => { setUrlPurchase(null); setStep('form') }}
+          onFailed={(d) => backToStart(failureText(d))}
         />
+        {/* TRIALLEAK.1 — inside Facebook or Instagram a wallet button may not
+            show. Nothing is blocked: the card form works, and the link opens
+            this same checkout in their own browser. */}
+        {inApp && (
+          <div className={`mt-4 rounded border border-black/10 p-3 text-xs ${TRIAL_MUTED}`}>
+            <p>Apple Pay and Google Pay may not show inside {IN_APP_NAMES[inApp]}. You can pay by card here, or open this page in your own browser.</p>
+            <button type="button" onClick={copyResumeLink} className={`mt-2 font-semibold ${TRIAL_LINK}`}>
+              {copied === 'copied' ? 'Link copied. Paste it into Safari or Chrome.' : 'Copy link to open in your browser'}
+            </button>
+            {copied === 'manual' && (
+              <input readOnly aria-label="Link to this checkout" className={`mt-2 ${TRIAL_INPUT}`} value={typeof window !== 'undefined' ? window.location.href : ''} onFocus={(e) => e.target.select()} />
+            )}
+          </div>
+        )}
       </div>
     )
   }
