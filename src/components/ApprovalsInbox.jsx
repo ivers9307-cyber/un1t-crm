@@ -41,7 +41,9 @@ export default function ApprovalsInbox({ timezone = null }) {
     setError(null)
     let ok = false
     try {
-      const r = await fetch('/api/approvals/pending', { cache: 'no-store' })
+      // Exempt from the studio-header guard: the list is about the person, not an item.
+      const pendingUrl = '/api/approvals/pending'
+      const r = await fetch(pendingUrl, { cache: 'no-store' })
       const j = await r.json()
       if (!j.success) throw new Error(j.error || 'Failed to load')
       setProviders(j.data.providers || [])

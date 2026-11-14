@@ -8,6 +8,7 @@ import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui'
 import CustomerCardShell from './CustomerCardShell'
+import { withStudio } from '@/lib/approvals/studio-request'
 import { formatApprovalDateTime } from './format-date-time'
 
 // The provider's subtitle is "<offer name> · <price>" (formatEuro in
@@ -33,7 +34,7 @@ export default function OfferPurchaseCard({ item, onDecided, timezone = null }) 
     setBusy(true)
     setOutcome(null)
     try {
-      const r = await fetch(`/api/offer-purchases/${item.id}/fulfil`, { method: 'POST' })
+      const r = await fetch(`/api/offer-purchases/${item.id}/fulfil`, withStudio(item, { method: 'POST' }))
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) {
         setOutcome({ tone: 'bad', text: `Could not mark it fulfilled (${j.error || `HTTP ${r.status}`}).` })

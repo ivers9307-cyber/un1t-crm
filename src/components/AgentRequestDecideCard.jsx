@@ -25,6 +25,7 @@ import { RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
 import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 import UndoClearButton from '@/components/approvals/UndoClearButton'
 import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
+import { withStudio } from '@/lib/approvals/studio-request'
 
 const KIND_CHIP = {
   cancellation: 'bg-red-500/10 text-red-700',
@@ -187,11 +188,11 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
         : status === 'declined'
         ? [reasonLabel, declineNote.trim() || null].filter(Boolean).join(' — ')
         : null
-      const res = await fetch(`/api/agent/membership-requests/${item.id}`, {
+      const res = await fetch(`/api/agent/membership-requests/${item.id}`, withStudio(item, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, ...(silent ? { silent: true } : {}), decision_note, ...(!silent && item.kind === 'cancellation' && endDate ? { end_date: endDate } : {}) }),
-      })
+      }))
       const data = await res.json()
       if (!data.success) {
         setError(res.status === 409 ? 'Already decided elsewhere — refresh the list.' : (data.error || 'Decision failed'))
@@ -227,7 +228,7 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
     setUndoBusy(true)
     setError(null)
     try {
-      const res = await undoClearRequest(item.id)
+      const res = await undoClearRequest(item)
       if (!res.ok) {
         setError(res.error)
         if (res.status === 409) setUndoGone(true)

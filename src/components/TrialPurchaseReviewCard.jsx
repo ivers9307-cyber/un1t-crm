@@ -19,6 +19,7 @@ import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
+import { withStudio } from '@/lib/approvals/studio-request'
 import { formatApprovalDateTime } from '@/components/approvals/format-date-time'
 
 export default function TrialPurchaseReviewCard({ item, onDecided, timezone = null }) {
@@ -33,11 +34,11 @@ export default function TrialPurchaseReviewCard({ item, onDecided, timezone = nu
     setBusy(which)
     setOutcome(null)
     try {
-      const r = await fetch(`/api/trial-purchases/${item.id}/review`, {
+      const r = await fetch(`/api/trial-purchases/${item.id}/review`, withStudio(item, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(notify === false ? { action, notify: false } : { action }),
-      })
+      }))
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) {
         const code = j.error || `HTTP ${r.status}`
