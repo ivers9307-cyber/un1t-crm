@@ -163,4 +163,15 @@ describe('customer cards', () => {
     }
     expect(screen.getByText(/Claimed /)).toBeTruthy()
   })
+
+  it('the trial, promo and offer cards render no select checkbox', () => {
+    const t = render(<TrialPurchaseReviewCard item={grant} />)
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    t.unmount()
+    const c = render(<CorpPromoClaimCard item={corp} />)
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    c.unmount()
+    render(<OfferPurchaseCard item={offer} />)
+    expect(screen.queryByRole('checkbox')).toBeNull()
+  })
 })

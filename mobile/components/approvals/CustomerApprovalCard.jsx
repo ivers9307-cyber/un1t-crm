@@ -17,7 +17,7 @@ const CHIP_TONES = {
   muted: { box: 'bg-un1t-bg', text: 'text-un1t-subtle' },
 }
 
-export default function CustomerApprovalCard({ item, busy, onApprove, onDecline, highlight }) {
+export default function CustomerApprovalCard({ item, busy, onApprove, onDecline, onClear, highlight }) {
   const chip = urgencyChip(item)
   const tone = CHIP_TONES[chip.tone] || CHIP_TONES.muted
   const kindLabel = APPROVAL_KIND_LABELS[item.kind] || 'Customer request'
@@ -81,13 +81,24 @@ export default function CustomerApprovalCard({ item, busy, onApprove, onDecline,
           className="flex-1 flex-row items-center justify-center py-2 rounded-xl bg-emerald-600 active:opacity-80 disabled:opacity-50">
           {busy
             ? <ActivityIndicator color="#FFFFFF" />
-            : <><Ionicons name={isFailed ? 'refresh' : 'checkmark'} size={15} color="#FFFFFF" /><Text className="text-sm font-semibold text-white ml-1">{isFailed ? 'Fixed it — retry' : 'Approve'}</Text></>}
+            : <><Ionicons name={isFailed ? 'refresh' : 'checkmark'} size={15} color="#FFFFFF" /><Text className="text-sm font-semibold text-white ml-1">{isFailed ? 'Fixed it, retry' : 'Approve'}</Text></>}
         </Pressable>
         {!isFailed ? (
           <Pressable onPress={onDecline} disabled={busy}
             className="flex-1 flex-row items-center justify-center py-2 rounded-xl border border-un1t-border active:opacity-60 disabled:opacity-50">
             <Ionicons name="close" size={15} color="#DC2626" />
             <Text className="text-sm font-semibold text-red-600 ml-1">Decline</Text>
+          </Pressable>
+        ) : null}
+        {/* APPROVALSQ.2 — quiet clear: closes the request, tells the customer
+            nothing. Quiet styling on purpose (not red, not green); the
+            parent's sheet confirms. */}
+        {onClear ? (
+          <Pressable onPress={onClear} disabled={busy}
+            accessibilityRole="button" accessibilityLabel="Clear"
+            className="flex-1 flex-row items-center justify-center py-2 rounded-xl bg-un1t-bg border border-un1t-border active:opacity-60 disabled:opacity-50">
+            <Ionicons name="remove-circle-outline" size={15} color="#64748B" />
+            <Text className="text-sm font-semibold text-un1t-subtle ml-1">Clear</Text>
           </Pressable>
         ) : null}
       </View>

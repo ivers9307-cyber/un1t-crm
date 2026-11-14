@@ -30,6 +30,21 @@ const STATUS_LABELS = {
   saved: 'Saved', declined: 'Declined', failed: 'Failed',
 }
 
+// APPROVALSQ.2 — "by Sarah, 14 Nov 2026, 16:20" (name unknown: just the time).
+function decidedByLine(request) {
+  let when = null
+  if (request.decided_at) {
+    const d = new Date(request.decided_at)
+    if (!Number.isNaN(d.getTime())) {
+      when = d.toLocaleString('en-IE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    }
+  }
+  const name = request.decided_by_name || null
+  if (name && when) return `by ${name}, ${when}`
+  if (name) return `by ${name}`
+  return when
+}
+
 export default function ApprovalActionCard({
   request, contactId, locationId, contactFirstName,
   onDecided, onPrefillComposer, onOpenBookTab,
@@ -228,7 +243,7 @@ export default function ApprovalActionCard({
 
         {decided && (
           <div className="mt-1.5 text-xs text-un1t-muted">
-            {wasCleared && <span>Cleared, customer not told.</span>}
+            {wasCleared && <span>{`Cleared, customer not told${decidedByLine(request) ? ` · ${decidedByLine(request)}` : ''}.`}</span>}
             {request.decision_note && <span> {request.decision_note}</span>}
             {failedLine && <span className="text-red-700"> {failedLine}</span>}
             {/* A quiet clear told nobody on purpose: never nag staff to follow up. */}

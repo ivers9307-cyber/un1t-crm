@@ -57,17 +57,19 @@ export async function listPendingApprovalConversationIds(locationId) {
 
 /**
  * Decide a pending approval request. `status` is 'approved' | 'declined' | 'saved'.
+ * `silent: true` (with status 'declined') clears the request WITHOUT messaging
+ * the customer (APPROVALSQ.2); the body is unchanged otherwise.
  * 409 means another colleague already decided it — the caller should
  * show "Already decided" and refresh.
  */
-export async function decideApproval(requestId, status, decisionNote = null) {
+export async function decideApproval(requestId, status, decisionNote = null, { silent = false } = {}) {
   const headers = await authHeaders({ json: true })
   let res
   try {
     res = await fetch(`${API_BASE}/api/agent/membership-requests/${requestId}`, {
       method: 'PATCH',
       headers,
-      body: JSON.stringify({ status, decision_note: decisionNote }),
+      body: JSON.stringify(silent === true ? { status, decision_note: decisionNote, silent: true } : { status, decision_note: decisionNote }),
     })
   } catch {
     return { success: false, error: 'Network error' }

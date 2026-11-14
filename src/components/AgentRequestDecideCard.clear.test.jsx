@@ -93,4 +93,28 @@ describe('AgentRequestDecideCard chips and bodies', () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
     expect('silent' in JSON.parse(fetch.mock.calls[0][1].body)).toBe(false)
   })
+  it('shows a select checkbox only when selectable, and it toggles', () => {
+    const onToggle = vi.fn()
+    const { unmount } = render(<AgentRequestDecideCard item={base} />)
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    unmount()
+    render(<AgentRequestDecideCard item={base} selectable selected={false} onToggle={onToggle} />)
+    const box = screen.getByRole('checkbox')
+    expect(box.checked).toBe(false)
+    fireEvent.click(box)
+    expect(onToggle).toHaveBeenCalledTimes(1)
+  })
+
+  it('a selected card shows its checkbox ticked', () => {
+    render(<AgentRequestDecideCard item={base} selectable selected onToggle={() => {}} />)
+    expect(screen.getByRole('checkbox').checked).toBe(true)
+  })
+
+  it('a card that already has an outcome shows no checkbox', async () => {
+    render(<AgentRequestDecideCard item={base} selectable selected={false} onToggle={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    fireEvent.click(screen.getByRole('button', { name: "Clear, don't notify" }))
+    await screen.findByText('Cleared. The customer was not told.')
+    expect(screen.queryByRole('checkbox')).toBeNull()
+  })
 })

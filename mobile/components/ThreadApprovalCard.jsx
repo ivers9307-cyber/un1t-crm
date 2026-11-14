@@ -13,12 +13,14 @@
 // Deliberately thinner than the web card: no book-tab / sequence-picker
 // steps (mobile has no Command Centre rail or sequence surface) — next
 // steps are filtered to type === 'composer' only.
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { View, Text, Pressable, TextInput, ActivityIndicator } from 'react-native'
 import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from 'shared/approvals-next-steps'
 import { approvalCardSummary, APPROVAL_KIND_LABELS } from 'shared/approval-cards'
 import { decideApproval } from '../lib/inbox-approvals-api'
 import { failedCardExplanation } from '../lib/approval-outcome'
+import { isCleared, clearWarns, CLEARED_LABEL } from '../lib/approval-clear'
+import DeclineSheet from './approvals/DeclineSheet'
 
 // House tone-object idiom (see ISSUE_STATUS_TONE in mobile/lib/issues-api.js):
 // bg on the chip View, fg on the Text.
@@ -54,6 +56,33 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
   const ctx = { firstName: contactFirstName, details: request.details, reason }
 
   const [notified, setNotified] = useState(null)
+  // APPROVALSQ.2 — quiet clear: confirmed in the shared sheet, never one tap.
+  const [clearOpen, setClearOpen] = useState(false)
+  const [clearedHere, setClearedHere] = useState(false)
+  // A ref, not state: a second tap before the re-render must not send a second PATCH.
+  const clearInFlight = useRef(false)
+
+  async function clearRequest(note) {
+    if (busy || clearInFlight.current) return
+    clearInFlight.current = true
+    setClearOpen(false)
+    setBusy('declined')
+    setError(null)
+    try {
+      const res = await decideApproval(request.id, 'declined', note || null, { silent: true })
+      if (!res.success) {
+        setError(res.error || 'Could not clear')
+        return
+      }
+      setClearedHere(true)
+      onDecided?.({ ...request, ...res.request })
+    } catch {
+      setError('Network error, try again')
+    } finally {
+      clearInFlight.current = false
+      setBusy(null)
+    }
+  }
 
   async function decide(status) {
     if (busy) return
@@ -87,10 +116,12 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
 
   const status = request.status
   const decided = status !== 'pending'
+  const cleared = clearedHere || (status === 'declined' && isCleared(request))
   // C85 (c) — a failed execution in the operator's words (what went wrong and
   // what to fix), not the raw `(CODE)` it used to print.
   const failWhy = failedCardExplanation(request)
-  const steps = decided
+  // A cleared request told the customer nothing: no explanation to send.
+  const steps = decided && !cleared
     ? getNextSteps(request.kind, status, ctx).filter(s => s.type === 'composer')
     : []
   const kindLabel = APPROVAL_KIND_LABELS[request.kind] || 'Agent request'
@@ -98,7 +129,7 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
   const reasonOptions = BOOKING_KINDS.has(request.kind)
     ? DECLINE_REASONS
     : DECLINE_REASONS.filter(([k]) => k === 'not_eligible' || k === 'other')
-  const tone = STATUS_TONE[status] || STATUS_TONE.pending
+  const tone = cleared ? { bg: 'bg-un1t-bg', fg: 'text-un1t-subtle' } : (STATUS_TONE[status] || STATUS_TONE.pending)
 
   return (
     <View className="items-center my-2">
@@ -107,7 +138,7 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
           <Text className="text-sm font-medium text-un1t-text">{kindLabel}</Text>
           <View className={`${tone.bg} rounded-full px-1.5 py-0.5`}>
             <Text className={`${tone.fg} text-[10px] font-semibold`}>
-              {STATUS_LABELS[status] || status}
+              {cleared ? CLEARED_LABEL : (STATUS_LABELS[status] || status)}
             </Text>
           </View>
         </View>
@@ -141,6 +172,16 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
               className="px-3 py-1.5 rounded-lg border border-un1t-border disabled:opacity-50"
             >
               <Text className="text-xs font-semibold text-un1t-text">Decline</Text>
+            </Pressable>
+            <Pressable
+              disabled={!!busy}
+              onPress={() => { setClearOpen(true); setError(null) }}
+              accessibilityRole="button"
+              accessibilityLabel="Clear"
+              accessibilityState={{ disabled: !!busy }}
+              className="px-3 py-1.5 rounded-lg bg-un1t-bg border border-un1t-border disabled:opacity-50"
+            >
+              <Text className="text-xs font-semibold text-un1t-subtle">Clear</Text>
             </Pressable>
             {request.retention_flagged && request.kind === 'cancellation' && (
               <Pressable
@@ -245,6 +286,13 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
         )}
 
         {error ? <Text className="text-xs text-red-700 mt-1.5">{error}</Text> : null}
+        <DeclineSheet
+          mode="clear"
+          visible={clearOpen}
+          warn={clearWarns({ kind: request.kind, failed: false })}
+          onConfirm={clearRequest}
+          onClose={() => setClearOpen(false)}
+        />
       </View>
     </View>
   )

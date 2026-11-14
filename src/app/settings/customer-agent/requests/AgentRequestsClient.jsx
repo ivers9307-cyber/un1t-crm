@@ -29,6 +29,22 @@ function fmtDate(d) {
   catch { return d }
 }
 
+// APPROVALSQ.2 — the decided row's "by Sarah, 14 Nov 2026, 16:20". No name
+// (unknown decider, or a decision made on this page whose PATCH carries none)
+// shows the date and time alone; a name is never invented.
+function fmtDateTime(d) {
+  if (!d) return null
+  const dt = new Date(d)
+  if (Number.isNaN(dt.getTime())) return null
+  return dt.toLocaleString('en-IE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+function decidedByText(r) {
+  const when = fmtDateTime(r.decided_at)
+  if (r.decided_by_name && when) return `by ${r.decided_by_name}, ${when}`
+  if (r.decided_by_name) return `by ${r.decided_by_name}`
+  return when
+}
+
 export default function AgentRequestsClient() {
   const [requests, setRequests] = useState([])
   const [loading, setLoading] = useState(true)
@@ -77,6 +93,7 @@ export default function AgentRequestsClient() {
           ...r,
           status: j.request.status,
           decided_at: j.request.decided_at,
+          decided_by_name: null, // the PATCH carries no name; never invent one
           // The cleared label is read off details, so take them back on a clear.
           ...(silent ? { details: j.request.details ?? r.details, decision_note: j.request.decision_note ?? null } : {}),
         } : r))
@@ -174,6 +191,7 @@ export default function AgentRequestsClient() {
                   <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_STYLE[r.status] || ''}`}>
                     {r.details?.cleared?.silent ? 'Cleared, customer not told' : r.status}
                   </span>
+                  {decidedByText(r) && <span className="text-xs text-un1t-muted">· {decidedByText(r)}</span>}
                 </div>
               </div>
             ))}

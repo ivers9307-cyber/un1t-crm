@@ -31,6 +31,7 @@ import CustomerApprovalCard from '../../components/approvals/CustomerApprovalCar
 import DeclineSheet from '../../components/approvals/DeclineSheet'
 import { InvoiceRosterCheck } from '../../components/invoices/RosterComparison'
 import { approveFailureAlert } from '../../lib/approval-outcome'
+import { clearWarns, isAlreadyDecided } from '../../lib/approval-clear'
 
 const REASON_REQUIRED = new Set(['fte_expenses', 'contractor_invoices', 'host_events'])
 
@@ -61,6 +62,10 @@ export default function ApprovalsInbox() {
   const [error, setError] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const [declineFor, setDeclineFor] = useState(null) // { key, id } — key 'agent_requests' = customer decline
+  // APPROVALSQ.2 — { id, warn } while the quiet-clear sheet is open; `clearing`
+  // refuses a second confirm before the first answers (one request per confirm).
+  const [clearFor, setClearFor] = useState(null)
+  const clearing = useRef(false)
   // SWAPOVERRIDE.1 — ids with an approve request in flight. busyId disables
   // the card's buttons only after a re-render; this ref refuses a second tap
   // that lands before it (and a second "Approve anyway").
@@ -211,6 +216,29 @@ export default function ApprovalsInbox() {
     load()
   }
 
+  // APPROVALSQ.2 — close a Mia request without messaging the customer. Only
+  // reached from the sheet's confirm, never from a single tap on the card.
+  async function submitClear(note) {
+    const target = clearFor
+    if (!target || clearing.current) return
+    clearing.current = true
+    setClearFor(null)
+    setBusyId(target.id)
+    try {
+      const res = await decideApproval(target.id, 'declined', note || null, { silent: true })
+      if (!res.success) {
+        if (isAlreadyDecided(res)) Alert.alert('Already decided', 'A colleague has already decided this request.')
+        else Alert.alert('Could not clear', res.error || 'Unknown error')
+        if (isAlreadyDecided(res)) load()
+        return
+      }
+      load()
+    } finally {
+      clearing.current = false
+      setBusyId(null)
+    }
+  }
+
   return (
     <View className="flex-1 bg-un1t-bg">
       <Stack.Screen options={{ title: 'Approvals', headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" /> }} />
@@ -253,6 +281,7 @@ export default function ApprovalsInbox() {
                   highlight={typeof focus === 'string' && focus === item.id}
                   busy={busyId === item.id}
                   onApprove={() => onApproveCustomer(item)}
+                  onClear={() => setClearFor({ id: item.id, warn: clearWarns(item) })}
                 />
               ))}
               {failed.length > 0 && customers.length > 0 ? (
@@ -266,6 +295,7 @@ export default function ApprovalsInbox() {
                   busy={busyId === item.id}
                   onApprove={() => onApproveCustomer(item)}
                   onDecline={() => setDeclineFor({ key: 'agent_requests', id: item.id })}
+                  onClear={() => setClearFor({ id: item.id, warn: clearWarns(item) })}
                 />
               ))}
             </>
@@ -319,6 +349,13 @@ export default function ApprovalsInbox() {
         requireReason={declineFor ? REASON_REQUIRED.has(declineFor.key) : false}
         onConfirm={submitDecline}
         onClose={() => setDeclineFor(null)}
+      />
+      <DeclineSheet
+        mode="clear"
+        visible={!!clearFor}
+        warn={!!clearFor?.warn}
+        onConfirm={submitClear}
+        onClose={() => setClearFor(null)}
       />
     </View>
   )
