@@ -172,7 +172,7 @@ export async function GET(request) {
   // row stamps only when every studio's sweep finished clean; zero eligible
   // studios, or no active sequence, is clean.
   let purchaseClean = true
-  const purchaseTotals = { locations: 0, checked: 0, enrolled: 0, already: 0, failed: 0 }
+  const purchaseTotals = { locations: 0, checked: 0, enrolled: 0, already: 0, failed: 0, skipped_by_staff: 0 }
   for (const locationId of okLocationIds) {
     const left = Math.max(0, Math.min(PURCHASE_CAP_MS, TOTAL_DEADLINE_MS - (Date.now() - started)))
     let timer
@@ -188,7 +188,7 @@ export async function GET(request) {
         purchaseClean = false
       } else {
         purchaseTotals.locations++
-        for (const k of ['checked', 'enrolled', 'already', 'failed']) purchaseTotals[k] += res[k] || 0
+        for (const k of ['checked', 'enrolled', 'already', 'failed', 'skipped_by_staff']) purchaseTotals[k] += res[k] || 0
       }
     } catch (err) {
       purchaseClean = false

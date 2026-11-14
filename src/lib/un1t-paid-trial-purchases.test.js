@@ -7,6 +7,7 @@ vi.mock('@/lib/paid-trial-products', () => ({ paidTrialProductIdsFor: vi.fn() })
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 import { logError } from '@/lib/log'
+import { STAFF_QUIET_GRANT } from './trial-checkout-purchase-sweep.js'
 import { sweepPaidTrialPurchases, PURCHASE_WINDOW_MS } from './un1t-paid-trial-purchases.js'
 
 const LOC = 'loc-hatch'
@@ -16,7 +17,7 @@ const at = (h) => new Date(NOW - h * HOUR).toISOString()
 
 // Records every chain; email_sequences answers a head count, un1t_transactions
 // its rows filtered by the chain's eq/in/gt/gte.
-function fakeDb({ activeSequences = 1, txs = [], seqError = null, txError = null } = {}) {
+function fakeDb({ activeSequences = 1, txs = [], seqError = null, txError = null, grants = [], grantError = null } = {}) {
   const calls = []
   return {
     calls,
@@ -35,6 +36,14 @@ function fakeDb({ activeSequences = 1, txs = [], seqError = null, txError = null
           calls.push(st)
           if (table === 'email_sequences') {
             return Promise.resolve(seqError ? { count: null, error: seqError } : { count: activeSequences, error: null }).then(res, rej)
+          }
+          if (table === 'trial_purchases') {
+            if (grantError) return Promise.resolve({ data: null, error: grantError }).then(res, rej)
+            let g = grants.filter((r) => Object.entries(st.eq).every(([c, v]) => r[c] === v)
+              && Object.entries(st.gte).every(([c, v]) => r[c] >= v)
+              && st.not.every(([c]) => r[c] != null))
+            if (st.range) g = g.slice(st.range[0], st.range[1] + 1)
+            return Promise.resolve({ data: g, error: null }).then(res, rej)
           }
           if (txError) return Promise.resolve({ data: null, error: txError }).then(res, rej)
           let rows = txs.filter((r) => Object.entries(st.eq).every(([c, v]) => r[c] === v)
@@ -132,5 +141,71 @@ describe('sweepPaidTrialPurchases', () => {
     const out = await sweepPaidTrialPurchases(db, LOC, { nowMs: NOW, trigger: vi.fn() })
     expect(out).toMatchObject({ ok: true, checked: 0 })
     expect(db.calls.some((c) => c.table === 'un1t_transactions')).toBe(false)
+  })
+
+  describe('a trial staff granted with no confirmation email (APPROVALSQ.3)', () => {
+    const grant = (over = {}) => ({ location_id: LOC, status: 'granted', contact_id: 'c1', granted_at: at(2), grant: { confirmation_email: STAFF_QUIET_GRANT }, ...over })
+
+    it('does not offer a marked contact and counts them; an unmarked one is still offered', async () => {
+      const trigger = vi.fn().mockResolvedValue({ ok: true, enrolled: 1 })
+      const db = fakeDb({
+        txs: [tx(), tx({ id: 'tx-2', contact_id: 'c2' })],
+        grants: [grant(), grant({ contact_id: 'c2', grant: { confirmation_email: 'sent' } })],
+      })
+      const out = await sweepPaidTrialPurchases(db, LOC, { nowMs: NOW, trigger })
+      expect(out).toMatchObject({ ok: true, checked: 1, enrolled: 1, skipped_by_staff: 1 })
+      expect(trigger).toHaveBeenCalledTimes(1)
+      expect(trigger.mock.calls[0][1].contactId).toBe('c2')
+    })
+
+    it('judges the NEWEST granted row: unmarked newest with an older marked row is offered', async () => {
+      const trigger = vi.fn().mockResolvedValue({ ok: true, enrolled: 1 })
+      const db = fakeDb({
+        txs: [tx()],
+        grants: [grant({ granted_at: at(20) }), grant({ granted_at: at(2), grant: { confirmation_email: 'sent' } })],
+      })
+      const out = await sweepPaidTrialPurchases(db, LOC, { nowMs: NOW, trigger })
+      expect(out).toMatchObject({ checked: 1, skipped_by_staff: 0 })
+      expect(trigger).toHaveBeenCalledTimes(1)
+    })
+
+    it('a newest marked row wins over an older unmarked one', async () => {
+      const trigger = vi.fn()
+      const db = fakeDb({
+        txs: [tx()],
+        grants: [grant({ granted_at: at(20), grant: null }), grant({ granted_at: at(2) })],
+      })
+      const out = await sweepPaidTrialPurchases(db, LOC, { nowMs: NOW, trigger })
+      expect(out).toMatchObject({ checked: 0, skipped_by_staff: 1 })
+      expect(trigger).not.toHaveBeenCalled()
+    })
+
+    it('a failed read of the list offers nobody, is not ok, and logs only the code', async () => {
+      const trigger = vi.fn()
+      const db = fakeDb({ txs: [tx()], grantError: { code: 'Z9', message: 'secret boom' } })
+      const out = await sweepPaidTrialPurchases(db, LOC, { nowMs: NOW, trigger })
+      expect(out).toMatchObject({ ok: false, checked: 0, skipped_by_staff: 0 })
+      expect(trigger).not.toHaveBeenCalled()
+      expect(JSON.stringify(logError.mock.calls)).toMatch(/Z9/)
+      expect(JSON.stringify(logError.mock.calls)).not.toMatch(/secret boom/)
+    })
+
+    it('the read names its columns, filters by studio, status and window, and is range-capped', async () => {
+      const db = fakeDb({ txs: [] })
+      await sweepPaidTrialPurchases(db, LOC, { nowMs: NOW, trigger: vi.fn() })
+      const read = db.calls.find((c) => c.table === 'trial_purchases')
+      expect(read.cols).toBe('contact_id, granted_at, "grant"')
+      expect(read.eq).toMatchObject({ location_id: LOC, status: 'granted' })
+      expect(read.gte.granted_at).toBe(new Date(NOW - PURCHASE_WINDOW_MS).toISOString())
+      expect(read.not).toContainEqual(['contact_id', 'is', null])
+      expect(read.order.length).toBeGreaterThan(0)
+      expect(read.range).toEqual([0, 999])
+    })
+
+    it('no active sequence: no trial_purchases read', async () => {
+      const db = fakeDb({ activeSequences: 0 })
+      await sweepPaidTrialPurchases(db, LOC, { nowMs: NOW, trigger: vi.fn() })
+      expect(db.calls.some((c) => c.table === 'trial_purchases')).toBe(false)
+    })
   })
 })
