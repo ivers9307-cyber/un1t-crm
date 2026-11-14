@@ -23,7 +23,7 @@ const CHIP = 'text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded'
 export default function CustomerCardShell({
   source, kind, state, name, meta, when, amount,
   summary, children, contact, links, outcome, actions, quietAction, error,
-  sourceClassName, kindClassName, leading,
+  sourceClassName, kindClassName, leading, summaryClassName,
 }) {
   return (
     <div className="border border-un1t-border rounded-lg p-4 bg-un1t-surface space-y-3">
@@ -42,7 +42,7 @@ export default function CustomerCardShell({
         </div>
       </div>
 
-      {summary && <div className="text-xs text-un1t-subtle">{summary}</div>}
+      {summary && <div className={summaryClassName || 'text-xs text-un1t-subtle'}>{summary}</div>}
       {children}
       {contact && <div className="text-xs text-un1t-subtle flex flex-wrap gap-x-4 gap-y-1">{contact}</div>}
       {links && <div className="text-xs flex flex-wrap gap-x-4 gap-y-1">{links}</div>}

@@ -175,3 +175,29 @@ describe('customer cards', () => {
     expect(screen.queryByRole('checkbox')).toBeNull()
   })
 })
+
+describe('card polish (APPROVALSQ.3)', () => {
+  it('offer card shows the price once: the subtitle drops its trailing price', () => {
+    render(<OfferPurchaseCard item={offer} />)
+    expect(screen.getAllByText(/€497/)).toHaveLength(1)
+    expect(screen.getByText('3 Month Membership')).toBeTruthy()
+  })
+
+  it('offer card leaves a subtitle with no trailing price untouched', () => {
+    render(<OfferPurchaseCard item={{ ...offer, subtitle: '3 Month Membership · Black Friday' }} />)
+    expect(screen.getByText('3 Month Membership · Black Friday')).toBeTruthy()
+  })
+
+  it('offer card keeps an offer name that itself contains the separator', () => {
+    render(<OfferPurchaseCard item={{ ...offer, subtitle: 'Pack · 10 classes · €497' }} />)
+    expect(screen.getByText('Pack · 10 classes')).toBeTruthy()
+  })
+
+  it('the trial card summary keeps the small subtle style', () => {
+    render(<TrialPurchaseReviewCard item={grant} />)
+    const summary = screen.getByText(grant.subtitle)
+    expect(summary.className).toContain('text-xs')
+    expect(summary.className).toContain('text-un1t-subtle')
+  })
+})
+

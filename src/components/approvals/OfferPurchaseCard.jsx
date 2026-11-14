@@ -16,6 +16,18 @@ function formatDateTime(s) {
   } catch { return s }
 }
 
+// The provider's subtitle is "<offer name> · <price>" (formatEuro in
+// src/lib/sale-offers.js: whole euros, en-IE). The card already shows the
+// price top right, so drop it from the summary, and only when the subtitle
+// really ends with that exact suffix, so nothing else can be lost. Not
+// imported from sale-offers: that module reaches server-only code.
+export function summaryWithoutPrice(subtitle, amount) {
+  if (typeof subtitle !== 'string') return subtitle
+  const price = '€' + Number(amount || 0).toLocaleString('en-IE', { maximumFractionDigits: 0 })
+  const suffix = ` · ${price}`
+  return subtitle.length > suffix.length && subtitle.endsWith(suffix) ? subtitle.slice(0, -suffix.length) : subtitle
+}
+
 export default function OfferPurchaseCard({ item, onDecided }) {
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState(null) // { tone, text }
@@ -58,7 +70,7 @@ export default function OfferPurchaseCard({ item, onDecided }) {
       meta={item.meta}
       when={`Paid ${formatDateTime(item.submittedAt)}`}
       amount={`€${Number(item.amount || 0).toFixed(2)}`}
-      summary={item.subtitle}
+      summary={summaryWithoutPrice(item.subtitle, item.amount)}
       links={item.reviewUrl && <Link href={item.reviewUrl} className="underline text-un1t-subtle">Open offer sales</Link>}
       outcome={outcome}
       actions={!done && (
