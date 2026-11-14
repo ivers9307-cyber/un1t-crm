@@ -20,11 +20,13 @@ export function bookingWarningCount(items) {
 
 // One request at a time, never in parallel, never stopping early. `clearOne`
 // resolves `{ ok: true }` for a cleared request; anything else, a throw
-// included, is a failure.
-export async function runBulkClear(ids, { note, clearOne }) {
+// included, is a failure. `entries` are whatever the caller sends on (an id, or
+// since APPROVALSQ.6 the item itself, so each request can carry its own studio);
+// the result lists hand the same entries back.
+export async function runBulkClear(entries, { note, clearOne }) {
   const cleared = []
   const failed = []
-  for (const id of ids) {
+  for (const id of entries) {
     let ok = false
     try {
       const res = await clearOne(id, note)
@@ -35,4 +37,23 @@ export async function runBulkClear(ids, { note, clearOne }) {
     ;(ok ? cleared : failed).push(id)
   }
   return { cleared, failed }
+}
+
+// APPROVALSQ.5 — undo a bulk clear: the same walk, one request at a time, never
+// in parallel, never stopping early. `undoOne` resolves `{ ok: true }` for a
+// restored request; anything else, a throw included, is a failure.
+export async function runBulkUndo(entries, { undoOne }) {
+  const restored = []
+  const failed = []
+  for (const id of entries) {
+    let ok = false
+    try {
+      const res = await undoOne(id)
+      ok = res?.ok === true
+    } catch {
+      ok = false
+    }
+    ;(ok ? restored : failed).push(id)
+  }
+  return { restored, failed }
 }

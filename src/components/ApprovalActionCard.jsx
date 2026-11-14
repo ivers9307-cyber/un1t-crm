@@ -17,6 +17,8 @@ import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from 
 import { approvalSummary, approvalKindLabel, explainFailure } from '@/lib/approvals/event-move-card'
 import SequencePicker from '@/components/SequencePicker'
 import { formatInZone, resolveZone } from '@shared/zoned-time'
+import UndoClearButton from '@/components/approvals/UndoClearButton'
+import { undoClearRequest } from '@/lib/approvals/undo-clear-request'
 
 const STATUS_CHIP = {
   pending:  'bg-amber-500/10 text-amber-700',
@@ -48,10 +50,24 @@ function decidedByLine(request, zone) {
 }
 
 export default function ApprovalActionCard({
-  request, contactId, locationId, contactFirstName, timezone = null,
+  request: requestProp, contactId, locationId, contactFirstName, timezone = null,
   onDecided, onPrefillComposer, onOpenBookTab,
 }) {
   const zone = resolveZone(timezone)
+  // APPROVALSQ.5 — what an undo put back, laid over the prop so the card
+  // reads the request as restored even if the parent has not caught up.
+  // It is dropped when the prop's own status moves away from the status it had
+  // at the undo (someone else decided it, the parent caught up) and on every
+  // successful decision here; until then a prop that has not caught up keeps
+  // reading as restored. Derived, never set during render.
+  const [restored, setRestored] = useState(null) // { data, base } | null
+  const overlayLive = restored && requestProp.status === restored.base
+  const request = overlayLive ? { ...requestProp, ...restored.data } : requestProp
+  // When this card's quiet clear answered (the Undo window runs from here), and
+  // whether the route said the clear can no longer be undone.
+  const [clearedAt, setClearedAt] = useState(null)
+  const [undoBusy, setUndoBusy] = useState(false)
+  const [undoGone, setUndoGone] = useState(false)
   const [busy, setBusy] = useState(null)          // 'approved' | 'declined' | 'saved' | null
   const [declineOpen, setDeclineOpen] = useState(false)
   // APPROVALSQ.1 — "Clear, don't notify": a confirm step, then one silent PATCH.
@@ -117,7 +133,12 @@ export default function ApprovalActionCard({
         return
       }
       setClearOpen(false)
-      if (silent) setClearedHere(true) // show the result even before the parent re-renders us
+      setRestored(null)
+      if (silent) {
+        setClearedHere(true) // show the result even before the parent re-renders us
+        setClearedAt(Date.now())
+        setUndoGone(false)
+      }
       onDecided?.({ ...request, ...data.request })
       // CANCEL-FORM.5 — whether the member heard about a pause/cancellation decision.
       if (data.customer_notified) setNotified(data.customer_notified)
@@ -136,6 +157,33 @@ export default function ApprovalActionCard({
     } finally {
       inFlight.current = false
       setBusy(null)
+    }
+  }
+
+  // APPROVALSQ.5 — take a quiet clear back. The route puts the request back to
+  // the state it was cleared from; the card shows its buttons again and the
+  // parent's copy of the request is put back through onDecided, the same
+  // "replace this request" hook a decision uses.
+  async function undoClear() {
+    if (inFlight.current || undoBusy || clearedAt == null) return
+    inFlight.current = true
+    setUndoBusy(true)
+    setError(null)
+    try {
+      const res = await undoClearRequest(request.id)
+      if (!res.ok) {
+        setError(res.error)
+        if (res.status === 409) setUndoGone(true)
+        return
+      }
+      setRestored({ data: res.request, base: requestProp.status })
+      setClearedHere(false)
+      setClearedAt(null)
+      setNotified(null)
+      onDecided?.({ ...request, ...res.request })
+    } finally {
+      inFlight.current = false
+      setUndoBusy(false)
     }
   }
 
@@ -249,6 +297,9 @@ export default function ApprovalActionCard({
         {decided && (
           <div className="mt-1.5 text-xs text-un1t-muted">
             {wasCleared && <span>{`Cleared, customer not told${decidedByLine(request, zone) ? ` · ${decidedByLine(request, zone)}` : ''}.`}</span>}
+            {wasCleared && clearedAt != null && !undoGone && (
+              <span className="ml-2"><UndoClearButton startedAt={clearedAt} disabled={undoBusy} onClick={undoClear} /></span>
+            )}
             {request.decision_note && <span> {request.decision_note}</span>}
             {failedLine && <span className="text-red-700"> {failedLine}</span>}
             {/* A quiet clear told nobody on purpose: never nag staff to follow up. */}

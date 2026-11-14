@@ -14,6 +14,7 @@ import {
   finishedMarker,
 } from '@/lib/agent/request-recovery'
 import { approvalGrantsTrialCredit } from '@/lib/approvals/agent-request-why'
+import { UNDO_CLEAR_WINDOW_MS } from '@/lib/approvals/undo-clear'
 import { logWarn } from '@/lib/log'
 import { isHandBookedEventId } from '@/lib/manual-timetable'
 import { UN1T_RECORD_ONLY_REASONS } from '@/lib/un1t-online-approval'
@@ -65,7 +66,26 @@ const DecisionSchema = z.object({
   path: ['silent'],
 })
 
+// APPROVALSQ.5 — take back a quiet clear: this key alone, true only.
+const UndoClearSchema = z.object({ undo_clear: z.literal(true) }).strict()
+
+// A body is EITHER an undo (it names `undo_clear`) or a decision, never both:
+// routed on the key so a decision body keeps its own validation messages.
+const BodySchema = z.any().transform((raw, ctx) => {
+  const isUndo = !!raw && typeof raw === 'object' && 'undo_clear' in raw
+  const parsed = (isUndo ? UndoClearSchema : DecisionSchema).safeParse(raw)
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) ctx.addIssue({ ...issue })
+    return z.NEVER
+  }
+  return parsed.data
+})
+
 const MEMBERSHIP_KINDS = new Set(['cancellation', 'pause'])
+
+// APPROVALSQ.5 — how far into the future a decided_at may sit (clock skew)
+// and still count for an undo; the window itself is in approvals/undo-clear.
+const UNDO_CLEAR_SKEW_MS = 5_000
 
 // EVENT-MOVE.7 — approving an event_move writes at the source AND the target
 // studio, so the approver needs what the staff move route needs at both
@@ -123,7 +143,7 @@ export async function PATCH(request, { params }) {
 
   // Confirm the request belongs to a location this user can act on.
   const { data: row } = await db.from('agent_membership_requests')
-    .select('id, location_id, kind, status, details, contact_id, channel, conversation_id')
+    .select('id, location_id, kind, status, details, contact_id, channel, conversation_id, decided_by, decided_at, decision_note')
     .eq('id', id).maybeSingle()
   if (!row) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   // APPROVALS-PERCAT.1 — agent requests are now fully gated on the
@@ -133,8 +153,11 @@ export async function PATCH(request, { params }) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
 
-  const v = await validateBody(request, DecisionSchema)
+  const v = await validateBody(request, BodySchema)
   if (!v.ok) return v.response
+
+  // APPROVALSQ.5 — an undo returns before any other read, claim or send.
+  if (v.data.undo_clear) return undoClear(db, user, row)
 
   // APPROVALSQ.1 — a quiet clear returns before any location read, claim or send.
   if (v.data.silent) return clearSilently(db, user, row, v.data)
@@ -963,7 +986,19 @@ async function clearSilently(db, user, row, body) {
     decided_by: user.id,
     decided_at: nowIso,
     updated_at: nowIso,
-    details: { ...(row.details || {}), cleared: { silent: true, from_status: row.status } },
+    details: {
+      ...(row.details || {}),
+      cleared: {
+        silent: true,
+        from_status: row.status,
+        // APPROVALSQ.5 — what the clear overwrote, so an undo can put it back.
+        previous: {
+          decided_by: row.decided_by ?? null,
+          decided_at: row.decided_at ?? null,
+          decision_note: row.decision_note ?? null,
+        },
+      },
+    },
   }).eq('id', row.id).eq('status', row.status)
     .select('id, status, decided_at, decision_note, details').maybeSingle()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -975,6 +1010,41 @@ async function clearSilently(db, user, row, body) {
     customer_notified: { sent: false, channel: null, reason: 'cleared' },
     planned_end_date: null,
   })
+}
+
+// APPROVALSQ.5 — take back a quiet clear. Only its author, only inside
+// UNDO_CLEAR_WINDOW_MS, and the request goes back to the state it was cleared
+// from. Sends nothing, calls no Glofox or un1t.online helper, reads nothing
+// beyond the row the route already holds.
+async function undoClear(db, user, row) {
+  const refuse = () => NextResponse.json({ success: false, error: 'This clear can no longer be undone.' }, { status: 409 })
+  const cleared = row.details?.cleared
+  const from = cleared?.from_status
+  if (row.status !== 'declined' || cleared?.silent !== true) return refuse()
+  if (from !== 'pending' && from !== 'failed') return refuse()
+  if (!row.decided_by || row.decided_by !== user.id) return refuse()
+  const decidedMs = row.decided_at ? Date.parse(row.decided_at) : NaN
+  if (!Number.isFinite(decidedMs)) return refuse()
+  const age = Date.now() - decidedMs
+  if (age > UNDO_CLEAR_WINDOW_MS || age < -UNDO_CLEAR_SKEW_MS) return refuse()
+  // A failed row's original decided_at is what its retry window is judged on;
+  // a clear stored before `previous` existed cannot give it back.
+  const previous = cleared.previous && typeof cleared.previous === 'object' ? cleared.previous : null
+  if (from === 'failed' && !previous) return refuse()
+
+  const { cleared: _cleared, ...rest } = row.details || {}
+  const { data, error } = await db.from('agent_membership_requests').update({
+    status: from,
+    decided_by: previous?.decided_by ?? null,
+    decided_at: previous?.decided_at ?? null,
+    decision_note: previous?.decision_note ?? null,
+    details: rest,
+    updated_at: new Date().toISOString(),
+  }).eq('id', row.id).eq('status', 'declined').eq('decided_at', row.decided_at)
+    .select('id, status, decided_at, decision_note, details').maybeSingle()
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (!data) return refuse()
+  return NextResponse.json({ success: true, request: data, undone: true })
 }
 
 // MIAORG.1 — the cancellation form's copy block from the studio's RESOLVED Mia

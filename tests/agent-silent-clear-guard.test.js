@@ -21,7 +21,8 @@ function walk(dir) {
   return out
 }
 
-const FORBIDDEN = [/silent:\s*true/, /\bcleared\s*:/]
+// APPROVALSQ.5: undo_clear is the staff-only undo of a quiet clear.
+const FORBIDDEN = [/silent:\s*true/, /\bcleared\s*:/, /undo_clear/]
 
 describe('agent and MCP tools never clear a request quietly', () => {
   for (const dir of DIRS) {
@@ -31,7 +32,7 @@ describe('agent and MCP tools never clear a request quietly', () => {
       expect(files.length).toBeGreaterThan(0)
     })
 
-    it(`${dir} never sends silent: true or writes a cleared: key`, () => {
+    it(`${dir} never sends silent: true, writes a cleared: key or names undo_clear`, () => {
       const offenders = files
         .filter((f) => {
           const src = fs.readFileSync(f, 'utf8')
