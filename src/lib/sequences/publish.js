@@ -12,7 +12,7 @@ import { parseGraphShape } from '@/lib/sequences/graph/schema'
 import { compileGraphToSteps } from '@/lib/sequences/graph/compile'
 import { planStepPublish } from '@/lib/sequences/graph/step-identity'
 import { loadTemplatesForApproval } from '@/lib/sequences/template-approval'
-import { logWarn } from '@/lib/log'
+import { logWarn, logInfo } from '@/lib/log'
 
 // Same-file literal so check:select-columns resolves it; the route test pins
 // it to STEP_IDENTITY_COLUMNS (what the plan compares).
@@ -31,7 +31,7 @@ export async function publishSequence(db, { sequenceId, graph: bodyGraph, existi
   let existing = preloaded
   if (!existing) {
     const { data, error } = await db.from('email_sequences')
-      .select('location_id, graph, draft_graph').eq('id', sequenceId).maybeSingle()
+      .select('location_id, graph, draft_graph, status').eq('id', sequenceId).maybeSingle()
     if (error) return fail(500, error.message)
     existing = data
   }
@@ -74,16 +74,20 @@ export async function publishSequence(db, { sequenceId, graph: bodyGraph, existi
     existingRows: existingRows || [],
     previousGraph: existing.graph,
   })
-  const { error: stepsError } = await db.rpc('publish_sequence_steps', {
+  const { data: applied, error: stepsError } = await db.rpc('publish_sequence_steps', {
     p_sequence_id: sequenceId,
     p_steps: plan.steps,
   })
   if (stepsError) return fail(500, stepsError.message)
+  // SEQCURSOR.1 (mig 840) — in-flight enrolments moved with their next step.
+  if (applied?.remapped) logInfo('sequences', 'publish moved in-flight enrolments with their next step', { sequenceId, remapped: applied.remapped })
 
   // Promote + clear the draft + GO LIVE (status='active' is what makes both
   // the enrolment triggers and the runner pick the sequence up).
+  // SEQPAUSE.2 — a PAUSED sequence stays paused: republishing an edit is not
+  // a decision to restart it (it used to un-pause the flow).
   const { error: seqError } = await db.from('email_sequences')
-    .update({ graph: parseGraphShape(graph).data, draft_graph: null, status: 'active' })
+    .update({ graph: parseGraphShape(graph).data, draft_graph: null, status: existing.status === 'paused' ? 'paused' : 'active' })
     .eq('id', sequenceId)
   if (seqError) return fail(500, seqError.message)
 

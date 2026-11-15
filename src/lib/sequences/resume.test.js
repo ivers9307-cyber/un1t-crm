@@ -21,6 +21,18 @@ describe('buildResumePatch', () => {
   })
 })
 
+describe('buildResumePatch — SEQPAUSE.1 keeps a later due time', () => {
+  const now = new Date('2026-11-15T12:00:00Z')
+  it('a due time later than now is kept (the wait before the next step is not skipped)', () => {
+    expect(buildResumePatch(now, '2026-11-17T09:00:00Z').next_step_at).toBe('2026-11-17T09:00:00.000Z')
+  })
+  it('an earlier, missing or unreadable due time resumes now', () => {
+    for (const due of ['2026-11-01T00:00:00Z', null, undefined, 'not a date']) {
+      expect(buildResumePatch(now, due).next_step_at).toBe('2026-11-15T12:00:00.000Z')
+    }
+  })
+})
+
 describe('classifyResumeOutcome', () => {
   it('200 when the CAS update landed', () => {
     expect(classifyResumeOutcome({ updatedRow: { id: 'e1', status: 'active' }, currentStatus: 'active' }))

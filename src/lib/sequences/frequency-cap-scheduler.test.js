@@ -9,7 +9,7 @@
 // was built to avoid); if it advanced the cursor, the step would be
 // silently SKIPPED instead of deferred.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('./steps.js', () => ({
@@ -29,6 +29,13 @@ import { runSequences } from './scheduler.js'
 import { createServerClient } from '@/lib/supabase'
 import { sendEmailStep } from './steps.js'
 import { FrequencyCapDeferral } from '@/lib/frequency-cap'
+
+// SEQQUIET.2 — the runner now holds a message step due inside quiet hours, so
+// a test run on the real clock would fail at night. Pin a daytime "now"
+// (11:00 Dublin) for every runSequences() call that passes none.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-08-10T10:00:00Z')) })
+afterEach(() => { vi.useRealTimers() })
+
 
 // Chainable recorder db (campaign-sender.test.js idiom).
 function makeDb(route) {

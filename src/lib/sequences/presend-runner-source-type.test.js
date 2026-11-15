@@ -22,7 +22,7 @@
 // boundary. One pins the column list the fake receives; the other drives the
 // whole runner with the real step handlers and checks the gate was genuinely
 // reached.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/postmark', () => ({
@@ -53,6 +53,13 @@ import { createServerClient } from '@/lib/supabase'
 import { sendTemplateMessage } from '@/lib/whatsapp'
 import { glofoxCredentialsForLocation, getGlofoxOverdueInvoices } from '@/lib/glofox'
 import { setEnrollmentStatus } from './enrollment-status.js'
+
+// SEQQUIET.2 — the runner now holds a message step due inside quiet hours, so
+// a test run on the real clock would fail at night. Pin a daytime "now"
+// (11:00 Dublin) for every runSequences() call that passes none.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-08-10T10:00:00Z')) })
+afterEach(() => { vi.useRealTimers() })
+
 
 const INVOICE = '0f187762-acc8-42d2-860c-43cbe1477df0'
 const MEMBER = '679bfd4c2f6535e4f200078e'

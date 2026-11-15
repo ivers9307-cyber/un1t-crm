@@ -311,7 +311,7 @@ export async function runSequences({ now = new Date() } = {}) {
   const db = createServerClient()
   // TZ.4 — zone_unavailable: enrolments left untouched this tick because their
   // studio's timezone could not be read (see the block before the dispatch).
-  const stats = { picked: 0, sent: 0, completed: 0, errored: 0, paused: 0, skipped: 0, deferred: 0, zone_unavailable: 0 }
+  const stats = { picked: 0, sent: 0, completed: 0, errored: 0, paused: 0, skipped: 0, deferred: 0, zone_unavailable: 0, quiet_held: 0 }
 
   // FREQ-CAP.1 — the marketing frequency-cap setting is per LOCATION;
   // resolve it once per location per tick (a 100-enrolment batch is
@@ -542,6 +542,29 @@ export async function runSequences({ now = new Date() } = {}) {
         }
       }
 
+      // SEQQUIET.2 (October audit A14) — the send window / quiet hours guard
+      // the send itself, not only the time the NEXT step is scheduled for. An
+      // enrolment started or resumed at night, a late tick and a retry all
+      // reach here due "now"; a message step outside the permitted hours is
+      // moved to the next permitted time with nothing sent (no error_count).
+      // Only customer messages are held: tags, tasks, branches and waits run.
+      // Test enrolments bypass, as clampFireAt does everywhere.
+      const isMessageStep = step.step_type === 'email' || !step.step_type || step.step_type === 'whatsapp'
+      if (isMessageStep && enrollment.metadata?.test !== true) {
+        const permittedAt = await clampFireAt(now, { sequence, zone, isTest: false })
+        if (permittedAt.getTime() > now.getTime()) {
+          const { error: holdErr } = await db.from('sequence_enrollments').update({
+            next_step_at: permittedAt.toISOString(),
+            last_processed_at: now.toISOString(),
+          }).eq('id', enrollment.id).eq('status', 'active')
+          // A failed write leaves the claim lease, which brings the row back
+          // to this same check: still nothing sent.
+          if (holdErr) logError('sequences', 'quiet-hours hold write failed', { enrollmentId: enrollment.id, sequenceId: sequence.id, error: holdErr.message })
+          stats.quiet_held++
+          continue
+        }
+      }
+
       // Branch by step type.
       let sendId = null
       // Mig 091: a branch step jumps the cursor instead of advancing
@@ -692,11 +715,9 @@ export async function runSequences({ now = new Date() } = {}) {
       // are exactly two ways to land here and they read very differently:
       //   - the run was exited mid-step (the dunning pre-send gate). Expected.
       //   - the row is anything else. The realistic one is an operator pausing
-      //     the enrolment while this step was in flight — and that carries a
-      //     known DUPLICATE-SEND window: buildResumePatch (resume.js) does not
-      //     touch current_step_order, so the resumed run re-sends step N, which
-      //     has already gone out. Fixing resume is a separate change; the log
-      //     is what makes it diagnosable instead of invisible.
+      //     the enrolment while this step was in flight. SEQPAUSE.1 moves the
+      //     paused row's cursor past the step below, so resume does not send
+      //     it again.
       if (!advanceErr && (advanced || []).length === 0) {
         const { data: nowRow } = await db.from('sequence_enrollments')
           .select('id, status').eq('id', enrollment.id).maybeSingle()
@@ -706,6 +727,29 @@ export async function runSequences({ now = new Date() } = {}) {
         }
         if (nowRow?.status === 'exited') {
           logInfo('sequences', 'advance skipped — enrolment was exited mid-step', meta)
+        } else if (nowRow?.status === 'paused') {
+          // SEQPAUSE.1 (October audit A15) — paused while this step ran. The
+          // step happened, so the cursor still moves past it (the row stays
+          // paused); resume then runs the FOLLOWING step at its own time
+          // instead of this one again. CAS on the cursor we started from, so
+          // a resume-and-run in between is never overwritten.
+          let moveQuery = db.from('sequence_enrollments').update({
+            current_step_order: followingOrder != null ? followingOrder - 1 : step.step_order,
+            next_step_at: nextFireAt,
+            last_step_send_id: sendId,
+            last_processed_at: now.toISOString(),
+          }).eq('id', enrollment.id).eq('status', 'paused')
+          moveQuery = enrollment.current_step_order == null
+            ? moveQuery.is('current_step_order', null)
+            : moveQuery.eq('current_step_order', enrollment.current_step_order)
+          const { data: moved, error: moveErr } = await moveQuery.select('id')
+          if (moveErr) {
+            logError('sequences', 'paused mid-step: cursor not moved, resume may repeat this step', { ...meta, error: moveErr.message })
+          } else if (!moved || moved.length === 0) {
+            logWarn('sequences', 'paused mid-step: enrolment changed again, cursor left as found', meta)
+          } else {
+            logInfo('sequences', 'paused mid-step: cursor moved past the step, enrolment stays paused', meta)
+          }
         } else {
           logWarn('sequences', 'advance matched no active row', meta)
         }

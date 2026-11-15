@@ -12,7 +12,7 @@
 // It is a CAS, the same discipline the claim uses: the row was claimed with
 // status='active', so the only way the predicate misses is that something
 // inside the step deliberately ended the run.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
@@ -33,6 +33,13 @@ import { runSequences } from './scheduler.js'
 import { createServerClient } from '@/lib/supabase'
 import { sendWhatsappStep } from './steps.js'
 import { logWarn, logInfo } from '@/lib/log'
+
+// SEQQUIET.2 — the runner now holds a message step due inside quiet hours, so
+// a test run on the real clock would fail at night. Pin a daytime "now"
+// (11:00 Dublin) for every runSequences() call that passes none.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-08-10T10:00:00Z')) })
+afterEach(() => { vi.useRealTimers() })
+
 
 function makeDb(route) {
   const statements = []
@@ -132,12 +139,9 @@ describe('runSequences — the cursor advance cannot revive an exited run', () =
 // can match zero rows read very differently:
 //
 //   - the run was EXITED mid-step (the pre-send gate). Expected, benign.
-//   - anything else — an operator pausing the enrolment while the step was in
-//     flight is the realistic one — is a surprise worth a warning, AND it
-//     carries a known duplicate-send window: buildResumePatch (resume.js) does
-//     not touch current_step_order, so a pause mid-step means the resumed run
-//     re-sends step N. Fixing resume is out of scope here; making the miss
-//     visible is what turns that from silent to diagnosable.
+//   - PAUSED mid-step (an operator): SEQPAUSE.1 moves the paused row's cursor
+//     past the step, so the resumed run does not re-send it.
+//   - anything else is a surprise worth a warning.
 describe('runSequences — a CAS miss on the advance is reported, not swallowed', () => {
   function runWithStatusAfter(statusAfter) {
     // The advance matches 0 rows; the follow-up read says what the row is now.
@@ -184,11 +188,25 @@ describe('runSequences — a CAS miss on the advance is reported, not swallowed'
     expect(logInfo).toHaveBeenCalledWith('sequences', expect.stringMatching(/exited/i), expect.objectContaining({ enrollmentId: 'en-1' }))
   })
 
-  it('warns when the row is anything else — e.g. an operator paused it mid-step', async () => {
-    runWithStatusAfter('paused')
+  it('warns when the row is anything else', async () => {
+    runWithStatusAfter('completed')
     await runSequences()
     expect(logWarn).toHaveBeenCalledWith('sequences', 'advance matched no active row', expect.objectContaining({
       enrollmentId: 'en-1', stepOrder: 2, stepType: 'whatsapp',
     }))
+  })
+
+  // SEQPAUSE.1 (October audit A15) — paused while the step ran: the cursor
+  // still moves past the step on the paused row, so resume does not repeat it.
+  it('paused mid-step: moves the paused row past the step, CAS on status and the starting cursor', async () => {
+    const { statements } = runWithStatusAfter('paused')
+    await runSequences()
+    const moves = statements.filter((st) => st.table === 'sequence_enrollments' && st.ops[0]?.method === 'update'
+      && 'current_step_order' in st.ops[0].args[0] && has(st, 'eq') && st.ops.some((o) => o.method === 'eq' && o.args[0] === 'status' && o.args[1] === 'paused'))
+    expect(moves).toHaveLength(1)
+    const patch = moves[0].ops[0].args[0]
+    expect(patch).not.toHaveProperty('status')
+    expect(patch.current_step_order).toBe(2)
+    expect(moves[0].ops).toContainEqual({ method: 'eq', args: ['current_step_order', enrollment.current_step_order] })
   })
 })

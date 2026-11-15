@@ -54,11 +54,23 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
 
+  // SEQPAUSE.1 — the row's own next_step_at is kept when it is later than now
+  // (a step paused mid-send already holds the following step's time).
+  const { data: current, error: currentErr } = await db
+    .from('sequence_enrollments')
+    .select('next_step_at')
+    .eq('id', params.enrollmentId)
+    .eq('sequence_id', params.id)
+    .maybeSingle()
+  if (currentErr) {
+    return NextResponse.json({ success: false, error: 'Could not load the enrolment' }, { status: 500 })
+  }
+
   // CAS: only a currently-paused enrollment (scoped to THIS sequence)
   // transitions. Zero rows back means gone or already resumed.
   const { data: updated, error } = await db
     .from('sequence_enrollments')
-    .update(buildResumePatch())
+    .update(buildResumePatch(new Date(), current?.next_step_at ?? null))
     .eq('id', params.enrollmentId)
     .eq('sequence_id', params.id)
     .eq('status', 'paused')
