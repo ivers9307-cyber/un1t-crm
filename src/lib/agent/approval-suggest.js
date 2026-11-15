@@ -21,6 +21,7 @@ import { instantToZonedParts, zoneOfLocation } from '@/lib/location-time'
 import { providerFor } from '@/lib/membership/source'
 import { noneSource } from '@/lib/membership/sources/none'
 import { providerTakesBookings } from './tool-capability'
+import { readAgentKnowledge } from './turn-studios'
 import { anthropicMessages } from '@/lib/anthropic'
 import { resolveAgentSettings } from './settings-resolve'
 import { chunkIds } from '@/lib/person-accounts'
@@ -141,7 +142,7 @@ export function zonedDateString(nowMs, zone) {
 // MIAORG.1 Task 6 (T6-D) — `capability` is what the prompt may offer at this
 // studio: { bookings, bookingUrl }. Absent or bookings true is the Glofox
 // render, byte-identical to before (the link is ignored).
-export async function composeAgentText(location, settings, historyRows, instruction, companyName, signal, membershipSource = null, { bookings = true, bookingUrl = null } = {}) {
+export async function composeAgentText(location, settings, historyRows, instruction, companyName, signal, membershipSource = null, { bookings = true, bookingUrl = null, knowledge = [] } = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   const system = buildCachedSystem({
@@ -154,6 +155,11 @@ export async function composeAgentText(location, settings, historyRows, instruct
     bookingUrl: bookings ? null : bookingUrl,
     tone: settings?.tone || null,
     extraRules: settings?.extra_rules || null,
+    // MIAKNOWLEDGE.1 — the studio's knowledge, as the live reply path and
+    // followups.js pass it. Without it the prompt carried the "No knowledge
+    // has been added yet … hand off" notice, so every suggested reply leaned
+    // to a hand-off however much the studio had written.
+    knowledge: knowledge || [],
     today: zonedDateString(Date.now(), zoneOfLocation(location)),
   })
   const messages = [
@@ -328,10 +334,12 @@ export async function composeApprovalSuggestion(db, row, { signal } = {}) {
   // reply path derives it; no second read that could fail on its own.
   const provider = location?.membership_source ? providerFor(location.membership_source) : noneSource
   const bookings = providerTakesBookings(provider)
+  const knowledgeRead = await readAgentKnowledge(db, location.id, 'approval-suggest')
+  if (!knowledgeRead.ok) return { error: 'knowledge_unreadable' }
   const composed = await composeAgentText(
     location, settings, historyRows, instruction, branding.companyName, signal,
     { key: provider.key, label: provider.label },
-    { bookings, bookingUrl: bookings ? null : (settings?.booking_url || null) },
+    { bookings, bookingUrl: bookings ? null : (settings?.booking_url || null), knowledge: knowledgeRead.rows },
   )
   if (composed.error) return { error: composed.error }
 

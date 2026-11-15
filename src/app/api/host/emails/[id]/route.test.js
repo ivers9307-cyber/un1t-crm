@@ -163,6 +163,17 @@ describe('PATCH /api/host/emails/[id]', () => {
     expect((await res.json()).error).toBe('kaboom')
   })
 
+  it('400s a Utility email to everyone or the mailing list, writing nothing (HOSTUTILITY.1)', async () => {
+    for (const extra of [{}, { audience_kind: 'mailing_list' }]) {
+      const { db, statements } = makeDb(() => ({ data: [{ id: CAMPAIGN_ID }], error: null }))
+      createServerClient.mockReturnValue(db)
+      const res = await PATCH(req('PATCH', { subject: 'x', body: 'y', email_type: 'utility', ...extra }), props)
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toMatch(/one event/)
+      expect(statements.some((st) => op(st, 'update'))).toBe(false)
+    }
+  })
+
   it('400s an event audience with no event id', async () => {
     const { db } = makeDb(() => ({}))
     createServerClient.mockReturnValue(db)

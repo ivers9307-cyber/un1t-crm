@@ -157,6 +157,7 @@ export const TIME_OPTIONS = Object.freeze(
  * in server-only code, and this file has to stay Intl-only/browser-safe.
  */
 export const SCHEDULE_ERROR_COPY = Object.freeze({
+  utility_needs_event: 'A Utility email can only go to one event\u2019s attendees',
   sender_not_verified: 'Sending is not enabled yet',
   no_stream: 'Marketing sending is not set up yet',
   daily_cap: 'Daily send limit was reached',
@@ -171,7 +172,7 @@ export function scheduleErrorCopy(code) {
   // Object.prototype.constructor (a function), not undefined — so a plain
   // `SCHEDULE_ERROR_COPY[code] || fallback` would return that function
   // instead of falling back. hasOwn only ever sees the frozen object's own
-  // five keys.
+  // keys.
   return typeof code === 'string' && Object.hasOwn(SCHEDULE_ERROR_COPY, code)
     ? SCHEDULE_ERROR_COPY[code]
     : SCHEDULE_ERROR_COPY.launch_failed

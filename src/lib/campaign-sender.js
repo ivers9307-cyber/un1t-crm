@@ -1012,7 +1012,15 @@ export async function tickCampaignSend(db, campaign) {
           })
           .eq('id', item._recipientId),
         `stamp recipient ${item._recipientId} sent`, campaignId)
-    } else if (isTransientSendError(result)) {
+    } else if (isTransientSendError(result) || result.BatchFailure) {
+      // MAILBATCHREFUSAL.1 (audit 2026-11-15, item 8): a whole-batch refusal
+      // (Postmark 401 for a revoked token, 422 for a missing sender signature)
+      // used to fall to the permanent branch below, so up to 500 people were
+      // stamped bounced/rejected in one call, never retried, and fed into the
+      // repeat-bounce escalation, although nothing was wrong with their
+      // addresses. It is retried like a transient failure, bounded by
+      // MAX_SEND_ATTEMPTS, and ends 'failed', never 'bounced'; the campaign's
+      // last_error says why (below).
       // CAMPAIGN-REL.1 — transient (network/-1, HTTP 429/5xx, Postmark
       // rate-limit/maintenance): retry on a later tick, bounded by
       // MAX_SEND_ATTEMPTS. Previously ANY non-zero ErrorCode marked
@@ -1061,6 +1069,17 @@ export async function tickCampaignSend(db, campaign) {
           .eq('id', item._recipientId),
         `stamp recipient ${item._recipientId} bounced`, campaignId)
     }
+  }
+
+  // MAILBATCHREFUSAL.1 — name the account-level refusal on the campaign, so
+  // the operator sees "Postmark refused the batch: …" rather than a send that
+  // stalls with no reason. Transient whole-batch failures (network, 429, 5xx)
+  // are not an operator problem and are not recorded here.
+  const refusal = results.find((r) => r?.BatchFailure && !isTransientSendError(r))
+  if (refusal) {
+    const msg = `Postmark refused the whole batch (${refusal.HttpStatus ? `HTTP ${refusal.HttpStatus}, ` : ''}code ${refusal.ErrorCode}): ${refusal.Message || 'no message'}. Nobody in it was marked bounced; check the Postmark server token and sender signature.`
+    console.error('[campaign-sender]', msg)
+    await writeOrLog(db.from('campaigns').update({ last_error: msg }).eq('id', campaignId), 'record batch refusal', campaignId)
   }
 
   // Refresh all rollup counters from email_sends so the progress

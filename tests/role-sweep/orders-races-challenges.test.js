@@ -23,8 +23,6 @@ import * as orderDetail from '@/app/api/orders/[id]/route.js'
 import * as orderCancel from '@/app/api/orders/[id]/cancel/route.js'
 import * as orderRefund from '@/app/api/orders/[id]/refund/route.js'
 import * as races from '@/app/api/races/route.js'
-import * as raceDetail from '@/app/api/races/[id]/route.js'
-import * as raceTeams from '@/app/api/races/[id]/teams/route.js'
 import * as racesToday from '@/app/api/races/today/route.js'
 import * as challenges from '@/app/api/challenges/route.js'
 import * as challengeDetail from '@/app/api/challenges/[id]/route.js'
@@ -39,7 +37,6 @@ const bare = (method, qs = '') => new Request(`http://localhost/api/x${qs}`, { m
 const params = (p) => ({ params: Promise.resolve(p) })
 const row = (fields) => (loc) => [{ data: { ...fields, location_id: loc }, error: null }]
 
-const WAVE = '5e000000-0000-4000-8000-0000000000a1'
 const NOT_FOUND = { status: 404, body: { success: false, error: 'Not found' } }
 const FORBIDDEN_PLAIN = { status: 403, body: { success: false, error: 'Forbidden' } }
 const MANAGER_REQUIRED = { status: 403, body: { success: false, error: 'Manager+ required' } }
@@ -65,10 +62,8 @@ for (const [name, call] of [
 }
 
 // ── races ─────────────────────────────────────────────────────────────────
-const RACE_BODY = (loc) => ({ location_id: loc, name: 'Autumn Race', race_date: '2026-10-10', waves: [{ start_time: '09:00' }] })
 for (const [name, call, hidden] of [
   ['GET /api/races?location_id=', (loc) => races.GET(bare('GET', `?location_id=${loc}`)), FORBIDDEN_PLAIN],
-  ['POST /api/races', (loc) => races.POST(json('POST', RACE_BODY(loc))), FORBIDDEN_PLAIN],
 ]) {
   gate(`${name} — Manager+ at the location`, { call, forbidden: MANAGER_REQUIRED, hidden, cases: roleCases(MANAGER_ROLES, 'races') })
   gate(`${name} — races at the location`, { call, forbidden: RACES_OFF, hidden, cases: permissionCases('races') })
@@ -91,17 +86,15 @@ describe('GET /api/races (no location_id) lists only locations where the caller 
   }
 })
 
-const RACE_ROW = row({ id: 'race-1', name: 'Autumn Race', allowed_team_sizes: [1], waves: [{ id: WAVE }], registrations: [] })
-for (const [name, call] of [
-  ['GET /api/races/[id]', () => raceDetail.GET(bare('GET'), params({ id: 'race-1' }))],
-  ['PUT /api/races/[id]', () => raceDetail.PUT(json('PUT', { name: 'Renamed' }), params({ id: 'race-1' }))],
-  ['DELETE /api/races/[id]', () => raceDetail.DELETE(bare('DELETE'), params({ id: 'race-1' }))],
-  ['GET /api/races/[id]/teams', () => raceTeams.GET(bare('GET'), params({ id: 'race-1' }))],
-  ['POST /api/races/[id]/teams', () => raceTeams.POST(json('POST', { team_name: 'Crew', team_size: 1, wave_id: WAVE, members: [{ name: 'Runner One' }] }), params({ id: 'race-1' }))],
-]) {
-  gate(`${name} — Manager+ at the race`, { call, gateReads: RACE_ROW, forbidden: MANAGER_REQUIRED, hidden: NOT_FOUND, cases: roleCases(MANAGER_ROLES, 'races') })
-  gate(`${name} — races at the race`, { call, gateReads: RACE_ROW, forbidden: RACES_OFF, hidden: NOT_FOUND, cases: permissionCases('races') })
-}
+// RACESFORK.1 (audit 2026-11-15, item 11): the races create, edit, delete
+// and add-team copies are deleted. /api/races/:id and /api/races/:id/teams now
+// reach /api/events/... through the next.config.js rewrites, which never fired
+// while these older copies existed on disk; POST /api/races answers 405.
+describe('the old races write routes are gone', () => {
+  it('POST /api/races is not exported', () => {
+    expect(races.POST).toBeUndefined()
+  })
+})
 
 // races/today re-judged the target already (hasPermissionForLocation); only
 // its pre-check read the active studio, so it was too closed, never too open.

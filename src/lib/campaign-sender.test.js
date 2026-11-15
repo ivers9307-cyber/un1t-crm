@@ -195,6 +195,39 @@ describe('tickCampaignSend — transient vs permanent errors (CAMPAIGN-REL.1)', 
     expect(result.retried).toBe(0)
   })
 
+  // MAILBATCHREFUSAL.1 — audit 2026-11-15 item 8: a whole-batch account
+  // refusal (401 revoked token, 422 sender signature) is not the address's
+  // fault and must never stamp anyone bounced.
+  it.each([
+    ['a revoked server token (401)', { ErrorCode: 10, Message: 'Bad or missing Server API token.', HttpStatus: 401, BatchFailure: true }],
+    ['a missing sender signature (422)', { ErrorCode: 400, Message: "The 'From' address you supplied is not a Sender Signature.", HttpStatus: 422, BatchFailure: true }],
+  ])('%s requeues the recipient, bounces nobody and names the refusal on the campaign', async (_label, refusal) => {
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0), makeRecipient('r2', 0)] }))
+    sendBatch.mockResolvedValue([refusal, refusal])
+
+    const result = await tickCampaignSend(db, campaign)
+
+    for (const id of ['r1', 'r2']) {
+      const updates = recipientUpdates(statements, id)
+      expect(updates).toContainEqual(expect.objectContaining({ status: 'queued', attempts: 1 }))
+      expect(updates.some(u => u.status === 'bounced')).toBe(false)
+    }
+    expect(result.bounced).toBe(0)
+    expect(result.retried).toBe(2)
+    const lastError = statements.find((st) => st.table === 'campaigns' && st.ops[0]?.method === 'update'
+      && String(st.ops[0].args[0]?.last_error || '').includes('Postmark refused the whole batch'))
+    expect(lastError).toBeTruthy()
+  })
+
+  it('a whole-batch refusal ends failed (never bounced) once the attempt cap is used up', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', MAX_SEND_ATTEMPTS - 1)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 10, Message: 'Bad token', HttpStatus: 401, BatchFailure: true }])
+    const result = await tickCampaignSend(db, campaign)
+    const updates = recipientUpdates(statements, 'r1')
+    expect(updates).toContainEqual(expect.objectContaining({ status: 'failed', attempts: MAX_SEND_ATTEMPTS }))
+    expect(result.bounced).toBe(0)
+  })
+
   it('stamps bounced_at on a permanent rejection so the event can be placed on a timeline', async () => {
     // BOUNCEDAT.1 — the rejection branch wrote status/bounce_type/attempts/
     // last_error but no timestamp, so 42 real rejection events across 11

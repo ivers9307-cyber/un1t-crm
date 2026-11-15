@@ -27,7 +27,7 @@ export default function ScanCheckinClient({ eventId, token }) {
         if (!res.ok || json.success === false) {
           setState({ status: 'error', message: json.error || 'Check-in failed.' })
         } else {
-          setState({ status: 'ok', name: json.data?.name || 'Attendee' })
+          setState({ status: 'ok', name: json.data?.name || 'Attendee', already: json.data?.already_checked_in === true })
         }
       } catch {
         if (!cancelled) setState({ status: 'error', message: 'Network error — try again.' })
@@ -50,7 +50,7 @@ export default function ScanCheckinClient({ eventId, token }) {
         <span className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-500 text-white">
           <Check size={32} />
         </span>
-        <div className="text-lg font-semibold text-un1t-text">Checked in</div>
+        <div className="text-lg font-semibold text-un1t-text">{state.already ? 'Already checked in' : 'Checked in'}</div>
         <div className="text-un1t-subtle">{state.name}</div>
       </div>
     )

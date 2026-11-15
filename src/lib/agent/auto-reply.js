@@ -68,7 +68,7 @@ import { CHOOSE_STUDIO_TOOL, CHOOSE_STUDIO_TOOL_NAME, matchStudioChoice, buildSt
 import { deriveUn1tReadTools, deriveUn1tFullTools, selectToolBlock, withCacheBreakpoint } from './tool-blocks'
 import { resolveMemberStudios, otherStudioOnly } from './member-studios'
 import {
-  threadTakesBookings, resolveTurnPlan, todayPlan, planKey, turnForPlan, createActionStudios, loadAgentKnowledge,
+  threadTakesBookings, resolveTurnPlan, todayPlan, planKey, turnForPlan, createActionStudios, loadAgentKnowledge, readAgentKnowledge,
   promptOptionsForPlan, executorCtxFor, readOrgStudioLinks, otherStudiosBlockFor,
 } from './turn-studios'
 import { DEFAULT_BOOKING_CTA_LABEL } from './default-copy'
@@ -863,7 +863,11 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // this. The prompt only acts on it when the sender isn't already verified.
     const multipleAccounts = distinctPersonCount(phoneMatches, groupOf) >= 2
 
-    const { data: knowledge } = await loadAgentKnowledge(db, locationId)
+    // MIAKNOWLEDGE.1 — a failed read is retried once and logged; it used to
+    // become "no knowledge" in silence (the prompt then hands off every
+    // factual question). The turn still runs: refusing it would lose the reply.
+    const knowledgeRead = await readAgentKnowledge(db, locationId, 'reply')
+    const knowledge = knowledgeRead.ok ? knowledgeRead.rows : []
 
     // A still-fresh prior verification, re-read from the stamp.
     // PERSON-ACCT.6 — used AS STAMPED (no primary remap; see the phone lane
@@ -1843,7 +1847,7 @@ export async function markVoiceNoteForStaff(db, { conversationId, locationId }) 
   }
 }
 
-async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings, brand, holdingOverride, voice = null }) {
+export async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings, brand, holdingOverride, voice = null }) {
   // holdingOverride: a reason-specific script (e.g. the no_credits
   // escalation wording) replaces the generic holding message for this
   // handoff only.
@@ -1851,14 +1855,27 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
   const holding = (holdingOverride || '').trim() || (settings?.holding_message || '').trim() || defaultHoldingMessage(brand)
   const now = new Date().toISOString()
 
-  await db.from(adapter.conversationsTable).update({
+  // MIAHANDOFF.1 (audit 2026-11-15, item 10): this write is what parks the
+  // thread for a person (agent off, in the handoff queue, under the SLA sweep).
+  // It was a bare await, so a failed write still sent "a person will help"
+  // while Mia kept answering and nobody's queue showed it. One retry; if it
+  // still fails, a structured error. The holding message and the staff push
+  // still go: losing them would be worse than a thread that needs re-parking.
+  const parkPatch = {
     agent_active: false,
     agent_handed_off_at: now,
     // MIA-REVIEW.3 — a NEW handoff re-arms the SLA escalation. The stamp is
     // per-handoff by design (handoff-sla.js), but nothing ever cleared it, so
     // the second and every later handoff on a thread could breach in silence.
     handoff_escalated_at: null,
-  }).eq('id', conversationId)
+  }
+  let parkErr = (await db.from(adapter.conversationsTable).update(parkPatch).eq('id', conversationId))?.error || null
+  if (parkErr) parkErr = (await db.from(adapter.conversationsTable).update(parkPatch).eq('id', conversationId))?.error || null
+  if (parkErr) {
+    logError('agent.handoff', 'handoff not recorded: thread is NOT parked for staff, Mia stays on', {
+      conversationId, locationId, reason, table: adapter.conversationsTable, code: parkErr.code ?? null, message: parkErr.message,
+    })
+  }
 
   // VOICEREPLY.1 — after a voice note the holding message is spoken in the
   // hand-off voice; a refusal sends it as text exactly as before.
