@@ -61,7 +61,7 @@ function registerDb(override) {
     if (answered) return answered
     if (q.table === 'race_events') return { data: race, error: null }
     if (q.table === 'teams') {
-      if (q.action === 'select') return { data: { id: 't1' }, error: null }
+      if (q.action === 'select') return { data: { id: 't1', captain_contact_id: 'c1' }, error: null }
       if (q.action === 'insert') {
         if (takenNames.has(q.payload.name)) return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } }
         return { data: { id: 't-new' }, error: null }

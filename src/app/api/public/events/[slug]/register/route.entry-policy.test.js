@@ -56,7 +56,7 @@ const isHeadCount = (q) => q.table === 'race_registrations' && q.ops.some((o) =>
 function registerDb() {
   return fakeDb((q) => {
     if (q.table === 'race_events') return { data: race, error: null }
-    if (q.table === 'teams') return q.action === 'insert' ? { data: { id: 't-new' }, error: null } : { data: { id: 't1' }, error: null }
+    if (q.table === 'teams') return q.action === 'insert' ? { data: { id: 't-new' }, error: null } : { data: { id: 't1', captain_contact_id: 'c1' }, error: null }
     if (q.table === 'race_payments') return { data: payment, error: null }
     if (q.table === 'race_registrations') {
       if (q.action === 'insert') return { data: { id: 'reg-new', registered_at: NOW, wave_id: W1, contact_id: 'c1' }, error: null }
