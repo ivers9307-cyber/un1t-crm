@@ -118,6 +118,14 @@ function inboundTextBody(text) {
   })
 }
 
+function inboundMessageBody(message) {
+  return envelope({
+    metadata: { phone_number_id: REGISTERED_PNI },
+    contacts: [{ wa_id: '353871234567', profile: { name: 'Test Sender' } }],
+    messages: [{ id: 'wamid.kw2', from: '353871234567', timestamp: '1770000000', ...message }],
+  })
+}
+
 function statusUpdate(pniOrNull) {
   return envelope({
     metadata: pniOrNull ? { phone_number_id: pniOrNull } : {},
@@ -432,6 +440,36 @@ describe('POST /api/webhooks/whatsapp — consent keywords', () => {
       m === 'update' && v && (v.wa_status === 'opted_out' || 'whatsapp_marketing' in v)))
     expect(consentFlips).toEqual([])
     expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ body: text, contactId: 'contact-1', messageType: 'text' }))
+  })
+
+  // WASTOP.1 — edge punctuation and emoji no longer hide the keyword.
+  it.each(['Stop.', 'STOP!', 'stop 🙏', '  Unsubscribe? '])('%j opts the member out', async (text) => {
+    await POST(reqFor(inboundTextBody(text)))
+    expect(applyWhatsappConsentKeyword).toHaveBeenCalledWith(expect.objectContaining({ keyword: 'stop' }))
+  })
+
+  it.each(['stop please', 'stop the classes'])('%j is more than the keyword and is not an opt-out', async (text) => {
+    await POST(reqFor(inboundTextBody(text)))
+    expect(applyWhatsappConsentKeyword).not.toHaveBeenCalled()
+  })
+
+  // WASTOP.1 — a TAPPED Stop is an opt-out too. It used to be read only off
+  // type 'text', so a quick-reply or list tap reached Mia and nobody was
+  // unsubscribed (audit 2026-11-15, item 7).
+  it.each([
+    ['a template quick-reply button', { type: 'button', button: { text: 'Stop', payload: 'STOP_MARKETING' } }],
+    ['a button with only a payload', { type: 'button', button: { payload: 'stop' } }],
+    ['a session button reply', { type: 'interactive', interactive: { type: 'button_reply', button_reply: { id: 'opt_2', title: 'Unsubscribe' } } }],
+    ['a list reply', { type: 'interactive', interactive: { type: 'list_reply', list_reply: { id: 'x', title: 'STOP' } } }],
+  ])('%s saying stop opts the member out', async (_label, message) => {
+    const res = await POST(reqFor(inboundMessageBody(message)))
+    expect(res.status).toBe(200)
+    expect(applyWhatsappConsentKeyword).toHaveBeenCalledWith(expect.objectContaining({ keyword: 'stop', contact: expect.objectContaining({ id: 'contact-1' }) }))
+  })
+
+  it('a button tap that is not a keyword is not an opt-out', async () => {
+    await POST(reqFor(inboundMessageBody({ type: 'button', button: { text: 'Book a consultation', payload: 'consult' } })))
+    expect(applyWhatsappConsentKeyword).not.toHaveBeenCalled()
   })
 
   it.each(['unsubscribe', 'STOP'])('an exact %j still opts the member out', async (text) => {

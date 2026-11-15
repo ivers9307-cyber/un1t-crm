@@ -1,6 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { refreshWindow, parseConsentKeyword, pickInboundContact, markUndeliverableIfPermanent } from '@/lib/whatsapp'
+import { consentTextOf } from '@/lib/whatsapp-consent-keywords'
 import { recountBroadcastSendCounters } from '@/lib/whatsapp-broadcast-counters'
 import { applyWhatsappConsentKeyword, applyMetaUserPreference } from '@/lib/whatsapp-consent'
 import { handleFlowCompletion, publishFlowClassBooking } from '@/lib/whatsapp-flow/completion.js'
@@ -844,8 +845,12 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // Unknown senders (no contact row) are skipped. WAORGNUMBER.3b: the keyword is
   // the THREAD's contact's (actingContact), and the phone is passed so a STOP
   // also closes the studio's row for every same-phone contact in the org.
-  if (messageType === 'text' && actingContact?.id) {
-    const keyword = parseConsentKeyword(body)
+  // WASTOP.1: a tapped "Stop" button (template quick reply or session
+  // button) counts as well as typed text; consentTextOf reads the tap's own
+  // text, never the stored body, which can carry a payload suffix.
+  const consentText = consentTextOf(message)
+  if (consentText != null && actingContact?.id) {
+    const keyword = parseConsentKeyword(consentText)
     if (keyword) {
       const consent = await applyWhatsappConsentKeyword({
         db,
