@@ -11,7 +11,8 @@ import { importClassKnowledge } from '@/lib/agent/knowledge-import'
 // skipped — same posture as every other per-location Glofox cron.
 export async function GET(request) {
   const auth = request.headers.get('authorization')
-  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
+  // CRONSTAMP.1: fail closed when the secret is unset ("Bearer undefined" used to pass).
+  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 

@@ -18,6 +18,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError } from '@/lib/log'
 import { reclassifyAllContacts } from '@/lib/pipeline-reclassify'
 
 export const runtime = 'nodejs'
@@ -48,11 +49,17 @@ export async function GET(request) {
 
   const perLocation = []
   for (const loc of locations || []) {
-    const result = await reclassifyAllContacts(db, {
-      locationId: loc.id,
-      source: 'cron',
-      dryRun: false,
-    })
+    // One studio's throw must not stop the others (or skip the summary).
+    let result
+    try {
+      result = await reclassifyAllContacts(db, {
+        locationId: loc.id,
+        source: 'cron',
+        dryRun: false,
+      })
+    } catch (e) {
+      result = { ok: false, error: `threw: ${e?.message || e}` }
+    }
     perLocation.push({
       location_id: loc.id,
       location_name: loc.name,
@@ -60,22 +67,29 @@ export async function GET(request) {
     })
   }
 
-  // Mig 172 audit caught: stampHeartbeat(name) only takes one arg.
-  // Passing `db` as the first arg silently fails the type check and
-  // returns without stamping. Heartbeat row also wasn't seeded in
-  // cron_heartbeats until mig 172.
-  await stampHeartbeat('pipeline-classify').catch(() => {})
+  // CRONSTAMP.1 (audit 2026-11-15, item 12): the heartbeat used to be
+  // stamped whatever happened, so a night where every studio failed (claims
+  // unreadable, a stage load error) read as a clean run and nothing paged.
+  // It is stamped only when no studio failed; the failures are logged.
+  const failed = perLocation.filter((r) => r.ok === false)
+  for (const r of failed) {
+    logError('cron.pipeline-classify', 'studio reclassify failed', { location_id: r.location_id, error: r.error || r.reason || null })
+  }
+  if (failed.length === 0) await stampHeartbeat('pipeline-classify')
 
   return NextResponse.json({
-    success: true,
+    success: failed.length === 0,
     locations: perLocation.length,
+    failed: failed.length,
     summary: perLocation.map((r) => ({
       location_name: r.location_name,
+      ok: r.ok !== false,
+      ...(r.ok === false ? { error: r.error || r.reason || 'failed' } : {}),
       contacts_seen: r.contacts_seen,
       deals_moved: r.deals_moved,
       deals_unchanged: r.deals_unchanged,
       deals_created: r.deals_created,
       errors: r.errors,
     })),
-  })
+  }, { status: failed.length === 0 ? 200 : 500 })
 }

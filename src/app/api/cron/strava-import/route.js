@@ -9,7 +9,8 @@ export const maxDuration = 300
 const BACKFILL_DAYS = 30
 
 export async function GET(request) {
-  if (request.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
+  // CRONSTAMP.1: fail closed when the secret is unset ("Bearer undefined" used to pass).
+  if (!process.env.CRON_SECRET || request.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
   const db = createServerClient()

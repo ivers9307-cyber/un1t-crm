@@ -21,13 +21,21 @@ export const maxDuration = 300
 
 export async function GET(request) {
   const auth = request.headers.get('authorization')
-  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
+  // CRONSTAMP.1: fail closed when the secret is unset ("Bearer undefined" used to pass).
+  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
   const db = createServerClient()
   let results = null
   let checkins = null
+  // CRONSTAMP.1 (audit 2026-11-15, item 12): the safety-net arms below
+  // (handoff SLA, auto-resolve, approvals SLA) used to fail with a free-text
+  // console line while the heartbeat stamped as if all was well. Each failure
+  // is now a structured error and is named on the heartbeat's last_outcome
+  // (arm_errors), which the customer-agent settings card already reads. The
+  // stamp itself still goes: it carries the check-in day rollup.
+  const armErrors = []
   try {
     results = await runAgentFollowups(db)
   } catch (e) {
@@ -38,7 +46,8 @@ export async function GET(request) {
   try {
     checkins = await runFirstClassCheckins(db)
   } catch (e) {
-    console.error('[radar-agent] checkins tick failed:', e?.message || e)
+    armErrors.push('checkins')
+    logError('cron-agent-followups', 'checkins arm failed', { err: e })
   }
   // TRIALDONE.4 — same tick, independent failure domain: the trial-done
   // opener at un1t.online studios that switched it on (default off).
@@ -62,7 +71,8 @@ export async function GET(request) {
   try {
     handoffSla = await runHandoffSlaSweep(db)
   } catch (e) {
-    console.error('[radar-agent] handoff-sla tick failed:', e?.message || e)
+    armErrors.push('handoff_sla')
+    logError('cron-agent-followups', 'handoff SLA arm failed: handed-off threads are not being re-escalated', { err: e })
   }
   // MIA-BOARD.1 — same tick, independent failure domain: hand parked
   // handed-off threads back to Mia once the human engagement is over
@@ -72,7 +82,8 @@ export async function GET(request) {
   try {
     autoResolve = await runHandoffAutoResolve(db)
   } catch (e) {
-    console.error('[radar-agent] auto-resolve tick failed:', e?.message || e)
+    armErrors.push('auto_resolve')
+    logError('cron-agent-followups', 'auto-resolve arm failed', { err: e })
   }
   // MIA-BOARD.2 — same tick, independent failure domain: the approvals clock.
   // Re-escalate pending rows nobody decided in 24h; expire a booking whose
@@ -81,7 +92,8 @@ export async function GET(request) {
   try {
     approvalsSla = await runApprovalsSlaSweep(db)
   } catch (e) {
-    console.error('[radar-agent] approvals-sla tick failed:', e?.message || e)
+    armErrors.push('approvals_sla')
+    logError('cron-agent-followups', 'approvals SLA arm failed: pending approvals are not being re-escalated', { err: e })
   }
 
   // Persist the tick summary on the heartbeat (last_outcome jsonb) — the
@@ -108,6 +120,6 @@ export async function GET(request) {
   // TZ.18b — the check-in rollup is ONE platform-wide heartbeat row across every
   // studio, so its day key is the platform calendar's (PLATFORM_TZ, D4), not a studio's.
   const checkinsDay = rollupCheckinDay(prevDay, checkins, { day: dayStrIn(Date.now(), PLATFORM_TZ), carryFailed })
-  await stampHeartbeat('agent-followups', { followups: results, checkins, checkins_day: checkinsDay, trial_done: trialDone, handoffSla, autoResolve, approvalsSla })
-  return NextResponse.json({ success: true, results, checkins, trial_done: trialDone, handoffSla, autoResolve, approvalsSla })
+  await stampHeartbeat('agent-followups', { followups: results, checkins, checkins_day: checkinsDay, trial_done: trialDone, handoffSla, autoResolve, approvalsSla, ...(armErrors.length ? { arm_errors: armErrors } : {}) })
+  return NextResponse.json({ success: armErrors.length === 0, results, checkins, trial_done: trialDone, handoffSla, autoResolve, approvalsSla, ...(armErrors.length ? { arm_errors: armErrors } : {}) })
 }

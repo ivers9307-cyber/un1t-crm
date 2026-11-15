@@ -24,8 +24,13 @@ export async function GET(request) {
   const db = createServerClient()
   const out = await runSonosReconcile(db)
 
-  await stampHeartbeat('sonos-reconcile').catch((err) =>
-    logWarn('cron-sonos-reconcile', 'heartbeat failed', { err }))
+  // CRONSTAMP.1 (audit 2026-11-15, item 12): stamp only a run that did not
+  // fail (ok: false is a whole-run read failure). It used to stamp every
+  // tick, so a sustained outage never went stale and nothing paged.
+  if (out.ok !== false) {
+    await stampHeartbeat('sonos-reconcile').catch((err) =>
+      logWarn('cron-sonos-reconcile', 'heartbeat failed', { err }))
+  }
 
   // `out.ok !== false`, not `out.ok === true`: the two `skipped` results
   // carry no `ok` key and a dormant deploy must not page. A real crash
