@@ -41,7 +41,7 @@ const RACE = { id: 'e1', location_id: 'L1', name: 'Hatch Relay', slug: 'hatch-oc
 function registerDb() {
   return fakeDb((q) => {
     if (q.table === 'race_events') return { data: RACE, error: null }
-    if (q.table === 'teams') return q.action === 'select' ? { data: { id: 't1' }, error: null } : { data: null, error: null }
+    if (q.table === 'teams') return q.action === 'select' ? { data: { id: 't1', captain_contact_id: 'c1' }, error: null } : { data: null, error: null }
     if (q.table === 'race_registrations') {
       if (q.action === 'insert') return { data: { id: 'reg1', registered_at: '2026-10-09T12:00:00Z', wave_id: W1, contact_id: 'c1' }, error: null }
       if (q.ops.some((o) => o[0] === 'select' && o[2]?.head)) return { data: null, count: 0, error: null }

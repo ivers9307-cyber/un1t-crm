@@ -106,6 +106,7 @@ describe('detectRetryRecovery', () => {
         status: 'completed',
         contact_email: 'sarah@example.com',
         source_type: 'race_registration',
+        location_id: 'L-stillorgan',
         completed_at: '2026-05-01T00:00:00Z',
       },
     })
@@ -117,6 +118,25 @@ describe('detectRetryRecovery', () => {
     expect(recoveredUpdate.patch.superseded_by_order_id).toBe('new-1')
     const pointerUpdate = db._ops.updates.find(u => u.col === 'id' && !Array.isArray(u.vals))
     expect(pointerUpdate.patch.retry_of_order_id).toBe('old-2') // newer of the two
+  })
+})
+
+// FINSCOPE.1 — October audit A02: the candidate lookup is scoped to the
+// completed order's studio, and an order with no studio recovers nothing.
+describe('detectRetryRecovery — studio scope (FINSCOPE.1)', () => {
+  it('filters candidates by the order\'s location_id', async () => {
+    const eqs = []
+    const chain = { eq: (c, v) => { eqs.push([c, v]); return chain }, in: () => chain, gte: () => chain, lt: () => chain, neq: () => chain,
+      then: (cb) => cb({ data: [], error: null }) }
+    const db = { from: () => ({ select: () => chain }) }
+    await detectRetryRecovery({ db, order: { id: 'n', status: 'completed', contact_email: 'a@example.test', source_type: 'race_registration', location_id: 'L-hatch' } })
+    expect(eqs).toContainEqual(['location_id', 'L-hatch'])
+  })
+  it('an order with no studio recovers nothing and reads nothing', async () => {
+    const from = vi.fn()
+    const r = await detectRetryRecovery({ db: { from }, order: { id: 'n', status: 'completed', contact_email: 'a@example.test', source_type: 'race_registration', location_id: null } })
+    expect(r.recoveredCount).toBe(0)
+    expect(from).not.toHaveBeenCalled()
   })
 })
 
@@ -138,7 +158,7 @@ describe('detectRetryRecovery — a failed recovery write', () => {
     }
     const r = await detectRetryRecovery({
       db,
-      order: { id: 'new-1', status: 'completed', contact_email: 'sarah@example.com', source_type: 'race_registration', completed_at: '2026-05-01T00:00:00Z' },
+      order: { id: 'new-1', status: 'completed', contact_email: 'sarah@example.com', source_type: 'race_registration', location_id: 'L-stillorgan', completed_at: '2026-05-01T00:00:00Z' },
     })
     expect(r.recoveredCount).toBe(0)
     expect(updates).toHaveLength(1) // the retry_of pointer is not written over a failed marking

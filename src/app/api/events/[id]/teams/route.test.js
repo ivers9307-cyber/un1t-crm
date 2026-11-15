@@ -33,7 +33,8 @@ vi.mock('@/lib/host-contact-list', () => ({ addEventAttendeesToHostList: vi.fn()
 
 const { getCurrentUser } = await import('@/lib/auth')
 const { logError } = await import('@/lib/log')
-const { GET } = await import('./route.js')
+const { GET, POST } = await import('./route.js')
+const { findOrCreateRaceContact } = await import('@/lib/race-contact-linking')
 
 const L1 = 'a0000000-0000-0000-0000-000000000001'
 const EV = 'e0000000-0000-0000-0000-000000000001'
@@ -205,3 +206,50 @@ describe('GET /api/events/[id]/teams — lead_name (EVENT-MOVE.5)', () => {
   })
 })
 
+
+describe('POST /api/events/[id]/teams — a name never takes over a team (EVENTTEAM.1)', () => {
+  const W = 'f0000000-0000-4000-8000-0000000000f1'
+  const BODY = { team_name: 'Rockets', team_size: 1, wave_id: W, members: [{ name: 'Ann', email: 'ann@example.test', role: 'captain' }] }
+  const post = () => POST(new Request(`http://localhost/api/events/${EV}/teams`, {
+    method: 'POST', body: JSON.stringify(BODY), headers: { 'content-type': 'application/json' },
+  }), props)
+  const writesToT1 = () => globalThis.__calls.filter((c) =>
+    (c.table === 'teams' && c.ops.some((o) => o[0] === 'update' || o[0] === 'delete') && has(c.ops, 'eq', 'id', 't1'))
+    || (c.table === 'team_members' && has(c.ops, 'eq', 'team_id', 't1')))
+
+  function answer({ captain, hereEntered = false }) {
+    globalThis.__answer = (table, ops) => {
+      if (table === 'race_events') return { data: { id: EV, location_id: L1, allowed_team_sizes: null, waves: [{ id: W }] }, error: null }
+      if (table === 'teams') {
+        if (ops.some((o) => o[0] === 'insert')) return { data: { id: 't-new' }, error: null }
+        if (ops.some((o) => o[0] === 'update')) return { data: null, error: null }
+        return { data: has(ops, 'eq', 'name', 'Rockets') ? { id: 't1', captain_contact_id: captain } : null, error: null }
+      }
+      if (table === 'team_members') return { data: null, error: null }
+      if (table === 'race_registrations') {
+        if (ops.some((o) => o[0] === 'insert')) return { data: { id: 'reg1', registered_at: '2026-10-09T12:00:00Z' }, error: null }
+        if (ops.some((o) => o[0] === 'neq')) return { data: [], error: null }
+        return { data: hereEntered ? [{ id: 'r-paid' }] : [], error: null }
+      }
+      return { data: null, error: null }
+    }
+  }
+
+  beforeEach(() => { findOrCreateRaceContact.mockResolvedValue('c1') })
+
+  it("another captain's team is left alone; the entry gets a fresh team", async () => {
+    answer({ captain: 'c-other' })
+    const res = await post()
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.data).toMatchObject({ team_id: 't-new', team_name: 'Rockets 2' })
+    expect(writesToT1()).toHaveLength(0)
+  })
+
+  it("the captain's own team already entered here is refused 409 before its roster is touched", async () => {
+    answer({ captain: 'c1', hereEntered: true })
+    const res = await post()
+    expect(res.status).toBe(409)
+    expect(writesToT1()).toHaveLength(0)
+  })
+})

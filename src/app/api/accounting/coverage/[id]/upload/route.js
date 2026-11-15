@@ -58,7 +58,7 @@ export async function POST(request, { params }) {
   let queueId
   let deduped = false
   try {
-    const { existingId } = await findQueueRowByHash(db, contentHash)
+    const { existingId } = await findQueueRowByHash(db, contentHash, locationId)
     if (existingId) {
       // Same document already in the queue via ANY source — link the
       // line to it rather than creating a duplicate.
