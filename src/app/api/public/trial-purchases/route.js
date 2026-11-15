@@ -41,6 +41,7 @@ import { stillorganTrialHistory, hatchActiveMembership } from '@/lib/trial-eligi
 import { createTrialPurchasePayment, findReusableTrialCheckout } from '@/lib/trial-purchase-payments'
 import { inAppBrowserFromUserAgent } from '@/lib/trial-checkout-window'
 import { cleanAttribution } from '@/lib/campaign-funnel-attribution'
+import { stampFirstTouchSource } from '@/lib/contact-first-touch-source'
 import { startUn1tTrialCheckout } from '@/lib/trial-purchase-un1t-checkout'
 import { normalizeTrialReturnPath } from '@/lib/trial-return-path'
 import { locationCanTakePayments } from '@/lib/location-payments'
@@ -238,6 +239,9 @@ export async function POST(request) {
   try {
     await db.from('contacts').update({ last_lead_source: product.leadSource, last_lead_source_at: new Date().toISOString() }).eq('id', contactId)
   } catch (e) { logWarn('trialbuy', 'last_lead_source failed', { err: e }) }
+  // UTMSOURCE.1 — first-touch utm_source / utm_medium (mig 837). Before the ad
+  // stamp below, which sets attributed_at for this same visit. Never throws.
+  await stampFirstTouchSource(db, contactId, b.attribution, { module: 'trialbuy' })
   try {
     const a = b.attribution || {}
     const patch = {}
