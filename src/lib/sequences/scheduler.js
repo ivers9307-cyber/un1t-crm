@@ -298,6 +298,15 @@ export async function isGoalMet({ db, contact, goalConfig, enrolledAt = null }) 
  * @param {object} [opts]
  * @param {Date} [opts.now=new Date()]  — overridable for tests
  */
+/**
+ * SEQUNDELIVERABLE.1 — true when a step's send failed because the recipient
+ * can never receive it: Postmark error 406, "inactive recipient" (sendEmail
+ * carries Postmark's code on err.errorCode). Exported for the test.
+ */
+export function isUndeliverableRecipient(err) {
+  return err?.errorCode === 406
+}
+
 export async function runSequences({ now = new Date() } = {}) {
   const db = createServerClient()
   // TZ.4 — zone_unavailable: enrolments left untouched this tick because their
@@ -781,6 +790,28 @@ export async function runSequences({ now = new Date() } = {}) {
           } else {
             stats.deferred++
           }
+        }
+        continue
+      }
+      // SEQUNDELIVERABLE.1 (audit 2026-11-15, item 13): Postmark 406 means
+      // the address is marked inactive (a hard bounce, spam complaint or a
+      // manual suppression). Retrying can never deliver, so the enrolment
+      // used to retry four times and then sit 'paused' for good: 90 did from
+      // 14 Oct, with nothing listing them. It now exits at once, as
+      // 'undeliverable', and the sequence moves on for everyone else.
+      if (isUndeliverableRecipient(e)) {
+        const { error: exitErr } = await db.from('sequence_enrollments').update({
+          status: 'exited',
+          exit_reason: 'undeliverable',
+          exited_at: now.toISOString(),
+          next_step_at: null,
+          last_error: e.message || String(e),
+          last_processed_at: now.toISOString(),
+        }).eq('id', enrollment.id).eq('status', 'active')
+        if (exitErr) {
+          logError('sequences', 'undeliverable exit write failed', { enrollmentId: enrollment.id, sequenceId: enrollment.sequence_id, error: exitErr.message })
+        } else {
+          stats.exited_undeliverable = (stats.exited_undeliverable || 0) + 1
         }
         continue
       }
