@@ -30,7 +30,6 @@ const ROOT = path.resolve(import.meta.dirname, '..')
 export const STAR_READS = {
   'src/app/api/staff/[id]/route.js': { count: 3, disposition: 'server-only', why: 'PUT targetBefore (UniFi revoke/sync via getUnifiConfig) and refreshed (role recompute), and the DELETE read (UniFi revoke); the PUT response re-reads STAFF_MANAGED_SELECT (CLIENT_LOCATION_COLUMNS embed)' },
   'src/app/api/staff/[id]/permanent/route.js': { count: 1, disposition: 'server-only', why: 'master-only; the embed feeds the UniFi revoke; the response is the tombstone RPC result' },
-  'src/app/settings/page.js': { count: 1, disposition: 'server-only', why: 'server-rendered list (name, address, slug, active); no client component receives the rows' },
   'src/app/settings/locations/[id]/page.js': { count: 1, disposition: 'redacted' },
   // INTEGONE.1 — the hub drawer's context (GET /api/integrations/hub/locations/[id]):
   // the same read the page above makes for its Integrations tab, shaped by

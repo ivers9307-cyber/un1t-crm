@@ -41,7 +41,7 @@ import { providerFor } from '@/lib/membership/source'
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { zoneOfLocation } from '@/lib/location-time'
 import { latestTrialUsedClass } from '@/lib/un1t-online-trial-used'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 const LOG_MODULE = 'mia-un1t'
 
@@ -265,6 +265,27 @@ export async function loadAgentKnowledge(db, locationId) {
     .eq('location_id', locationId)
     .eq('enabled', true)
     .order('sort_order', { ascending: true })
+}
+
+/**
+ * MIAKNOWLEDGE.1 (audit 2026-11-15, item 10) — the knowledge read with its
+ * failure made visible. A failed read used to become `[]`, and an empty list
+ * renders the prompt's "No knowledge has been added yet … hand off" notice,
+ * so one database blip silently turned Mia into a hand-off machine for that
+ * turn. One retry, then a structured error. Never throws.
+ * @returns {Promise<{ ok: true, rows: object[] } | { ok: false }>}
+ */
+export async function readAgentKnowledge(db, locationId, caller = 'agent') {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const { data, error } = await loadAgentKnowledge(db, locationId)
+      if (!error) return { ok: true, rows: data || [] }
+      if (attempt === 2) logError(LOG_MODULE, 'studio knowledge unreadable', { caller, locationId, code: error.code ?? null, message: error.message })
+    } catch (err) {
+      if (attempt === 2) logError(LOG_MODULE, 'studio knowledge read threw', { caller, locationId, errClass: err?.name, message: err?.message })
+    }
+  }
+  return { ok: false }
 }
 
 async function readAddress(db, locationId) {

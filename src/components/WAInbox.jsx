@@ -25,6 +25,9 @@ import {
 } from 'lucide-react'
 import { VOICE_TRANSCRIPT_SUBSCRIPTION, handleVoiceTranscriptUpdate } from '@/components/inbox/wa-voice-realtime'
 
+// WAINBOXLOOP.1 — a burst of realtime changes becomes one list reload.
+export const LIST_RELOAD_DEBOUNCE_MS = 400
+
 function formatTime(dateStr) {
   if (!dateStr) return ''
   const d = new Date(dateStr)
@@ -369,18 +372,26 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
   useEffect(() => {
     if (!locationId) return
     const supabase = createBrowserClient()
+    // WAINBOXLOOP.1 — one inbound message updates its conversation row
+    // several times in a row; coalesce a burst into one list reload instead
+    // of one reload per change (audit 2026-11-15, item 7).
+    let listTimer = null
+    const reloadList = () => {
+      if (listTimer) clearTimeout(listTimer)
+      listTimer = setTimeout(() => { listTimer = null; fetchConversations() }, LIST_RELOAD_DEBOUNCE_MS)
+    }
     const channel = supabase
       .channel(`wa-inbox-${locationId}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'whatsapp_conversations' },
-        () => { fetchConversations() }
+        { event: '*', schema: 'public', table: 'whatsapp_conversations', filter: `location_id=eq.${locationId}` },
+        () => { reloadList() }
       )
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'whatsapp_messages' },
         (payload) => {
-          fetchConversations()
+          reloadList()
           const convId = payload?.new?.conversation_id
           if (convId && convId === selectedIdRef.current) {
             fetchMessages(convId)
@@ -409,7 +420,10 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
         }
       )
       .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    return () => {
+      if (listTimer) clearTimeout(listTimer)
+      supabase.removeChannel(channel)
+    }
   }, [locationId, fetchConversations])
 
   // Load messages when conversation selected. Also mirror selectedId

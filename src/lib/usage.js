@@ -16,7 +16,7 @@ import { logError } from '@/lib/log'
 // Cents per 1M tokens, keyed by model-family substring. An ESTIMATE for
 // operator visibility and caps — Anthropic's invoice is the billing
 // truth. Cache multipliers per the API pricing model: reads 0.1x input,
-// writes 1.25x input (5-min TTL).
+// writes 1.25x input (5-min TTL), 2x input (1-hour TTL).
 const FAMILY_PRICES_CENTS_PER_MTOK = [
   { match: 'opus', input: 500, output: 2500 },
   { match: 'haiku', input: 100, output: 500 },
@@ -32,12 +32,22 @@ export function estimateAnthropicCostCents(model, usage) {
   const input = (usage.input_tokens || 0) / M
   const output = (usage.output_tokens || 0) / M
   const cacheRead = (usage.cache_read_input_tokens || 0) / M
-  const cacheWrite = (usage.cache_creation_input_tokens || 0) / M
+  // MIACOST.1 (audit 2026-11-15, item 10): a 1-hour cache write bills 2x
+  // input, a 5-minute one 1.25x. Mia writes her prompt with the 1h TTL
+  // (prompt.js buildCachedSystem), so pricing every write at 1.25x under-
+  // counted her spend against the org AI cap. The API's usage.cache_creation
+  // splits the two; without it the 5-minute price stands, as before.
+  const split = usage.cache_creation || null
+  const write1h = (split?.ephemeral_1h_input_tokens || 0) / M
+  const write5m = split
+    ? (split.ephemeral_5m_input_tokens || 0) / M
+    : (usage.cache_creation_input_tokens || 0) / M
   return (
     input * family.input +
     output * family.output +
     cacheRead * family.input * 0.1 +
-    cacheWrite * family.input * 1.25
+    write5m * family.input * 1.25 +
+    write1h * family.input * 2
   )
 }
 
@@ -69,6 +79,7 @@ export async function recordUsage(evt, { db } = {}) {
         output_tokens: evt.usage.output_tokens || 0,
         cache_read_input_tokens: evt.usage.cache_read_input_tokens || 0,
         cache_creation_input_tokens: evt.usage.cache_creation_input_tokens || 0,
+        ...(evt.usage.cache_creation ? { cache_creation_1h_input_tokens: evt.usage.cache_creation.ephemeral_1h_input_tokens || 0 } : {}),
       },
     })
     if (error && process.env.NODE_ENV !== 'production') {

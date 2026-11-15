@@ -2226,7 +2226,7 @@ export function renderTemplateBody(template, contact, variableMapping, opts = {}
  * silently unsubscribed them from WhatsApp marketing. Those words are now
  * ordinary messages that reach Mia or staff. START/UNSTOP/SUBSCRIBE opt back in.
  */
-export { CONSENT_STOP_KEYWORDS, CONSENT_START_KEYWORDS, parseConsentKeyword } from './whatsapp-consent-keywords.js'
+export { CONSENT_STOP_KEYWORDS, CONSENT_START_KEYWORDS, parseConsentKeyword, consentTextOf } from './whatsapp-consent-keywords.js'
 
 /**
  * ORGCONTACTS.3 — which of the contacts sharing the sender's phone an inbound

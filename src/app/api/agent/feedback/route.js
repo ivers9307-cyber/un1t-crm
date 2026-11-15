@@ -12,7 +12,9 @@ import { uuidLike } from '@/lib/schemas'
 
 const Schema = z.object({
   channel: z.enum(['whatsapp', 'instagram']),
-  message_id: z.string().regex(uuidLike),
+  // MIAFEEDBACK.1: uuidLike is already a zod schema. `.regex(uuidLike)` passed a
+  // schema where a RegExp belongs, so every rating failed (0 rows ever).
+  message_id: uuidLike,
   rating: z.enum(['up', 'down']),
   note: z.string().max(1000).nullable().optional(),
 })

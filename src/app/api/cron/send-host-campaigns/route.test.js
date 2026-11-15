@@ -155,12 +155,14 @@ describe('GET /api/cron/send-host-campaigns', () => {
     expect(stampHeartbeat).toHaveBeenCalledWith('send-host-campaigns')
   })
 
-  it('a campaign-pick error 500s but still stamps the heartbeat', async () => {
+  // CRONSTAMP.1 (audit 2026-11-15, item 12): this used to stamp, so a pick
+  // that failed every tick never went stale and nothing paged.
+  it('a campaign-pick error 500s and does NOT stamp the heartbeat', async () => {
     const { db } = makeDb(routeFor({ pickErr: { message: 'pick broke' } }))
     createServerClient.mockReturnValue(db)
     const res = await GET(req())
     expect(res.status).toBe(500)
-    expect(stampHeartbeat).toHaveBeenCalledWith('send-host-campaigns')
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })
 

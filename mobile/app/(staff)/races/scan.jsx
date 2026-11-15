@@ -47,7 +47,7 @@ export default function MobileCheckinScanner() {
     setBusy(false)
     setResult(res.success === false
       ? { ok: false, msg: res.error || 'Check-in failed.' }
-      : { ok: true, name: res.data?.name || 'Checked in' })
+      : { ok: true, name: res.data?.name || 'Checked in', already: res.data?.already_checked_in === true })
   }, [activeLocation?.id])
 
   function scanNext() { setResult(null); setLocked(false) }
@@ -113,7 +113,7 @@ export default function MobileCheckinScanner() {
                     {result.ok ? result.name : 'Not checked in'}
                   </Text>
                   <Text className="text-white/80 text-sm mt-1 text-center">
-                    {result.ok ? 'Checked in ✓' : result.msg}
+                    {result.ok ? (result.already ? 'Already checked in earlier' : 'Checked in ✓') : result.msg}
                   </Text>
                   <Pressable onPress={scanNext} className="bg-white rounded-xl px-6 py-3 mt-6 active:opacity-80">
                     <Text className="text-black text-base font-semibold">Scan next</Text>
