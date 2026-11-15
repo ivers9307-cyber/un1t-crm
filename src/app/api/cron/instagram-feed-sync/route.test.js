@@ -26,11 +26,11 @@ import { stampConnectionError } from '@/lib/connection-health'
 
 const CONN = { id: 'conn-1', location_id: 'loc-1', external_account_id: 'ig-1', access_token: 'tok' }
 
-function fakeDb(rows) {
+function fakeDb(rows, readError = null) {
   const q = {
     select: vi.fn(() => q),
     eq: vi.fn(() => q),
-    then: (resolve, reject) => Promise.resolve({ data: rows, error: null }).then(resolve, reject),
+    then: (resolve, reject) => Promise.resolve({ data: readError ? null : rows, error: readError }).then(resolve, reject),
   }
   return { from: vi.fn(() => q), q }
 }
@@ -54,6 +54,15 @@ beforeEach(() => {
 })
 
 describe('instagram-feed-sync', () => {
+  it('a failed connections read answers 500 and withholds the heartbeat (not "no connections")', async () => {
+    db = fakeDb([], { code: '57014', message: 'canceling statement due to statement timeout' })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect((await res.json()).success).toBe(false)
+    expect(syncLocationIgFeed).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
   it('selects the connection id (needed to flag the row)', async () => {
     syncLocationIgFeed.mockResolvedValue({ synced: 3 })
     await GET(req())
