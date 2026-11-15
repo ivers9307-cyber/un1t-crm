@@ -60,9 +60,34 @@
 //     (`?cancelled=1`) comes back to a filled form and a plain message;
 //   - inside Facebook or Instagram the payment step says a wallet button may
 //     not show and offers a link to copy, which resumes in Safari or Chrome.
+//
+// HATCHTRACK.1 — Hatch Street gets the same care, within what un1t.online's
+// hosted checkout allows:
+//   - `retry`: a buyer back from that checkout without paying (`cancelled=1`),
+//     or one who opens `?purchase=<id>` for a Hatch row that still awaits
+//     payment (the follow-up email's button, a copied link), sees one message
+//     and one button, "Continue to payment". It posts the purchase id alone
+//     (POST …/[id]/checkout) and the server sends back the same row's
+//     checkout: nothing is retyped and no second row is made. un1t.online's
+//     success return carries `paid=1`, which is the only thing that tells
+//     "came back from paying" (wait for the mirror, as before) from "came
+//     back without paying": the CRM cannot see the money until the sync
+//     mirrors it. A return without either marker is told both possibilities.
+//   - inside Facebook or Instagram the form and the retry step say so before
+//     the redirect and offer the link to copy. Nothing is blocked.
+//   - the ad parameters of the visit's first page are kept for the tab
+//     (visit-origin.js firstTouchAttribution), so a second attempt, loaded
+//     from a URL with no fbclid, still carries the click id.
+//   - the Lead and InitiateCheckout also go to the chosen studio's own pixel
+//     (`metaPixelId`), which a page whose pixel does not follow the studio
+//     (/trial with the studio chosen in the picker) had not loaded.
+//   - a Hatch purchase is granted when the sync mirrors it (up to ~17
+//     minutes), so the "being confirmed" screen keeps listening for 20
+//     minutes at a slow beat and fires the browser Purchase if the tab is
+//     still open: before this the Hatch dataset saw no browser Purchase.
 import { useEffect, useRef, useState } from 'react'
 import { trackFunnelStep } from '@/lib/funnel-track'
-import { readVisitOrigin } from '@/lib/visit-origin'
+import { readVisitOrigin, firstTouchAttribution } from '@/lib/visit-origin'
 import { newLeadEventId, pixelUserData, fireBrowserLead, fireBrowserInitiateCheckout, checkoutEventIdFor } from '@/lib/meta-pixel-lead'
 import { metaPixelIdsForPath, pageLocationIdFromDocument } from '@/lib/meta-pixel-paths'
 import { isValidMobileNumber } from '@/lib/phone-validate'
@@ -88,6 +113,18 @@ const INCOMPLETE_TEXT = "Your checkout wasn't completed. Nothing was charged. Yo
 const DECLINED_TEXT = 'That payment did not go through. Nothing was charged; please try again.'
 const UNCONFIRMED_TEXT = 'We have not received a payment for that checkout. If you did pay, your confirmation email is on its way; otherwise please try again.'
 const IN_APP_NAMES = { facebook: 'Facebook', instagram: 'Instagram' }
+// HATCHTRACK.1 — a Hatch `?purchase=` load with neither `paid=1` nor
+// `cancelled=1` (the follow-up email's button, a copied link, a return minted
+// before `paid=1` existed): the CRM cannot tell yet, so it says both.
+const NOT_CONFIRMED_TEXT = "We haven't received a payment for this trial yet. If you have already paid, there is nothing more to do: we will email you as soon as it is on your account. If you didn't finish, you can pick up where you left off."
+const EXPIRED_TEXT = 'That checkout expired. Nothing was charged; please start again.'
+const CHECK_LATER_TEXT = 'We could not check your payment just now. Please try again in a minute.'
+const ALREADY_PAID_LINE = 'Already paid? Please do not pay again: we will email you as soon as your trial is on your account.'
+const RETRY_FAILED_TEXT = 'We could not open the payment page just now. Please try again in a moment.'
+// A Hatch grant waits on the un1t.online sync (every 15 minutes) and the
+// settle sweep (every 2): the pending screen listens this long, this often.
+const HATCH_PENDING_POLLS = 80
+const HATCH_PENDING_POLL_MS = 15_000
 
 // The buyer's typed details and class, for this tab only: a reload (or a
 // cancelled Hatch checkout) comes back to a filled form. Storage may throw.
@@ -112,6 +149,7 @@ function setUrlPurchase(id) {
     if (id) u.searchParams.set('purchase', id)
     else u.searchParams.delete('purchase')
     u.searchParams.delete('cancelled')
+    u.searchParams.delete('paid')
     window.history.replaceState(null, '', `${u.pathname}${u.search}${u.hash}`)
   } catch { /* never block the page */ }
 }
@@ -158,7 +196,11 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
   // A return without ?studio= is a Stillorgan redirect-flow payment (the only kind before TRIALSTUDIO).
   const [studioKey, setStudioKey] = useState(resuming ? (initialStudio === 'hatch' ? 'hatch' : 'stillorgan') : preselected)
   // CLASSFIRST.1 — `pick` (the class) sits between the studio and the form.
-  const [step, setStep] = useState(resuming ? 'confirming' : (preselected ? 'pick' : 'choose')) // choose | pick | form | payment | confirming | done | refused | help_sent
+  // HATCHTRACK.1 — back from un1t.online's checkout without paying: one step to payment.
+  const retryOnLoad = Boolean(resumePurchaseId) && cancelled && preselected === 'hatch' && !preview
+  const [step, setStep] = useState(resuming ? 'confirming' : retryOnLoad ? 'retry' : (preselected ? 'pick' : 'choose')) // choose | pick | form | payment | retry | confirming | done | refused | help_sent
+  const [retryNote, setRetryNote] = useState(retryOnLoad ? INCOMPLETE_TEXT : null)
+  const [confirmNote, setConfirmNote] = useState(null) // the CRM could not check the payment: try again in a minute
   const [chosen, setChosen] = useState(null) // the public class picked, or null (skipped)
   const [reloadKey, setReloadKey] = useState(0)
   const [doneClass, setDoneClass] = useState(null) // the class the status route reports (a resumed checkout)
@@ -171,13 +213,16 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
   const [termsAccepted, setTermsAccepted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   // TRIALLEAK.1 — a cancelled checkout says so (it used to say nothing).
-  const [error, setError] = useState(cancelled && !preview ? INCOMPLETE_TEXT : null)
+  const [error, setError] = useState(cancelled && !preview && !retryOnLoad ? INCOMPLETE_TEXT : null)
   const [inApp, setInApp] = useState(null) // 'facebook' | 'instagram' | null
   const [copied, setCopied] = useState(null) // null | 'copied' | 'manual'
+  const [manualLink, setManualLink] = useState('') // HATCHTRACK.1 — the link to copy by hand, when there is no clipboard
   const formRef = useRef(form)
   useEffect(() => { formRef.current = form }, [form])
   const attributionRef = useRef(null)
-  const purchaseIdRef = useRef(resuming ? resumePurchaseId : null)
+  const purchaseIdRef = useRef(resuming || retryOnLoad ? resumePurchaseId : null)
+  // HATCHTRACK.1 — un1t.online's success return (`paid=1`), read once on mount.
+  const returnedPaidRef = useRef(false)
   const purchaseFiredRef = useRef(false)
 
   const studio = byKey(studioKey)
@@ -203,7 +248,12 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
     try {
       // TRIALLEAK.1 — the shared reader: utm_source / utm_medium too, and an
       // unfilled Meta macro (`{{adset.id}}`) is no value.
-      attributionRef.current = readAttributionFromUrl(window.location.search)
+      // HATCHTRACK.1 — first touch: a return or a retry is loaded from a URL
+      // with no fbclid or utm_*, so what the visit's first page carried is
+      // kept for the tab and used again (the preview stores nothing).
+      const fromUrl = readAttributionFromUrl(window.location.search)
+      attributionRef.current = preview ? fromUrl : firstTouchAttribution(fromUrl)
+      returnedPaidRef.current = new URLSearchParams(window.location.search).get('paid') === '1'
     } catch { /* never block the page */ }
     if (preview) return // the editor's preview tracks nothing and restores nothing
     try { setInApp(inAppBrowserFromUserAgent(window.navigator?.userAgent)) } catch { /* never block the page */ }
@@ -214,7 +264,7 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
       if (draft && (!draft.studioKey || draft.studioKey === studioKey)) {
         setForm((f) => ({ ...f, ...draft.form }))
         if (draft.chosen && typeof draft.chosen === 'object') setChosen(draft.chosen)
-        if (cancelled && studio?.sellable && hasDetails(draft.form)) setStep('form')
+        if (cancelled && !retryOnLoad && studio?.sellable && hasDetails(draft.form)) setStep('form')
       }
     }
     trackFunnelStep('trial_view')
@@ -246,13 +296,28 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
   // nobody finished another.
   const failureText = (d) => (d?.payment_status === 'failed' ? DECLINED_TEXT : INCOMPLETE_TEXT)
 
-  async function copyResumeLink() {
+  // The link that reopens this card where it is, in another browser.
+  // HATCHTRACK.1 — Hatch: the studio is named (the picker may have chosen it)
+  // and the return markers are dropped, so it opens on the form (no purchase
+  // yet) or on "Continue to payment" (a purchase this tab already holds).
+  function resumeLinkHref() {
     try {
       const u = new URL(window.location.href)
       if (purchaseIdRef.current) u.searchParams.set('purchase', purchaseIdRef.current)
-      await window.navigator.clipboard.writeText(u.toString())
+      if (isHatch) {
+        if (list.length > 1) u.searchParams.set('studio', 'hatch')
+        u.searchParams.delete('cancelled')
+        u.searchParams.delete('paid')
+      }
+      return u.toString()
+    } catch { return typeof window !== 'undefined' ? window.location.href : '' }
+  }
+
+  async function copyResumeLink() {
+    try {
+      await window.navigator.clipboard.writeText(resumeLinkHref())
       setCopied('copied')
-    } catch { setCopied('manual') } // no clipboard here: show the link to copy by hand
+    } catch { setManualLink(resumeLinkHref()); setCopied('manual') } // no clipboard here: show the link to copy by hand
     trackFunnelStep('trial_copy_link', { studio: studioKey })
   }
 
@@ -305,7 +370,10 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
     let leaving = false
     const leadEventId = newLeadEventId()
     const fireLead = (contentName) => fireBrowserLead({
-      pixelIds: typeof window !== 'undefined' ? metaPixelIdsForPath(window.location.pathname, { primaryLocationId: pageLocationIdFromDocument() }) : [],
+      // HATCHTRACK.1 — and the chosen studio's own pixel, which the page may not have loaded.
+      pixelIds: typeof window !== 'undefined'
+        ? [...new Set([...metaPixelIdsForPath(window.location.pathname, { primaryLocationId: pageLocationIdFromDocument() }), studio?.metaPixelId].filter(Boolean))]
+        : [],
       eventId: leadEventId,
       userData: pixelUserData({ email: form.email, phone: form.phone, firstName: form.first_name, lastName: form.last_name }),
       contentName,
@@ -390,6 +458,76 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
     }
   }
 
+  // HATCHTRACK.1 — back to un1t.online's checkout for the purchase this
+  // browser already holds: the id alone, nothing retyped, no second row.
+  async function continuePayment() {
+    const id = purchaseIdRef.current
+    if (preview || !id) return
+    setError(null)
+    setSubmitting(true)
+    let leaving = false
+    try {
+      const r = await fetch(`${STATUS_PATH}/${id}/checkout`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ return_path: returnPath }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (j.success === true && j.data?.redirect_url) {
+        trackFunnelStep('trial_hatch_retry', { studio: studioKey })
+        leaving = true
+        window.location.assign(j.data.redirect_url)
+        return
+      }
+      // A state, not a failure: paid meanwhile (or with the team) goes to the
+      // confirming screen; anything else starts again, the details kept.
+      // Paid already, or the CRM could not look: the being-confirmed screen,
+      // never a pay button (a second payment would settle nothing).
+      if (j.code === 'already_paid' || j.code === 'confirming') {
+        returnedPaidRef.current = true
+        setConfirmNote(j.code === 'confirming' ? (j.error || CHECK_LATER_TEXT) : null)
+        setStep('confirming')
+        return
+      }
+      if (j.code === 'not_resumable') {
+        if (['granted', 'paid', 'help'].includes(j.state)) { returnedPaidRef.current = true; setStep('confirming'); return }
+        backToStart(j.state === 'expired' ? EXPIRED_TEXT : INCOMPLETE_TEXT); return
+      }
+      if (r.status === 404) { backToStart('We could not find that purchase. Please start again.'); return }
+      setError(customerErrorText(j.error, RETRY_FAILED_TEXT))
+    } catch {
+      setError('Network error. Please try again.')
+    } finally {
+      if (!leaving) setSubmitting(false)
+    }
+  }
+
+  // The retry step checks the row once: a purchase that was paid after all,
+  // or that has ended, never sits behind a "Continue to payment" button.
+  useEffect(() => {
+    if (step !== 'retry') return
+    const id = purchaseIdRef.current
+    if (!id) { backToStart(null); return }
+    let stopped = false
+    ;(async () => {
+      try {
+        const r = await fetch(`${STATUS_PATH}/${id}`, { cache: 'no-store' })
+        if (stopped) return
+        if (r.status === 404) { backToStart('We could not find that purchase. Please start again.'); return }
+        const d = (await r.json().catch(() => ({})))?.data
+        if (stopped || !d) return
+        if (d.class && d.class.name) setDoneClass(d.class)
+        if (d.state === 'granted' || d.state === 'help') { setStep('confirming'); return }
+        if (d.state === 'expired') { backToStart(EXPIRED_TEXT); return }
+        // Not retryable while still pending: it may be paid (the mirror shows a
+        // payment, or its checkout predates the paid=1 return). Being confirmed,
+        // never a form to pay again on.
+        if (d.retryable !== true) { returnedPaidRef.current = true; setStep('confirming') }
+      } catch { /* the button still works; the server judges the row again */ }
+    })()
+    return () => { stopped = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per entry to the step
+  }, [step])
+
   async function askForHelp() {
     setError(null)
     setSubmitting(true)
@@ -452,7 +590,16 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
           setDone({ state: 'granted' }); setStep('done'); return
         }
         if (d.state === 'failed') { restart(failureText(d)); return }
-        if (d.state === 'expired') { restart('That checkout expired. Nothing was charged; please start again.'); return }
+        if (d.state === 'expired') { restart(EXPIRED_TEXT); return }
+        // HATCHTRACK.1 — a Hatch row still awaiting payment, on a load that did
+        // not come back from paying (`paid=1`): one step to payment, not a wait
+        // for a payment that was never made.
+        if (step === 'confirming' && isHatch && studio && d.state === 'pending' && d.retryable === true && !returnedPaidRef.current) {
+          setRetryNote(NOT_CONFIRMED_TEXT)
+          setStep('retry')
+          trackFunnelStep('trial_hatch_retry_view', { studio: studioKey })
+          return
+        }
         // TRIALLEAK.1 — still unpaid and still payable (a reload, or the copied
         // link in another browser): the checkout goes back in front of them.
         // Two polls first, each of which re-asks the provider, so a payment
@@ -472,7 +619,11 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
       if (stopped) return
       // Give the grant up to ~2 minutes of polling, then leave the screen as is
       // (a Hatch purchase moves to its "being confirmed" screen).
-      if (polls < 40) setTimeout(tick, 3000)
+      // HATCHTRACK.1 — a Hatch purchase is granted when the sync mirrors it,
+      // so its pending screen listens longer, slowly, and fires the browser
+      // Purchase (the server's twin) if the tab is still open then.
+      const slow = step === 'done' && isHatch
+      if (polls < (slow ? HATCH_PENDING_POLLS : 40)) setTimeout(tick, slow ? HATCH_PENDING_POLL_MS : 3000)
       else if (step === 'confirming' && isHatch) { setDone({ state: 'pending' }); setStep('done') }
       // TRIALLEAK.1 — Stillorgan never spins for ever: say so, and hand them back.
       else if (step === 'confirming') restart(UNCONFIRMED_TEXT)
@@ -525,11 +676,54 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
     )
   }
 
+  // HATCHTRACK.1 — Hatch pays on un1t.online's page, so the hint comes before
+  // the redirect (TRIALLEAK.1's, for the embedded checkout, sits on the
+  // payment step). Nothing is blocked.
+  const hatchInAppHint = inApp && isHatch && !preview ? (
+    <div className={`mt-4 rounded border border-black/10 p-3 text-xs ${TRIAL_MUTED}`}>
+      <p>You will pay on our secure payment page. Apple Pay and Google Pay may not show inside {IN_APP_NAMES[inApp]}. You can carry on here, or open this page in your own browser.</p>
+      <button type="button" onClick={copyResumeLink} className={`mt-2 font-semibold ${TRIAL_LINK}`}>
+        {copied === 'copied' ? 'Link copied. Paste it into Safari or Chrome.' : 'Copy link to open in your browser'}
+      </button>
+      {copied === 'manual' && (
+        <input readOnly aria-label="Link to this page" className={`mt-2 ${TRIAL_INPUT}`} value={manualLink} onFocus={(e) => e.target.select()} />
+      )}
+    </div>
+  ) : null
+
+  if (step === 'retry' && studio) {
+    const picked = chosen || doneClass
+    return (
+      <div className={TRIAL_CARD}>
+        <p className={`text-xs uppercase tracking-[0.25em] font-semibold mb-3 ${TRIAL_MUTED}`}>{studio.label}</p>
+        <p className="font-display font-extrabold text-2xl text-black mb-2">{retryNote === NOT_CONFIRMED_TEXT ? 'Pick up where you left off' : 'Your trial is one step away'}</p>
+        <p className={`${TRIAL_MUTED} mb-4`} role="status">{retryNote || INCOMPLETE_TEXT}</p>
+        {picked?.name ? (
+          <div className={TRIAL_SUMMARY}>
+            <div className="text-[11px] uppercase tracking-wider text-black/55">Your first class</div>
+            <div className="mt-1 text-base"><span className="font-bold">{picked.time}</span> · {picked.day_label} · {picked.name}</div>
+          </div>
+        ) : null}
+        {error && <p className={`${TRIAL_ERROR} mb-3`} role="alert">{error}</p>}
+        <button type="button" onClick={continuePayment} disabled={submitting} className={TRIAL_BTN}>
+          {submitting ? 'One moment…' : `Continue to payment${price ? ` · ${price}` : ''}`}
+        </button>
+        <p className={TRIAL_FINE}>You are charged {price} once on our secure payment page; nothing renews.</p>
+        <p className={`mt-2 text-xs font-semibold text-black/80`}>{ALREADY_PAID_LINE}</p>
+        <button type="button" disabled={submitting} onClick={() => backToStart(null)} className={`mt-3 text-xs ${TRIAL_MUTED} ${TRIAL_LINK}`}>
+          Start again with different details
+        </button>
+        {hatchInAppHint}
+      </div>
+    )
+  }
+
   if (step === 'confirming') {
     return (
       <div className={`${TRIAL_CARD} text-center`}>
         <p className="font-display font-extrabold text-2xl text-black mb-2">Confirming your payment</p>
         <p className={TRIAL_MUTED}>{isHatch ? (block.pending_body || PAID_TRIAL_PENDING_BODY) : 'One moment while we check with the bank.'}</p>
+        {confirmNote ? <p className={`mt-3 ${TRIAL_MUTED}`} role="status">{confirmNote}</p> : null}
       </div>
     )
   }
@@ -668,6 +862,7 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
         </button>
         <p className={TRIAL_FINE}>Secure payment. You are charged {price} once; nothing renews.</p>
       </form>
+      {hatchInAppHint}
     </div>
   )
 }

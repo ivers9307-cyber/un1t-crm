@@ -12,6 +12,7 @@ import { paymentsFor } from '@/lib/payments'
 import { markTrialPurchasePaymentStatus } from '@/lib/trial-purchase-payments'
 import { trialPurchasePublicState } from '@/lib/paid-trial'
 import { trialCheckoutUsable } from '@/lib/trial-checkout-window'
+import { un1tRetryGate } from '@/lib/trial-purchase-un1t-resume'
 import { publishQueuePush, TRIAL_PURCHASES_WORKER_PATH } from '@/lib/qstash'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { logWarn } from '@/lib/log'
@@ -23,9 +24,15 @@ export const runtime = 'nodejs'
 // embedded checkout and its order is still payable (trialCheckoutUsable, off
 // created_at), so the page can put the checkout back in front of a buyer whose
 // browser reloaded, instead of waiting on a payment that was never made.
+// HATCHTRACK.1 — `retryable`: a Hatch Street row still awaits payment, shows
+// no payment in the mirror and can be sent back to un1t.online's checkout
+// (POST …/[id]/checkout; un1tRetryGate). The two
+// un1t.online ids are read to judge that and are never returned; nor is
+// anything that names the buyer (no name, email, phone or `attribution`,
+// which holds their IP address and user agent until the Purchase is sent).
 // CLASSFIRST.1 — class_name / class_starts_at / location_id: the class the
 // buyer picked, labelled below on the studio's clock for the done screen.
-const COLS = 'id, status, payment_status, payment_provider, payment_provider_ref, payment_checkout_token, payment_checkout_url, amount_cents, currency, product_name, duration_days, connected_account_id, location_id, class_name, class_starts_at, created_at'
+const COLS = 'id, status, payment_status, payment_provider, payment_provider_ref, payment_checkout_token, payment_checkout_url, amount_cents, currency, product_name, duration_days, connected_account_id, location_id, class_name, class_starts_at, created_at, un1t_user_id, un1t_product_id'
 
 // The public class shape's labels (public-classes.js shapeAt), so the done
 // screen's class line reads exactly as the tile did. Display only: an
@@ -67,6 +74,14 @@ export async function GET(_request, props) {
     } catch (e) { logWarn('trialbuy-poll', 're-check failed', { err: e }) }
   }
 
+  // HATCHTRACK.1 — may the page offer "Continue to payment"? Only when the
+  // row still awaits payment, its newest checkout was minted with the paid=1
+  // return (else a paid buyer's return looks the same as an unpaid one), and
+  // the mirror holds no payment since the row was made. A read that fails is
+  // false: the page keeps its being-confirmed screen. The POST checks again,
+  // with un1t.online's live credits ledger as well.
+  const retryable = row.payment_provider === 'un1t_online' ? (await un1tRetryGate(db, row)).ok : false
+
   return NextResponse.json({ success: true, data: {
     id: row.id,
     paid: row.payment_status === 'paid',
@@ -74,6 +89,7 @@ export async function GET(_request, props) {
     purchase_status: row.status,
     payment_status: row.payment_status,
     resumable: trialCheckoutUsable(row),
+    retryable,
     checkout: row.payment_provider === 'un1t_online'
       ? null
       : { provider: row.payment_provider, token: row.payment_checkout_token, url: row.payment_checkout_url },

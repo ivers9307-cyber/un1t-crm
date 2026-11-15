@@ -12,6 +12,7 @@ import { paymentsFor } from './payments'
 import { resolveLocationPaymentProvider } from './location-payments'
 import { resolveCustomerBaseUrl } from './tenant-host'
 import { getLocationBranding } from './location-branding'
+import { clientDataRemoval } from './trial-purchase-conversion'
 import { TRIAL_CHECKOUT_EXPIRE_AFTER, TRIAL_CHECKOUT_REUSE_MS, trialCheckoutUsable, trialPaymentFailure } from './trial-checkout-window'
 
 /** "UN1T Stillorgan: The UN1T 14 Day Reset" on the checkout and the statement. */
@@ -135,7 +136,8 @@ export async function markTrialPurchasePaymentStatus({ db, purchase, providerSta
   const failure = trialPaymentFailure(state, purchase, Date.parse(now()) || Date.now())
   if (failure) {
     const { error } = await db.from('trial_purchases')
-      .update({ payment_status: failure.payment_status, status: 'payment_failed', last_error: failure.reason })
+      // HATCHTRACK.1 — the buyer's browser details go with the checkout.
+      .update({ payment_status: failure.payment_status, status: 'payment_failed', last_error: failure.reason, ...clientDataRemoval(purchase) })
       .eq('id', purchase.id)
     if (error) throw error
     return { released: false }

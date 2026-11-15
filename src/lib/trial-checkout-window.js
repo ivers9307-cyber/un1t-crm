@@ -69,3 +69,32 @@ export function inAppBrowserFromUserAgent(userAgent) {
   if (/FBAN|FBAV|FB_IAB/.test(ua)) return 'facebook'
   return null
 }
+
+// ── HATCHTRACK.1 — Hatch Street (un1t.online's hosted checkout) ──────────────
+//
+// un1t.online's checkout is a Stripe Checkout page. Stripe keeps a session
+// open after the buyer presses Back and never closes one sooner than 30
+// minutes after it was made; how long un1t.online keeps its own open is not
+// written down anywhere the CRM can read (the settle sweep assumes 24 hours).
+// So a stored URL is handed back only inside the part of its life that is
+// certain, and after that the SAME purchase row is given a fresh checkout.
+
+/** How long a stored un1t.online checkout URL is handed back before a fresh one is made. */
+export const UN1T_CHECKOUT_REUSE_MS = 20 * 60_000
+/** How old a Hatch row may be and still be given a checkout (the abandoned follow-up's own window). */
+export const UN1T_TRIAL_RESUME_MAX_AGE_MS = 72 * 60 * 60_000
+/** How long the follow-up's link names the purchase: the row's life before the settle sweep expires it. */
+export const UN1T_TRIAL_RESUME_LINK_MS = 24 * 60 * 60_000
+
+/**
+ * Can this Hatch Street row be sent back to payment? An unpaid row the settle
+ * sweep can still settle (it carries the un1t.online account and product),
+ * young enough. Never a Stillorgan row (trialCheckoutUsable is its rule).
+ */
+export function un1tTrialRetryable(row, nowMs = Date.now()) {
+  if (!row) return false
+  if (row.payment_provider !== 'un1t_online' || row.status !== 'awaiting_payment') return false
+  if (!row.un1t_user_id || !row.un1t_product_id) return false
+  const age = ageMsOf(row, nowMs)
+  return age !== null && age >= 0 && age < UN1T_TRIAL_RESUME_MAX_AGE_MS
+}

@@ -60,6 +60,22 @@ describe('markTrialPurchasePaymentStatus', () => {
     })
     expect(calls[0].fields).toEqual({ payment_status: 'expired', status: 'payment_failed', last_error: 'checkout_expired' })
   })
+  it('HATCHTRACK.1: an order that failed or expired takes the buyer\'s IP address and user agent off the row, and nothing else', async () => {
+    const { client, calls } = db()
+    await markTrialPurchasePaymentStatus({
+      db: client, providerState: 'failed', now: () => '2026-11-14T12:00:00.000Z',
+      purchase: { id: 'p1', status: 'awaiting_payment', payment_status: 'pending', created_at: '2026-11-14T11:50:00.000Z', attribution: { fbc: 'fb.1.x', utm_campaign: 'c', client_ip: '203.0.113.9', client_user_agent: 'UA' } },
+    })
+    expect(calls[0].fields).toEqual({ payment_status: 'failed', status: 'payment_failed', last_error: 'payment_declined', attribution: { fbc: 'fb.1.x', utm_campaign: 'c' } })
+  })
+  it('HATCHTRACK.1: a paid order keeps them (the Purchase has not been sent yet)', async () => {
+    const { client, calls } = db()
+    await markTrialPurchasePaymentStatus({
+      db: client, providerState: 'completed', providerAmount: 3900, now: () => 'T',
+      purchase: { id: 'p1', status: 'awaiting_payment', payment_status: 'pending', amount_cents: 3900, attribution: { client_ip: '203.0.113.9', client_user_agent: 'UA' } },
+    })
+    expect(calls[0].fields).toEqual({ payment_status: 'paid', paid_at: 'T', status: 'queued' })
+  })
   it('a transient state changes nothing', async () => {
     const { client, calls } = db()
     const r = await markTrialPurchasePaymentStatus({ db: client, purchase: { id: 'p1', status: 'awaiting_payment', payment_status: 'pending' }, providerState: 'authorised' })

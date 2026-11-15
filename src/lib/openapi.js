@@ -657,10 +657,24 @@ registry.registerPath({
   path: '/api/public/trial-purchases/{id}',
   tags: ['Public'],
   summary: 'Status of one paid trial purchase (checkout and confirming polls)',
-  description: 'Anonymous, display-safe. state: pending | paid (money in, grant in flight) | granted (the Glofox plan is on the account) | failed. Re-checks the provider while pending (capped at 20 per purchase per 5 min); a settled payment releases the row and nudges the trial-purchases worker. TRIALLEAK.1: `resumable` is true while the row still awaits payment on the embedded Revolut checkout and its two-hour order is still payable (the page remounts the checkout from `checkout.token`); `payment_status` is `expired` for a checkout that ran out of time or was cancelled and `failed` for a refused payment.',
+  description: 'Anonymous, display-safe. state: pending | paid (money in, grant in flight) | granted (the Glofox plan is on the account) | failed. Re-checks the provider while pending (capped at 20 per purchase per 5 min); a settled payment releases the row and nudges the trial-purchases worker. TRIALLEAK.1: `resumable` is true while the row still awaits payment on the embedded Revolut checkout and its two-hour order is still payable (the page remounts the checkout from `checkout.token`); `payment_status` is `expired` for a checkout that ran out of time or was cancelled and `failed` for a refused payment. HATCHTRACK.1: `retryable` is true for a Hatch Street row that still awaits payment and can be sent back to un1t.online\'s checkout (POST …/{id}/checkout). Never returns the buyer\'s name, email, phone or stored attribution.',
   responses: {
     200: { description: 'Status returned' },
     404: { description: 'Unknown purchase', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/trial-purchases/{id}/checkout',
+  tags: ['Public'],
+  summary: 'Send a Hatch Street trial buyer back to payment for the purchase they already started',
+  description: 'HATCHTRACK.1. Anonymous: the purchase id is the capability (the buyer\'s own browser, `?purchase=` on their return, or the follow-up email sent to their address). Only a Hatch Street (un1t.online) row that still awaits payment (`retryable` on the status route). Answers `{ redirect_url, reused }`: the row\'s own checkout when it was made in the last 20 minutes, else a fresh un1t.online hosted checkout for the SAME row and account (no new row, no charge, no grant; ledgered in un1t_write_events as `trial_purchase:<id>:r<n>`). `{ success: false, code: \'already_paid\' }` (200) when the purchase is paid or cannot be told from paid (a payment in the mirror, credits on un1t.online\'s live ledger, or a checkout minted before the paid=1 return), and `{ code: \'confirming\', retry_later: true }` when that could not be checked: never a URL in either case. `{ success: false, code: \'not_resumable\', state }` (200) when the row is settled, expired or with the team; 503 `unavailable` when un1t.online is busy or unreadable (the row is left open). Optional body `{ return_path }`, allowlisted as on the purchase POST. Never returns the buyer\'s name, email or phone. Rate-limited per purchase and per IP.',
+  responses: {
+    200: { description: 'A checkout to redirect to, or a not_resumable state' },
+    404: { description: 'Unknown purchase', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'un1t.online busy or unreadable; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

@@ -27,7 +27,7 @@
 // last_error + an ops alert to the organisation's recipients.
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, purchaseGlofoxMembership } from '@/lib/glofox'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
-import { sendWebsiteConversion } from '@/lib/meta-capi'
+import { sendTrialPurchaseConversion, clientDataRemoval } from '@/lib/trial-purchase-conversion'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { sendTrialPurchaseEmail } from '@/lib/trial-purchase-emails'
 import { logError, logWarn } from '@/lib/log'
@@ -211,11 +211,13 @@ export async function processTrialPurchase(db, row, { now = () => new Date().toI
         grant: { ...marker, ok: false, glofox_message_code: res.message_code || null, http_status: res.http_status ?? null, error: res.error || null },
       })
     }
-    const ok = await stamp(db, row.id, { grant, granted_at: grant.at, status: 'granted', glofox_member_id: memberId, last_error: null })
+    // HATCHTRACK.1 — the buyer's IP address and user agent leave the row with
+    // this stamp; the Purchase below is sent from the row held here.
+    const ok = await stamp(db, row.id, { grant, granted_at: grant.at, status: 'granted', glofox_member_id: memberId, last_error: null, ...clientDataRemoval(row) })
     if (!ok) logWarn('trial-purchase', 'granted but the row could not be stamped; the sweeper will see processing', { purchaseId: row.id })
   } else {
     // A recorded grant on a re-run: finish the side effects only.
-    try { await stamp(db, row.id, { status: 'granted', granted_at: prior.at || now(), glofox_member_id: memberId, last_error: null }) } catch (e) { logWarn('trial-purchase', 're-run stamp failed', { purchaseId: row.id, err: e }) }
+    try { await stamp(db, row.id, { status: 'granted', granted_at: prior.at || now(), glofox_member_id: memberId, last_error: null, ...clientDataRemoval(row) }) } catch (e) { logWarn('trial-purchase', 're-run stamp failed', { purchaseId: row.id, err: e }) }
   }
 
   // CLASSFIRST.1 — the class they picked before paying: queued now, booked
@@ -234,22 +236,11 @@ export async function processTrialPurchase(db, row, { now = () => new Date().toI
 
   // 6. side effects, independent and best-effort
   try { await sendTrialPurchaseEmail(db, { purchase: { ...row, glofox_member_id: memberId }, kind: 'granted' }) } catch (e) { logWarn('trial-purchase', 'confirmation email failed', { purchaseId: row.id, err: e }) }
+  // HATCHTRACK.1 — the one Purchase both studios send (the browser's event
+  // id, the amount, and the IP, user agent and click ids captured when the
+  // checkout was created; the worker has no request of its own).
   try {
-    await sendWebsiteConversion(db, {
-      locationId: row.location_id,
-      eventName: 'Purchase',
-      email: row.customer_email, phone: row.customer_phone,
-      firstName: row.first_name, lastName: row.last_name,
-      externalId: row.contact_id,
-      eventSourceUrl: row.attribution?.event_source_url || undefined,
-      eventId: `trialpurchase-${row.id}`,
-      contentName: row.product_name,
-      // PURCHASEVALUE.1 — what the browser's Purchase already says: the
-      // amount taken, its currency, and our purchase id as the order.
-      value: (row.amount_cents || 0) / 100, currency: row.currency || 'EUR',
-      orderId: row.id, contentType: 'product',
-      fbc: row.attribution?.fbc, fbp: row.attribution?.fbp,
-    })
+    await sendTrialPurchaseConversion(db, row)
   } catch (e) { logWarn('trial-purchase', 'capi purchase failed', { purchaseId: row.id, err: e }) }
 
   return { outcome: 'granted' }

@@ -43,10 +43,14 @@ describe('trialReturnPathFor', () => {
 describe('parseTrialReturn', () => {
   it('reads a uuid purchase, a known studio and cancelled=1', () => {
     expect(parseTrialReturn({ purchase: '11111111-1111-1111-1111-111111111111', studio: 'hatch', cancelled: '1' }))
-      .toEqual({ resumePurchaseId: '11111111-1111-1111-1111-111111111111', initialStudio: 'hatch', cancelled: true })
+      .toEqual({ resumePurchaseId: '11111111-1111-1111-1111-111111111111', initialStudio: 'hatch', cancelled: true, paid: false })
+  })
+  it("HATCHTRACK.1 — reads un1t.online's success marker, and only the exact value", () => {
+    expect(parseTrialReturn({ purchase: '11111111-1111-1111-1111-111111111111', studio: 'hatch', paid: '1' }).paid).toBe(true)
+    for (const v of ['true', '0', '', ['1'], undefined]) expect(parseTrialReturn({ paid: v }).paid).toBe(false)
   })
   it('drops a non-uuid purchase, an unknown studio and a missing cancelled', () => {
-    expect(parseTrialReturn({ purchase: 'abc', studio: 'HATCH' })).toEqual({ resumePurchaseId: null, initialStudio: null, cancelled: false })
-    expect(parseTrialReturn(undefined)).toEqual({ resumePurchaseId: null, initialStudio: null, cancelled: false })
+    expect(parseTrialReturn({ purchase: 'abc', studio: 'HATCH' })).toEqual({ resumePurchaseId: null, initialStudio: null, cancelled: false, paid: false })
+    expect(parseTrialReturn(undefined)).toEqual({ resumePurchaseId: null, initialStudio: null, cancelled: false, paid: false })
   })
 })
