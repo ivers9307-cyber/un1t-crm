@@ -36,16 +36,24 @@ describe('findQueueRowByHash', () => {
 
   it('returns the existing row id on a hash hit', async () => {
     const db = { from: vi.fn().mockReturnValue(chain({ data: { id: 'q-1' }, error: null })) }
-    await expect(findQueueRowByHash(db, 'abc')).resolves.toEqual({ existingId: 'q-1' })
+    await expect(findQueueRowByHash(db, 'abc', 'L-1')).resolves.toEqual({ existingId: 'q-1' })
   })
 
   it('returns null when no row carries the hash', async () => {
     const db = { from: vi.fn().mockReturnValue(chain({ data: null, error: null })) }
-    await expect(findQueueRowByHash(db, 'abc')).resolves.toEqual({ existingId: null })
+    await expect(findQueueRowByHash(db, 'abc', 'L-1')).resolves.toEqual({ existingId: null })
+  })
+
+  it('scopes the lookup to the studio (FINSCOPE.1) and refuses without one', async () => {
+    const c = chain({ data: null, error: null })
+    const db = { from: vi.fn().mockReturnValue(c) }
+    await findQueueRowByHash(db, 'abc', 'L-1')
+    expect(c.eq).toHaveBeenCalledWith('location_id', 'L-1')
+    await expect(findQueueRowByHash(db, 'abc')).rejects.toThrow(/needs a locationId/)
   })
 
   it('throws with a greppable prefix on query error', async () => {
     const db = { from: vi.fn().mockReturnValue(chain({ data: null, error: { message: 'boom' } })) }
-    await expect(findQueueRowByHash(db, 'abc')).rejects.toThrow(/manual-upload hash lookup failed: boom/)
+    await expect(findQueueRowByHash(db, 'abc', 'L-1')).rejects.toThrow(/manual-upload hash lookup failed: boom/)
   })
 })

@@ -434,9 +434,14 @@ export async function enqueueFromHuntFind({
   if (!huntId) return { ok: false, error: 'huntId is required.' }
   if (!bucketPath) return { ok: false, error: 'bucketPath is required.' }
 
+  if (!locationId) return { ok: false, error: 'locationId is required.' }
+  // FINSCOPE.1: dedupe against THIS studio's queue only. Unscoped, a hunted
+  // file identical to another studio's row was reported as already queued,
+  // so this studio's bank line pointed at the other studio's bill.
   const { data: existing, error: dupErr } = await db
     .from('invoices_queue')
     .select('id, status')
+    .eq('location_id', locationId)
     .eq('content_hash', contentHash)
     .limit(1)
     .maybeSingle()
