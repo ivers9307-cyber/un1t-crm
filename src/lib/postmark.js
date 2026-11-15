@@ -470,11 +470,15 @@ export async function sendBatch(emails, { locationId, sender } = {}) {
         const message = result?.Message || `Postmark batch failed (HTTP ${response.status})`
         // HttpStatus rides along so callers can classify a 429/5xx on
         // the whole batch call as transient (isTransientSendError).
-        results.push(...chunk.map(() => ({ ErrorCode: code, Message: message, HttpStatus: response.status })))
+        // MAILBATCHREFUSAL.1 — BatchFailure marks a refusal of the whole call
+        // (a revoked server token, a sender signature missing, a malformed
+        // batch), which says nothing about any recipient's address. Callers
+        // must never record it as a per-address bounce.
+        results.push(...chunk.map(() => ({ ErrorCode: code, Message: message, HttpStatus: response.status, BatchFailure: true })))
         continue
       }
     } catch (err) {
-      results.push(...chunk.map(() => ({ ErrorCode: -1, Message: err?.message || 'Postmark batch request failed' })))
+      results.push(...chunk.map(() => ({ ErrorCode: -1, Message: err?.message || 'Postmark batch request failed', BatchFailure: true })))
       continue
     }
     results.push(...result)

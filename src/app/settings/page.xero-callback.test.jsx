@@ -6,7 +6,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => ({ id: 'u1', role: 'master', isMaster: true })) }))
+vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => ({ id: 'u1', role: 'master', isMaster: true })), getUserLocationIds: () => [] }))
 vi.mock('@/lib/permissions', () => ({ hasPermission: () => true }))
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }))
 vi.mock('next/link', () => ({ default: ({ href, children }) => <a href={href}>{children}</a> }))

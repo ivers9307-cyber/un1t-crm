@@ -827,7 +827,7 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
                 className={`flex-1 rounded-lg border px-3 py-2 text-left ${emailType === 'utility' ? 'border-host-accent bg-host-hover' : 'border-host-edge hover:bg-host-hover'}`}
               >
                 <span className="block text-sm font-semibold">Utility</span>
-                <span className={`block ${HOST_HINT} mt-0.5`}>Operational info for attendees — time changes, instructions. Reaches people regardless of marketing opt-in, so only use it for messages about their booking.</span>
+                <span className={`block ${HOST_HINT} mt-0.5`}>Operational info for one event's attendees — time changes, instructions. Reaches them regardless of marketing opt-in, so pick that event under Send to.</span>
               </button>
             </div>
           </div>

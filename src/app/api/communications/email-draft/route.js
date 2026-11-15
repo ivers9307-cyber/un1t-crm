@@ -15,6 +15,7 @@ import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
+import { releasePreflight, releaseCampaign } from '@/lib/campaign-release'
 
 export const runtime = 'nodejs'
 
@@ -95,7 +96,21 @@ export async function POST(request) {
     }
   }
 
-  const status = action === 'send' ? 'queued' : action === 'schedule' ? 'scheduled' : 'draft'
+  // MAILPREFLIGHT.1 (audit 2026-11-15, item 8): the composer used to insert
+  // 'queued' / 'scheduled' directly, skipping releasePreflight, so a send
+  // went out past the org's email hard cap and an empty prepaid wallet (the
+  // run-campaigns cron checks the cap only when it promotes a scheduled
+  // campaign, never for a queued one). Now the row is always created as a
+  // draft and released through the same two functions the editor's Send and
+  // Schedule use. A refused release leaves the draft, so nothing is lost.
+  let sendAt = null
+  if (action === 'schedule') {
+    sendAt = new Date(scheduled_at)
+    if (Number.isNaN(sendAt.getTime())) {
+      return NextResponse.json({ success: false, error: 'scheduled_at is not a valid date' }, { status: 400 })
+    }
+  }
+  const status = 'draft'
   const row = {
     location_id,
     name,
@@ -107,7 +122,6 @@ export async function POST(request) {
     created_by: user.id,
     postmark_stream: email_type === 'utility' ? 'outbound' : 'broadcast',
   }
-  if (action === 'schedule') row.scheduled_at = scheduled_at
   if (resend_enabled) {
     row.resend_enabled = true
     row.resend_wait_hours = resend_wait_hours
@@ -117,5 +131,25 @@ export async function POST(request) {
   const db = createServerClient()
   const { data, error } = await db.from('campaigns').insert(row).select('id').single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  return NextResponse.json({ success: true, id: data.id, status })
+  if (action === 'draft') return NextResponse.json({ success: true, id: data.id, status: 'draft' })
+
+  const campaign = { ...row, id: data.id }
+  const preflight = await releasePreflight(db, campaign)
+  if (!preflight.ok) {
+    // Same codes and status as POST /api/campaigns/[id]/send. The draft is
+    // kept: the operator fixes the cause and sends it from the editor.
+    const status422 = preflight.code === 'email_hard_cap' || preflight.code === 'wallet_empty'
+    return NextResponse.json(
+      { success: false, error: `${preflight.message} The email was saved as a draft.`, code: preflight.code, id: data.id, status: 'draft' },
+      { status: status422 ? 422 : 400 },
+    )
+  }
+  const release = await releaseCampaign(db, campaign, { sendAt })
+  if (!release.ok) {
+    return NextResponse.json(
+      { success: false, error: `${release.message} The email was saved as a draft.`, code: release.code, id: data.id, status: 'draft' },
+      { status: release.code === 'conflict' ? 409 : 500 },
+    )
+  }
+  return NextResponse.json({ success: true, id: data.id, status: release.status })
 }

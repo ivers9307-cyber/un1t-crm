@@ -17,7 +17,7 @@ vi.mock('@/lib/unifi-access', async () => {
   return { ...actual, getUnifiConfig: vi.fn(), listDoors: vi.fn() }
 })
 
-import { listAllowedDoors } from './studio-doors.js'
+import { listAllowedDoors, readDoorAllowlist } from './studio-doors.js'
 import { getUnifiConfig, listDoors, UnifiError } from '@/lib/unifi-access'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
@@ -27,12 +27,12 @@ const USER = { id: 'u1', role: 'manager' }
 
 // Configurable fake DB. Only table touched by the helper: profile_locations
 // (the UNIFI-DOORS-SCOPE allowlist read).
-function mockDb({ assignment = { unifi_door_ids: null } } = {}) {
+function mockDb({ assignment = { unifi_door_ids: null }, error = null } = {}) {
   return {
     from: (table) => {
       if (table === 'profile_locations') return {
         select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: () =>
-          Promise.resolve({ data: assignment, error: null }) }) }) }),
+          Promise.resolve({ data: error ? null : assignment, error }) }) }) }),
       }
       throw new Error(`unexpected table ${table}`)
     },
@@ -155,5 +155,25 @@ describe('listAllowedDoors — UniFi config and error handling', () => {
     const result = await listAllowedDoors(db, ctx())
     expect(result.status).toBe(502)
     expect(result.message).toBe('No status here')
+  })
+})
+
+// DOORFAILCLOSED.1 — October audit A04.
+describe('listAllowedDoors — a failed allowlist read fails closed', () => {
+  it('returns allowlist_unreadable (503) and never lists doors', async () => {
+    listDoors.mockResolvedValue([{ id: 'd1', name: 'Front' }])
+    const db = mockDb({ error: { code: '57014', message: 'timeout' } })
+    const result = await listAllowedDoors(db, ctx())
+    expect(result).toMatchObject({ ok: false, reason: 'allowlist_unreadable', status: 503 })
+    expect(listDoors).not.toHaveBeenCalled()
+  })
+})
+
+describe('readDoorAllowlist', () => {
+  it('null and a missing row are unrestricted; an array is the list; an error is not ok', async () => {
+    expect(await readDoorAllowlist(mockDb({ assignment: { unifi_door_ids: null } }), 'u', LOC)).toEqual({ ok: true, allowlist: null })
+    expect(await readDoorAllowlist(mockDb({ assignment: null }), 'u', LOC)).toEqual({ ok: true, allowlist: null })
+    expect(await readDoorAllowlist(mockDb({ assignment: { unifi_door_ids: ['d2'] } }), 'u', LOC)).toEqual({ ok: true, allowlist: ['d2'] })
+    expect(await readDoorAllowlist(mockDb({ error: { message: 'x' } }), 'u', LOC)).toEqual({ ok: false })
   })
 })
