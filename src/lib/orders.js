@@ -226,6 +226,11 @@ function mapCarDepositStatus(s) {
 export async function detectRetryRecovery({ db, order }) {
   if (!order || order.status !== 'completed') return { recoveredCount: 0 }
   if (!order.contact_email || !order.source_type) return { recoveredCount: 0 }
+  // FINSCOPE.1 (October audit A02): the lookup matched on email and type
+  // alone, so a buyer's completed order could mark another studio's (and
+  // another organisation's) failed order as recovered. It is now scoped to
+  // the order's own studio; an order with no studio recovers nothing.
+  if (!order.location_id) return { recoveredCount: 0 }
 
   const completedAt = order.completed_at ? new Date(order.completed_at) : new Date()
   const windowStart = new Date(completedAt.getTime() - RETRY_WINDOW_DAYS * 86400_000)
@@ -235,6 +240,7 @@ export async function detectRetryRecovery({ db, order }) {
   const { data: candidates, error } = await db
     .from('orders')
     .select('id, status')
+    .eq('location_id', order.location_id)
     .eq('contact_email', order.contact_email)
     .eq('source_type', order.source_type)
     .in('status', ['failed', 'abandoned'])
