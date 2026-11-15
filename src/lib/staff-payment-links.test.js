@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import {
   LIVE_STATUSES, STAFF_PAYMENT_LINK_TTL_MS, BUY_PATH, mintPaymentToken, hashPaymentToken, buildBuyUrl,
   issueStaffPaymentLink, revokeStaffPaymentLink, resolveStaffPaymentLink, markOpened,
