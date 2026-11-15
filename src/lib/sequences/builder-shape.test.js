@@ -25,7 +25,7 @@ const ROW = {
 describe('toBuilderSequence (SEQPAGEGATE.1)', () => {
   it('is an allow-list: the builder fields + has_webhook_secret, nothing else', () => {
     expect(Object.keys(toBuilderSequence(ROW)).sort()).toEqual([
-      'audience_filter', 'description', 'goal_config', 'has_webhook_secret', 'id', 'location_id', 'name',
+      'audience_filter', 'audience_seed_count', 'audience_seeded_at', 'description', 'goal_config', 'has_webhook_secret', 'id', 'location_id', 'name',
       're_enrolment_cooldown_days', 'send_window', 'status', 'trigger_config', 'trigger_type', 'webhook_token',
     ])
   })
