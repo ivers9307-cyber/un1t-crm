@@ -98,3 +98,19 @@ describe('recordUsage', () => {
     expect(inserts).toHaveLength(0)
   })
 })
+
+// MIACOST.1 — 1-hour cache writes bill 2x input; 5-minute writes 1.25x.
+describe('estimateAnthropicCostCents — cache write TTLs', () => {
+  it('prices the 1h and 5m parts of cache_creation separately', async () => {
+    const { estimateAnthropicCostCents } = await import('./usage.js')
+    const M = 1_000_000
+    const oneHour = estimateAnthropicCostCents('claude-sonnet-5', { cache_creation_input_tokens: M, cache_creation: { ephemeral_1h_input_tokens: M, ephemeral_5m_input_tokens: 0 } })
+    const fiveMin = estimateAnthropicCostCents('claude-sonnet-5', { cache_creation_input_tokens: M, cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: M } })
+    expect(oneHour).toBeCloseTo(600) // 300c/Mtok * 2
+    expect(fiveMin).toBeCloseTo(375) // 300c/Mtok * 1.25
+  })
+  it('without the split, a write is priced as before (1.25x)', async () => {
+    const { estimateAnthropicCostCents } = await import('./usage.js')
+    expect(estimateAnthropicCostCents('claude-sonnet-5', { cache_creation_input_tokens: 1_000_000 })).toBeCloseTo(375)
+  })
+})

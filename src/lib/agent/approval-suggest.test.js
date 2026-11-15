@@ -211,6 +211,30 @@ describe('composeApprovalSuggestion — un1t.online vs Glofox context', () => {
     expect(db.reads.some((x) => x.table.startsWith('un1t_'))).toBe(false)
   })
 
+  // MIAKNOWLEDGE.1 — audit 2026-11-15 item 10: suggestions were composed with
+  // no knowledge, so the prompt told the model to hand off every fact.
+  it('composes with the studio knowledge, not the "no knowledge" notice', async () => {
+    const db = recordingDb({
+      contacts: { data: { first_name: 'Member' }, error: null },
+      agent_knowledge: { data: [{ category: 'pricing', title: 'Drop-in', content: 'A drop-in class is 25 euro.', enabled: true, sort_order: 1 }], error: null },
+    })
+    await composeApprovalSuggestion(db, { ...BASE, location_id: 'loc-stillorgan', kind: 'class_booking', details: { event_id: 'g-1' } })
+    expect(db.reads.some((x) => x.table === 'agent_knowledge')).toBe(true)
+    const system = JSON.stringify(anthropicMessages.mock.calls[0][0].system)
+    expect(system).toContain('A drop-in class is 25 euro.')
+    expect(system).not.toMatch(/No knowledge has been added yet/)
+  })
+
+  it('an unreadable knowledge base composes nothing (no hand-off-leaning suggestion)', async () => {
+    const db = recordingDb({
+      contacts: { data: { first_name: 'Member' }, error: null },
+      agent_knowledge: { data: null, error: { code: 'XX000', message: 'down' } },
+    })
+    const r = await composeApprovalSuggestion(db, { ...BASE, location_id: 'loc-stillorgan', kind: 'class_booking', details: { event_id: 'g-1' } })
+    expect(r).toEqual({ error: 'knowledge_unreadable' })
+    expect(anthropicMessages).not.toHaveBeenCalled()
+  })
+
   it('Glofox fields for Glofox cards; no un1t mirror read', async () => {
     const db = recordingDb({
       contacts: { data: { first_name: 'Member', glofox_membership_state: 'ACTIVE', recent_bookings: [{ time_start: Math.floor(Date.now() / 1000) + 86_400, event_name: 'HYROX', status: 'BOOKED' }] }, error: null },
