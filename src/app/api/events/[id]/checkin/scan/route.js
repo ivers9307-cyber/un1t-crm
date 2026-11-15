@@ -16,7 +16,7 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/perm
 import { validateBody } from '@/lib/validate'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { verifyCheckinToken } from '@/lib/event-checkin-tokens'
-import { followPlacementForCheckin, isPlacedRedirect } from '@/lib/placed-checkin'
+import { followPlacementForCheckin, isPlacedRedirect, checkinStatusRefusal, isAlreadyCheckedIn } from '@/lib/placed-checkin'
 
 export const runtime = 'nodejs'
 
@@ -61,6 +61,7 @@ export async function POST(request, props) {
 
   let member = scanned
   let registrationId = payload.registrationId
+  let registrationStatus = reg.status
   if (isPlacedRedirect(reg)) {
     const followed = await followPlacementForCheckin(db, {
       eventId: params.id,
@@ -74,7 +75,11 @@ export async function POST(request, props) {
     }
     member = followed.member
     registrationId = followed.registrationId
+    registrationStatus = followed.registrationStatus
   }
+  // CHECKINSTATUS.1 — a cancelled or unpaid entry's QR no longer checks in.
+  const refusal = checkinStatusRefusal(registrationStatus)
+  if (refusal) return NextResponse.json({ success: false, error: refusal, code: 'not_checkable', status: registrationStatus }, { status: 409 })
 
   const { error } = await db.from('race_checkins').insert({
     race_registration_id: registrationId,
@@ -83,8 +88,14 @@ export async function POST(request, props) {
     location_id: locationId,
     checked_in_by: user.id,
   })
-  if (error && !/duplicate|unique|23505/i.test(error.message || '')) {
+  const already = isAlreadyCheckedIn(error)
+  if (error && !already) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+  // A repeat scan used to answer exactly like a first one, so door staff could
+  // not tell a reused or shared code from a new arrival.
+  if (already) {
+    return NextResponse.json({ success: true, data: { checked_in: true, already_checked_in: true, name: member.name || member.email || 'Attendee' } })
   }
 
   if (member.email) {

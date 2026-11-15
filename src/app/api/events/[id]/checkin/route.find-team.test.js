@@ -37,7 +37,7 @@ const soloRow = (extra = {}) => ({
   teams: { id: 't-solo', team_members: [{ id: SOLO_M, name: 'Sarah Byrne', email: 'Sarah@Example.test', contact_id: 'c-sarah' }] },
   ...extra,
 })
-const teamRow = (members) => ({ id: TEAM, race_event_id: EV, teams: { id: 't-team', team_members: members } })
+const teamRow = (members, status = 'confirmed') => ({ id: TEAM, race_event_id: EV, status, teams: { id: 't-team', team_members: members } })
 
 function makeDb() {
   return fakeDb((q) => {
@@ -124,6 +124,42 @@ describe.each([
     expect(res.status).toBe(200)
     expect(checkins()[0].payload).toMatchObject({ race_registration_id: SOLO, team_member_id: SOLO_M })
     expect(db.queries.filter((x) => x.table === 'race_registrations')).toHaveLength(1)
+  })
+})
+
+// CHECKINSTATUS.1 — audit 2026-11-15 item 11: a cancelled or unpaid entry's
+// QR (or a tap) used to check in. Both doors refuse it, untouched.
+describe.each([
+  ['scan', postScan],
+  ['manual', postManual],
+])('%s check-in judges the entry status (CHECKINSTATUS.1)', (_label, call) => {
+  it.each([['cancelled', /cancelled/], ['pending_payment', /not been paid/]])('a %s entry is refused 409 and nothing is written', async (status, words) => {
+    regs[SOLO] = soloRow({ status, placed_into_registration_id: null })
+    const res = await call(SOLO, SOLO_M)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(words)
+    expect(checkins()).toHaveLength(0)
+  })
+
+  it('a placed solo whose team entry was cancelled is refused', async () => {
+    regs[TEAM] = { ...regs[TEAM], status: 'cancelled' }
+    expect((await call(SOLO, SOLO_M)).status).toBe(409)
+    expect(checkins()).toHaveLength(0)
+  })
+})
+
+describe('scan says when someone was already checked in', () => {
+  it('a repeat scan answers already_checked_in, a first one does not', async () => {
+    regs[SOLO] = soloRow({ status: 'confirmed', placed_into_registration_id: null })
+    const first = await (await postScan(SOLO, SOLO_M)).json()
+    expect(first.data.already_checked_in).toBeUndefined()
+    db = fakeDb((q) => {
+      if (q.table === 'race_registrations') return { data: regs[eqOf(q, 'id')] ?? null, error: null }
+      if (q.table === 'race_checkins') return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } }
+      return { data: null, error: null }
+    })
+    const again = await (await postScan(SOLO, SOLO_M)).json()
+    expect(again).toMatchObject({ success: true, data: { checked_in: true, already_checked_in: true } })
   })
 })
 
