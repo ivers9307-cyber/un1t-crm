@@ -48,6 +48,8 @@ vi.mock('@/lib/waitlist-entry', () => ({ placeWaitlistEntry: vi.fn() }))
 vi.mock('@/lib/class-booking-payments', () => ({ createClassBookingPayment: vi.fn() }))
 vi.mock('@/lib/location-payments', () => ({ locationCanTakePayments: vi.fn(() => false) }))
 vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn() }))
+// UTMSOURCE.1 — the stamp's own rule is tested beside it; here, that the route calls it.
+vi.mock('@/lib/contact-first-touch-source', () => ({ stampFirstTouchSource: vi.fn(async () => ({ stamped: true })) }))
 vi.mock('@/lib/meta-capi', async (importOriginal) => ({
   ...(await importOriginal()),
   sendWebsiteConversion: vi.fn(async () => ({ sent: true })),
@@ -55,6 +57,7 @@ vi.mock('@/lib/meta-capi', async (importOriginal) => ({
 
 import { POST } from './route.js'
 import { sendWebsiteConversion } from '@/lib/meta-capi'
+import { stampFirstTouchSource } from '@/lib/contact-first-touch-source'
 import { findOrCreateRaceContact, findOrCreateRaceContactWithOutcome } from '@/lib/race-contact-linking'
 import { applyFormMarketingConsent } from '@/lib/marketing-consent'
 import { writeContactTag } from '@/lib/contact-tags'
@@ -132,6 +135,21 @@ describe('POST /api/public/class-booking — new-contact source label', () => {
     await book(undefined)
     expect(findOrCreateRaceContact).toHaveBeenCalledTimes(1)
     expect(findOrCreateRaceContact.mock.calls[0][0]).toMatchObject({ restrictToOrg: true, insertFields: { source: 'class_booking' } })
+  })
+})
+
+// UTMSOURCE.1 (mig 837) — first-touch utm_source / utm_medium on the contact.
+describe('POST /api/public/class-booking — first-touch utm_source / utm_medium', () => {
+  it('offers the cleaned attribution to the stamp for the captured contact', async () => {
+    const res = await book({ utm_campaign: 'c', ad_provider: 'meta', ad_external_id: 'ad9', utm_source: 'facebook', utm_medium: 'paid' })
+    expect(res.status).toBe(200)
+    expect(stampFirstTouchSource).toHaveBeenCalledTimes(1)
+    expect(stampFirstTouchSource).toHaveBeenCalledWith(expect.anything(), 'c1', expect.objectContaining({ utm_source: 'facebook', utm_medium: 'paid' }), { module: 'classbook' })
+  })
+  it('an organic visitor is offered too, and an unfilled macro never reaches the stamp', async () => {
+    await book({ utm_source: 'instagram', utm_medium: '{{placement}}' })
+    const [, , attribution] = stampFirstTouchSource.mock.calls[0]
+    expect(attribution).toEqual({ utm_source: 'instagram' })
   })
 })
 
