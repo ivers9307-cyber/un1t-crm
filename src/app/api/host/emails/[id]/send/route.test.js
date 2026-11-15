@@ -259,9 +259,17 @@ describe('POST /api/host/emails/[id]/send — HOST-CONSENT.1 stream gate', () =>
     expect((await POST(makeRequest(), props)).status).toBe(409)
   })
   it('lets a UTILITY send through without a stream', async () => {
-    const { db } = makeDb(routeFor({ host: { ...HOST_ROW, postmark_stream_id: null }, campaign: { id: CAMPAIGN_ID, status: 'draft', email_type: 'utility' } }))
+    const { db } = makeDb(routeFor({ host: { ...HOST_ROW, postmark_stream_id: null }, campaign: { id: CAMPAIGN_ID, status: 'draft', email_type: 'utility', audience_kind: 'event', audience_event_id: 'e0000000-0000-0000-0000-0000000000e1' } }))
     createServerClient.mockReturnValue(db)
     const res = await POST(makeRequest(), props)
     expect(res.status).toBe(200)
+  })
+
+  it('refuses a UTILITY send to everyone with 409 (HOSTUTILITY.1)', async () => {
+    const { db } = makeDb(routeFor({ host: { ...HOST_ROW, postmark_stream_id: null }, campaign: { id: CAMPAIGN_ID, status: 'draft', email_type: 'utility', audience_kind: 'all' } }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(makeRequest(), props)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/one event/)
   })
 })
