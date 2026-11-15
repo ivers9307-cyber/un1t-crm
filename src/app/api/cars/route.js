@@ -71,7 +71,7 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  let query = db.from('cars').select('*, car_documents(id, doc_type, filename)').order('updated_at', { ascending: false })
+  let query = db.from('cars').select('*, car_documents(id, doc_type, filename, xero_sent_at)').order('updated_at', { ascending: false })
 
   if (locationId) {
     query = query.eq('location_id', locationId)
