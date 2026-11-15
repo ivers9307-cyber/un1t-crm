@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 import { logWarn } from '@/lib/log'
-import { TRIAL_CHECKOUT_REUSE_MS } from '@/lib/trial-checkout-window'
+import { TRIAL_CHECKOUT_REUSE_MS, UN1T_TRIAL_RESUME_LINK_MS } from '@/lib/trial-checkout-window'
 import {
   ABANDONED_TRIGGER, PURCHASED_EXIT_REASON, PURCHASE_ROW_FILTER, isPurchaseRow, trialCheckoutFromEnrollment,
   trialResumeLink, exitEnrolmentForPurchase, trialAbandonPresendGate,
@@ -55,10 +55,28 @@ describe('trialResumeLink', () => {
     expect(trialResumeLink({ ...base, checkout: { ...open, resumable: false } }).url).not.toMatch(/purchase=/)
   })
 
-  it('a Hatch Street row (un1t.online checkout, URL never stored) never carries the purchase', () => {
-    const link = trialResumeLink({ ...base, medium: 'whatsapp', checkout: { ...open, studio: 'hatch', provider: 'un1t_online' } })
-    expect(link.url).toBe('https://un1tdublin.com/trial?studio=hatch&utm_source=crm&utm_medium=whatsapp&utm_campaign=trial-abandoned')
-    expect(link.suffix).toBe('studio=hatch&utm_source=crm&utm_medium=whatsapp&utm_campaign=trial-abandoned')
+  it('HATCHTRACK.1 — a Hatch Street row still awaiting payment carries the purchase for 24 hours (the page continues to payment from the id alone)', () => {
+    const hatch = { ...open, studio: 'hatch', provider: 'un1t_online' }
+    const link = trialResumeLink({ ...base, medium: 'whatsapp', checkout: hatch })
+    expect(link.url).toBe(`https://un1tdublin.com/trial?studio=hatch&purchase=${hatch.purchase_id}&utm_source=crm&utm_medium=whatsapp&utm_campaign=trial-abandoned`)
+    expect(link.suffix).toBe(`studio=hatch&purchase=${hatch.purchase_id}&utm_source=crm&utm_medium=whatsapp&utm_campaign=trial-abandoned`)
+    // Far past a Revolut order's two hours, still inside the row's own life.
+    const created = Date.parse(hatch.created_at)
+    expect(trialResumeLink({ ...base, checkout: hatch, nowMs: created + UN1T_TRIAL_RESUME_LINK_MS - 1000 }).url).toMatch(/purchase=/)
+    // Past it the page could only say "expired": the plain link.
+    const late = trialResumeLink({ ...base, medium: 'whatsapp', checkout: hatch, nowMs: created + UN1T_TRIAL_RESUME_LINK_MS })
+    expect(late.url).toBe('https://un1tdublin.com/trial?studio=hatch&utm_source=crm&utm_medium=whatsapp&utm_campaign=trial-abandoned')
+  })
+
+  it('a Hatch row that was not open at enrolment, or a provider the page cannot resume, never carries the purchase', () => {
+    expect(trialResumeLink({ ...base, checkout: { ...open, studio: 'hatch', provider: 'un1t_online', resumable: false } }).url).not.toMatch(/purchase=/)
+    expect(trialResumeLink({ ...base, checkout: { ...open, provider: 'stripe_connect' } }).url).not.toMatch(/purchase=/)
+    expect(trialResumeLink({ ...base, checkout: { ...open, provider: null } }).url).not.toMatch(/purchase=/)
+  })
+
+  it('the link names the purchase and nothing about the buyer', () => {
+    const { url } = trialResumeLink({ ...base, checkout: { ...open, studio: 'hatch', provider: 'un1t_online', email: 'sam@example.com', phone: '0871234567', name: 'Sam' } })
+    expect([...new URL(url).searchParams.keys()].sort()).toEqual(['purchase', 'studio', 'utm_campaign', 'utm_medium', 'utm_source'])
   })
 
   it('an unknown studio is left off, and a malformed purchase id is never placed in the link', () => {

@@ -39,5 +39,7 @@ export function parseTrialReturn(searchParams) {
     resumePurchaseId: typeof sp.purchase === 'string' && /^[0-9a-f-]{36}$/i.test(sp.purchase) ? sp.purchase : null,
     initialStudio: ['stillorgan', 'hatch'].includes(sp.studio) ? sp.studio : null,
     cancelled: sp.cancelled === '1',
+    // HATCHTRACK.1 — un1t.online's success return (un1tTrialReturnUrls).
+    paid: sp.paid === '1',
   }
 }

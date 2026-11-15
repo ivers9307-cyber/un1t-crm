@@ -36,6 +36,19 @@ const LOG = 'trialbuy'
 export const UN1T_TRIAL_ORIGIN = 'web_trial'
 
 /**
+ * Where un1t.online sends the buyer back to (HATCHTRACK.1: one definition for
+ * the first checkout and every later one for the same row). `paid=1` marks the
+ * success return, so the page can tell "came back from paying" (wait for the
+ * mirror) from "came back without paying" (`cancelled=1`, or the follow-up
+ * email's link, which carries neither): the CRM cannot see the money until
+ * the sync mirrors it, so the URL is the only thing that says which.
+ */
+export function un1tTrialReturnUrls(base, returnPath, purchaseId) {
+  const back = `${base}${returnPath}?purchase=${encodeURIComponent(purchaseId)}&studio=hatch`
+  return { successUrl: `${back}&paid=1`, cancelUrl: `${back}&cancelled=1` }
+}
+
+/**
  * @param {object} db service-role client
  * @param {{ row: object, location: { id: string, organization_id: string|null },
  *   contact: { id: string, email: string, first_name?: string|null, last_name?: string|null,
@@ -111,8 +124,7 @@ export async function startUn1tTrialCheckout(db, { row, location, contact, retur
 
   // ── 2. un1t.online's hosted checkout, back to the page the buyer started on, on the customer host ──
   const base = await resolveCustomerBaseUrl(db, locationId)
-  const successUrl = `${base}${returnPath}?purchase=${encodeURIComponent(purchaseId)}&studio=hatch`
-  const cancelUrl = `${successUrl}&cancelled=1`
+  const { successUrl, cancelUrl } = un1tTrialReturnUrls(base, returnPath, purchaseId)
   let checkout
   try {
     checkout = await createCheckoutLink(db, {

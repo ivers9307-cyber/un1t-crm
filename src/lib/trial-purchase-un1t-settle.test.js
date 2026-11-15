@@ -51,8 +51,8 @@ function matches(r, [op, col, val, extra]) {
   return true
 }
 
-function makeDb({ rows = [], txs = [], contact = CONTACT, race = new Set(), fail = {} } = {}) {
-  const tables = { trial_purchases: rows, un1t_transactions: txs }
+function makeDb({ rows = [], txs = [], contact = CONTACT, race = new Set(), fail = {}, ledger = [] } = {}) {
+  const tables = { trial_purchases: rows, un1t_transactions: txs, un1t_write_events: ledger }
   const updates = []
   const reads = []
   const db = {
@@ -256,6 +256,111 @@ describe('settleUn1tTrialPurchases', () => {
     }
     expect(rows.map((x) => [x.id, x.status])).toEqual([['old', 'expired'], ['noUser', 'expired'], ['young', 'awaiting_payment']])
     expect(mocks.capi).not.toHaveBeenCalled()
+  })
+
+  // HATCHTRACK.1 — the Purchase carries what the checkout request captured.
+  it('the Purchase carries the IP address, user agent and click ids kept at checkout, and they leave the row with the settle stamp', async () => {
+    const attribution = { fbc: 'fb.1.x', fbp: 'fb.1.y', event_source_url: 'https://www.un1tdublin.com/trial', utm_campaign: 'reset', client_ip: '203.0.113.9', client_user_agent: 'Mozilla/5.0 Test' }
+    const { db, updates, rows } = makeDb({ rows: [row({ attribution })], txs: [tx()] })
+    const r = await settleUn1tTrialPurchases(db, { now: () => T0 + 10 * MIN })
+    expect(r).toMatchObject({ settled: 1, errors: 0 })
+    expect(mocks.capi).toHaveBeenCalledTimes(1)
+    expect(mocks.capi).toHaveBeenCalledWith(db, expect.objectContaining({
+      eventName: 'Purchase', eventId: 'trialpurchase-tp1', orderId: 'tp1', externalId: 'c1',
+      clientIp: '203.0.113.9', userAgent: 'Mozilla/5.0 Test', fbc: 'fb.1.x', fbp: 'fb.1.y',
+      eventSourceUrl: 'https://www.un1tdublin.com/trial', value: 39, currency: 'EUR',
+    }))
+    // They leave the row in the settle stamp itself (one guarded write, no
+    // later write of the whole attribution that could erase a follow-up's stamp).
+    const ups = trialUpdates(updates)
+    expect(ups).toHaveLength(1)
+    expect(ups[0].fields).toMatchObject({ status: 'granted', attribution: { fbc: 'fb.1.x', fbp: 'fb.1.y', event_source_url: 'https://www.un1tdublin.com/trial', utm_campaign: 'reset' } })
+    guardedBy(ups[0], 'tp1')
+    expect(rows[0].attribution).not.toHaveProperty('client_ip')
+    expect(rows[0].attribution).not.toHaveProperty('client_user_agent')
+    expect(rows[0].status).toBe('granted')
+  })
+
+  it('a Purchase that Meta refused leaves the row without them all the same (nothing sends it again)', async () => {
+    mocks.capi.mockResolvedValueOnce({ sent: false, reason: 'api_error' })
+    const { db, rows } = makeDb({ rows: [row({ attribution: { fbc: 'fb.1.x', client_ip: '203.0.113.9', client_user_agent: 'UA' } })], txs: [tx()] })
+    await settleUn1tTrialPurchases(db, { now: () => T0 + 10 * MIN })
+    expect(rows[0].attribution).toEqual({ fbc: 'fb.1.x' })
+  })
+
+  it('an expired row loses them with the same guarded update', async () => {
+    const now = T0 + 2 * 24 * 60 * MIN
+    const { db, updates, rows } = makeDb({ rows: [row({ id: 'old', created_at: iso(now - UN1T_TRIAL_EXPIRY_MS - 1000), attribution: { fbc: 'fb.1.x', client_ip: '203.0.113.9', client_user_agent: 'UA' } })] })
+    expect(await settleUn1tTrialPurchases(db, { now: () => now })).toMatchObject({ expired: 1, errors: 0 })
+    const [u] = trialUpdates(updates)
+    expect(u.fields).toEqual({ status: 'expired', attribution: { fbc: 'fb.1.x' } })
+    guardedBy(u, 'old')
+    expect(rows[0].attribution).toEqual({ fbc: 'fb.1.x' })
+  })
+
+  // HATCHTRACK.1 — one row, several checkout attempts.
+  const checkoutEvent = (over = {}) => ({ location_id: 'loc2', op: 'checkout', stage: 'done', origin_ref: 'old', created_at: iso(T0), ...over })
+  it('a row past its own age is kept open while a checkout made for it is still inside the window, and expires once that one is too', async () => {
+    const now = T0 + 3 * 24 * 60 * MIN
+    const created = iso(now - UN1T_TRIAL_EXPIRY_MS - 60 * MIN)
+    const ledger = [
+      checkoutEvent({ created_at: created }), // the first checkout, as old as the row
+      checkoutEvent({ created_at: iso(now - 2 * 60 * MIN) }), // "Continue to payment", two hours ago
+    ]
+    const { db, updates, rows, reads } = makeDb({ rows: [row({ id: 'old', created_at: created }), row({ id: 'other', contact_id: 'c2', un1t_user_id: 'u2', created_at: created })], ledger })
+    const r = await settleUn1tTrialPurchases(db, { now: () => now })
+    expect(r).toMatchObject({ settled: 0, expired: 1, errors: 0 })
+    expect(rows.map((x) => [x.id, x.status])).toEqual([['old', 'awaiting_payment'], ['other', 'expired']])
+    expect(trialUpdates(updates)).toHaveLength(1)
+    // One ledger read for the sweep, scoped to the due rows and their studio.
+    const ledgerReads = reads.filter((x) => x.table === 'un1t_write_events')
+    expect(ledgerReads).toHaveLength(1)
+    expect(ledgerReads[0].filters).toEqual(expect.arrayContaining([
+      ['eq', 'op', 'checkout'], ['eq', 'stage', 'done'], ['in', 'location_id', ['loc2']], ['in', 'origin_ref', ['old', 'other']],
+    ]))
+    // …and once the newest checkout is itself past the window, the row expires.
+    const later = now + UN1T_TRIAL_EXPIRY_MS
+    expect(await settleUn1tTrialPurchases(db, { now: () => later })).toMatchObject({ expired: 1, errors: 0 })
+    expect(rows[0].status).toBe('expired')
+  })
+
+  it('a refused or still-open checkout attempt does not keep a row alive', async () => {
+    const now = T0 + 3 * 24 * 60 * MIN
+    const created = iso(now - UN1T_TRIAL_EXPIRY_MS - 60 * MIN)
+    const ledger = [checkoutEvent({ stage: 'refused', created_at: iso(now - MIN) }), checkoutEvent({ stage: 'sent', created_at: iso(now - MIN) }), checkoutEvent({ op: 'book', created_at: iso(now - MIN) })]
+    const { db } = makeDb({ rows: [row({ id: 'old', created_at: created })], ledger })
+    expect(await settleUn1tTrialPurchases(db, { now: () => now })).toMatchObject({ expired: 1 })
+  })
+
+  it('an unreadable checkout ledger expires nothing that sweep (counted), and still settles what it can', async () => {
+    const now = T0 + 3 * 24 * 60 * MIN
+    const created = iso(now - UN1T_TRIAL_EXPIRY_MS - 60 * MIN)
+    const { db, rows } = makeDb({
+      rows: [row({ id: 'old', created_at: created }), row({ id: 'pays', contact_id: 'c2', un1t_user_id: 'u2', created_at: iso(now - 30 * MIN) })],
+      txs: [tx({ un1t_user_id: 'u2', remote_created_at: iso(now - 20 * MIN) })],
+      fail: { un1t_write_events: true },
+    })
+    const r = await settleUn1tTrialPurchases(db, { now: () => now })
+    expect(r).toMatchObject({ settled: 1, expired: 0, errors: 1, readFailed: false })
+    expect(rows.map((x) => [x.id, x.status])).toEqual([['old', 'awaiting_payment'], ['pays', 'granted']])
+  })
+
+  it('no ledger read at all when no row is due to expire', async () => {
+    const { db, reads } = makeDb({ rows: [row()], txs: [tx()] })
+    await settleUn1tTrialPurchases(db, { now: () => T0 + 10 * MIN })
+    expect(reads.filter((x) => x.table === 'un1t_write_events')).toHaveLength(0)
+  })
+
+  it('a row the buyer went back to pay several times settles ONCE off the one payment, with one Purchase', async () => {
+    // Created two days ago, a fresh checkout an hour ago, paid on it 50 minutes ago.
+    const now = T0 + 2 * 24 * 60 * MIN
+    const ledger = [checkoutEvent({ origin_ref: 'tp1', created_at: iso(T0) }), checkoutEvent({ origin_ref: 'tp1', created_at: iso(now - 60 * MIN) })]
+    const { db, rows } = makeDb({ rows: [row()], txs: [tx({ remote_created_at: iso(now - 50 * MIN) })], ledger })
+    expect(await settleUn1tTrialPurchases(db, { now: () => now })).toMatchObject({ settled: 1, expired: 0, errors: 0 })
+    expect(rows[0]).toMatchObject({ status: 'granted', payment_provider_ref: 'tx1' })
+    expect(await settleUn1tTrialPurchases(db, { now: () => now + 2 * MIN })).toMatchObject({ settled: 0, expired: 0 })
+    expect(mocks.capi).toHaveBeenCalledTimes(1)
+    expect(mocks.setPassword).toHaveBeenCalledTimes(1)
   })
 
   it('a status guard that matches nothing (raced) sends no Purchase', async () => {

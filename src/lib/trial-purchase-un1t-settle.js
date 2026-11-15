@@ -27,8 +27,10 @@
 // after a crash between the stamp and the side effects, never sends twice.
 //
 // Expiry: an open row older than UN1T_TRIAL_EXPIRY_MS (the un1t.online
-// checkout's 24h plus the sync's lag) with no purchase becomes 'expired'. A
-// row whose transactions could not be read is neither settled nor expired.
+// checkout's 24h plus the sync's lag) with no purchase becomes 'expired',
+// unless a checkout was made for it inside that window (HATCHTRACK.1: the
+// buyer went back to pay the same row; the write ledger says when). A row
+// whose transactions could not be read is neither settled nor expired.
 //
 // Never throws: every failure is counted in `errors` and logged with ids only.
 // `readFailed` says the sweep could not read its own work list (the cron then
@@ -42,7 +44,7 @@
 // `passwordPending`: a settled buyer whose set-password step did not finish
 // (anything but done / skipped_*, or a throw); the verdict is logged and kept
 // on the row as grant.set_password for staff.
-import { sendWebsiteConversion } from '@/lib/meta-capi'
+import { sendTrialPurchaseConversion, clientDataRemoval } from '@/lib/trial-purchase-conversion'
 import { queueFundedClassBooking, fundedBookingFromRow, FUNDED_BY } from '@/lib/class-first-booking'
 import { runSetPasswordStep } from '@/lib/un1t-online-account'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
@@ -161,12 +163,38 @@ export async function settleUn1tTrialPurchases(db, { now = () => Date.now(), pag
     }
   }
 
-  for (const r of rows) {
-    if (settledIds.has(r.id) || unreadable.has(r.id)) continue
-    if (Date.parse(r.created_at) + UN1T_TRIAL_EXPIRY_MS >= nowMs) continue
+  // HATCHTRACK.1 — a row is one purchase however many times the buyer went
+  // back to pay it: "Continue to payment" gives the SAME row a fresh checkout
+  // (trial-purchase-un1t-resume.js), recorded on the write ledger under the
+  // row's id. So the row's clock is its NEWEST checkout, not its creation: a
+  // row past its own age is kept open while a checkout made for it is still
+  // inside the window. An unreadable ledger expires nothing this sweep.
+  const due = rows.filter((r) => !settledIds.has(r.id) && !unreadable.has(r.id)
+    && Date.parse(r.created_at) + UN1T_TRIAL_EXPIRY_MS < nowMs)
+  const stillOpen = new Set()
+  if (due.length > 0) {
+    try {
+      const { data, error } = await db.from('un1t_write_events').select('origin_ref, created_at')
+        .eq('op', 'checkout').eq('stage', 'done')
+        .in('location_id', [...new Set(due.map((r) => r.location_id))])
+        .in('origin_ref', due.map((r) => r.id))
+        .gte('created_at', new Date(nowMs - UN1T_TRIAL_EXPIRY_MS).toISOString())
+        .order('created_at', { ascending: false }).range(0, 999)
+      if (error) throw Object.assign(new Error('checkout ledger unreadable'), { code: error.code ?? null })
+      for (const e of data || []) if (e?.origin_ref) stillOpen.add(e.origin_ref)
+    } catch (err) {
+      out.errors++
+      logWarn(LOG, 'checkout ledger unreadable; no row expired this sweep', { code: err?.code ?? null, errClass: err?.name })
+      return out
+    }
+  }
+
+  for (const r of due) {
+    if (stillOpen.has(r.id)) continue
     let data, error
     try {
-      ({ data, error } = await db.from('trial_purchases').update({ status: 'expired' })
+      // The buyer's browser details go with the checkout (trial-purchase-conversion.js).
+      ({ data, error } = await db.from('trial_purchases').update({ status: 'expired', ...clientDataRemoval(r) })
         .eq('id', r.id).eq('status', 'awaiting_payment').select('id'))
     } catch (err) {
       error = err
@@ -189,6 +217,9 @@ async function settleRow(db, row, tx, nowMs, out) {
       status: 'granted', granted_at: tx.remote_created_at,
       payment_status: 'paid', paid_at: tx.remote_created_at,
       payment_provider_ref: tx.un1t_id, grant,
+      // HATCHTRACK.1 — the buyer's IP address and user agent leave the row
+      // with the settle stamp; the Purchase below is sent from `row` as read.
+      ...clientDataRemoval(row),
     }).eq('id', row.id).eq('status', 'awaiting_payment').select('id'))
   } catch (err) {
     error = err
@@ -219,20 +250,11 @@ async function settleRow(db, row, tx, nowMs, out) {
     logWarn(LOG, 'funded class booking not queued', { ...ids, errClass: err?.name })
   }
 
+  // HATCHTRACK.1 — the Purchase with what the checkout request captured (IP,
+  // user agent, click ids): this sweep has no request, and the buyer's
+  // browser rarely sees the grant, so this copy is usually the only one.
   try {
-    await sendWebsiteConversion(db, {
-      locationId: row.location_id,
-      eventName: 'Purchase',
-      email: row.customer_email, phone: row.customer_phone,
-      firstName: row.first_name, lastName: row.last_name,
-      externalId: row.contact_id,
-      eventSourceUrl: row.attribution?.event_source_url || undefined,
-      eventId: `trialpurchase-${row.id}`,
-      contentName: row.product_name,
-      value: (row.amount_cents || 0) / 100, currency: row.currency || 'EUR',
-      orderId: row.id, contentType: 'product',
-      fbc: row.attribution?.fbc, fbp: row.attribution?.fbp,
-    })
+    await sendTrialPurchaseConversion(db, row)
   } catch (err) {
     out.errors++
     logWarn(LOG, 'capi purchase failed', { ...ids, errClass: err?.name })

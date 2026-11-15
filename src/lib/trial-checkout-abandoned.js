@@ -364,8 +364,13 @@ export async function sweepAbandonedTrialCheckouts(db, {
       studio: TRIAL_STUDIOS.find((s) => s.publicPath === newest.landing_path)?.key ?? null,
       provider: newest.payment_provider ?? null,
       created_at: newest.created_at,
-      resumable: newest.status === 'awaiting_payment' && newest.payment_status === 'pending'
-        && newest.payment_provider === 'revolut' && Boolean(newest.payment_checkout_token),
+      // An open Revolut checkout, or (HATCHTRACK.1) a Hatch Street row still
+      // awaiting payment: the page gives that same row a checkout again from
+      // its id alone (POST /api/public/trial-purchases/[id]/checkout).
+      resumable: newest.status === 'awaiting_payment' && (
+        newest.payment_provider === 'un1t_online'
+        || (newest.payment_status === 'pending' && newest.payment_provider === 'revolut' && Boolean(newest.payment_checkout_token))
+      ),
     }
     let res
     try {

@@ -4,7 +4,7 @@
 // Stillorgan (Revolut) row still re-checks while pending.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ rateLimit: vi.fn(), getPayment: vi.fn(), paymentsFor: vi.fn(), mark: vi.fn(), push: vi.fn(), row: null }))
+const mocks = vi.hoisted(() => ({ rateLimit: vi.fn(), getPayment: vi.fn(), paymentsFor: vi.fn(), mark: vi.fn(), push: vi.fn(), row: null, selects: [] }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: mocks.rateLimit }))
 vi.mock('@/lib/payments', () => ({ paymentsFor: mocks.paymentsFor }))
 vi.mock('@/lib/trial-purchase-payments', () => ({ markTrialPurchasePaymentStatus: mocks.mark }))
@@ -13,7 +13,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from: () => {
-      const b = { select: () => b, eq: () => b, maybeSingle: async () => ({ data: mocks.row, error: null }) }
+      const b = { select: (cols) => { mocks.selects.push(String(cols)); return b }, eq: () => b, maybeSingle: async () => ({ data: mocks.row, error: null }) }
       return b
     },
   }),
@@ -27,6 +27,7 @@ const BASE = { id: 'tp1', amount_cents: 3900, currency: 'EUR', product_name: 'Th
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.selects.length = 0
   mocks.rateLimit.mockResolvedValue({ allowed: true })
   mocks.getPayment.mockResolvedValue({ state: 'pending', amountCents: 3900 })
   mocks.paymentsFor.mockReturnValue({ getPayment: mocks.getPayment })
@@ -78,5 +79,52 @@ describe('GET /api/public/trial-purchases/[id]', () => {
     expect((await (await call('tp1')).json()).data).toMatchObject({ state: 'paid', resumable: false })
     mocks.row = { ...OPEN_REVOLUT, status: 'payment_failed', payment_status: 'expired', created_at: minutesAgo(5) }
     expect((await (await call('tp1')).json()).data).toMatchObject({ state: 'failed', payment_status: 'expired', resumable: false })
+  })
+
+  // HATCHTRACK.1 — `retryable`: may the page send a Hatch buyer back to payment?
+  const OPEN_HATCH = { ...BASE, status: 'awaiting_payment', payment_status: 'pending', payment_provider: 'un1t_online', payment_provider_ref: null, payment_checkout_token: null, payment_checkout_url: null, un1t_user_id: 'u-77', un1t_product_id: 'prod-1' }
+  const hoursAgo = (h) => new Date(Date.now() - h * 3_600_000).toISOString()
+  it('an unpaid Hatch row with its un1t.online account is retryable (never resumable); a Revolut row never is', async () => {
+    mocks.row = { ...OPEN_HATCH, created_at: hoursAgo(3) }
+    expect((await (await call('tp1')).json()).data).toMatchObject({ state: 'pending', retryable: true, resumable: false, checkout: null })
+    mocks.row = { ...OPEN_HATCH, payment_provider: 'revolut', payment_provider_ref: 'ord1', payment_checkout_token: 'tok', created_at: hoursAgo(1) }
+    expect((await (await call('tp1')).json()).data.retryable).toBe(false)
+  })
+  it('a Hatch row with no account yet, one already settled, expired or too old is not retryable', async () => {
+    for (const over of [{ un1t_user_id: null }, { un1t_product_id: null }, { status: 'granted' }, { status: 'expired' }, { status: 'help_requested' }, { created_at: hoursAgo(73) }]) {
+      mocks.row = { ...OPEN_HATCH, created_at: hoursAgo(1), ...over }
+      expect((await (await call('tp1')).json()).data.retryable).toBe(false)
+    }
+  })
+
+  // HATCHTRACK.1 — the row now holds the buyer's IP address and user agent
+  // (attribution.client_ip / client_user_agent) as well as their name, email
+  // and phone. None of it may ever leave through this anonymous route: not as
+  // a column it reads, and not in what it answers, whatever the row holds.
+  it('reads no column that names the buyer and never answers with one, even if the row carried them', async () => {
+    const secrets = {
+      customer_name: 'Sam Byrne', first_name: 'Sam', last_name: 'Byrne', customer_email: 'sam@example.com', customer_phone: '0871234567',
+      contact_id: 'contact-uuid-1', un1t_ledger_id: 'ledger-uuid-1',
+      attribution: { client_ip: '203.0.113.9', client_user_agent: 'Mozilla/5.0 SecretAgent', fbc: 'fb.1.1.CLICK', fbp: 'fb.1.2.3', utm_campaign: 'reset' },
+    }
+    for (const base of [OPEN_HATCH, OPEN_REVOLUT]) {
+      mocks.selects.length = 0
+      mocks.row = { ...base, created_at: hoursAgo(1), ...secrets }
+      const r = await call('tp1')
+      const text = JSON.stringify(await r.json())
+      for (const v of ['Sam', 'Byrne', 'sam@example.com', '0871234567', '203.0.113.9', 'SecretAgent', 'fb.1.1.CLICK', 'fb.1.2.3', 'contact-uuid-1', 'ledger-uuid-1', 'u-77', 'prod-1']) {
+        expect(text).not.toContain(v)
+      }
+      for (const k of ['attribution', 'client_ip', 'client_user_agent', 'customer_', 'first_name', 'last_name', 'contact_id', 'un1t_user_id', 'un1t_product_id', 'fbc', 'fbp']) {
+        expect(text).not.toContain(k)
+      }
+      // Every read names its columns (never `*`), and none is the buyer's.
+      expect(mocks.selects.length).toBeGreaterThan(0)
+      for (const cols of mocks.selects) {
+        const list = cols.split(',').map((c) => c.trim())
+        expect(list).not.toContain('*')
+        for (const c of ['attribution', 'customer_name', 'customer_email', 'customer_phone', 'first_name', 'last_name', 'contact_id']) expect(list).not.toContain(c)
+      }
+    }
   })
 })

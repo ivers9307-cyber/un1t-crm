@@ -17,7 +17,15 @@ describe('trialStudioView', () => {
     expect(trialStudioView(entry, { companyName: 'UN1T Hatch Street' })).toEqual({
       key: 'hatch', publicPath: 'hatch-street', label: 'UN1T Hatch Street', sellable: true, block: clientTrialBlock(block),
       priceCents: 3900, currency: 'EUR', durationDays: 14, productName: 'Reset',
+      metaPixelId: null,
     })
+  })
+  it("HATCHTRACK.1 — carries the studio's own Meta dataset id when it has one, and never the location id", () => {
+    const hatch = trialStudioView({ ...entry, locationId: '28c78d6b-f7b3-4edf-8c7c-840bd047b3f4' }, null)
+    expect(hatch.metaPixelId).toBe('39174085025538525')
+    expect(JSON.stringify(hatch)).not.toContain('28c78d6b')
+    expect(trialStudioView({ ...entry, locationId: 'a0000000-0000-0000-0000-000000000001' }, null).metaPixelId).toBeNull()
+    expect(trialStudioView({ ...entry, locationId: null }, null).metaPixelId).toBeNull()
   })
   it('a Glofox-provider block at hatch is not sellable; no brand falls back to the studio name', () => {
     const v = trialStudioView({ ...entry, config: { ...entry.config, provider: 'glofox' } }, null)

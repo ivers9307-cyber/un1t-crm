@@ -153,10 +153,11 @@ const studioRowOf = (page, studios) => resolvePageStudio({ page, studios }).stud
 function resumeElsewhere(slug, rest, sp) {
   if (Array.isArray(rest) && rest.length) return
   if (!TRIAL_STUDIOS.some((s) => s.publicPath === slug)) return
-  const { resumePurchaseId, cancelled } = parseTrialReturn(sp)
+  const { resumePurchaseId, cancelled, paid } = parseTrialReturn(sp)
   if (!resumePurchaseId) return
   const key = slug === 'hatch-street' ? 'hatch' : 'stillorgan'
-  redirect(`/trial?purchase=${resumePurchaseId}&studio=${key}${cancelled ? '&cancelled=1' : ''}`)
+  // HATCHTRACK.1 — `paid=1` travels too: it is what tells /trial the buyer came back from paying.
+  redirect(`/trial?purchase=${resumePurchaseId}&studio=${key}${cancelled ? '&cancelled=1' : ''}${paid && !cancelled ? '&paid=1' : ''}`)
 }
 
 // The three /welcome/[location] pages' metadata, kept to the character (their

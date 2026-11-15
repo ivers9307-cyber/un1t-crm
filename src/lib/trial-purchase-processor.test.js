@@ -121,6 +121,33 @@ describe('processTrialPurchase', () => {
     expect(mocks.capi).toHaveBeenCalledWith(db, expect.objectContaining({ eventName: 'Purchase', eventId: 'trialpurchase-tp1', locationId: 'loc1', fbc: 'fb.1.x' }))
   })
 
+  it('HATCHTRACK.1: the Purchase carries the IP address, user agent and click ids the checkout request kept (the worker has no request)', async () => {
+    const { db, updates } = makeDb({ contact: { id: 'c1', email: 'ava@example.com', first_name: 'Ava', last_name: 'Byrne', glofox_member_id: 'g-existing' } })
+    const row = { ...ROW, attribution: { ...ROW.attribution, fbp: 'fb.1.2.3', client_ip: '203.0.113.9', client_user_agent: 'Mozilla/5.0 Test' } }
+    expect(await processTrialPurchase(db, row, { now: () => 'T' })).toEqual({ outcome: 'granted' })
+    expect(mocks.capi).toHaveBeenCalledTimes(1)
+    expect(mocks.capi).toHaveBeenCalledWith(db, {
+      locationId: 'loc1', eventName: 'Purchase',
+      email: 'ava@example.com', phone: '+353850000001', firstName: 'Ava', lastName: 'Byrne',
+      externalId: 'c1', eventSourceUrl: 'https://www.un1tdublin.com/trial',
+      eventId: 'trialpurchase-tp1', contentName: '2 Week Trial',
+      value: 39, currency: 'EUR', orderId: 'tp1', contentType: 'product',
+      fbc: 'fb.1.x', fbp: 'fb.1.2.3', clientIp: '203.0.113.9', userAgent: 'Mozilla/5.0 Test',
+    })
+    // They leave the row in the grant stamp itself, and in no other write.
+    const withAttribution = updates.filter((u) => 'attribution' in u.fields)
+    expect(withAttribution).toHaveLength(1)
+    expect(withAttribution[0].fields).toMatchObject({ status: 'granted', attribution: { fbc: 'fb.1.x', event_source_url: 'https://www.un1tdublin.com/trial', fbp: 'fb.1.2.3' } })
+    expect(withAttribution[0].fields.attribution).not.toHaveProperty('client_ip')
+    expect(withAttribution[0].fields.attribution).not.toHaveProperty('client_user_agent')
+  })
+
+  it('HATCHTRACK.1: a row that holds no browser details gets no attribution write (a follow-up stamp is never overwritten)', async () => {
+    const { db, updates } = makeDb({ contact: { id: 'c1', email: 'ava@example.com', first_name: 'Ava', last_name: 'Byrne', glofox_member_id: 'g-existing' } })
+    await processTrialPurchase(db, ROW, { now: () => 'T' })
+    expect(updates.filter((u) => 'attribution' in u.fields)).toHaveLength(0)
+  })
+
   it('a new person gets an account (attachTrial false) and then the plan', async () => {
     const { db } = makeDb()
     const r = await processTrialPurchase(db, ROW)

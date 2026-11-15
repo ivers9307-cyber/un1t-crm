@@ -6,7 +6,7 @@
 // senders can use it without a cycle (the sweep reaches the engine through
 // triggers.js).
 import { logWarn, logError } from '@/lib/log'
-import { TRIAL_CHECKOUT_REUSE_MS } from '@/lib/trial-checkout-window'
+import { TRIAL_CHECKOUT_REUSE_MS, UN1T_TRIAL_RESUME_LINK_MS } from '@/lib/trial-checkout-window'
 
 const MODULE = 'trial-abandoned'
 
@@ -38,8 +38,12 @@ export function trialCheckoutFromEnrollment(enrollment) {
  * The link back to the /trial page for one enrolment, built at send time.
  * `/trial?studio=<key>&purchase=<id>` while the row was an open Revolut
  * checkout at enrolment AND is still young enough to be handed back
- * (TRIAL_CHECKOUT_REUSE_MS); otherwise `/trial?studio=<key>` (a Hatch Street
- * checkout URL is never stored, and a closed order cannot be reopened). The
+ * (TRIAL_CHECKOUT_REUSE_MS), or (HATCHTRACK.1) was a Hatch Street row still
+ * awaiting payment AND is younger than UN1T_TRIAL_RESUME_LINK_MS: the page
+ * then shows "Continue to payment", which gives that row a checkout again
+ * with nothing retyped. Otherwise `/trial?studio=<key>` (a closed order
+ * cannot be reopened). The link carries the purchase id and nothing about
+ * the buyer; the status route it leads to returns no name, email or phone. The
  * studio is left off when the row's page is not one of the /trial studios.
  * Pure. Both values are '' for an enrolment that carries no checkout, so a
  * body that uses the tag on another trigger renders nothing.
@@ -56,7 +60,13 @@ export function trialResumeLink({ baseUrl, checkout, medium, nowMs = Date.now() 
   const created = Date.parse(checkout.created_at || '')
   const age = Number.isFinite(created) ? nowMs - created : null
   const purchaseId = typeof checkout.purchase_id === 'string' && /^[0-9a-f-]{36}$/i.test(checkout.purchase_id) ? checkout.purchase_id : null
-  if (checkout.resumable === true && checkout.provider === 'revolut' && purchaseId && age !== null && age >= 0 && age < TRIAL_CHECKOUT_REUSE_MS) {
+  // How long the purchase is worth naming: a Revolut order's reuse window, or
+  // (HATCHTRACK.1) a Hatch Street row's life before the settle sweep expires
+  // it. Past that the page would only say "expired", so the link is the plain one.
+  const maxAge = checkout.provider === 'revolut' ? TRIAL_CHECKOUT_REUSE_MS
+    : checkout.provider === 'un1t_online' ? UN1T_TRIAL_RESUME_LINK_MS
+      : 0
+  if (checkout.resumable === true && purchaseId && age !== null && age >= 0 && age < maxAge) {
     params.set('purchase', purchaseId)
   }
   params.set('utm_source', 'crm')

@@ -518,7 +518,7 @@ describe('POST /api/public/trial-purchases', () => {
     const r = await POST(req({ ...HATCH_BODY, return_path: '/hatch-street' }))
     expect(r.status).toBe(200)
     expect(mocks.checkout).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      successUrl: 'https://www.un1tdublin.com/hatch-street?purchase=tp9&studio=hatch',
+      successUrl: 'https://www.un1tdublin.com/hatch-street?purchase=tp9&studio=hatch&paid=1',
       cancelUrl: 'https://www.un1tdublin.com/hatch-street?purchase=tp9&studio=hatch&cancelled=1',
     }))
   })
@@ -616,7 +616,7 @@ describe('POST /api/public/trial-purchases', () => {
     expect(mocks.baseUrl).toHaveBeenCalledWith(expect.anything(), 'loc2')
     expect(mocks.checkout).toHaveBeenCalledWith(expect.anything(), {
       locationId: 'loc2', userId: 'u-77', productId: HATCH_PRODUCT_ID,
-      successUrl: 'https://www.un1tdublin.com/trial?purchase=tp9&studio=hatch',
+      successUrl: 'https://www.un1tdublin.com/trial?purchase=tp9&studio=hatch&paid=1',
       cancelUrl: 'https://www.un1tdublin.com/trial?purchase=tp9&studio=hatch&cancelled=1',
       idempotencyKey: 'trial_purchase:tp9', origin: 'web_trial', originRef: 'tp9', actor: null,
     })
@@ -779,5 +779,86 @@ describe('POST /api/public/trial-purchases — page (PAGES.1)', () => {
     expect((await off.json()).code).toBe('not_configured')
     expect(mocks.contact).not.toHaveBeenCalled()
     expect(mocks.inserted).not.toHaveBeenCalled()
+  })
+})
+
+// HATCHTRACK.1 — what the checkout request keeps for the Purchase, and the
+// first touch a later attempt takes from the buyer's own earlier row.
+describe('POST /api/public/trial-purchases — HATCHTRACK.1 tracking', () => {
+  const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148'
+  const PRIOR_ID = '44444444-4444-4444-8444-444444444444'
+  const priorRead = (attribution, seen = []) => async (table, filters, mode) => {
+    if (table === 'trial_purchases' && filterValue(filters, 'id') === PRIOR_ID) {
+      seen.push(filters)
+      return { data: attribution === undefined ? null : { id: PRIOR_ID, attribution }, error: null }
+    }
+    return readFixture(table, filters, mode)
+  }
+
+  it("the row keeps the request's IP address and user agent for the Purchase, at both studios", async () => {
+    await POST(req(BODY, { 'user-agent': UA }))
+    expect(mocks.inserted.mock.calls[0][0].attribution).toMatchObject({ client_ip: '1.2.3.4', client_user_agent: UA })
+    await POST(req(HATCH_BODY, { 'user-agent': UA }))
+    expect(mocks.inserted.mock.calls[1][0].attribution).toMatchObject({ client_ip: '1.2.3.4', client_user_agent: UA, fbc: 'fb.1.xyz', fbp: 'fb.1.1.2' })
+  })
+
+  it('a user agent is cut to 512 characters and a missing one is not stored', async () => {
+    await POST(req(BODY, { 'user-agent': 'x'.repeat(2000) }))
+    expect(mocks.inserted.mock.calls[0][0].attribution.client_user_agent).toHaveLength(512)
+    await POST(req(BODY, { 'user-agent': '' }))
+    expect(mocks.inserted.mock.calls[1][0].attribution).not.toHaveProperty('client_user_agent')
+  })
+
+  it('no answer of this route carries them', async () => {
+    for (const body of [BODY, HATCH_BODY]) {
+      const text = JSON.stringify(await (await POST(req(body, { 'user-agent': UA }))).json())
+      expect(text).not.toContain('1.2.3.4')
+      expect(text).not.toContain('AppleWebKit')
+      expect(text).not.toContain('attribution')
+    }
+  })
+
+  it("a second attempt with no click id takes the first touch from the buyer's own earlier row, and the events of this request carry it", async () => {
+    const seen = []
+    mocks.read.mockImplementation(priorRead({ fbc: 'fb.1.111.FIRSTCLICK', fbp: 'fb.1.9.9', utm_campaign: 'reset', utm_source: 'ig', ad_provider: 'meta', ad_external_id: 'ad1', client_ip: '9.9.9.9', client_user_agent: 'OldAgent', in_app_browser: 'instagram' }, seen))
+    const r = await POST(req({ ...HATCH_BODY, attribution: undefined, resume_purchase_id: PRIOR_ID }, { 'user-agent': UA }))
+    expect(r.status).toBe(200)
+    // The earlier row is read by its id AND this contact AND this studio: an id alone finds nothing.
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toEqual(expect.arrayContaining([['eq', 'id', PRIOR_ID], ['eq', 'contact_id', 'c1'], ['eq', 'location_id', 'loc2']]))
+    const a = mocks.inserted.mock.calls[0][0].attribution
+    expect(a).toMatchObject({ fbc: 'fb.1.111.FIRSTCLICK', fbp: 'fb.1.9.9', utm_campaign: 'reset', utm_source: 'ig', ad_provider: 'meta', ad_external_id: 'ad1' })
+    // The browser details are this request's own, never the earlier row's.
+    expect(a).toMatchObject({ client_ip: '1.2.3.4', client_user_agent: UA, in_app_browser: null })
+    for (const name of ['Lead', 'InitiateCheckout']) {
+      expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: name, fbc: 'fb.1.111.FIRSTCLICK', fbp: 'fb.1.9.9', clientIp: '1.2.3.4', userAgent: UA }))
+    }
+  })
+
+  it("this request's own values win over the earlier row's", async () => {
+    mocks.read.mockImplementation(priorRead({ fbc: 'fb.1.111.OLD', fbp: 'fb.1.9.9', utm_campaign: 'old' }))
+    await POST(req({ ...HATCH_BODY, resume_purchase_id: PRIOR_ID }))
+    expect(mocks.inserted.mock.calls[0][0].attribution).toMatchObject({ fbc: 'fb.1.xyz', fbp: 'fb.1.1.2', utm_campaign: 'c1' })
+  })
+
+  it("an earlier row that is not this buyer's (the read finds none), or a read that fails, changes nothing and still sells", async () => {
+    mocks.read.mockImplementation(priorRead(undefined))
+    expect((await POST(req({ ...HATCH_BODY, attribution: undefined, resume_purchase_id: PRIOR_ID }))).status).toBe(200)
+    expect(mocks.inserted.mock.calls[0][0].attribution.fbc).toBeUndefined()
+    mocks.read.mockImplementation(async (table, filters, mode) => (table === 'trial_purchases' && filterValue(filters, 'id') === PRIOR_ID
+      ? { data: null, error: { code: 'XX000' } }
+      : readFixture(table, filters, mode)))
+    expect((await POST(req({ ...HATCH_BODY, attribution: undefined, resume_purchase_id: PRIOR_ID }))).status).toBe(200)
+    expect(mocks.inserted).toHaveBeenCalledTimes(2)
+  })
+
+  it('without a resume_purchase_id no earlier row is ever read (an email or phone alone inherits nothing)', async () => {
+    const seen = []
+    mocks.read.mockImplementation(async (table, filters, mode) => {
+      if (table === 'trial_purchases' && filterValue(filters, 'id') !== undefined) seen.push(filters)
+      return readFixture(table, filters, mode)
+    })
+    await POST(req({ ...HATCH_BODY, attribution: undefined }))
+    expect(seen).toHaveLength(0)
   })
 })

@@ -50,6 +50,7 @@ import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 import { logWarn, logError } from '@/lib/log'
 import { resolveChosenClass, classColumnsFor, chosenClassRefusal } from '@/lib/class-first-choice'
 import { classFirstStepCopy } from '@/lib/class-first-funnel'
+import { clientDataForAttribution, inheritAttribution } from '@/lib/trial-purchase-conversion'
 
 export const runtime = 'nodejs'
 
@@ -271,7 +272,10 @@ export async function POST(request) {
   // (trial_used, active_member, help_filed) was still captured, so gets the
   // Lead alone. Each is its own best-effort send.
   const { fbcFromFbclid } = await import('@/lib/meta-capi')
-  const fbc = fbcFromFbclid(b.attribution?.fbclid) || undefined
+  // HATCHTRACK.1 — `let`: a later attempt that arrived without its click id
+  // or browser id takes them from the buyer's own earlier row (below).
+  let fbc = fbcFromFbclid(b.attribution?.fbclid) || undefined
+  let fbp = b.attribution?.fbp
   const sendConversions = async ({ initiateCheckout }) => {
     try {
       const { sendWebsiteConversion } = await import('@/lib/meta-capi')
@@ -283,7 +287,7 @@ export async function POST(request) {
         fbc, clientIp: ip,
         userAgent: request.headers.get('user-agent') || undefined,
         firstName: b.first_name, lastName: b.last_name, externalId: contactId,
-        fbp: b.attribution?.fbp,
+        fbp,
       }
       await sendWebsiteConversion(db, { ...identity, eventName: 'Lead', eventId: leadEventId })
       if (!initiateCheckout) return
@@ -335,13 +339,18 @@ export async function POST(request) {
   }
 
   // ── The purchase row, then the provider payment (Stillorgan) or un1t.online's checkout (Hatch) ──
-  const attribution = {
+  let attribution = {
     ...(b.attribution || {}),
     fbc,
     event_source_url: product.eventSourceUrl,
     // TRIALLEAK.1 — Facebook's or Instagram's in-app browser (where an ad
     // buyer lands, and where a wallet button may not show), from the request.
     in_app_browser: inAppBrowserFromUserAgent(request.headers.get('user-agent')),
+    // HATCHTRACK.1 — the two things the Purchase needs that only this request
+    // has (it is sent later, from a worker): removed from the row once the
+    // Purchase has been tried or the checkout ends unpaid, and never returned
+    // by a public route (src/lib/trial-purchase-conversion.js).
+    ...clientDataForAttribution({ ip, userAgent: request.headers.get('user-agent') }),
   }
   delete attribution.fbclid
 
@@ -380,6 +389,23 @@ export async function POST(request) {
           resumed: true,
         } })
       }
+    }
+  }
+
+  // HATCHTRACK.1 — a second attempt (a cancelled checkout, a failed card) is
+  // loaded from a URL with no fbclid, so its row had no click id and the
+  // Purchase could not be tied to the ad. When the caller names the purchase
+  // its browser already holds AND that row is this contact's at this studio,
+  // the new row takes the first-touch values it is missing from it (never the
+  // browser details, which are this request's own). Best-effort.
+  if (b.resume_purchase_id) {
+    const { data: prior, error: priorErr } = await db.from('trial_purchases').select('id, attribution')
+      .eq('id', b.resume_purchase_id).eq('contact_id', contactId).eq('location_id', locationId).maybeSingle()
+    if (priorErr) logWarn('trialbuy', 'earlier attempt unread; first touch not carried', { code: priorErr.code ?? null, contactId })
+    else if (prior) {
+      attribution = inheritAttribution(attribution, prior.attribution)
+      fbc = attribution.fbc || undefined
+      fbp = attribution.fbp || undefined
     }
   }
 

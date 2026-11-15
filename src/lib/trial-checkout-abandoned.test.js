@@ -135,7 +135,25 @@ describe('sweepAbandonedTrialCheckouts: enrolling', () => {
     expect(d.trigger.mock.calls[0][1].checkout.resumable).toBe(true)
   })
 
-  it('a Hatch row is judged on the un1t.online reads and is never resumable', async () => {
+  it('HATCHTRACK.1 — a Hatch row still awaiting payment past the wait is enrolled as resumable (the page continues the same row)', async () => {
+    const row = tp({ location_id: HATCH, status: 'awaiting_payment', payment_status: 'pending', last_error: null, payment_provider: 'un1t_online', payment_checkout_token: null, landing_path: 'hatch-street', created_at: at(1.2) })
+    const db = fakeDb(base({
+      email_sequences: [{ id: 'seq-h', location_id: HATCH, status: 'active', trigger_type: ABANDONED_TRIGGER }],
+      trial_purchases: [row],
+    }))
+    const d = deps()
+    const out = await sweepAbandonedTrialCheckouts(db, d)
+    expect(out).toMatchObject({ ok: true, enrolled: 1 })
+    expect(d.trigger.mock.calls[0][1].checkout).toEqual({ purchase_id: row.id, studio: 'hatch', provider: 'un1t_online', created_at: row.created_at, resumable: true })
+    // One row, judged once: a later tick (the buyer has since been back to
+    // pay it, twice; the row is the same row) offers nothing again.
+    const again = deps()
+    await sweepAbandonedTrialCheckouts(db, again)
+    expect(again.trigger).not.toHaveBeenCalled()
+    expect(row.status).toBe('awaiting_payment')
+  })
+
+  it('an EXPIRED Hatch row is judged on the un1t.online reads and is not resumable', async () => {
     const row = tp({ location_id: HATCH, status: 'expired', payment_status: null, last_error: null, payment_provider: 'un1t_online', payment_checkout_token: null, landing_path: 'hatch-street' })
     const db = fakeDb(base({
       email_sequences: [{ id: 'seq-h', location_id: HATCH, status: 'active', trigger_type: ABANDONED_TRIGGER }],
@@ -431,6 +449,18 @@ describe('sweepAbandonedTrialCheckouts: stop on purchase', () => {
     const db = fakeDb(base({ trial_purchases: [row], sequence_enrollments: [e] }))
     await sweepAbandonedTrialCheckouts(db, deps())
     expect(e.status).toBe('exited')
+  })
+
+  it('HATCHTRACK.1 — a Hatch row paid on a later checkout attempt (the same row, settled days after it was made) exits the enrolment made for it', async () => {
+    const row = tp({ location_id: HATCH, status: 'granted', payment_status: 'paid', payment_provider: 'un1t_online', payment_checkout_token: null, landing_path: 'hatch-street', created_at: at(40), abandon_followup_at: at(39), abandon_followup_outcome: 'enrolled' })
+    const e = enrolment({ sequence_id: 'seq-h', metadata: { trial_checkout: { purchase_id: row.id, provider: 'un1t_online', created_at: row.created_at, resumable: true } } })
+    const db = fakeDb(base({
+      email_sequences: [{ id: 'seq-h', location_id: HATCH, status: 'active', trigger_type: ABANDONED_TRIGGER }],
+      trial_purchases: [row], sequence_enrollments: [e],
+    }))
+    const out = await sweepAbandonedTrialCheckouts(db, deps())
+    expect(out).toMatchObject({ ok: true, exited: 1 })
+    expect(e).toMatchObject({ status: 'exited', exit_reason: 'trial_purchased' })
   })
 
   it('a purchase from BEFORE the checkout they were enrolled for does not exit them', async () => {

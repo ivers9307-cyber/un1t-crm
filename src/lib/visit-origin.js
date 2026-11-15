@@ -11,9 +11,58 @@
 // routes stamp it on the contact once (stamp-if-null = first touch).
 //
 // Browser helpers and pure helpers live together so the forms, the routes
-// and the UI share one definition. Nothing here imports a server module.
+// and the UI share one definition. Nothing here imports a server module
+// (campaign-funnel-attribution.js is pure and client-safe).
+
+import { cleanAdValue, readAttributionFromUrl } from './campaign-funnel-attribution'
 
 export const VISIT_ORIGIN_KEY = 'un1t_visit_origin'
+export const VISIT_ATTRIBUTION_KEY = 'un1t_visit_attribution'
+
+// HATCHTRACK.1 — the ad parameters of the visit's FIRST touch, kept the same
+// way (sessionStorage: this tab, gone when it closes). An ad click lands with
+// `fbclid` and `utm_*` in the URL, but the buyer's later page loads do not
+// carry them: a return from a cancelled checkout, a `?purchase=` resume, a
+// move from the studio page to /trial. Those loads used to send nothing, so
+// the purchase row had no click id and Meta could not tie it to the ad.
+// Only these keys, each through the shared cleaner (capped; an unfilled Meta
+// macro such as `{{ad.id}}` is no value), whatever the storage holds.
+const AD_KEYS = ['utm_campaign', 'utm_content', 'utm_term', 'utm_source', 'utm_medium', 'meta_ad_id', 'fbclid']
+
+function cleanAdParams(input) {
+  const out = {}
+  if (!input || typeof input !== 'object') return out
+  for (const k of AD_KEYS) {
+    const v = typeof input[k] === 'string' ? cleanAdValue(input[k]) : undefined
+    if (v) out[k] = v
+  }
+  return out
+}
+
+function storedVisitAttribution() {
+  try {
+    return cleanAdParams(JSON.parse(window.sessionStorage.getItem(VISIT_ATTRIBUTION_KEY) || 'null'))
+  } catch { return {} }
+}
+
+/**
+ * Browser: the ad parameters for a submission, first touch first. `current` is
+ * what this page load's URL carried (readAttributionFromUrl); each value the
+ * visit has not seen before is remembered, and each one this load lacks is
+ * filled from what was remembered. A value already remembered is never
+ * replaced (first touch). Storage may be unavailable: `current` comes back
+ * as it was.
+ */
+export function firstTouchAttribution(current) {
+  const now = cleanAdParams(current)
+  if (typeof window === 'undefined') return { ...(current && typeof current === 'object' ? current : {}) }
+  const stored = storedVisitAttribution()
+  const merged = { ...now, ...stored }
+  if (Object.keys(merged).length > Object.keys(stored).length) {
+    try { window.sessionStorage.setItem(VISIT_ATTRIBUTION_KEY, JSON.stringify(merged)) } catch { /* storage unavailable */ }
+  }
+  return { ...(current && typeof current === 'object' ? current : {}), ...merged }
+}
 
 const MAX_REFERRER = 300
 const MAX_PATH = 200
@@ -25,6 +74,9 @@ const MAX_PATH = 200
  */
 export function rememberVisitOrigin() {
   if (typeof window === 'undefined') return
+  // HATCHTRACK.1 — the landing URL's ad parameters, on every public page, so
+  // a visitor who lands on a studio page and buys on another keeps them.
+  try { firstTouchAttribution(readAttributionFromUrl(window.location.search)) } catch { /* never block the page */ }
   try {
     if (window.sessionStorage.getItem(VISIT_ORIGIN_KEY)) return
     const landing_path = `${window.location.pathname || '/'}`

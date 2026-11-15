@@ -702,6 +702,9 @@ describe('studio pages on the [slug] route', () => {
     h.loaded = null
     expect(await outcome({ slug: 'hatch-street', sp: { purchase: PURCHASE } })).toBe(`redirect /trial?purchase=${PURCHASE}&studio=hatch`)
     expect(await outcome({ slug: 'stillorgan' })).toBe('NEXT_NOT_FOUND')
+    // HATCHTRACK.1 — un1t.online's success marker travels on to /trial; a cancel never carries it.
+    expect(await outcome({ slug: 'hatch-street', sp: { purchase: PURCHASE, paid: '1' } })).toBe(`redirect /trial?purchase=${PURCHASE}&studio=hatch&paid=1`)
+    expect(await outcome({ slug: 'hatch-street', sp: { purchase: PURCHASE, paid: '1', cancelled: '1' } })).toBe(`redirect /trial?purchase=${PURCHASE}&studio=hatch&cancelled=1`)
     // Nobody is sent back to a path that was never a studio's.
     expect(await outcome({ slug: 'nowhere', sp: { purchase: PURCHASE } })).toBe('NEXT_NOT_FOUND')
     h.loadThrows = new Error('network')

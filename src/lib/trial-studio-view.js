@@ -4,6 +4,7 @@
 
 import { paidTrialCopyFromBlock } from '@/lib/paid-trial'
 import { CLASS_FIRST_STEP_KEYS } from '@/lib/class-first-copy'
+import { STUDIO_META_PIXELS_BY_LOCATION } from '@/lib/meta-pixel-paths'
 
 // Only the words the card shows travel to the browser: never the Glofox ids,
 // the un1t.online product id, the location or the tag.
@@ -49,5 +50,11 @@ export function trialStudioView(entry, brand) {
     currency: entry.config?.currency || 'EUR',
     durationDays: entry.config?.durationDays || 14,
     productName: entry.config?.productName || block.product_name || '',
+    // HATCHTRACK.1 — the studio's own Meta dataset, when it has one (a public
+    // id: the pixel loads it in the page). The server sends this studio's Lead
+    // and InitiateCheckout there, so the browser's copies must go there too,
+    // even when the studio was chosen in the picker on a page whose pixel does
+    // not follow it (/trial with no ?studio=). Never the location id itself.
+    metaPixelId: (entry.locationId && STUDIO_META_PIXELS_BY_LOCATION[entry.locationId]) || null,
   }
 }
