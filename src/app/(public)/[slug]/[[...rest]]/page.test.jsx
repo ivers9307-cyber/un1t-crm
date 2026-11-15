@@ -370,6 +370,7 @@ describe('the [slug] page route', () => {
     expect(html).not.toContain('data-testid="campaign"')
     // No live card that would book at a fallback studio: a notice instead.
     expect(propsOf(html, 'overlay').offerLayout.offer.props.children).toContain('no public path yet')
+    expect(propsOf(html, 'overlay').offerLayout.offerProps ?? null).toBeNull()
   })
 
   it('anything under a slug that the page does not serve 404s', async () => {
@@ -459,6 +460,12 @@ describe('the [slug] page route', () => {
     expect(overlay.offerLayout.offer.props).toMatchObject({ publicPath: 'stillorgan', campaign: '50plus', page: '50plus', locationName: 'UN1T Stillorgan' })
     expect(overlay.offerLayout.offer.props.copy.heading).toBe('A free trial of The 50+ Club')
     expect(overlay.offerLayout.offer.props.copy).not.toHaveProperty('class_keywords')
+    // FUNNELPREVIEW.1 — the card's props also travel as plain data: the
+    // preview rebuilds the card from them (an element with shared props
+    // reaches the browser as a lazy reference it cannot clone), and they hold
+    // no more than the card already had.
+    expect(overlay.offerLayout.offerProps).toEqual(overlay.offerLayout.offer.props)
+    expect(overlay.offerLayout.offerProps.copy.reassurance).toBe('Free · no card needed · 60 minutes')
     // The trial card hand-off is the legacy overlay's; a page passes its layout instead.
     expect(overlay.trialPreview ?? null).toBeNull()
     expectClientSafe(html)
@@ -474,6 +481,7 @@ describe('the [slug] page route', () => {
     expect(picker.offerLayout.expect.cards).toHaveLength(3)
     expect(picker.offerLayout.offer.props).toMatchObject({ preview: true, initialStudio: null, resumePurchaseId: null, cancelled: false, returnPath: '/trial', page: 'trial' })
     expect(picker.offerLayout.offer.props.studios.map((s) => s.publicPath)).toEqual(['stillorgan', 'hatch-street'])
+    expect(picker.offerLayout.offerProps).toEqual(picker.offerLayout.offer.props)
     // A previewed studio: its card, still disabled.
     const html = await render({ slug: 'trial', sp: { edit: '1', studio: 'hatch-street', purchase: 'abc' } })
     const one = propsOf(html, 'overlay')

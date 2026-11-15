@@ -67,7 +67,7 @@ import { oneClassPresentation, classFirstStepCopy } from '@/lib/class-first-funn
 import { corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
 import { readCorpPromo } from '@/lib/corp-promos-db'
 import { classFunnelCtaLabel } from '@/lib/public-landing'
-import { pageCtas, clientSafeBlocks, blocksOrDefault } from '@/lib/landing-page-blocks'
+import { pageCtas, clientSafeBlocks, blocksOrDefault, classFunnelWordProps } from '@/lib/landing-page-blocks'
 import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
 import { resolveOrgChrome, resolveLocationBrand } from '@/lib/host-brand'
 import { logWarn } from '@/lib/log'
@@ -312,6 +312,15 @@ async function paidTrialItems(db, page, rows) {
 // one_class page the coach video hero and the expect strip. A paid trial's
 // card renders disabled in the preview (PaidTrialFunnel's `preview`) and never
 // resumes a checkout; every other card stays live, as the editor tests it.
+//
+// FUNNELPREVIEW.1 — in the preview the layout also carries `offerProps`: the
+// card's props as PLAIN data (and, for a promo, `offerLive`: what its words
+// are filled from). The editor rebuilds the card from them with the live
+// block's words (EditOfferLayout's liveOffer). It used to clone `offer`, but
+// an element whose props share an object with an earlier prop of the same
+// payload (the campaign copy's expect_cards is also expect.cards) reaches the
+// browser as a lazy reference, never an element, so the clone was skipped and
+// the card kept the words the server seeded it with.
 async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName, preview = false }) {
   const kind = layoutFor(page.offer_type, page.kind)
 
@@ -329,32 +338,27 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     // poster (else the page's hero photo) and the expect strip, from the lead
     // studio's block (its words name that studio's product).
     const { hero, expect } = oneClassPresentation(lead?.entry.block || mergedOffer || { type: 'paid_trial' }, { heroImageUrl })
+    const offerProps = {
+      anchorId: 'trial', studios: views, initialStudio, resumePurchaseId, cancelled, hatchTerms,
+      returnPath: `/${page.slug}`, page: page.slug, ...(preview ? { preview: true } : {}),
+    }
     return {
       kind, cta, anchor: 'trial', heroImageUrl, scrollCueLabel, hero, expect,
-      offer: (
-        <PaidTrialFunnel
-          anchorId="trial"
-          studios={views}
-          initialStudio={initialStudio}
-          resumePurchaseId={resumePurchaseId}
-          cancelled={cancelled}
-          hatchTerms={hatchTerms}
-          returnPath={`/${page.slug}`}
-          page={page.slug}
-          {...(preview ? { preview: true } : {})}
-        />
-      ),
+      offer: <PaidTrialFunnel {...offerProps} />,
+      ...(preview ? { offerProps } : {}),
     }
   }
 
   if (page.offer_type === 'one_class') {
     const copy = campaignFunnelCopy(mergedOffer || {}, { brand: studioName })
+    const offerProps = { publicPath: contextPath, campaign: page.slug, page: page.slug, copy: campaignFunnelClientCopy(copy), locationName: studioName }
     return {
       kind,
       cta: { href: '#book', label: 'Book a free class' },
       hero: { videoUrl: copy.video_url, posterUrl: copy.poster_url, soundLabel: copy.sound_label, videoFocus: copy.video_focus, soundDefault: copy.sound_default, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead },
       expect: { eyebrow: copy.expect_eyebrow, heading: copy.expect_heading, cards: copy.expect_cards },
-      offer: <CampaignFunnel publicPath={contextPath} campaign={page.slug} page={page.slug} copy={campaignFunnelClientCopy(copy)} locationName={studioName} />,
+      offer: <CampaignFunnel {...offerProps} />,
+      ...(preview ? { offerProps } : {}),
     }
   }
 
@@ -390,33 +394,30 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     // FILLED words ({studio_name}, {credits}), the strip the block's; the
     // class step's words go to the card resolved.
     const { hero, expect } = oneClassPresentation({ ...(mergedOffer || {}), type: 'corp_promo', title: copy.title, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead }, { heroImageUrl })
+    const offerProps = { promoKey: promo ? promo.key : null, copy, terms, page: page.slug, studio: contextPath, stepCopy: classFirstStepCopy(mergedOffer || {}, 'corp_promo') }
     return {
       kind, cta: { href: '#corp', label: copy.cta_label }, anchor: 'corp', heroImageUrl, scrollCueLabel: null, hero, expect,
-      offer: <CorpPromoFunnel promoKey={promo ? promo.key : null} copy={copy} terms={terms} page={page.slug} studio={contextPath} stepCopy={classFirstStepCopy(mergedOffer || {}, 'corp_promo')} />,
+      offer: <CorpPromoFunnel {...offerProps} />,
+      // The preview refills the live block's words from the same promo and tokens.
+      ...(preview ? { offerProps, offerLive: { promoKey: rowKey, platform: promo?.platform || resolved?.platform || null, tokens, unavailableText: readFailed ? CORP_PROMO_READ_FAILED_TEXT : null } } : {}),
     }
   }
 
   if (page.offer_type === 'class_funnel') {
     const funnel = mergedOffer || {}
+    const offerProps = {
+      publicPath: contextPath,
+      page: page.slug,
+      locationName: contextBrand?.locationName || '',
+      // '' is "no consult upsell" and must be passed explicitly: an
+      // absent prop falls back to Stillorgan's booking type.
+      consultSlug: funnel.consult_slug || '',
+      ...classFunnelWordProps(funnel),
+    }
     return {
       kind, cta: { href: '#start', label: classFunnelCtaLabel(merged) }, anchor: 'start', heroImageUrl, scrollCueLabel: null,
-      offer: (
-        <ClassFunnel
-          publicPath={contextPath}
-          page={page.slug}
-          locationName={contextBrand?.locationName || ''}
-          // '' is "no consult upsell" and must be passed explicitly: an
-          // absent prop falls back to Stillorgan's booking type.
-          consultSlug={funnel.consult_slug || ''}
-          heading={funnel.heading}
-          subhead={funnel.subhead}
-          consentLabel={funnel.consent_label}
-          classDoneTitle={funnel.class_done_title}
-          classDoneBody={funnel.class_done_body}
-          consultDoneTitle={funnel.consult_done_title}
-          consultDoneBody={funnel.consult_done_body}
-        />
-      ),
+      offer: <ClassFunnel {...offerProps} />,
+      ...(preview ? { offerProps } : {}),
     }
   }
 
@@ -662,6 +663,7 @@ export default async function PublicPage(props) {
     // A funnel with no studio path is not for sale (the public page 404s), and
     // a live card here would book at the fallback studio: say so instead.
     if (needsPath(page.offer_type) && !contextPath) {
+      built.offerProps = null
       built.offer = (
         <p className="max-w-md rounded-2xl bg-white text-black p-6 text-center text-sm">
           This studio has no public path yet, so its booking card cannot show here.
