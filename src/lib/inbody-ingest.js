@@ -16,12 +16,21 @@ const SOURCE = 'lookinbody'
 // null if there's no unambiguous match. Pre-filters with an ilike on the digit
 // tail (the established phone-search pattern), then confirms with the
 // format-agnostic normalisePhone9 and requires exactly one distinct contact.
-export async function matchContactId(db, telHp) {
+//
+// INBODYSCOPE.1 (October audit A03): the search used to run across every
+// contact in the estate, so a scan taken at one organisation's studio could
+// attach to (and write the body weight of) another organisation's contact,
+// and a phone shared across organisations defeated a valid match. It now
+// searches only the organisation that owns the scanning studio: contacts are
+// shared across an organisation's studios (ORGCONTACTS), so a member scanned
+// at a sibling studio still matches. No organisation, no match.
+export async function matchContactId(db, telHp, organizationId) {
   const tail = normalisePhone9(telHp)
-  if (!tail) return null
+  if (!tail || !organizationId) return null
   const { data, error } = await db
     .from('contacts')
     .select('id, phone, wa_phone')
+    .eq('organization_id', organizationId)
     .or(`phone.ilike.%${tail}%,wa_phone.ilike.%${tail}%`)
     .limit(20)
   if (error || !data) return null
@@ -31,6 +40,15 @@ export async function matchContactId(db, telHp) {
       .map((c) => c.id),
   )
   return ids.size === 1 ? [...ids][0] : null
+}
+
+// The organisation that owns a studio, or null (no studio, unknown studio,
+// or a failed read: an unmatched scan is safe, a cross-tenant match is not).
+async function organizationOfLocation(db, locationId) {
+  if (!locationId) return null
+  const { data, error } = await db.from('locations').select('organization_id').eq('id', locationId).maybeSingle()
+  if (error || !data) return null
+  return data.organization_id || null
 }
 
 // Map + match + upsert one scan. `db` is a service-role client (caller may pass
@@ -45,7 +63,8 @@ export async function ingestScan(db, { telHp, testDatetime, raw, locationId }) {
 
   const externalId = `${telHp}_${testDatetime}`
   const measurements = parseFullInBodyData(raw)
-  const contactId = await matchContactId(client, telHp)
+  const organizationId = await organizationOfLocation(client, locationId)
+  const contactId = await matchContactId(client, telHp, organizationId)
 
   const { error } = await client
     .from('inbody_scans')
