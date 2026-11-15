@@ -15,6 +15,7 @@
 // Without `page`, `path` names a STUDIO PAGE by its slug (/stillorgan's own
 // class funnel): its merged class_funnel block decides everything the same way.
 import { cleanAttribution } from '@/lib/campaign-funnel-attribution'
+import { stampFirstTouchSource } from '@/lib/contact-first-touch-source'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -344,6 +345,9 @@ export async function POST(request) {
       .update({ last_lead_source: leadSource, last_lead_source_at: new Date().toISOString() })
       .eq('id', contactId)
   } catch (e) { logWarn('classbook', 'last_lead_source failed', { err: e }) }
+  // UTMSOURCE.1 — first-touch utm_source / utm_medium (mig 837). Before the ad
+  // stamp below, which sets attributed_at for this same visit. Never throws.
+  await stampFirstTouchSource(db, contactId, b.attribution, { module: 'classbook' })
   // ADS-REPORT.2 — first-touch ad-click attribution (stamp-if-null). Marketing
   // params are low-trust: sanitised + length-capped. Only stamp when a real ad
   // signal is present so organic /start visitors never get ad_provider='meta'.

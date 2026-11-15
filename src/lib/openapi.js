@@ -606,7 +606,7 @@ const CorpPromoClaim = z.object({
   phone: z.string(),
   consent: z.boolean().optional(),
   terms_accepted: z.boolean().openapi({ description: "The studio's un1t.online terms and waiver tick; required (true)." }),
-  attribution: z.object({ utm_source: z.string().optional(), utm_campaign: z.string().optional(), utm_content: z.string().optional(), utm_term: z.string().optional(), fbclid: z.string().optional(), fbp: z.string().optional() }).optional(),
+  attribution: z.object({ utm_source: z.string().optional(), utm_medium: z.string().optional(), utm_campaign: z.string().optional(), utm_content: z.string().optional(), utm_term: z.string().optional(), fbclid: z.string().optional(), fbp: z.string().optional() }).optional(),
   lead_event_id: z.string().optional(),
   visit: z.object({ referrer: z.string().optional(), landing_path: z.string().optional() }).optional(),
 }).openapi('CorpPromoClaim')

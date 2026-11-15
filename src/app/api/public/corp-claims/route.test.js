@@ -268,6 +268,31 @@ describe('POST /api/public/corp-claims', () => {
     expect((await call()).status).toBe(503)
     expect(m.fulfil).not.toHaveBeenCalled()
   })
+
+  // UTMSOURCE.1 (mig 837) — the real stamp, through this file's recording db.
+  it('utm_source and utm_medium are stamped on the contact in their own write, before the utm stamp, and kept on the claim', async () => {
+    const { status } = await call({ ...BODY, attribution: { utm_source: 'linkedin', utm_medium: 'social', utm_campaign: 'acme-q4' } })
+    expect(status).toBe(200)
+    const contactWrites = m.updates.filter((u) => u.table === 'contacts')
+    const i = contactWrites.findIndex((u) => 'utm_source' in u.payload)
+    const j = contactWrites.findIndex((u) => 'attributed_at' in u.payload)
+    expect(contactWrites[i].payload).toEqual({ utm_source: 'linkedin', utm_medium: 'social' })
+    expect(i).toBeLessThan(j)
+    expect(contactWrites[j].payload).toEqual({ utm_campaign: 'acme-q4', attributed_at: expect.any(String) })
+    expect(m.inserted.mock.calls[0][1].attribution).toEqual({ utm_campaign: 'acme-q4', utm_source: 'linkedin', utm_medium: 'social' })
+  })
+
+  it('source and medium alone (no campaign) are stamped and set no attributed_at; an unfilled macro is stamped nowhere', async () => {
+    await call({ ...BODY, attribution: { utm_source: 'crm', utm_medium: 'email' } })
+    const contactWrites = m.updates.filter((u) => u.table === 'contacts')
+    expect(contactWrites.find((u) => 'utm_source' in u.payload).payload).toEqual({ utm_source: 'crm', utm_medium: 'email' })
+    expect(contactWrites.some((u) => 'attributed_at' in u.payload)).toBe(false)
+    m.updates = []
+    await call({ ...BODY, attribution: { utm_source: '{{site_source_name}}', utm_medium: '%7B%7Bplacement%7D%7D' } })
+    expect(m.updates.some((u) => 'utm_source' in u.payload || 'utm_medium' in u.payload)).toBe(false)
+    await call(BODY)
+    expect(m.updates.some((u) => 'utm_source' in u.payload || 'utm_medium' in u.payload)).toBe(false)
+  })
 })
 
 // PAGES.1 — `page`: the promo is the one the page's studio row names (the
