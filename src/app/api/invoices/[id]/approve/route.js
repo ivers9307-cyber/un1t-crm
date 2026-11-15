@@ -36,7 +36,7 @@ export async function POST(_request, props) {
 
   const { data: inv, error: loadErr } = await db
     .from('contractor_invoices')
-    .select('id, contractor_id, location_id, period_start, period_end, status')
+    .select('id, contractor_id, location_id, period_start, period_end, status, pdf_path')
     .eq('id', params.id)
     .single()
   if (loadErr || !inv) {
@@ -56,6 +56,16 @@ export async function POST(_request, props) {
     return NextResponse.json(
       { success: false, error: `Cannot approve an invoice in '${inv.status}' state.` },
       { status: 409 }
+    )
+  }
+
+  // APPROVEQUEUE.1 — an invoice with no attachment cannot reach the
+  // bookkeeper (the queue needs the file), so it is refused before anything
+  // changes, rather than approved and then stranded.
+  if (!inv.pdf_path) {
+    return NextResponse.json(
+      { success: false, error: 'This invoice has no PDF or photo attached, so it cannot go to the bookkeeper. Ask the contractor to re-submit it with the invoice attached.' },
+      { status: 400 },
     )
   }
 
@@ -100,7 +110,7 @@ export async function POST(_request, props) {
     .eq('id', params.id)
     .eq('status', 'submitted') // race-safe
     .select()
-    .single()
+    .maybeSingle() // 0 rows = someone else got there first (the branch below)
   if (updErr) {
     return NextResponse.json({ success: false, error: updErr.message }, { status: 400 })
   }
@@ -118,10 +128,35 @@ export async function POST(_request, props) {
   // Vision + final Xero forward from /invoices. Best-effort: if
   // enqueue fails the approval is still recorded; operator can
   // retry from PR 2's queue UI.
+  // APPROVEQUEUE.1 — if the hand-off to the bookkeeper fails, the approval
+  // is put back: there is no retry for an approved invoice that never reached
+  // the queue (it left the approvals list and approve refuses it), so it sat
+  // approved and never paid. Back at 'submitted' it stays in the list and
+  // approving again retries. The insert is idempotent, so a retry cannot
+  // queue it twice.
   const enq = await enqueueFromContractorInvoice(approved.id)
   if (!enq.ok) {
-    logWarn('invoice-approve', 'enqueue failed', { err: enq.error, invoiceId: approved.id })
-    warnings.push(`Queue insert failed: ${enq.error}. The approval is recorded; retry enqueue from /invoices.`)
+    const { data: reverted, error: revErr } = await db
+      .from('contractor_invoices')
+      .update({
+        status: 'submitted', reviewed_by: null, reviewed_at: null, approved_at: null,
+        scheduled_hours_at_review: null, estimated_cost_at_review: null, hourly_rate_at_review: null,
+      })
+      .eq('id', approved.id)
+      .eq('status', 'awaiting_accountant_review')
+      .select('id')
+    if (revErr || !reverted?.length) {
+      logError('invoice-approve', 'enqueue failed and the approval could not be put back', {
+        err: enq.error, revertErr: revErr?.message || null, invoiceId: approved.id,
+      })
+      warnings.push(`The invoice is approved but did not reach the bookkeeper (${enq.error}). Tell the bookkeeper to add it from /invoices.`)
+    } else {
+      logWarn('invoice-approve', 'enqueue failed; approval put back', { err: enq.error, invoiceId: approved.id })
+      return NextResponse.json(
+        { success: false, error: `Not approved: the invoice could not be passed to the bookkeeper (${enq.error}). It is still waiting for approval; try again.` },
+        { status: 502 },
+      )
+    }
   }
 
   // Email contractor (best-effort).

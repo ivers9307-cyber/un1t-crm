@@ -850,3 +850,27 @@ describe('ApprovalsInbox response order', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh' }).disabled).toBe(false))
   })
 })
+
+// APPROVALSUNAVAIL.1 (October audit A17) — a category the server could not
+// load is named in a warning, and an empty list then never reads "All clear".
+describe('ApprovalsInbox — a category that could not load', () => {
+  function mockWith(providers, unavailable) {
+    const total = providers.reduce((s, p) => s + p.count, 0)
+    vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ success: true, data: { providers, total, unavailable } }) })))
+  }
+
+  it('names it in a warning and does not say All clear', async () => {
+    mockWith([prov('time_off', [], [], { label: 'Time off', unavailable: true })], ['Time off'])
+    render(<ApprovalsInbox />)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Could not load Time off')
+    expect(screen.queryByText('All clear')).toBeNull()
+  })
+
+  it('shows no warning when everything loaded', async () => {
+    mockWith(team(), [])
+    render(<ApprovalsInbox />)
+    await screen.findByText('leave-1')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+})

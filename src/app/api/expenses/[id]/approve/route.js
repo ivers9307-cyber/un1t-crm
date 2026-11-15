@@ -21,7 +21,7 @@ import { canTransition, periodLabel } from '@/lib/fte-expenses'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { enqueueFromFteExpenseClaim } from '@/lib/invoices-queue/enqueue'
 import { logAuditEvent } from '@/lib/audit'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -80,8 +80,8 @@ export async function POST(request, { params }) {
     .eq('id', id)
     .eq('status', 'submitted')
     .select()
-    .single()
-  if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+    .maybeSingle() // 0 rows = someone else got there first (the branch below)
+  if (updErr) return NextResponse.json({ success: false, error: 'Could not approve the claim. Try again.' }, { status: 500 })
   if (!updated) return NextResponse.json({ success: false, error: 'Claim was reviewed by someone else — refresh and retry.' }, { status: 409 })
 
   // Drop one row per receipt into the central invoices_queue. The
@@ -92,10 +92,30 @@ export async function POST(request, { params }) {
   // (PR 2). Rolling back the approval on enqueue failure would
   // make the submitter's UX worse for no real gain.
   const warnings = []
+  // APPROVEQUEUE.1 — if the hand-off fails the approval is put back, so the
+  // claim stays in the approvals list and approving again retries. There was
+  // no retry for an approved claim that never reached the queue: it sat
+  // approved and was never reimbursed. The insert is idempotent per item.
   const enq = await enqueueFromFteExpenseClaim(claim.id)
   if (!enq.ok) {
-    logWarn('expense-approve', 'enqueue failed', { err: enq.error, claimId: claim.id })
-    warnings.push(`Queue insert failed: ${enq.error}. The approval is recorded; retry enqueue from /invoices.`)
+    const { data: reverted, error: revErr } = await db
+      .from('fte_expense_claims')
+      .update({ status: 'submitted', reviewed_at: null, reviewed_by: null, approved_at: null })
+      .eq('id', id)
+      .eq('status', 'awaiting_accountant_review')
+      .select('id')
+    if (revErr || !reverted?.length) {
+      logError('expense-approve', 'enqueue failed and the approval could not be put back', {
+        err: enq.error, revertErr: revErr?.message || null, claimId: claim.id,
+      })
+      warnings.push(`The claim is approved but did not reach the bookkeeper (${enq.error}). Tell the bookkeeper to add it from /invoices.`)
+    } else {
+      logWarn('expense-approve', 'enqueue failed; approval put back', { err: enq.error, claimId: claim.id })
+      return NextResponse.json(
+        { success: false, error: `Not approved: the claim could not be passed to the bookkeeper (${enq.error}). It is still waiting for approval; try again.` },
+        { status: 502 },
+      )
+    }
   }
 
   // Staff notification — push + email fallback via notifyUsers.
