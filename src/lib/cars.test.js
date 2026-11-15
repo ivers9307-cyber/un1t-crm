@@ -171,14 +171,14 @@ describe('completionGaps', () => {
     expect(gaps).toContain('Ferry invoice')
   })
 
-  it('flags an uploaded-but-not-sent doc with the "send to Xero" suffix', () => {
+  it('flags an uploaded-but-not-sent doc as waiting for the bookkeeper', () => {
     const gaps = completionGaps(fullCar({
       car_documents: REQUIRED_DOCUMENT_TYPES.map(r => ({
         doc_type: r.key,
         xero_sent_at: r.key === 'transporter' ? null : '2026-05-01T08:00:00Z',
       })),
     }))
-    expect(gaps).toContain('Car transporter invoice — send to Xero')
+    expect(gaps).toContain('Car transporter invoice — waiting for the bookkeeper to send it to Xero')
   })
 
   it('treats multiple uploads of the same type — at least one sent — as satisfied', () => {

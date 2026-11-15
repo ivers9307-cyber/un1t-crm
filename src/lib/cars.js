@@ -26,10 +26,11 @@ export const ALL_DOCUMENT_TYPES = Object.freeze([
  * outstanding before this car can be moved from 'pending' to
  * 'completed'. Empty array means the car is ready to close.
  *
- * Required document types must both EXIST and have been forwarded
- * to Xero (xero_sent_at populated) — the document → Xero email is
- * what triggers the auto-OCR'd draft Bill, so requiring the
- * forward guarantees the AP side of every car is captured before
+ * Required document types must both EXIST and be in Xero
+ * (xero_sent_at populated). Each upload is queued for the bookkeeper
+ * (invoices_queue); pushing its bill to Xero stamps xero_sent_at
+ * (CARXERO.1, markCarDocumentInXero in invoices-queue/push-xero.js), so
+ * requiring it guarantees the AP side of every car is captured before
  * close.
  *
  * @param {{ buyer_name?: string, xero_invoice_id?: string, uk_vat_refund_received?: boolean, car_documents?: {doc_type: string, xero_sent_at?: string}[] }} car
@@ -66,10 +67,12 @@ export function completionGaps(car, opts = {}) {
       gaps.push(req.label)
       continue
     }
-    // At least one of the uploaded docs of this type must have
-    // been forwarded to Xero (email sent successfully).
+    // At least one of the uploaded docs of this type must be in Xero.
+    // Since CARXERO.1 the bookkeeper's push from /invoices stamps
+    // xero_sent_at (markCarDocumentInXero); the operator cannot send it
+    // from here, so the gap says who it is waiting on.
     const anySent = docs.some(d => d.xero_sent_at)
-    if (!anySent) gaps.push(`${req.label} — send to Xero`)
+    if (!anySent) gaps.push(`${req.label} — waiting for the bookkeeper to send it to Xero`)
   }
 
   // BCA pack submission (Phase 3 — gate only fires when the feature is
