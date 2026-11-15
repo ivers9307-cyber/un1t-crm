@@ -25,7 +25,12 @@ export async function GET(request) {
   const db = createServerClient()
   const out = await runClassClimate(db, {})
 
-  await stampHeartbeat('class-climate').catch((err) =>
-    logWarn('cron-class-climate', 'heartbeat failed', { err }))
+  // CRONSTAMP.1 (audit 2026-11-15, item 12): stamp only a run that did not
+  // fail (ok: false is a whole-run read failure). It used to stamp every
+  // tick, so a sustained outage never went stale and nothing paged.
+  if (out.ok !== false) {
+    await stampHeartbeat('class-climate').catch((err) =>
+      logWarn('cron-class-climate', 'heartbeat failed', { err }))
+  }
   return NextResponse.json({ success: out.ok !== false, ...out })
 }

@@ -99,8 +99,10 @@ export async function GET(request) {
     .order('created_at', { ascending: true })
     .limit(MAX_CAMPAIGNS_PER_TICK)
   if (pickErr) {
-    logError('host-campaigns', 'campaign pick failed', { error: pickErr.message })
-    await stampHeartbeat('send-host-campaigns')
+    // CRONSTAMP.1 (audit 2026-11-15, item 12): no heartbeat here. It used to
+    // stamp, so a pick that failed every tick never went stale and sending
+    // campaigns silently stopped moving.
+    logError('host-campaigns', 'campaign pick failed; no heartbeat', { error: pickErr.message })
     return NextResponse.json({ ok: false, ...summary, error: pickErr.message }, { status: 500 })
   }
 

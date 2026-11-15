@@ -67,9 +67,15 @@ export async function GET(request) {
   const nowMs = Date.now()
 
   // Locations + their reminder config (timezone for the label, lead times).
-  const { data: locs } = await db
+  const { data: locs, error: locsErr } = await db
     .from('locations')
     .select('id, timezone, notification_config')
+  // CRONSTAMP.1 (audit 2026-11-15, item 12): a failed read used to give no
+  // lead times, so the run answered "nothing due" and stamped healthy.
+  if (locsErr) {
+    logError('cron-class-reminders', 'locations unreadable; no reminders sent, no heartbeat', { err: locsErr })
+    return NextResponse.json({ ok: false, error: 'locations unreadable' }, { status: 500 })
+  }
   const locById = new Map((locs || []).map((l) => [l.id, l]))
 
   // Widest lead across all locations bounds the fetch window.
@@ -102,6 +108,7 @@ export async function GET(request) {
   // Future, non-cancelled, contact-linked bookings in the window. Paginated —
   // the booking table can exceed Supabase's ~1000-row cap (1k-row invariant).
   const bookings = []
+  let bookingsReadFailed = false
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await scopeToCrmActionable(
       db.from('class_bookings').select('id, contact_id, location_id, class_name, starts_at, source_platform'),
@@ -113,11 +120,12 @@ export async function GET(request) {
       .order('starts_at', { ascending: true })
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
-    if (error) { logWarn('cron-class-reminders', 'booking query failed', { err: error }); break }
+    if (error) { logError('cron-class-reminders', 'booking query failed; sending what was read, no heartbeat', { err: error, page_from: from }); bookingsReadFailed = true; break }
     bookings.push(...(data || []))
     if (!data || data.length < PAGE) break
   }
   if (bookings.length === 0) {
+    if (bookingsReadFailed) return NextResponse.json({ ok: false, error: 'bookings unreadable' }, { status: 500 })
     await stampHeartbeat('send-class-booking-reminders').catch(() => {})
     return NextResponse.json({ ok: true, due: 0, sent: 0, skipped_un1t_online: 0 })
   }
@@ -141,6 +149,7 @@ export async function GET(request) {
     due.push(...selectDueClassReminders([b], nowMs, leadTimes, WINDOW_MIN, LATE_WINDOW_MIN))
   }
   if (due.length === 0) {
+    if (bookingsReadFailed) return NextResponse.json({ ok: false, partial: true, due: 0, sent: 0 }, { status: 500 })
     await stampHeartbeat('send-class-booking-reminders').catch(() => {})
     return NextResponse.json({ ok: true, due: 0, sent: 0, skipped_un1t_online: skippedUn1tOnline })
   }
@@ -181,6 +190,8 @@ export async function GET(request) {
 
   const summary = { bookings: bookings.length, due: due.length, sent, send_failed: sendFailed, reachability_failed: reachabilityFailed, skipped_un1t_online: skippedUn1tOnline }
   logInfo('cron-class-reminders', 'tick', summary)
+  // A partial bookings read sent what it could; the run is not clean.
+  if (bookingsReadFailed) return NextResponse.json({ ok: false, partial: true, ...summary }, { status: 500 })
   await stampHeartbeat('send-class-booking-reminders').catch((err) =>
     logWarn('cron-class-reminders', 'heartbeat failed', { err }))
   return NextResponse.json({ ok: true, ...summary })
