@@ -38,17 +38,30 @@ import { applyWeightObservation } from '@/lib/body-metrics'
  * by the contacts query regardless of the filter (we test the normalisation
  * logic, not PostgREST filtering).
  */
-function makeDb({ contacts = [], upsertError = null } = {}) {
+function makeDb({ contacts = [], upsertError = null, locationOrg = 'org-1' } = {}) {
   const upserted = []
+  const contactFilters = []
 
   return {
     from(table) {
       if (table === 'contacts') {
         return {
           select: () => ({
-            or: () => ({
-              limit: () => Promise.resolve({ data: contacts, error: null }),
-            }),
+            eq: (col, val) => {
+              contactFilters.push([col, val])
+              return {
+                or: () => ({
+                  limit: () => Promise.resolve({ data: contacts, error: null }),
+                }),
+              }
+            },
+          }),
+        }
+      }
+      if (table === 'locations') {
+        return {
+          select: () => ({
+            eq: () => ({ maybeSingle: () => Promise.resolve({ data: locationOrg === undefined ? null : { organization_id: locationOrg }, error: null }) }),
           }),
         }
       }
@@ -63,6 +76,7 @@ function makeDb({ contacts = [], upsertError = null } = {}) {
       return {}
     },
     _upserted: upserted,
+    _contactFilters: contactFilters,
   }
 }
 
@@ -83,13 +97,13 @@ describe('matchContactId', () => {
     const db = makeDb({
       contacts: [{ id: 'c-42', phone: '+353851234567', wa_phone: null }],
     })
-    const id = await matchContactId(db, '0851234567')
+    const id = await matchContactId(db, '0851234567', 'org-1')
     expect(id).toBe('c-42')
   })
 
   it('returns null when no contacts match', async () => {
     const db = makeDb({ contacts: [] })
-    const id = await matchContactId(db, '0851234567')
+    const id = await matchContactId(db, '0851234567', 'org-1')
     expect(id).toBeNull()
   })
 
@@ -102,7 +116,7 @@ describe('matchContactId', () => {
         { id: 'c-2', phone: '+44851234567', wa_phone: null },
       ],
     })
-    const id = await matchContactId(db, '0851234567')
+    const id = await matchContactId(db, '0851234567', 'org-1')
     expect(id).toBeNull()
   })
 
@@ -116,7 +130,7 @@ describe('matchContactId', () => {
     const db = makeDb({
       contacts: [{ id: 'c-99', phone: null, wa_phone: '+353851234567' }],
     })
-    const id = await matchContactId(db, '0851234567')
+    const id = await matchContactId(db, '0851234567', 'org-1')
     expect(id).toBe('c-99')
   })
 })
@@ -298,5 +312,36 @@ describe('ingestScan — canonical weight feed', () => {
       locationId: 'loc-1',
     })
     expect(applyWeightObservation).not.toHaveBeenCalled()
+  })
+})
+
+// INBODYSCOPE.1 — October audit A03: matching stays inside the organisation
+// that owns the scanning studio.
+describe('InBody matching is scoped to the scanning studio\'s organisation', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('filters contacts by the organisation', async () => {
+    const db = makeDb({ contacts: [{ id: 'c1', phone: '+353851234567', wa_phone: null }] })
+    expect(await matchContactId(db, '0851234567', 'org-1')).toBe('c1')
+    expect(db._contactFilters).toContainEqual(['organization_id', 'org-1'])
+  })
+
+  it('no organisation means no match (and no contact read)', async () => {
+    const db = makeDb({ contacts: [{ id: 'c1', phone: '+353851234567', wa_phone: null }] })
+    expect(await matchContactId(db, '0851234567', null)).toBeNull()
+    expect(db._contactFilters).toHaveLength(0)
+  })
+
+  it('a scan from a studio with no organisation is stored unlinked and writes no weight', async () => {
+    const db = makeDb({ contacts: [{ id: 'c1', phone: '+353851234567', wa_phone: null }], locationOrg: null })
+    const r = await ingestScan(db, { telHp: '0851234567', testDatetime: '20260115120000', raw: rawScan, locationId: 'loc-x' })
+    expect(r).toMatchObject({ ok: true, linked: false, contactId: null })
+    expect(db._upserted[0].row.contact_id).toBeNull()
+    expect(applyWeightObservation).not.toHaveBeenCalled()
+  })
+
+  it('a scan with no studio at all is stored unlinked', async () => {
+    const db = makeDb({ contacts: [{ id: 'c1', phone: '+353851234567', wa_phone: null }] })
+    const r = await ingestScan(db, { telHp: '0851234567', testDatetime: '20260115120000', raw: rawScan, locationId: null })
+    expect(r.linked).toBe(false)
   })
 })

@@ -62,13 +62,28 @@ export { setEnrollmentStatus } from './enrollment-status.js'
  */
 async function nextStepForEnrollment(db, enrollment) {
   const targetOrder = (enrollment.current_step_order || 0) + 1
-  const { data: step } = await db
+  const { data: step, error } = await db
     .from('sequence_steps')
     .select('*')
     .eq('sequence_id', enrollment.sequence_id)
     .eq('step_order', targetOrder)
     .maybeSingle()
+  // SEQREAD.1 (October audit A13) — a failed read is "unknown", never "no
+  // more steps": returning null here used to mark the enrolment completed.
+  if (error) throw new SequenceReadUnavailable('sequence step', error)
   return step || null
+}
+
+/**
+ * A read the runner needs failed. Not the enrolment's fault and not an
+ * answer: the enrolment is left as it is this tick (no error_count, no
+ * status change) and the claim lease brings it back on a later tick.
+ */
+export class SequenceReadUnavailable extends Error {
+  constructor(what, cause) {
+    super(`${what} unreadable: ${cause?.message || cause}`)
+    this.name = 'SequenceReadUnavailable'
+  }
 }
 
 /**
@@ -311,7 +326,7 @@ export async function runSequences({ now = new Date() } = {}) {
   const db = createServerClient()
   // TZ.4 — zone_unavailable: enrolments left untouched this tick because their
   // studio's timezone could not be read (see the block before the dispatch).
-  const stats = { picked: 0, sent: 0, completed: 0, errored: 0, paused: 0, skipped: 0, deferred: 0, zone_unavailable: 0, quiet_held: 0 }
+  const stats = { picked: 0, sent: 0, completed: 0, errored: 0, paused: 0, skipped: 0, deferred: 0, zone_unavailable: 0, read_unavailable: 0, quiet_held: 0 }
 
   // FREQ-CAP.1 — the marketing frequency-cap setting is per LOCATION;
   // resolve it once per location per tick (a 100-enrolment batch is
@@ -403,16 +418,26 @@ export async function runSequences({ now = new Date() } = {}) {
       }
 
       // Reload the parent sequence + the contact in one go.
-      const [{ data: sequenceRow }, { data: contact }] = await Promise.all([
-        db.from('email_sequences').select('*').eq('id', enrollment.sequence_id).single(),
+      // SEQREAD.1 — `.maybeSingle()` so 0 rows (really deleted) and a failed
+      // read are told apart: only a definite absence exits the enrolment.
+      const [{ data: sequenceRow, error: sequenceErr }, { data: contact, error: contactErr }] = await Promise.all([
+        db.from('email_sequences').select('*').eq('id', enrollment.sequence_id).maybeSingle(),
         db.from('contacts')
           // LOCCOMMS.5 — contact_location_preferences is REQUIRED here: the step
           // gates resolve the row for sequence.location_id and treat a missing row
           // as "do not send". Drop this embed and every sequence step silently
           // skips.
           .select('*, contact_preferences(unsubscribe_token), contact_location_preferences(location_id, email_marketing, sms_marketing, whatsapp_marketing)')
-          .eq('id', enrollment.contact_id).single(),
+          .eq('id', enrollment.contact_id).maybeSingle(),
       ])
+      if (sequenceErr || contactErr) {
+        logWarn('sequences', 'sequence or contact unreadable; enrolment left as it is this tick', {
+          enrollmentId: enrollment.id, sequenceId: enrollment.sequence_id,
+          error: (sequenceErr || contactErr).message,
+        })
+        stats.read_unavailable++
+        continue
+      }
       sequence = sequenceRow
       if (!sequence || !contact) {
         await db.from('sequence_enrollments').update({
@@ -495,7 +520,17 @@ export async function runSequences({ now = new Date() } = {}) {
         }
       }
 
-      const step = await nextStepForEnrollment(db, enrollment)
+      let step
+      try {
+        step = await nextStepForEnrollment(db, enrollment)
+      } catch (e) {
+        if (!(e instanceof SequenceReadUnavailable)) throw e
+        logWarn('sequences', 'next step unreadable; enrolment left as it is this tick', {
+          enrollmentId: enrollment.id, sequenceId: sequence.id, error: e.message,
+        })
+        stats.read_unavailable++
+        continue
+      }
       if (!step) {
         // Out of steps — mark complete.
         await db.from('sequence_enrollments').update({
@@ -861,15 +896,22 @@ export async function runSequences({ now = new Date() } = {}) {
       }
       const errCount = (enrollment.error_count || 0) + 1
       const shouldPause = errCount >= MAX_ERRORS
-      await db.from('sequence_enrollments').update({
+      // SEQERRPATH.1 — only an enrolment that is still active is written: one
+      // staff paused or exited while this step ran keeps their decision (the
+      // unguarded write used to set it back to 'active').
+      const { data: errRows, error: errWriteErr } = await db.from('sequence_enrollments').update({
         last_error: e.message || String(e),
         error_count: errCount,
         last_processed_at: now.toISOString(),
         // Push next attempt 30 min out (or pause altogether).
         next_step_at: shouldPause ? null : new Date(now.getTime() + 30 * 60_000).toISOString(),
         status: shouldPause ? 'paused' : 'active',
-      }).eq('id', enrollment.id)
-      if (shouldPause) stats.paused++
+      }).eq('id', enrollment.id).eq('status', 'active').select('id')
+      if (errWriteErr) {
+        logError('sequences', 'error-path write failed', { enrollmentId: enrollment.id, sequenceId: enrollment.sequence_id, error: errWriteErr.message })
+      } else if (!errRows || errRows.length === 0) {
+        logWarn('sequences', 'enrolment no longer active; error not recorded over the staff decision', { enrollmentId: enrollment.id, sequenceId: enrollment.sequence_id })
+      } else if (shouldPause) stats.paused++
       stats.errored++
     }
   }

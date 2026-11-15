@@ -17,12 +17,20 @@ export function prepareManualUpload({ bytes, filename }) {
 }
 
 // Look up an existing queue row carrying this content hash (any
-// source). Returns { existingId } or { existingId: null }; throws on
-// query error.
-export async function findQueueRowByHash(db, contentHash) {
+// source) AT THIS STUDIO. Returns { existingId } or { existingId: null };
+// throws on query error.
+//
+// FINSCOPE.1 (audit 2026-11-15, area 15): the lookup was not scoped to a
+// studio, so a file identical to one in another studio's (or another
+// organisation's) queue linked this studio's bank line to that row and
+// this studio got no bill. A studio's documents only ever dedupe against
+// its own queue.
+export async function findQueueRowByHash(db, contentHash, locationId) {
+  if (!locationId) throw new Error('manual-upload hash lookup needs a locationId')
   const { data, error } = await db
     .from('invoices_queue')
     .select('id')
+    .eq('location_id', locationId)
     .eq('content_hash', contentHash)
     .limit(1)
     .maybeSingle()

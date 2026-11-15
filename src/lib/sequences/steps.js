@@ -43,7 +43,7 @@ import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { signStartPrefillToken } from '@/lib/start-prefill-token'
 import { getLocationBranding } from '@/lib/location-branding'
 import { appLinksFrom, renderAppDownloadLinks, renderStudioLogo } from '@/lib/un1t-online-app-links'
-import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
+import { getLocationZone, DEFAULT_TZ, instantToZonedParts } from '@/lib/location-time'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase, dunningPresendGate } from '@/lib/dunning-payment'
@@ -1235,21 +1235,63 @@ export async function internalTaskStep(db, { step, contact, sequence }) {
   const note = String(cfg.note || '').trim().slice(0, 4000)
   if (!subject) throw new Error('internal_task step: config.subject is required')
 
+  // Blank "Due in" in the editor means no due date (its own hint says so).
   const dueOffsetMinutes = Number.isFinite(cfg.due_offset_minutes)
     ? cfg.due_offset_minutes
-    : 0
-  const dueAt = new Date(Date.now() + Math.max(0, dueOffsetMinutes) * 60_000).toISOString()
+    : null
+  const locationId = sequence?.location_id || contact.location_id
+  if (!locationId) throw new Error('internal_task step: no studio to file the task at')
 
-  await db.from('activities').insert({
+  // SEQTASK.1 (October audit A12) — the task's columns are due_date + due_time
+  // (the studio's wall clock) and assignee_id, the same shape the Tasks board
+  // and /api/activities/tasks write. The old insert named assigned_to/due_at,
+  // which do not exist, and never read the error, so no task was ever made.
+  // A failed zone read throws: the runner retries rather than filing a task
+  // on the wrong day.
+  let dueDate = null
+  let dueTime = null
+  if (dueOffsetMinutes != null) {
+    const zone = await getLocationZone(db, locationId)
+    const due = instantToZonedParts(Date.now() + Math.max(0, dueOffsetMinutes) * 60_000, zone)
+    dueDate = due.dateKey
+    dueTime = `${String(due.h).padStart(2, '0')}:${String(due.mi).padStart(2, '0')}`
+  }
+
+  // The assignee must work at the task's studio. One who does not (left, or
+  // moved studio) is dropped and the task lands unassigned in the studio's
+  // queue: a stale config must never wedge every enrolment on this step. A
+  // failed read throws, so the runner retries.
+  let assigneeId = cfg.assignee_user_id || null
+  if (assigneeId) {
+    const { data: member, error: memberErr } = await db
+      .from('profile_locations')
+      .select('profile_id')
+      .eq('profile_id', assigneeId)
+      .eq('location_id', locationId)
+      .maybeSingle()
+    if (memberErr) throw new Error(`internal_task step: could not check the assignee (${memberErr.message})`)
+    if (!member) {
+      logWarn('sequences', 'internal_task assignee not at the studio; task left unassigned', { sequenceId: sequence?.id, stepId: step.id })
+      assigneeId = null
+    }
+  }
+
+  const { error } = await db.from('activities').insert({
     contact_id: contact.id,
-    location_id: sequence?.location_id || contact.location_id,
+    location_id: locationId,
     type: 'task',
     kind: 'task',
+    status: 'todo',
+    source: 'crm',
     subject,
     note: note || null,
-    assigned_to: cfg.assignee_user_id || null,
-    due_at: dueAt,
+    assignee_id: assigneeId,
+    due_date: dueDate,
+    due_time: dueTime,
   })
+  // A rejected insert must not complete the step: throwing leaves the cursor
+  // where it is and the runner retries.
+  if (error) throw new Error(`internal_task step: task insert failed (${error.message})`)
 }
 
 // ── move_pipeline_stage (GLOFOX4.3 — RETIRED, FUNNEL.1) ──────────
