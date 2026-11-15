@@ -315,6 +315,14 @@ describe('enqueueFromHuntFind', () => {
     // Only the dedupe lookup should hit `from` — no separate insert call.
     expect(mockDb.from).toHaveBeenCalledTimes(1)
     expect(dedupeChain.insert).not.toHaveBeenCalled()
+    // FINSCOPE.1 — the dedupe only ever matches this studio's queue.
+    expect(dedupeChain.eq).toHaveBeenCalledWith('location_id', 'loc1')
+  })
+
+  it('refuses without a studio rather than deduping across studios (FINSCOPE.1)', async () => {
+    const r = await enqueueModule.enqueueFromHuntFind({ ...validArgs, locationId: null })
+    expect(r).toEqual({ ok: false, error: 'locationId is required.' })
+    expect(mockDb.from).not.toHaveBeenCalled()
   })
 
   it('inserts a fresh row when content_hash is not already queued', async () => {
