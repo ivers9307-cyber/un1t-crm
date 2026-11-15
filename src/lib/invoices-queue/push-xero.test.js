@@ -49,7 +49,14 @@ const mockDb = {
     update: vi.fn((patch) => ({
       eq: vi.fn(() => {
         dbCaptured.updates.push({ table, patch })
-        return Promise.resolve({ error: null })
+        // A thenable that also takes .is().select() (markCarDocumentInXero).
+        const done = { error: null }
+        const tail = {
+          is: vi.fn(() => tail),
+          select: vi.fn(() => Promise.resolve({ data: [{ id: 'stamped' }], error: null })),
+          then: (res, rej) => Promise.resolve(done).then(res, rej),
+        }
+        return tail
       }),
     })),
   })),
@@ -291,6 +298,41 @@ describe('buildBillPayload — receipts with no invoice number', () => {
   it('describes the line without a dangling "Invoice" when the number is null', () => {
     const payload = buildBillPayload({ ...base, invoice_number: null }, { supplierContactId: 'C1' })
     expect(payload.LineItems[0].Description).toBe('Tesco Ireland')
+  })
+})
+
+describe('pushQueueRowToXero — a car document (CARXERO.1)', () => {
+  const carRow = (over = {}) => ({
+    id: 'q-car', location_id: 'loc1', status: 'data_approved',
+    source_type: 'car_document', source_car_document_id: 'doc-1',
+    extracted_fields: {
+      supplier_name: 'Ferry Co', invoice_number: 'F-1', invoice_date: '2026-11-01',
+      currency: 'EUR', total: 250, xero_account_id: 'A1', account_code: '400',
+      xero_contact_ref: { kind: 'existing', xero_contact_id: 'C-FERRY', name: 'Ferry Co' },
+    },
+    ...over,
+  })
+
+  it('stamps the car document with xero_sent_at and the bill id once the bill exists', async () => {
+    nextRow = carRow()
+    xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] })
+      .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'INV-CAR', InvoiceNumber: 'BILL-9' }] })
+    const r = await pushQueueRowToXero('q-car')
+    expect(r.billId).toBe('INV-CAR')
+    const stamp = dbCaptured.updates.find((u) => u.table === 'car_documents')
+    expect(stamp).toBeTruthy()
+    expect(stamp.patch.xero_bill_id).toBe('INV-CAR')
+    expect(typeof stamp.patch.xero_sent_at).toBe('string')
+  })
+
+  it('a supplier email row never touches car_documents', async () => {
+    nextRow = carRow({ source_type: 'supplier_email', source_car_document_id: null })
+    xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] })
+      .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'INV-2', InvoiceNumber: 'BILL-2' }] })
+    await pushQueueRowToXero('q-car')
+    expect(dbCaptured.updates.some((u) => u.table === 'car_documents')).toBe(false)
   })
 })
 

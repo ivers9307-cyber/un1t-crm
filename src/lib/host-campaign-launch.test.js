@@ -137,7 +137,7 @@ describe('setup refusals name the host organisation (W1.S1c)', () => {
 
 describe('LAUNCH_GATE_REASONS', () => {
   it('lists exactly the pre-CAS gate refusals, for the sweeper to import', () => {
-    expect(LAUNCH_GATE_REASONS).toEqual(['sender_not_verified', 'no_stream', 'daily_cap', 'no_recipients'])
+    expect(LAUNCH_GATE_REASONS).toEqual(['sender_not_verified', 'no_stream', 'daily_cap', 'no_recipients', 'utility_needs_event'])
   })
 })
 
@@ -308,8 +308,20 @@ describe('launchHostCampaign — refusals (nothing enqueued, nothing published)'
   })
 
   it('a utility campaign passes the stream gate even without a host stream', async () => {
-    const { db } = makeDb(routeFor({ host: { ...HOST_ROW, postmark_stream_id: null }, campaign: { id: CAMPAIGN_ID, status: 'draft', email_type: 'utility', audience_kind: 'all' } }))
+    const { db } = makeDb(routeFor({ host: { ...HOST_ROW, postmark_stream_id: null }, campaign: { id: CAMPAIGN_ID, status: 'draft', email_type: 'utility', audience_kind: 'event', audience_event_id: 'e0000000-0000-0000-0000-0000000000e1' } }))
     expect((await launch(db)).ok).toBe(true)
+  })
+
+  it('utility_needs_event 409 for a utility campaign to everyone (HOSTUTILITY.1), before any send row', async () => {
+    const r = await refusal({ campaign: { id: CAMPAIGN_ID, status: 'draft', email_type: 'utility', audience_kind: 'all' } })
+    expect(r).toMatchObject({ reason: 'utility_needs_event', status: 409, error: LAUNCH_MESSAGES.utility_needs_event })
+  })
+
+  it('utility_needs_event for the mailing list and a reminder audience too', async () => {
+    for (const audience_kind of ['mailing_list', 'non_openers']) {
+      const r = await refusal({ campaign: { id: CAMPAIGN_ID, status: 'draft', email_type: 'utility', audience_kind, audience_campaign_id: 'b0000000-0000-0000-0000-0000000000b1' } })
+      expect(r.reason).toBe('utility_needs_event')
+    }
   })
 
   it('db_error 500 when the campaign read itself errors', async () => {
@@ -598,5 +610,29 @@ describe('resolveMissedRecipients', () => {
   it('throws (never returns a partial list) when the rows read errors', async () => {
     const { db } = makeDb((state) => (state.table === 'host_campaign_sends' ? { data: null, error: { message: 'nope' } } : {}))
     await expect(resolveMissedRecipients(db, { hostId: HOST_ID, campaign: { id: CAMPAIGN_ID } })).rejects.toThrow(/nope/)
+  })
+})
+
+// HOSTUTILITY.1 — audit 2026-11-15 item 6: Utility skips marketing consent and
+// host unsubscribes, so it is only for one event's attendees.
+describe('utilityAudienceProblem', () => {
+  it('marketing is never refused here, whatever the audience', async () => {
+    const { utilityAudienceProblem } = await import('./host-campaign-launch')
+    for (const audience_kind of ['all', 'mailing_list', 'event', 'non_openers']) {
+      expect(utilityAudienceProblem({ email_type: 'marketing', audience_kind, audience_event_id: null })).toBeNull()
+    }
+    expect(utilityAudienceProblem({ audience_kind: 'all' })).toBeNull()
+  })
+  it('utility needs an event audience with an event id', async () => {
+    const { utilityAudienceProblem, UTILITY_NEEDS_EVENT_MESSAGE } = await import('./host-campaign-launch')
+    expect(utilityAudienceProblem({ email_type: 'utility', audience_kind: 'event', audience_event_id: 'ev-1' })).toBeNull()
+    for (const c of [
+      { audience_kind: 'all', audience_event_id: null },
+      { audience_kind: 'mailing_list', audience_event_id: null },
+      { audience_kind: 'non_openers', audience_event_id: null },
+      { audience_kind: 'event', audience_event_id: null },
+    ]) {
+      expect(utilityAudienceProblem({ email_type: 'utility', ...c })).toBe(UTILITY_NEEDS_EVENT_MESSAGE)
+    }
   })
 })

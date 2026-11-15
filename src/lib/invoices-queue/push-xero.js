@@ -25,6 +25,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { withFreshToken, XeroError } from '@/lib/xero/client'
 import { attachInvoiceFile } from '@/lib/xero/attachments'
+import { logError } from '@/lib/log'
 
 // ---------------------------------------------------------------
 // Contact resolution
@@ -307,7 +308,7 @@ export async function pushQueueRowToXero(queueId) {
   const { data: row, error: loadErr } = await db
     .from('invoices_queue')
     .select(`
-      id, location_id, status, source_type, extracted_fields,
+      id, location_id, status, source_type, source_car_document_id, extracted_fields,
       attachment_bucket, attachment_path, attachment_filename, attachment_mime_type,
       xero_bill_id, xero_bill_number, xero_deep_link_url,
       location:location_id ( id, name )
@@ -456,6 +457,14 @@ export async function pushQueueRowToXero(queueId) {
     }
   }
 
+  // CARXERO.1 — a car document's bill is the "in Xero" the car's completion
+  // gate (completionGaps, src/lib/cars.js) waits for. Since CAR-DOCS-XERO-FLOW
+  // removed the per-document Email button, nothing wrote car_documents
+  // .xero_sent_at, so no car could ever be completed (audit 2026-11-15).
+  // Stamped only once the source file is attached too: a failed attachment
+  // leaves the row unsent and a retry re-attaches and stamps then.
+  if (!attachmentError) await markCarDocumentInXero(db, row, billId)
+
   return {
     billId,
     billNumber,
@@ -463,4 +472,30 @@ export async function pushQueueRowToXero(queueId) {
     attachmentError,
     sentTo: conn?.tenant_name || conn?.tenant_id || null,
   }
+}
+
+/**
+ * Record on the car document that its bill is in Xero. Best effort: the bill
+ * already exists, so a failed stamp is logged, never thrown (a throw would
+ * report a bill that went through as a failed push and invite a duplicate).
+ * The first stamp wins; a re-push leaves it.
+ * @param {object} db service-role client
+ * Also records the bill id, which the car page's "In Xero" badge and link
+ * read (car_documents.xero_bill_id, mig 175).
+ * @param {{ id: string, source_type?: string, source_car_document_id?: string|null }} row
+ * @param {string|null} billId the Xero bill the row was pushed to
+ * @returns {Promise<boolean>} true when a document was stamped
+ */
+export async function markCarDocumentInXero(db, row, billId = null) {
+  if (row?.source_type !== 'car_document' || !row.source_car_document_id) return false
+  const { data, error } = await db.from('car_documents')
+    .update({ xero_sent_at: new Date().toISOString(), ...(billId ? { xero_bill_id: billId } : {}) })
+    .eq('id', row.source_car_document_id)
+    .is('xero_sent_at', null)
+    .select('id')
+  if (error) {
+    logError('push-xero', 'car document not marked as in Xero', { queue_id: row.id, car_document_id: row.source_car_document_id, code: error.code ?? null, message: error.message })
+    return false
+  }
+  return (data || []).length > 0
 }

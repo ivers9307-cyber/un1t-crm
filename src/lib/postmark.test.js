@@ -462,6 +462,15 @@ describe('sendBatch — failure handling (COMMS-AUDIT batch 3)', () => {
     expect(results.every(r => r.HttpStatus === 429)).toBe(true)
   })
 
+  it('marks synthetic whole-batch results as BatchFailure; real per-message results never are (MAILBATCHREFUSAL.1)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({ ErrorCode: 10, Message: 'Bad or missing Server API token.' }) })
+    expect((await sendBatch(two)).every(r => r.BatchFailure === true)).toBe(true)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('ECONNRESET'))
+    expect((await sendBatch(two)).every(r => r.BatchFailure === true)).toBe(true)
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({ ok: true, status: 200, json: async () => [{ ErrorCode: 0, MessageID: 'm1' }, { ErrorCode: 406, Message: 'Inactive recipient' }] })
+    expect((await sendBatch(two)).some(r => r.BatchFailure)).toBe(false)
+  })
+
   it('sends a TextBody derived from the html when none is provided (CAMPAIGN-REL.4)', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,

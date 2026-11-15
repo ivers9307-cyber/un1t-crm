@@ -11,6 +11,7 @@
 //       593b's trigger refuses it at the database too.
 // Tenancy: every query .eq('host_id', session.host.id) → 404, not 403.
 
+import { utilityAudienceProblem } from '@/lib/host-campaign-launch'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentHost } from '@/lib/host-auth'
@@ -99,6 +100,10 @@ export async function PATCH(request, props) {
     const problem = reminderParentProblem(parent)
     if (problem) return NextResponse.json({ success: false, error: problem }, { status: 409 })
   }
+
+  // HOSTUTILITY.1 — Utility only to one event's attendees (utilityAudienceProblem).
+  const utilityProblem = utilityAudienceProblem({ email_type: parsed.data.email_type, audience_kind: kind, audience_event_id: audienceEventId })
+  if (utilityProblem) return NextResponse.json({ success: false, error: utilityProblem }, { status: 400 })
 
   // CAS on draft — a concurrent send flipped it → 0 rows → 409.
   const { data: updated, error } = await db

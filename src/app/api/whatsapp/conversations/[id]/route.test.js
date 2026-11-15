@@ -46,9 +46,12 @@ import { createServerClient } from '@/lib/supabase'
 // db mock dispatching by table. Captures the unread-reset update so
 // tests can assert the side-effect is gated too.
 function mockDb({ conversation, messages = [], locationSettings = {}, links = { data: [], error: null } } = {}) {
-  const updateEq = vi.fn(() => Promise.resolve({ data: null, error: null }))
+  // WAINBOXLOOP.1: the reset is .eq('id').gt('unread_count', 0); updateGt records the guard.
+  const updateGt = vi.fn(() => Promise.resolve({ data: null, error: null }))
+  const updateEq = vi.fn(() => ({ gt: updateGt }))
   return {
     updateEq,
+    updateGt,
     from: vi.fn((table) => {
       if (table === 'whatsapp_conversations') {
         return {
@@ -139,6 +142,8 @@ describe('GET /api/whatsapp/conversations/[id] — authz gate', () => {
     expect(body.messages).toHaveLength(1)
     expect(body.flow_available).toBe(false)
     expect(db.updateEq).toHaveBeenCalled()
+    // Only resets when there is something to reset, so a poll on a read thread writes nothing.
+    expect(db.updateGt).toHaveBeenCalledWith('unread_count', 0)
   })
 
   it('flags flow_available when the location has a booking Flow configured (FLOW-SEND)', async () => {
