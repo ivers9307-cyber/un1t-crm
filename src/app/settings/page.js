@@ -1,5 +1,5 @@
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -78,7 +78,7 @@ function SettingsRow({ row, badge }) {
   )
 }
 
-function LocationsSection({ isMaster, locations }) {
+function LocationsSection({ isMaster, locations, canEdit }) {
   return (
     <div className="mb-4">
       <div className="flex items-center justify-between mb-2">
@@ -107,15 +107,43 @@ function LocationsSection({ isMaster, locations }) {
               <span className={`text-xs px-2 py-0.5 rounded-full ${loc.active ? 'bg-green-500/20 text-green-700' : 'bg-red-500/20 text-red-700'}`}>
                 {loc.active ? 'Active' : 'Inactive'}
               </span>
-              <Link href={`/settings/locations/${loc.id}`} className="text-xs text-blue-400 hover:text-blue-300">
-                Edit
-              </Link>
+              {/* The edit page admits masters and owners at the studio only
+                  (guardMasterOrOwner); a manager clicking Edit was bounced home. */}
+              {canEdit(loc.id) && (
+                <Link href={`/settings/locations/${loc.id}`} className="text-xs text-blue-700 hover:text-blue-800">
+                  Edit
+                </Link>
+              )}
             </div>
           </div>
         ))}
       </div>
     </div>
   )
+}
+
+/**
+ * The hub's two counts, scoped to what the caller may see (SETTINGSSCOPE.1).
+ * Exported for the test. Tombstoned staff hold no profile_locations row, so
+ * the per-studio count needs no tombstone filter; the master count keeps one.
+ * @returns {Promise<{ staffCount: number, locations: object[] }>}
+ */
+export async function loadSettingsHubCounts(db, { isMaster, myLocationIds }) {
+  if (isMaster) {
+    const [{ count }, locationsRes] = await Promise.all([
+      // STAFFDELETE.1 — permanently deleted staff keep a row; they are not staff.
+      excludeTombstones(db.from('profiles').select('id', { count: 'exact', head: true })),
+      db.from('locations').select('id, name, slug, address, active').eq('is_host_anchor', false).order('created_at'),
+    ])
+    return { staffCount: count || 0, locations: locationsRes.data || [] }
+  }
+  if (!myLocationIds.length) return { staffCount: 0, locations: [] }
+  const [membersRes, locationsRes] = await Promise.all([
+    db.from('profile_locations').select('profile_id').in('location_id', myLocationIds),
+    db.from('locations').select('id, name, slug, address, active').in('id', myLocationIds).eq('is_host_anchor', false).order('created_at'),
+  ])
+  const staffCount = new Set((membersRes.data || []).map((r) => r.profile_id)).size
+  return { staffCount, locations: locationsRes.data || [] }
 }
 
 export default async function SettingsPage() {
@@ -132,12 +160,14 @@ export default async function SettingsPage() {
   // We only need counts on this index page — the full staff list lives
   // at /settings/staff. Pull head=true + count so we don't drag 50+ rows
   // + profile_locations joins for what's effectively a badge.
-  const [{ count: staffCount }, locationsRes] = await Promise.all([
-    // STAFFDELETE.1 — permanently deleted staff keep a row; they are not staff.
-    excludeTombstones(db.from('profiles').select('id', { count: 'exact', head: true })),
-    db.from('locations').select('*').eq('is_host_anchor', false).order('created_at'),
-  ])
-  const locations = locationsRes.data || []
+  // SETTINGSSCOPE.1 (audit 2026-11-15, item 9): both reads used to be
+  // estate-wide on the service-role client, so any `settings` holder (every
+  // manager and owner by default) saw every organisation's studios and a
+  // staff count for the whole platform. A master still sees the estate; anyone
+  // else sees the studios they belong to and the staff at those studios.
+  const isMaster = user.profileRole === 'master' || user.role === 'master'
+  const myLocationIds = getUserLocationIds(user)
+  const { staffCount, locations } = await loadSettingsHubCounts(db, { isMaster, myLocationIds })
 
   const hasPerm = (key) => hasPermission(user, key)
   const tree = visibleSettingsTree(user, hasPerm)
@@ -169,7 +199,7 @@ export default async function SettingsPage() {
 
       <div className="mb-10">
         <h3 className="text-lg font-semibold mb-4">Workspace</h3>
-        <LocationsSection isMaster={user.role === 'master'} locations={locations} />
+        <LocationsSection isMaster={user.role === 'master'} locations={locations} canEdit={(id) => isMaster || user.rolesByLocation?.[id] === 'owner'} />
         {workspaceRows.length > 0 && (
           <div className="space-y-2">
             {workspaceRows.map((row) => (
