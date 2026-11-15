@@ -61,7 +61,7 @@ import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
 const LOC = 'c0000000-0000-0000-0000-000000000003'
 const OFFER = 'd0000000-0000-0000-0000-000000000009'
 const USER = { id: 'u-1', role: 'manager', locations: [{ id: LOC }] }
-let dbMock, contactRow, locationRow, templateRow, memberRow, writes, prefRow
+let dbMock, contactRow, locationRow, templateRow, memberRow, writes, prefRow, adminPrefRow, messageInsertThrows
 
 function makeDb() {
   writes = []
@@ -69,11 +69,12 @@ function makeDb() {
     from: (table) => {
       const c = {
         select() { return c }, eq() { return c }, in() { return c }, order() { return c }, limit() { return c },
-        insert(p) { writes.push({ table, op: 'insert', payload: p }); return c },
+        insert(p) { if (table === 'whatsapp_messages' && messageInsertThrows) throw new Error('db down'); writes.push({ table, op: 'insert', payload: p }); return c },
         update(p) { writes.push({ table, op: 'update', payload: p }); return c },
         maybeSingle() {
           if (table === 'contacts') return Promise.resolve({ data: contactRow, error: null })
           if (table === 'locations') return Promise.resolve({ data: locationRow, error: null })
+          if (table === 'contact_preferences') return Promise.resolve({ data: adminPrefRow, error: null })
           if (table === 'contact_location_preferences') return Promise.resolve({ data: prefRow, error: null })
           if (table === 'mia_purchase_offers') return Promise.resolve({ data: { id: OFFER, un1t_product_row_id: 'p-row' }, error: null })
           if (table === 'un1t_products') return Promise.resolve({ data: { id: 'p-row', un1t_id: 'un1t-p1', title: '10 Class Pack', type: 'pack', status: 'active', price_cents: 12500, currency: 'EUR' }, error: null })
@@ -106,6 +107,8 @@ beforeEach(() => {
   templateRow = null
   memberRow = null
   prefRow = null
+  adminPrefRow = null
+  messageInsertThrows = false
   dbMock = makeDb()
   getCurrentUser.mockResolvedValue(USER)
   hasPermission.mockReturnValue(true)
@@ -196,6 +199,44 @@ describe('POST send', () => {
     const res = await send()
     expect(res.status).toBe(502)
     expect(revokeStaffPaymentLink).toHaveBeenCalledWith(expect.anything(), 'l-1', 'Meta said no')
+  })
+})
+
+describe('fix round 1', () => {
+  it('409 when contact_preferences.whatsapp_administrative is false', async () => {
+    adminPrefRow = { whatsapp_administrative: false }
+    expect((await send()).status).toBe(409)
+    expect(issueStaffPaymentLink).not.toHaveBeenCalled()
+  })
+
+  it('403 with the payment-link permission but no whatsapp permission', async () => {
+    hasPermission.mockImplementation((u, k) => k !== 'whatsapp')
+    expect((await send()).status).toBe(403)
+    expect(issueStaffPaymentLink).not.toHaveBeenCalled()
+  })
+
+  it.each(['https://evil.example/buy/{{1}}', 'https://hatch.example/cancel/{{1}}'])('409 needs_template when the template button url is %s', async (url) => {
+    isWindowOpen.mockReturnValue(false)
+    const t = goodTemplate()
+    t.components[0].buttons[0].url = url
+    templateRow = t
+    const res = await send()
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('needs_template')
+  })
+
+  it('a bookkeeping failure after a successful send keeps the link', async () => {
+    messageInsertThrows = true
+    const res = await send()
+    expect(res.status).toBe(200)
+    expect(revokeStaffPaymentLink).not.toHaveBeenCalled()
+  })
+
+  it('a failed issue returns a fixed message, not the raw error', async () => {
+    issueStaffPaymentLink.mockResolvedValueOnce({ ok: false, error: 'duplicate key value violates unique constraint' })
+    const res = await send()
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('Could not create the payment link. Please try again.')
   })
 })
 

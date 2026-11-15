@@ -135,6 +135,17 @@ async function whatsappRefusal(db, contact, locationId) {
       ? 'WhatsApp could not deliver to this number before, so no link was sent.'
       : 'This customer has opted out of WhatsApp.'
   }
+  // The link is a service (administrative-family) message: a contact-wide
+  // whatsapp_administrative=false refuses it. Missing row = not opted out.
+  const { data: admin, error: adminError } = await db.from('contact_preferences')
+    .select('whatsapp_administrative')
+    .eq('contact_id', contact.id)
+    .maybeSingle()
+  if (adminError) {
+    logWarn('paylink', 'contact WhatsApp preference unreadable', { contactId: contact.id, code: adminError.code ?? null })
+    return 'Could not check this customer\'s WhatsApp preferences. Try again in a moment.'
+  }
+  if (admin && admin.whatsapp_administrative === false) return 'This customer has opted out of WhatsApp.'
   // A studio STOP writes whatsapp_marketing=false on the studio's row (the
   // column defaults TRUE: creating the row is the opt-in).
   const { data: pref, error } = await db.from('contact_location_preferences')
@@ -318,18 +329,21 @@ export async function POST(request, props) {
     product: { un1t_id: product.un1t_id, title: product.title, price_cents: product.price_cents },
     createdBy: user.id,
   })
-  if (!issued.ok) return fail(issued.error || 'Could not create the link', 500)
+  if (!issued.ok) {
+    logError('paylink', 'link issue failed', { contactId: contact.id, locationId, detail: String(issued.error || '').slice(0, 200) })
+    return fail('Could not create the payment link. Please try again.', 500)
+  }
 
   const url = buildBuyUrl(baseUrl, issued.token)
   const label = productLabel(product)
   const firstName = contact.first_name || (contact.name || '').split(' ')[0] || ''
   let via
-  let waMessageId = null
+  let result
+  let messageType
+  let body
+  let templateName = null
+  // Only the Meta send can revoke the link: after it succeeds the customer holds it.
   try {
-    let result
-    let messageType
-    let body
-    let templateName = null
     if (!template) {
       via = 'cta'
       body = renderCopyText(copy.whatsapp_text, { first_name: firstName, studio: location.name || '', product: label })
@@ -343,12 +357,20 @@ export async function POST(request, props) {
         held ? { config: held } : { locationId, businessAccountId: template.business_account_id })
       messageType = 'template'
       templateName = template.name
+    }
+  } catch (e) {
+    await revokeStaffPaymentLink(db, issued.linkId, e?.message || 'send failed')
+    return fail(e?.message || 'Failed to send the payment link', whatsappErrorStatus(e, 502))
+  }
+
+  // Everything below is best-effort: the link is already delivered, so a
+  // failure here is logged and never revokes it.
+  try {
+    if (templateName) {
       body = renderTemplateBody(template, { ...contact, first_name: firstName }, { '1': 'first_name', '2': label }, { locationId }) || `[Template: ${template.name}]`
     }
-    waMessageId = result.messageId
     const nowIso = new Date().toISOString()
-    // The body never carries the token or URL on the template path; the cta
-    // path's body is the operator's copy only (the URL rides the button).
+    // The body never carries the token or URL (the URL rides the button).
     const { error: msgErr } = await db.from('whatsapp_messages').insert({
       conversation_id: conversation.id,
       contact_id: contact.id,
@@ -367,32 +389,27 @@ export async function POST(request, props) {
     const { error: convErr } = await db.from('whatsapp_conversations').update({
       last_message_at: nowIso,
       last_message_direction: 'outbound',
-      last_message_preview: body.substring(0, 100),
+      last_message_preview: String(body).substring(0, 100),
       ...manualTakeoverPatch(conversation.agent_handed_off_at),
     }).eq('id', conversation.id).select('id')
     if (convErr) logError('paylink', 'conversation update failed', { linkId: issued.linkId, code: convErr.code ?? null })
-  } catch (e) {
-    await revokeStaffPaymentLink(db, issued.linkId, e?.message || 'send failed')
-    return fail(e?.message || 'Failed to send the payment link', whatsappErrorStatus(e, 502))
-  }
-
-  // Everything below is best-effort: the link is already delivered.
-  if (waMessageId) {
     const { error: stampErr } = await db.from('staff_payment_links')
-      .update({ whatsapp_message_id: waMessageId, updated_at: new Date().toISOString() })
+      .update({ whatsapp_message_id: result.messageId, updated_at: new Date().toISOString() })
       .eq('id', issued.linkId)
       .in('status', LIVE_STATUSES)
     if (stampErr) logWarn('paylink', 'whatsapp_message_id stamp failed', { linkId: issued.linkId, code: stampErr.code ?? null })
+    const { error: actErr } = await db.from('activities').insert({
+      contact_id: contact.id,
+      location_id: locationId,
+      type: 'un1t_payment_link_sent',
+      subject: `Payment link sent on WhatsApp: ${label}`,
+      note: null,
+      created_by: user.id,
+    })
+    if (actErr) logWarn('paylink', 'activity insert failed', { linkId: issued.linkId, code: actErr.code ?? null })
+  } catch (e) {
+    logError('paylink', 'post-send bookkeeping threw', { linkId: issued.linkId, errClass: e?.name })
   }
-  const { error: actErr } = await db.from('activities').insert({
-    contact_id: contact.id,
-    location_id: locationId,
-    type: 'un1t_payment_link_sent',
-    subject: `Payment link sent on WhatsApp: ${label}`,
-    note: null,
-    created_by: user.id,
-  })
-  if (actErr) logWarn('paylink', 'activity insert failed', { linkId: issued.linkId, code: actErr.code ?? null })
 
   return json({ success: true, data: { linkId: issued.linkId, expiresAt: issued.expiresAt, via } })
 }
