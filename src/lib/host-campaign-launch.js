@@ -78,6 +78,26 @@ export function hostSetupMessages(brand) {
 /** User-facing refusal copy, moved from the send route. The two setup
  * refusals here are the brand-less floor; launchHostCampaign and the routes
  * answer them through hostSetupMessages(brand). */
+export const UTILITY_NEEDS_EVENT_MESSAGE = 'A Utility email can only go to one event\u2019s attendees. Pick an event under Send to, or make it a Marketing email.'
+
+/**
+ * HOSTUTILITY.1 — a Utility email reaches people whatever their marketing
+ * consent and host unsubscribe (emailabilityReason, host-contact-list.js), on
+ * the transactional stream with no unsubscribe header. That is right only for
+ * people with a booking the message is about: one event's attendees. Pointed
+ * at "everyone", the mailing list or a reminder audience it was a marketing
+ * send that skipped every opt-out; two such campaigns reached 252 people
+ * before this rule (audit 2026-11-15, item 6). Checked on create, on edit and
+ * again at launch, so a draft saved before the rule cannot go out.
+ * @param {{ email_type?: string, audience_kind?: string, audience_event_id?: string|null }} campaign
+ * @returns {string|null} the refusal, or null when allowed
+ */
+export function utilityAudienceProblem(campaign) {
+  if ((campaign?.email_type ?? 'marketing') !== 'utility') return null
+  if (campaign.audience_kind === 'event' && campaign.audience_event_id) return null
+  return UTILITY_NEEDS_EVENT_MESSAGE
+}
+
 export const LAUNCH_MESSAGES = Object.freeze({
   not_found: 'Not found',
   not_sent: 'Only a sent email can be resent.',
@@ -86,6 +106,7 @@ export const LAUNCH_MESSAGES = Object.freeze({
   no_recipients: 'No emailable contacts.',
   nobody_missed: 'Everyone who can be emailed already received this.',
   cas_lost: 'This email has already been sent.',
+  utility_needs_event: UTILITY_NEEDS_EVENT_MESSAGE,
   // cas_lost under trigger 'resend_missed': the campaign left 'sent' between
   // the read and the CAS, so a resend (or another launch) is already in flight.
   resend_in_flight: 'This email is already being resent.',
@@ -94,10 +115,11 @@ export const LAUNCH_MESSAGES = Object.freeze({
 /** The subset of reason codes that are pre-CAS gate refusals (campaign
  * untouched) — exported so the sweeper can import the set instead of
  * re-typing it. */
-export const LAUNCH_GATE_REASONS = Object.freeze(['sender_not_verified', 'no_stream', 'daily_cap', 'no_recipients'])
+export const LAUNCH_GATE_REASONS = Object.freeze(['sender_not_verified', 'no_stream', 'daily_cap', 'no_recipients', 'utility_needs_event'])
 
 const REFUSAL_STATUS = Object.freeze({
   not_found: 404,
+  utility_needs_event: 409,
   not_sent: 409,
   sender_not_verified: 409,
   no_stream: 409,
@@ -217,6 +239,7 @@ export async function launchHostCampaign(db, { campaignId, hostId, trigger }) {
   // The CAS below would refuse this too, but with the wrong words; a resend
   // of anything but a sent campaign is a distinct, plain refusal.
   if (isResend && campaign.status !== 'sent') return refuse('not_sent')
+  if (utilityAudienceProblem(campaign)) return refuse('utility_needs_event')
 
   // Sender identity — HOST_PORTAL_COLS deliberately excludes the sender
   // columns, so load them here. Missing sender_email with verified=true is a

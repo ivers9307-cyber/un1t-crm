@@ -55,14 +55,14 @@ const validBody = (overrides = {}) => ({ door_id: 'door-1', ...overrides })
 // Configurable fake DB. Tables: profile_locations (the UNIFI-DOORS-SCOPE
 // allowlist read), locations (name + settings for the config dual-read),
 // activities (the fire-and-forget timeline row).
-function mockDb({ assignment = { unifi_door_ids: null }, location = LOCATION_ROW } = {}) {
+function mockDb({ assignment = { unifi_door_ids: null }, assignmentError = null, location = LOCATION_ROW } = {}) {
   const activities = []
   const db = {
     activities,
     from: (table) => {
       if (table === 'profile_locations') return {
         select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: () =>
-          Promise.resolve({ data: assignment, error: null }) }) }) }),
+          Promise.resolve({ data: assignmentError ? null : assignment, error: assignmentError }) }) }) }),
       }
       if (table === 'locations') return {
         select: () => ({ eq: () => ({ single: () =>
@@ -344,5 +344,26 @@ describe('POST /api/studio-management/unlock — widget-token path', () => {
     const res = await POST(postReq(validBody()))
     expect(res.status).toBe(403)
     expect(remoteUnlockDoor).not.toHaveBeenCalled()
+  })
+})
+
+// DOORFAILCLOSED.1 — October audit A04: a failed allowlist read used to be
+// discarded, and `undefined` reads as "unrestricted".
+describe('POST /api/studio-management/unlock — the allowlist read fails closed', () => {
+  it('a failed allowlist read refuses with 503 and never calls UniFi', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    mockDb({ assignmentError: { code: '57014', message: 'canceling statement due to statement timeout' } })
+    const res = await POST(postReq(validBody()))
+    expect(res.status).toBe(503)
+    expect((await res.json()).success).toBe(false)
+    expect(remoteUnlockDoor).not.toHaveBeenCalled()
+  })
+
+  it('no profile_locations row is still unrestricted (masters, organisation admins)', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    mockDb({ assignment: null })
+    const res = await POST(postReq(validBody()))
+    expect(res.status).toBe(200)
+    expect(remoteUnlockDoor).toHaveBeenCalledTimes(1)
   })
 })

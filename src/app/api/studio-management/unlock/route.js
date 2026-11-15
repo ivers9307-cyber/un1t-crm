@@ -24,6 +24,7 @@ import { validateBody } from '@/lib/validate'
 import { getUnifiConfig, remoteUnlockDoor, UnifiError } from '@/lib/unifi-access'
 import { logAuditEvent } from '@/lib/audit'
 import { logWarn } from '@/lib/log'
+import { readDoorAllowlist } from '@/lib/studio-doors'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -53,14 +54,18 @@ export const POST = withAuth(
     //
     // NULL allowlist (mig 182 left manager+ roles as NULL) = legacy
     // fallback, all doors permitted. Empty array = no doors permitted.
-    const { data: assignment } = await db
-      .from('profile_locations')
-      .select('unifi_door_ids')
-      .eq('profile_id', user.id)
-      .eq('location_id', locationId)
-      .maybeSingle()
-    const allowlist = assignment?.unifi_door_ids
-    const isUnrestricted = allowlist === null || allowlist === undefined
+    // DOORFAILCLOSED.1 (A04): a FAILED read refuses. It used to read as
+    // unrestricted, so a database blip let anyone with studio_management
+    // open any door at the studio.
+    const read = await readDoorAllowlist(db, user.id, locationId)
+    if (!read.ok) {
+      return NextResponse.json({
+        success: false,
+        error: 'Could not check your door access, so the door was not unlocked. Try again in a moment.',
+      }, { status: 503 })
+    }
+    const allowlist = read.allowlist
+    const isUnrestricted = allowlist === null
     if (!isUnrestricted && !allowlist.includes(door_id)) {
       return NextResponse.json({
         success: false,
