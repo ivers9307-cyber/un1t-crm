@@ -14,6 +14,7 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/perm
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { resolveEventTeam } from '@/lib/event-team'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { addEventAttendeesToHostList } from '@/lib/host-contact-list'
 import { logError } from '@/lib/log'
@@ -183,7 +184,7 @@ export async function POST(request, props) {
   // (or the first member if none specified). Captain's contact is
   // resolved via findOrCreateRaceContact (CLASSIFY.2: no stage set on
   // insert; deal trigger populates pipeline_stage_slug later).
-  const teamName = body.team_name.trim()
+  let teamName = body.team_name.trim()
   const captainIdx = body.members.findIndex((m) => m.role === 'captain')
   const captain = body.members[captainIdx >= 0 ? captainIdx : 0]
   let captainContactId = null
@@ -196,35 +197,47 @@ export async function POST(request, props) {
     })
   }
 
-  // Find-or-create the team by (location_id, name).
-  let teamId
-  const { data: foundTeam } = await db
-    .from('teams')
-    .select('id')
-    .eq('location_id', race.location_id)
-    .eq('name', teamName)
-    .maybeSingle()
-  if (foundTeam) {
-    teamId = foundTeam.id
-    await db.from('teams').update({ size: body.team_size, captain_contact_id: captainContactId }).eq('id', teamId)
-  } else {
-    const { data: inserted, error: teamErr } = await db
-      .from('teams')
-      .insert({
-        location_id: race.location_id,
-        name: teamName,
-        size: body.team_size,
-        captain_contact_id: captainContactId,
-      })
+  // EVENTTEAM.1 — the team row comes from resolveEventTeam: a name only
+  // reuses a row that is already this captain's team with no entry at another
+  // event; anything else gets a fresh row under the next free suffixed name.
+  const resolved = await resolveEventTeam(db, {
+    locationId: race.location_id,
+    raceEventId: params.id,
+    name: body.team_name,
+    size: body.team_size,
+    captainContactId,
+  })
+  if (!resolved.ok) {
+    return NextResponse.json({
+      success: false,
+      error: resolved.reason === 'read_failed' ? 'Could not check the team name. Please try again.' : 'Could not create team.',
+    }, { status: resolved.reason === 'read_failed' ? 503 : 500 })
+  }
+  const teamId = resolved.teamId
+  teamName = resolved.teamName
+  if (resolved.reused) {
+    // The captain's own team: refuse before touching its roster if it is
+    // already entered here, then take the new size.
+    const { data: here, error: hereErr } = await db
+      .from('race_registrations')
       .select('id')
-      .single()
-    if (teamErr) {
+      .eq('race_event_id', params.id)
+      .eq('team_id', teamId)
+      .limit(1)
+    if (hereErr) {
+      return NextResponse.json({ success: false, error: 'Could not check the existing entry. Please try again.' }, { status: 503 })
+    }
+    if (here && here.length > 0) {
       return NextResponse.json({
         success: false,
-        error: `Could not create team: ${teamErr.message}`,
-      }, { status: 500 })
+        error: `Team "${teamName}" is already registered for this race.`,
+        code: 'already_registered',
+      }, { status: 409 })
     }
-    teamId = inserted.id
+    const { error: sizeErr } = await db.from('teams').update({ size: body.team_size }).eq('id', teamId)
+    if (sizeErr) {
+      return NextResponse.json({ success: false, error: 'Could not update the team.' }, { status: 500 })
+    }
   }
 
   // Reset members. Operator-added teams skip member-validation —
@@ -306,6 +319,7 @@ export async function POST(request, props) {
     data: {
       registration_id: registration.id,
       team_id: teamId,
+      team_name: teamName,
       registered_at: registration.registered_at,
     },
   })

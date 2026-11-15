@@ -55,6 +55,7 @@ import { eventIsPublic, resolveMasterLocationId } from '@/lib/host-events'
 import { resolveEventAttribution } from '@/lib/event-attribution-server'
 import { claimWaitlistOnRegistration, claimWaitlistByEmail } from '@/lib/event-waitlist'
 import { resolveFindTeamSettings, soloTeamName } from '@/lib/find-team'
+import { resolveEventTeam } from '@/lib/event-team'
 import { holdingPlaces, pendingLapsed } from '@/lib/entry-policy'
 
 export const runtime = 'nodejs'
@@ -345,24 +346,14 @@ export async function POST(request, props) {
     // Name includes the email so two leads with the same name don't
     // collide on the (location_id, name) unique constraint.
     const leadTeamName = `${leadName || 'Lead'} \u2014 ${leadEmail}`
-    let teamId
-    const { data: foundTeam } = await db.from('teams').select('id').eq('location_id', race.location_id).eq('name', leadTeamName).maybeSingle()
-    if (foundTeam) {
-      teamId = foundTeam.id
-      await db.from('teams').update({ size: 1, captain_contact_id: contactId }).eq('id', teamId)
-    } else {
-      const { data: ins, error: teamErr } = await db.from('teams').insert({ location_id: race.location_id, name: leadTeamName, size: 1, captain_contact_id: contactId }).select('id').single()
-      if (teamErr && teamErr.code === '23505') {
-        // K8 — `.maybeSingle()`, matching the find-first query above: the
-        // conflicting row can be gone again by the time we re-read, and the
-        // `if (!teamId)` path below is what handles that. (location_id, name)
-        // is uniquely indexed — it is the very constraint we just tripped.
-        const { data: re } = await db.from('teams').select('id').eq('location_id', race.location_id).eq('name', leadTeamName).maybeSingle()
-        teamId = re?.id
-      } else if (teamErr) {
-        return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
-      } else { teamId = ins.id }
+    // EVENTTEAM.1 — same team rule as every other signup.
+    const leadTeam = await resolveEventTeam(db, {
+      locationId: race.location_id, raceEventId: race.id, name: leadTeamName, size: 1, captainContactId: contactId,
+    })
+    if (!leadTeam.ok) {
+      return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
     }
+    const teamId = leadTeam.teamId
 
     // QUESTIONS.1 — a lead-gen form asks too: the lead is the one person.
     const leadAnswers = validateAnswers(resolveRegistrationQuestions(race), body.answers, { peopleCount: 1 })
@@ -638,56 +629,30 @@ export async function POST(request, props) {
     }
   }
 
-  // Find-or-create the team by (location_id, name). Teams only: a solo got its
-  // own team row above.
-  const { data: foundTeam } = findTeam ? { data: null } : await db
-    .from('teams')
-    .select('id')
-    .eq('location_id', race.location_id)
-    .eq('name', teamName)
-    .maybeSingle()
-  if (findTeam) {
-    // teamId already set above.
-  } else if (foundTeam) {
-    teamId = foundTeam.id
-    await db.from('teams').update({
+  // EVENTTEAM.1 — the team row comes from resolveEventTeam: a typed name only
+  // reuses a row that is already this captain's team with no entry at another
+  // event; anything else gets a fresh row under the next free suffixed name.
+  // Nothing is written to a reused row until the re-book checks below pass.
+  let reusedTeam = false
+  if (!findTeam) {
+    const resolved = await resolveEventTeam(db, {
+      locationId: race.location_id,
+      raceEventId: race.id,
+      name: teamName,
       size: teamSize,
-      captain_contact_id: captainContactId,
-    }).eq('id', teamId)
-  } else {
-    const { data: insertedTeam, error: teamErr } = await db
-      .from('teams')
-      .insert({
-        location_id: race.location_id,
-        name: teamName,
-        size: teamSize,
-        captain_contact_id: captainContactId,
-      })
-      .select('id')
-      .single()
-    if (teamErr) {
-      // UNIQUE violation race — refetch and continue.
-      if (teamErr.code === '23505') {
-        // K8 — `.maybeSingle()`: see the solo branch above. 0 rows is handled
-        // by the `if (!teamId)` 500 immediately below, so it must not arrive
-        // as a discarded error. (location_id, name) is uniquely indexed.
-        const { data: raceFound } = await db
-          .from('teams')
-          .select('id')
-          .eq('location_id', race.location_id)
-          .eq('name', teamName)
-          .maybeSingle()
-        teamId = raceFound?.id
-      }
-      if (!teamId) {
-        return NextResponse.json({
-          success: false,
-          error: `Could not create team: ${teamErr.message}`,
-        }, { status: 500 })
-      }
-    } else {
-      teamId = insertedTeam.id
+      captainContactId,
+    })
+    if (!resolved.ok) {
+      return NextResponse.json({
+        success: false,
+        error: resolved.reason === 'read_failed'
+          ? 'Could not check the team name. Please try again.'
+          : 'Could not create your team. Please try again.',
+      }, { status: resolved.reason === 'read_failed' ? 503 : 500 })
     }
+    teamId = resolved.teamId
+    teamName = resolved.teamName
+    reusedTeam = resolved.reused
   }
 
   // ─── re-book handling (EVENTS-REBOOK) ─────────────────────────────
@@ -765,6 +730,13 @@ export async function POST(request, props) {
       const { error: staleErr } = await db.from('race_registrations').delete().eq('id', teamReg.id)
       if (staleErr) {
         return NextResponse.json({ success: false, error: 'Could not clear the earlier unfinished entry. Please try again.' }, { status: 500 })
+      }
+    }
+    // EVENTTEAM.1 — the captain's own team, going ahead: now take the new size.
+    if (reusedTeam) {
+      const { error: sizeErr } = await db.from('teams').update({ size: teamSize }).eq('id', teamId)
+      if (sizeErr) {
+        return NextResponse.json({ success: false, error: 'Could not update your team. Please try again.' }, { status: 500 })
       }
     }
   }
