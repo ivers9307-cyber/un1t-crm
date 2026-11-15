@@ -17,6 +17,15 @@ vi.mock('@/lib/meta-pixel-lead', () => ({
 vi.mock('@/lib/meta-pixel-paths', () => ({ metaPixelIdsForPath: () => [], pageLocationIdFromDocument: () => null }))
 vi.mock('@/lib/visit-origin', () => ({ readVisitOrigin: () => null }))
 vi.mock('./ClassFunnelCheckout', () => ({ default: () => null }))
+// FUNNELPREVIEW.1 — the preview builds the campaign card itself from the
+// layout's plain `offerProps` (EditOfferLayout's liveOffer); the stand-in
+// below shows the copy it was handed and offers its copy hook to the test.
+// The real card in the preview is EditOfferLayout.live.test.jsx.
+const { renderFunnel } = vi.hoisted(() => ({ renderFunnel: vi.fn() }))
+vi.mock('./CampaignFunnel', () => ({
+  default: (props) => renderFunnel(props),
+  EDITABLE_COPY_KEYS: ['pick_title', 'pick_body', 'done_title', 'done_body'],
+}))
 vi.mock('./BlockRenderers', () => ({
   default: (p) => <div data-testid={`block-${p.block.id}`}>{p.block.type}</div>,
   SiteHeader: () => null,
@@ -26,17 +35,12 @@ vi.mock('./BlockRenderers', () => ({
 import EditModeOverlay from './EditModeOverlay.jsx'
 import PaidTrialFunnel from './PaidTrialFunnel'
 
-// The booking card stand-in: shows the copy it was handed and offers the
-// overlay's copy hook to the test.
-const renderFunnel = vi.fn((props) => (
+const funnelStandIn = (props) => (
   <div data-testid="funnel">
     <span data-testid="pick-title">{props.copy?.pick_title}</span>
     <button type="button">Book Mon 07:00</button>
   </div>
-))
-function FakeFunnel(props) {
-  return renderFunnel(props)
-}
+)
 const funnelSeen = { get props() { return renderFunnel.mock.calls.at(-1)?.[0] ?? null } }
 
 const CF = {
@@ -53,7 +57,8 @@ const oneClassLayout = () => ({
   anchor: 'book',
   heroImageUrl: null,
   offerBlockId: 'cf',
-  offer: <FakeFunnel copy={{ pick_title: 'Pick your first morning', consent_label: 'Keep me posted by UN1T.' }} publicPath="stillorgan" />,
+  offer: <div data-testid="server-card" />,
+  offerProps: { copy: { pick_title: 'Pick your first morning', consent_label: 'Keep me posted by UN1T.' }, publicPath: 'stillorgan' },
   hero: { videoUrl: 'https://x/v.mp4', posterUrl: 'https://x/p.jpg', soundLabel: 'Tap for sound', eyebrow: CF.eyebrow, heading: CF.heading, subhead: CF.subhead },
   expect: { eyebrow: CF.expect_eyebrow, heading: CF.expect_heading, cards: CF.expect_cards },
   scrollCueLabel: null,
@@ -64,7 +69,8 @@ let posted
 let parentWin
 beforeEach(() => {
   posted = []
-  renderFunnel.mockClear()
+  renderFunnel.mockReset()
+  renderFunnel.mockImplementation(funnelStandIn)
   parentWin = { postMessage: vi.fn((m) => posted.push(m)) }
   Object.defineProperty(window, 'parent', { value: parentWin, configurable: true })
   globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ success: true }) }))

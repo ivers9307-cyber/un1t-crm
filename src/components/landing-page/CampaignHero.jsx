@@ -44,6 +44,23 @@
 // box instead of being clipped; from `sm` they overlay the bottom edge and
 // every ratio is as before. The top padding follows the slimmer phone header.
 //
+// FUNNELPREVIEW.1 — the words carry their own scrim (HERO_WORDS_SCRIM_CLS):
+// a flat black at HERO_SCRIM_ALPHA behind every line, fading out over the
+// block's top padding (HERO_SCRIM_FADE), at every width. The footage has an
+// Instagram handle and captions burned in, and which part of the clip the box
+// shows changes with its ratio, so at one width or another they landed under
+// the heading or the sub-copy (the handle under the heading at 667px, under
+// the sub-copy at 375px, a caption under the heading on desktop), where the
+// old whole-box gradient was down to about a third black. The words no longer
+// depend on what is behind them: over pure white footage the weakest line
+// (the eyebrow, white at 75%) is still above 7:1 (CampaignHero.test.jsx works
+// it out). The scrim REPLACES that whole-box gradient: stacked, the two left
+// a phone's box close to solid black; alone, the clip shows clear above the
+// words and faintly through them. No size, position or height changes: the
+// phone box is exactly as tall as before, and the fade zone is the top
+// padding the phone already had (from `sm` the top padding grows from 2rem
+// to 4rem, upwards, so the words do not move).
+//
 // The video box is the one dark island on a light page: `bg-black` sits on
 // the element whose text is white, which is the rule no-low-contrast-accent-
 // text asks for.
@@ -55,6 +72,12 @@ const GESTURE_EVENTS = ['pointerdown', 'keydown', 'touchend']
 
 // Literal class names so Tailwind sees them.
 const FOCUS_CLASS = Object.freeze({ top: 'object-top', center: 'object-center', bottom: 'object-bottom' })
+
+/** How black the scrim behind the hero's words is (0-1), and how tall its fade-out is. */
+export const HERO_SCRIM_ALPHA = 0.85
+export const HERO_SCRIM_FADE = '4rem'
+// One literal so Tailwind sees it; the test pins it to the two constants above.
+export const HERO_WORDS_SCRIM_CLS = 'bg-[linear-gradient(to_top,rgb(0_0_0/0.85)_calc(100%-4rem),transparent)]'
 
 export function heroFocusClass(videoFocus) {
   return FOCUS_CLASS[videoFocus] || FOCUS_CLASS.top
@@ -155,7 +178,6 @@ export default function CampaignHero({
 
             <img src={posterUrl} alt="" className={`absolute inset-0 w-full h-full object-cover ${focusClass}`} />
           ) : null}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent pointer-events-none" aria-hidden="true" />
           {videoUrl && (
             <button
               type="button"
@@ -167,7 +189,7 @@ export default function CampaignHero({
               {muted ? `🔊 ${soundLabel}` : '🔇 Sound on'}
             </button>
           )}
-          <div data-hero-words="" className="relative px-5 pb-5 pt-16 sm:absolute sm:inset-x-0 sm:bottom-0 sm:p-8">
+          <div data-hero-words="" className={`relative px-5 pb-5 pt-16 sm:absolute sm:inset-x-0 sm:bottom-0 sm:px-8 sm:pb-8 ${HERO_WORDS_SCRIM_CLS}`}>
             {eyebrow && <div className="text-[11px] uppercase tracking-[0.3em] font-semibold text-white/75 mb-2 sm:mb-3">{text('eyebrow', eyebrow)}</div>}
             <h1 className="font-display font-extrabold uppercase text-[1.75rem] sm:text-[clamp(2rem,6vw,3.5rem)] leading-[1.02] tracking-tight">{text('heading', heading)}</h1>
             {subhead && <p className="mt-2 sm:mt-4 text-[15px] sm:text-lg text-white/85 max-w-xl leading-snug sm:leading-relaxed">{text('subhead', subhead)}</p>}

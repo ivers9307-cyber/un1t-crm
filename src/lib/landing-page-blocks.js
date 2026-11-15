@@ -445,6 +445,24 @@ export const CLIENT_WITHHELD_KEYS = Object.freeze({
   campaign_funnel: ['class_keywords', 'tag', 'lead_source', 'event_source_url', 'trial_membership_id', 'trial_plan_code'],
 })
 
+/**
+ * FUNNELPREVIEW.1 — the class funnel card's word props off a class_funnel
+ * block. One mapping for the [slug] route (the public card) and the editor's
+ * preview (the live block), so a word the editor has is a word the card gets.
+ */
+export function classFunnelWordProps(block) {
+  const b = block && typeof block === 'object' ? block : {}
+  return {
+    heading: b.heading,
+    subhead: b.subhead,
+    consentLabel: b.consent_label,
+    classDoneTitle: b.class_done_title,
+    classDoneBody: b.class_done_body,
+    consultDoneTitle: b.consult_done_title,
+    consultDoneBody: b.consult_done_body,
+  }
+}
+
 export function clientSafeBlocks(blocks) {
   if (!Array.isArray(blocks)) return []
   return blocks.map((block) => {
