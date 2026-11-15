@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { publishSequence } from './publish'
 
@@ -69,5 +69,21 @@ describe('publishSequence', () => {
     expect(r).toEqual({ ok: true, steps: 1 })
     expect(rpc).toHaveBeenCalledWith('publish_sequence_steps', expect.objectContaining({ p_sequence_id: SEQ }))
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ draft_graph: null, status: 'active' }))
+  })
+
+  // SEQPAUSE.2 — republishing an edit never restarts a paused flow.
+  it('a paused sequence stays paused after a republish', async () => {
+    const { db, update } = mockDb({ stored: { location_id: LOC, graph: null, draft_graph: null, status: 'paused' } })
+    const r = await publishSequence(db, { sequenceId: SEQ, graph: emailGraph })
+    expect(r.ok).toBe(true)
+    expect(update.mock.calls[0][0].status).toBe('paused')
+  })
+
+  it('a draft or active sequence goes live', async () => {
+    for (const status of ['draft', 'active', undefined]) {
+      const { db, update } = mockDb({ stored: { location_id: LOC, graph: null, draft_graph: null, status } })
+      await publishSequence(db, { sequenceId: SEQ, graph: emailGraph })
+      expect(update.mock.calls[0][0].status).toBe('active')
+    }
   })
 })

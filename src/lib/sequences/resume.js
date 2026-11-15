@@ -12,11 +12,17 @@
  * the first hiccup.
  *
  * @param {Date} [now]
+ * @param {string|null} [dueAt] the row's current next_step_at, kept when later than now
  */
-export function buildResumePatch(now = new Date()) {
+export function buildResumePatch(now = new Date(), dueAt = null) {
+  // SEQPAUSE.1 — a row paused mid-step already holds its NEXT step's time
+  // (the runner moved it past the step it was sending); resuming before then
+  // must not skip that wait. An earlier, missing or unreadable time is "now".
+  const due = dueAt ? Date.parse(dueAt) : NaN
+  const at = Number.isFinite(due) && due > now.getTime() ? new Date(due) : now
   return {
     status: 'active',
-    next_step_at: now.toISOString(),
+    next_step_at: at.toISOString(),
     error_count: 0,
     last_error: null,
   }

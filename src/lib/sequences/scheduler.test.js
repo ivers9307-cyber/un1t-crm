@@ -6,7 +6,7 @@
 // pure helpers that make it correct: nextStepDelayMs, clampToSendWindow,
 // isGoalMet, plus setEnrollmentStatus's update shape.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock supabase before importing the module so createServerClient is
 // a Vitest mock when scheduler.js loads.
@@ -684,6 +684,13 @@ describe('runSequences — audience re-check before each step', () => {
 
 import { hasSendWindow } from './scheduler.js'
 
+// SEQQUIET.2 — the runner now holds a message step due inside quiet hours, so
+// a test run on the real clock would fail at night. Pin a daytime "now"
+// (11:00 Dublin) for every runSequences() call that passes none.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-08-10T10:00:00Z')) })
+afterEach(() => { vi.useRealTimers() })
+
+
 // One due enrolment on a sequence carrying `sendWindow`, at a location whose
 // company_settings row is `quietHours`. Two steps, so the runner computes a
 // real next-fire time for step 3 rather than completing.
@@ -719,6 +726,18 @@ function quietRouteFor({ sendWindow = null, quietHours = undefined } = {}) {
 }
 
 // The cursor advance carries the computed next_step_at.
+// SEQQUIET.2 — the pre-send hold: next_step_at moved, no cursor change.
+function holdUpdate(statements) {
+  return statements.find(s =>
+    s.table === 'sequence_enrollments' &&
+    s.ops[0]?.method === 'update' &&
+    'next_step_at' in (s.ops[0].args[0] || {}) &&
+    !('current_step_order' in s.ops[0].args[0]) &&
+    !('error_count' in s.ops[0].args[0]) &&
+    !s.ops.some(o => o.method === 'lte') // not the claim lease
+  )?.ops[0].args[0]
+}
+
 function advanceUpdate(statements) {
   return statements.find(s =>
     s.table === 'sequence_enrollments' &&
@@ -748,17 +767,34 @@ describe('hasSendWindow', () => {
 describe('runSequences — quiet-hours fallback for a windowless sequence', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
-  it('defers a 03:00 step to the end of the location quiet window', async () => {
-    // now = 02:00 UTC = 03:00 Dublin (August is IST). The following step is
-    // +1h, so the raw next fire is 04:00 Dublin — inside the default
-    // 21:00-08:00 quiet window. It must land at 08:00 Dublin = 07:00 UTC.
+  it('holds a step due at 03:00 until the end of the location quiet window, nothing sent (A14)', async () => {
+    // now = 02:00 UTC = 03:00 Dublin (August is IST), inside the default
+    // 21:00-08:00 quiet window. The step itself waits for 08:00 Dublin =
+    // 07:00 UTC; the cursor does not move.
     const { db, statements } = makeExitDb(quietRouteFor({ quietHours: null }))
     createServerClient.mockReturnValue(db)
     sendEmailStep.mockResolvedValue('send-1')
 
-    await runSequences({ now: new Date('2026-08-10T02:00:00Z') })
+    const stats = await runSequences({ now: new Date('2026-08-10T02:00:00Z') })
 
-    expect(advanceUpdate(statements).next_step_at).toBe('2026-08-10T07:00:00.000Z')
+    expect(sendEmailStep).not.toHaveBeenCalled()
+    expect(stats.quiet_held).toBe(1)
+    expect(holdUpdate(statements).next_step_at).toBe('2026-08-10T07:00:00.000Z')
+    expect(advanceUpdate(statements)).toBeUndefined()
+  })
+
+  it('defers the FOLLOWING step when it would land in the quiet window', async () => {
+    // now = 19:30 UTC = 20:30 Dublin, still permitted, so the step sends. The
+    // following step is +1h: 21:30 Dublin, inside the window, so it lands at
+    // 08:00 Dublin next morning = 07:00 UTC on the 11th.
+    const { db, statements } = makeExitDb(quietRouteFor({ quietHours: null }))
+    createServerClient.mockReturnValue(db)
+    sendEmailStep.mockResolvedValue('send-1')
+
+    await runSequences({ now: new Date('2026-08-10T19:30:00Z') })
+
+    expect(sendEmailStep).toHaveBeenCalledTimes(1)
+    expect(advanceUpdate(statements).next_step_at).toBe('2026-08-11T07:00:00.000Z')
   })
 
   it('leaves a daytime step exactly where it fell', async () => {
@@ -784,8 +820,9 @@ describe('runSequences — quiet-hours fallback for a windowless sequence', () =
 
     await runSequences({ now: new Date('2026-08-10T02:00:00Z') })
 
-    // 10:00 Dublin = 09:00 UTC.
-    expect(advanceUpdate(statements).next_step_at).toBe('2026-08-10T09:00:00.000Z')
+    // Held until 10:00 Dublin = 09:00 UTC.
+    expect(sendEmailStep).not.toHaveBeenCalled()
+    expect(holdUpdate(statements).next_step_at).toBe('2026-08-10T09:00:00.000Z')
   })
 
   it('defers nothing when the operator has turned quiet hours off', async () => {
@@ -840,7 +877,8 @@ describe('runSequences — quiet-hours fallback for a windowless sequence', () =
 
     await runSequences({ now: new Date('2026-08-10T02:00:00Z') })
 
-    expect(advanceUpdate(statements).next_step_at).toBe('2026-08-10T07:00:00.000Z')
+    expect(sendEmailStep).not.toHaveBeenCalled()
+    expect(holdUpdate(statements).next_step_at).toBe('2026-08-10T07:00:00.000Z')
   })
 
   it('bypasses the fallback for a test enrolment, exactly as the window is bypassed', async () => {

@@ -2,7 +2,7 @@
 // on a one-step sequence completes without sending anything.
 // Harness idiom copied from frequency-cap-scheduler.test.js.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('./steps.js', () => ({
@@ -21,6 +21,13 @@ vi.mock('./steps.js', () => ({
 import { runSequences } from './scheduler.js'
 import { createServerClient } from '@/lib/supabase'
 import { sendEmailStep } from './steps.js'
+
+// SEQQUIET.2 — the runner now holds a message step due inside quiet hours, so
+// a test run on the real clock would fail at night. Pin a daytime "now"
+// (11:00 Dublin) for every runSequences() call that passes none.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-08-10T10:00:00Z')) })
+afterEach(() => { vi.useRealTimers() })
+
 
 function makeDb(route) {
   const statements = []

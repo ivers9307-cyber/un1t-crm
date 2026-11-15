@@ -132,8 +132,10 @@ const seq = (id, locationId, over = {}) => ({
 
 describe('TZ.4 runSequences: the clamp runs on the sequence studio clock', () => {
   it('a New York sequence window (9-17) defers an evening step to 09:00 New York, not 09:00 Dublin', async () => {
-    // now 20:00 EDT Wed 1 Jul (01:00 IST Thu); following step +1h = 21:00 EDT
-    const now = new Date('2026-07-02T00:00:00Z')
+    // now 16:00 EDT Wed 1 Jul (21:00 IST): inside New York's window, so the
+    // step sends (SEQQUIET.2 holds a step due outside it). Following step +1h
+    // = 17:00 EDT, past the window.
+    const now = new Date('2026-07-01T20:00:00Z')
     const { db, statements } = makeDb(schedulerRoute({
       enrollments: [enrollmentAt('en-ny', 'seq-ny')],
       sequences: { 'seq-ny': seq('seq-ny', LOC_NY, { send_window: { start_hour: 9, end_hour: 17, skip_days: [] } }) },

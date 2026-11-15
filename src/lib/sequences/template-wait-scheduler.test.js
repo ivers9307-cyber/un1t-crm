@@ -2,7 +2,7 @@
 // pending template waits (no error_count / status change), and a wait past
 // 48 h exits the enrolment instead of sending late.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('./steps.js', () => ({
@@ -22,6 +22,13 @@ import { runSequences } from './scheduler.js'
 import { createServerClient } from '@/lib/supabase'
 import { sendWhatsappStep } from './steps.js'
 import { TemplateNotApprovedDeferral, templateStamp } from './template-wait.js'
+
+// SEQQUIET.2 — the runner now holds a message step due inside quiet hours, so
+// a test run on the real clock would fail at night. Pin a daytime "now"
+// (11:00 Dublin) for every runSequences() call that passes none.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-08-10T10:00:00Z')) })
+afterEach(() => { vi.useRealTimers() })
+
 
 // Chainable recorder db (campaign-sender.test.js idiom).
 function makeDb(route) {
@@ -136,8 +143,12 @@ describe('runSequences — TemplateNotApprovedDeferral handling', () => {
     const { db, statements } = makeDb(routeFor(baseEnrollment))
     createServerClient.mockReturnValue(db)
     sendWhatsappStep.mockRejectedValue(deferral())
-    // 22:00 Europe/Dublin (GMT in November); default quiet hours 21:00-08:00.
-    const now = new Date('2026-11-06T22:00:00.000Z')
+    // 20:30 Europe/Dublin (GMT in November), still permitted, so the step
+    // runs and the template wait answers; the hourly retry (21:30) falls in
+    // the default quiet hours 21:00-08:00. (SEQQUIET.2: a step due INSIDE
+    // quiet hours is held before it runs, so the retry clamp is tested from
+    // a permitted time.)
+    const now = new Date('2026-11-06T20:30:00.000Z')
 
     const stats = await runSequences({ now })
 
