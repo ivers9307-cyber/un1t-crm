@@ -4308,6 +4308,52 @@ registry.registerPath({
   },
 })
 
+// PAYLINK.1 — staff send a Hatch Street (un1t.online) customer a payment link on
+// WhatsApp. un1t_payment_links + whatsapp permissions at locationId; the CRM never
+// charges a card (the customer pays on un1t.online's hosted checkout).
+registry.registerPath({
+  method: 'get',
+  path: '/api/contacts/{id}/un1t-payment-link',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Payment link: sellable offers, latest link, what can be sent now, live membership, preview',
+  request: { params: z.object({ id: uuidLike }), query: z.object({ locationId: uuidLike }) },
+  responses: {
+    200: { description: 'State + offers', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — un1t_payment_links and whatsapp permissions required at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact or studio not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not a un1t.online studio (not_a_un1t_studio)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/un1t-payment-link',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Send the customer a 7-day un1t.online payment link on WhatsApp',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ locationId: uuidLike, offerId: uuidLike }).openapi('Un1tPaymentLinkSendBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Sent', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ linkId: z.string(), expiresAt: z.string(), via: z.enum(['cta', 'template']) }) }) } } },
+    400: { description: 'No email / phone, or offer_not_available', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact or studio not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not a un1t.online studio, writes off, WhatsApp opted out / undeliverable, or window closed with no usable template (needs_template)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Link could not be issued or the studio could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Delivery failed (link revoked)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // MIAHATCH.6 — the payment links Mia has sent a contact, for the contact page's
 // "Payment link sent" chip. Cookie only. Six columns, never the checkout URL or a
 // token; limited to studios where the caller holds Contacts; a contact the caller
