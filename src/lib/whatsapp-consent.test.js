@@ -792,3 +792,26 @@ describe('consentAckText', () => {
     expect(consentAckText({ name: 'A' }, false)).not.toMatch(/\u2014/)
   })
 })
+
+// WASTOP.1 — the keyword rule and the tap reader, pure.
+import { parseConsentKeyword as parseKw, consentTextOf } from './whatsapp-consent-keywords.js'
+describe('parseConsentKeyword (WASTOP.1 edges)', () => {
+  it.each([['Stop.', 'stop'], ['STOP!!', 'stop'], ['stop 🙏', 'stop'], ['"start"', 'start'], ['stop  all', 'stop'], ['Unsubscribe?', 'stop']])('%j → %s', (t, k) => {
+    expect(parseKw(t)).toBe(k)
+  })
+  it.each(['stop please', 'cancel', 'end', 'quit', 'please stop messaging me', '', null])('%j is not a keyword', (t) => {
+    expect(parseKw(t)).toBeNull()
+  })
+})
+describe('consentTextOf', () => {
+  it('reads text, button text or payload, and interactive titles; null for other types', () => {
+    expect(consentTextOf({ type: 'text', text: { body: 'STOP' } })).toBe('STOP')
+    expect(consentTextOf({ text: { body: 'STOP' } })).toBe('STOP')
+    expect(consentTextOf({ type: 'button', button: { text: 'Stop', payload: 'P' } })).toBe('Stop')
+    expect(consentTextOf({ type: 'button', button: { payload: 'stop' } })).toBe('stop')
+    expect(consentTextOf({ type: 'interactive', interactive: { button_reply: { id: 'a', title: 'Stop' } } })).toBe('Stop')
+    expect(consentTextOf({ type: 'interactive', interactive: { list_reply: { id: 'a', title: 'Start' } } })).toBe('Start')
+    expect(consentTextOf({ type: 'image', image: {} })).toBeNull()
+    expect(consentTextOf({ type: 'reaction', reaction: { emoji: '👍' } })).toBeNull()
+  })
+})
