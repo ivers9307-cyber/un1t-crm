@@ -26,7 +26,7 @@ export async function followPlacementForCheckin(db, { eventId, placedIntoId, per
   if (!placedIntoId) return { ok: false, reason: 'target_gone' }
   const { data: target, error } = await db
     .from('race_registrations')
-    .select('id, race_event_id, teams ( id, team_members ( id, name, email, contact_id ) )')
+    .select('id, race_event_id, status, teams ( id, team_members ( id, name, email, contact_id ) )')
     .eq('id', placedIntoId)
     .maybeSingle()
   if (error) return { ok: false, reason: 'load_failed' }
@@ -37,7 +37,7 @@ export async function followPlacementForCheckin(db, { eventId, placedIntoId, per
   const email = String(person?.email ?? '').trim().toLowerCase()
   if (!member && email) member = members.find((m) => String(m.email ?? '').trim().toLowerCase() === email)
   if (!member) return { ok: false, reason: 'not_on_team' }
-  return { ok: true, registrationId: target.id, member }
+  return { ok: true, registrationId: target.id, member, registrationStatus: target.status ?? null }
 }
 
 /**
@@ -47,4 +47,25 @@ export async function followPlacementForCheckin(db, { eventId, placedIntoId, per
  */
 export function isPlacedRedirect(reg) {
   return reg?.status === 'placed'
+}
+
+// CHECKINSTATUS.1 (audit 2026-11-15, item 11): a QR or a tap checked in any
+// registration it found, including a CANCELLED one (the scan selected status
+// and never looked at it) or one never paid for. Only these statuses may be
+// checked in: confirmed, and no_show (staff may mark one before the person
+// turns up late). Judged on the registration the check-in lands on, i.e.
+// the team entry for a placed solo.
+const CHECKIN_ALLOWED = new Set(['confirmed', 'no_show'])
+
+/** @returns {string|null} why this registration cannot be checked in, or null */
+export function checkinStatusRefusal(status) {
+  if (CHECKIN_ALLOWED.has(status)) return null
+  if (status === 'cancelled') return 'This entry was cancelled, so it cannot be checked in.'
+  if (status === 'pending_payment') return 'This entry has not been paid for, so it cannot be checked in.'
+  return 'This entry cannot be checked in.'
+}
+
+/** True when a race_checkins insert failed only because the person is already in. */
+export function isAlreadyCheckedIn(error) {
+  return !!error && /duplicate|unique|23505/i.test(error.message || '')
 }

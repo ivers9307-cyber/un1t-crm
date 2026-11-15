@@ -18,7 +18,7 @@ import { uuidLike } from '@/lib/schemas'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { checkinCounts } from '@/lib/event-checkins'
 import { sumWaveCapacity } from '@/lib/event-signups'
-import { followPlacementForCheckin, isPlacedRedirect } from '@/lib/placed-checkin'
+import { followPlacementForCheckin, isPlacedRedirect, checkinStatusRefusal } from '@/lib/placed-checkin'
 
 export const runtime = 'nodejs'
 
@@ -48,7 +48,7 @@ async function resolve(db, eventId, registrationId, memberId) {
   const locationId = reg.race_events?.location_id
   const member = (reg.teams?.team_members || []).find((m) => m.id === memberId)
   if (!member) return { error: 'That person is not on this registration', status: 400 }
-  if (!isPlacedRedirect(reg)) return { member, locationId, registrationId }
+  if (!isPlacedRedirect(reg)) return { member, locationId, registrationId, registrationStatus: reg.status }
   const followed = await followPlacementForCheckin(db, {
     eventId,
     placedIntoId: reg.placed_into_registration_id,
@@ -59,7 +59,7 @@ async function resolve(db, eventId, registrationId, memberId) {
     if (followed.reason === 'not_found') return { error: 'Registration not found for this event', status: 404 }
     return { error: 'That person is not on this registration', status: 400 }
   }
-  return { member: followed.member, locationId, registrationId: followed.registrationId }
+  return { member: followed.member, locationId, registrationId: followed.registrationId, registrationStatus: followed.registrationStatus }
 }
 
 export async function POST(request, props) {
@@ -83,6 +83,11 @@ export async function POST(request, props) {
   if (!hasPermissionForLocation(user, r.locationId, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
+
+  // CHECKINSTATUS.1 — a cancelled or unpaid entry is not checked in (undo,
+  // the DELETE below, is unaffected).
+  const refusal = checkinStatusRefusal(r.registrationStatus)
+  if (refusal) return NextResponse.json({ success: false, error: refusal, code: 'not_checkable', status: r.registrationStatus }, { status: 409 })
 
   const { error } = await db.from('race_checkins').insert({
     race_registration_id: r.registrationId,
