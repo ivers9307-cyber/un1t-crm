@@ -21,6 +21,7 @@ import { useRouter } from 'next/navigation'
 import { CalendarPlus } from 'lucide-react'
 import BookPanel from '@/components/BookPanel'
 import Un1tCompCredits from '@/components/Un1tCompCredits'
+import Un1tPaymentLink from '@/components/Un1tPaymentLink'
 import { UN1T_STAFF_COPY } from '@/lib/un1t-staff-booking-copy'
 import { moveChatConfirmationText } from '@/lib/book-chat-copy'
 
@@ -158,6 +159,7 @@ export default function Un1tClassBookingCard({ contactId, locationId, studioName
           onGranted={reload}
         />
       )}
+      <Un1tPaymentLink contactId={contactId} locationId={locationId} studioName={studioName} />
       <BookPanel
         contactId={contactId}
         locationId={locationId}
