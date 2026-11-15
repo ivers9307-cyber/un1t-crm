@@ -13,6 +13,7 @@ import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { syncLocationIgFeed } from '@/lib/instagram-feed'
 import { isMetaAuthError, stampConnectionError } from '@/lib/connection-health'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -23,11 +24,17 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
   const db = createServerClient()
-  const { data: conns } = await db
+  const { data: conns, error: readErr } = await db
     .from('channel_connections')
     .select('id, location_id, external_account_id, access_token')
     .eq('platform', 'instagram')
     .eq('is_active', true)
+  // A failed read is not "no connections": answering success here stamped the
+  // heartbeat over an outage (audit 2026-11-15). No stamp, so it goes stale.
+  if (readErr) {
+    logError('instagram-feed-sync', 'connections read failed; no heartbeat', { code: readErr.code ?? null, message: readErr.message })
+    return NextResponse.json({ success: false, error: 'Could not read Instagram connections' }, { status: 500 })
+  }
 
   let ok = 0
   let failed = 0
