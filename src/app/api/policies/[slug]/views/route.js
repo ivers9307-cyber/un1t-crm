@@ -120,23 +120,19 @@ export async function PATCH(request, { params }) {
     return NextResponse.json({ success: false, error: 'View / policy mismatch' }, { status: 400 })
   }
 
-  // Idempotent rule: later PATCH only wins if its duration is >=
-  // what's already stored. Lets the client safely fire on both
-  // beforeunload (short) and visibility-hidden (longer) without
-  // worrying about ordering — the longest reading wins.
-  const prevDuration = existing.total_duration_seconds || 0
-  const finalDuration = Math.max(prevDuration, total_duration_seconds)
-
-  const { data: updated, error } = await db
-    .from('policy_views')
-    .update({
-      ended_at: new Date().toISOString(),
-      total_duration_seconds: finalDuration,
-      section_dwell: section_dwell || null,
-    })
-    .eq('id', view_id)
-    .select('id, ended_at, total_duration_seconds')
-    .single()
+  // POLICYATOMIC.1 (October audit A23, mig 841) — one UPDATE that only ever
+  // raises the evidence: the longer reading wins, and section times merge
+  // keeping the larger per section (a request with none keeps the stored
+  // ones). The page fires on both hide and unload, in either order, so a
+  // read-then-write here used to let the shorter one land last.
+  const { data: rows, error } = await db.rpc('record_policy_view_end', {
+    p_view_id: view_id,
+    p_profile_id: user.id,
+    p_duration: total_duration_seconds,
+    p_section_dwell: section_dwell || null,
+  })
+  const updated = Array.isArray(rows) ? rows[0] : rows
+  if (!error && !updated) return NextResponse.json({ success: false, error: 'View not found' }, { status: 404 })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, view: updated })
 }
