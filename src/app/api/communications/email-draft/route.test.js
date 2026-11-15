@@ -25,8 +25,13 @@ vi.mock('@/lib/auth', () => ({
   assertLocationAccess: vi.fn(() => null),
 }))
 vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true), hasPermissionForLocation: vi.fn(() => true) }))
+vi.mock('@/lib/campaign-release', () => ({
+  releasePreflight: vi.fn(async () => ({ ok: true })),
+  releaseCampaign: vi.fn(async (_db, _c, { sendAt } = {}) => ({ ok: true, status: sendAt ? 'scheduled' : 'queued', scheduled_at: sendAt ? sendAt.toISOString() : null })),
+}))
 
 import { POST } from './route.js'
+import { releasePreflight, releaseCampaign } from '@/lib/campaign-release'
 
 const base = {
   location_id: '00000000-0000-0000-0000-000000000001',
@@ -174,5 +179,59 @@ describe('email-draft — audience filter validated at save time (B7)', () => {
     })
     expect(res.status).toBe(200)
     expect(inserted).toHaveLength(1)
+  })
+})
+
+// MAILPREFLIGHT.1 — audit 2026-11-15 item 8: "Send now" in the composer used
+// to insert status 'queued' directly, past the org email hard cap and the
+// prepaid wallet. The row is now always a draft, released through the same
+// releasePreflight + releaseCampaign the editor uses.
+describe('email-draft — sends and schedules go through the release checks', () => {
+  it('inserts a draft, preflights it, then releases it as queued', async () => {
+    const res = await post(base)
+    expect(res.status).toBe(200)
+    expect(inserted[0].status).toBe('draft')
+    expect(inserted[0]).not.toHaveProperty('scheduled_at')
+    expect(releasePreflight).toHaveBeenCalledWith(fakeDb, expect.objectContaining({ id: 'camp-new', status: 'draft', location_id: base.location_id }))
+    expect(releaseCampaign).toHaveBeenCalledWith(fakeDb, expect.objectContaining({ id: 'camp-new' }), { sendAt: null })
+    expect(await res.json()).toMatchObject({ success: true, id: 'camp-new', status: 'queued' })
+  })
+
+  it('a schedule is released with its date', async () => {
+    const res = await post({ ...base, action: 'schedule', scheduled_at: '2026-12-01T09:00:00.000Z' })
+    expect(res.status).toBe(200)
+    const sendAt = releaseCampaign.mock.calls[0][2].sendAt
+    expect(sendAt.toISOString()).toBe('2026-12-01T09:00:00.000Z')
+    expect((await res.json()).status).toBe('scheduled')
+  })
+
+  it.each(['email_hard_cap', 'wallet_empty'])('a %s refusal answers 422, releases nothing and keeps the draft', async (code) => {
+    releasePreflight.mockResolvedValueOnce({ ok: false, code, message: 'Refused.' })
+    const res = await post(base)
+    expect(res.status).toBe(422)
+    expect(releaseCampaign).not.toHaveBeenCalled()
+    expect(inserted[0].status).toBe('draft')
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, code, id: 'camp-new', status: 'draft' })
+    expect(body.error).toMatch(/saved as a draft/)
+  })
+
+  it('a lost release race answers 409 and says the draft was kept', async () => {
+    releaseCampaign.mockResolvedValueOnce({ ok: false, code: 'conflict', message: 'This campaign changed.' })
+    const res = await post(base)
+    expect(res.status).toBe(409)
+    expect((await res.json()).id).toBe('camp-new')
+  })
+
+  it('a draft action never preflights or releases', async () => {
+    await post({ ...base, action: 'draft' })
+    expect(releasePreflight).not.toHaveBeenCalled()
+    expect(releaseCampaign).not.toHaveBeenCalled()
+  })
+
+  it('an unreadable scheduled_at is refused before anything is written', async () => {
+    const res = await post({ ...base, action: 'schedule', scheduled_at: 'next tuesday' })
+    expect(res.status).toBe(400)
+    expect(inserted).toHaveLength(0)
   })
 })
