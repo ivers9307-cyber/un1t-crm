@@ -87,6 +87,24 @@ describe('POST /api/public/trial-purchases/[id]/checkout', () => {
     }
   })
 
+  it('paid already (or it cannot be told from paid) answers already_paid: no URL, nothing to press', async () => {
+    for (const reason of ['paid_in_mirror', 'holds_credits', 'legacy_checkout']) {
+      mocks.resume.mockResolvedValueOnce({ kind: 'confirming', reason })
+      const r = await call(ID, {})
+      expect(r.status).toBe(200)
+      const body = await r.json()
+      expect(body).toEqual({ success: false, code: 'already_paid' })
+      expect(JSON.stringify(body)).not.toContain('redirect_url')
+    }
+  })
+
+  it('a paid check that could not be made answers confirming with "try again in a minute": never a URL', async () => {
+    mocks.resume.mockResolvedValueOnce({ kind: 'confirming', reason: 'read_failed', retryLater: true })
+    const r = await call(ID, {})
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ success: false, code: 'confirming', retry_later: true, error: 'We could not check your payment just now. Nothing has been charged twice. Please try again in a minute.' })
+  })
+
   it('un1t.online busy or unreadable is 503 with words for the buyer and no internal code', async () => {
     mocks.resume.mockResolvedValueOnce({ kind: 'unavailable', code: 'UN1T_BUDGET' })
     const r = await call(ID, {})

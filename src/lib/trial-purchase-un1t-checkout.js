@@ -36,6 +36,21 @@ const LOG = 'trialbuy'
 export const UN1T_TRIAL_ORIGIN = 'web_trial'
 
 /**
+ * The write-ledger key of a row's n-th checkout (0 = the first). HATCHTRACK.1:
+ * every checkout minted with the `paid=1` success return carries the `:r<n>`
+ * suffix; a checkout made before that return existed has the bare
+ * `trial_purchase:<id>` key. The key is therefore the record of whether a
+ * buyer coming back from that checkout can be told apart from one who never
+ * paid (isPaidAwareCheckoutKey), read off the ledger, never off a deploy date.
+ */
+export function un1tTrialCheckoutKey(purchaseId, n) {
+  return `trial_purchase:${purchaseId}:r${n}`
+}
+export function isPaidAwareCheckoutKey(key) {
+  return typeof key === 'string' && /^trial_purchase:[^:]+:r\d+$/.test(key)
+}
+
+/**
  * Where un1t.online sends the buyer back to (HATCHTRACK.1: one definition for
  * the first checkout and every later one for the same row). `paid=1` marks the
  * success return, so the page can tell "came back from paying" (wait for the
@@ -129,7 +144,7 @@ export async function startUn1tTrialCheckout(db, { row, location, contact, retur
   try {
     checkout = await createCheckoutLink(db, {
       locationId, userId: account.un1tUserId, productId: row.un1t_product_id,
-      successUrl, cancelUrl, idempotencyKey: `trial_purchase:${purchaseId}`,
+      successUrl, cancelUrl, idempotencyKey: un1tTrialCheckoutKey(purchaseId, 0),
       origin: UN1T_TRIAL_ORIGIN, originRef: purchaseId, actor: null,
     })
   } catch (err) {

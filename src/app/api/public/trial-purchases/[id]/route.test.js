@@ -4,11 +4,13 @@
 // Stillorgan (Revolut) row still re-checks while pending.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ rateLimit: vi.fn(), getPayment: vi.fn(), paymentsFor: vi.fn(), mark: vi.fn(), push: vi.fn(), row: null, selects: [] }))
+const mocks = vi.hoisted(() => ({ rateLimit: vi.fn(), getPayment: vi.fn(), paymentsFor: vi.fn(), mark: vi.fn(), push: vi.fn(), row: null, selects: [], gate: vi.fn() }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: mocks.rateLimit }))
 vi.mock('@/lib/payments', () => ({ paymentsFor: mocks.paymentsFor }))
 vi.mock('@/lib/trial-purchase-payments', () => ({ markTrialPurchasePaymentStatus: mocks.mark }))
 vi.mock('@/lib/qstash', () => ({ publishQueuePush: mocks.push, TRIAL_PURCHASES_WORKER_PATH: '/api/workers/trial-purchases' }))
+// HATCHTRACK.1 — the paid gate has its own tests (trial-purchase-un1t-resume.test.js); here it answers what a test sets.
+vi.mock('@/lib/trial-purchase-un1t-resume', () => ({ un1tRetryGate: mocks.gate }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
@@ -32,6 +34,7 @@ beforeEach(() => {
   mocks.getPayment.mockResolvedValue({ state: 'pending', amountCents: 3900 })
   mocks.paymentsFor.mockReturnValue({ getPayment: mocks.getPayment })
   mocks.mark.mockResolvedValue({ released: false })
+  mocks.gate.mockResolvedValue({ ok: true, ledger: [] })
 })
 
 describe('GET /api/public/trial-purchases/[id]', () => {
@@ -84,16 +87,22 @@ describe('GET /api/public/trial-purchases/[id]', () => {
   // HATCHTRACK.1 — `retryable`: may the page send a Hatch buyer back to payment?
   const OPEN_HATCH = { ...BASE, status: 'awaiting_payment', payment_status: 'pending', payment_provider: 'un1t_online', payment_provider_ref: null, payment_checkout_token: null, payment_checkout_url: null, un1t_user_id: 'u-77', un1t_product_id: 'prod-1' }
   const hoursAgo = (h) => new Date(Date.now() - h * 3_600_000).toISOString()
-  it('an unpaid Hatch row with its un1t.online account is retryable (never resumable); a Revolut row never is', async () => {
+  it('a Hatch row is retryable exactly when the paid gate passes (asked without the live read); a Revolut row never asks it', async () => {
     mocks.row = { ...OPEN_HATCH, created_at: hoursAgo(3) }
     expect((await (await call('tp1')).json()).data).toMatchObject({ state: 'pending', retryable: true, resumable: false, checkout: null })
+    expect(mocks.gate).toHaveBeenCalledTimes(1)
+    // The row and nothing else: no `live`, so a poll never calls un1t.online.
+    expect(mocks.gate.mock.calls[0].slice(1)).toEqual([mocks.row])
+    mocks.gate.mockClear()
     mocks.row = { ...OPEN_HATCH, payment_provider: 'revolut', payment_provider_ref: 'ord1', payment_checkout_token: 'tok', created_at: hoursAgo(1) }
     expect((await (await call('tp1')).json()).data.retryable).toBe(false)
+    expect(mocks.gate).not.toHaveBeenCalled()
   })
-  it('a Hatch row with no account yet, one already settled, expired or too old is not retryable', async () => {
-    for (const over of [{ un1t_user_id: null }, { un1t_product_id: null }, { status: 'granted' }, { status: 'expired' }, { status: 'help_requested' }, { created_at: hoursAgo(73) }]) {
-      mocks.row = { ...OPEN_HATCH, created_at: hoursAgo(1), ...over }
-      expect((await (await call('tp1')).json()).data.retryable).toBe(false)
+  it('a payment in the mirror, a checkout from before the paid=1 return, a row that is no longer open, or a read that failed: not retryable, so the page keeps its being-confirmed screen', async () => {
+    for (const reason of ['paid_in_mirror', 'legacy_checkout', 'not_retryable', 'read_failed']) {
+      mocks.gate.mockResolvedValueOnce({ ok: false, reason })
+      mocks.row = { ...OPEN_HATCH, created_at: hoursAgo(1) }
+      expect((await (await call('tp1')).json()).data).toMatchObject({ state: 'pending', retryable: false })
     }
   })
 

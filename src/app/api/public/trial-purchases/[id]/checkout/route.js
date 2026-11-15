@@ -8,6 +8,11 @@
 // the status route beside this one. The answer is a checkout URL or a state,
 // never the buyer's name, email or phone. Rate-limited per purchase and per IP.
 //
+// A buyer who has paid is never given a checkout: before one is handed back
+// or made, the row must still await payment, its newest checkout must carry
+// the paid-aware return, the mirror must hold no payment since the row was
+// made, and un1t.online's live credits ledger must show nothing on the
+// account (un1tRetryGate). Any of those reads failing answers `confirming`.
 // Only a Hatch row that still awaits payment (un1tTrialRetryable). A Stillorgan
 // row resumes through the status route's `resumable` checkout token instead.
 // No charge, no grant, no account: resumeUn1tTrialCheckout hands back the
@@ -26,6 +31,7 @@ export const runtime = 'nodejs'
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const Schema = z.object({ return_path: z.string().max(64).optional() })
 
+const CHECK_LATER = 'We could not check your payment just now. Nothing has been charged twice. Please try again in a minute.'
 const TRY_AGAIN = 'We could not open the payment page just now. Please try again in a moment.'
 
 export async function POST(request, props) {
@@ -52,6 +58,14 @@ export async function POST(request, props) {
   if (out.kind === 'redirect') {
     // The URL goes to the browser once; it is never logged.
     return NextResponse.json({ success: true, data: { purchaseId: id, redirect_url: out.checkoutUrl, reused: out.reused } })
+  }
+  // Paid already, or it cannot be told from paid: never a checkout. The page
+  // shows the being-confirmed screen. `retry_later`: a read failed, so the
+  // CRM could not look (unknown is not unpaid); the buyer may try in a minute.
+  if (out.kind === 'confirming') {
+    return NextResponse.json(out.retryLater
+      ? { success: false, code: 'confirming', retry_later: true, error: CHECK_LATER }
+      : { success: false, code: 'already_paid' })
   }
   if (out.kind === 'not_found') return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   if (out.kind === 'not_resumable') {

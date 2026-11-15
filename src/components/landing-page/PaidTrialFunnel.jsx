@@ -118,6 +118,8 @@ const IN_APP_NAMES = { facebook: 'Facebook', instagram: 'Instagram' }
 // before `paid=1` existed): the CRM cannot tell yet, so it says both.
 const NOT_CONFIRMED_TEXT = "We haven't received a payment for this trial yet. If you have already paid, there is nothing more to do: we will email you as soon as it is on your account. If you didn't finish, you can pick up where you left off."
 const EXPIRED_TEXT = 'That checkout expired. Nothing was charged; please start again.'
+const CHECK_LATER_TEXT = 'We could not check your payment just now. Please try again in a minute.'
+const ALREADY_PAID_LINE = 'Already paid? Please do not pay again: we will email you as soon as your trial is on your account.'
 const RETRY_FAILED_TEXT = 'We could not open the payment page just now. Please try again in a moment.'
 // A Hatch grant waits on the un1t.online sync (every 15 minutes) and the
 // settle sweep (every 2): the pending screen listens this long, this often.
@@ -198,6 +200,7 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
   const retryOnLoad = Boolean(resumePurchaseId) && cancelled && preselected === 'hatch' && !preview
   const [step, setStep] = useState(resuming ? 'confirming' : retryOnLoad ? 'retry' : (preselected ? 'pick' : 'choose')) // choose | pick | form | payment | retry | confirming | done | refused | help_sent
   const [retryNote, setRetryNote] = useState(retryOnLoad ? INCOMPLETE_TEXT : null)
+  const [confirmNote, setConfirmNote] = useState(null) // the CRM could not check the payment: try again in a minute
   const [chosen, setChosen] = useState(null) // the public class picked, or null (skipped)
   const [reloadKey, setReloadKey] = useState(0)
   const [doneClass, setDoneClass] = useState(null) // the class the status route reports (a resumed checkout)
@@ -477,6 +480,14 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
       }
       // A state, not a failure: paid meanwhile (or with the team) goes to the
       // confirming screen; anything else starts again, the details kept.
+      // Paid already, or the CRM could not look: the being-confirmed screen,
+      // never a pay button (a second payment would settle nothing).
+      if (j.code === 'already_paid' || j.code === 'confirming') {
+        returnedPaidRef.current = true
+        setConfirmNote(j.code === 'confirming' ? (j.error || CHECK_LATER_TEXT) : null)
+        setStep('confirming')
+        return
+      }
       if (j.code === 'not_resumable') {
         if (['granted', 'paid', 'help'].includes(j.state)) { returnedPaidRef.current = true; setStep('confirming'); return }
         backToStart(j.state === 'expired' ? EXPIRED_TEXT : INCOMPLETE_TEXT); return
@@ -507,7 +518,10 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
         if (d.class && d.class.name) setDoneClass(d.class)
         if (d.state === 'granted' || d.state === 'help') { setStep('confirming'); return }
         if (d.state === 'expired') { backToStart(EXPIRED_TEXT); return }
-        if (d.retryable !== true) backToStart(INCOMPLETE_TEXT)
+        // Not retryable while still pending: it may be paid (the mirror shows a
+        // payment, or its checkout predates the paid=1 return). Being confirmed,
+        // never a form to pay again on.
+        if (d.retryable !== true) { returnedPaidRef.current = true; setStep('confirming') }
       } catch { /* the button still works; the server judges the row again */ }
     })()
     return () => { stopped = true }
@@ -695,6 +709,7 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
           {submitting ? 'One moment…' : `Continue to payment${price ? ` · ${price}` : ''}`}
         </button>
         <p className={TRIAL_FINE}>You are charged {price} once on our secure payment page; nothing renews.</p>
+        <p className={`mt-2 text-xs font-semibold text-black/80`}>{ALREADY_PAID_LINE}</p>
         <button type="button" disabled={submitting} onClick={() => backToStart(null)} className={`mt-3 text-xs ${TRIAL_MUTED} ${TRIAL_LINK}`}>
           Start again with different details
         </button>
@@ -708,6 +723,7 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
       <div className={`${TRIAL_CARD} text-center`}>
         <p className="font-display font-extrabold text-2xl text-black mb-2">Confirming your payment</p>
         <p className={TRIAL_MUTED}>{isHatch ? (block.pending_body || PAID_TRIAL_PENDING_BODY) : 'One moment while we check with the bank.'}</p>
+        {confirmNote ? <p className={`mt-3 ${TRIAL_MUTED}`} role="status">{confirmNote}</p> : null}
       </div>
     )
   }

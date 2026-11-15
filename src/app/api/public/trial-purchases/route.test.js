@@ -618,7 +618,7 @@ describe('POST /api/public/trial-purchases', () => {
       locationId: 'loc2', userId: 'u-77', productId: HATCH_PRODUCT_ID,
       successUrl: 'https://www.un1tdublin.com/trial?purchase=tp9&studio=hatch&paid=1',
       cancelUrl: 'https://www.un1tdublin.com/trial?purchase=tp9&studio=hatch&cancelled=1',
-      idempotencyKey: 'trial_purchase:tp9', origin: 'web_trial', originRef: 'tp9', actor: null,
+      idempotencyKey: 'trial_purchase:tp9:r0', origin: 'web_trial', originRef: 'tp9', actor: null,
     })
     // the stamps, in order, each scoped to the row and the studio; the URL is never stored
     const ups = trialUpdates()

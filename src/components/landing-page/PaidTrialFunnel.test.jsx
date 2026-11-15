@@ -858,6 +858,71 @@ describe('HATCHTRACK.1 — Hatch retry, first touch, pixel', () => {
     expect(screen.getByRole('alert').textContent).toMatch(/Nothing was charged/)
   })
 
+  it('the server says already paid: the being-confirmed screen, and no pay button left on the page', async () => {
+    vi.useFakeTimers()
+    pollData = { retryable: true }
+    const assign = stubAssign()
+    answers[CHECKOUT_URL] = { status: 200, body: { success: false, code: 'already_paid' } }
+    render(<PaidTrialFunnel studios={[HATCH]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} cancelled hatchTerms={HATCH_TERMS} />)
+    await advance(0)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Continue to payment/ })) })
+    await advance(0)
+    expect(screen.getByText('Confirming your payment')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Continue to payment/ })).toBeNull()
+    expect(assign).not.toHaveBeenCalled()
+    // Still retryable by the status route's cheaper look: it must not bounce back to the button.
+    await advance(10_000)
+    expect(screen.queryByRole('button', { name: /Continue to payment/ })).toBeNull()
+    expect(screen.queryByPlaceholderText('First name')).toBeNull()
+  })
+
+  it('the payment could not be checked: the being-confirmed screen with "try again in a minute", never a pay button', async () => {
+    vi.useFakeTimers()
+    pollData = { retryable: true }
+    const assign = stubAssign()
+    answers[CHECKOUT_URL] = { status: 200, body: { success: false, code: 'confirming', retry_later: true, error: 'We could not check your payment just now. Nothing has been charged twice. Please try again in a minute.' } }
+    render(<PaidTrialFunnel studios={[HATCH]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} cancelled hatchTerms={HATCH_TERMS} />)
+    await advance(0)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Continue to payment/ })) })
+    await advance(0)
+    expect(screen.getByText('Confirming your payment')).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toMatch(/could not check your payment just now.*try again in a minute/)
+    expect(screen.queryByRole('button', { name: /Continue to payment/ })).toBeNull()
+    expect(assign).not.toHaveBeenCalled()
+  })
+
+  it('a ?purchase= load for a row the status route will not retry (a checkout from before paid=1, or a payment in the mirror) keeps the old being-confirmed screen', async () => {
+    vi.useFakeTimers()
+    pollData = { retryable: false }
+    window.history.replaceState(null, '', `/trial?purchase=${PURCHASE_ID}&studio=hatch`)
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} hatchTerms={HATCH_TERMS} />)
+    await advance(10_000)
+    expect(screen.getByText('Confirming your payment')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Continue to payment/ })).toBeNull()
+    await advance(41 * 3000)
+    expect(screen.getByText('Almost there')).toBeTruthy()
+    expect(posts).toHaveLength(0)
+  })
+
+  it('a cancelled return for such a row is being confirmed too: no pay button and no form to pay again on', async () => {
+    vi.useFakeTimers()
+    pollData = { retryable: false }
+    window.sessionStorage.setItem('trial_checkout_draft', JSON.stringify({ studioKey: 'hatch', form: { first_name: 'Sam', last_name: 'Byrne', email: 'sam@example.com', phone: '0871234567', consent: true }, chosen: null }))
+    render(<PaidTrialFunnel studios={[HATCH]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} cancelled hatchTerms={HATCH_TERMS} />)
+    await advance(0)
+    expect(screen.getByText('Confirming your payment')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Continue to payment/ })).toBeNull()
+    expect(screen.queryByPlaceholderText('First name')).toBeNull()
+  })
+
+  it('the retry step says plainly not to pay again if they already have', async () => {
+    vi.useFakeTimers()
+    pollData = { retryable: true }
+    render(<PaidTrialFunnel studios={[HATCH]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} cancelled hatchTerms={HATCH_TERMS} />)
+    await advance(0)
+    expect(screen.getByText(/Already paid\? Please do not pay again/)).toBeTruthy()
+  })
+
   it('un1t.online busy (503) keeps the buyer on the step with a message and the button live', async () => {
     vi.useFakeTimers()
     pollData = { retryable: true }
