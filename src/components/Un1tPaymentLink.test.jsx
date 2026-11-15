@@ -2,7 +2,7 @@
 //
 // PAYLINK.1 — send a un1t.online payment link on WhatsApp from the Hatch card.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import Un1tPaymentLink from './Un1tPaymentLink.jsx'
 
 const OFFERS = [
@@ -38,13 +38,16 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
-const mount = () => render(<Un1tPaymentLink contactId="c1" locationId="loc1" studioName="UN1T Hatch Street" />)
+const mount = (props = {}) => render(<Un1tPaymentLink contactId="c1" locationId="loc1" studioName="UN1T Hatch Street" {...props} />)
+// Let the fetch -> json() -> setState chain finish (a macrotask outlasts every microtask).
+const settle = async () => { await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
 const choose = (id) => fireEvent.change(screen.getByRole('combobox', { name: /product/i }), { target: { value: id } })
 
 describe('Un1tPaymentLink', () => {
   it('renders the offers and fills the preview with the chosen one', async () => {
     mount()
     expect(await screen.findByRole('option', { name: '10 class pack — €120' })).toBeTruthy()
+    expect(screen.queryByTestId('paylink-preview')).toBeNull()
     choose('o1')
     expect(screen.getByTestId('paylink-preview').textContent).toBe('Hi Aoife, here is your link for 10 class pack, €120.')
     expect(calls[0].url).toBe('/api/contacts/c1/un1t-payment-link?locationId=loc1')
@@ -113,7 +116,7 @@ describe('Un1tPaymentLink', () => {
     getStatus = 409
     const { container } = mount()
     await waitFor(() => expect(calls.length).toBe(1))
-    await Promise.resolve()
+    await settle()
     expect(container.innerHTML).toBe('')
   })
 
@@ -121,7 +124,22 @@ describe('Un1tPaymentLink', () => {
     getData = base({ can: { send: false, has_email: true, has_phone: true, window_open: true, template_ready: true } })
     const { container } = mount()
     await waitFor(() => expect(calls.length).toBe(1))
-    await Promise.resolve()
+    await settle()
     expect(container.innerHTML).toBe('')
+  })
+
+  it('positive control: the same setup with can.send renders the dropdown', async () => {
+    const { container } = mount()
+    await waitFor(() => expect(calls.length).toBe(1))
+    await settle()
+    expect(container.innerHTML).not.toBe('')
+    expect(screen.getByRole('combobox', { name: /product/i })).toBeTruthy()
+  })
+
+  it('renders times in the studio zone', async () => {
+    getData = base({ latest: { status: 'sent', product_title: 'x', created_at: '2026-07-01T23:30:00Z', paid_at: null, expires_at: null } })
+    mount({ zone: 'Europe/Dublin' })
+    // 23:30Z in July is 00:30 on 2 Jul in Dublin.
+    expect(await screen.findByText(/Link sent 2 Jul, 00:30 · not opened yet/)).toBeTruthy()
   })
 })

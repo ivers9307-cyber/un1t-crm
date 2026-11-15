@@ -18,21 +18,21 @@ const STATUS_WORDS = Object.freeze({
   revoked: 'replaced',
 })
 
-function fmtTime(iso) {
+function fmtTime(iso, zone) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', ...(zone ? { timeZone: zone } : {}) })
 }
 
-function statusLine(latest) {
+function statusLine(latest, zone) {
   if (!latest) return ''
   const word = latest.status === 'paid'
-    ? `paid ${fmtTime(latest.paid_at)}`.trim()
+    ? `paid ${fmtTime(latest.paid_at, zone)}`.trim()
     : STATUS_WORDS[latest.status] || latest.status
-  return `Link sent ${fmtTime(latest.created_at)} · ${word}`
+  return `Link sent ${fmtTime(latest.created_at, zone)} · ${word}`
 }
 
-export default function Un1tPaymentLink({ contactId, locationId, studioName }) {
+export default function Un1tPaymentLink({ contactId, locationId, studioName, zone }) {
   const [info, setInfo] = useState(null)
   const [offerId, setOfferId] = useState('')
   const [busy, setBusy] = useState(false)
@@ -70,8 +70,9 @@ export default function Un1tPaymentLink({ contactId, locationId, studioName }) {
   }
   if (!can.send && !latest && reasons.length === 0) return null
 
-  const product = offer ? `${offer.title}, ${offer.price_label}` : '{product}'
-  const preview = String(info.preview_text || '').split('{product}').join(product)
+  const preview = offer
+    ? String(info.preview_text || '').split('{product}').join(`${offer.title}, ${offer.price_label}`)
+    : ''
   const showWarning = !!offer?.recurring && !!info.live_membership
   const first = info.first_name || 'They'
   const disabled = busy || !offer || !can.send
@@ -103,7 +104,7 @@ export default function Un1tPaymentLink({ contactId, locationId, studioName }) {
   return (
     <div className="mb-3 border border-un1t-border rounded-lg p-3 space-y-2 bg-un1t-bg" role="group" aria-label={`Send a payment link at ${studioName}`}>
       <p className="text-[11px] font-semibold text-un1t-subtle">Send a payment link</p>
-      {latest && <p className="text-xs text-un1t-text" data-testid="paylink-latest">{statusLine(latest)}</p>}
+      {latest && <p className="text-xs text-un1t-text" data-testid="paylink-latest">{statusLine(latest, zone)}</p>}
       <label className="block text-xs text-un1t-subtle">
         Product
         <select

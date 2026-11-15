@@ -159,7 +159,7 @@ export default function Un1tClassBookingCard({ contactId, locationId, studioName
           onGranted={reload}
         />
       )}
-      <Un1tPaymentLink contactId={contactId} locationId={locationId} studioName={studioName} />
+      <Un1tPaymentLink contactId={contactId} locationId={locationId} studioName={studioName} zone={info?.zone} />
       <BookPanel
         contactId={contactId}
         locationId={locationId}
