@@ -30,6 +30,7 @@
 // written; a Glofox promo with no plan binding is 409 glofox_plan_missing
 // before any Glofox call; every claim row records the promo's platform.
 import { cleanAttribution } from '@/lib/campaign-funnel-attribution'
+import { stampFirstTouchSource } from '@/lib/contact-first-touch-source'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -79,6 +80,7 @@ const Schema = z.object({
   terms_accepted: z.boolean().optional(),
   attribution: z.object({
     utm_source: z.string().max(200).optional(),
+    utm_medium: z.string().max(200).optional(),
     utm_campaign: z.string().max(200).optional(),
     utm_content: z.string().max(200).optional(),
     utm_term: z.string().max(200).optional(),
@@ -259,6 +261,9 @@ export async function POST(request) {
   await bestEffort('lead_source stamp', () => db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null))
   await bestEffort('last_lead_source stamp', () => db.from('contacts').update({ last_lead_source: leadSource, last_lead_source_at: nowIso }).eq('id', contactId))
   const a = b.attribution || {}
+  // UTMSOURCE.1 — first-touch utm_source / utm_medium (mig 837). Before the
+  // utm stamp below, which sets attributed_at for this same visit. Never throws.
+  await stampFirstTouchSource(db, contactId, a, { module: 'corp-promo' })
   const utm = {}
   for (const k of ['utm_campaign', 'utm_content', 'utm_term']) if (a[k]) utm[k] = String(a[k])
   if (Object.keys(utm).length) {
@@ -342,7 +347,7 @@ export async function POST(request) {
     customer_phone: b.phone,
     status: 'processing',
     ...(isGlofox ? {} : { terms_accepted_at: nowIso, terms_source: 'website', terms_version: version }),
-    attribution: { ...utm, ...(a.utm_source ? { utm_source: String(a.utm_source) } : {}) },
+    attribution: { ...utm, ...(a.utm_source ? { utm_source: String(a.utm_source) } : {}), ...(a.utm_medium ? { utm_medium: String(a.utm_medium) } : {}) },
     lead_event_id: b.lead_event_id || null,
     ...classColumnsFor(choice.chosen),
   }).select('*').single()

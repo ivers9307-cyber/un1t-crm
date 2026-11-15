@@ -416,6 +416,36 @@ describe('POST /api/public/trial-purchases', () => {
     expect(stamp[1]).toMatchObject({ utm_content: 'real-ad', ad_provider: 'meta' })
     for (const k of ['utm_campaign', 'utm_term', 'ad_external_id']) expect(k in stamp[1], k).toBe(false)
   })
+  it('UTMSOURCE.1: the contact gets utm_source and utm_medium first-touch, in their own write, before the ad stamp', async () => {
+    await POST(req({ ...BODY, attribution: { ...BODY.attribution, utm_source: 'ig', utm_medium: 'paid' } }))
+    const contactWrites = mocks.updated.mock.calls.filter(([t]) => t === 'contacts')
+    const i = contactWrites.findIndex(([, patch]) => 'utm_source' in patch)
+    const j = contactWrites.findIndex(([, patch]) => 'attributed_at' in patch)
+    expect(i).toBeGreaterThan(-1)
+    expect(i).toBeLessThan(j)
+    const [, patch, filters] = contactWrites[i]
+    expect(patch).toEqual({ utm_source: 'ig', utm_medium: 'paid' })
+    expect(filters).toEqual([['eq', 'id', 'c1'], ['is', 'utm_source', null], ['is', 'utm_medium', null], ['is', 'attributed_at', null]])
+    // The ad stamp is unchanged: it never carries source or medium.
+    expect('utm_source' in contactWrites[j][1] || 'utm_medium' in contactWrites[j][1]).toBe(false)
+  })
+  it('UTMSOURCE.1: an organic visitor (source and medium, no ad signal) is tagged and is NOT made an ad lead', async () => {
+    await POST(req({ ...BODY, attribution: { utm_source: 'instagram', utm_medium: 'bio', fbp: 'fb.1.1.2' } }))
+    const contactWrites = mocks.updated.mock.calls.filter(([t]) => t === 'contacts')
+    expect(contactWrites.find(([, patch]) => 'utm_source' in patch)[1]).toEqual({ utm_source: 'instagram', utm_medium: 'bio' })
+    expect(contactWrites.some(([, patch]) => 'attributed_at' in patch || 'ad_provider' in patch)).toBe(false)
+  })
+  it('UTMSOURCE.1: no source or medium sends no such write, and an unfilled macro is never stamped', async () => {
+    await POST(req(BODY))
+    await POST(req({ ...BODY, attribution: { ...BODY.attribution, utm_source: '{{site_source_name}}' } }))
+    expect(mocks.updated.mock.calls.some(([t, patch]) => t === 'contacts' && ('utm_source' in patch || 'utm_medium' in patch))).toBe(false)
+  })
+  it('UTMSOURCE.1: a failed source/medium write never costs the purchase', async () => {
+    mocks.updated.mockImplementation(async (t, patch) => (t === 'contacts' && 'utm_source' in patch ? { error: { code: '42703' } } : { error: null }))
+    const r = await POST(req({ ...BODY, attribution: { ...BODY.attribution, utm_source: 'ig' } }))
+    expect(r.status).toBe(200)
+    expect(mocks.inserted).toHaveBeenCalledTimes(1)
+  })
 
   // ── Stillorgan: the trial-history gate, before any money ──
   it('Stillorgan: a buyer with a trial claim gets trial_used and no row, no checkout', async () => {

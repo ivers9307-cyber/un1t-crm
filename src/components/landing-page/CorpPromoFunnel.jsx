@@ -35,7 +35,7 @@ function utmFromUrl() {
   try {
     const p = new URLSearchParams(window.location.search)
     const out = {}
-    for (const k of ['utm_source', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid']) {
+    for (const k of ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid']) {
       // TRIALLEAK.1 — an unfilled Meta macro (`{{adset.id}}`) is no value.
       const v = cleanAdValue(p.get(k))
       if (v) out[k] = v.slice(0, k === 'fbclid' ? 500 : 200)

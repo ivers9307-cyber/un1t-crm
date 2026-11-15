@@ -6,6 +6,7 @@ import { validateBody, uuidLike } from '@/lib/validate'
 import { validateCustomResponses } from '@/lib/booking-validation'
 import { logWarn, logError } from '@/lib/log'
 import { findBookableSlot } from '@/lib/booking-slots'
+import { stampFirstTouchSource } from '@/lib/contact-first-touch-source'
 
 export const runtime = 'nodejs'
 
@@ -30,6 +31,10 @@ const BookingSchema = z.object({
     utm_campaign: z.string().max(200).optional(),
     utm_content: z.string().max(200).optional(),
     utm_term: z.string().max(200).optional(),
+    // UTMSOURCE.1 — measurement only, never an ad signal. The /start funnel
+    // has sent both since TRIALLEAK.1; this schema used to strip them.
+    utm_source: z.string().max(200).optional(),
+    utm_medium: z.string().max(200).optional(),
     ad_provider: z.string().max(50).optional(),
     ad_external_id: z.string().max(200).optional(),
   }).optional(),
@@ -202,6 +207,10 @@ export async function POST(request) {
       await writeContactTag(db, { contactId: data.contact_id, locationId: data.location_id, tag: 'stillorgan-start' })
     }
   } catch (e) { logWarn('book', 'meta_book attribution failed', { err: e }) }
+
+  // UTMSOURCE.1 — first-touch utm_source / utm_medium (mig 837). Before the ad
+  // stamp below, which sets attributed_at for this same visit. Never throws.
+  if (data?.contact_id) await stampFirstTouchSource(db, data.contact_id, body.attribution, { module: 'book' })
 
   // ADS-REPORT.2 — first-touch ad-click attribution (stamp-if-null). Marketing
   // params are low-trust: sanitised + length-capped. Only stamp when a real ad
