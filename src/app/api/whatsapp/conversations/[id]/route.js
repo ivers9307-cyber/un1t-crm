@@ -1,4 +1,5 @@
 import { createServerClient } from '@/lib/supabase'
+import { logWarn } from '@/lib/log'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt, requireWebWhatsAppInboxAt } from '@/lib/auth'
@@ -67,10 +68,16 @@ export async function GET(request, props) {
     .limit(limit)
   const messages = (messagesDesc || []).slice().reverse()
 
-  // Mark as read (reset unread count)
-  await db.from('whatsapp_conversations')
+  // Mark as read (reset unread count). WAINBOXLOOP.1: only when there is
+  // something to reset. The open thread polls this route every 10 s, and an
+  // unconditional write emitted a whatsapp_conversations change each time,
+  // which every open inbox answers by reloading its whole list (audit
+  // 2026-11-15, item 7). Best effort: a failed reset is logged, never fatal.
+  const { error: readResetErr } = await db.from('whatsapp_conversations')
     .update({ unread_count: 0 })
     .eq('id', params.id)
+    .gt('unread_count', 0)
+  if (readResetErr) logWarn('whatsapp.conversation', 'unread reset failed', { conversationId: params.id, error: readResetErr.message })
 
   // FLOW-SEND — whether this location has the booking Flow configured, so
   // the composer can offer "Send booking Flow" (single PK lookup).

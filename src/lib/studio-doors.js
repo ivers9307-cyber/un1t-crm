@@ -21,12 +21,46 @@
 // full control of their own HTTP status codes:
 //   { ok: true, doors: [{id, name}], scope: 'unrestricted' | 'allowlist' }
 //   { ok: false, reason: 'not_configured' }
+//   { ok: false, reason: 'allowlist_unreadable', status: 503, message }  (fail closed)
 //   { ok: false, reason: 'unifi_error', status, message }
 //
 // Location-row lookup (the 404 "location not found" case) stays with the
 // caller — it's a route-level concern, not part of the door-scoping logic.
 
 import { getUnifiConfig, listDoors, UnifiError } from '@/lib/unifi-access'
+import { logError } from '@/lib/log'
+
+/**
+ * The caller's door allowlist at one studio, read once for every door gate
+ * (the list here, and the unlock route's check).
+ *
+ * DOORFAILCLOSED.1 (October audit A04): the read's error used to be
+ * discarded, so a failed read gave `undefined`, which the gates treated as
+ * "unrestricted": a database blip opened every door to a coach whose list
+ * was restricted. A failed read is now its own answer and every caller
+ * refuses on it. No row is still unrestricted (masters and organisation
+ * admins may hold no profile_locations row at the studio; mig 182 left
+ * manager+ rows NULL), and NULL is still unrestricted.
+ *
+ * @returns {Promise<{ ok: true, allowlist: string[]|null } | { ok: false }>}
+ *   allowlist null = every door; [] = none.
+ */
+export async function readDoorAllowlist(db, userId, locationId) {
+  const { data, error } = await db
+    .from('profile_locations')
+    .select('unifi_door_ids')
+    .eq('profile_id', userId)
+    .eq('location_id', locationId)
+    .maybeSingle()
+  if (error) {
+    logError('studio-doors', 'door allowlist read failed; refusing', { location_id: locationId, code: error.code ?? null, message: error.message })
+    return { ok: false }
+  }
+  const ids = data?.unifi_door_ids
+  return { ok: true, allowlist: Array.isArray(ids) ? ids : null }
+}
+
+export const ALLOWLIST_UNREADABLE_MESSAGE = 'Could not check which doors you can open, so none are shown. Try again in a moment.'
 
 /**
  * @param {object} db - Supabase server client
@@ -48,14 +82,12 @@ export async function listAllowedDoors(db, { user, location, locationId }) {
   // identifiers from the UniFi controller, set via the staff edit UI.
   // NULL/undefined = legacy fallback (show all doors — applies to
   // manager+ roles after the mig 182 backfill).
-  const { data: assignment } = await db
-    .from('profile_locations')
-    .select('unifi_door_ids')
-    .eq('profile_id', user.id)
-    .eq('location_id', locationId)
-    .maybeSingle()
-  const allowlist = assignment?.unifi_door_ids
-  const isUnrestricted = allowlist === null || allowlist === undefined
+  const read = await readDoorAllowlist(db, user.id, locationId)
+  if (!read.ok) {
+    return { ok: false, reason: 'allowlist_unreadable', status: 503, message: ALLOWLIST_UNREADABLE_MESSAGE }
+  }
+  const allowlist = read.allowlist
+  const isUnrestricted = allowlist === null
 
   try {
     const doors = await listDoors(cfg)

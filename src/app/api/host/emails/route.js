@@ -10,7 +10,7 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { designJsonTooBig, assertAudienceEventOwned, HOST_CAMPAIGN_LIST_COLUMNS } from '@/lib/host-campaign-draft'
 import { loadHostCampaignStats, ZERO_STATS } from '@/lib/host-campaign-stats'
-import { hostSendBlockReason } from '@/lib/host-campaign-launch'
+import { hostSendBlockReason, utilityAudienceProblem } from '@/lib/host-campaign-launch'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -95,6 +95,10 @@ export async function POST(request) {
     const audienceErr = await assertAudienceEventOwned(db, session.host.id, audienceEventId)
     if (audienceErr) return NextResponse.json({ success: false, error: audienceErr }, { status: 404 })
   }
+  // HOSTUTILITY.1 — Utility only to one event's attendees (utilityAudienceProblem).
+  const utilityProblem = utilityAudienceProblem({ email_type: parsed.data.email_type, audience_kind: kind, audience_event_id: audienceEventId })
+  if (utilityProblem) return NextResponse.json({ success: false, error: utilityProblem }, { status: 400 })
+
   const { data: campaign, error } = await db
     .from('host_campaigns')
     .insert({

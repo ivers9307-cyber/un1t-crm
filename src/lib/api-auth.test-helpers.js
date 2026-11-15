@@ -43,6 +43,8 @@ export function makeFakeDb(tables) {
     b.neq = chain((col, val) => { matched = matched.filter((r) => r[col] !== val) })
     b.is = chain((col, val) => { matched = matched.filter((r) => (r[col] ?? null) === val) })
     b.in = chain((col, vals) => { matched = matched.filter((r) => vals.includes(r[col])) })
+    b.gt = chain((col, val) => { matched = matched.filter((r) => r[col] > val) })
+    b.lt = chain((col, val) => { matched = matched.filter((r) => r[col] < val) })
     b.gte = chain((col, val) => { matched = matched.filter((r) => r[col] >= val) })
     b.lte = chain((col, val) => { matched = matched.filter((r) => r[col] <= val) })
     b.ilike = chain((col, pat) => {
