@@ -48,14 +48,18 @@
 // a flat black at HERO_SCRIM_ALPHA behind every line, fading out over the
 // block's top padding (HERO_SCRIM_FADE), at every width. The footage has an
 // Instagram handle and captions burned in, and which part of the clip the box
-// shows changes with its ratio: at tablet widths (5:4, seen at 667px) the
-// handle landed under the heading, where the old whole-box gradient was down
-// to about a third black. The words no longer depend on what is behind them:
-// over pure white footage the weakest line (the eyebrow, white at 75%) is
-// still above 7:1 (CampaignHero.test.jsx works it out). No size, position or
-// height changes: the phone box is exactly as tall as before, and the fade
-// zone is the top padding the phone already had (from `sm` the top padding
-// grows from 2rem to 4rem, upwards, so the words do not move).
+// shows changes with its ratio, so at one width or another they landed under
+// the heading or the sub-copy (the handle under the heading at 667px, under
+// the sub-copy at 375px, a caption under the heading on desktop), where the
+// old whole-box gradient was down to about a third black. The words no longer
+// depend on what is behind them: over pure white footage the weakest line
+// (the eyebrow, white at 75%) is still above 7:1 (CampaignHero.test.jsx works
+// it out). The scrim REPLACES that whole-box gradient: stacked, the two left
+// a phone's box close to solid black; alone, the clip shows clear above the
+// words and faintly through them. No size, position or height changes: the
+// phone box is exactly as tall as before, and the fade zone is the top
+// padding the phone already had (from `sm` the top padding grows from 2rem
+// to 4rem, upwards, so the words do not move).
 //
 // The video box is the one dark island on a light page: `bg-black` sits on
 // the element whose text is white, which is the rule no-low-contrast-accent-
@@ -70,10 +74,10 @@ const GESTURE_EVENTS = ['pointerdown', 'keydown', 'touchend']
 const FOCUS_CLASS = Object.freeze({ top: 'object-top', center: 'object-center', bottom: 'object-bottom' })
 
 /** How black the scrim behind the hero's words is (0-1), and how tall its fade-out is. */
-export const HERO_SCRIM_ALPHA = 0.8
+export const HERO_SCRIM_ALPHA = 0.85
 export const HERO_SCRIM_FADE = '4rem'
 // One literal so Tailwind sees it; the test pins it to the two constants above.
-export const HERO_WORDS_SCRIM_CLS = 'bg-[linear-gradient(to_top,rgb(0_0_0/0.8)_calc(100%-4rem),transparent)]'
+export const HERO_WORDS_SCRIM_CLS = 'bg-[linear-gradient(to_top,rgb(0_0_0/0.85)_calc(100%-4rem),transparent)]'
 
 export function heroFocusClass(videoFocus) {
   return FOCUS_CLASS[videoFocus] || FOCUS_CLASS.top
@@ -174,7 +178,6 @@ export default function CampaignHero({
 
             <img src={posterUrl} alt="" className={`absolute inset-0 w-full h-full object-cover ${focusClass}`} />
           ) : null}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent pointer-events-none" aria-hidden="true" />
           {videoUrl && (
             <button
               type="button"
