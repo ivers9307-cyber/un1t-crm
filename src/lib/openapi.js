@@ -597,6 +597,25 @@ registry.registerPath({
   },
 })
 
+// PAYLINK.1 — "Continue to payment" on a staff-sent payment link (/buy/<token>).
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/buy/{token}',
+  tags: ['Public'],
+  summary: 'Continue to payment on a staff-sent un1t.online payment link (PAYLINK.1)',
+  description: 'Anonymous; the token is the credential. Rate-limited to 10 per IP per minute. Re-reads the link, the contact and the current product; a link already paid in the un1t_transactions mirror is never sent to pay again. Finds the person\'s un1t.online account, or creates it only with acceptTerms: true on this request, then answers un1t.online\'s hosted-checkout URL (returned once, never stored). The CRM never charges a card. data.kind: redirect (with url) | paid | expired | help | terms_required.',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({ acceptTerms: z.boolean().optional() }) } } },
+  },
+  responses: {
+    200: { description: 'data.kind redirect (with data.url), or a state the page shows: paid, expired, help, terms_required' },
+    404: { description: 'Unknown token', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: a read failed or un1t.online is busy or unclear; try again', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 const CorpPromoClaim = z.object({
   promo: z.string().max(60).optional().openapi({ example: 'hatch-3-free', description: 'A promo key from src/lib/corp-promos.js; it decides the studio, credits and expiry. Required without `page`; with `page` (PAGES.1) optional, and only accepted when it names the page studio row\'s own promo (anything else is not_found).' }),
   ...PublicPageFields,
