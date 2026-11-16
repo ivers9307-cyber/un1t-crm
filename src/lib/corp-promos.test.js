@@ -202,3 +202,42 @@ describe('glofox promos (NEWSTART.1)', () => {
     expect(corpPromoCopyFromBlocks([], 'hatch-3-free')).toEqual({ ...CORP_PROMO_COPY_DEFAULT, ticks: [...CORP_PROMO_COPY_DEFAULT.ticks] })
   })
 })
+
+describe('OPENWEEK.1 open week words', () => {
+  it('uses the open week defaults for kind open_week, on either platform', async () => {
+    const { corpPromoCopyFromBlocks: words, OPEN_WEEK_COPY_DEFAULT } = await import('./corp-promos')
+    for (const platform of ['un1t_online', 'glofox']) {
+      const c = words([], 'hatch-open-week', { platform, kind: 'open_week' })
+      expect(c.title).toBe('Open Week at {studio_name}')
+      expect(c.heading).toBe('Open Week at {studio_name}')
+      expect(c.subhead).toBe("Come and try coach-led classes, on us. Pick your classes for 23–30 November and we'll book you in.")
+      expect(c.ticks).toEqual(['Up to 5 classes, free', 'One class a day, 23–30 November', 'Booked for you, see them in the app'])
+      expect(c.cta_label).toBe('Book my classes')
+      expect(c.pick_heading).toBe('Pick your classes')
+      expect(c.pick_hint).toBe('One class a day, up to {max_classes}.')
+      expect(c.pick_cta).toBe('Continue with {count} classes')
+      expect(c.class_list_heading).toBe('Your classes')
+      expect(c.studio_heading).toBe('Choose your studio')
+      expect(c.done_title).toBe("You're in 🎉")
+      expect(c.done_body).toBe("We're booking you into the classes below. Check your email for how to log in to the app.")
+      expect(c.active_member_text).toBe("You're already a member at {studio_name}, so just book your classes in the app as usual.")
+      expect(c.already_claimed_text).toBe("You've already signed up for Open Week. Your classes are in the app; reply to our email if anything looks off.")
+      expect(c.over_text).toBe('Open Week has finished. Ask at the front desk about trying a class.')
+      expect(c.email_subject).toBe('Your Open Week classes at {studio_name}')
+      expect(c.email_body).toBe("Hi {first_name}, we're booking you into your Open Week classes at {studio_name}:\n{class_list}\nYou'll get a confirmation for each class as it's booked. Log in to the app with this email to see them. Reply to this email if anything looks off.")
+      expect(c.trial_used_text).toBe(OPEN_WEEK_COPY_DEFAULT.trial_used_text)
+    }
+  })
+
+  it("a block's own field still wins", async () => {
+    const { corpPromoCopyFromBlocks: words } = await import('./corp-promos')
+    const c = words([{ type: 'corp_promo', promo_key: 'hatch-open-week', heading: 'Try us free', pick_cta: 'Next' }], 'hatch-open-week', { kind: 'open_week' })
+    expect(c.heading).toBe('Try us free')
+    expect(c.pick_cta).toBe('Next')
+  })
+
+  it('a normal promo carries no open week keys', async () => {
+    const { corpPromoCopyFromBlocks: words } = await import('./corp-promos')
+    expect(words([], 'hatch-3-free', {}).pick_heading).toBeUndefined()
+  })
+})

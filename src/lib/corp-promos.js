@@ -115,20 +115,49 @@ export const CORP_PROMO_GLOFOX_COPY_DEFAULT = Object.freeze({
   email_body: 'Hi {first_name}, your {credits} free classes at {studio_name} are on your account. Use them within 7 days of your first class. Log in to the UN1T app with this email (tap "Forgot password" if you have not set one) and book your classes there. Reply to this email if anything looks off.',
 })
 
+// OPENWEEK.1: the words for an open week promo, at either platform. The extra
+// keys are the class picker's (pick_*), the studio choice's, the done list's
+// heading and the "the week is over" text.
+export const OPEN_WEEK_COPY_DEFAULT = Object.freeze({
+  ...CORP_PROMO_COPY_DEFAULT,
+  title: 'Open Week at {studio_name}',
+  eyebrow: '',
+  heading: 'Open Week at {studio_name}',
+  subhead: "Come and try coach-led classes, on us. Pick your classes for 23–30 November and we'll book you in.",
+  ticks: Object.freeze(['Up to 5 classes, free', 'One class a day, 23–30 November', 'Booked for you, see them in the app']),
+  cta_label: 'Book my classes',
+  done_title: "You're in 🎉",
+  done_body: "We're booking you into the classes below. Check your email for how to log in to the app.",
+  active_member_text: "You're already a member at {studio_name}, so just book your classes in the app as usual.",
+  already_claimed_text: "You've already signed up for Open Week. Your classes are in the app; reply to our email if anything looks off.",
+  help_text: "Thanks, we've got your details. Something needs a quick check on our side, so the team will be in touch shortly to get you booked in.",
+  unavailable_text: 'Open Week sign-up is not available right now.',
+  email_subject: 'Your Open Week classes at {studio_name}',
+  email_body: "Hi {first_name}, we're booking you into your Open Week classes at {studio_name}:\n{class_list}\nYou'll get a confirmation for each class as it's booked. Log in to the app with this email to see them. Reply to this email if anything looks off.",
+  pick_heading: 'Pick your classes',
+  pick_hint: 'One class a day, up to {max_classes}.',
+  pick_cta: 'Continue with {count} classes',
+  class_list_heading: 'Your classes',
+  studio_heading: 'Choose your studio',
+  over_text: 'Open Week has finished. Ask at the front desk about trying a class.',
+})
+
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
 const TEXT_FIELDS = Object.keys(CORP_PROMO_COPY_DEFAULT).filter((k) => k !== 'ticks')
+const OPEN_WEEK_TEXT_FIELDS = Object.keys(OPEN_WEEK_COPY_DEFAULT).filter((k) => k !== 'ticks')
 
 /**
  * The words for `promoKey` off a studio's landing blocks: the corp_promo block
  * naming that promo, else the first corp_promo block with no promo key, every
  * blank or missing field on its default. Pure.
  */
-export function corpPromoCopyFromBlocks(blocks, promoKey, { platform } = {}) {
-  const defaults = platform === 'glofox' ? CORP_PROMO_GLOFOX_COPY_DEFAULT : CORP_PROMO_COPY_DEFAULT
+export function corpPromoCopyFromBlocks(blocks, promoKey, { platform, kind } = {}) {
+  const openWeek = kind === 'open_week'
+  const defaults = openWeek ? OPEN_WEEK_COPY_DEFAULT : platform === 'glofox' ? CORP_PROMO_GLOFOX_COPY_DEFAULT : CORP_PROMO_COPY_DEFAULT
   const list = (Array.isArray(blocks) ? blocks : []).filter((b) => b && typeof b === 'object' && b.type === 'corp_promo')
   const block = list.find((b) => str(b.promo_key) === promoKey) || list.find((b) => !str(b.promo_key)) || {}
   const out = {}
-  for (const k of TEXT_FIELDS) out[k] = str(block[k]) || defaults[k]
+  for (const k of openWeek ? OPEN_WEEK_TEXT_FIELDS : TEXT_FIELDS) out[k] = str(block[k]) || defaults[k]
   const ticks = Array.isArray(block.ticks) ? block.ticks.map(str).filter(Boolean) : []
   out.ticks = ticks.length > 0 ? ticks : [...defaults.ticks]
   return out
