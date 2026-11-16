@@ -667,6 +667,21 @@ if (!phone) return skip
 Why: a single migration that drops + replaces is irreversible; a two-stage migration lets us roll back the code change without DB-side action if the new path proves wrong. Examples of the convention working end-to-end: `event_types.reminder_*` (mig 076 deprecated → **dropped in mig 241** after verifying zero readers + no fn/view/trigger refs + zero live data), `public.shifts` (mig 067 deprecated in favour of `shift_blocks` + `shift_assignments`; mig 068 + 069 kept it trigger-mirrored during cutover; **fully dropped in mig 238**). **Not yet droppable** (incomplete cutover — still dual-written/read): the `profiles` comp columns (`annual_salary`/`hourly_rate`/`overtime_rate`/`contracted_hours_per_week`/`annual_leave_entitlement`) migrated to `profile_compensation` but the read path still hits `profiles` in `assistant/chat`, `contracts`, `invoices` + `staff` dual-writes both — cut the reads over before dropping.
 
 
+### STAFFPAYLINK.1 — staff payment links (Hatch Street, un1t.online)
+
+A staff member sends a contact a payment link on WhatsApp from the contact's Hatch card; the customer opens `/buy/<token>`, accepts terms and is taken to un1t.online's hosted checkout. Inside WhatsApp's 24-hour window the message is free text; outside it, the studio's approved UTILITY template (button URL `https://<customer site>/buy/{{1}}`).
+
+Files: `src/lib/staff-payment-links.js` (issue, resolve, revoke, copy defaults), `src/lib/staff-payment-link-checkout.js` (the buy page's load and checkout start, page copy), `src/lib/staff-payment-link-sweep.js` (settles links off the `un1t_transactions` mirror), `src/app/api/contacts/[id]/un1t-payment-link` (staff send), `src/app/buy/[token]` (public page), `src/app/api/public/buy/[token]` (public API), migs 841-844. Template name and every customer-facing line are operator-editable under Settings, Integrations, un1t.online, Payment links (`locations.settings.un1t_online.payment_link`, blank = code default).
+
+Rules:
+- One live link per contact per studio; a new send revokes the previous one.
+- A link lives 7 days (`STAFF_PAYMENT_LINK_TTL_MS`); only the token's hash is stored.
+- Never a charge from the CRM: payment happens on un1t.online's hosted checkout.
+- Reuse the existing checkout, then a cooldown (`PAYLINK_CHECKOUT_COOLDOWN_MS`) before a second one is minted, so a payment still in the mirror's lag is never paid twice.
+- The paid rule: a link is paid only when a mirrored transaction matches it (`isPaymentForLink`); a failed read is never "unpaid".
+- The sweep is the one settler: the `/buy` POST answers "paid" when it sees the payment but never stamps the row paid. The sweep runs the set-password step for every link it settles; `runSetPasswordStep` reads the ledger for a CRM `create_client` and skips (`skipped_not_created`) an account the CRM did not make, so an existing member never gets the email. Its subject and body are `set_password_email_subject`/`_body` (`{studio}` = the studio's name). The paid page's "set your password" line shows only when the link carries `terms_accepted_at` (the account was created from this page), so it never promises an email to an existing member.
+- The sweep expires every live link past `expires_at` (with or without an account, free checkouts included), so the one-live-link index frees up; the staff card reads a live link past expiry as expired before that.
+
 ## Deployment
 
 Vercel Pro. Every scheduled job lives in `vercel.json` — there is no `pg_cron` and no `pg_net` in the database (mig 097 removed both extensions along with the legacy `webhook_subscriptions` table that was the last `pg_net` consumer). One source of truth, no drift surface.
