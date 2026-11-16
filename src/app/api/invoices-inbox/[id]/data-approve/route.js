@@ -17,7 +17,7 @@ import { loadInvoiceForUser } from '../../_helpers'
 import { canTransitionInboundInvoice } from '@/lib/inbound-invoices'
 import { pushQueueRowToXero } from '@/lib/invoices-queue/push-xero'
 import { hasResolvedVatRate } from '@/lib/invoices-queue/vat'
-import { recordSupplierDefault } from '@/lib/invoices-queue/supplier-defaults'
+import { recordPushOutcome, rememberSupplierCoding } from '@/lib/invoices-queue/push-outcome'
 import { XeroError } from '@/lib/xero/client'
 import { serverErrorResponse } from '@/lib/error-events'
 
@@ -85,18 +85,7 @@ export async function POST(request, { params }) {
     // invoice from them pre-fills. Best-effort: a write failure must
     // never block the approval. Recorded once, on the first approval.
     try {
-      const ef = row.extracted_fields || {}
-      const ref = ef.xero_contact_ref
-      if (ref?.kind === 'existing' && ref.xero_contact_id && ef.xero_account_id) {
-        await recordSupplierDefault(db, {
-          locationId: row.location_id,
-          xeroContactId: ref.xero_contact_id,
-          supplierName: ref.name || ef.supplier_name || null,
-          accountCode: ef.account_code || null,
-          xeroAccountId: ef.xero_account_id,
-          category: ef.category || null,
-        })
-      }
+      await rememberSupplierCoding(db, row)
     } catch (e) {
       console.warn(`[data-approve ${id}] recordSupplierDefault failed: ${e?.message || e}`)
     }
@@ -120,23 +109,13 @@ export async function POST(request, { params }) {
     return serverErrorResponse({ module: 'invoice-data-approve', error: e, request, status: 502, publicMessage: msg })
   }
 
-  // The bill was created in Xero, but the source file failed to
-  // attach. Do NOT mark it forwarded — the source must travel to Xero
-  // (the CRM is the sole path now that Dext is being retired). Persist
-  // the bill id (so a retry re-attaches to the SAME bill instead of
-  // creating a duplicate) and surface the reason; the row stays in
-  // data_approved with a Retry button.
-  if (pushResult.attachmentError) {
-    await db
-      .from('invoices_queue')
-      .update({
-        xero_bill_id: pushResult.billId,
-        xero_bill_number: pushResult.billNumber,
-        xero_deep_link_url: pushResult.deepLinkUrl,
-        xero_synced_at: new Date().toISOString(),
-        xero_error: `Bill created in Xero, but attaching the source file failed: ${pushResult.attachmentError}. Click "Retry send to Xero" to attach it.`,
-      })
-      .eq('id', id)
+  // XEROBULK.1 — the shared outcome (also the bulk route's). A bill whose
+  // source file did not attach is NOT forwarded: it keeps its bill id (so a
+  // retry re-attaches to the SAME bill) and stays in data_approved.
+  const recorded = await recordPushOutcome(db, id, pushResult, {
+    select: 'id, status, forwarded_at, xero_bill_id, xero_bill_number, xero_deep_link_url, xero_synced_at',
+  })
+  if (recorded.outcome === 'attachment_failed') {
     return serverErrorResponse({
       module: 'invoice-data-approve',
       error: { name: 'XeroAttachmentError', message: `Bill created but source file failed to attach: ${pushResult.attachmentError}` },
@@ -145,30 +124,14 @@ export async function POST(request, { params }) {
       publicMessage: `Bill created in Xero, but the source file didn't attach: ${pushResult.attachmentError}. Retry to attach it.`,
     })
   }
-
-  // Stamp success state with the bill_id + deep link.
-  const { data: updated, error: updErr } = await db
-    .from('invoices_queue')
-    .update({
-      status: 'forwarded',
-      forwarded_at: new Date().toISOString(),
-      xero_bill_id: pushResult.billId,
-      xero_bill_number: pushResult.billNumber,
-      xero_deep_link_url: pushResult.deepLinkUrl,
-      xero_synced_at: new Date().toISOString(),
-      xero_error: null,
-    })
-    .eq('id', id)
-    .eq('status', 'data_approved')
-    .select('id, status, forwarded_at, xero_bill_id, xero_bill_number, xero_deep_link_url, xero_synced_at')
-    .single()
-  if (updErr) return serverErrorResponse({ module: 'invoice-data-approve', error: updErr, request })
-  if (!updated) {
+  if (recorded.outcome === 'error') return serverErrorResponse({ module: 'invoice-data-approve', error: { message: recorded.message }, request })
+  if (recorded.outcome === 'conflict') {
     return NextResponse.json({
       success: false,
       error: 'Row was modified concurrently — refresh and retry.',
     }, { status: 409 })
   }
+  const updated = recorded.row
 
   return NextResponse.json({
     success: true,
