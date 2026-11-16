@@ -193,3 +193,80 @@ export async function applyCarDepositUpdates({ db, car, order, state, updates, g
 
   return { written: true }
 }
+
+
+// ── DEPOSITREISSUE.1 (mig 845) — orders a re-issued link superseded ─────────
+
+/** Revolut states in which a buyer's payment is under way or done. */
+const IN_FLIGHT = new Set(['processing', 'authorised'])
+
+/**
+ * Before a deposit link is re-issued over an unpaid order: decide what the
+ * old order means. Pure.
+ * @returns {'rotate'|'record_then_rotate'|'paid'|'in_flight'}
+ */
+export function reissueDecision(orderState) {
+  const state = String(orderState || '').toLowerCase()
+  if (state === 'completed') return 'paid'
+  if (IN_FLIGHT.has(state)) return 'in_flight'
+  if (state === 'pending') return 'record_then_rotate'
+  return 'rotate' // cancelled, failed: nothing can be paid on it any more
+}
+
+/**
+ * Settle an order a re-issue superseded. A COMPLETED order marks the car paid
+ * (and becomes its order of record); cancelled/failed closes the row and
+ * leaves the car alone (its new link is live); anything else is still open.
+ * A completed old order on a car ALREADY paid by its new link is a double
+ * payment: logged at error for a person to refund, the row closed.
+ *
+ * @returns {Promise<{ outcome: 'not_superseded'|'still_pending'|'settled'|'closed'|'double_payment'|'not_applied'|'error', state?: string, error?: any }>}
+ */
+export async function settleSupersededOrder({ db, orderId, getOrder }) {
+  const { data: row, error: rowErr } = await db.from('car_deposit_superseded_orders')
+    .select('order_id, car_id, settled_at').eq('order_id', orderId).maybeSingle()
+  if (rowErr) return { outcome: 'error', error: rowErr }
+  if (!row) return { outcome: 'not_superseded' }
+  if (row.settled_at) return { outcome: 'closed' }
+
+  const order = await getOrder(orderId)
+  if (!order) return { outcome: 'error', error: new Error('order not readable') }
+  const state = String(order.state || '').toLowerCase()
+  const close = async (settledState) => {
+    const { error } = await db.from('car_deposit_superseded_orders')
+      .update({ settled_at: new Date().toISOString(), settled_state: settledState })
+      .eq('order_id', orderId).is('settled_at', null)
+    if (error) logError('car-deposit-revolut', 'superseded order settled but not recorded; it is re-checked', { orderId, err: error })
+  }
+
+  if (state === 'cancelled' || state === 'failed') {
+    await close(state)
+    return { outcome: 'closed', state }
+  }
+  if (state !== 'completed') return { outcome: 'still_pending', state }
+
+  const { data: car, error: carErr } = await db.from('cars').select(`
+      id, location_id, deposit_token, deposit_status, deposit_paid_at,
+      deposit_amount, deposit_paid_amount,
+      deposit_revolut_order_id, deposit_link_sent_at,
+      buyer_email, buyer_phone, buyer_name, make, model, irish_reg,
+      locations ( id, name )
+    `).eq('id', row.car_id).maybeSingle()
+  if (carErr) return { outcome: 'error', error: carErr }
+  if (!car) { await close('car_gone'); return { outcome: 'closed', state } }
+  if (car.deposit_status === 'paid' && car.deposit_revolut_order_id !== orderId) {
+    logError('car-deposit-revolut', 'DOUBLE PAYMENT: a superseded deposit order completed on a car already paid; refund one by hand', {
+      carId: car.id, orderId, carOrderId: car.deposit_revolut_order_id,
+    })
+    await close('double_payment')
+    return { outcome: 'double_payment', state }
+  }
+  const { updates } = depositUpdateForOrder({ order, car })
+  const { written, error } = await applyCarDepositUpdates({
+    db, car, order, state, updates: { ...updates, deposit_revolut_order_id: orderId }, guardStatus: true,
+  })
+  if (error) return { outcome: 'error', error }
+  if (!written) return { outcome: 'not_applied', state }
+  await close('completed')
+  return { outcome: 'settled', state }
+}

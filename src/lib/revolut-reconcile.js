@@ -72,7 +72,7 @@
 // pages.
 
 import { getOrder as revolutGetOrder } from './revolut'
-import { depositUpdateForOrder, applyCarDepositUpdates } from './car-deposit-revolut'
+import { depositUpdateForOrder, applyCarDepositUpdates, settleSupersededOrder } from './car-deposit-revolut'
 import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from './race-payments'
 import { runRacePaymentCompletedEffects } from './race-payment-completed'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from './class-booking-payments'
@@ -107,7 +107,7 @@ const SIX_HOURLY_FROM_MS = 24 * 60 * 60_000
 /** Rows per page of a candidate list (under the 1,000-row select cap). */
 const PAGE = 500
 
-export const DOMAINS = ['car_deposit', 'race_payment', 'class_booking', 'trial_purchase', 'offer_purchase', 'donation']
+export const DOMAINS = ['car_deposit', 'car_deposit_superseded', 'race_payment', 'class_booking', 'trial_purchase', 'offer_purchase', 'donation']
 
 /** Revolut order states that end a payment; anything else is still in flight. */
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
@@ -182,6 +182,18 @@ const LISTS = {
     .order('id', { ascending: true })
     .range(a, b)))
     .map((r) => ({ id: r.id, ref: r.deposit_revolut_order_id, createdAt: r.deposit_terms_accepted_at })),
+
+  // DEPOSITREISSUE.1 (mig 845) — orders a re-issued link superseded while
+  // pending: a missed webhook for one of these was an orphaned payment.
+  car_deposit_superseded: async (db, fromIso, toIso) => (await paginate((a, b) => db.from('car_deposit_superseded_orders')
+    .select('order_id, car_id, superseded_at')
+    .is('settled_at', null)
+    .gte('superseded_at', fromIso)
+    .lte('superseded_at', toIso)
+    .order('superseded_at', { ascending: true })
+    .order('order_id', { ascending: true })
+    .range(a, b)))
+    .map((r) => ({ id: r.order_id, ref: r.order_id, createdAt: r.superseded_at })),
 
   race_payment: async (db, fromIso, toIso) => (await paginate((a, b) => db.from('race_payments')
     .select('id, payment_provider_ref, created_at')
@@ -296,6 +308,15 @@ const APPLY = {
     if (!updates) return { outcome: 'still_pending', state }
     const { written } = await applyCarDepositUpdates({ db, car, order, state, updates, guardStatus: true })
     return { outcome: written ? 'settled' : 'not_applied', state }
+  },
+
+  async car_deposit_superseded({ db, row, getOrder }) {
+    const r = await settleSupersededOrder({ db, orderId: row.ref, getOrder: (ref) => fetchOrder(getOrder, 'car_deposit_superseded', ref) })
+    if (r.outcome === 'error') { if (r.error?.message === 'order not readable') return PROVIDER_FAILED; throw r.error }
+    if (r.outcome === 'not_superseded' || r.outcome === 'closed') return r.state ? { outcome: 'settled', state: r.state } : ALREADY_SETTLED
+    if (r.outcome === 'still_pending') return { outcome: 'still_pending', state: r.state }
+    if (r.outcome === 'not_applied') return { outcome: 'not_applied', state: r.state }
+    return { outcome: 'settled', state: r.state }
   },
 
   async race_payment({ db, row, getOrder }) {
