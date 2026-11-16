@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   ROSTER_LAYOUTS, DEFAULT_ROSTER_LAYOUT, rosterLayoutStorageKey, loadRosterLayout, saveRosterLayout,
-  gridWeekDays, buildRosterGrid, adminBalanceLabel, restGapTitle, untimedLabel, GRID_COPY,
+  gridWeekDays, buildRosterGrid, gridAddOptions, adminBalanceLabel, restGapTitle, untimedLabel, GRID_COPY,
 } from './roster-grid-model'
 import { untimedShiftCount } from '@shared/working-time'
 
@@ -530,5 +530,34 @@ describe('review nits', () => {
 
   it('My shifts with no row of your own has its own words', () => {
     expect(GRID_COPY.noRowsMine).toBe('You have no shifts at this studio this week.')
+  })
+})
+
+// GRIDEDIT.1
+describe('gridAddOptions', () => {
+  const blk = (id, date, start, end, assigned = [], max = 3) => ({
+    id, block_date: date, start_time: start, end_time: end, max_coaches: max,
+    shift_templates: { name: `T ${id}` },
+    shift_assignments: assigned.map((p, i) => ({ id: `${id}-${i}`, profile_id: p, status: 'scheduled' })),
+  })
+  const blocks = [
+    blk('late', '2026-09-23', '18:00:00', '19:00:00'),
+    blk('early', '2026-09-23', '06:00:00', '07:00:00'),
+    blk('mine', '2026-09-23', '09:00:00', '10:00:00', ['p1']),
+    blk('full', '2026-09-23', '12:00:00', '13:00:00', ['a', 'b'], 2),
+    blk('other-day', '2026-09-24', '06:00:00', '07:00:00'),
+  ]
+  it("lists the day's shifts the coach is not on, earliest first, a full one marked", () => {
+    const out = gridAddOptions(blocks, { profileId: 'p1', date: '2026-09-23' })
+    expect(out.map((o) => [o.block_id, o.full])).toEqual([['early', false], ['full', true], ['late', false]])
+    expect(out[1]).toMatchObject({ assigned: 2, max: 2, name: 'T full' })
+  })
+  it('a cancelled assignment does not count as being on the shift', () => {
+    const b = [{ ...blk('x', '2026-09-23', '06:00:00', '07:00:00'), shift_assignments: [{ id: 'c', profile_id: 'p1', status: 'cancelled' }] }]
+    expect(gridAddOptions(b, { profileId: 'p1', date: '2026-09-23' }).map((o) => o.block_id)).toEqual(['x'])
+  })
+  it('nothing without a coach or a date', () => {
+    expect(gridAddOptions(blocks, { date: '2026-09-23' })).toEqual([])
+    expect(gridAddOptions(blocks, { profileId: 'p1' })).toEqual([])
   })
 })
