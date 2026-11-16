@@ -20,6 +20,7 @@ vi.mock('@/lib/activity-write-gate', () => ({ canWriteActivitiesAt: () => true }
 const boardProps = vi.hoisted(() => ({ last: null }))
 vi.mock('@/components/KanbanBoard', () => ({ default: (props) => { boardProps.last = props; return <div>{`board:${props.initialStages.map((s) => s.slug).join(',')}`}</div> } }))
 vi.mock('@/components/PipelineViewSwitcher', () => ({ default: () => <div>switcher</div> }))
+vi.mock('@/components/PipelineBoardFilter', () => ({ default: (p) => <div>{`filter:${p.q ?? ''}:${p.stuck}`}</div> }))
 vi.mock('@/components/StageFollowupCoverage', () => ({ default: (props) => <div>{`coverage:${props.pipelineId}:${props.canEditSequences}`}</div> }))
 vi.mock('@/lib/sequence-access', () => ({ canBuildSequencesAt: vi.fn(() => false) }))
 // HATCHCARD.1 — the signals read is mocked; the rest of the module is real.
@@ -457,5 +458,67 @@ describe('/pipeline — builder links (PIPEBUILD.5p)', () => {
     const html = renderToStaticMarkup(await Page({ searchParams: {} }))
     expect(html).toContain('No pipeline is configured')
     expect(html).toContain('href="/settings/pipelines/new"')
+  })
+})
+
+// BOARDFILTER.1 — ?q= and ?stuck=1 narrow every column's read AND its count.
+describe('/pipeline — board search and stuck filter (BOARDFILTER.1)', () => {
+  function recordingDb() {
+    const deals = []
+    const db = {
+      from: (table) => {
+        const st = { table, head: false, ilike: null, or: null }
+        const chain = {}
+        chain.select = (_c, o) => { st.head = !!o?.head; return chain }
+        for (const m of ['eq', 'in', 'order', 'range']) chain[m] = () => chain
+        chain.ilike = (c, v) => { st.ilike = [c, v]; return chain }
+        chain.or = (v) => { st.or = v; return chain }
+        chain.then = (res, rej) => {
+          if (table === 'deals') deals.push(st)
+          const out = table === 'pipelines' ? { data: [{ id: 'p1', key: 'funnel', name: 'Funnel', mode: 'derived' }], error: null }
+            : table === 'pipeline_stages' ? { data: [STAGE, { id: 's9', slug: 'dormant', name: 'Dormant', is_dormant: true, display_order: 9, pipeline_id: 'p1' }], error: null }
+            : { data: [], error: null, count: 0 }
+          return Promise.resolve(out).then(res, rej)
+        }
+        return chain
+      },
+    }
+    return { db, deals }
+  }
+  beforeEach(() => membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS }))
+
+  it('filters the column read and its count; the tab badges stay whole', async () => {
+    const { db, deals } = recordingDb()
+    createServerClient.mockReturnValue(db)
+    const html = renderToStaticMarkup(await Page({ searchParams: { q: 'Aoife', stuck: '1' } }))
+    const column = deals.filter((d) => d.ilike)
+    expect(column.some((d) => !d.head)).toBe(true)     // the read
+    expect(column.some((d) => d.head)).toBe(true)      // its count
+    for (const d of column) {
+      expect(d.ilike).toEqual(['title', '%Aoife%'])
+      expect(d.or).toMatch(/^stage_entered_at\.lte\./)
+    }
+    // the tab-badge counts carry no filter
+    expect(deals.filter((d) => d.head && !d.ilike).length).toBeGreaterThan(0)
+    expect(html).toContain('filter:Aoife:true')
+    expect(html).toContain('funnel deals matching')
+    expect(boardProps.last.filterQuery).toBe('q=Aoife&stuck=1')
+  })
+
+  it('the Off funnel view keeps the search but drops stuck', async () => {
+    const { db, deals } = recordingDb()
+    createServerClient.mockReturnValue(db)
+    const html = renderToStaticMarkup(await Page({ searchParams: { view: 'dormant', q: 'Aoife', stuck: '1' } }))
+    expect(deals.every((d) => d.or == null)).toBe(true)
+    expect(html).toContain('filter:Aoife:false')
+  })
+
+  it('no filter: no ilike or or on any read, and Load more carries nothing', async () => {
+    const { db, deals } = recordingDb()
+    createServerClient.mockReturnValue(db)
+    const html = renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(deals.every((d) => d.ilike == null && d.or == null)).toBe(true)
+    expect(html).not.toContain('matching')
+    expect(boardProps.last.filterQuery).toBe('')
   })
 })

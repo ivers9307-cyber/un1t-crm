@@ -88,7 +88,8 @@ const DAY_MS = 86400000
 // in pipeline when no stage stamp exists yet): quiet < 7d, warm < 21d,
 // stale beyond.
 const WARM_DAYS = 7
-const STALE_DAYS = 21
+// BOARDFILTER.1 — exported: the board's "Stuck" filter is this same rule.
+export const STALE_DAYS = 21
 
 // Whole days between an ISO timestamp and nowMs; null on bad input.
 export function ageDays(iso, nowMs) {

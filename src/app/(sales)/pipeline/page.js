@@ -55,8 +55,12 @@ import { zoneOfLocation } from '@/lib/location-time'
 import { loadUn1tCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
 import { stageShowsSignals } from '@/lib/pipeline-card-signal-slugs'
 import { logWarn } from '@/lib/log'
+import { parseBoardFilter, applyBoardFilter, boardFilterActive, boardFilterParams } from '@/lib/pipeline-board-filter'
+import PipelineBoardFilter from '@/components/PipelineBoardFilter'
 
 export const dynamic = 'force-dynamic'
+
+const boardFilterParamsString = (filter) => boardFilterParams(filter).toString()
 
 // PIPEBUILD.5p — the way into the board builder from the board itself.
 // "New pipeline" follows the create gate of POST /api/locations/[id]/pipelines
@@ -99,6 +103,7 @@ export default async function PipelinePage(props) {
   // behaves exactly as before.
   const requestedView = sp?.view === 'dormant' ? 'dormant' : 'active'
   const requestedPipeline = typeof sp?.pipeline === 'string' ? sp.pipeline : null
+  const nowMs = Date.now()
 
   const db = createServerClient()
 
@@ -160,6 +165,10 @@ export default async function PipelinePage(props) {
   // A manual board's rows all carry is_dormant=false, so the concat IS
   // activeStages in practice — it is there so a stray is_dormant row can never
   // make a column vanish on a board that has no second view to find it in.
+  // BOARDFILTER.1 — ?q= (name) and ?stuck=1 (Funnel view only) narrow every
+  // column's read and count in the database; the tab badges stay the whole board's.
+  const filter = parseBoardFilter(sp, { view })
+  const filtering = boardFilterActive(filter)
   const visibleStages = manual
     ? [...activeStages, ...dormantStages]
     : (view === 'dormant' ? dormantStages : activeStages)
@@ -184,16 +193,16 @@ export default async function PipelinePage(props) {
     ? await Promise.all(visibleStages.map(async (stage) => {
         // created_at is not unique (bulk imports share a stamp), so `id` breaks
         // ties: without it two pages of one column can overlap or skip a card.
-        const readRange = (from, to) => db.from('deals')
+        const readRange = (from, to) => applyBoardFilter(db.from('deals')
           .select(pipelineDealSelect(view))
-          .eq('status', 'open').eq('location_id', locationId).eq('stage_id', stage.id)
+          .eq('status', 'open').eq('location_id', locationId).eq('stage_id', stage.id), filter, nowMs)
           .order('created_at', { ascending: false })
           .order('id')
           .range(from, to)
         const [pageRes, countRes] = await Promise.all([
           readRange(0, (pageSize ?? PIPELINE_READ_PAGE) - 1),
-          db.from('deals').select('id', { count: 'exact', head: true })
-            .eq('status', 'open').eq('location_id', locationId).eq('stage_id', stage.id),
+          applyBoardFilter(db.from('deals').select('id', { count: 'exact', head: true })
+            .eq('status', 'open').eq('location_id', locationId).eq('stage_id', stage.id), filter, nowMs),
         ])
         if (countRes.error) {
           throw new Error(`pipeline deals count (stage ${stage.id}, location ${locationId}): ${countRes.error.message}`)
@@ -263,9 +272,9 @@ export default async function PipelinePage(props) {
 
   // "funnel" is the derived board's word for its live columns; a manual board
   // has no funnel, so it just counts deals.
-  const totalLabel = manual ? 'deals'
+  const totalLabel = (manual ? 'deals'
     : view === 'dormant' ? 'off-funnel deals'
-    : 'funnel deals'
+    : 'funnel deals') + (filtering ? ' matching' : '')
 
   return (
     <div className="p-6">
@@ -300,6 +309,8 @@ export default async function PipelinePage(props) {
         dormantCount={dormantCount || 0}
       />
 
+      <PipelineBoardFilter q={filter.q} stuck={filter.stuck} showStuck={view !== 'dormant'} />
+
       <KanbanBoard
         // BOARDKEY.1 — the board tabs and the Active/Dormant toggle navigate
         // client-side (router.push), which re-renders this page with the new
@@ -307,11 +318,14 @@ export default async function PipelinePage(props) {
         // state was seeded once from the first board. Keyed on board + view it
         // remounts with the server's fresh first page instead of showing every
         // column as "Load more (0 of N)" (the €39 Trial board at Hatch, 2 Nov 2026).
-        key={`${activePipeline.id}:${view}`}
+        // BOARDFILTER.1 — and on the filter, so a new search starts from the
+        // server's filtered first page.
+        key={`${activePipeline.id}:${view}:${filter.q ?? ''}:${filter.stuck ? 1 : 0}`}
         initialStages={visibleStages}
         initialDeals={boardDeals}
         stageCounts={stageCounts}
         view={view}
+        filterQuery={boardFilterParamsString(filter)}
         manual={manual}
         locationId={locationId}
         // TZ.16 — the board's studio zone: every deal on it is this studio's.

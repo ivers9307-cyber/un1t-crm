@@ -15,6 +15,7 @@ import { pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, classes
 import { loadUn1tCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
 import { stageShowsSignals } from '@/lib/pipeline-card-signal-slugs'
 import { zoneOfLocation } from '@/lib/location-time'
+import { parseBoardFilter, applyBoardFilter } from '@/lib/pipeline-board-filter'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,6 +37,9 @@ export async function GET(request) {
   // way the funnel's do. Only 'dormant' ships the trimmed selection.
   const view = searchParams.get('view') === 'dormant' ? 'dormant' : 'active'
   if (!stageId) return NextResponse.json({ success: false, error: 'stage_id required' }, { status: 400 })
+  // BOARDFILTER.1 — the board's search and "stuck" filter, the same as its
+  // first page, so the next page continues the filtered column.
+  const filter = parseBoardFilter(searchParams, { view })
 
   const db = createServerClient()
 
@@ -75,12 +79,12 @@ export async function GET(request) {
     }
   }
 
-  const { data, error } = await db
+  const { data, error } = await applyBoardFilter(db
     .from('deals')
     .select(pipelineDealSelect(view))
     .eq('status', 'open')
     .eq('location_id', locationId)
-    .eq('stage_id', stageId)
+    .eq('stage_id', stageId), filter)
     .order('created_at', { ascending: false })
     // Same tiebreak as the page's first page (created_at is not unique), so the
     // pages of an off-funnel column never overlap or skip a card.
