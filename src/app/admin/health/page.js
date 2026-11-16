@@ -23,6 +23,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getTenantHealth } from '@/lib/tenant-health'
 import Link from 'next/link'
 import { ArrowLeft, Activity } from 'lucide-react'
+import BackgroundJobsCard from '@/components/admin/BackgroundJobsCard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -93,6 +94,9 @@ export default async function TenantHealthPage() {
         Per-tenant cron heartbeats, integration connections, AI spend (month to date, est.) and campaign
         backlog. Heartbeat rows appear after each cron&rsquo;s first per-tenant stamp.
       </p>
+
+      {/* STALEWATCH.1 — the global background jobs, with acknowledge. */}
+      <BackgroundJobsCard />
 
       {unreadable.length > 0 && (
         <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700">
