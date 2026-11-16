@@ -126,16 +126,20 @@ export function isClassAllowed(name, allowKeywords) {
  *   class_funnel block (MANUALFUNNEL.1), or { classes: [], error: null } when
  *   it has none.
  */
-export async function readPublicClasses(db, locationId, days = 7, { allowKeywords = null, blocks } = {}) {
+// OPENWEEK.1 — `fromMs` starts the read later than now (an open week lists
+// only its own dates, and Glofox's read caps at 100 events, so reading from
+// today could cut the week's last days). The end stays at most 14 days from now.
+export async function readPublicClasses(db, locationId, days = 7, { allowKeywords = null, blocks, fromMs = null } = {}) {
   const creds = await glofoxCredentialsForLocation(db, locationId)
   if (creds.readError) return { classes: [], error: creds.readError }
-  if (missingGlofoxCredentialsForLocation(creds).length) return readNoGlofoxClasses(db, locationId, days, { allowKeywords, blocks })
+  if (missingGlofoxCredentialsForLocation(creds).length) return readNoGlofoxClasses(db, locationId, days, { allowKeywords, blocks, fromMs })
   // REGISTRYREAD.1a: the deny-list rides on the SAME read as the credentials.
   // A second read used to fail OPEN — a blip answered {} and listed (and let
   // the funnel book) every hidden class.
   const hidden = parseHiddenKeywords(creds.hiddenClassKeywords)
-  const start = Math.floor(Date.now() / 1000)
-  const end = start + Math.min(14, Math.max(1, days)) * 86400
+  const nowSec = Math.floor(Date.now() / 1000)
+  const start = Number.isFinite(fromMs) ? Math.max(nowSec, Math.floor(fromMs / 1000)) : nowSec
+  const end = nowSec + Math.min(14, Math.max(1, days)) * 86400
   const { ok, events } = await fetchUpcomingEvents(creds, { start, end, limit: 100 })
   if (!ok || !Array.isArray(events)) return { classes: [], error: 'glofox_unreachable' }
   const now = Date.now()
@@ -164,7 +168,7 @@ export async function readPublicClasses(db, locationId, days = 7, { allowKeyword
 // Street) lists its REAL timetable instead: the classes the un1t.online sync
 // mirrored into un1t_events. The hand-written text is not read for it at all,
 // because it drifts from what the studio actually runs.
-async function readNoGlofoxClasses(db, locationId, days, { allowKeywords = null, blocks: given } = {}) {
+async function readNoGlofoxClasses(db, locationId, days, { allowKeywords = null, blocks: given, fromMs = null } = {}) {
   let blocks = given
   if (!Array.isArray(blocks)) {
     try {
@@ -176,7 +180,7 @@ async function readNoGlofoxClasses(db, locationId, days, { allowKeywords = null,
   }
   const source = await readUn1tListingSource(db, locationId)
   if (source.error) return { classes: [], error: source.error }
-  if (source.un1t) return readUn1tClasses(db, locationId, days, { blocks, hidden: source.hidden, allowKeywords })
+  if (source.un1t) return readUn1tClasses(db, locationId, days, { blocks, hidden: source.hidden, allowKeywords, fromMs })
   const cfg = manualTimetableConfigFromBlocks(blocks)
   if (!cfg) return { classes: [], error: null }
   const zone = await readListingZone(db, locationId)
@@ -227,9 +231,10 @@ async function readUn1tListingSource(db, locationId) {
 // The window matches the Glofox read (at most 14 days); un1t.online runs ~60
 // classes a fortnight, so 200 rows is never the binding limit.
 const UN1T_LISTING_LIMIT = 200
-async function readUn1tClasses(db, locationId, days, { blocks, hidden, allowKeywords = null }) {
+async function readUn1tClasses(db, locationId, days, { blocks, hidden, allowKeywords = null, fromMs: startMs = null }) {
   const nowMs = Date.now()
-  const fromMs = nowMs + classFunnelMinNoticeHours(blocks) * 3_600_000
+  const noticeMs = nowMs + classFunnelMinNoticeHours(blocks) * 3_600_000
+  const fromMs = Number.isFinite(startMs) ? Math.max(noticeMs, startMs) : noticeMs
   const toMs = nowMs + Math.min(14, Math.max(1, days)) * 86_400_000
   let res
   try {

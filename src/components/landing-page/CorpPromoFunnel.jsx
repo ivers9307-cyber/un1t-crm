@@ -25,6 +25,7 @@ import { isValidMobileNumber } from '@/lib/phone-validate'
 import { classFirstStepCopy, classLine } from '@/lib/class-first-funnel'
 import TrialTermsTick from './TrialTermsTick'
 import ClassPickStep, { useClassList, ctaLabelFor } from './ClassPickStep'
+import OpenWeekPickStep from './OpenWeekPickStep'
 import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERROR, TRIAL_LINK, TRIAL_SUMMARY } from './trial-card'
 import { customerErrorText } from '@/lib/page-request-errors'
 import { cleanAdValue } from '@/lib/campaign-funnel-attribution'
@@ -57,11 +58,15 @@ function utmFromUrl() {
  *   promo alone, as before.
  *   CLASSFIRST.1 — `stepCopy` is the class step's words
  *   (classFirstStepCopy(block, 'corp_promo')); absent, the defaults.
+ *   OPENWEEK.1 — `openWeek` ({ maxClasses, maxPerDay }) makes the class step
+ *   a multi-pick (OpenWeekPickStep) and the claim send `event_ids`; the done
+ *   screen lists the classes under copy.class_list_heading.
  */
-export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, studio = null, stepCopy = null }) {
+export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, studio = null, stepCopy = null, openWeek = null }) {
   const words = stepCopy && typeof stepCopy === 'object' ? classFirstStepCopy(stepCopy, 'corp_promo') : classFirstStepCopy({}, 'corp_promo')
   const [step, setStep] = useState('pick') // pick | form
   const [chosen, setChosen] = useState(null)
+  const [picks, setPicks] = useState([])
   const [reloadKey, setReloadKey] = useState(0)
   // MOBILEFUNNEL.1 — marketing consent starts unticked and is optional.
   const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: false })
@@ -96,7 +101,7 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
         body: JSON.stringify({
           ...(page ? { page, ...(studio ? { studio } : {}) } : {}),
           promo: promoKey,
-          ...(chosen ? { event_id: chosen.event_id } : {}),
+          ...(openWeek ? { event_ids: picks.map((p) => p.event_id) } : chosen ? { event_id: chosen.event_id } : {}),
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
           email: form.email.trim(), phone: form.phone.trim(), consent: form.consent === true,
           terms_accepted: termsAccepted,
@@ -109,6 +114,7 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
       // CLASSFIRST.1 — the class filled while they typed: back to the tiles,
       // the details kept, the list reloaded.
       if (j.code === 'class_unavailable') {
+        if (openWeek) setPicks((ps) => ps.filter((p) => p.event_id !== j.event_id))
         setChosen(null)
         setStep('pick')
         setError(customerErrorText(j.error, 'That class filled up while you were typing. Pick another one, your details are saved.'))
@@ -133,12 +139,30 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
   }
 
   if (result) {
-    const line = result.kind === 'granted' ? classLine(words.done_class_body, chosen) : ''
+    const line = result.kind === 'granted' && !openWeek ? classLine(words.done_class_body, chosen) : ''
     return (
       <div className={`${TRIAL_CARD} text-center`} role="status">
         {result.kind === 'granted' && <p className="font-display font-extrabold text-3xl text-black mb-3">{result.title}</p>}
         <p className="text-black/80">{result.message}</p>
         {line ? <p className="mt-3 text-black font-semibold">{line}</p> : null}
+        {result.kind === 'granted' && openWeek ? <PickList heading={copy.class_list_heading} picks={picks} /> : null}
+      </div>
+    )
+  }
+
+  if (step === 'pick' && openWeek) {
+    return (
+      <div id="corp" className={TRIAL_CARD}>
+        <OpenWeekPickStep
+          list={classList}
+          copy={{ ...words, ...copy }}
+          maxClasses={openWeek.maxClasses}
+          maxPerDay={openWeek.maxPerDay}
+          picks={picks}
+          onChange={(ps) => { setPicks(ps); setError(null) }}
+          onContinue={() => { if (picks.length) { setError(null); setStep('form') } }}
+          error={error}
+        />
       </div>
     )
   }
@@ -173,6 +197,17 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
   return (
     <div id="corp" className={TRIAL_CARD}>
       {/* CLASSFIRST.1 — what they picked, with the way back to the tiles. */}
+      {openWeek ? (
+        <div className={TRIAL_SUMMARY}>
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[11px] uppercase tracking-wider text-black/55">{copy.class_list_heading}</div>
+            <button type="button" onClick={() => { setError(null); setStep('pick') }} className="shrink-0 text-sm underline text-black/60 hover:text-black">Change</button>
+          </div>
+          <ul className="mt-1 space-y-0.5">
+            {picks.map((p) => <li key={p.event_id} className="text-base"><span className="font-bold">{p.time}</span> · {p.day_label} · {p.name}</li>)}
+          </ul>
+        </div>
+      ) : (
       <div className={TRIAL_SUMMARY}>
         <div className="text-[11px] uppercase tracking-wider text-black/55">{chosen ? 'Your first class' : 'First class'}</div>
         <div className="mt-1 flex items-center justify-between gap-3">
@@ -180,6 +215,7 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
           <button type="button" onClick={() => { setError(null); setStep('pick') }} className="shrink-0 text-sm underline text-black/60 hover:text-black">{chosen ? 'Change' : 'Pick a class'}</button>
         </div>
       </div>
+      )}
       <div className="mb-5">
         <p className="text-[11px] uppercase tracking-[0.3em] font-semibold text-black/55 mb-2">Step 2 of 2</p>
         <h2 className="font-display font-extrabold uppercase text-2xl leading-tight">{words.details_title}</h2>
@@ -214,6 +250,19 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
         </button>
         <p className={TRIAL_FINE}>Free. No card, nothing to pay.</p>
       </form>
+    </div>
+  )
+}
+
+// OPENWEEK.1 — the classes they picked, on the done screen.
+function PickList({ heading, picks }) {
+  if (!picks.length) return null
+  return (
+    <div className="mt-5 text-left">
+      <p className="text-[11px] uppercase tracking-wider font-semibold text-black/55 mb-1.5">{heading}</p>
+      <ul className="space-y-1">
+        {picks.map((p) => <li key={p.event_id} className="text-black"><span className="font-bold">{p.time}</span> · {p.day_label} · {p.name}</li>)}
+      </ul>
     </div>
   )
 }

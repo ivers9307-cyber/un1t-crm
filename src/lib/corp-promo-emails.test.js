@@ -59,3 +59,22 @@ describe('sendCorpPromoEmail', () => {
     expect(expiresOnLabel('nope', 'Europe/Dublin')).toBeNull()
   })
 })
+
+describe('sendCorpPromoEmail — OPENWEEK.1', () => {
+  const OWCOPY = corpPromoCopyFromBlocks([], 'hatch-open-week', { kind: 'open_week' })
+  const classes = [
+    { event_id: 'b', name: 'HIIT', starts_at: '2026-11-25T18:30:00.000Z' },
+    { event_id: 'a', name: 'S&C <x>', starts_at: '2026-11-24T07:00:00.000Z' },
+  ]
+  it('lists the picked classes in order, escaped, one per line', async () => {
+    await sendCorpPromoEmail(db({ id: 'c-1' }), { claim: { ...claim, credits: 2 }, copy: OWCOPY, studioName: 'UN1T Hatch Street', zone: 'Europe/Dublin', classes })
+    const msg = sent.mock.calls[0][0]
+    expect(msg.subject).toBe('Your Open Week classes at UN1T Hatch Street')
+    expect(msg.htmlBody).toContain('Tue 24 Nov, 07:00, S&amp;C &lt;x&gt;<br/>Wed 25 Nov, 18:30, HIIT')
+    expect(msg.htmlBody).not.toContain('{class_list}')
+  })
+  it('no classes leaves the token blank', async () => {
+    await sendCorpPromoEmail(db({ id: 'c-1' }), { claim, copy: OWCOPY, studioName: 'UN1T Hatch Street', zone: 'Europe/Dublin' })
+    expect(sent.mock.calls[0][0].htmlBody).not.toContain('{class_list}')
+  })
+})

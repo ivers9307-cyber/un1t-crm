@@ -108,3 +108,25 @@ describe('glofoxCorpPromoEligibility', () => {
     expect(await glofoxCorpPromoEligibility(db, { locationId: LOC, organizationId: ORG, contactId: ME, promoKey: KEY })).toEqual({ ok: false })
   })
 })
+
+describe('OPENWEEK.1 open week counts as the free trial', () => {
+  const OW = 'stillorgan-open-week'
+  it('a granted open week claim refuses another promo as free_trial_used', async () => {
+    const out = await run({ corp_promo_claims: [claim('granted', TWIN, { promo_key: OW })] }, { openWeekKeys: [OW] })
+    expect(out).toEqual({ ok: true, eligible: false, reason: 'free_trial_used' })
+  })
+
+  it('an open week claim still processing or refused does not', async () => {
+    expect(await run({ corp_promo_claims: [claim('ineligible', ME, { promo_key: OW })] }, { openWeekKeys: [OW] })).toEqual({ ok: true, eligible: true })
+  })
+
+  it('an earlier promo never refuses the open week itself', async () => {
+    const out = await run({ corp_promo_claims: [claim('granted', ME)] }, { promoKey: OW, openWeekKeys: [OW] })
+    expect(out).toEqual({ ok: true, eligible: true })
+  })
+
+  it('the open week granted twice is already_claimed', async () => {
+    const out = await run({ corp_promo_claims: [claim('granted', ME, { promo_key: OW })] }, { promoKey: OW, openWeekKeys: [OW] })
+    expect(out).toEqual({ ok: true, eligible: false, reason: 'already_claimed' })
+  })
+})

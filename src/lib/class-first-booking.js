@@ -52,6 +52,21 @@ export function fundedBookingFromRow(row, { fundedBy }) {
 }
 
 /**
+ * OPENWEEK.1 — one queue argument per open week pick, off the claim row (its
+ * person, studio, page and terms) and each pick's class. [] without a contact.
+ * @param {object} row corp_promo_claims row
+ * @param {{ event_id: string, name?: string|null, starts_at?: string|null }[]} picks
+ * @param {{ fundedBy: 'trial_purchase'|'corp_promo' }} opts
+ */
+export function fundedBookingsFromPicks(row, picks, { fundedBy }) {
+  if (!row || typeof row !== 'object' || !row.contact_id) return []
+  return (Array.isArray(picks) ? picks : [])
+    .filter((p) => p && p.event_id)
+    .map((p) => fundedBookingFromRow({ ...row, class_event_id: p.event_id, class_name: p.name || null, class_starts_at: p.starts_at || null }, { fundedBy }))
+    .filter(Boolean)
+}
+
+/**
  * Queue the booking. Never throws.
  * @returns {Promise<{ queued: true, id: string|null, deduped?: true } | { queued: false, reason: string }>}
  */

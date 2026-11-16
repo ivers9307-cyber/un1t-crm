@@ -72,3 +72,14 @@ describe('un1tEventIdOf', () => {
     expect(un1tEventIdOf(null)).toBeNull()
   })
 })
+
+describe('OPENWEEK.1 — fromMs starts the read later', () => {
+  it('a fromMs past the minimum notice moves the lower bound of the un1t_events read', async () => {
+    const gts = []
+    const base = db({})
+    const spy = { from(t) { const b = base.from(t); const gt = b.gt; b.gt = (col, v) => { gts.push([col, v]); return gt(col, v) }; return b } }
+    const fromMs = Date.now() + 5 * 24 * HOUR
+    await readPublicClasses(spy, 'HATCH', 14, { fromMs })
+    expect(gts).toContainEqual(['starts_at', new Date(fromMs).toISOString()])
+  })
+})

@@ -99,3 +99,20 @@ describe('queueFundedClassBooking', () => {
     expect(FUNDED_NO_BALANCE).toBe('funded_no_balance')
   })
 })
+
+describe('fundedBookingsFromPicks (OPENWEEK.1)', () => {
+  it('one queue argument per pick, each with the claim person, studio and terms', async () => {
+    const { fundedBookingsFromPicks } = await import('./class-first-booking')
+    const row = { id: 'claim-1', location_id: 'loc-h', contact_id: 'c-1', page_id: 'p-ow', first_name: 'Ann', last_name: 'Byrne', customer_email: 'ann@work.ie', customer_phone: '087', terms_accepted_at: '2026-11-18T10:00:00Z', terms_source: 'website', terms_version: 'v3' }
+    const picks = [{ event_id: 'un1t:a', name: 'A', starts_at: '2026-11-24T07:00:00.000Z', day: '2026-11-24' }, { event_id: 'un1t:b', name: 'B', starts_at: '2026-11-25T07:00:00.000Z', day: '2026-11-25' }]
+    const out = fundedBookingsFromPicks(row, picks, { fundedBy: 'corp_promo' })
+    expect(out).toHaveLength(2)
+    expect(out[1]).toEqual({
+      fundedBy: 'corp_promo', fundedById: 'claim-1', locationId: 'loc-h', contactId: 'c-1', pageId: 'p-ow',
+      eventId: 'un1t:b', className: 'B', startsAt: '2026-11-25T07:00:00.000Z',
+      customer: { name: 'Ann Byrne', email: 'ann@work.ie', phone: '087' },
+      terms: { terms_accepted_at: '2026-11-18T10:00:00Z', terms_source: 'website', terms_version: 'v3' },
+    })
+    expect(fundedBookingsFromPicks({ ...row, contact_id: null }, picks, { fundedBy: 'corp_promo' })).toEqual([])
+  })
+})

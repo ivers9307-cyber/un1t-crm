@@ -24,6 +24,7 @@ import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { waPhoneFromPhone } from '@/lib/phone-validate'
 import { logWarn } from '@/lib/log'
+import { MEMBERSHIP_ACTIVE_STATUSES } from '@/lib/un1t-online-map'
 
 const PAGE = 1000
 const CHUNK = 200
@@ -67,9 +68,9 @@ export async function personContactIds(db, { organizationId, contactId, email, p
  * @param {object} db service-role client
  * @param {{ locationId: string, organizationId: string|null, contactId: string|null,
  *   email: string|null, phone: string|null, trialProductId: string|null, promoKey?: string|null }} args
- * @returns {Promise<{ ok: true, eligible: true } | { ok: true, eligible: false, reason: 'already_claimed'|'free_trial_used'|'trained' } | { ok: false }>}
+ * @returns {Promise<{ ok: true, eligible: true } | { ok: true, eligible: false, reason: 'already_claimed'|'free_trial_used'|'trained'|'active_member' } | { ok: false }>}
  */
-export async function corpPromoEligibility(db, { locationId, organizationId = null, contactId = null, email = null, phone = null, trialProductId = null, promoKey = null } = {}) {
+export async function corpPromoEligibility(db, { locationId, organizationId = null, contactId = null, email = null, phone = null, trialProductId = null, promoKey = null, openWeek = false } = {}) {
   if (!locationId) throw new TypeError('corpPromoEligibility: locationId is required')
   try {
     const contactIds = await personContactIds(db, { organizationId, contactId, email, phone })
@@ -88,6 +89,25 @@ export async function corpPromoEligibility(db, { locationId, organizationId = nu
     const ledger = await byPerson('un1t_write_events', 'id, op, stage, target')
     if (promoKey && ledger.some((r) => r.op === 'promo_grant' && r.target === promoKey && OPEN_OR_DONE.includes(r.stage))) {
       return { ok: true, eligible: false, reason: 'already_claimed' }
+    }
+    // OPENWEEK.1 — an open week is open to anyone who is not a member NOW: an
+    // earlier trial or training never refuses it, but a live membership on any
+    // contact of the person (same email or mobile, or their un1t user) does.
+    if (openWeek) {
+      const [subs, studios] = await Promise.all([
+        byPerson('un1t_subscriptions', 'id, status'),
+        selectAllByKeys(
+          contactIds,
+          (chunk, from, to) => db.from('contact_studios').select('contact_id, membership_status')
+            .eq('location_id', locationId).in('contact_id', chunk).eq('membership_status', 'active')
+            .order('contact_id', { ascending: true }).range(from, to),
+          { chunkSize: CHUNK, pageSize: PAGE },
+        ),
+      ])
+      if (subs.some((r) => MEMBERSHIP_ACTIVE_STATUSES.includes(String(r.status ?? '').toLowerCase())) || studios.length > 0) {
+        return { ok: true, eligible: false, reason: 'active_member' }
+      }
+      return { ok: true, eligible: true }
     }
     if (ledger.some((r) => FREE_TRIAL_OPS.includes(r.op) && OPEN_OR_DONE.includes(r.stage))) {
       return { ok: true, eligible: false, reason: 'free_trial_used' }

@@ -91,7 +91,7 @@ export function liveOffer(layout, pinned, onEditField) {
 
   if (pinned.type === 'corp_promo') {
     const live = isObj(layout.offerLive) ? layout.offerLive : {}
-    const raw = corpPromoCopyFromBlocks([pinned], live.promoKey ?? null, { platform: live.platform || undefined })
+    const raw = corpPromoCopyFromBlocks([pinned], live.promoKey ?? null, { platform: live.platform || undefined, kind: live.kind || undefined })
     if (live.unavailableText) raw.unavailable_text = live.unavailableText
     const tokens = isObj(live.tokens) ? live.tokens : {}
     const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v.map((t) => fillCorpPromoTokens(t, tokens)) : fillCorpPromoTokens(v, tokens)]))

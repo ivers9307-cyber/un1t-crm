@@ -7,10 +7,10 @@
 // failed read is { ok: false, error }, never "no promos": the caller judges it.
 
 /** @typedef {{ membershipId: string, planCode: string, planName: string | null }} CorpPromoGlofoxPlan */
-/** @typedef {{ id: string, locationId: string, key: string, name: string, platform: 'un1t_online'|'glofox', credits: number, expiresInDays: number, live: boolean, tag: string, leadSource: string, glofox: CorpPromoGlofoxPlan | null }} CorpPromoRow */
+/** @typedef {{ id: string, locationId: string, key: string, name: string, platform: 'un1t_online'|'glofox', credits: number, expiresInDays: number, live: boolean, tag: string, leadSource: string, glofox: CorpPromoGlofoxPlan | null, kind: 'promo'|'open_week', windowStartsOn: string|null, windowEndsOn: string|null, maxClasses: number|null, maxPerDay: number|null }} CorpPromoRow */
 
 // Named columns: check:select-columns resolves them against mig 816.
-export const CORP_PROMO_COLUMNS = 'id, location_id, key, name, platform, credits, expires_in_days, live, tag, lead_source, glofox_membership_id, glofox_plan_code, glofox_plan_name'
+export const CORP_PROMO_COLUMNS = 'id, location_id, key, name, platform, credits, expires_in_days, live, tag, lead_source, glofox_membership_id, glofox_plan_code, glofox_plan_name, kind, window_starts_on, window_ends_on, max_classes, max_per_day'
 const READ_PAGE = 1000
 
 const blank = (v) => typeof v !== 'string' || v.trim() === ''
@@ -43,6 +43,12 @@ export function promoView(row) {
     tag: row.tag,
     leadSource: row.lead_source,
     glofox,
+    // OPENWEEK.1 (mig 847): the window is studio-local dates (YYYY-MM-DD).
+    kind: row.kind === 'open_week' ? 'open_week' : 'promo',
+    windowStartsOn: row.window_starts_on ?? null,
+    windowEndsOn: row.window_ends_on ?? null,
+    maxClasses: Number.isSafeInteger(row.max_classes) ? row.max_classes : null,
+    maxPerDay: Number.isSafeInteger(row.max_per_day) ? row.max_per_day : null,
   }
 }
 

@@ -9,6 +9,7 @@ const m = vi.hoisted(() => ({
   membership: vi.fn(), eligibility: vi.fn(), fulfil: vi.fn(), legal: vi.fn(), chosen: vi.fn(),
   reads: {}, readErrors: {}, inserted: vi.fn(), updates: [],
   gElig: vi.fn(), gFulfil: vi.fn(), gPlan: vi.fn(), gCreds: vi.fn(), promoRead: vi.fn(), promoRows: [],
+  owPicks: vi.fn(), owInsert: vi.fn(), promoList: vi.fn(),
 }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: m.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
 // MOBILEFUNNEL.1 — the route reads the outcome form; `m.created` says whether this POST made the contact.
@@ -22,7 +23,9 @@ vi.mock('@/lib/corp-promo-eligibility', () => ({ corpPromoEligibility: m.eligibi
 vi.mock('@/lib/corp-promo-claim', () => ({ fulfilCorpPromoClaim: m.fulfil }))
 // WAYSIN.3 — the promo is the studio's corp_promos row (readCorpPromo, tested
 // beside it): the fake answers a row only at its own location_id.
-vi.mock('@/lib/corp-promos-db', async (importOriginal) => ({ ...(await importOriginal()), readCorpPromo: m.promoRead }))
+vi.mock('@/lib/corp-promos-db', async (importOriginal) => ({ ...(await importOriginal()), readCorpPromo: m.promoRead, listCorpPromos: m.promoList }))
+// OPENWEEK.1 — the picks are judged by their own module (tested beside it).
+vi.mock('@/lib/open-week-claim', () => ({ resolveOpenWeekPicks: m.owPicks, insertClaimClasses: m.owInsert }))
 vi.mock('@/lib/corp-promo-glofox-plans', () => ({ glofoxPlanForPromo: m.gPlan }))
 vi.mock('@/lib/corp-promo-eligibility-glofox', () => ({ glofoxCorpPromoEligibility: m.gElig }))
 vi.mock('@/lib/corp-promo-claim-glofox', () => ({ fulfilGlofoxCorpPromoClaim: m.gFulfil }))
@@ -102,6 +105,9 @@ beforeEach(() => {
   m.gElig.mockResolvedValue({ ok: true, eligible: true })
   m.gFulfil.mockResolvedValue({ kind: 'granted', credits: 3, expiresAt: null })
   m.fulfil.mockResolvedValue({ kind: 'granted', credits: 3, expiresAt: '2026-11-04T10:00:00.000Z' })
+  m.promoList.mockImplementation(async (_db, { locationId }) => ({ ok: true, promos: m.promoRows.filter((p) => p.locationId === locationId) }))
+  m.owInsert.mockResolvedValue({ error: null })
+  m.owPicks.mockImplementation(async (_db, { eventIds }) => ({ ok: true, picks: eventIds.map((id, i) => ({ event_id: id, name: `C${i}`, starts_at: `2026-11-2${4 + i}T07:00:00.000Z`, day: `2026-11-2${4 + i}` })) }))
   m.chosen.mockImplementation(async (_db, { eventId }) => (eventId
     ? { ok: true, chosen: { event_id: eventId, name: 'RALLY', starts_at: '2099-01-07T18:00:00.000Z' } }
     : { ok: true, chosen: null }))
@@ -546,5 +552,97 @@ describe('POST /api/public/corp-claims — the studio\'s promo row (WAYSIN.3)', 
     const r = await call({ ...BODY, promo: 'acme-5-free' })
     expect([r.status, r.json.code]).toEqual([400, 'not_available'])
     expect(m.promoRead).not.toHaveBeenCalled()
+  })
+})
+
+// OPENWEEK.1 — an open week page takes several classes.
+describe('POST /api/public/corp-claims — open week', () => {
+  const OW = { ...HATCH_PROMO, id: 'cp-ow', key: 'hatch-open-week', name: 'Open Week (Hatch Street)', credits: 5, expiresInDays: 14, tag: 'hatch-open-week', kind: 'open_week', windowStartsOn: '2026-11-23', windowEndsOn: '2026-11-30', maxClasses: 5, maxPerDay: 1 }
+  const GOW = { ...STILL_PROMO, id: 'cp-gow', key: 'stillorgan-open-week', kind: 'open_week', windowStartsOn: '2026-11-23', windowEndsOn: '2026-11-30', maxClasses: 5, maxPerDay: 1 }
+  const pageOk = (locationId = LOC, key = 'hatch-open-week') => ({
+    ok: true, pageId: 'page-ow', page: { id: 'page-ow', slug: 'openweek', kind: 'campaign', offer_type: 'promo_credits' },
+    studioRow: { location_id: locationId, enabled: true, offer: {}, attribution: {} },
+    locationId, publicPath: locationId === LOC ? 'hatch-street' : 'stillorgan', blocks: [{ type: 'corp_promo', promo_key: key }], attribution: {}, terms: {},
+  })
+  const OWBODY = { page: 'openweek', studio: 'hatch-street', first_name: 'Ann', last_name: 'Byrne', email: 'ann@work.ie', phone: '0871234567', terms_accepted: true }
+  beforeEach(() => {
+    m.promoRows = [HATCH_PROMO, STILL_PROMO, OW, GOW]
+    resolvePublicPageRequest.mockResolvedValue(pageOk())
+  })
+
+  it('judges the picks, records the claim and one row per class, and hands the picks to the fulfilment', async () => {
+    const { status } = await call({ ...OWBODY, event_ids: ['un1t:a', 'un1t:b', 'un1t:c'] })
+    expect(status).toBe(200)
+    expect(m.owPicks).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: LOC, promo: OW, eventIds: ['un1t:a', 'un1t:b', 'un1t:c'] }))
+    expect(m.chosen).not.toHaveBeenCalled()
+    expect(m.inserted).toHaveBeenCalledWith('corp_promo_claims', expect.objectContaining({ promo_key: 'hatch-open-week', platform: 'un1t_online' }))
+    expect(m.inserted.mock.calls[0][1]).not.toHaveProperty('class_event_id')
+    expect(m.owInsert).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ claimId: 'claim-1', locationId: LOC, picks: expect.arrayContaining([expect.objectContaining({ event_id: 'un1t:b' })]) }))
+    expect(m.fulfil).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ picks: expect.any(Array) }))
+    expect(m.fulfil.mock.calls[0][1].picks).toHaveLength(3)
+    expect(m.eligibility).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ openWeek: true, promoKey: 'hatch-open-week' }))
+  })
+
+  it('(review) a Hatch active_member from the person-wide check and holds_credits answer in the open week words', async () => {
+    m.eligibility.mockResolvedValueOnce({ ok: true, eligible: false, reason: 'active_member' })
+    let r = await call({ ...OWBODY, event_ids: ['un1t:a'] })
+    expect(r.json).toEqual({ success: false, code: 'active_member', error: "You're already a member at UN1T Hatch Street, so just book your classes in the app as usual." })
+    m.fulfil.mockResolvedValueOnce({ kind: 'ineligible', reason: 'holds_credits' })
+    r = await call({ ...OWBODY, event_ids: ['un1t:a'] })
+    expect(r.json).toEqual({ success: false, code: 'holds_credits', error: 'You already have classes on your account at UN1T Hatch Street, so book those in the app first. Ask at the front desk if you would like to try Open Week too.' })
+  })
+
+  it('a class that filled is 400 class_unavailable naming it, before anything is captured', async () => {
+    m.owPicks.mockResolvedValueOnce({ ok: false, code: 'class_unavailable', eventId: 'un1t:b' })
+    const r = await call({ ...OWBODY, event_ids: ['un1t:a', 'un1t:b'] })
+    expect(r.status).toBe(400)
+    expect(r.json).toMatchObject({ success: false, code: 'class_unavailable', event_id: 'un1t:b' })
+    expect(m.contact).not.toHaveBeenCalled()
+    expect(m.inserted).not.toHaveBeenCalled()
+  })
+
+  it('too many, two on one day and none picked are 400 with their codes', async () => {
+    for (const code of ['too_many', 'two_on_one_day', 'none_picked']) {
+      m.owPicks.mockResolvedValueOnce({ ok: false, code })
+      const r = await call({ ...OWBODY, event_ids: ['un1t:a'] })
+      expect(r.status).toBe(400)
+      expect(r.json).toMatchObject({ success: false, code })
+    }
+    expect(m.contact).not.toHaveBeenCalled()
+  })
+
+  it('after the week is a 200 refusal in the over words; an unreadable timetable is 503', async () => {
+    m.owPicks.mockResolvedValueOnce({ ok: false, code: 'over' })
+    let r = await call({ ...OWBODY, event_ids: ['un1t:a'] })
+    expect(r.status).toBe(200)
+    expect(r.json).toEqual({ success: false, code: 'over', error: 'Open Week has finished. Ask at the front desk about trying a class.' })
+    m.owPicks.mockResolvedValueOnce({ ok: false, code: 'timetable_unavailable' })
+    r = await call({ ...OWBODY, event_ids: ['un1t:a'] })
+    expect(r.status).toBe(503)
+  })
+
+  it('a failed class-row insert marks the claim failed and grants nothing', async () => {
+    m.owInsert.mockResolvedValueOnce({ error: { code: '57014' } })
+    const r = await call({ ...OWBODY, event_ids: ['un1t:a'] })
+    expect(r.status).toBe(503)
+    expect(m.updates).toContainEqual({ table: 'corp_promo_claims', payload: { status: 'failed', reason: 'classes_unrecorded' } })
+    expect(m.fulfil).not.toHaveBeenCalled()
+  })
+
+  it('at a Glofox studio the eligibility hears the studio open week keys, and free_trial_used refuses in the trial words', async () => {
+    resolvePublicPageRequest.mockResolvedValue(pageOk(GLOC, 'stillorgan-open-week'))
+    m.reads.locations = { id: GLOC, name: 'UN1T Stillorgan', organization_id: 'org-1', timezone: 'Europe/Dublin', settings: {} }
+    await call({ ...OWBODY, studio: 'stillorgan', event_ids: ['g1'] })
+    expect(m.gElig).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ promoKey: 'stillorgan-open-week', openWeekKeys: ['stillorgan-open-week'] }))
+    expect(m.gFulfil.mock.calls[0][1].picks).toHaveLength(1)
+  })
+
+  it('a normal Glofox promo hears the open week keys too, and free_trial_used is the trial words', async () => {
+    resolvePublicPageRequest.mockResolvedValue(pageOk(GLOC, 'stillorgan-newstart'))
+    m.reads.locations = { id: GLOC, name: 'UN1T Stillorgan', organization_id: 'org-1', timezone: 'Europe/Dublin', settings: {} }
+    m.gElig.mockResolvedValueOnce({ ok: true, eligible: false, reason: 'free_trial_used' })
+    const r = await call({ ...OWBODY, studio: 'stillorgan' })
+    expect(m.gElig).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ openWeekKeys: ['stillorgan-open-week'] }))
+    expect(r.json).toMatchObject({ success: false, code: 'free_trial_used' })
   })
 })

@@ -426,3 +426,19 @@ describe('FIFTYPLUS.1 — allowKeywords', () => {
     expect(isClassAllowed('S&C', [])).toBe(false)
   })
 })
+
+describe('OPENWEEK.1 — fromMs starts the Glofox read later', () => {
+  it('passes start = fromMs (seconds) when it is later than now; the end stays at most 14 days from now', async () => {
+    const fromMs = Date.now() + 5 * 86_400_000
+    await readPublicClasses(makeDb({}), 'L', 14, { fromMs })
+    const { start, end } = fetchUpcomingEvents.mock.calls[0][1]
+    expect(start).toBe(Math.floor(fromMs / 1000))
+    expect(end - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(14 * 86400 + 1)
+  })
+
+  it('a fromMs in the past changes nothing', async () => {
+    await readPublicClasses(makeDb({}), 'L', 7, { fromMs: 0 })
+    const { start } = fetchUpcomingEvents.mock.calls[0][1]
+    expect(Math.abs(start - Math.floor(Date.now() / 1000))).toBeLessThanOrEqual(1)
+  })
+})

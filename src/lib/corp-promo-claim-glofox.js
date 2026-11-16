@@ -37,7 +37,9 @@ import { glofoxPlanForPromo } from '@/lib/corp-promo-glofox-plans'
 import { sendCorpPromoEmail } from '@/lib/corp-promo-emails'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { placeContactNow } from '@/lib/pipeline-place-now'
-import { queueFundedClassBooking, fundedBookingFromRow, FUNDED_BY } from '@/lib/class-first-booking'
+import { queueFundedClassBooking, fundedBookingFromRow, fundedBookingsFromPicks, FUNDED_BY } from '@/lib/class-first-booking'
+import { isOpenWeek } from '@/lib/open-week'
+import { openWeekClassListHtml } from '@/lib/open-week-format'
 import { escapeHtml } from '@/lib/html-escape'
 import { logError, logWarn } from '@/lib/log'
 
@@ -68,7 +70,7 @@ const adviceFor = (reason) => HELP_ADVICE[String(reason).split(':')[0]] || ''
  * @param {object} [deps] test seams
  * @returns {Promise<{ kind: 'granted', credits: number, expiresAt: null } | { kind: 'help_filed' } | { kind: 'unavailable' }>}
  */
-export async function fulfilGlofoxCorpPromoClaim(db, { claim, location, contact, promo, copy, zone }, deps = {}) {
+export async function fulfilGlofoxCorpPromoClaim(db, { claim, location, contact, promo, copy, zone, picks = [] }, deps = {}) {
   const d = {
     glofoxPlanForPromo, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, findOrCreateGlofoxMember,
     fetchMemberResult, fetchUserCreditsResult, purchaseGlofoxMembership, mapMembershipStatus, computeCreditsRemaining,
@@ -77,6 +79,12 @@ export async function fulfilGlofoxCorpPromoClaim(db, { claim, location, contact,
   }
   const locationId = claim.location_id
   const ids = { claimId: claim.id, locationId }
+  // OPENWEEK.1 — an open week books every pick, and someone on a trial, a
+  // pack or ClassPass is booked anyway (Richard, 16 Nov); only a member is
+  // sent to staff. TODO(OPENWEEK.2): Richard wants credits equal to the picks
+  // instead of the plan; swap step 6 for Glofox's add-credits call once its
+  // endpoint is confirmed.
+  const openWeek = isOpenWeek(promo) && Array.isArray(picks) && picks.length > 0
   const nowIso = () => d.now().toISOString()
 
   const stamp = async (patch) => {
@@ -135,7 +143,9 @@ export async function fulfilGlofoxCorpPromoClaim(db, { claim, location, contact,
             `<p><strong>Person:</strong> ${escapeHtml(person)} &lt;${escapeHtml(claim.customer_email || '')}&gt; ${escapeHtml(claim.customer_phone || '')}<br/>` +
             (memberId ? `<strong>Glofox member id:</strong> ${escapeHtml(memberId)}<br/>` : '') +
             `<strong>Claim id:</strong> ${escapeHtml(claim.id)}</p>` +
-            `<p>If they qualify, add the ${escapeHtml(promo.name || promo.key)} plan (${promo.credits} classes) in Glofox by hand, then mark the card handled on the Approvals page.</p>`,
+            (openWeek
+              ? `<p>If they qualify, add the ${escapeHtml(promo.name || promo.key)} plan in Glofox by hand and book them into their picked classes:</p>${openWeekClassListHtml(picks, zone)}<p>Then mark the card handled on the Approvals page.</p>`
+              : `<p>If they qualify, add the ${escapeHtml(promo.name || promo.key)} plan (${promo.credits} classes) in Glofox by hand, then mark the card handled on the Approvals page.</p>`),
         })
       }
     } catch (e) {
@@ -184,11 +194,13 @@ export async function fulfilGlofoxCorpPromoClaim(db, { claim, location, contact,
     try { member = await d.fetchMemberResult(creds, memberId) } catch { member = null }
     if (!member?.ok) return help('glofox_read_failed')
     const status = d.mapMembershipStatus(member.member)
-    if (LIVE_PLAN_STATUSES.has(status)) return help(`live_plan: ${status}`)
+    if (openWeek) {
+      if (status === 'member') return help(`live_plan: ${status}`)
+    } else if (LIVE_PLAN_STATUSES.has(status)) return help(`live_plan: ${status}`)
     let credits
     try { credits = await d.fetchUserCreditsResult(creds, memberId) } catch { credits = null }
     if (!credits?.ok) return help('glofox_read_failed')
-    if ((d.computeCreditsRemaining(credits.credits) ?? 0) > 0) return help('live_plan: credits')
+    if (!openWeek && (d.computeCreditsRemaining(credits.credits) ?? 0) > 0) return help('live_plan: credits')
   }
 
   // ── 5. The write-ahead marker: no marker, no purchase ──
@@ -260,11 +272,15 @@ export async function fulfilGlofoxCorpPromoClaim(db, { claim, location, contact,
   await stamp({ status: 'granted', reason: null, glofox_member_id: memberId, grant, credits: promo.credits, expires_at: null })
 
   // ── 7. After the grant, each best-effort and independent ──
-  try {
-    const funded = fundedBookingFromRow(grantedRow, { fundedBy: FUNDED_BY.corpPromo })
-    if (funded) await d.queueFundedClassBooking(db, funded)
-  } catch (e) {
-    logWarn(LOG, 'funded class booking not queued', { ...ids, errClass: e?.name })
+  const funded = openWeek
+    ? fundedBookingsFromPicks(grantedRow, picks, { fundedBy: FUNDED_BY.corpPromo })
+    : [fundedBookingFromRow(grantedRow, { fundedBy: FUNDED_BY.corpPromo })].filter(Boolean)
+  for (const f of funded) {
+    try {
+      await d.queueFundedClassBooking(db, f)
+    } catch (e) {
+      logWarn(LOG, 'funded class booking not queued', { ...ids, eventId: f.eventId, errClass: e?.name })
+    }
   }
   try {
     await d.placeContactNow(db, { locationId, contactId: contact.id })
@@ -273,7 +289,7 @@ export async function fulfilGlofoxCorpPromoClaim(db, { claim, location, contact,
   }
   try {
     // No un1t.online app section for a Glofox studio: appLinks stays null.
-    await d.sendCorpPromoEmail(db, { claim: grantedRow, copy, studioName: location.name || '', zone, appLinks: null })
+    await d.sendCorpPromoEmail(db, { claim: grantedRow, copy, studioName: location.name || '', zone, appLinks: null, ...(openWeek ? { classes: picks } : {}) })
   } catch (e) {
     logWarn(LOG, 'confirmation email failed after the grant', { ...ids, errClass: e?.name })
   }

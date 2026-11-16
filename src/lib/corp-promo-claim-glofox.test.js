@@ -434,3 +434,32 @@ describe('fulfilGlofoxCorpPromoClaim — the staff alert', () => {
     expect(await run(d)).toEqual({ kind: 'help_filed' })
   })
 })
+
+describe('fulfilGlofoxCorpPromoClaim — OPENWEEK.1', () => {
+  const GOW = promoView({ id: 'cp-gow', location_id: 'loc-s', key: 'stillorgan-open-week', name: 'Open Week (Stillorgan)', platform: 'glofox', credits: 5, expires_in_days: 14, live: true, tag: 'stillorgan-open-week', lead_source: 'corp_promo', glofox_membership_id: 'mem-ow', glofox_plan_code: 'plan-ow', glofox_plan_name: 'Open Week Free Trial', kind: 'open_week', window_starts_on: '2026-11-23', window_ends_on: '2026-11-30', max_classes: 5, max_per_day: 1 })
+  const picks = [{ event_id: 'g1', name: 'S&C', starts_at: '2026-11-24T07:00:00.000Z', day: '2026-11-24' }, { event_id: 'g2', name: 'HIIT', starts_at: '2026-11-25T07:00:00.000Z', day: '2026-11-25' }]
+  const runOw = (d, db = fakeDb().db) => fulfilGlofoxCorpPromoClaim(db, { claim: { ...claim, promo_key: 'stillorgan-open-week' }, location, contact: { ...contact, glofox_member_id: 'gm-1' }, promo: GOW, copy: COPY, zone: 'Europe/Dublin', picks }, d)
+
+  it.each(['trial', 'credit_member', 'classpass_payg'])('someone on a %s is booked anyway: plan bought, every pick queued', async (status) => {
+    const d = deps({ mapMembershipStatus: vi.fn(() => status), fetchUserCreditsResult: vi.fn(async () => ({ ok: true, credits: [{ num_sessions: 4 }] })), computeCreditsRemaining: vi.fn(() => 4) })
+    const r = await runOw(d)
+    expect(r.kind).toBe('granted')
+    expect(d.purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+    expect(d.queueFundedClassBooking).toHaveBeenCalledTimes(2)
+    expect(d.queueFundedClassBooking.mock.calls.map((c) => c[1].eventId)).toEqual(['g1', 'g2'])
+    expect(d.sendCorpPromoEmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ classes: picks }))
+  })
+
+  it('a member is still sent to staff, nothing bought', async () => {
+    const f = fakeDb()
+    const d = deps({ mapMembershipStatus: vi.fn(() => 'member') })
+    expect(await runOw(d, f.db)).toEqual({ kind: 'help_filed' })
+    expect(d.purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(lastStatus(f.updates).reason).toBe('live_plan: member')
+  })
+
+  it('a normal promo with a live trial still goes to staff', async () => {
+    const d = deps({ findOrCreateGlofoxMember: vi.fn(async () => ({ status: 'linked', glofox_member_id: 'gm-1' })), mapMembershipStatus: vi.fn(() => 'trial') })
+    expect(await run(d)).toEqual({ kind: 'help_filed' })
+  })
+})
