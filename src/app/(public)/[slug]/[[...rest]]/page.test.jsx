@@ -610,6 +610,16 @@ describe('the open week page (OPENWEEK.1)', () => {
     expectClientSafe(html)
   })
 
+  it('(OPENWEEK.3) before a studio is chosen the hero names the organisation, not a studio', async () => {
+    h.loaded = { page: OWPAGE, studios: OWSTUDIOS }
+    const html = unescape(await render({ slug: 'openweek' }))
+    expect(html).toContain('Open Week at UN1T')
+    expect(html).not.toContain('Open Week at Hatch Street')
+    expect(html).not.toContain('Open Week at Stillorgan')
+    const chosen = unescape(await render({ slug: 'openweek', sp: { studio: 'hatch-street' } }))
+    expect(chosen).toContain('Open Week at Hatch Street')
+  })
+
   it('(review) the choice lists only studios whose promo is live', async () => {
     h.promoRows = [OW_PROMO]
     h.loaded = { page: OWPAGE, studios: OWSTUDIOS }
