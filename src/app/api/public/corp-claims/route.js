@@ -44,7 +44,7 @@ import { isValidMobileNumber } from '@/lib/phone-validate'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 import { hatchActiveMembership } from '@/lib/trial-eligibility'
 import { CORP_PROMO_SEEDS, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
-import { readCorpPromo } from '@/lib/corp-promos-db'
+import { readCorpPromo, listCorpPromos } from '@/lib/corp-promos-db'
 import { corpPromoEligibility } from '@/lib/corp-promo-eligibility'
 import { fulfilCorpPromoClaim } from '@/lib/corp-promo-claim'
 import { corpPromoTokens } from '@/lib/corp-promo-emails'
@@ -60,6 +60,8 @@ import { logWarn, logError } from '@/lib/log'
 import { resolvePublicPageRequest, pageRequestRefusal } from '@/lib/landing-pages'
 import { resolveChosenClass, classColumnsFor, chosenClassRefusal } from '@/lib/class-first-choice'
 import { classFirstStepCopy } from '@/lib/class-first-funnel'
+import { isOpenWeek } from '@/lib/open-week'
+import { resolveOpenWeekPicks, insertClaimClasses } from '@/lib/open-week-claim'
 
 export const runtime = 'nodejs'
 
@@ -71,6 +73,9 @@ const Schema = z.object({
   // CLASSFIRST.1 — the class the claimant picked before their details (the
   // studio's event id, judged below against the picker's own read).
   event_id: z.string().trim().min(1).max(64).optional(),
+  // OPENWEEK.1 — the classes an open week claimant picked (judged below
+  // against the studio's own read, the window and the limits).
+  event_ids: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   first_name: z.string().trim().min(1).max(120),
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
@@ -94,6 +99,14 @@ const Schema = z.object({
   }).optional(),
 }).superRefine((v, ctx) => {
   if (!v.page && !v.promo) ctx.addIssue({ code: 'custom', path: ['promo'], message: 'Required' })
+})
+
+// OPENWEEK.1 — the words for a refused set of picks (the page enforces the
+// same limits, so a visitor only meets these if the page and server disagree).
+const OPEN_WEEK_PICK_TEXT = Object.freeze({
+  none_picked: 'Pick at least one class.',
+  too_many: 'That is more classes than Open Week allows. Please remove one.',
+  two_on_one_day: 'You can book one class a day. Please pick a different day for one of them.',
 })
 
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
@@ -157,7 +170,7 @@ export async function POST(request) {
     }
     promo = read.promo
     if (!promo || !promo.live) return notAvailable('This offer is not available right now.')
-    copy = corpPromoCopyFromBlocks([block], promo.key, { platform: promo.platform })
+    copy = corpPromoCopyFromBlocks([block], promo.key, { platform: promo.platform, kind: promo.kind })
     locationId = r.locationId
     publicPath = r.publicPath
     pageId = r.pageId
@@ -224,7 +237,8 @@ export async function POST(request) {
     un1t = un1tWriteSettingsFrom(location.settings)
     if (!un1t.writesEnabled) return notAvailable(copy.unavailable_text)
   }
-  const tokens = corpPromoTokens({ firstName: b.first_name, credits: promo.credits, expiresAt: null, zone: zoneOfLocation(location), studioName: location.name })
+  const openWeek = isOpenWeek(promo)
+  const tokens = { ...corpPromoTokens({ firstName: b.first_name, credits: promo.credits, expiresAt: null, zone: zoneOfLocation(location), studioName: location.name }), max_classes: promo.maxClasses ?? '' }
   const say = (text) => fillCorpPromoTokens(text, tokens)
 
   // A new un1t.online account needs the studio's terms and liability waiver.
@@ -241,10 +255,32 @@ export async function POST(request) {
   // filled is class_unavailable (the card returns to the tiles), an
   // unreadable timetable is 503 in the block's words. No event_id is "no
   // class yet": the claim still grants.
-  const choice = await resolveChosenClass(db, { locationId, blocks: pageBlocks, eventId: b.event_id })
-  if (!choice.ok) {
-    const refusal = chosenClassRefusal(choice.code, { timetable_unavailable: classFirstStepCopy(promoBlock, 'corp_promo').timetable_unavailable_text })
-    return NextResponse.json(refusal.body, { status: refusal.status })
+  // OPENWEEK.1 — an open week takes several classes instead: the picks,
+  // judged the same way (the studio's read, limited to the window), with the
+  // window and the limits on top. Nothing is captured for a refused set.
+  let picks = []
+  let choice = { ok: true, chosen: null }
+  if (openWeek) {
+    const judged = await resolveOpenWeekPicks(db, { locationId, blocks: pageBlocks, promo, zone: zoneOfLocation(location), eventIds: b.event_ids || [] })
+    if (!judged.ok) {
+      if (judged.code === 'over') return refused('over', say(copy.over_text))
+      if (judged.code === 'timetable_unavailable') {
+        const refusal = chosenClassRefusal('timetable_unavailable', { timetable_unavailable: classFirstStepCopy(promoBlock, 'corp_promo').timetable_unavailable_text })
+        return NextResponse.json(refusal.body, { status: refusal.status })
+      }
+      if (judged.code === 'class_unavailable') {
+        const refusal = chosenClassRefusal('class_unavailable')
+        return NextResponse.json({ ...refusal.body, event_id: judged.eventId ?? null }, { status: refusal.status })
+      }
+      return NextResponse.json({ success: false, code: judged.code, error: OPEN_WEEK_PICK_TEXT[judged.code] || OPEN_WEEK_PICK_TEXT.none_picked }, { status: 400 })
+    }
+    picks = judged.picks
+  } else {
+    choice = await resolveChosenClass(db, { locationId, blocks: pageBlocks, eventId: b.event_id })
+    if (!choice.ok) {
+      const refusal = chosenClassRefusal(choice.code, { timetable_unavailable: classFirstStepCopy(promoBlock, 'corp_promo').timetable_unavailable_text })
+      return NextResponse.json(refusal.body, { status: refusal.status })
+    }
   }
 
   // ── Capture the lead ──
@@ -296,13 +332,19 @@ export async function POST(request) {
 
   // ── Who may claim, before anything reaches Glofox / un1t.online ──
   if (isGlofox) {
+    // OPENWEEK.1 — the studio's open week promos: a granted one is the person's
+    // free trial, so every other promo there refuses it.
+    const listed = await listCorpPromos(db, { locationId })
+    if (!listed.ok) return unavailable()
+    const openWeekKeys = listed.promos.filter((p) => p && p.kind === 'open_week').map((p) => p.key)
     const gelig = await glofoxCorpPromoEligibility(db, {
-      locationId, organizationId: location.organization_id ?? null, contactId, email, phone: b.phone, promoKey: promo.key,
+      locationId, organizationId: location.organization_id ?? null, contactId, email, phone: b.phone, promoKey: promo.key, openWeekKeys,
     })
     if (!gelig.ok) return unavailable()
     if (!gelig.eligible) {
       if (gelig.reason === 'active_member') return refused('active_member', say(copy.active_member_text))
       if (gelig.reason === 'already_claimed') return refused('already_claimed', say(copy.already_claimed_text))
+      if (gelig.reason === 'free_trial_used') return refused('free_trial_used', say(copy.trial_used_text))
       if (gelig.reason !== 'help_pending' && gelig.reason !== 'in_progress') {
         logWarn('corp-promo', 'glofox eligibility answered an unmapped reason', { locationId, contactId, reason: String(gelig.reason) })
       }
@@ -318,7 +360,7 @@ export async function POST(request) {
     if (membership.active) return refused('active_member', say(copy.active_member_text))
     const elig = await corpPromoEligibility(db, {
       locationId, organizationId: location.organization_id ?? null, contactId, email, phone: b.phone,
-      trialProductId: un1t.trialProductId, promoKey: promo.key,
+      trialProductId: un1t.trialProductId, promoKey: promo.key, openWeek,
     })
     if (!elig.ok) return unavailable()
     if (!elig.eligible) return refused(elig.reason, say(refusalText[elig.reason] || copy.trained_text))
@@ -360,17 +402,29 @@ export async function POST(request) {
     logError('corp-promo', 'claim insert failed', { contactId, code: insErr?.code ?? null })
     return unavailable()
   }
+  if (openWeek) {
+    // The picks must be on record before anything is granted: the fulfilment
+    // books exactly these, and staff read them on a card.
+    const { error: clsErr } = await insertClaimClasses(db, { claimId: claim.id, locationId, picks })
+    if (clsErr) {
+      logError('corp-promo', 'open week classes not recorded', { claimId: claim.id, locationId, code: clsErr.code ?? null })
+      const { error: stampErr } = await db.from('corp_promo_claims').update({ status: 'failed', reason: 'classes_unrecorded' }).eq('id', claim.id).eq('location_id', locationId)
+      if (stampErr) logError('corp-promo', 'claim not stamped failed', { claimId: claim.id, code: stampErr.code ?? null })
+      return unavailable()
+    }
+  }
 
   const outcome = isGlofox
-    ? await fulfilGlofoxCorpPromoClaim(db, { claim, location, contact, promo, copy, zone: zoneOfLocation(location) })
+    ? await fulfilGlofoxCorpPromoClaim(db, { claim, location, contact, promo, copy, zone: zoneOfLocation(location), picks })
     : await fulfilCorpPromoClaim(db, {
-      claim, location, contact, promo, copy, zone: zoneOfLocation(location), trialProductId: un1t.trialProductId,
+      claim, location, contact, promo, copy, zone: zoneOfLocation(location), trialProductId: un1t.trialProductId, picks,
     })
   if (outcome.kind === 'unavailable') return unavailable()
   if (outcome.kind === 'help_filed') return refused('help_filed', say(copy.help_text))
   if (outcome.kind === 'ineligible') return refused(outcome.reason, say(refusalText[outcome.reason] || copy.trained_text))
   const done = corpPromoTokens({ firstName: b.first_name, credits: outcome.credits, expiresAt: outcome.expiresAt, zone: zoneOfLocation(location), studioName: location.name })
   return NextResponse.json({ success: true, data: {
+    ...(openWeek ? { classes: picks.map((p) => ({ event_id: p.event_id, name: p.name, starts_at: p.starts_at })) } : {}),
     credits: outcome.credits,
     expires_at: outcome.expiresAt,
     title: fillCorpPromoTokens(copy.done_title, done),
