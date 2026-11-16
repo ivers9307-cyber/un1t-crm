@@ -12,6 +12,7 @@ import { escapeHtml } from '@/lib/html-escape'
 import { fillCorpPromoTokens } from '@/lib/corp-promos'
 import { formatInZone } from '@/lib/location-time'
 import { renderAppSection } from '@/lib/un1t-online-app-links'
+import { openWeekClassListText } from '@/lib/open-week-format'
 
 /** "Tuesday 4 November" in the studio's zone; null for an unreadable instant. */
 export function expiresOnLabel(expiresAt, zone) {
@@ -34,13 +35,14 @@ const paragraphs = (text) => text.split(/\n{2,}/).map((p) => `<p>${p.replace(/\n
 
 /**
  * @param {object} db service-role client
- * @param {{ claim: object, copy: object, studioName: string, zone: string, appLinks?: object|null }} args
+ * @param {{ claim: object, copy: object, studioName: string, zone: string, appLinks?: object|null, classes?: object[] }} args
+ *   classes: OPENWEEK.1, the picked classes, rendered at {class_list} one per line
  *   appLinks: the studio's app download links (UN1TWELCOME); the section follows the body, left out when there are none
  *     (always null for a Glofox studio: no un1t.online app section)
  *   claim: a corp_promo_claims row with credits and expires_at stamped
  * @returns {Promise<{ sent: boolean, reason?: string }>}
  */
-export async function sendCorpPromoEmail(db, { claim, copy, studioName, zone, appLinks = null }) {
+export async function sendCorpPromoEmail(db, { claim, copy, studioName, zone, appLinks = null, classes = [] }) {
   const to = claim?.customer_email
   if (!to) return { sent: false, reason: 'no_email_address' }
   if (claim.contact_id) {
@@ -53,7 +55,7 @@ export async function sendCorpPromoEmail(db, { claim, copy, studioName, zone, ap
     const adminConsent = Array.isArray(prefs) ? prefs[0]?.email_administrative : prefs?.email_administrative
     if (adminConsent === false) return { sent: false, reason: 'opted_out_administrative_email' }
   }
-  const tokens = corpPromoTokens({ firstName: claim.first_name, credits: claim.credits, expiresAt: claim.expires_at, zone, studioName })
+  const tokens = { ...corpPromoTokens({ firstName: claim.first_name, credits: claim.credits, expiresAt: claim.expires_at, zone, studioName }), class_list: openWeekClassListText(classes, zone) }
   const safe = Object.fromEntries(Object.entries(tokens).map(([k, v]) => [k, escapeHtml(v)]))
   const appSection = renderAppSection(appLinks)
   await sendTransactionalEmail({
