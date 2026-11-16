@@ -106,7 +106,7 @@ const ContactCreate = z.object({
   name: z.string().min(1).max(200),
   first_name: z.string().max(100).optional(),
   last_name: z.string().max(100).optional(),
-  email,
+  email: email.optional().nullable().describe('Email or phone is required (PHONEONLY.1).'),
   phone: phone.optional().nullable(),
   label: z.string().max(100).nullable().optional(),
   glofox_member_id: z.string().max(100).nullable().optional(),
@@ -4106,13 +4106,15 @@ registry.registerPath({
   tags: ['Contacts'],
   security: [{ BearerAuth: [] }],
   summary: 'Create a contact',
+  description: 'An email or a phone number is required (PHONEONLY.1). Without an email the contact is not provisioned in Glofox.',
   request: { body: { content: { 'application/json': { schema: ContactCreate } } } },
   responses: {
     200: { description: 'Contact created', content: { 'application/json': { schema: SuccessResponse(Contact) } } },
     400: { description: 'Validation failed, location_id missing (cookie callers and per-organisation keys), or the insert failed (generic message; the database error is logged, never echoed)', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized, or (cookie caller) not Manager+ at location_id', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Per-organisation API key: location_id is not in your organisation. Cookie caller: not a member of location_id.', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'A contact with this email already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A contact with this email (or, with no email, this WhatsApp number) already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'No email given and the phone duplicate check could not be read (nothing created)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
