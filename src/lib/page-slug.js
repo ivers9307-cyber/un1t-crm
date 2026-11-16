@@ -25,7 +25,7 @@ const FIXED_NAMES = [
 const ROUTE_SEGMENTS = [
   'account', 'account-deletion', 'accounting', 'achievements',
   'activities', 'admin', 'api', 'api-docs', 'approvals', 'auth', 'automations',
-  'bca', 'book', 'bookings', 'cancel', 'card-receipts', 'cars', 'challenges',
+  'bca', 'book', 'bookings', 'buy', 'cancel', 'card-receipts', 'cars', 'challenges',
   'checklists', 'class-fees', 'class-pay', 'communications', 'contacts',
   'contracts', 'dashboard', 'deposit', 'embed', 'event', 'event-pay',
   'events', 'fee-appeal', 'givers', 'h', 'host', 'host-connect',

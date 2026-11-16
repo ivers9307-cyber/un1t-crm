@@ -382,4 +382,20 @@ describe('Un1tOnlineIntegrationTab — funnel settings (UN1TWRITE.24)', () => {
     expect(play.getAttribute('type')).toBe('url')
     expect(screen.getByLabelText('App section text')).toBeTruthy()
   })
+
+  it('the set-password email subject and body boxes PATCH payment_link', async () => {
+    current = connected({ write: write({ writes_enabled: true, payment_link_defaults: { set_password_email_subject: 'Your {studio} account' } }) })
+    fetchMock.mockImplementation(async (url, init) => {
+      if ((init?.method || 'GET') === 'PATCH') return reply({ write: { ...current.write } })
+      return reply(current)
+    })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    const subject = await screen.findByLabelText(/Set password email subject/)
+    expect(subject.getAttribute('placeholder')).toBe('Your {studio} account')
+    fireEvent.change(subject, { target: { value: 'Welcome to {studio}' } })
+    fireEvent.blur(subject)
+    await waitFor(() => expect(callsOf('PATCH')).toHaveLength(1))
+    expect(JSON.parse(callsOf('PATCH')[0][1].body)).toEqual({ payment_link: { set_password_email_subject: 'Welcome to {studio}' } })
+    expect(screen.getByLabelText(/Set password email text/)).toBeTruthy()
+  })
 })
