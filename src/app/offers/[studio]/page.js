@@ -150,6 +150,12 @@ function InfoBlocks({ blocks }) {
   )
 }
 
+/** "MONDAY 30 NOVEMBER, 23:59" → "MON 30 NOV"; '' stays ''. */
+function shortSaleDate(long) {
+  const [weekday = '', day = '', month = ''] = long.split(',')[0].split(' ')
+  return weekday ? `${weekday.slice(0, 3)} ${day} ${month.slice(0, 3)}`.trim() : ''
+}
+
 /** OFFERSDESIGN.1 — the operator's questions and answers; nothing when there are none. */
 function Faq({ items }) {
   if (!items?.length) return null
@@ -226,8 +232,9 @@ export default async function OfferStudioPage(props) {
   const hero = heroFor(offers, copy, studio.label)
   // Decisions in src/lib/offers-storefront.js (tested there).
   const countdown = storefrontCountdown(offers, now)
+  // "MON 30 NOV": the studio-clock date, short enough for one line on a phone.
   const calmLabel = countdown?.label === 'Sale ends'
-    ? formatSaleDeadline(countdown.at, { zone }).split(',')[0]
+    ? shortSaleDate(formatSaleDeadline(countdown.at, { zone }))
     : null
   const flagFor = (o) => (isCyberMondayOnly(o, offers) ? 'Cyber Monday only' : flagForSlug(o.slug))
   const opensLabelFor = (o) => (offerIsUpcoming(o, now)

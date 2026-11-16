@@ -128,8 +128,10 @@
 @media (max-width: 900px) {
   .ofr-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
   .ofr-faq { grid-template-columns: 1fr; }
-  .ofr-hero-photo::after { background: linear-gradient(0deg, #000 0%, rgba(0,0,0,.85) 55%, rgba(0,0,0,.35) 100%); }
-  .ofr-hero-photo .ofr-hero-inner { padding-top: 150px; }
+  /* Phones: the photo sits above the headline, so let its top half show. */
+  .ofr-hero > img { object-position: 50% 30%; height: 62%; }
+  .ofr-hero-photo::after { background: linear-gradient(0deg, #000 0%, #000 42%, rgba(0,0,0,.55) 58%, rgba(0,0,0,.05) 100%); }
+  .ofr-hero-photo .ofr-hero-inner { padding-top: 190px; }
 }
 @media (max-width: 600px) {
   .ofr-grid { grid-template-columns: 1fr; }
