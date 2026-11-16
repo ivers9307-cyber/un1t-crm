@@ -463,3 +463,15 @@ describe('fulfilGlofoxCorpPromoClaim — OPENWEEK.1', () => {
     expect(await run(d)).toEqual({ kind: 'help_filed' })
   })
 })
+
+describe('OPENWEEK.5 — the staff alert names the promo\'s own plan', () => {
+  it('a doubtful purchase names the open week plan, never New Start', async () => {
+    const OW = promoView({ id: 'cp-ow', location_id: 'loc-s', key: 'stillorgan-open-week', name: 'Open Week (Stillorgan)', platform: 'glofox', credits: 5, expires_in_days: 14, live: true, tag: 't', lead_source: 'corp_promo', glofox_membership_id: 'mem-ow', glofox_plan_code: 'plan-ow', glofox_plan_name: '2) Black Friday Open Week.' })
+    const f = fakeDb({ markerError: { code: '57014' }, readError: { code: '08006' } })
+    const d = deps({ glofoxPlanForPromo: vi.fn(() => ({ membershipId: 'mem-ow', planCode: 'plan-ow', planName: '2) Black Friday Open Week.' })) })
+    await fulfilGlofoxCorpPromoClaim(f.db, { claim, location, contact, promo: OW, copy: COPY, zone: 'Europe/Dublin' }, d)
+    const html = d.sendOpsAlert.mock.calls[0][0].htmlBody
+    expect(html).toContain('€0 2) Black Friday Open Week. invoice')
+    expect(html).not.toContain('New Start')
+  })
+})

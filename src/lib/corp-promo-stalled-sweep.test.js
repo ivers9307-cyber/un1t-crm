@@ -81,7 +81,8 @@ describe('sweepStalledGlofoxCorpClaims', () => {
     await sweepStalledGlofoxCorpClaims(db, { now: NOW })
     const body = mocks.alert.mock.calls[0][0].htmlBody
     expect(body).toContain('may have gone through')
-    expect(body).toContain('€0 New Start invoice')
+    // OPENWEEK.5 — the promo's own plan, never a hard-coded one.
+    expect(body).toContain('€0 New Start Free Trial invoice')
     expect(body).not.toContain('Nothing was bought')
   })
 
