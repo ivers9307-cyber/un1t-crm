@@ -2,11 +2,12 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { sqlCode } from './helpers/sql-code.js'
 
 const FILE = join(process.cwd(), 'supabase/migrations/847_open_week_promos.sql')
 const sql = () => readFileSync(FILE, 'utf8')
 // Comments out, whitespace squashed: a comment never satisfies a check.
-const code = () => sql().replace(/--[^\n]*/g, '').replace(/\s+/g, ' ')
+const code = () => sqlCode(sql()).replace(/\s+/g, ' ')
 
 describe('mig 847 open week promos', () => {
   it('exists', () => {
