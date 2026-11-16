@@ -220,7 +220,10 @@ export function reissueDecision(orderState) {
  * A completed old order on a car ALREADY paid by its new link is a double
  * payment: logged at error for a person to refund, the row closed.
  *
- * @returns {Promise<{ outcome: 'not_superseded'|'still_pending'|'settled'|'closed'|'double_payment'|'not_applied'|'error', state?: string, error?: any }>}
+ * An old order that paid less than the car's current deposit (or not in euro)
+ * is closed as `amount_mismatch` and logged; it never marks the car paid.
+ *
+ * @returns {Promise<{ outcome: 'not_superseded'|'still_pending'|'settled'|'closed'|'double_payment'|'amount_mismatch'|'not_applied'|'error', state?: string, error?: any }>}
  */
 export async function settleSupersededOrder({ db, orderId, getOrder }) {
   const { data: row, error: rowErr } = await db.from('car_deposit_superseded_orders')
@@ -261,6 +264,30 @@ export async function settleSupersededOrder({ db, orderId, getOrder }) {
     await close('double_payment')
     return { outcome: 'double_payment', state }
   }
+  // The old order was for the deposit as it stood then. It counts as the
+  // deposit only if it covers the car's CURRENT deposit, in euro: a re-issue
+  // can raise the amount, and an underpaid old order must not mark it paid.
+  const paidMinor = Number(order.amount)
+  const dueMinor = Math.round(Number(car.deposit_amount) * 100)
+  const currency = String(order.currency || 'EUR').toUpperCase()
+  if (currency !== 'EUR' || !Number.isFinite(paidMinor) || (Number.isFinite(dueMinor) && paidMinor < dueMinor)) {
+    logError('car-deposit-revolut', 'superseded deposit order paid a different amount than the current deposit; car not marked paid, review by hand', {
+      carId: car.id, orderId, paidMinor: Number.isFinite(paidMinor) ? paidMinor : null, dueMinor: Number.isFinite(dueMinor) ? dueMinor : null, currency,
+    })
+    await close('amount_mismatch')
+    return { outcome: 'amount_mismatch', state }
+  }
+
+  // The car's CURRENT order (its new link) must stay tracked: it becomes a
+  // superseded order itself, so a later payment on it raises the
+  // double-payment alert instead of vanishing.
+  if (car.deposit_revolut_order_id && car.deposit_revolut_order_id !== orderId) {
+    const { error: keepErr } = await db.from('car_deposit_superseded_orders').upsert({
+      order_id: car.deposit_revolut_order_id, car_id: car.id, location_id: car.location_id,
+    }, { onConflict: 'order_id', ignoreDuplicates: true })
+    if (keepErr) return { outcome: 'error', error: keepErr }
+  }
+
   const { updates } = depositUpdateForOrder({ order, car })
   const { written, error } = await applyCarDepositUpdates({
     db, car, order, state, updates: { ...updates, deposit_revolut_order_id: orderId }, guardStatus: true,

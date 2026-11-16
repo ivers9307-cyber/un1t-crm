@@ -316,6 +316,7 @@ const APPLY = {
     if (r.outcome === 'not_superseded' || r.outcome === 'closed') return r.state ? { outcome: 'settled', state: r.state } : ALREADY_SETTLED
     if (r.outcome === 'still_pending') return { outcome: 'still_pending', state: r.state }
     if (r.outcome === 'not_applied') return { outcome: 'not_applied', state: r.state }
+    if (r.outcome === 'amount_mismatch' || r.outcome === 'double_payment') return { outcome: 'settled', state: r.state }
     return { outcome: 'settled', state: r.state }
   },
 
