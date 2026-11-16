@@ -13,7 +13,7 @@
 
 import { useState, useMemo } from 'react'
 import Link from 'next/link'
-import { ChevronRight, Mail, X, GitMerge, Trash2 } from 'lucide-react'
+import { ChevronRight, Mail, X, GitMerge, Trash2, Tag } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { useStudioStages } from '@/lib/use-studio-stages'
 
@@ -25,6 +25,8 @@ import { useStudioStages } from '@/lib/use-studio-stages'
 const SequencePicker = dynamic(() => import('./SequencePicker'), { ssr: false })
 const ContactMergeModal = dynamic(() => import('./ContactMergeModal'), { ssr: false })
 const ContactBulkDeleteModal = dynamic(() => import('./ContactBulkDeleteModal'), { ssr: false })
+// CONTACTTAGS.1 — bulk Add tag / Remove tag (POST /api/contacts/bulk-tags).
+const ContactBulkTagModal = dynamic(() => import('./ContactBulkTagModal'), { ssr: false })
 
 // Badge palette keyed by the stage slug (FUNNEL.1 taxonomy). The chip reads
 // studio_stage_slug: the stage AT this studio (ORGCONTACTS.4, decision 3).
@@ -136,7 +138,7 @@ function LinkedMarker({ contact }) {
   )
 }
 
-export default function ContactsTable({ contacts, locationId, crossoverContext = {}, listFlags = {}, canMerge = false, canDelete = false }) {
+export default function ContactsTable({ contacts, locationId, crossoverContext = {}, listFlags = {}, canMerge = false, canDelete = false, canTag = false }) {
   const { bySlug: stageBySlug } = useStudioStages(locationId)
   // Set<contactId>. Set so toggle is O(1) and resilient to the contact
   // list changing under us (filter / search updates).
@@ -144,6 +146,8 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
   const [pickerOpen, setPickerOpen] = useState(false)
   const [mergeOpen, setMergeOpen] = useState(false)
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  // CONTACTTAGS.1 — null, 'add' or 'remove'.
+  const [tagAction, setTagAction] = useState(null)
 
   const allIds = useMemo(() => contacts.map(c => c.id), [contacts])
   const allSelected = allIds.length > 0 && allIds.every(id => selectedIds.has(id))
@@ -190,6 +194,28 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
           >
             <Mail size={12} /> Add to sequence
           </button>
+          {/* CONTACTTAGS.1 — bulk tag: canBulkTagAt (MANAGER_ROLES + Contacts
+              at the active studio), the route's own gate. */}
+          {canTag && (
+            <>
+              <button
+                type="button"
+                onClick={() => setTagAction('add')}
+                className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1.5"
+                title="Add one tag to the selected contacts"
+              >
+                <Tag size={12} /> Add tag
+              </button>
+              <button
+                type="button"
+                onClick={() => setTagAction('remove')}
+                className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1.5"
+                title="Remove one tag from the selected contacts"
+              >
+                <Tag size={12} /> Remove tag
+              </button>
+            </>
+          )}
           {/* Merge — owner-only. Visible only when exactly 2 rows
               are selected (the merge API takes survivor + loser). */}
           {canMerge && selectedCount === 2 && (
@@ -222,6 +248,14 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
           contactIds={selectedIdsArray}
           contacts={contacts.filter(c => selectedIds.has(c.id))}
           onClose={() => setMergeOpen(false)}
+        />
+      )}
+
+      {tagAction && (
+        <ContactBulkTagModal
+          action={tagAction}
+          contactIds={selectedIdsArray}
+          onClose={() => setTagAction(null)}
         />
       )}
 
