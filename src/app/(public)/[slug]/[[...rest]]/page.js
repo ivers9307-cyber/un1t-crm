@@ -323,7 +323,7 @@ async function paidTrialItems(db, page, rows) {
 // payload (the campaign copy's expect_cards is also expect.cards) reaches the
 // browser as a lazy reference, never an element, so the clone was skipped and
 // the card kept the words the server seeded it with.
-async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName, studioChoices = [], preview = false }) {
+async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName, studioChoices = [], orgName = '', preview = false }) {
   const kind = layoutFor(page.offer_type, page.kind)
 
   if (page.offer_type === 'paid_trial') {
@@ -385,7 +385,10 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
       }
     }
     const promo = resolved && resolved.live ? resolved : null
-    const corpStudioName = contextBrand?.locationName || contextBrand?.companyName || ''
+    // OPENWEEK.3 — before the visitor chooses a studio the page speaks for the
+    // organisation ("Open Week at <organisation name>"), never the first studio.
+    const choosingStudio = !preview && studioChoices.length > 0
+    const corpStudioName = choosingStudio && orgName ? orgName : (contextBrand?.locationName || contextBrand?.companyName || '')
     const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey, { platform: promo?.platform || resolved?.platform, kind: promo?.kind || resolved?.kind })
     if (readFailed) raw.unavailable_text = CORP_PROMO_READ_FAILED_TEXT
     // OPENWEEK.1 — an open week card picks several classes, within its limits.
@@ -401,7 +404,7 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     const offerProps = { promoKey: promo ? promo.key : null, copy, terms, page: page.slug, studio: contextPath, stepCopy: classFirstStepCopy(mergedOffer || {}, 'corp_promo'), ...(openWeek ? { openWeek } : {}) }
     // OPENWEEK.1 — an all-studios promo page with no studio chosen yet asks
     // for one first (each studio has its own promo row); never in the preview.
-    const choosing = !preview && studioChoices.length > 0
+    const choosing = choosingStudio
     return {
       kind, cta: { href: '#corp', label: copy.cta_label }, anchor: 'corp', heroImageUrl, scrollCueLabel: null, hero, expect,
       offer: choosing ? <PromoStudioChoice heading={copy.studio_heading || 'Choose your studio'} choices={studioChoices} /> : <CorpPromoFunnel {...offerProps} />,
@@ -672,7 +675,7 @@ export default async function PublicPage(props) {
       return path ? { path, label: embeddedOne(r.locations)?.name || path } : null
     }))).filter(Boolean)
     : []
-  const offerArgs = { db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName, studioChoices }
+  const offerArgs = { db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName, studioChoices, orgName: chrome.companyName || '' }
 
   if (editMode) {
     // The preview renders the page's own layout round the editable blocks:
