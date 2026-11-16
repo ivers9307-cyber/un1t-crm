@@ -440,9 +440,9 @@ export const EXEMPT = {
     donations: 'CHARITY.7 signature-verified Stripe webhook (constructEvent): the post-mark re-read is by the row\'s own id, taken from resolveDonationByRef on the verified Checkout Session id — the provider\'s session id IS the row identity.',
     race_events: 'CHARITY.7 signature-verified Stripe webhook: the donation\'s event row is read by the donation\'s own race_event_id (never by caller input) for the match multiplier and the paid side effects.',
   },
-  'src/app/api/webhooks/xero/route.js': {
-    cars: 'Signature-verified webhook resolves the car by xero_invoice_id — the provider\'s invoice id IS the row identity (per-location Xero connections mint the ids).',
-  },
+  // XEROHOOK.1 — the Xero webhook's car / bill lookups moved to
+  // src/lib/xero/webhook-events.js (shared with the dead-letter replayer);
+  // they still resolve the row by the provider's invoice id, the row identity.
 
   // The schedule/templates/[id] TODO-LEAK entries were removed once
   // SAAS-11 landed the fix (assertLocationAccessOr404 + .eq('location_id')

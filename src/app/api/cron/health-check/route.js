@@ -45,7 +45,7 @@ async function readCronHealth() {
   try {
     const { data, error } = await db
       .from('cron_health')
-      .select('name, last_ok_at, stale_seconds, max_allowed_seconds, is_stale')
+      .select('name, last_ok_at, stale_seconds, max_allowed_seconds, is_stale, is_acknowledged, acknowledged_until, acknowledged_note')
       .order('name')
       .abortSignal(controller.signal)
     if (error) return { ok: false, error: error.message }
@@ -80,7 +80,12 @@ export async function GET(request) {
   }
 
   const checks = result.checks
-  const stale = checks.filter((c) => c.is_stale)
+  // STALEWATCH.1 (mig 843) — an ACKNOWLEDGED stale job (a known fault, being
+  // handled, acknowledged_until still ahead) no longer holds the alarm red, so
+  // the next job to go stale changes the answer instead of vanishing behind
+  // the first. It is still listed, under `acknowledged`.
+  const stale = checks.filter((c) => c.is_stale && !c.is_acknowledged)
+  const acknowledged = checks.filter((c) => c.is_stale && c.is_acknowledged)
   const allHealthy = stale.length === 0
 
   // SAAS4-O1 — per-tenant visibility (additive; best-effort). The
@@ -108,6 +113,7 @@ export async function GET(request) {
       success: allHealthy,
       all_healthy: allHealthy,
       stale: stale.map((c) => c.name),
+      acknowledged: acknowledged.map((c) => ({ name: c.name, until: c.acknowledged_until, note: c.acknowledged_note || null })),
       tenant_stale: tenantStale,
       checks,
       checked_at: new Date().toISOString(),

@@ -14,7 +14,25 @@ const h = vi.hoisted(() => ({
   user: { id: 'prof-staff', full_name: 'Sam Staff', email: 'sam@un1t.ie', role: 'staff' },
   locationId: 'loc-1',
   db: {},
+  // EQUIPSUBMIT.1 — every write to equipment_inspections through db.from
+  // (the claim and its release), and what the claim's CAS answers.
+  inspWrites: [],
+  claimRows: [{ id: 'insp-1' }],
 }))
+
+// The claim (draft -> submitted) and its release go straight to the table.
+function inspTable() {
+  const q = {}
+  q.update = (patch) => { h.inspWrites.push(patch); return q }
+  q.eq = () => q
+  q.select = async () => ({ data: h.claimRows, error: null })
+  q.then = (res) => Promise.resolve({ data: null, error: null }).then(res)
+  return q
+}
+function withClaims(db) {
+  const from = db.from
+  return { ...db, from: (t) => (t === 'equipment_inspections' ? inspTable() : from?.(t)) }
+}
 
 vi.mock('@/lib/with-auth', () => ({
   withAuth: (opts, handler) => async (request, ctx) => {
@@ -98,7 +116,9 @@ const ONE_FAIL = { i1: { state: 'fail', note: 'Belt is fraying' }, i2: { state: 
 beforeEach(() => {
   vi.clearAllMocks()
   h.locationId = 'loc-1'
-  h.db = {}
+  h.db = withClaims({})
+  h.inspWrites = []
+  h.claimRows = [{ id: 'insp-1' }]
   getInspection.mockResolvedValue(INSPECTION)
   updateInspection.mockImplementation(async (_db, id, patch) => ({ id, ...patch }))
   updateEquipment.mockImplementation(async (_db, id, patch) => ({ id, ...patch }))
@@ -143,8 +163,8 @@ describe('POST /api/equipment/inspections/[id]/submit', () => {
     const equipPatch = updateEquipment.mock.calls.at(-1)[2]
     expect(equipPatch.next_due_on).toBe(expectedNextDue)
 
+    expect(h.inspWrites[0]).toMatchObject({ status: 'submitted', inspector_id: 'prof-staff' })
     const inspPatch = updateInspection.mock.calls.at(-1)[2]
-    expect(inspPatch.status).toBe('submitted')
     expect(inspPatch.issue_id).toBeNull()
   })
 
@@ -206,6 +226,8 @@ describe('POST /api/equipment/inspections/[id]/submit', () => {
     expect(body.error).toBe('insert boom')
     expect(updateInspection).not.toHaveBeenCalled()
     expect(updateEquipment).not.toHaveBeenCalled()
+    // EQUIPSUBMIT.1 — claimed, then put back to draft.
+    expect(h.inspWrites.map((w) => w.status)).toEqual(['submitted', 'draft'])
   })
 
   it('returns 400 for malformed results JSON', async () => {
@@ -236,7 +258,7 @@ function jsonReq(body) {
 
 const removed = []
 function dbFor({ claimed = [], listed = [] } = {}) {
-  return {
+  return withClaims({
     from: () => ({ select: () => ({ in: () => ({ limit: async () => ({ data: claimed, error: null }) }) }) }),
     storage: {
       from: () => ({
@@ -244,7 +266,7 @@ function dbFor({ claimed = [], listed = [] } = {}) {
         remove: async (paths) => { removed.push(...paths); return { data: null, error: null } },
       }),
     },
-  }
+  })
 }
 const storedPhoto = (size = 4096, mimetype = 'image/jpeg') => ([
   { name: `${ATT}-belt.jpg`, metadata: { size, mimetype } },
@@ -343,5 +365,41 @@ describe('POST /api/equipment/inspections/[id]/submit — JSON mode', () => {
     const res = await POST(jsonReq({ results: 'not-an-object' }), ctx)
     expect(res.status).toBe(400)
     expect(updateInspection).not.toHaveBeenCalled()
+  })
+})
+
+// EQUIPSUBMIT.1 (October audit A11) — one result per inspection, and an
+// out-of-service decision always reaches the asset.
+describe('POST /api/equipment/inspections/[id]/submit — claim and retry', () => {
+  it('a second submission at the same moment gets a 409 and raises no issue', async () => {
+    h.claimRows = []
+    const res = await POST(req({ results: JSON.stringify(ONE_FAIL) }), ctx)
+    expect(res.status).toBe(409)
+    expect(insertIssueWithAttachments).not.toHaveBeenCalled()
+    expect(updateEquipment).not.toHaveBeenCalled()
+  })
+
+  it('a failed asset update is retried once, then hands the inspection back as a draft holding its issue', async () => {
+    updateEquipment.mockRejectedValue(new Error('db down'))
+    const res = await POST(req({ results: JSON.stringify(ONE_FAIL), takeOutOfService: 'true' }), ctx)
+    expect(res.status).toBe(503)
+    expect((await res.json()).issueId).toBe('iss-1')
+    expect(updateEquipment).toHaveBeenCalledTimes(2)
+    expect(h.inspWrites.at(-1)).toMatchObject({ status: 'draft', issue_id: 'iss-1' })
+  })
+
+  it('the retry reuses that issue and takes the asset out of service', async () => {
+    getInspection.mockResolvedValue({ ...INSPECTION, issue_id: 'iss-1' })
+    const res = await POST(req({ results: JSON.stringify(ONE_FAIL), takeOutOfService: 'true' }), ctx)
+    expect(res.status).toBe(200)
+    expect(insertIssueWithAttachments).not.toHaveBeenCalled()
+    expect(updateEquipment.mock.calls.at(-1)[2]).toMatchObject({ status: 'out_of_service', out_of_service_issue_id: 'iss-1' })
+  })
+
+  it('a first asset-update failure that succeeds on retry still answers 200', async () => {
+    updateEquipment.mockRejectedValueOnce(new Error('blip'))
+    const res = await POST(req({ results: JSON.stringify(ALL_PASS) }), ctx)
+    expect(res.status).toBe(200)
+    expect(updateEquipment).toHaveBeenCalledTimes(2)
   })
 })
