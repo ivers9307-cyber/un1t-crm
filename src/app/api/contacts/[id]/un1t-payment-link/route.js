@@ -257,9 +257,25 @@ export async function GET(request, props) {
         template_ready: templateReady,
       },
       live_membership: member ? { plan: member.membership_plan || null } : null,
-      preview_text: renderCopyText(copy.whatsapp_text, { first_name: contact.first_name || '', studio: location.name || '', product: '{product}' }),
+      // STAFFPAYLINK.1 — outside the 24h window the customer receives the
+      // approved template, so the card previews that, not the chat wording.
+      preview_text: !windowOpen && templateReady
+        ? templatePreviewText(template, contact.first_name || '')
+        : renderCopyText(copy.whatsapp_text, { first_name: contact.first_name || '', studio: location.name || '', product: '{product}' }),
     },
   })
+}
+
+// The template as the customer will read it: a TEXT header on its own line,
+// then the body with {{1}} = first name and {{2}} = the product label (left as
+// {product} for the card to fill), matching the POST's variable mapping.
+function templatePreviewText(template, firstName) {
+  const comps = Array.isArray(template?.components) ? template.components : []
+  const header = comps.find((c) => c?.type === 'HEADER' && c?.format === 'TEXT' && c?.text)
+  const body = comps.find((c) => c?.type === 'BODY' && c?.text)
+  const vars = { 1: firstName || '', 2: '{product}' }
+  const text = String(body?.text || '').replace(/\{\{(\d+)\}\}/g, (m, n) => (n in vars ? vars[n] : m))
+  return header ? `${header.text}\n${text}` : text
 }
 
 // A live link past expires_at reads as expired before the sweep stamps it.
