@@ -48,6 +48,8 @@ export default function ApprovalsInbox({ timezone = null, activeStudioId = null 
   const [allInfo, setAllInfo] = useState({ on: false, failed: [], truncated: false })
   const [providers, setProviders] = useState([])
   const [total, setTotal] = useState(0)
+  // APPROVALSUNAVAIL.1 — categories that could not be loaded this time.
+  const [unavailable, setUnavailable] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [view, setView] = useState(null) // 'customers' | 'team'; chosen on first load
@@ -97,6 +99,7 @@ export default function ApprovalsInbox({ timezone = null, activeStudioId = null 
         : { on: false, failed: [], truncated: false })
       setProviders(j.data.providers || [])
       setTotal(j.data.total || 0)
+      setUnavailable(Array.isArray(j.data.unavailable) ? j.data.unavailable : [])
       const team = teamProviders(j.data.providers || [])
       // Open on Customers when something waits there or there is no team view.
       setView((prev) => {
@@ -155,6 +158,11 @@ export default function ApprovalsInbox({ timezone = null, activeStudioId = null 
 
   return (
     <div className="space-y-6">
+      {unavailable.length > 0 && (
+        <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+          Could not load {unavailable.join(', ')}. What is shown here may be missing items from {unavailable.length === 1 ? 'it' : 'them'}; refresh to try again.
+        </div>
+      )}
       {showSwitch && (
         <div className="space-y-1.5">
           <div className="inline-flex items-center gap-1 border border-un1t-border rounded-lg p-1 bg-un1t-bg/40">
@@ -181,7 +189,7 @@ export default function ApprovalsInbox({ timezone = null, activeStudioId = null 
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-un1t-subtle">
-            {total === 0 ? 'All clear' : `${total} pending`}
+            {total === 0 ? (unavailable.length > 0 ? 'Nothing shown' : 'All clear') : `${total} pending`}
           </span>
           <button
             type="button"

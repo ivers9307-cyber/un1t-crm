@@ -139,6 +139,10 @@ export const CLOSED_FUNCTIONS = [
     why: 'PIPEBUILD.5a: INVOKER create of one offer board and its stages in one transaction, over a bare location id; only the service-role board builder calls it, after its own access check' },
   { fn: 'public.org_assistant_spend_month_cents', args: '(uuid, date)', closedBy: 806,
     why: 'ASSISTCAP.1: live staff-assistant spend for an org this billing month, the complement of org_ai_spend_month_cents (mig 421, closed the same way). Read only by the service-role cap check, the usage summary and the rollup cron notice; a client that could call it would learn another org\'s spend by passing its id' },
+  { fn: 'public.publish_policy_version', args: '(uuid, text, text, date, uuid)', closedBy: 841,
+    why: 'POLICYATOMIC.1 atomic policy publish; the master-only admin route calls it as service_role' },
+  { fn: 'public.record_policy_view_end', args: '(uuid, uuid, integer, jsonb)', closedBy: 841,
+    why: 'POLICYATOMIC.1 reading-time update for ANY profile id; the views route checks ownership and calls it as service_role' },
   { fn: 'public.reconcile_contact_studios_batch', args: '(uuid, integer)', closedBy: 846,
     why: 'RECONCILEBATCH.1: DEFINER batch of the nightly contact_studios reconcile over a contact-id range; only the service-role cron calls it' },
 ]
