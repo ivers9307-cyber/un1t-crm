@@ -26,16 +26,20 @@ const CHUNK = 200
  * @param {object} db service-role client
  * @param {{ locationId: string, organizationId: string|null, contactId: string|null,
  *   email: string|null, phone: string|null, promoKey: string }} args
- * @returns {Promise<{ ok: true, eligible: true } | { ok: true, eligible: false, reason: 'active_member'|'already_claimed'|'help_pending'|'in_progress' } | { ok: false }>}
+ * @returns {Promise<{ ok: true, eligible: true } | { ok: true, eligible: false, reason: 'active_member'|'already_claimed'|'help_pending'|'in_progress'|'free_trial_used' } | { ok: false }>}
  */
-export async function glofoxCorpPromoEligibility(db, { locationId, organizationId = null, contactId = null, email = null, phone = null, promoKey } = {}) {
+export async function glofoxCorpPromoEligibility(db, { locationId, organizationId = null, contactId = null, email = null, phone = null, promoKey, openWeekKeys = [] } = {}) {
   if (!locationId) throw new TypeError('glofoxCorpPromoEligibility: locationId is required')
   if (!promoKey) throw new TypeError('glofoxCorpPromoEligibility: promoKey is required')
   try {
+    // OPENWEEK.1 — an open week granted at this studio is the person's free
+    // trial: every OTHER promo there refuses it (free_trial_used).
+    const owKeys = (Array.isArray(openWeekKeys) ? openWeekKeys : []).filter((k) => typeof k === 'string' && k && k !== promoKey)
+    const keys = [promoKey, ...owKeys]
     const contactIds = await personContactIds(db, { organizationId, contactId, email, phone })
     if (contactIds.length === 0) return { ok: true, eligible: true }
 
-    const [studios, homed, claims] = await Promise.all([
+    let [studios, homed, claims] = await Promise.all([
       selectAllByKeys(
         contactIds,
         (chunk, from, to) => db.from('contact_studios').select('contact_id, membership_status')
@@ -52,14 +56,19 @@ export async function glofoxCorpPromoEligibility(db, { locationId, organizationI
       ),
       selectAllByKeys(
         contactIds,
-        (chunk, from, to) => db.from('corp_promo_claims').select('id, status')
-          .eq('location_id', locationId).eq('promo_key', promoKey).in('contact_id', chunk)
+        (chunk, from, to) => db.from('corp_promo_claims').select('id, status, promo_key')
+          .eq('location_id', locationId).in('promo_key', keys).in('contact_id', chunk)
           .order('id', { ascending: true }).range(from, to),
         { chunkSize: CHUNK, pageSize: PAGE },
       ),
     ])
 
     if (studios.length > 0 || homed.length > 0) return { ok: true, eligible: false, reason: 'active_member' }
+    const isOpenWeekClaim = (c) => owKeys.includes(c.promo_key)
+    if (!owKeys.includes(promoKey) && claims.some((c) => isOpenWeekClaim(c) && c.status === 'granted')) {
+      return { ok: true, eligible: false, reason: 'free_trial_used' }
+    }
+    claims = claims.filter((c) => !isOpenWeekClaim(c))
     if (claims.some((c) => c.status === 'granted')) return { ok: true, eligible: false, reason: 'already_claimed' }
     if (claims.some((c) => ['help_requested', 'handled'].includes(c.status))) return { ok: true, eligible: false, reason: 'help_pending' }
     if (claims.some((c) => c.status === 'processing')) return { ok: true, eligible: false, reason: 'in_progress' }

@@ -69,7 +69,7 @@ export async function personContactIds(db, { organizationId, contactId, email, p
  *   email: string|null, phone: string|null, trialProductId: string|null, promoKey?: string|null }} args
  * @returns {Promise<{ ok: true, eligible: true } | { ok: true, eligible: false, reason: 'already_claimed'|'free_trial_used'|'trained' } | { ok: false }>}
  */
-export async function corpPromoEligibility(db, { locationId, organizationId = null, contactId = null, email = null, phone = null, trialProductId = null, promoKey = null } = {}) {
+export async function corpPromoEligibility(db, { locationId, organizationId = null, contactId = null, email = null, phone = null, trialProductId = null, promoKey = null, openWeek = false } = {}) {
   if (!locationId) throw new TypeError('corpPromoEligibility: locationId is required')
   try {
     const contactIds = await personContactIds(db, { organizationId, contactId, email, phone })
@@ -89,6 +89,9 @@ export async function corpPromoEligibility(db, { locationId, organizationId = nu
     if (promoKey && ledger.some((r) => r.op === 'promo_grant' && r.target === promoKey && OPEN_OR_DONE.includes(r.stage))) {
       return { ok: true, eligible: false, reason: 'already_claimed' }
     }
+    // OPENWEEK.1 — an open week is open to anyone who is not a member now (the
+    // route checks membership): an earlier trial or training never refuses it.
+    if (openWeek) return { ok: true, eligible: true }
     if (ledger.some((r) => FREE_TRIAL_OPS.includes(r.op) && OPEN_OR_DONE.includes(r.stage))) {
       return { ok: true, eligible: false, reason: 'free_trial_used' }
     }
