@@ -6,6 +6,13 @@
 // advances, so the inspector retries with their ticks intact.
 // unique (equipment_id, due_on) stops a retry double-advancing.
 //
+// EQUIPSUBMIT.1 (October audit A11) — the inspection is CLAIMED (draft ->
+// submitted, compare-and-set on status) before the issue is created, so a
+// second submission at the same moment gets a 409 and creates no second
+// issue. If the asset update then fails, the claim is released back to
+// draft WITH the issue id kept, and a retry reuses that issue instead of
+// raising another, so an out-of-service decision always reaches the asset.
+//
 // Photos upload only here, never on the draft.
 //
 // MOBILE-UPLOAD.1 — the phone no longer POSTs the photo bytes to this
@@ -30,7 +37,7 @@ import {
 import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { logAuditEvent } from '@/lib/audit'
 import { sendPushToRolesAtLocation } from '@/lib/push'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -39,6 +46,28 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 const STORAGE_BUCKET = 'issue-photos'
+
+/** Take the inspection from draft to submitted, only if still a draft. */
+async function claimInspection(db, id, patch) {
+  const { data, error } = await db
+    .from('equipment_inspections')
+    .update({ ...patch, status: 'submitted' })
+    .eq('id', id)
+    .eq('status', 'draft')
+    .select('id')
+  if (error) throw error
+  return (data || []).length > 0
+}
+
+/** Put a claimed inspection back to draft (keeping any issue it raised). */
+async function releaseInspection(db, id, { issueId = null } = {}) {
+  const { error } = await db
+    .from('equipment_inspections')
+    .update({ status: 'draft', submitted_at: null, ...(issueId ? { issue_id: issueId } : {}) })
+    .eq('id', id)
+    .eq('status', 'submitted')
+  if (error) logError('equipment', 'could not put the inspection back to draft', { inspectionId: id, error: error.message })
+}
 
 export const POST = withAuth(
   { permission: 'equipment_inspect', location: true },
@@ -162,8 +191,12 @@ export const POST = withAuth(
       }
     }
 
-    let issueId = null
-    if (check.failed.length > 0) {
+    const claimPatch = { results, submitted_at: new Date().toISOString(), inspector_id: user.id }
+    let claimed = false
+    // An earlier attempt that raised the issue but could not update the asset
+    // left the inspection as a draft carrying that issue: reuse it.
+    let issueId = check.failed.length > 0 ? (inspection.issue_id || null) : null
+    if (check.failed.length > 0 && !issueId) {
       const description = buildIssueDescription({
         equipmentName: asset?.name || 'Equipment',
         typeName: type?.name || 'Unknown type',
@@ -229,6 +262,14 @@ export const POST = withAuth(
         }
       }
 
+      claimed = await claimInspection(db, inspection.id, claimPatch)
+      if (!claimed) {
+        for (const p of uploadedPaths) {
+          await db.storage.from(STORAGE_BUCKET).remove([p]).catch(() => {})
+        }
+        return NextResponse.json({ success: false, error: 'This inspection was already submitted.' }, { status: 409 })
+      }
+
       const out = await insertIssueWithAttachments(db, {
         locationId,
         submitterId: user.id,
@@ -240,8 +281,8 @@ export const POST = withAuth(
         for (const p of uploadedPaths) {
           await db.storage.from(STORAGE_BUCKET).remove([p]).catch(() => {})
         }
-        // Inspection stays 'draft' — the inspector keeps their ticks
-        // and can retry.
+        // Back to 'draft': the inspector keeps their ticks and can retry.
+        await releaseInspection(db, inspection.id)
         return NextResponse.json({ success: false, error: out.error }, { status: out.status || 500 })
       }
       issueId = out.issue.id
@@ -261,14 +302,14 @@ export const POST = withAuth(
       }
     }
 
-    // ---- now commit the inspection + the asset --------------------
-    const submitted = await updateInspection(db, inspection.id, {
-      results,
-      status: 'submitted',
-      submitted_at: new Date().toISOString(),
-      inspector_id: user.id,
-      issue_id: issueId,
-    })
+    // ---- claim (if the issue path did not), then the asset -------------
+    if (!claimed) {
+      claimed = await claimInspection(db, inspection.id, claimPatch)
+      if (!claimed) {
+        return NextResponse.json({ success: false, error: 'This inspection was already submitted.' }, { status: 409 })
+      }
+    }
+    const submitted = await updateInspection(db, inspection.id, { issue_id: issueId })
 
     const assetPatch = {
       last_inspected_on: todayStrIn(zone),
@@ -278,7 +319,28 @@ export const POST = withAuth(
       assetPatch.status = EQUIPMENT_STATUS.OUT_OF_SERVICE
       assetPatch.out_of_service_issue_id = issueId
     }
-    await updateEquipment(db, asset.id, assetPatch)
+    // The asset write is the one that takes unsafe kit out of service, so a
+    // failure is retried once and then handed back: the inspection returns to
+    // draft holding its issue, and submitting again finishes the job.
+    try {
+      try {
+        await updateEquipment(db, asset.id, assetPatch)
+      } catch {
+        await updateEquipment(db, asset.id, assetPatch)
+      }
+    } catch (err) {
+      logError('equipment', 'asset update failed after inspection submit; inspection put back to draft', {
+        inspectionId: inspection.id, equipmentId: asset?.id, issueId, outOfService: Boolean(assetPatch.status), error: err?.message || String(err),
+      })
+      await releaseInspection(db, inspection.id, { issueId })
+      return NextResponse.json({
+        success: false,
+        error: issueId
+          ? 'The fault was reported, but the equipment record was not updated. Submit the inspection again to finish (no second fault report is raised).'
+          : 'The equipment record could not be updated. Submit the inspection again.',
+        ...(issueId ? { issueId } : {}),
+      }, { status: 503 })
+    }
 
     await logAuditEvent({
       category: 'business',

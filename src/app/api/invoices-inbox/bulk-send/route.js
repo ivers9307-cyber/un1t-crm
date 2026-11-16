@@ -33,6 +33,7 @@ import {
   loadAndScopeBulkRows,
 } from '../_bulk-helpers'
 import { validateBody } from '@/lib/validate'
+import { recordPushOutcome, rememberSupplierCoding } from '@/lib/invoices-queue/push-outcome'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -98,10 +99,14 @@ export async function POST(request) {
         .eq('id', id)
         .eq('status', 'extracted')
         .select('id')
-        .single()
+        .maybeSingle()
       if (stepErr || !stepped) {
         results.push({ id, outcome: 'failed', error: stepErr?.message || 'concurrent_modification' })
         continue
+      }
+      // XEROBULK.1 — supplier memory, as the single-row approve records it.
+      try { await rememberSupplierCoding(db, row) } catch (e) {
+        console.warn(`[bulk-send ${id}] recordSupplierDefault failed: ${e?.message || e}`)
       }
     }
 
@@ -126,23 +131,20 @@ export async function POST(request) {
       continue
     }
 
-    // Step 3: stamp forwarded with the new bill_id + deep link.
-    const { error: updErr } = await db
-      .from('invoices_queue')
-      .update({
-        status: 'forwarded',
-        forwarded_at: new Date().toISOString(),
-        xero_bill_id: pushResult.billId,
-        xero_bill_number: pushResult.billNumber,
-        xero_deep_link_url: pushResult.deepLinkUrl,
-        xero_synced_at: new Date().toISOString(),
-        xero_error: null,
-      })
-      .eq('id', id)
-      .eq('status', 'data_approved')
-
-    if (updErr) {
-      results.push({ id, outcome: 'failed', error: updErr.message })
+    // Step 3 (XEROBULK.1, October audit A16) — the shared outcome: a bill
+    // whose source file did not attach stays retryable with its bill id,
+    // never 'forwarded'.
+    const recorded = await recordPushOutcome(db, id, pushResult)
+    if (recorded.outcome === 'attachment_failed') {
+      results.push({ id, outcome: 'attachment_failed', error: recorded.message, bill_id: pushResult.billId, retry_state: 'data_approved' })
+      continue
+    }
+    if (recorded.outcome === 'conflict') {
+      results.push({ id, outcome: 'failed', error: 'concurrent_modification' })
+      continue
+    }
+    if (recorded.outcome === 'error') {
+      results.push({ id, outcome: 'failed', error: recorded.message })
       continue
     }
     results.push({

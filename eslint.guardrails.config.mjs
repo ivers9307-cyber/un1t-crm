@@ -543,6 +543,8 @@ const config = [
       // PIPEBUILD.5d — the board builder: born clean. A silent failed write
       // would report a board switched on (or a stage removed) that was not.
       'src/lib/pipeline-boards.js',
+      // STAFFPAYLINK.1 — the payment link paid sweep: born clean.
+      'src/lib/staff-payment-link-sweep.js',
       'src/app/api/pipelines/**',
       'src/app/api/locations/[[]id]/pipelines/**',
     ],

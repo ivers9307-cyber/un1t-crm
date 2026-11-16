@@ -28,6 +28,7 @@ import {
   loadAndScopeBulkRows,
 } from '../_bulk-helpers'
 import { validateBody } from '@/lib/validate'
+import { resolveExtractionDefaults } from '@/lib/invoices-queue/supplier-defaults'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -103,8 +104,19 @@ export async function POST(request) {
       continue
     }
 
+    // XEROBULK.1 — supplier memory, as the single-row /extract route applies
+    // it: a known supplier opens with its Xero contact, account and category
+    // already picked. Best-effort: a memory miss never blocks the analysis.
+    let fields = result.fields
+    try {
+      const memory = await resolveExtractionDefaults(db, row.location_id, fields.supplier_name)
+      if (memory && Object.keys(memory).length > 0) fields = { ...fields, ...memory }
+    } catch (e) {
+      console.warn(`[bulk-analyse ${id}] supplier-memory resolve failed: ${e?.message || e}`)
+    }
+
     // Confidence heuristic — same as the single-row /extract route.
-    const f = result.fields
+    const f = fields
     const reconciles = Math.abs((Number(f.subtotal) + Number(f.tax_amount)) - Number(f.total)) <= 0.01
     const allRequired = f.supplier_name && f.invoice_number && f.invoice_date && Number.isFinite(Number(f.total))
     const confidence = allRequired && reconciles ? 'high' : 'medium'
@@ -113,7 +125,7 @@ export async function POST(request) {
     const patch = {
       status: 'extracted',
       extracted_at: nowIso,
-      extracted_fields: result.fields,
+      extracted_fields: fields,
       extraction_confidence: confidence,
       extraction_error: null,
       // clear any queue flags so a row can't be both extracted AND queued

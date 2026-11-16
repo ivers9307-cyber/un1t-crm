@@ -6,6 +6,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { naturalSortByName } from '@/lib/presentations'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -54,14 +55,33 @@ export async function POST(request, { params }) {
     const buffer = Buffer.from(await file.arrayBuffer())
     const { error: upErr } = await db.storage.from('presentation-slides')
       .upload(path, buffer, { contentType: file.type, cacheControl: '3600', upsert: false })
-    if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 400 })
+    if (upErr) {
+      // PRESENTSAFE.1 — slides saved before the failure still reach open screens.
+      if (inserted.length) await bumpVersion(db, id)
+      return NextResponse.json({ success: false, error: upErr.message, added: inserted.length }, { status: 400 })
+    }
     const { data: row, error: insErr } = await db.from('presentation_slides')
       .insert({ presentation_id: id, location_id: deck.location_id, position: pos, image_path: path })
       .select('id, position, image_path').single()
-    if (insErr) return NextResponse.json({ success: false, error: insErr.message }, { status: 500 })
+    if (insErr) {
+      if (inserted.length) await bumpVersion(db, id)
+      return NextResponse.json({ success: false, error: insErr.message, added: inserted.length }, { status: 500 })
+    }
     inserted.push(row); pos += 1
   }
 
-  await db.rpc('bump_presentation_version', { p_presentation_id: id })
-  return NextResponse.json({ success: true, added: inserted.length })
+  const bumped = await bumpVersion(db, id)
+  return NextResponse.json({
+    success: true,
+    added: inserted.length,
+    ...(bumped ? {} : { warning: 'Saved, but open screens did not get the update. Reload them.' }),
+  })
+}
+
+// PRESENTSAFE.1 — the version is what tells open screens to re-read; a failed
+// bump is logged and reported, never ignored.
+async function bumpVersion(db, id) {
+  const { error } = await db.rpc('bump_presentation_version', { p_presentation_id: id })
+  if (error) logError('presentations', 'version bump failed', { presentationId: id, error: error.message })
+  return !error
 }

@@ -29,17 +29,23 @@ export async function GET(request, { params }) {
   const limit = await checkRateLimit(db, `present-state:${token}:${ip}`, { max: 240, windowMs: 60_000 })
   if (!limit.allowed) return rateLimitResponse(limit)
 
-  const { data: deck } = await db
+  // PRESENTSAFE.1 (October audit A18) — a failed read is a 503, never an
+  // answer: a deck-read failure used to read as "invalid link" (404), and a
+  // slide-read failure as an empty deck the screen then adopted and kept.
+  // The viewer keeps what it is showing on any non-OK answer.
+  const { data: deck, error: deckErr } = await db
     .from('presentations')
     .select('id, title, current_index, version')
     .eq('view_token', token)
     .maybeSingle()
+  if (deckErr) return NextResponse.json({ success: false, error: 'unavailable' }, { status: 503 })
   if (!deck) return NextResponse.json({ success: false, error: 'invalid_token' }, { status: 404 })
-  const { data: slides } = await db
+  const { data: slides, error: slidesErr } = await db
     .from('presentation_slides')
     .select('image_path')
     .eq('presentation_id', deck.id)
     .order('position', { ascending: true })
+  if (slidesErr) return NextResponse.json({ success: false, error: 'unavailable' }, { status: 503 })
   return NextResponse.json({
     success: true,
     title: deck.title,

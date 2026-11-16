@@ -169,6 +169,11 @@ const CALLERS = {
     decision: 'refuse-409',
     why: 'WAORGNUMBER.4 (R3): the composer’s thread, at the contact’s HOME studio (getOrCreateConversation at contact.location_id); same resolver calls. WhatsApp channel only: own number checked before a thread or a link, and the send carries that checked { config }; email unaffected. WAORGNUMBER.2 (R5): a template goes from the checked default only when it is on the template\'s WABA (pickTemplateConfig); otherwise the send resolves by location + WABA (sendTemplateMessage { locationId, businessAccountId }) and can refuse: WhatsAppNumberMissingError → the minted link is revoked and the route answers 409 (whatsappErrorStatus). route.test.js.',
   },
+  'src/app/api/contacts/[id]/un1t-payment-link/route.js': {
+    calls: { sendCtaUrlMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1 },
+    decision: 'refuse-409',
+    why: 'STAFFPAYLINK.1: own number checked (ownNumberOrRefusal) before any thread or link exists; the thread files at the Hatch card\'s studio (getOrCreateConversation at locationId) and the send carries that checked { config }. A template goes from the checked default only when it is on the template\'s WABA (pickTemplateConfig); otherwise the send resolves by location + WABA and can refuse: WhatsAppNumberMissingError → the minted link is revoked and the route answers 409 (whatsappErrorStatus). route.test.js.',
+  },
   'src/app/api/churn-radar/action/route.js': {
     calls: { sendTextMessage: 1 },
     decision: 'refuse-409',
