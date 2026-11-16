@@ -67,6 +67,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS staff_payment_links_one_live
   ON public.staff_payment_links (location_id, contact_id)
   WHERE status IN ('sent', 'opened', 'checkout_started');
 
+-- One payment settles at most one link, across sweep runs.
+CREATE UNIQUE INDEX IF NOT EXISTS staff_payment_links_paid_tx_unique
+  ON public.staff_payment_links (location_id, paid_transaction_id)
+  WHERE paid_transaction_id IS NOT NULL;
+
 -- The settle sweep and the expiry pass both read live rows by status and age.
 CREATE INDEX IF NOT EXISTS staff_payment_links_status_expires_idx
   ON public.staff_payment_links (status, expires_at);

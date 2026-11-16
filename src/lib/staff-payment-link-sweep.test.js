@@ -15,7 +15,7 @@ const DAY = 86_400_000
 const iso = (ms) => new Date(ms).toISOString()
 
 // A tiny in-memory PostgREST stand-in: select/update with eq/in/gte/not/order/range.
-function makeDb(tables, { failRead = null, failUpdate = false, lostCas = new Set() } = {}) {
+function makeDb(tables, { failRead = null, failUpdate = false, lostCas = new Set(), dupPaid = false } = {}) {
   const log = { updates: [] }
   const from = (name) => {
     const q = { op: 'select', filters: [], patch: null, ord: [] }
@@ -25,6 +25,7 @@ function makeDb(tables, { failRead = null, failUpdate = false, lostCas = new Set
     b.eq = (c, v) => { q.filters.push((r) => r[c] === v); return b }
     b.in = (c, vs) => { q.filters.push((r) => vs.includes(r[c])); return b }
     b.gte = (c, v) => { q.filters.push((r) => r[c] >= v); return b }
+    b.or = () => b
     b.not = (c, _o, v) => { q.filters.push((r) => r[c] !== v); return b }
     b.order = (c) => { q.ord.push(c); return b }
     b.range = (from_, to) => { q.range = [from_, to]; return b }
@@ -33,6 +34,7 @@ function makeDb(tables, { failRead = null, failUpdate = false, lostCas = new Set
       if (failRead === name && q.op === 'select') return Promise.resolve({ data: null, error: { code: 'XX' } }).then(res, rej)
       let rows = (tables[name] || []).filter((r) => q.filters.every((f) => f(r)))
       if (q.op === 'update') {
+        if (dupPaid && q.patch.status === 'paid') return Promise.resolve({ data: null, error: { code: '23505' } }).then(res, rej)
         if (failUpdate) return Promise.resolve({ data: null, error: { code: 'XX' } }).then(res, rej)
         rows = rows.filter((r) => !lostCas.has(r.id))
         rows.forEach((r) => Object.assign(r, q.patch))
@@ -158,5 +160,32 @@ describe('sweepStaffPaymentLinks', () => {
     const res = await sweepStaffPaymentLinks(makeDb(t), 'loc', { now: NOW })
     expect(res).toMatchObject({ ok: true, paid: 1, passwordPending: 1, failed: 0 })
     expect(t.staff_payment_links[0]).toMatchObject({ status: 'paid', last_error: 'set_password:failed_5xx' })
+  })
+
+  it('a live link is offered the payment before a recently expired one', async () => {
+    const t = { staff_payment_links: [
+      link({ id: 'exp', status: 'expired', created_at: iso(NOW - 6 * DAY), expires_at: iso(NOW - DAY) }),
+      link({ id: 'live', created_at: iso(NOW - 3 * DAY) }),
+    ], un1t_transactions: [tx()] }
+    await sweepStaffPaymentLinks(makeDb(t), 'loc', { now: NOW })
+    const st = (id) => t.staff_payment_links.find((l) => l.id === id).status
+    expect([st('live'), st('exp')]).toEqual(['paid', 'expired'])
+  })
+
+  it('a transaction already on a paid row settles no other link in a later run', async () => {
+    const t = { staff_payment_links: [
+      link({ id: 'done', status: 'paid', paid_transaction_id: 't1' }),
+      link({ id: 'next', contact_id: 'c2' }),
+    ], un1t_transactions: [tx()] }
+    const res = await sweepStaffPaymentLinks(makeDb(t), 'loc', { now: NOW })
+    expect(res.paid).toBe(0)
+    expect(t.staff_payment_links[1].status).toBe('sent')
+  })
+
+  it('a unique violation on the paid write is raced: no set-password, not failed', async () => {
+    const t = { staff_payment_links: [link({ terms_accepted_at: iso(NOW) })], un1t_transactions: [tx()], contacts: [{ id: 'c1' }] }
+    const res = await sweepStaffPaymentLinks(makeDb(t, { dupPaid: true }), 'loc', { now: NOW })
+    expect(res).toMatchObject({ ok: true, paid: 0, raced: 1, failed: 0 })
+    expect(mocks.step).not.toHaveBeenCalled()
   })
 })

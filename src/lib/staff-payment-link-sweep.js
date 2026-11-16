@@ -75,14 +75,18 @@ export async function sweepStaffPaymentLinks(db, locationId, { now } = {}) {
 }
 
 async function sweep(db, locationId, nowMs, out) {
+  const cutoff = iso(nowMs - LATE_PAYMENT_GRACE_MS)
+  const isLive = (l) => LIVE_STATUSES.includes(l.status)
   const links = (await readAll(() => db.from('staff_payment_links').select(LINK_COLS)
     .eq('location_id', locationId)
     .not('un1t_user_id', 'is', null)
-    .in('status', [...LIVE_STATUSES, 'expired'])
+    .or(`status.in.(${LIVE_STATUSES.join(',')}),and(status.eq.expired,expires_at.gte.${cutoff})`)
     .order('id', { ascending: true }), 'payment links'))
     .filter((l) => l.last_error !== FREE_CHECKOUT
       && (l.status !== 'expired' || ms(l.expires_at) + LATE_PAYMENT_GRACE_MS >= nowMs))
-    .sort((a, b) => (ms(a.created_at) - ms(b.created_at)) || String(a.id).localeCompare(String(b.id)))
+    // Live links are offered each transaction before expired ones.
+    .sort((a, b) => ((isLive(a) ? 0 : 1) - (isLive(b) ? 0 : 1))
+      || (ms(a.created_at) - ms(b.created_at)) || String(a.id).localeCompare(String(b.id)))
   out.checked = links.length
   if (links.length === 0) return out
 
@@ -95,7 +99,12 @@ async function sweep(db, locationId, nowMs, out) {
     .order('remote_created_at', { ascending: true })
     .order('un1t_id', { ascending: true }), 'un1t transactions')
 
-  const usedTx = new Set()
+  // Transactions that already settled a link in an earlier run.
+  const usedTx = new Set((await readAll(() => db.from('staff_payment_links').select('id, paid_transaction_id')
+    .eq('location_id', locationId)
+    .not('paid_transaction_id', 'is', null)
+    .order('id', { ascending: true }), 'paid transactions'))
+    .map((r) => String(r.paid_transaction_id)))
   const settled = new Set()
   for (const link of links) {
     const t = txs.find((x) => !usedTx.has(String(x.un1t_id)) && isPaymentForLink(link, x))
@@ -137,6 +146,11 @@ async function settleLink(db, link, t, nowMs, out) {
     status: 'paid', paid_transaction_id: String(t.un1t_id), paid_at: t.remote_created_at,
     last_error: null, updated_at: iso(nowMs),
   })
+  if (error?.code === '23505') {
+    out.raced++
+    logWarn(LOG, 'transaction already settled another link', ids)
+    return
+  }
   if (error) {
     out.failed++
     logError(LOG, 'link not marked paid; the next run tries again', { ...ids, code: error.code ?? null })
