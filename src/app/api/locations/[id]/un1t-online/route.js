@@ -57,6 +57,8 @@ import { z } from 'zod'
 import { mergeLocationSettings } from '@/lib/location-settings'
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { createUn1tWriter } from '@/lib/un1t-online-write'
+import { COPY_DEFAULTS } from '@/lib/staff-payment-links'
+import { PAGE_DEFAULTS } from '@/lib/staff-payment-link-checkout'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -276,6 +278,9 @@ function writeFields(settings) {
     un1t_sends_booking_confirmation: s.sendsBookingConfirmation,
     // UN1TWELCOME.1 — as stored, so the form shows what a master typed.
     app_links: appLinksStored(settings),
+    // STAFFPAYLINK.1 — as stored; the defaults ride along as the fields' placeholders.
+    payment_link: paymentLinkStored(settings),
+    payment_link_defaults: PAYMENT_LINK_DEFAULTS,
   }
 }
 
@@ -283,6 +288,19 @@ function appLinksStored(settings) {
   const raw = settings?.un1t_online?.app_links
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
 }
+
+// STAFFPAYLINK.1 — the staff payment link's WhatsApp template name and customer
+// wording (locations.settings.un1t_online.payment_link). Blank = code default.
+const PAYMENT_LINK_DEFAULTS = Object.freeze({ ...COPY_DEFAULTS, ...PAGE_DEFAULTS })
+function paymentLinkStored(settings) {
+  const raw = settings?.un1t_online?.payment_link
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+}
+const copyText = z.string().max(1000).nullable().optional()
+const PaymentLinkSchema = z.object({
+  template_name: z.string().trim().max(512).regex(/^[A-Za-z0-9_]*$/, 'Letters, digits and underscores only.').nullable().optional(),
+  ...Object.fromEntries(Object.keys(PAYMENT_LINK_DEFAULTS).map((k) => [k, copyText])),
+}).strict()
 
 // UN1TWELCOME.1 — the app store links and the copy above them in the account
 // and sequence emails. null clears a key, an absent key is kept.
@@ -305,6 +323,7 @@ const WriteSettingsSchema = z.object({
   un1t_welcome_sets_login: z.boolean().optional(),
   un1t_sends_booking_confirmation: z.boolean().optional(),
   app_links: AppLinksSchema.optional(),
+  payment_link: PaymentLinkSchema.optional(),
 }).strict().refine((b) => Object.keys(b).length > 0, { message: 'Nothing to change.' })
 
 export async function PATCH(request, props) {
@@ -344,6 +363,15 @@ export async function PATCH(request, props) {
         else links[k] = v
       }
       next.app_links = links
+    }
+    if (body.payment_link !== undefined) {
+      const copy = { ...paymentLinkStored(current) }
+      for (const [k, v] of Object.entries(body.payment_link)) {
+        if (v === undefined) continue
+        if (v === null || v.trim() === '') delete copy[k]
+        else copy[k] = v
+      }
+      next.payment_link = copy
     }
     // Writes off switches the funnel off too, so writes coming back on never
     // brings the public path back live without anyone asking for it.
