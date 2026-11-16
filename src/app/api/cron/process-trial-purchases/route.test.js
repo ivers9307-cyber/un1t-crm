@@ -4,7 +4,7 @@
 // thrown sweeper are counted and do not.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ stamp: vi.fn(), claim: vi.fn(), settle: vi.fn(), sweep: vi.fn(), abandoned: vi.fn(), stalled: vi.fn(), offers: vi.fn(), studios: vi.fn() }))
+const mocks = vi.hoisted(() => ({ stamp: vi.fn(), claim: vi.fn(), settle: vi.fn(), sweep: vi.fn(), abandoned: vi.fn(), stalled: vi.fn(), offers: vi.fn(), paylinks: vi.fn(), studios: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: mocks.stamp }))
 vi.mock('@/lib/trial-purchase-queue', () => ({ claimAndProcessTrialPurchase: mocks.claim, MAX_ATTEMPTS: 5 }))
 vi.mock('@/lib/trial-purchase-un1t-settle', () => ({ settleUn1tTrialPurchases: mocks.settle }))
@@ -12,6 +12,7 @@ vi.mock('@/lib/trial-checkout-purchase-sweep', () => ({ sweepCheckoutTrialPurcha
 vi.mock('@/lib/trial-checkout-abandoned', () => ({ sweepAbandonedTrialCheckouts: mocks.abandoned }))
 vi.mock('@/lib/corp-promo-stalled-sweep', () => ({ sweepStalledGlofoxCorpClaims: mocks.stalled }))
 vi.mock('@/lib/un1t-offer-purchases', () => ({ sweepUn1tOfferPurchases: mocks.offers }))
+vi.mock('@/lib/staff-payment-link-sweep', () => ({ sweepStaffPaymentLinks: mocks.paylinks }))
 vi.mock('@/lib/membership/locations-for-source', () => ({ locationsWithSource: mocks.studios }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({
@@ -38,6 +39,7 @@ beforeEach(() => {
   mocks.stalled.mockResolvedValue({ ok: true, checked: 0, filed: 0, failed: 0 })
   mocks.studios.mockResolvedValue({ eligible: [], error: null })
   mocks.offers.mockResolvedValue({ ok: true, checked: 0, recorded: 0, matchedPage: 0, expired: 0, failed: 0, passwordPending: 0 })
+  mocks.paylinks.mockResolvedValue({ ok: true, checked: 0, paid: 0, expired: 0, raced: 0, failed: 0, passwordPending: 0 })
 })
 
 describe('process-trial-purchases cron: the un1t settle sweep', () => {
@@ -146,7 +148,7 @@ describe('process-trial-purchases cron: the offer purchase sweep', () => {
     expect(mocks.offers.mock.calls.map((c) => [c[1], c.length])).toEqual([['hatch', 2], ['other', 2]])
     expect(offerStamps()).toEqual([['un1t-offer-purchase-sweep', { locations: 2, checked: 6, recorded: 4, matchedPage: 2, expired: 0, failed: 2, passwordPending: 2 }]])
     expect(body).toMatchObject({ success: true, offer_sweep_ok: true, offer_sweep_recorded: 4, offer_sweep_matched: 2 })
-    expect(otherStamps()).toEqual(['process-trial-purchases', 'trial-checkout-purchase-sweep', 'trial-checkout-abandoned-sweep', 'corp-promo-stalled-sweep'])
+    expect(otherStamps()).toEqual(['process-trial-purchases', 'trial-checkout-purchase-sweep', 'trial-checkout-abandoned-sweep', 'corp-promo-stalled-sweep', 'staff-payment-link-sweep'])
   })
 
   it('no un1t.online studio is clean and stamps', async () => {
@@ -163,7 +165,7 @@ describe('process-trial-purchases cron: the offer purchase sweep', () => {
     expect(await r.json()).toMatchObject({ success: true, offer_sweep_ok: false })
     expect(mocks.offers).toHaveBeenCalledTimes(2)
     expect(offerStamps()).toEqual([])
-    expect(otherStamps()).toEqual(['process-trial-purchases', 'trial-checkout-purchase-sweep', 'trial-checkout-abandoned-sweep', 'corp-promo-stalled-sweep'])
+    expect(otherStamps()).toEqual(['process-trial-purchases', 'trial-checkout-purchase-sweep', 'trial-checkout-abandoned-sweep', 'corp-promo-stalled-sweep', 'staff-payment-link-sweep'])
   })
 
   it('an unreadable studio list, or a throw in the arm, skips its stamp and never fails the run', async () => {
@@ -230,5 +232,36 @@ describe('process-trial-purchases cron: the abandoned checkout sweep', () => {
     const r = await call()
     expect(r.status).toBe(200)
     expect(mocks.stalled).toHaveBeenCalledTimes(1)
+  })
+})
+
+// STAFFPAYLINK.1 — the staff payment link arm: its own heartbeat, stamped only when
+// every studio read clean, and never able to stop the response.
+describe('process-trial-purchases cron: the staff payment link sweep', () => {
+  const stamps = () => mocks.stamp.mock.calls.filter((c) => c[0] === 'staff-payment-link-sweep')
+
+  it('sums the studios, stamps its own row and joins the response', async () => {
+    mocks.studios.mockResolvedValue({ eligible: [{ id: 'hatch' }, { id: 'other' }], error: null })
+    mocks.paylinks.mockResolvedValue({ ok: true, checked: 3, paid: 1, expired: 1, raced: 0, failed: 0, passwordPending: 0 })
+    const body = await (await call()).json()
+    expect(body).toMatchObject({ success: true, paylink_sweep_ok: true, paylink_sweep_paid: 2, paylink_sweep_expired: 2 })
+    expect(stamps()).toHaveLength(1)
+  })
+
+  it('an unclean studio or a throw skips the stamp but not the second studio', async () => {
+    mocks.studios.mockResolvedValue({ eligible: [{ id: 'hatch' }, { id: 'other' }], error: null })
+    mocks.paylinks.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ ok: false })
+    const r = await call()
+    expect(r.status).toBe(200)
+    expect(await r.json()).toMatchObject({ success: true, paylink_sweep_ok: false })
+    expect(mocks.paylinks).toHaveBeenCalledTimes(2)
+    expect(stamps()).toEqual([])
+  })
+
+  it('an unreadable studio list skips the stamp', async () => {
+    mocks.studios.mockResolvedValue({ eligible: null, error: { code: 'XX' } })
+    expect(await (await call()).json()).toMatchObject({ success: true, paylink_sweep_ok: false })
+    expect(mocks.paylinks).not.toHaveBeenCalled()
+    expect(stamps()).toEqual([])
   })
 })

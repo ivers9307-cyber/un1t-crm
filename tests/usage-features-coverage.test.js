@@ -22,6 +22,8 @@ const WEB_NOT_STAFF = new Set([
   'offers', 'privacy', 'terms', 'legal', 'technical',
   'account-deletion', 'givers', 'studio-login', 'embed', 'bca', 'host-connect', 'host', 'h',
   'use-the-app', 'cancel', 'pay-done', 'fee-appeal', 'pay-link', 'oauth', '.well-known',
+  // /buy/[token]: customer opens a WhatsApp payment link, then goes on to un1t.online's checkout (STAFFPAYLINK.1)
+  'buy',
 ])
 
 // Staff routes deliberately filed under `other`, with the reason.

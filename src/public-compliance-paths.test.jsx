@@ -677,6 +677,52 @@ describe('UN1TDUN.1 — /pay-link is public on every host', () => {
   })
 })
 
+// ── 7f. STAFFPAYLINK.1 — a staff-sent payment link is public on every host ──
+//
+// A customer opens <customer base>/buy/<token> from the WhatsApp "Pay now"
+// button staff sent after a call, and un1t.online's hosted checkout returns
+// them to the same page (?paid=1 / ?cancelled=1). No session, and the base is
+// the studio's customer host, so all FOUR lists must carry it; the POST behind
+// the button is under /api/public/, already in every list.
+
+describe('STAFFPAYLINK.1 — /buy is public on every host', () => {
+  const BUY = '/buy/dG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9r'
+  beforeEach(() => {
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === TENANT_HOST
+        ? { id: `tenant:${TENANT_HOST}`, hostnames: [TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  for (const host of [CRM_HOST, MARKETING_HOST, TENANT_HOST]) {
+    it(`${host} admits ${BUY} anonymously without a rewrite`, async () => {
+      const res = await proxy(makeReq({ host, path: BUY }))
+      expect(rewrittenTo(res), `${BUY} fell through to the /welcome fallback on ${host}`).toBe(null)
+      expect(admitted(res), `${BUY} is not admitted on ${host}`).toBe(true)
+      expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+    })
+  }
+
+  it('AppShell renders the page with no session', () => {
+    pathnameImpl = BUY
+    const html = renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)
+    expect(html, '/buy is missing from AppShell PUBLIC_PATHS').toContain('page-body')
+  })
+
+  it('the marketing brand and the tenant defaults name /buy/ explicitly', () => {
+    for (const [label, allowed] of [['un1t-marketing', marketingBrand().allowedPaths], ['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths]]) {
+      expect(allowed, `${label} lost '/buy/'`).toContain('/buy/')
+    }
+  })
+
+  it('only /buy/ is public: a look-alike segment is not', async () => {
+    for (const path of ['/buyers/x', '/buying']) {
+      const res = await proxy(makeReq({ host: CRM_HOST, path }))
+      expect(admitted(res), `${path} must not inherit the exemption`).toBe(false)
+    }
+  })
+})
+
 // ── 8. W1.L2 — the customer flow is complete on a tenant domain ───────
 //
 // W1.L1 gave every organisation an automatic <slug>.repset.ie host whose
