@@ -154,7 +154,7 @@ export function productLabel(product) {
   return price ? (title ? `${title}, ${price}` : price) : title
 }
 
-const COPY_DEFAULTS = Object.freeze({
+export const COPY_DEFAULTS = Object.freeze({
   whatsapp_text: "Hi {first_name}, it's {studio}. Here's the link for the {product} we talked about on the phone. Tap below to pay securely on un1t.online.",
   button_text: 'Pay now',
   page_title_new: 'Complete your purchase',

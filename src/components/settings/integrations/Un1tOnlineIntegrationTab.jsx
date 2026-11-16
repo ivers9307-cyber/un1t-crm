@@ -316,6 +316,49 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
             })}
             <div className="text-un1t-subtle">Links must start with https://. With no link, the emails leave the app section out.</div>
           </div>
+          <div className="space-y-2">
+            <div className="text-un1t-text font-medium">Payment links</div>
+            <div className="text-un1t-subtle">Send payment links from a contact&apos;s Hatch card. Outside WhatsApp&apos;s 24-hour window the message uses this approved UTILITY template; its button URL must be https://&lt;your customer site&gt;/buy/{'{{1}}'}.</div>
+            {[
+              ['template_name', 'WhatsApp template name', 'input'],
+              ['whatsapp_text', 'WhatsApp message', 'textarea'],
+              ['button_text', 'Button text', 'input'],
+              ['page_title_new', 'Page title (new customer)', 'input'],
+              ['page_title_existing', 'Page title (existing customer)', 'input'],
+              ['paid_heading', 'Paid heading', 'input'],
+              ['paid_text', 'Already paid text', 'textarea'],
+              ['confirming_text', 'Confirming payment text', 'textarea'],
+              ['set_password_text', 'Set password text', 'textarea'],
+              ['continue_button', 'Continue button', 'input'],
+              ['not_you_text', 'Not you text', 'input'],
+              ['retry_later_text', 'Try again later text', 'input'],
+              ['expired_text', 'Expired link text', 'textarea'],
+              ['unavailable_text', 'Payment system unavailable text', 'textarea'],
+              ['help_text', 'Account help text', 'textarea'],
+            ].map(([key, label, kind]) => {
+              const stored = write.payment_link?.[key] || ''
+              const props = {
+                id: `un1t-paylink-${key}`,
+                defaultValue: stored,
+                placeholder: key === 'template_name' ? 'approved_template_name' : (write.payment_link_defaults?.[key] || ''),
+                maxLength: key === 'template_name' ? 512 : 1000,
+                onBlur: (e) => {
+                  const v = e.target.value.trim()
+                  if (v !== stored) saveWrite({ payment_link: { [key]: v === '' ? null : v } })
+                },
+                className: 'w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text',
+              }
+              return (
+                <div key={key} className="space-y-1">
+                  <label htmlFor={props.id} className="block text-un1t-subtle">{label}</label>
+                  {kind === 'textarea'
+                    ? <textarea key={`${key}:${stored}`} rows={2} {...props} />
+                    : <input key={`${key}:${stored}`} type="text" {...props} />}
+                </div>
+              )
+            })}
+            <div className="text-un1t-subtle">Leave a field blank to use the default shown in it. Use {'{first_name}'}, {'{studio}'} and {'{product}'} where the default does.</div>
+          </div>
           {[
             ['un1t_sends_welcome', 'un1t.online sends its own welcome email', 'Then the CRM does not send its account email.'],
             ['un1t_welcome_sets_login', 'That welcome email lets them set a password', 'Then the CRM does not ask un1t.online for a set-password code either.'],

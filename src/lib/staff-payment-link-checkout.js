@@ -56,7 +56,7 @@ export const PAYLINK_CHECKOUT_COOLDOWN_MS = 60 * 60_000
 
 // The page's own lines, over these defaults per key, from
 // locations.settings.un1t_online.payment_link (beside paymentLinkCopy's keys).
-const PAGE_DEFAULTS = Object.freeze({
+export const PAGE_DEFAULTS = Object.freeze({
   paid_heading: "You're in, {first_name}!",
   confirming_text: "Thanks, {first_name}! We're confirming your payment. This can take a couple of minutes.",
   set_password_text: 'Check your inbox for a code to set your password, then log in to the un1t.online app with this email address.',
