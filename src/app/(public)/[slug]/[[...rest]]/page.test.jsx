@@ -610,6 +610,14 @@ describe('the open week page (OPENWEEK.1)', () => {
     expectClientSafe(html)
   })
 
+  it('(review) the choice lists only studios whose promo is live', async () => {
+    h.promoRows = [OW_PROMO]
+    h.loaded = { page: OWPAGE, studios: OWSTUDIOS }
+    const html = await render({ slug: 'openweek' })
+    expect(html).toContain('href="?studio=hatch-street"')
+    expect(html).not.toContain('href="?studio=stillorgan"')
+  })
+
   it('with a studio, the card carries the open week limits and the open week words', async () => {
     h.loaded = { page: OWPAGE, studios: OWSTUDIOS }
     const props = propsOf(await render({ slug: 'openweek', sp: { studio: 'hatch-street' } }), 'corp')

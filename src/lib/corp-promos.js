@@ -140,6 +140,7 @@ export const OPEN_WEEK_COPY_DEFAULT = Object.freeze({
   class_list_heading: 'Your classes',
   studio_heading: 'Choose your studio',
   over_text: 'Open Week has finished. Ask at the front desk about trying a class.',
+  holds_credits_text: 'You already have classes on your account at {studio_name}, so book those in the app first. Ask at the front desk if you would like to try Open Week too.',
 })
 
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)

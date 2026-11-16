@@ -85,6 +85,15 @@ describe('corpPromoEligibility', () => {
     expect((await run(tables, { promoKey: 'hatch-open-week' })).reason).toBe('free_trial_used')
   })
 
+  it('OPENWEEK.1 (review): with openWeek, an active membership on any contact of the person is active_member', async () => {
+    const ow = { promoKey: 'hatch-open-week', openWeek: true }
+    const clients = [{ id: 'cl', location_id: LOC, un1t_user_id: 'u-twin', contact_id: TWIN }]
+    expect(await run({ un1t_subscriptions: [{ id: 's', location_id: LOC, contact_id: TWIN, status: 'active' }] }, ow)).toEqual({ ok: true, eligible: false, reason: 'active_member' })
+    expect(await run({ un1t_clients: clients, un1t_subscriptions: [{ id: 's', location_id: LOC, un1t_user_id: 'u-twin', status: 'past_due' }] }, ow)).toEqual({ ok: true, eligible: false, reason: 'active_member' })
+    expect(await run({ contact_studios: [{ contact_id: TWIN, location_id: LOC, membership_status: 'active' }] }, ow)).toEqual({ ok: true, eligible: false, reason: 'active_member' })
+    expect(await run({ un1t_subscriptions: [{ id: 's', location_id: LOC, contact_id: TWIN, status: 'ended' }], contact_studios: [{ contact_id: ME, location_id: LOC, membership_status: 'ended' }] }, ow)).toEqual({ ok: true, eligible: true })
+  })
+
   it('OPENWEEK.1: with openWeek, the open week already granted is already_claimed', async () => {
     const ledger = [{ id: 'w1', location_id: LOC, contact_id: TWIN, op: 'promo_grant', stage: 'done', target: 'hatch-open-week' }]
     expect(await run({ un1t_write_events: ledger }, { promoKey: 'hatch-open-week', openWeek: true })).toEqual({ ok: true, eligible: false, reason: 'already_claimed' })

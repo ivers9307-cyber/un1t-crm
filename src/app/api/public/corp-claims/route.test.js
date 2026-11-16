@@ -583,6 +583,15 @@ describe('POST /api/public/corp-claims — open week', () => {
     expect(m.eligibility).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ openWeek: true, promoKey: 'hatch-open-week' }))
   })
 
+  it('(review) a Hatch active_member from the person-wide check and holds_credits answer in the open week words', async () => {
+    m.eligibility.mockResolvedValueOnce({ ok: true, eligible: false, reason: 'active_member' })
+    let r = await call({ ...OWBODY, event_ids: ['un1t:a'] })
+    expect(r.json).toEqual({ success: false, code: 'active_member', error: "You're already a member at UN1T Hatch Street, so just book your classes in the app as usual." })
+    m.fulfil.mockResolvedValueOnce({ kind: 'ineligible', reason: 'holds_credits' })
+    r = await call({ ...OWBODY, event_ids: ['un1t:a'] })
+    expect(r.json).toEqual({ success: false, code: 'holds_credits', error: 'You already have classes on your account at UN1T Hatch Street, so book those in the app first. Ask at the front desk if you would like to try Open Week too.' })
+  })
+
   it('a class that filled is 400 class_unavailable naming it, before anything is captured', async () => {
     m.owPicks.mockResolvedValueOnce({ ok: false, code: 'class_unavailable', eventId: 'un1t:b' })
     const r = await call({ ...OWBODY, event_ids: ['un1t:a', 'un1t:b'] })

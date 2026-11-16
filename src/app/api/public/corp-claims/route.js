@@ -353,7 +353,11 @@ export async function POST(request) {
       return refused('help_filed', say(copy.help_text))
     }
   }
-  const refusalText = { already_claimed: copy.already_claimed_text, free_trial_used: copy.trial_used_text, trained: copy.trained_text }
+  const refusalText = {
+    already_claimed: copy.already_claimed_text, free_trial_used: copy.trial_used_text, trained: copy.trained_text,
+    // OPENWEEK.1 — the person-wide membership check and a balance already on the account.
+    active_member: copy.active_member_text, ...(copy.holds_credits_text ? { holds_credits: copy.holds_credits_text } : {}),
+  }
   if (!isGlofox) {
     const membership = await hatchActiveMembership(db, { locationId, contactId })
     if (!membership.ok) return unavailable()

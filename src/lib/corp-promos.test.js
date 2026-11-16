@@ -223,6 +223,7 @@ describe('OPENWEEK.1 open week words', () => {
       expect(c.active_member_text).toBe("You're already a member at {studio_name}, so just book your classes in the app as usual.")
       expect(c.already_claimed_text).toBe("You've already signed up for Open Week. Your classes are in the app; reply to our email if anything looks off.")
       expect(c.over_text).toBe('Open Week has finished. Ask at the front desk about trying a class.')
+      expect(c.holds_credits_text).toBe('You already have classes on your account at {studio_name}, so book those in the app first. Ask at the front desk if you would like to try Open Week too.')
       expect(c.email_subject).toBe('Your Open Week classes at {studio_name}')
       expect(c.email_body).toBe("Hi {first_name}, we're booking you into your Open Week classes at {studio_name}:\n{class_list}\nYou'll get a confirmation for each class as it's booked. Log in to the app with this email to see them. Reply to this email if anything looks off.")
       expect(c.trial_used_text).toBe(OPEN_WEEK_COPY_DEFAULT.trial_used_text)

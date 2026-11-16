@@ -401,7 +401,7 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     const offerProps = { promoKey: promo ? promo.key : null, copy, terms, page: page.slug, studio: contextPath, stepCopy: classFirstStepCopy(mergedOffer || {}, 'corp_promo'), ...(openWeek ? { openWeek } : {}) }
     // OPENWEEK.1 — an all-studios promo page with no studio chosen yet asks
     // for one first (each studio has its own promo row); never in the preview.
-    const choosing = !preview && studioChoices.length > 1
+    const choosing = !preview && studioChoices.length > 0
     return {
       kind, cta: { href: '#corp', label: copy.cta_label }, anchor: 'corp', heroImageUrl, scrollCueLabel: null, hero, expect,
       offer: choosing ? <PromoStudioChoice heading={copy.studio_heading || 'Choose your studio'} choices={studioChoices} /> : <CorpPromoFunnel {...offerProps} />,
@@ -663,6 +663,11 @@ export default async function PublicPage(props) {
   // when the visitor has not chosen one: each a link to ?studio=<path>.
   const studioChoices = page.offer_type === 'promo_credits' && page.scope === 'all' && !studio && offerRows.length > 1
     ? (await Promise.all(offerRows.map(async (r) => {
+      // Only a studio whose own promo row is live is offered (a studio whose
+      // row is not made yet would answer "not available").
+      const key = str(mergedBlocksFor({ page, studio: r }).find((b) => isObj(b) && b.type === 'corp_promo')?.promo_key)
+      const read = key ? await readCorpPromo(db, { locationId: r.location_id, key }) : null
+      if (!read?.ok || !read.promo?.live) return null
       const path = await safePublicPath(db, r.location_id)
       return path ? { path, label: embeddedOne(r.locations)?.name || path } : null
     }))).filter(Boolean)
