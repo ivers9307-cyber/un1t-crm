@@ -373,44 +373,35 @@ export async function sectionDwellAggregate(versionId) {
     .sort((a, b) => b.total_seconds - a.total_seconds)
 }
 
+/** POLICYATOMIC.1 — true when YYYY-MM-DD names a day that exists (no 30 Feb, no month 13). */
+export function isCalendarDate(value) {
+  const [y, m, d] = String(value).split('-').map(Number)
+  if (!y || !m || !d) return false
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+}
+
 /**
- * Admin publish-new-version flow. Race-safe via the partial unique
- * index on (policy_id) where is_current.
+ * Admin publish-new-version flow.
+ *
+ * POLICYATOMIC.1 (October audit A10, mig 841) — one database transaction
+ * (public.publish_policy_version): number the version, clear the old current,
+ * insert the new current. It used to be two calls, so a failed insert left the
+ * policy with no current version at all.
  */
 export async function publishVersion({ policyId, bodyMarkdown, changeSummary, effectiveDate, publishedBy }) {
   const db = createServerClient()
-
-  const { data: prevRows } = await db
-    .from('policy_versions')
-    .select('version_number')
-    .eq('policy_id', policyId)
-    .order('version_number', { ascending: false })
-    .limit(1)
-  const nextVersion = (prevRows?.[0]?.version_number || 0) + 1
-
-  const { error: flipErr } = await db
-    .from('policy_versions')
-    .update({ is_current: false })
-    .eq('policy_id', policyId)
-    .eq('is_current', true)
-  if (flipErr) throw flipErr
-
-  const { data: inserted, error: insertErr } = await db
-    .from('policy_versions')
-    .insert({
-      policy_id: policyId,
-      version_number: nextVersion,
-      body_markdown: bodyMarkdown,
-      change_summary: changeSummary || null,
-      effective_date: effectiveDate,
-      published_by: publishedBy,
-      is_current: true,
-    })
-    .select('id, version_number')
-    .single()
-  if (insertErr) throw insertErr
-
-  return inserted
+  const { data, error } = await db.rpc('publish_policy_version', {
+    p_policy_id: policyId,
+    p_body_markdown: bodyMarkdown,
+    p_change_summary: changeSummary || null,
+    p_effective_date: effectiveDate,
+    p_published_by: publishedBy || null,
+  })
+  if (error) throw error
+  const row = Array.isArray(data) ? data[0] : data
+  if (!row?.id) throw new Error('publish_policy_version returned no version')
+  return { id: row.id, version_number: row.version_number }
 }
 
 // --------------------------------------------------------------------
