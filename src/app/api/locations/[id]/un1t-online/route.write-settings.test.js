@@ -265,6 +265,52 @@ describe('UN1TWELCOME.1 — app links', () => {
   })
 })
 
+describe('STAFFPAYLINK.1 — payment link copy', () => {
+  it('saves keys merged, returns them with the defaults, blank clears one, siblings kept', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    settings = { un1t_online: { hidden_class_keywords: 'elite', payment_link: { button_text: 'Old' } } }
+    const res = await patch({ payment_link: { template_name: 'hatch_pay_link', whatsapp_text: 'Hi {first_name}', button_text: '  ', paid_heading: 'Done' } })
+    expect(res.status).toBe(200)
+    expect(settings.un1t_online.hidden_class_keywords).toBe('elite')
+    expect(settings.un1t_online.payment_link).toEqual({ template_name: 'hatch_pay_link', whatsapp_text: 'Hi {first_name}', paid_heading: 'Done' })
+    const j = await res.json()
+    expect(j.data.write.payment_link.template_name).toBe('hatch_pay_link')
+    expect(j.data.write.payment_link_defaults.button_text).toBe('Pay now')
+    expect(j.data.write.payment_link_defaults.paid_heading).toBeTruthy()
+  })
+
+  it('saves the set-password email subject and body, defaulted with {studio}', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    settings = { un1t_online: {} }
+    const res = await patch({ payment_link: { set_password_email_subject: 'Welcome to {studio}', set_password_email_body: 'Hi from {studio}' } })
+    expect(res.status).toBe(200)
+    expect(settings.un1t_online.payment_link).toEqual({ set_password_email_subject: 'Welcome to {studio}', set_password_email_body: 'Hi from {studio}' })
+    const j = await res.json()
+    expect(j.data.write.payment_link_defaults.set_password_email_subject).toBe('Your {studio} account')
+    expect(j.data.write.payment_link_defaults.set_password_email_body).toContain('{studio}')
+  })
+
+  it('rejects a non-string, an over-long value, a bad template name and an unknown key', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    for (const bad of [
+      { button_text: 5 },
+      { whatsapp_text: 'x'.repeat(1001) },
+      { template_name: 'has space' },
+      { template_name: 'a'.repeat(513) },
+      { nope: 'x' },
+    ]) {
+      expect((await patch({ payment_link: bad })).status).toBe(400)
+    }
+    expect(writes).toHaveLength(0)
+  })
+
+  it('a non-master gets 403', async () => {
+    getCurrentUser.mockResolvedValue(owner)
+    expect((await patch({ payment_link: { button_text: 'Go' } })).status).toBe(403)
+    expect(writes).toHaveLength(0)
+  })
+})
+
 describe('UN1TWRITE.24 — writes off switches the funnel off', () => {
   it('a PATCH turning writes off clears funnel_enabled, so writes on again never re-arms it', async () => {
     getCurrentUser.mockResolvedValue(master)

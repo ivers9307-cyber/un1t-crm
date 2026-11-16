@@ -262,3 +262,19 @@ describe('getPendingApprovalsAllStudios with the real gate', () => {
     expect(askedAt).not.toContain('loc-c')
   })
 })
+
+// APPROVALSUNAVAIL.1 — a category one studio could not load is named, with
+// the studio, so the combined view never reads it as empty.
+describe('getPendingApprovalsAllStudios — unavailable categories', () => {
+  it('names each unavailable category with its studio and marks the merged bucket', async () => {
+    const user = makeUser({ locations: [S1, S2], active: 's1' })
+    const getPendingApprovals = resultFor({
+      s1: { providers: [prov('time_off', [{ id: 'a', title: 'A' }])], total: 1 },
+      s2: { providers: [prov('time_off', [], [], { unavailable: true })], total: 0 },
+    })
+    const r = await getPendingApprovalsAllStudios({}, user, {}, deps({ getPendingApprovals }))
+    expect(r.unavailable).toEqual([`L time_off at ${S2.name}`])
+    expect(r.providers.find((p) => p.key === 'time_off').unavailable).toBe(true)
+    expect(r.total).toBe(1)
+  })
+})

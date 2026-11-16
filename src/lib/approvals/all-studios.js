@@ -63,6 +63,7 @@ export async function getPendingApprovalsAllStudios(db, user, { maxStudios = DEF
   )
 
   const failedStudios = []
+  const unavailable = [] // APPROVALSUNAVAIL.1 — "<category> at <studio>"
   const merged = new Map() // provider key -> merged provider, insertion = display order
   const seenItems = new Set()
   const seenFailed = new Set()
@@ -82,6 +83,10 @@ export async function getPendingApprovalsAllStudios(db, user, { maxStudios = DEF
         m = { key: p.key, label: p.label, reviewBase: p.reviewBase, count: 0, items: [], failedItems: [] }
         merged.set(p.key, m)
       }
+      if (p.unavailable) {
+        m.unavailable = true
+        unavailable.push(`${p.label} at ${studio.name}`)
+      }
       const take = (src, dst, seen) => {
         for (const item of src || []) {
           if (item?.id != null) {
@@ -99,5 +104,5 @@ export async function getPendingApprovalsAllStudios(db, user, { maxStudios = DEF
 
   const providers = [...merged.values()].map((m) => ({ ...m, count: m.items.length + m.failedItems.length }))
   const total = providers.reduce((sum, p) => sum + p.count, 0)
-  return { providers, total, scope: 'all', studios, failedStudios, truncated }
+  return { providers, total, scope: 'all', studios, failedStudios, truncated, unavailable }
 }

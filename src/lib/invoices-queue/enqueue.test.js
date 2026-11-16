@@ -101,7 +101,8 @@ describe('enqueueFromFteExpenseClaim', () => {
     mockDb.from.mockImplementation((t) => {
       if (t === 'fte_expense_claims') return claimChain
       if (t === 'fte_expense_items') return itemsChain
-      if (t === 'invoices_queue') return queueChain
+      // APPROVEQUEUE.1 — the idempotency lookup (select … in) finds nothing queued.
+      if (t === 'invoices_queue') return { ...queueChain, select: vi.fn(() => ({ in: vi.fn(() => Promise.resolve({ data: [], error: null })) })) , insert: queueChain.insert }
       throw new Error(`unexpected table ${t}`)
     })
 
@@ -157,7 +158,8 @@ describe('enqueueFromFteExpenseClaim — undated item, studio zone (TZ.11a)', ()
       if (t === 'fte_expense_claims') return buildChainable({ data: { id: 'c1', location_id: 'loc-ny', status: 'approved' }, error: null })
       if (t === 'fte_expense_items') return { select: vi.fn().mockReturnThis(), eq: vi.fn(() => Promise.resolve(itemsResult)) }
       if (t === 'locations') return buildChainable(locationsError ? { data: null, error: locationsError } : { data: { id: 'loc-ny', timezone }, error: null })
-      if (t === 'invoices_queue') return queueChain
+      // APPROVEQUEUE.1 — the idempotency lookup (select … in) finds nothing queued.
+      if (t === 'invoices_queue') return { ...queueChain, select: vi.fn(() => ({ in: vi.fn(() => Promise.resolve({ data: [], error: null })) })), insert: queueChain.insert }
       throw new Error(`unexpected table ${t}`)
     })
     return insertedRows
@@ -418,5 +420,60 @@ describe('enqueueFromCarDocument', () => {
     const r = await enqueueModule.enqueueFromCarDocument('missing')
     expect(r.ok).toBe(false)
     expect(r.error).toMatch(/not found/i)
+  })
+})
+
+// APPROVEQUEUE.1 — both approval hand-offs are idempotent, so retrying an
+// approval after a failed hand-off can never queue the same item twice.
+describe('enqueue is idempotent (APPROVEQUEUE.1)', () => {
+  it('a contractor invoice already in the queue returns its row and inserts nothing', async () => {
+    const invChain = buildChainable({
+      data: { id: 'inv1', location_id: 'loc1', status: 'approved', pdf_path: 'inv1.pdf', contractor: { full_name: 'Sam' } },
+      error: null,
+    })
+    const insert = vi.fn()
+    const queueChain = {
+      select: vi.fn(() => queueChain), eq: vi.fn(() => queueChain),
+      limit: vi.fn(() => Promise.resolve({ data: [{ id: 'q-old' }], error: null })),
+      insert,
+    }
+    mockDb.from.mockImplementation((t) => (t === 'contractor_invoices' ? invChain : queueChain))
+    expect(await enqueueModule.enqueueFromContractorInvoice('inv1')).toEqual({ ok: true, queueIds: ['q-old'] })
+    expect(insert).not.toHaveBeenCalled()
+  })
+
+  it('a failed queue lookup refuses rather than risking a second row', async () => {
+    const invChain = buildChainable({ data: { id: 'inv1', location_id: 'loc1', pdf_path: 'inv1.pdf', contractor: {} }, error: null })
+    const queueChain = {
+      select: vi.fn(() => queueChain), eq: vi.fn(() => queueChain),
+      limit: vi.fn(() => Promise.resolve({ data: null, error: { message: 'down' } })),
+      insert: vi.fn(),
+    }
+    mockDb.from.mockImplementation((t) => (t === 'contractor_invoices' ? invChain : queueChain))
+    expect(await enqueueModule.enqueueFromContractorInvoice('inv1')).toMatchObject({ ok: false })
+    expect(queueChain.insert).not.toHaveBeenCalled()
+  })
+
+  it('an expense claim queues only the items not already queued', async () => {
+    const claimChain = buildChainable({ data: { id: 'c1', location_id: 'loc1', status: 'approved' }, error: null })
+    const itemsResult = { data: [
+      { id: 'i1', claim_id: 'c1', receipt_path: 'r/1.jpg', vendor: 'A', amount: 1, expense_date: '2026-10-01' },
+      { id: 'i2', claim_id: 'c1', receipt_path: 'r/2.jpg', vendor: 'B', amount: 2, expense_date: '2026-10-02' },
+    ], error: null }
+    const inserted = []
+    let call = 0
+    mockDb.from.mockImplementation((t) => {
+      if (t === 'fte_expense_claims') return claimChain
+      if (t === 'fte_expense_items') return { select: vi.fn().mockReturnThis(), eq: vi.fn(() => Promise.resolve(itemsResult)) }
+      if (t === 'invoices_queue') {
+        call++
+        if (call === 1) return { select: () => ({ in: () => Promise.resolve({ data: [{ id: 'q1', source_fte_expense_item_id: 'i1' }], error: null }) }) }
+        const c = { insert: (rows) => { inserted.push(...rows); return c }, select: () => Promise.resolve({ data: [{ id: 'q2' }], error: null }) }
+        return c
+      }
+      throw new Error(`unexpected table ${t}`)
+    })
+    expect(await enqueueModule.enqueueFromFteExpenseClaim('c1')).toEqual({ ok: true, queueIds: ['q1', 'q2'] })
+    expect(inserted.map((r) => r.source_fte_expense_item_id)).toEqual(['i2'])
   })
 })

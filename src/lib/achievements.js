@@ -437,3 +437,24 @@ export async function runDetectionForSession(db, sessionId, { nowMs = Date.now()
     return { ok: false, error: err?.message || String(err) }
   }
 }
+
+/**
+ * ACHIEVEBACKFILL.1 (October audit A19) — the earliest session at which a
+ * rule fires, replaying a member's history in order. Each session is judged
+ * with only the sessions before it as history (buildAchievementContext also
+ * takes its clock from the session itself), so a first-Z5 or first-class
+ * rule met on an EARLIER session awards, which judging only the latest
+ * session never could.
+ *
+ * @param {object} rule an achievement_rules row
+ * @param {object[]} sessions the member's ended sessions, oldest first
+ * @returns {{ session: object, fired: object } | null}
+ */
+export function firstQualifyingSession(rule, sessions) {
+  const list = Array.isArray(sessions) ? sessions : []
+  for (let i = 0; i < list.length; i++) {
+    const fired = runDetectors([rule], buildAchievementContext(list[i], list.slice(0, i)))
+    if (fired.length > 0) return { session: list[i], fired: fired[0] }
+  }
+  return null
+}

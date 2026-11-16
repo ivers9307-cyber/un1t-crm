@@ -26,7 +26,7 @@
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
-import { getPendingApprovalsCount } from '@/lib/approvals/registry'
+import { getPendingApprovalsCountDetail } from '@/lib/approvals/registry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,8 +35,10 @@ export const GET = withAuth(
   { permission: null, location: false },
   async ({ user, db }) => {
     try {
-      const count = await getPendingApprovalsCount(db, user)
-      return NextResponse.json({ success: true, data: { count } })
+      // APPROVALSUNAVAIL.1 — `incomplete`: a category could not be read, so
+      // the count may be low; the badge must not read that as nothing pending.
+      const { count, incomplete } = await getPendingApprovalsCountDetail(db, user)
+      return NextResponse.json({ success: true, data: { count, incomplete } })
     } catch (e) {
       console.error('[approvals/count] failed:', e.message)
       return NextResponse.json({

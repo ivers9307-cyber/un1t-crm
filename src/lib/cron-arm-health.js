@@ -72,6 +72,18 @@
 //                       returned ok. Seeded by mig 828, applied RIGHT AFTER
 //                       the deploy.
 //
+// STAFFPAYLINK.1 adds another, on the */2 process-trial-purchases cron:
+//
+//   'staff-payment-link-sweep' — sweepStaffPaymentLinks
+//                       (src/lib/staff-payment-link-sweep.js), the staff
+//                       payment link arm (settles staff_payment_links rows to
+//                       paid off the un1t_transactions mirror, runs the
+//                       set-password step for each, expires stale live
+//                       links), run for every un1t.online studio. Stamped by
+//                       the route only when the studio list was read and
+//                       every studio's sweep returned ok. Seeded by mig 842,
+//                       applied RIGHT AFTER the deploy.
+//
 // STILL39SEQ.1 adds a ninth, on the */2 process-trial-purchases cron:
 //
 //   'trial-checkout-purchase-sweep' — sweepCheckoutTrialPurchases

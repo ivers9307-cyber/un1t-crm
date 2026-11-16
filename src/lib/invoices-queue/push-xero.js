@@ -421,13 +421,23 @@ export async function pushQueueRowToXero(queueId) {
     // Persist the bill id IMMEDIATELY, before attaching. If the
     // attachment then fails, a retry reuses this id (skips create
     // above) and re-attaches instead of creating a duplicate bill.
-    await db.from('invoices_queue').update({
+    // XEROBULK.1 — the write is judged and tried twice: it is what stops a
+    // retry creating a second bill. If it still fails the caller's own write
+    // (recordPushOutcome) carries the bill id again; it is logged either way.
+    const billIdPatch = {
       xero_bill_id: billId,
       xero_bill_number: billNumber,
       xero_deep_link_url: deepLinkUrl,
       xero_total_tax: xeroTotalTax,
       xero_tax_mismatch: taxMismatch,
-    }).eq('id', queueId)
+    }
+    let { error: billIdErr } = await db.from('invoices_queue').update(billIdPatch).eq('id', queueId)
+    if (billIdErr) ({ error: billIdErr } = await db.from('invoices_queue').update(billIdPatch).eq('id', queueId))
+    if (billIdErr) {
+      logError('invoices-queue', 'Xero bill created but its id could not be saved before attaching', {
+        queueId, billId, error: billIdErr.message,
+      })
+    }
   }
   // else: idempotent retry — the bill already exists from a previous
   // attempt; fall through and (re)attach the source file to it.

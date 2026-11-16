@@ -17,6 +17,7 @@ import {
   detectLocationVisit,
   runDetectionForSession,
   summariseUnlocked,
+  firstQualifyingSession,
 } from './achievements.js'
 
 const MS_DAY = 24 * 3600 * 1000
@@ -473,5 +474,34 @@ describe('summariseUnlocked', () => {
   })
   it('returns [] for empty input', () => {
     expect(summariseUnlocked([])).toEqual([])
+  })
+})
+
+// ACHIEVEBACKFILL.1 (October audit A19) — the backfill replays a member's
+// history in order and awards at the first session a rule fires on.
+describe('firstQualifyingSession', () => {
+  const s = (id, day, extra = {}) => ({
+    id, started_at: `2026-0${day}-01T10:00:00Z`, ended_at: `2026-0${day}-01T11:00:00Z`,
+    location_id: 'loc1', event_type_id: null, effort_points: 10, zones_seconds: {}, ...extra,
+  })
+
+  it('finds a first Z5 minute that only an EARLIER session had', () => {
+    const rule = { id: 'r', slug: 'first_z5', rule_type: 'first_event', rule_config: { event: 'z5_minute' }, is_active: true }
+    const sessions = [s('a', 1), s('b', 2, { zones_seconds: { 5: 120 } }), s('c', 3), s('d', 4)]
+    const hit = firstQualifyingSession(rule, sessions)
+    expect(hit.session.id).toBe('b')
+    expect(hit.fired.metadata).toEqual({ z5Seconds: 120 })
+  })
+
+  it('finds a first class of a type taken only earlier', () => {
+    const rule = { id: 'r', slug: 'first_hyrox', rule_type: 'first_event', rule_config: { event: 'class_type', event_type_id: 'et-hyrox' }, is_active: true }
+    const sessions = [s('a', 1), s('b', 2, { event_type_id: 'et-hyrox' }), s('c', 3)]
+    expect(firstQualifyingSession(rule, sessions).session.id).toBe('b')
+  })
+
+  it('returns null when the rule never fires, and for no sessions', () => {
+    const rule = { id: 'r', slug: 'first_z5', rule_type: 'first_event', rule_config: { event: 'z5_minute' }, is_active: true }
+    expect(firstQualifyingSession(rule, [s('a', 1), s('b', 2)])).toBeNull()
+    expect(firstQualifyingSession(rule, [])).toBeNull()
   })
 })

@@ -597,6 +597,25 @@ registry.registerPath({
   },
 })
 
+// STAFFPAYLINK.1 — "Continue to payment" on a staff-sent payment link (/buy/<token>).
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/buy/{token}',
+  tags: ['Public'],
+  summary: 'Continue to payment on a staff-sent un1t.online payment link (STAFFPAYLINK.1)',
+  description: 'Anonymous; the token is the credential. Rate-limited to 10 per IP per minute. Re-reads the link, the contact and the current product; a link already paid in the un1t_transactions mirror is never sent to pay again. Finds the person\'s un1t.online account, or creates it only with acceptTerms: true on this request, then answers un1t.online\'s hosted-checkout URL (returned once, never stored). The CRM never charges a card. data.kind: redirect (with url) | paid | expired | help | terms_required.',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({ acceptTerms: z.boolean().optional() }) } } },
+  },
+  responses: {
+    200: { description: 'data.kind redirect (with data.url), or a state the page shows: paid, expired, help, terms_required' },
+    404: { description: 'Unknown token', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: a read failed or un1t.online is busy or unclear; try again', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 const CorpPromoClaim = z.object({
   promo: z.string().max(60).optional().openapi({ example: 'hatch-3-free', description: 'A promo key from src/lib/corp-promos.js; it decides the studio, credits and expiry. Required without `page`; with `page` (PAGES.1) optional, and only accepted when it names the page studio row\'s own promo (anything else is not_found).' }),
   ...PublicPageFields,
@@ -4304,6 +4323,52 @@ registry.registerPath({
     404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'WhatsApp window closed and no usable template (window_expired, needs_template), or no WhatsApp number is connected at the contact location (WACONFIGFALLBACK.1; checked before a thread or link is created)', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: "Link could not be issued, or the location's WhatsApp number could not be looked up", content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Delivery failed (link revoked)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// STAFFPAYLINK.1 — staff send a Hatch Street (un1t.online) customer a payment link on
+// WhatsApp. un1t_payment_links + whatsapp permissions at locationId; the CRM never
+// charges a card (the customer pays on un1t.online's hosted checkout).
+registry.registerPath({
+  method: 'get',
+  path: '/api/contacts/{id}/un1t-payment-link',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Payment link: sellable offers, latest link, what can be sent now, live membership, preview',
+  request: { params: z.object({ id: uuidLike }), query: z.object({ locationId: uuidLike }) },
+  responses: {
+    200: { description: 'State + offers', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — un1t_payment_links and whatsapp permissions required at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact or studio not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not a un1t.online studio (not_a_un1t_studio)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/un1t-payment-link',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Send the customer a 7-day un1t.online payment link on WhatsApp',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ locationId: uuidLike, offerId: uuidLike }).openapi('Un1tPaymentLinkSendBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Sent', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ linkId: z.string(), expiresAt: z.string(), via: z.enum(['cta', 'template']) }) }) } } },
+    400: { description: 'No email / phone, or offer_not_available', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact or studio not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not a un1t.online studio, writes off, WhatsApp opted out / undeliverable, or window closed with no usable template (needs_template)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Link could not be issued or the studio could not be read', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Delivery failed (link revoked)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
