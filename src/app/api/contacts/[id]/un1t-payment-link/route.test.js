@@ -302,3 +302,31 @@ describe('GET', () => {
     expect(can.reason).toBe('un1t.online says Aoife already has this product.')
   })
 })
+
+describe('GET preview_text', () => {
+  const templateWithText = () => ({
+    ...goodTemplate(),
+    components: [
+      { type: 'HEADER', format: 'TEXT', text: 'Payment request' },
+      { type: 'BODY', text: 'Hi {{1}}, your UN1T Hatch Street order is ready for payment. Order: {{2}}. Use the button below to complete payment on un1t.online.' },
+      ...goodTemplate().components,
+    ],
+  })
+
+  it('outside the 24h window it previews the approved template the customer will receive', async () => {
+    isWindowOpen.mockReturnValue(false)
+    templateRow = templateWithText()
+    const { data } = await (await get()).json()
+    expect(data.can).toMatchObject({ window_open: false, template_ready: true })
+    expect(data.preview_text).toBe('Payment request\nHi Aoife, your UN1T Hatch Street order is ready for payment. Order: {product}. Use the button below to complete payment on un1t.online.')
+  })
+
+  it('inside the window it previews the chat wording, not the template', async () => {
+    templateRow = templateWithText()
+    const { data } = await (await get()).json()
+    expect(data.can.window_open).toBe(true)
+    expect(data.preview_text).not.toContain('Payment request')
+    expect(data.preview_text).toContain('Aoife')
+    expect(data.preview_text).toContain('{product}')
+  })
+})
