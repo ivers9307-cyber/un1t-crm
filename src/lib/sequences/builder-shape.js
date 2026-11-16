@@ -14,6 +14,9 @@ export const SEQUENCE_BUILDER_ROW_SELECT = [
   'id, location_id, name, description, status',
   'trigger_type, trigger_config, audience_filter, goal_config, send_window, re_enrolment_cooldown_days',
   'webhook_token, webhook_secret',
+  // SEQSTART.1 — the audience-match Start / Stop panel shows whether the flow
+  // has been started and with how many people.
+  'audience_seeded_at, audience_seed_count',
 ].join(', ')
 
 // + what resolveSequenceGraph reads on the server (the graph is computed
@@ -24,6 +27,7 @@ export const SEQUENCE_BUILDER_PAGE_SELECT = `${SEQUENCE_BUILDER_ROW_SELECT}, gra
 const CLIENT_KEYS = Object.freeze([
   'id', 'location_id', 'name', 'description', 'status',
   'trigger_type', 'trigger_config', 'audience_filter', 'goal_config', 'send_window', 're_enrolment_cooldown_days',
+  'audience_seeded_at', 'audience_seed_count',
 ])
 
 export function toBuilderSequence(row) {
