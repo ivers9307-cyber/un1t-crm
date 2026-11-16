@@ -12,6 +12,9 @@
   background: #000;
   color: var(--ofr-paper);
   min-height: 100vh;
+  /* 100vh is the tall viewport on a phone, so the page jumped as the browser
+     bar came and went. Browsers without dvh keep the line above. */
+  min-height: 100dvh;
   font-family: var(--font-archivo), Helvetica, Arial, sans-serif;
 }
 .ofr-frame { max-width: 1100px; margin: 0 auto; border-left: 1px solid var(--ofr-line-soft); border-right: 1px solid var(--ofr-line-soft); }
@@ -19,9 +22,19 @@
 .ofr-outline { color: transparent; -webkit-text-stroke: 2px var(--ofr-paper); }
 .ofr-outline-thin { color: transparent; -webkit-text-stroke: 1.5px var(--ofr-paper); }
 
-/* marquee strip */
-.ofr-strip { overflow: hidden; border-bottom: 1px solid var(--ofr-line); background: var(--ofr-paper); color: var(--ofr-ink); white-space: nowrap; }
-.ofr-strip span { display: inline-block; padding: 10px 0; font-family: var(--font-archivo-black); font-size: 13px; letter-spacing: .28em; text-transform: uppercase; animation: ofr-slide 18s linear infinite; }
+/* marquee strip (OfferMarquee.jsx). It moves only for people who have not
+   asked for reduced motion, and they get a pause button; everyone else gets
+   a still strip and no button. The button sits on its own white tab so the
+   moving type never runs under its icon. */
+.ofr-strip { position: relative; overflow: hidden; border-bottom: 1px solid var(--ofr-line); background: var(--ofr-paper); color: var(--ofr-ink); white-space: nowrap; }
+.ofr-strip > span { display: inline-block; padding: 10px 0; font-family: var(--font-archivo-black); font-size: 13px; letter-spacing: .28em; text-transform: uppercase; }
+.ofr-strip-toggle { display: none; position: absolute; top: 0; right: 0; bottom: 0; min-width: 44px; padding: 0 14px; border: 0; border-left: 1px solid var(--ofr-ink); background: var(--ofr-paper); color: var(--ofr-ink); font-size: 11px; line-height: 1; cursor: pointer; }
+.ofr-strip-toggle:focus-visible { outline: 2px solid var(--ofr-ink); outline-offset: -4px; }
+@media (prefers-reduced-motion: no-preference) {
+  .ofr-strip > span { animation: ofr-slide 18s linear infinite; }
+  .ofr-strip[data-paused="true"] > span { animation-play-state: paused; }
+  .ofr-strip-toggle { display: block; }
+}
 @keyframes ofr-slide { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 
 /* countdown — the one red element, deliberately loud */
@@ -33,6 +46,8 @@
    color/text-decoration live HERE, not inline on the Link — an inline
    color:'inherit' outranks the :hover rule and pins the type white. */
 .ofr-card { border-bottom: 1px solid var(--ofr-line); padding: 38px 26px 30px; display: flex; flex-direction: column; gap: 18px; position: relative; transition: background .2s, color .2s; color: inherit; text-decoration: none; }
+/* A keyboard user gets a ring as clear as the mouse's green flood. */
+.ofr-card:focus-visible { outline: 3px solid #22c55e; outline-offset: -3px; }
 .ofr-card:hover { background: #22c55e; color: var(--ofr-ink); }
 .ofr-card:hover .ofr-outline-thin { -webkit-text-stroke-color: var(--ofr-ink); }
 .ofr-card:hover .ofr-go { background: var(--ofr-ink); color: var(--ofr-paper); border-color: var(--ofr-ink); }
@@ -52,7 +67,9 @@
 }
 
 /* product page form */
-.ofr-input { width: 100%; background: transparent; border: 1px solid var(--ofr-line); color: var(--ofr-paper); padding: 13px 14px; font-size: 15px; font-family: inherit; }
+.ofr-input { width: 100%; background: transparent; border: 1px solid var(--ofr-line); color: var(--ofr-paper); padding: 13px 14px; font-family: inherit;
+  /* Never under 16px: iOS Safari zooms the page into a smaller field. */
+  font-size: max(16px, 1rem); }
 .ofr-input:focus { outline: 2px solid var(--ofr-paper); outline-offset: -1px; }
 .ofr-label { display: block; font-size: 11px; letter-spacing: .26em; text-transform: uppercase; color: #8a8a8a; margin-bottom: 8px; }
 .ofr-pay { width: 100%; background: var(--ofr-paper); color: var(--ofr-ink); border: 0; font-family: var(--font-archivo-black); font-size: 14px; letter-spacing: .26em; text-transform: uppercase; padding: 18px; cursor: pointer; }

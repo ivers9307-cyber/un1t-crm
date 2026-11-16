@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { heroFor, storefrontTitle, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, offerFinePrint } from './offers-storefront'
+import { heroFor, storefrontTitle, storefrontShare, offerShare, offersShareMetadata, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, offerFinePrint } from './offers-storefront'
 import { OFFER_SALE_TAG } from './sale-offers'
 
 const gift = { category: 'gift_card' }
@@ -146,5 +146,41 @@ describe('offerFinePrint', () => {
     expect(offerFinePrint({ fine_print: null })).toBeNull()
     expect(offerFinePrint({})).toBeNull()
     expect(offerFinePrint(null)).toBeNull()
+  })
+})
+
+describe('link previews and tab titles (OFFERSPOLISH.1)', () => {
+  const copy = { marquee: 'M · ', line1: 'L1', line2: 'L2', blurb: 'Studio blurb.' }
+
+  it('a storefront shares its tab title and the studio blurb', () => {
+    expect(storefrontShare(new Set(['membership']), copy, 'UN1T Hatch Street'))
+      .toEqual({ title: 'Black Friday — UN1T Hatch Street', description: 'Studio blurb.' })
+    expect(storefrontShare(['gift_card'], copy, 'UN1T Stillorgan').title).toBe('Gift Cards — UN1T Stillorgan')
+    expect(storefrontShare(['gift_card'], copy).description).toMatch(/gift card/i)
+  })
+
+  it('a product page is titled by the offer first, so two tabs differ', () => {
+    const a = offerShare({ name: '3 Month Membership', description: ' 3 months, plus 3 weeks. ' }, 'UN1T Hatch Street')
+    const b = offerShare({ name: '12 Month Membership', description: '' }, 'UN1T Hatch Street')
+    expect(a).toEqual({ title: '3 Month Membership — UN1T Hatch Street', description: '3 months, plus 3 weeks.' })
+    expect(b).toEqual({ title: '12 Month Membership — UN1T Hatch Street', description: null })
+    expect(offerShare({}, 'UN1T Stillorgan').title).toBe('Black Friday — UN1T Stillorgan')
+  })
+
+  it('states its own Open Graph block, since Next replaces the root one whole', () => {
+    const m = offersShareMetadata({ title: 'T', description: 'D', siteName: 'UN1T Stillorgan', image: 'https://cdn.example/logo.png' })
+    expect(m.title).toBe('T')
+    expect(m.description).toBe('D')
+    expect(m.robots).toEqual({ index: false, follow: false })
+    expect(m.openGraph).toEqual({ title: 'T', description: 'D', siteName: 'UN1T Stillorgan', type: 'website', images: [{ url: 'https://cdn.example/logo.png' }] })
+    expect(m.twitter).toEqual({ card: 'summary', title: 'T', description: 'D', images: ['https://cdn.example/logo.png'] })
+  })
+
+  it('leaves out an empty description and an image that is not absolute https', () => {
+    const m = offersShareMetadata({ title: 'T', description: '  ', siteName: 'UN1T', image: '/logo.png' })
+    expect(m).not.toHaveProperty('description')
+    expect(m.openGraph).toEqual({ title: 'T', siteName: 'UN1T', type: 'website' })
+    expect(m.twitter).toEqual({ card: 'summary', title: 'T' })
+    expect(offersShareMetadata({ title: 'T', siteName: 'UN1T', image: 'http://x/logo.png' }).openGraph.images).toBeUndefined()
   })
 })

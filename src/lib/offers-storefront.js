@@ -70,6 +70,43 @@ export function storefrontTitle(categories, studioLabel = DEFAULT_STUDIO_LABEL) 
   return heroForCategories(categories instanceof Set ? categories : new Set(categories || []), DEFAULT_OFFERS_PAGE_COPY, studioLabel).title
 }
 
+/**
+ * OFFERSPOLISH.1 — the storefront's link-preview words for a Set of active
+ * categories: the tab title and the hero blurb (operator copy, or the gift
+ * blurb on a gift-only storefront). One rule with the hero.
+ */
+export function storefrontShare(categories, copy = DEFAULT_OFFERS_PAGE_COPY, studioLabel = DEFAULT_STUDIO_LABEL) {
+  const h = heroForCategories(categories instanceof Set ? categories : new Set(categories || []), copy, studioLabel)
+  return { title: h.title, description: h.blurb }
+}
+
+/** A product page's link-preview words: the offer first, then the studio. */
+export function offerShare(offer, studioLabel = DEFAULT_STUDIO_LABEL) {
+  const name = typeof offer?.name === 'string' ? offer.name.trim() : ''
+  const description = typeof offer?.description === 'string' && offer.description.trim() !== '' ? offer.description.trim() : null
+  return { title: name ? `${name} — ${studioLabel}` : `Black Friday — ${studioLabel}`, description }
+}
+
+/**
+ * Next.js metadata for an /offers page (OFFERSPOLISH.1). The root layout's
+ * Open Graph block names the platform, and Next replaces `openGraph` whole
+ * rather than merging it, so every /offers page states its own: before this a
+ * link shared on WhatsApp previewed as the platform's name with no words.
+ * The image is the studio's logo and only when it is an absolute https URL
+ * (a relative one needs a metadataBase this app does not set). Never indexed.
+ */
+export function offersShareMetadata({ title, description = null, siteName, image = null }) {
+  const img = typeof image === 'string' && image.startsWith('https://') ? image : null
+  const desc = typeof description === 'string' && description.trim() !== '' ? description.trim() : null
+  return {
+    title,
+    ...(desc ? { description: desc } : {}),
+    robots: { index: false, follow: false },
+    openGraph: { title, ...(desc ? { description: desc } : {}), siteName, type: 'website', ...(img ? { images: [{ url: img }] } : {}) },
+    twitter: { card: 'summary', title, ...(desc ? { description: desc } : {}), ...(img ? { images: [img] } : {}) },
+  }
+}
+
 // BLACKFRIDAY.3 — the storefront's decisions, pure so they are testable.
 
 const time = (iso) => new Date(iso).getTime()
