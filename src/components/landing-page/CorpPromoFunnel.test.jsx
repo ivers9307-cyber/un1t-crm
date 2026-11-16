@@ -166,3 +166,46 @@ describe('CorpPromoFunnel', () => {
     expect(lists).toEqual([])
   })
 })
+
+describe('CorpPromoFunnel — open week (OPENWEEK.1)', () => {
+  const OWCOPY = { ...COPY, pick_heading: 'Pick your classes', pick_hint: 'One class a day, up to 5.', pick_cta: 'Continue with {count} classes', class_list_heading: 'Your classes', cta_label: 'Book my classes' }
+  const mount = () => render(<CorpPromoFunnel promoKey="hatch-open-week" copy={OWCOPY} terms={null} page="openweek" studio="hatch-street" openWeek={{ maxClasses: 5, maxPerDay: 1 }} />)
+  async function pickBoth() {
+    fireEvent.click(await screen.findByRole('button', { name: /S&C/ }))
+    fireEvent.click(screen.getByRole('button', { name: /RALLY/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with 2 classes' }))
+  }
+  function fill() {
+    fireEvent.change(screen.getByPlaceholderText('First name'), { target: { value: 'Ann' } })
+    fireEvent.change(screen.getByPlaceholderText('Last name'), { target: { value: 'Byrne' } })
+    fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'ann@work.ie' } })
+    fireEvent.change(screen.getByPlaceholderText('Mobile'), { target: { value: '0871234567' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Book my classes' }))
+  }
+
+  it('picks several classes, posts event_ids, and the done screen lists them', async () => {
+    answers = [{ status: 200, body: { success: true, data: { title: 'You are in', message: 'Booking you in', classes: [{ event_id: 'a', name: 'S&C', starts_at: CLASSES[0].starts_at }, { event_id: 'b', name: 'RALLY', starts_at: CLASSES[1].starts_at }] } } }]
+    mount()
+    await pickBoth()
+    expect(screen.getByText('Your classes')).toBeTruthy()
+    fill()
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].body.event_ids).toEqual(['a', 'b'])
+    expect(posts[0].body).not.toHaveProperty('event_id')
+    expect(await screen.findByText('You are in')).toBeTruthy()
+    expect(screen.getByText('Your classes')).toBeTruthy()
+    expect(screen.getByText(/Mon, 5 Jan/)).toBeTruthy()
+    expect(screen.getByText(/Wed, 7 Jan/)).toBeTruthy()
+  })
+
+  it('a class that filled goes back to the picker without it, the error shown, the list reloaded', async () => {
+    answers = [{ status: 400, body: { success: false, code: 'class_unavailable', event_id: 'b', error: 'That class is no longer available. Please pick another.' } }]
+    mount()
+    await pickBoth()
+    fill()
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toBe('That class is no longer available. Please pick another.')
+    await waitFor(() => expect(lists.length).toBe(2))
+    expect(screen.getByRole('button', { name: 'Continue with 1 classes' })).toBeTruthy()
+  })
+})

@@ -589,6 +589,44 @@ const hatchRow = (over = {}) => row('loc-h', {
 const PURCHASE = '11111111-1111-1111-1111-111111111111'
 const meta = (slug, rest) => generateMetadata({ params: Promise.resolve({ slug, rest }), searchParams: Promise.resolve({}) })
 
+// OPENWEEK.1 — /openweek: an all-studios promo page.
+describe('the open week page (OPENWEEK.1)', () => {
+  const OW_PROMO = { ...HATCH_PROMO_ROW, id: 'cp-ow', key: 'hatch-open-week', name: 'Open Week (Hatch Street)', credits: 5, expiresInDays: 14, tag: 'hatch-open-week', kind: 'open_week', windowStartsOn: '2026-11-23', windowEndsOn: '2026-11-30', maxClasses: 5, maxPerDay: 1 }
+  const OWS_PROMO = { ...OW_PROMO, id: 'cp-ows', locationId: 'loc-s', key: 'stillorgan-open-week', platform: 'glofox', glofox: { membershipId: 'GLOFOX-MEM-S', planCode: 'GLOFOX-PLAN-S', planName: 'Open Week Free Trial' } }
+  const OWPAGE = { ...CORP, id: 'pow', slug: 'openweek', title: 'Open Week', scope: 'all', primary_location_id: null, blocks: [{ id: 'cp', type: 'corp_promo' }] }
+  const OWSTUDIOS = [
+    row('loc-s', { sort_order: 0, offer: { promo_key: 'stillorgan-open-week' }, locations: loc('loc-s', 'glofox') }),
+    row('loc-h', { sort_order: 1, offer: { promo_key: 'hatch-open-week' }, locations: loc('loc-h', 'un1t_online') }),
+  ]
+  beforeEach(() => { h.promoRows = [OW_PROMO, OWS_PROMO] })
+
+  it('with no studio chosen, offers a choice of studio linking to ?studio=', async () => {
+    h.loaded = { page: OWPAGE, studios: OWSTUDIOS }
+    const html = await render({ slug: 'openweek' })
+    expect(html).toContain('Choose your studio')
+    expect(html).toContain('href="?studio=stillorgan"')
+    expect(html).toContain('href="?studio=hatch-street"')
+    expect(propsOf(html, 'corp')).toBeNull()
+    expectClientSafe(html)
+  })
+
+  it('with a studio, the card carries the open week limits and the open week words', async () => {
+    h.loaded = { page: OWPAGE, studios: OWSTUDIOS }
+    const props = propsOf(await render({ slug: 'openweek', sp: { studio: 'hatch-street' } }), 'corp')
+    expect(props.promoKey).toBe('hatch-open-week')
+    expect(props.openWeek).toEqual({ maxClasses: 5, maxPerDay: 1 })
+    expect(props.copy.heading).toBe('Open Week at Hatch Street')
+    expect(props.copy.pick_hint).toBe('One class a day, up to 5.')
+  })
+
+  it('a normal promo page passes no openWeek', async () => {
+    h.promoRows = [HATCH_PROMO_ROW]
+    h.loaded = { page: CORP, studios: CORP_STUDIOS }
+    const props = propsOf(await render({ slug: 'corp' }), 'corp')
+    expect(props.openWeek ?? null).toBeNull()
+  })
+})
+
 describe('the page root names its studio for the pixel (PAGES.1)', () => {
   const attr = (html) => html.match(/data-page-location="([^"]*)"/g)
 

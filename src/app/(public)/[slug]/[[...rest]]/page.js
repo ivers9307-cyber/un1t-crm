@@ -75,6 +75,8 @@ import { FrostedCardLayout, OneClassLayout, BlocksLayout } from '@/components/la
 import PaidTrialFunnel from '@/components/landing-page/PaidTrialFunnel'
 import CampaignFunnel from '@/components/landing-page/CampaignFunnel'
 import CorpPromoFunnel from '@/components/landing-page/CorpPromoFunnel'
+import PromoStudioChoice from '@/components/landing-page/PromoStudioChoice'
+import { isOpenWeek } from '@/lib/open-week'
 import ClassFunnel from '@/components/ClassFunnel'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
 import StudioShell from '@/components/landing-page/StudioShell'
@@ -321,7 +323,7 @@ async function paidTrialItems(db, page, rows) {
 // payload (the campaign copy's expect_cards is also expect.cards) reaches the
 // browser as a lazy reference, never an element, so the clone was skipped and
 // the card kept the words the server seeded it with.
-async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName, preview = false }) {
+async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName, studioChoices = [], preview = false }) {
   const kind = layoutFor(page.offer_type, page.kind)
 
   if (page.offer_type === 'paid_trial') {
@@ -384,9 +386,11 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     }
     const promo = resolved && resolved.live ? resolved : null
     const corpStudioName = contextBrand?.locationName || contextBrand?.companyName || ''
-    const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey, { platform: promo?.platform || resolved?.platform })
+    const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey, { platform: promo?.platform || resolved?.platform, kind: promo?.kind || resolved?.kind })
     if (readFailed) raw.unavailable_text = CORP_PROMO_READ_FAILED_TEXT
-    const tokens = { studio_name: corpStudioName, credits: promo?.credits ?? '' }
+    // OPENWEEK.1 — an open week card picks several classes, within its limits.
+    const openWeek = promo && isOpenWeek(promo) ? { maxClasses: promo.maxClasses, maxPerDay: promo.maxPerDay } : null
+    const tokens = { studio_name: corpStudioName, credits: promo?.credits ?? '', ...(openWeek ? { max_classes: openWeek.maxClasses } : {}) }
     const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v.map((t) => fillCorpPromoTokens(t, tokens)) : fillCorpPromoTokens(v, tokens)]))
     // NEWSTART.1: a Glofox promo takes no un1t.online terms tick.
     const terms = promo && promo.platform !== 'glofox' ? await termsFor(db, contextLocationId, { studioName: corpStudioName, publicPath: contextPath }) : null
@@ -394,12 +398,15 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     // FILLED words ({studio_name}, {credits}), the strip the block's; the
     // class step's words go to the card resolved.
     const { hero, expect } = oneClassPresentation({ ...(mergedOffer || {}), type: 'corp_promo', title: copy.title, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead }, { heroImageUrl })
-    const offerProps = { promoKey: promo ? promo.key : null, copy, terms, page: page.slug, studio: contextPath, stepCopy: classFirstStepCopy(mergedOffer || {}, 'corp_promo') }
+    const offerProps = { promoKey: promo ? promo.key : null, copy, terms, page: page.slug, studio: contextPath, stepCopy: classFirstStepCopy(mergedOffer || {}, 'corp_promo'), ...(openWeek ? { openWeek } : {}) }
+    // OPENWEEK.1 — an all-studios promo page with no studio chosen yet asks
+    // for one first (each studio has its own promo row); never in the preview.
+    const choosing = !preview && studioChoices.length > 1
     return {
       kind, cta: { href: '#corp', label: copy.cta_label }, anchor: 'corp', heroImageUrl, scrollCueLabel: null, hero, expect,
-      offer: <CorpPromoFunnel {...offerProps} />,
+      offer: choosing ? <PromoStudioChoice heading={copy.studio_heading || 'Choose your studio'} choices={studioChoices} /> : <CorpPromoFunnel {...offerProps} />,
       // The preview refills the live block's words from the same promo and tokens.
-      ...(preview ? { offerProps, offerLive: { promoKey: rowKey, platform: promo?.platform || resolved?.platform || null, tokens, unavailableText: readFailed ? CORP_PROMO_READ_FAILED_TEXT : null } } : {}),
+      ...(preview ? { offerProps, offerLive: { promoKey: rowKey, platform: promo?.platform || resolved?.platform || null, kind: promo?.kind || resolved?.kind || null, tokens, unavailableText: readFailed ? CORP_PROMO_READ_FAILED_TEXT : null } } : {}),
     }
   }
 
@@ -652,7 +659,15 @@ export default async function PublicPage(props) {
   const heroBlock = content.find((b) => b.type === 'hero')
   const bodyBlocks = layout === 'blocks' ? content : content.filter((b) => b.type !== 'hero')
   const heroImageUrl = str(heroBlock?.image_url) || HERO_IMAGE
-  const offerArgs = { db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName }
+  // OPENWEEK.1 — the studios an all-studios promo page may be claimed at,
+  // when the visitor has not chosen one: each a link to ?studio=<path>.
+  const studioChoices = page.offer_type === 'promo_credits' && page.scope === 'all' && !studio && offerRows.length > 1
+    ? (await Promise.all(offerRows.map(async (r) => {
+      const path = await safePublicPath(db, r.location_id)
+      return path ? { path, label: embeddedOne(r.locations)?.name || path } : null
+    }))).filter(Boolean)
+    : []
+  const offerArgs = { db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName, studioChoices }
 
   if (editMode) {
     // The preview renders the page's own layout round the editable blocks:
