@@ -3,20 +3,21 @@
 // points at them, under the default Black Friday hero. It reads nothing.
 import Link from 'next/link'
 import { OFFER_STUDIOS, DEFAULT_OFFERS_PAGE_COPY } from '@/lib/offer-studios'
+import { offersShareMetadata } from '@/lib/offers-storefront'
+import OfferMarquee from '@/components/offers/OfferMarquee'
 
-export const metadata = {
+export const metadata = offersShareMetadata({
   title: 'Black Friday — UN1T',
-  robots: { index: false, follow: false },
-}
+  description: DEFAULT_OFFERS_PAGE_COPY.blurb,
+  siteName: 'UN1T',
+})
 
 export default function OffersPickerPage() {
   const hero = DEFAULT_OFFERS_PAGE_COPY
   const studios = Object.values(OFFER_STUDIOS)
   return (
     <main>
-      <div className="ofr-strip" aria-hidden="true">
-        <span>{hero.marquee.repeat(4)}</span>
-      </div>
+      <OfferMarquee text={hero.marquee.repeat(4)} />
 
       <header style={{ padding: '72px 32px 56px', borderBottom: '1px solid var(--ofr-line)' }}>
         <p className="ofr-display" style={{ fontSize: 15, letterSpacing: '.55em', marginBottom: 52 }}>UN1T</p>

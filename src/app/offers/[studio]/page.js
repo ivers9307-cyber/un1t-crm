@@ -22,6 +22,7 @@ import { heroFor, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyber
 import { legacyOfferRedirect } from '@/lib/offers-legacy-redirect'
 import { displayZoneFor } from '@/lib/display-zone'
 import SaleCountdown from '@/components/offers/SaleCountdown'
+import OfferMarquee from '@/components/offers/OfferMarquee'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -49,32 +50,40 @@ function OfferCard({ offer, studio, flag, opensLabel }) {
   const isGift = offer.category === 'gift_card'
   // BLACKFRIDAY.9 — any studio's offer shows its own fine print when it has some.
   const finePrint = offerFinePrint(offer)
+  // OFFERSPOLISH.1 — the whole card is one link, so its name was every word
+  // on it. The name is now the term, the bonus, the price and the action (all
+  // visible text, in reading order); the prose is the link's description.
+  const id = (part) => `ofr-${offer.id}-${part}`
+  const nameIds = [id('term'), !isGift && id('bonus'), !isGift && id('price'), id('go')].filter(Boolean).join(' ')
+  const descIds = [flag && id('flag'), id('desc'), !isGift && finePrint && id('fine')].filter(Boolean).join(' ')
   return (
     <Link
       href={`/offers/${studio.key}/${offer.slug}`}
       className="ofr-card"
+      aria-labelledby={nameIds}
+      aria-describedby={descIds}
       style={{ minHeight: isGift ? 340 : 400, borderRight: '1px solid var(--ofr-line-soft)' }}
     >
-      {flag && <span className="ofr-flag">{flag}</span>}
-      <span className="ofr-display" style={{ fontSize: 'clamp(44px,5vw,64px)', lineHeight: .9 }}>
+      {flag && <span id={id('flag')} className="ofr-flag">{flag}</span>}
+      <span id={id('term')} className="ofr-display" style={{ fontSize: 'clamp(44px,5vw,64px)', lineHeight: .9 }}>
         {term.num}
         <small style={{ display: 'block', fontSize: 15, letterSpacing: '.3em', marginTop: 8 }}>{term.label}</small>
       </span>
       {!isGift && (
-        <span className="ofr-display ofr-outline-thin" style={{ fontSize: 'clamp(22px,2.6vw,30px)', lineHeight: 1 }}>
+        <span id={id('bonus')} className="ofr-display ofr-outline-thin" style={{ fontSize: 'clamp(22px,2.6vw,30px)', lineHeight: 1 }}>
           {offer.bonus_headline}
         </span>
       )}
-      <p className="ofr-meta">{offer.description}</p>
+      <p id={id('desc')} className="ofr-meta">{offer.description}</p>
       {!isGift && (
         <span>
-          <span className="ofr-display" style={{ fontSize: 'clamp(30px,3.4vw,42px)', fontVariantNumeric: 'tabular-nums', display: 'block' }}>
+          <span id={id('price')} className="ofr-display" style={{ fontSize: 'clamp(30px,3.4vw,42px)', fontVariantNumeric: 'tabular-nums', display: 'block' }}>
             {formatEuro(offer.price_cents)}
           </span>
-          {finePrint && <span className="ofr-meta" style={{ display: 'block', fontSize: 12, marginTop: 6 }}>{finePrint}</span>}
+          {finePrint && <span id={id('fine')} className="ofr-meta" style={{ display: 'block', fontSize: 12, marginTop: 6 }}>{finePrint}</span>}
         </span>
       )}
-      <span className="ofr-go">{opensLabel || (isGift ? 'Buy this card' : 'Lock it in')}</span>
+      <span id={id('go')} className="ofr-go">{opensLabel || (isGift ? 'Buy this card' : 'Lock it in')}</span>
     </Link>
   )
 }
@@ -158,9 +167,7 @@ export default async function OfferStudioPage(props) {
 
   return (
     <main>
-      <div className="ofr-strip" aria-hidden="true">
-        <span>{hero.marquee.repeat(4)}</span>
-      </div>
+      <OfferMarquee text={hero.marquee.repeat(4)} />
 
       <header style={{ padding: '72px 32px 56px', borderBottom: '1px solid var(--ofr-line)' }}>
         <p style={{ fontSize: 11, letterSpacing: '.3em', textTransform: 'uppercase', color: '#777', marginBottom: 30 }}>

@@ -8,11 +8,12 @@
 import { createServerClient } from '@/lib/supabase'
 import { formatSaleDeadline } from '@/lib/sale-offers'
 import { resolveOfferStudio, offersPageCopy } from '@/lib/offer-studios'
-import { storefrontTitle } from '@/lib/offers-storefront'
+import { storefrontShare, offersShareMetadata } from '@/lib/offers-storefront'
+import { getLocationBranding } from '@/lib/location-branding'
 import { displayZoneFor } from '@/lib/display-zone'
 import { logWarn } from '@/lib/log'
 
-const GENERIC_METADATA = { title: 'Black Friday — UN1T', robots: { index: false, follow: false } }
+const GENERIC_METADATA = offersShareMetadata({ title: 'Black Friday — UN1T', siteName: 'UN1T' })
 
 export async function generateMetadata(props) {
   const { studio: key } = await props.params
@@ -28,10 +29,11 @@ export async function generateMetadata(props) {
   if (error) logWarn('offers', 'sale_offers unreadable for the tab title', { locationId: location.id, code: error.code ?? null })
   // OFFERS.8 — one rule with the page's hero (src/lib/offers-storefront.js).
   const cats = new Set((data || []).map((o) => o.category))
-  return {
-    title: storefrontTitle(cats, studio.label),
-    robots: { index: false, follow: false },
-  }
+  // OFFERSPOLISH.1 — the link preview carries the storefront's own title,
+  // the hero blurb and the studio's logo (getLocationBranding never throws).
+  const share = storefrontShare(cats, offersPageCopy(location), studio.label)
+  const { logoUrl } = await getLocationBranding(db, location.id)
+  return offersShareMetadata({ ...share, siteName: studio.label, image: logoUrl })
 }
 
 export default async function OfferStudioLayout(props) {

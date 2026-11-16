@@ -21,9 +21,34 @@ import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import SaleCountdown from '@/components/offers/SaleCountdown'
 import OfferCheckout from '@/components/offers/OfferCheckout'
 import { displayZoneFor } from '@/lib/display-zone'
+import { offerShare, offersShareMetadata } from '@/lib/offers-storefront'
+import { getLocationBranding } from '@/lib/location-branding'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+// OFFERSPOLISH.1 — every product page used to carry the studio storefront's
+// tab title, so two open tabs (and two shared links) were indistinguishable.
+// Returning {} keeps the studio layout's metadata: an unknown studio or slug
+// 404s in the page below, and an unreadable row must not blank the title.
+export async function generateMetadata(props) {
+  const { studio: key, slug } = await props.params
+  const db = createServerClient()
+  const resolved = await resolveOfferStudio(db, key)
+  if (!resolved) return {}
+  const { studio, location } = resolved
+  const { data: offer, error } = await db
+    .from('sale_offers')
+    .select('name, description')
+    .eq('location_id', location.id)
+    .eq('slug', slug)
+    .maybeSingle()
+  if (error) logWarn('offers', 'sale_offers unreadable for the product title', { locationId: location.id, code: error.code ?? null })
+  if (!offer) return {}
+  const { logoUrl } = await getLocationBranding(db, location.id)
+  return offersShareMetadata({ ...offerShare(offer, studio.label), siteName: studio.label, image: logoUrl })
+}
 
 function includesFor(offer, studio) {
   const finePrint = typeof offer.fine_print === 'string' && offer.fine_print.trim() ? offer.fine_print : null
