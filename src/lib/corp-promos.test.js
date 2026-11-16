@@ -71,7 +71,13 @@ describe('promoView', () => {
     expect(promoView(row())).toEqual({
       id: 'p1', locationId: HATCH, key: 'hatch-3-free', name: 'Corporate trial (Hatch Street)', platform: 'un1t_online',
       credits: 3, expiresInDays: 7, live: true, tag: 'hatch-corp-promo', leadSource: 'corp_promo', glofox: null,
+      kind: 'promo', windowStartsOn: null, windowEndsOn: null, maxClasses: null, maxPerDay: null,
     })
+  })
+
+  it('OPENWEEK.1: an open week row carries its window and limits', () => {
+    const v = promoView(row({ key: 'hatch-open-week', kind: 'open_week', window_starts_on: '2026-11-23', window_ends_on: '2026-11-30', max_classes: 5, max_per_day: 1 }))
+    expect(v).toMatchObject({ kind: 'open_week', windowStartsOn: '2026-11-23', windowEndsOn: '2026-11-30', maxClasses: 5, maxPerDay: 1 })
   })
 
   it('glofox is the plan binding; a blank membership id or plan code is no plan', () => {
