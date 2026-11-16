@@ -176,6 +176,8 @@ export const BRANDS = [
       '/fee-appeal/',
       // UN1TDUN.1: the short pay link in a un1t.online payment reminder (/pay-link/<token>).
       '/pay-link/',
+      // STAFFPAYLINK.1: a staff-sent payment link and its checkout return (/buy/<token>).
+      '/buy/',
       // MCP.1: Supabase's OAuth consent redirect lands on whichever host the
       // dashboard's Site URL names; raw startsWith, only /oauth/consent resolves.
       '/oauth/consent',
