@@ -143,6 +143,8 @@ export const CLOSED_FUNCTIONS = [
     why: 'POLICYATOMIC.1 atomic policy publish; the master-only admin route calls it as service_role' },
   { fn: 'public.record_policy_view_end', args: '(uuid, uuid, integer, jsonb)', closedBy: 841,
     why: 'POLICYATOMIC.1 reading-time update for ANY profile id; the views route checks ownership and calls it as service_role' },
+  { fn: 'public.reconcile_contact_studios_batch', args: '(uuid, integer)', closedBy: 846,
+    why: 'RECONCILEBATCH.1: DEFINER batch of the nightly contact_studios reconcile over a contact-id range; only the service-role cron calls it' },
 ]
 
 /** The client roles a closed function is closed to. */
