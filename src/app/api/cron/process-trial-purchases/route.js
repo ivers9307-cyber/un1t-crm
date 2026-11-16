@@ -40,6 +40,7 @@ import { sweepCheckoutTrialPurchases } from '@/lib/trial-checkout-purchase-sweep
 import { sweepAbandonedTrialCheckouts } from '@/lib/trial-checkout-abandoned'
 import { sweepStalledGlofoxCorpClaims } from '@/lib/corp-promo-stalled-sweep'
 import { sweepUn1tOfferPurchases } from '@/lib/un1t-offer-purchases'
+import { sweepStaffPaymentLinks } from '@/lib/staff-payment-link-sweep'
 import { locationsWithSource } from '@/lib/membership/locations-for-source'
 import { logWarn, logError } from '@/lib/log'
 
@@ -53,6 +54,8 @@ const CHECKOUT_SWEEP_HEARTBEAT = 'trial-checkout-purchase-sweep'
 const ABANDONED_SWEEP_HEARTBEAT = 'trial-checkout-abandoned-sweep'
 const STALLED_SWEEP_HEARTBEAT = 'corp-promo-stalled-sweep'
 const OFFER_SWEEP_HEARTBEAT = 'un1t-offer-purchase-sweep'
+const PAYLINK_SWEEP_HEARTBEAT = 'staff-payment-link-sweep'
+const PAYLINK_COUNT_KEYS = ['checked', 'paid', 'expired', 'raced', 'failed', 'passwordPending']
 const OFFER_COUNT_KEYS = ['checked', 'recorded', 'matchedPage', 'expired', 'failed', 'passwordPending']
 
 export async function GET(request) {
@@ -111,7 +114,8 @@ export async function GET(request) {
     const abandoned = await runAbandonedCheckoutSweep(db)
     const stalled = await runStalledClaimSweep(db)
     const offers = await runOfferPurchaseSweep(db)
-    return NextResponse.json({ success: true, ...stats, ...sweep, ...abandoned, ...stalled, ...offers })
+    const paylinks = await runStaffPaymentLinkSweep(db)
+    return NextResponse.json({ success: true, ...stats, ...sweep, ...abandoned, ...stalled, ...offers, ...paylinks })
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 })
   }
@@ -211,6 +215,42 @@ async function runOfferPurchaseSweep(db) {
     return answer(clean)
   } catch (e) {
     logError('process-trial-purchases', 'offer purchase arm threw', { errName: e?.name ?? null })
+    return answer(false)
+  }
+}
+
+// PAYLINK.1 — the staff payment link arm. Returns its counts; never throws.
+async function runStaffPaymentLinkSweep(db) {
+  const totals = { locations: 0, checked: 0, paid: 0, expired: 0, raced: 0, failed: 0, passwordPending: 0 }
+  const answer = (ok) => ({ paylink_sweep_ok: ok, paylink_sweep_paid: totals.paid, paylink_sweep_expired: totals.expired })
+  try {
+    const { eligible, error } = await locationsWithSource(db, 'un1t_online', { module: 'process-trial-purchases' })
+    if (error) {
+      logError('process-trial-purchases', 'payment link sweep: un1t.online studios unreadable', { code: error?.code ?? null })
+      return answer(false)
+    }
+    let clean = true
+    for (const loc of eligible || []) {
+      try {
+        const res = await sweepStaffPaymentLinks(db, loc.id)
+        if (!res?.ok) { clean = false; continue }
+        totals.locations++
+        for (const k of PAYLINK_COUNT_KEYS) totals[k] += res[k] || 0
+      } catch (e) {
+        clean = false
+        logError('process-trial-purchases', 'payment link sweep threw', { locationId: loc.id, errName: e?.name ?? null })
+      }
+    }
+    if (clean) {
+      try {
+        await stampHeartbeat(PAYLINK_SWEEP_HEARTBEAT, totals)
+      } catch (e) {
+        logError('process-trial-purchases', 'payment link sweep stamp threw', { errName: e?.name ?? null })
+      }
+    }
+    return answer(clean)
+  } catch (e) {
+    logError('process-trial-purchases', 'payment link arm threw', { errName: e?.name ?? null })
     return answer(false)
   }
 }
