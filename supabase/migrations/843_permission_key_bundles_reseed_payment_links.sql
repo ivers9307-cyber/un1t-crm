@@ -1,4 +1,4 @@
--- PAYLINK.1 — reseed private.permission_key_bundles (last seeded by mig 826)
+-- STAFFPAYLINK.1 — reseed private.permission_key_bundles (last seeded by mig 826)
 -- after adding the web-only `un1t_payment_links` key to
 -- shared/permission-bundles.js: un1t_payment_links → bundle_members, matching
 -- `un1t_comp_credits` (the Hatch card's contact-page action sits with the

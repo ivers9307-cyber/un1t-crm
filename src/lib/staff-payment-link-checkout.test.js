@@ -1,4 +1,4 @@
-// PAYLINK.1 — the public /buy/<token> page's two halves: loadBuyPage (GET,
+// STAFFPAYLINK.1 — the public /buy/<token> page's two halves: loadBuyPage (GET,
 // reads only, may stamp `opened`) and startStaffLinkCheckout (POST: account,
 // then un1t.online's hosted checkout). What it pins:
 //   - GET never calls un1t.online (no account, no checkout, no legal read);
@@ -24,7 +24,7 @@ vi.mock('@/lib/landing-pages', () => ({ studioTermsCopy: m.termsCopy, studioPubl
 vi.mock('@/lib/un1t-online-legal', () => ({ readUn1tLegalDocs: m.legalDocs }))
 vi.mock('@/lib/log', () => ({ logWarn: m.warn, logError: m.error, logInfo: vi.fn() }))
 
-import { loadBuyPage, startStaffLinkCheckout, buyPageCopy, fillFirstName, PAYLINK_CHECKOUT_COOLDOWN_MS } from './staff-payment-link-checkout'
+import { loadBuyPage, startStaffLinkCheckout, buyPageCopy, fillFirstName, isReusableCheckoutUrl, PAYLINK_CHECKOUT_COOLDOWN_MS } from './staff-payment-link-checkout'
 
 const NOW = Date.parse('2026-11-15T12:00:00.000Z')
 const iso = (ms) => new Date(ms).toISOString()
@@ -241,15 +241,23 @@ describe('startStaffLinkCheckout (POST)', () => {
     expect((await run(makeDb())).kind).toBe('unavailable')
   })
 
-  it('refuses checkout when the mirror shows the payment (and stamps the row paid)', async () => {
+  it('refuses checkout when the mirror shows the payment, and never stamps the row paid (the sweep settles)', async () => {
     const db = makeDb({ link: { ...LINK, status: 'checkout_started', un1t_user_id: 'u-1' }, txs: [tx()] })
     const out = await run(db)
     expect(out.kind).toBe('paid')
     expect(m.ensureAccount).not.toHaveBeenCalled()
     expect(m.createLink).not.toHaveBeenCalled()
-    const up = linkUpdates(db)[0]
-    expect(up.patch).toMatchObject({ status: 'paid', paid_transaction_id: 'tx-1' })
-    expect(up.filters).toContainEqual(['eq', 'status', 'checkout_started'])
+    expect(linkUpdates(db)).toHaveLength(0)
+  })
+
+  it('a payment under the contact\'s account on a link with no account: paid, only the account stamped', async () => {
+    const db = makeDb({ contact: { ...CONTACT, un1t_user_id: 'u-1' }, txs: [tx()] })
+    const out = await run(db)
+    expect(out.kind).toBe('paid')
+    const ups = linkUpdates(db)
+    expect(ups).toHaveLength(1)
+    expect(ups[0].patch).toMatchObject({ un1t_user_id: 'u-1' })
+    expect(ups[0].patch.status).toBeUndefined()
   })
 
   it('a payment found with the account just resolved is never sent to pay', async () => {
@@ -305,6 +313,22 @@ describe('startStaffLinkCheckout (POST)', () => {
         ['eq', 'location_id', 'loc-h'], ['eq', 'op', 'checkout'], ['eq', 'origin_ref', 'link-1'],
         ['eq', 'un1t_user_id', 'u-1'], ['eq', 'target', 'prod-1'], ['range', 0, 99],
       ]))
+    })
+
+    it('a stored checkout that is not https, or is on our own host, is never handed back', async () => {
+      for (const url of ['http://checkout.stripe.com/c/pay/x', 'https://hatch.example.com/buy/zzz', 'javascript:alert(1)', 'not a url']) {
+        m.createLink.mockClear()
+        const db = makeDb({ link: LIVE_LINK, ledger: [event({ checkout_url: url })] })
+        expect(await run(db)).toEqual({ kind: 'confirming' })
+        expect(m.createLink).not.toHaveBeenCalled()
+      }
+    })
+
+    it('isReusableCheckoutUrl: https on another host only', () => {
+      expect(isReusableCheckoutUrl('https://checkout.stripe.com/x', 'https://hatch.example.com')).toBe(true)
+      expect(isReusableCheckoutUrl('https://HATCH.example.com/x', 'https://hatch.example.com')).toBe(false)
+      expect(isReusableCheckoutUrl('http://checkout.stripe.com/x', 'https://hatch.example.com')).toBe(false)
+      expect(isReusableCheckoutUrl('https://checkout.stripe.com/x', null)).toBe(false)
     })
 
     it('a checkout 30 minutes old: confirming, no new checkout', async () => {

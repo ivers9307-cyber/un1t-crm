@@ -1,4 +1,4 @@
-// PAYLINK.1 — who may send a un1t.online payment link: the
+// STAFFPAYLINK.1 — who may send a un1t.online payment link: the
 // un1t_payment_links web permission, resolved at the studio (owner, manager
 // and reception by default; head coach and staff off; master always).
 import { describe, it, expect } from 'vitest'

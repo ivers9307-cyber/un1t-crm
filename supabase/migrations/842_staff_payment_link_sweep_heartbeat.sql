@@ -1,4 +1,4 @@
--- 842 — PAYLINK.1: heartbeat row for the staff payment link sweep.
+-- 842 — STAFFPAYLINK.1: heartbeat row for the staff payment link sweep.
 --
 --   APPLY THIS MIGRATION RIGHT AFTER THE CODE DEPLOYS (CLAUDE.md cron rule:
 --   stampHeartbeat() is UPDATE-only, and a row seeded early goes stale).
@@ -21,7 +21,7 @@ VALUES (
   now(),
   120,
   600,
-  'PAYLINK.1 — the staff payment link arm of the */2 Vercel cron /api/cron/process-trial-purchases. Settles staff_payment_links rows to paid off the un1t_transactions mirror and expires stale live links. Stamped ONLY when the sweep returned ok (no throw). Zero links to settle is clean and stamps. STALE = no clean sweep for 12 minutes: read the process-trial-purchases logError lines (module paylink).'
+  'STAFFPAYLINK.1 — the staff payment link arm of the */2 Vercel cron /api/cron/process-trial-purchases. Settles staff_payment_links rows to paid off the un1t_transactions mirror and expires stale live links. Stamped ONLY when the sweep returned ok (no throw). Zero links to settle is clean and stamps. STALE = no clean sweep for 12 minutes: read the process-trial-purchases logError lines (module paylink).'
 )
 ON CONFLICT (name) DO UPDATE
   SET last_ok_at = now(),

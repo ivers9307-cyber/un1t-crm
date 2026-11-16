@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// PAYLINK.1 — the "Continue to payment" form. An existing member gets no tick,
+// STAFFPAYLINK.1 — the "Continue to payment" form. An existing member gets no tick,
 // but a terms_required answer (no account found after all) reveals it; a
 // recent checkout answers `confirming`; a new customer must tick first.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -34,6 +34,15 @@ describe('BuyForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue to payment' }))
     await waitFor(() => expect(screen.getByText('All paid.')).toBeTruthy())
     expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ acceptTerms: true })
+  })
+
+  it('terms_required with no terms to show: the help line, no button to press again', async () => {
+    render(<BuyForm token={TOKEN} isNew={false} terms={null} buttonText="Continue to payment" messages={MESSAGES} />)
+    fetch.mockReturnValueOnce(answer({ kind: 'terms_required' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to payment' }))
+    await waitFor(() => expect(screen.getByText('We will help.')).toBeTruthy())
+    expect(screen.queryByRole('button')).toBe(null)
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 
   it('a new customer must tick before anything is sent', async () => {

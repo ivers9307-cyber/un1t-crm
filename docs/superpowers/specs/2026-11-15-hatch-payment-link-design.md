@@ -1,4 +1,4 @@
-# PAYLINK.1 — staff send a Hatch Street payment link on WhatsApp
+# STAFFPAYLINK.1 — staff send a Hatch Street payment link on WhatsApp
 
 Status: design approved by Richard (15 Nov 2026).
 

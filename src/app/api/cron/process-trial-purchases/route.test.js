@@ -235,7 +235,7 @@ describe('process-trial-purchases cron: the abandoned checkout sweep', () => {
   })
 })
 
-// PAYLINK.1 — the staff payment link arm: its own heartbeat, stamped only when
+// STAFFPAYLINK.1 — the staff payment link arm: its own heartbeat, stamped only when
 // every studio read clean, and never able to stop the response.
 describe('process-trial-purchases cron: the staff payment link sweep', () => {
   const stamps = () => mocks.stamp.mock.calls.filter((c) => c[0] === 'staff-payment-link-sweep')

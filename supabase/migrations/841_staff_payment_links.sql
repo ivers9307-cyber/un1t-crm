@@ -1,4 +1,4 @@
--- 841 — PAYLINK.1: staff-sent un1t.online payment links (Hatch Street).
+-- 841 — STAFFPAYLINK.1: staff-sent un1t.online payment links (Hatch Street).
 --
 -- A staff member sends a customer a link to a un1t.online product on WhatsApp.
 -- The customer opens /buy/<token>, accepts the terms themselves and is sent to
@@ -81,7 +81,7 @@ REVOKE ALL ON public.staff_payment_links FROM anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.staff_payment_links TO service_role;
 
 COMMENT ON TABLE public.staff_payment_links IS
-  'PAYLINK.1: staff-sent un1t.online payment links. Stores only the sha256 of the link token and never the checkout URL. Service role only (RLS on, no policy).';
+  'STAFFPAYLINK.1: staff-sent un1t.online payment links. Stores only the sha256 of the link token and never the checkout URL. Service role only (RLS on, no policy).';
 
 -- Self-check (POST-state): the table is closed to client sessions and RLS is on.
 DO $$

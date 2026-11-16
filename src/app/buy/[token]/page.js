@@ -4,7 +4,7 @@ import { loadBuyPage, buyPageCopy, fillFirstName as fill } from '@/lib/staff-pay
 import { TRIAL_CARD, TRIAL_MUTED, TRIAL_SUMMARY } from '@/components/landing-page/trial-card'
 import BuyForm from './BuyForm'
 
-// PAYLINK.1 — the page behind a staff-sent payment link (/buy/<token>). The
+// STAFFPAYLINK.1 — the page behind a staff-sent payment link (/buy/<token>). The
 // token is the credential. A new customer sees the product, the current price,
 // their name and email, and un1t.online's terms tick; an existing member the
 // same page without the tick. "Continue to payment" POSTs to

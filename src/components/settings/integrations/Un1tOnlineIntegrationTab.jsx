@@ -335,6 +335,8 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
               ['expired_text', 'Expired link text', 'textarea'],
               ['unavailable_text', 'Payment system unavailable text', 'textarea'],
               ['help_text', 'Account help text', 'textarea'],
+              ['set_password_email_subject', 'Set password email subject ({studio} = studio name)', 'input'],
+              ['set_password_email_body', 'Set password email text ({studio} = studio name)', 'textarea'],
             ].map(([key, label, kind]) => {
               const stored = write.payment_link?.[key] || ''
               const props = {

@@ -265,7 +265,7 @@ describe('UN1TWELCOME.1 — app links', () => {
   })
 })
 
-describe('PAYLINK.1 — payment link copy', () => {
+describe('STAFFPAYLINK.1 — payment link copy', () => {
   it('saves keys merged, returns them with the defaults, blank clears one, siblings kept', async () => {
     getCurrentUser.mockResolvedValue(master)
     settings = { un1t_online: { hidden_class_keywords: 'elite', payment_link: { button_text: 'Old' } } }
@@ -277,6 +277,17 @@ describe('PAYLINK.1 — payment link copy', () => {
     expect(j.data.write.payment_link.template_name).toBe('hatch_pay_link')
     expect(j.data.write.payment_link_defaults.button_text).toBe('Pay now')
     expect(j.data.write.payment_link_defaults.paid_heading).toBeTruthy()
+  })
+
+  it('saves the set-password email subject and body, defaulted with {studio}', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    settings = { un1t_online: {} }
+    const res = await patch({ payment_link: { set_password_email_subject: 'Welcome to {studio}', set_password_email_body: 'Hi from {studio}' } })
+    expect(res.status).toBe(200)
+    expect(settings.un1t_online.payment_link).toEqual({ set_password_email_subject: 'Welcome to {studio}', set_password_email_body: 'Hi from {studio}' })
+    const j = await res.json()
+    expect(j.data.write.payment_link_defaults.set_password_email_subject).toBe('Your {studio} account')
+    expect(j.data.write.payment_link_defaults.set_password_email_body).toContain('{studio}')
   })
 
   it('rejects a non-string, an over-long value, a bad template name and an unknown key', async () => {

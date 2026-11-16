@@ -1,4 +1,4 @@
-// PAYLINK.1 — the customer's side of a staff-sent payment link: the public
+// STAFFPAYLINK.1 — the customer's side of a staff-sent payment link: the public
 // page /buy/<token> (loadBuyPage, GET) and its "Continue to payment" POST
 // (startStaffLinkCheckout).
 //
@@ -84,6 +84,29 @@ export function fillFirstName(template, firstName) {
 }
 
 const errCode = (error) => ({ code: error?.code ?? null })
+
+/**
+ * A checkout URL read back from the ledger is handed to the customer only when
+ * it is https and NOT on our own customer host (un1t.online's page, never a
+ * /buy/ loop or anything a bad ledger row could point at). Pure.
+ */
+export function isReusableCheckoutUrl(url, ownBaseUrl) {
+  let u
+  try {
+    u = new URL(String(url || ''))
+  } catch {
+    return false
+  }
+  if (u.protocol !== 'https:' || !u.hostname) return false
+  let own = null
+  try {
+    own = new URL(String(ownBaseUrl || '')).hostname.toLowerCase()
+  } catch {
+    own = null
+  }
+  if (!own) return false
+  return u.hostname.toLowerCase() !== own
+}
 
 async function readLocation(db, link) {
   const { data, error } = await db.from('locations').select(LOCATION_COLS).eq('id', link.location_id).maybeSingle()
@@ -272,10 +295,15 @@ export async function startStaffLinkCheckout(db, { token, acceptTerms = false, n
     if (error) return { error }
     return { error: null, hit: Array.isArray(data) && data.length > 0 }
   }
-  const markPaid = async (tx, code) => {
-    const { error, hit } = await updateLink({ status: 'paid', paid_transaction_id: tx?.un1t_id ?? null, paid_at: nowIso }, { status: link.status })
-    if (error) logWarn(LOG, 'link not stamped paid', { ...ids, code: error.code ?? null })
-    else if (!hit) logWarn(LOG, 'link changed before the paid stamp', { ...ids, code })
+  // The sweep is the ONE settler (it runs the set-password step for a link it
+  // settles): a payment seen here answers 'paid' and never stamps the row paid.
+  // A link with no account on it gets the account the payment was made under,
+  // so the sweep (which reads links by un1t_user_id) can settle it.
+  const paidSeen = async (userId) => {
+    if (!link.un1t_user_id && userId) {
+      const { error } = await updateLink({ un1t_user_id: String(userId) })
+      if (error) logWarn(LOG, 'un1t user id not stamped on a paid link', { ...ids, code: error.code ?? null })
+    }
     return { kind: 'paid' }
   }
   const help = async (reason) => {
@@ -303,7 +331,7 @@ export async function startStaffLinkCheckout(db, { token, acceptTerms = false, n
   const knownUser = link.un1t_user_id || contact.un1t_user_id || null
   try {
     const tx = await findPayment(db, link, knownUser)
-    if (tx) return markPaid(tx, 'paid_in_mirror')
+    if (tx) return paidSeen(knownUser)
   } catch (err) {
     logWarn(LOG, 'transactions unreadable; no checkout', { ...ids, code: err?.code ?? null })
     return { kind: 'unavailable' }
@@ -362,7 +390,7 @@ export async function startStaffLinkCheckout(db, { token, acceptTerms = false, n
   if (userId !== knownUser) {
     try {
       const tx = await findPayment(db, link, userId)
-      if (tx) return markPaid(tx, 'paid_in_mirror')
+      if (tx) return paidSeen(userId)
     } catch (err) {
       logWarn(LOG, 'transactions unreadable; no checkout', { ...ids, code: err?.code ?? null })
       return { kind: 'unavailable' }
@@ -388,7 +416,19 @@ export async function startStaffLinkCheckout(db, { token, acceptTerms = false, n
     if (!Number.isFinite(age) || age < 0) return { kind: 'confirming' }
     if (age < UN1T_CHECKOUT_REUSE_MS) {
       if (newest.stage === 'done' && typeof newest.checkout_url === 'string' && newest.checkout_url) {
-        return { kind: 'redirect', url: newest.checkout_url }
+        let ownBase = null
+        try {
+          ownBase = await resolveCustomerBaseUrl(db, link.location_id)
+        } catch (err) {
+          logWarn(LOG, 'customer host unreadable; stored checkout not reused', { ...ids, code: err?.code ?? null })
+        }
+        if (ownBase && isReusableCheckoutUrl(newest.checkout_url, ownBase)) {
+          return { kind: 'redirect', url: newest.checkout_url }
+        }
+        // Not a page we will send a customer to: no reusable checkout, and
+        // inside the cooldown no new one either.
+        logWarn(LOG, 'stored checkout not reusable; no checkout', { ...ids, ledgerId: newest.id ?? null, code: 'checkout_url_rejected' })
+        return { kind: 'confirming' }
       }
       if (OPEN_STAGES.has(newest.stage) && newest.idempotency_key) resumeKey = newest.idempotency_key
       else return { kind: 'confirming' }

@@ -1,4 +1,4 @@
-// PAYLINK.1 — the sweep that marks staff payment links paid off the
+// STAFFPAYLINK.1 — the sweep that marks staff payment links paid off the
 // un1t_transactions mirror.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -8,7 +8,9 @@ vi.mock('@/lib/un1t-online-settings', () => ({ readUn1tWriteSettings: mocks.sett
 vi.mock('@/lib/un1t-online-funnel-emails', () => ({ sendUn1tAccountEmail: mocks.email }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
-import { sweepStaffPaymentLinks, PAYLINK_SET_PASSWORD_SUBJECT, PAYLINK_SET_PASSWORD_BODY } from './staff-payment-link-sweep'
+import { sweepStaffPaymentLinks } from './staff-payment-link-sweep'
+
+const HATCH = { id: 'loc', name: 'UN1T Hatch Street', settings: {} }
 
 const NOW = Date.parse('2026-11-16T12:00:00Z')
 const DAY = 86_400_000
@@ -25,6 +27,7 @@ function makeDb(tables, { failRead = null, failUpdate = false, lostCas = new Set
     b.eq = (c, v) => { q.filters.push((r) => r[c] === v); return b }
     b.in = (c, vs) => { q.filters.push((r) => vs.includes(r[c])); return b }
     b.gte = (c, v) => { q.filters.push((r) => r[c] >= v); return b }
+    b.lte = (c, v) => { q.filters.push((r) => r[c] <= v); return b }
     b.or = () => b
     b.not = (c, _o, v) => { q.filters.push((r) => r[c] !== v); return b }
     b.order = (c) => { q.ord.push(c); return b }
@@ -32,7 +35,8 @@ function makeDb(tables, { failRead = null, failUpdate = false, lostCas = new Set
     b.maybeSingle = () => { q.one = true; return b }
     b.then = (res, rej) => {
       if (failRead === name && q.op === 'select') return Promise.resolve({ data: null, error: { code: 'XX' } }).then(res, rej)
-      let rows = (tables[name] || []).filter((r) => q.filters.every((f) => f(r)))
+      const source = name === 'locations' && !tables.locations ? [HATCH] : (tables[name] || [])
+      let rows = source.filter((r) => q.filters.every((f) => f(r)))
       if (q.op === 'update') {
         if (dupPaid && q.patch.status === 'paid') return Promise.resolve({ data: null, error: { code: '23505' } }).then(res, rej)
         if (failUpdate) return Promise.resolve({ data: null, error: { code: 'XX' } }).then(res, rej)
@@ -141,17 +145,60 @@ describe('sweepStaffPaymentLinks', () => {
     expect(res).toMatchObject({ ok: true, paid: 0, failed: 1 })
   })
 
-  it('runs the set-password step only for a CRM-created account (terms_accepted_at set)', async () => {
+  it('runs the set-password step for every link it settles, terms_accepted_at or not (the step judges the ledger)', async () => {
     const mk = (terms) => ({ staff_payment_links: [link({ terms_accepted_at: terms })], un1t_transactions: [tx()], contacts: [{ id: 'c1', email: 'a@b.c' }] })
     await sweepStaffPaymentLinks(makeDb(mk(null)), 'loc', { now: NOW })
-    expect(mocks.step).not.toHaveBeenCalled()
-    await sweepStaffPaymentLinks(makeDb(mk(iso(NOW - DAY))), 'loc', { now: NOW })
     expect(mocks.step).toHaveBeenCalledTimes(1)
+    await sweepStaffPaymentLinks(makeDb(mk(iso(NOW - DAY))), 'loc', { now: NOW })
+    expect(mocks.step).toHaveBeenCalledTimes(2)
     const [, args, deps] = mocks.step.mock.calls[0]
     expect(args).toMatchObject({ locationId: 'loc', un1tUserId: 'u1', origin: 'staff_payment_link',
-      emailArgs: { copy: { subject: PAYLINK_SET_PASSWORD_SUBJECT, body: PAYLINK_SET_PASSWORD_BODY } } })
-    expect(PAYLINK_SET_PASSWORD_SUBJECT).toBe('Your UN1T Hatch Street account')
+      emailArgs: { copy: { subject: 'Your UN1T Hatch Street account' } } })
+    expect(args.emailArgs.copy.body).toContain('Thanks for your purchase at UN1T Hatch Street.')
     expect(deps).toEqual({ sendUn1tAccountEmail: mocks.email })
+  })
+
+  it('a skipped_* verdict (not created by the CRM, already done) is success: nothing pending, nothing noted', async () => {
+    for (const verdict of ['skipped_not_created', 'skipped_already_done']) {
+      mocks.step.mockResolvedValue({ forgotPassword: verdict })
+      const t = { staff_payment_links: [link()], un1t_transactions: [tx()], contacts: [{ id: 'c1', email: 'a@b.c' }] }
+      const res = await sweepStaffPaymentLinks(makeDb(t), 'loc', { now: NOW })
+      expect(res).toMatchObject({ ok: true, paid: 1, passwordPending: 0 })
+      expect(t.staff_payment_links[0].last_error).toBeNull()
+    }
+  })
+
+  it('the set-password email uses the studio\'s own copy, {studio} filled from its name', async () => {
+    const t = {
+      staff_payment_links: [link()], un1t_transactions: [tx()], contacts: [{ id: 'c1', email: 'a@b.c' }],
+      locations: [{ id: 'loc', name: 'UN1T Ranelagh', settings: { un1t_online: { payment_link: { set_password_email_subject: 'Welcome to {studio}' } } } }],
+    }
+    await sweepStaffPaymentLinks(makeDb(t), 'loc', { now: NOW })
+    const copy = mocks.step.mock.calls[0][1].emailArgs.copy
+    expect(copy.subject).toBe('Welcome to UN1T Ranelagh')
+    expect(copy.body).toContain('Thanks for your purchase at UN1T Ranelagh.')
+  })
+
+  it('a studio read error before settling is ok:false and writes nothing', async () => {
+    const t = { staff_payment_links: [link()], un1t_transactions: [tx()], contacts: [{ id: 'c1' }] }
+    const db = makeDb(t, { failRead: 'locations' })
+    const res = await sweepStaffPaymentLinks(db, 'loc', { now: NOW })
+    expect(res.ok).toBe(false)
+    expect(db.log.updates).toEqual([])
+  })
+
+  it('expires every live link past expiry: no account, a free checkout, never a terminal one', async () => {
+    const t = { staff_payment_links: [
+      link({ id: 'noacct', un1t_user_id: null, expires_at: iso(NOW - 1000) }),
+      link({ id: 'free', status: 'checkout_started', last_error: 'checkout_free', expires_at: iso(NOW - 1000) }),
+      link({ id: 'rev', status: 'revoked', expires_at: iso(NOW - 1000) }),
+      link({ id: 'live', un1t_user_id: 'u9', expires_at: iso(NOW + DAY) }),
+    ], un1t_transactions: [] }
+    const db = makeDb(t)
+    const res = await sweepStaffPaymentLinks(db, 'loc', { now: NOW })
+    const st = (id) => t.staff_payment_links.find((l) => l.id === id).status
+    expect(res).toMatchObject({ ok: true, expired: 2, failed: 0 })
+    expect([st('noacct'), st('free'), st('rev'), st('live')]).toEqual(['expired', 'expired', 'revoked', 'sent'])
   })
 
   it('a set-password failure is counted in passwordPending and noted on the row', async () => {

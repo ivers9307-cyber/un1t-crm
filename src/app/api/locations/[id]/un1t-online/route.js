@@ -278,7 +278,7 @@ function writeFields(settings) {
     un1t_sends_booking_confirmation: s.sendsBookingConfirmation,
     // UN1TWELCOME.1 — as stored, so the form shows what a master typed.
     app_links: appLinksStored(settings),
-    // PAYLINK.1 — as stored; the defaults ride along as the fields' placeholders.
+    // STAFFPAYLINK.1 — as stored; the defaults ride along as the fields' placeholders.
     payment_link: paymentLinkStored(settings),
     payment_link_defaults: PAYMENT_LINK_DEFAULTS,
   }
@@ -289,7 +289,7 @@ function appLinksStored(settings) {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
 }
 
-// PAYLINK.1 — the staff payment link's WhatsApp template name and customer
+// STAFFPAYLINK.1 — the staff payment link's WhatsApp template name and customer
 // wording (locations.settings.un1t_online.payment_link). Blank = code default.
 const PAYMENT_LINK_DEFAULTS = Object.freeze({ ...COPY_DEFAULTS, ...PAGE_DEFAULTS })
 function paymentLinkStored(settings) {

@@ -1,4 +1,4 @@
-// PAYLINK.1 — POST /api/public/buy/[token]: the per-IP rate limit, the body
+// STAFFPAYLINK.1 — POST /api/public/buy/[token]: the per-IP rate limit, the body
 // (anything odd is no tick), and each answer's HTTP status. The work itself is
 // startStaffLinkCheckout (src/lib/staff-payment-link-checkout.test.js).
 import { describe, it, expect, vi, beforeEach } from 'vitest'

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// PAYLINK.1 — send a un1t.online payment link on WhatsApp from the Hatch card.
+// STAFFPAYLINK.1 — send a un1t.online payment link on WhatsApp from the Hatch card.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import Un1tPaymentLink from './Un1tPaymentLink.jsx'
@@ -97,6 +97,13 @@ describe('Un1tPaymentLink', () => {
     getData = base({ can: { send: false, has_email: false, has_phone: true, window_open: true, template_ready: true } })
     mount()
     expect(await screen.findByText(/no email address/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Send on WhatsApp' }).disabled).toBe(true)
+  })
+
+  it('shows the route\'s reason line (can.reason) when it gives one', async () => {
+    getData = base({ can: { send: false, reason: 'This customer has opted out of WhatsApp.', has_email: true, has_phone: true, window_open: true, template_ready: true } })
+    mount()
+    expect(await screen.findByText('This customer has opted out of WhatsApp.')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Send on WhatsApp' }).disabled).toBe(true)
   })
 

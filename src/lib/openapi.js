@@ -597,12 +597,12 @@ registry.registerPath({
   },
 })
 
-// PAYLINK.1 — "Continue to payment" on a staff-sent payment link (/buy/<token>).
+// STAFFPAYLINK.1 — "Continue to payment" on a staff-sent payment link (/buy/<token>).
 registry.registerPath({
   method: 'post',
   path: '/api/public/buy/{token}',
   tags: ['Public'],
-  summary: 'Continue to payment on a staff-sent un1t.online payment link (PAYLINK.1)',
+  summary: 'Continue to payment on a staff-sent un1t.online payment link (STAFFPAYLINK.1)',
   description: 'Anonymous; the token is the credential. Rate-limited to 10 per IP per minute. Re-reads the link, the contact and the current product; a link already paid in the un1t_transactions mirror is never sent to pay again. Finds the person\'s un1t.online account, or creates it only with acceptTerms: true on this request, then answers un1t.online\'s hosted-checkout URL (returned once, never stored). The CRM never charges a card. data.kind: redirect (with url) | paid | expired | help | terms_required.',
   request: {
     params: z.object({ token: z.string() }),
@@ -4327,7 +4327,7 @@ registry.registerPath({
   },
 })
 
-// PAYLINK.1 — staff send a Hatch Street (un1t.online) customer a payment link on
+// STAFFPAYLINK.1 — staff send a Hatch Street (un1t.online) customer a payment link on
 // WhatsApp. un1t_payment_links + whatsapp permissions at locationId; the CRM never
 // charges a card (the customer pays on un1t.online's hosted checkout).
 registry.registerPath({

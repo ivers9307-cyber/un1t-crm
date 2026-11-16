@@ -219,7 +219,7 @@ async function runOfferPurchaseSweep(db) {
   }
 }
 
-// PAYLINK.1 — the staff payment link arm. Returns its counts; never throws.
+// STAFFPAYLINK.1 — the staff payment link arm. Returns its counts; never throws.
 async function runStaffPaymentLinkSweep(db) {
   const totals = { locations: 0, checked: 0, paid: 0, expired: 0, raced: 0, failed: 0, passwordPending: 0 }
   const answer = (ok) => ({ paylink_sweep_ok: ok, paylink_sweep_paid: totals.paid, paylink_sweep_expired: totals.expired })

@@ -1,4 +1,4 @@
-// PAYLINK.1 — staff-sent un1t.online payment links (Hatch Street).
+// STAFFPAYLINK.1 — staff-sent un1t.online payment links (Hatch Street).
 //
 // A staff member sends a customer a link on WhatsApp; the customer opens
 // /buy/<token>, accepts the terms themselves and pays on un1t.online's hosted
@@ -46,7 +46,7 @@ async function revokeLive(db, { locationId, contactId, now }) {
  * Revoke any live link for (studio, contact), then insert the new one. The
  * partial unique index refuses a racing second live row (23505): revoke again
  * once and retry.
- * @returns {Promise<{ok:true, linkId:string, token:string, expiresAt:string}|{ok:false, error:string}>}
+ * @returns {Promise<{ok:true, linkId:string, token:string, expiresAt:string}|{ok:false, error:'revoke_failed'|'insert_failed', code:string|null}>}
  */
 export async function issueStaffPaymentLink(db, { locationId, organizationId, contactId, product, createdBy = null, now = Date.now() }) {
   const { token, hash } = mintPaymentToken()
@@ -69,23 +69,23 @@ export async function issueStaffPaymentLink(db, { locationId, organizationId, co
   for (let attempt = 0; attempt < 2; attempt++) {
     const revokeError = await revokeLive(db, { locationId, contactId, now: createdAt })
     if (revokeError) {
-      logWarn('paylink', 'revoke of the previous link failed', { contactId, locationId, error: revokeError.message })
-      return { ok: false, error: revokeError.message || 'revoke failed' }
+      logWarn('paylink', 'revoke of the previous link failed', { contactId, locationId, code: revokeError.code ?? null })
+      return { ok: false, error: 'revoke_failed', code: revokeError.code ?? null }
     }
     const { data, error } = await db.from('staff_payment_links').insert(row).select('id').single()
     if (!error) return { ok: true, linkId: data.id, token, expiresAt }
     if (error.code === '23505' && attempt === 0) continue
-    logWarn('paylink', 'link insert failed', { contactId, locationId, code: error.code, error: error.message })
-    return { ok: false, error: error.message || 'insert failed' }
+    logWarn('paylink', 'link insert failed', { contactId, locationId, code: error.code ?? null })
+    return { ok: false, error: 'insert_failed', code: error.code ?? null }
   }
-  return { ok: false, error: 'insert failed' }
+  return { ok: false, error: 'insert_failed', code: null }
 }
 
 export async function revokeStaffPaymentLink(db, linkId, reason = null) {
   const { error } = await db.from('staff_payment_links')
     .update({ status: 'revoked', last_error: reason, updated_at: new Date().toISOString() })
     .eq('id', linkId)
-  if (error) logWarn('paylink', 'revoke failed', { linkId, error: error.message })
+  if (error) logWarn('paylink', 'revoke failed', { linkId, code: error.code ?? null })
 }
 
 /**
@@ -100,7 +100,7 @@ export async function resolveStaffPaymentLink(db, token, { now = Date.now() } = 
     .select(LINK_COLUMNS)
     .eq('token_hash', hashPaymentToken(token))
     .maybeSingle()
-  if (error) throw new Error(`paylink resolve failed: ${error.message}`)
+  if (error) throw Object.assign(new Error(`paylink resolve failed (${error.code ?? 'no code'})`), { code: error.code ?? null })
   if (!data) return { kind: 'not_found' }
   let state
   if (data.status === 'paid') state = 'paid'
@@ -119,7 +119,7 @@ export async function markOpened(db, linkId, nowIso = new Date().toISOString()) 
     .update({ status: 'opened', opened_at: nowIso, updated_at: nowIso })
     .eq('id', linkId)
     .eq('status', 'sent')
-  if (error) logWarn('paylink', 'markOpened failed', { linkId, error: error.message })
+  if (error) logWarn('paylink', 'markOpened failed', { linkId, code: error.code ?? null })
 }
 
 /**
@@ -154,6 +154,11 @@ export function productLabel(product) {
   return price ? (title ? `${title}, ${price}` : price) : title
 }
 
+/** {studio} (and any other known {key}) filled; an unknown {key} is kept. Function replacer: a `$&` in a value is literal. */
+export function fillCopy(text, vars) {
+  return String(text ?? '').replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k] ?? '') : m))
+}
+
 export const COPY_DEFAULTS = Object.freeze({
   whatsapp_text: "Hi {first_name}, it's {studio}. Here's the link for the {product} we talked about on the phone. Tap below to pay securely on un1t.online.",
   button_text: 'Pay now',
@@ -163,6 +168,10 @@ export const COPY_DEFAULTS = Object.freeze({
   expired_text: "This link has expired. Reply to us on WhatsApp and we'll send you a new one.",
   unavailable_text: "We couldn't reach the payment system just now. Please try again in a minute.",
   help_text: "We couldn't set up your account automatically. Reply to us on WhatsApp and we'll sort it out.",
+  // The set-password email the paid sweep sends for an account the CRM made.
+  // {studio} = the studio's name (locations.name).
+  set_password_email_subject: 'Your {studio} account',
+  set_password_email_body: "Thanks for your purchase at {studio}. We've set up your un1t.online account. Check your inbox for a code to set your password, then book your first class in the app.",
 })
 
 /** `locations.settings.un1t_online.payment_link` over the code defaults, per key. */
@@ -180,5 +189,7 @@ export function paymentLinkCopy(settings) {
     expired_text: pick('expired_text'),
     unavailable_text: pick('unavailable_text'),
     help_text: pick('help_text'),
+    set_password_email_subject: pick('set_password_email_subject'),
+    set_password_email_body: pick('set_password_email_body'),
   }
 }

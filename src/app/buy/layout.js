@@ -1,4 +1,4 @@
-// /buy segment layout — studio-site typography (PAYLINK.1).
+// /buy segment layout — studio-site typography (STAFFPAYLINK.1).
 //
 // A customer opens this from a staff-sent payment link on WhatsApp, so it
 // must look like the studio, not the staff CRM. Mirrors

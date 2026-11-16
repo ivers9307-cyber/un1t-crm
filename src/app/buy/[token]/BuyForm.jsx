@@ -1,6 +1,6 @@
 'use client'
 
-// PAYLINK.1 — "Continue to payment" on /buy/<token>. A new customer ticks
+// STAFFPAYLINK.1 — "Continue to payment" on /buy/<token>. A new customer ticks
 // un1t.online's terms and waiver (the /trial tick, TrialTermsTick); an existing
 // member just presses the button. The POST answers a hosted-checkout URL
 // (followed once, never stored) or a state the card then shows. A
@@ -42,8 +42,14 @@ export default function BuyForm({ token, isNew, terms, buttonText, messages }) {
     }
     setBusy(false)
     if (kind === 'terms_required') {
-      setNeedsTerms(!!terms)
-      setError(terms?.required_message || messages?.help || '')
+      // No terms to tick: pressing again would only loop, so show the help
+      // line and stop (the form goes, the customer replies on WhatsApp).
+      if (!terms) {
+        setDone(messages?.help || messages?.unavailable || '')
+        return
+      }
+      setNeedsTerms(true)
+      setError(terms.required_message || messages?.help || '')
       return
     }
     if (kind === 'unavailable') {

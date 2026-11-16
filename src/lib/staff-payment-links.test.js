@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   LIVE_STATUSES, STAFF_PAYMENT_LINK_TTL_MS, BUY_PATH, mintPaymentToken, hashPaymentToken, buildBuyUrl,
   issueStaffPaymentLink, revokeStaffPaymentLink, resolveStaffPaymentLink, markOpened,
-  isPaymentForLink, productLabel, paymentLinkCopy,
+  isPaymentForLink, productLabel, paymentLinkCopy, fillCopy,
 } from './staff-payment-links'
 
 // A recording chain: every filter call is logged; awaiting resolves to the
@@ -85,9 +85,9 @@ describe('issueStaffPaymentLink', () => {
     expect(db.calls.map((c) => c.op)).toEqual(['update', 'insert', 'update', 'insert'])
   })
   it('fails when the revoke fails', async () => {
-    const db = makeDb({ 'staff_payment_links.update': { data: null, error: { message: 'boom' } } })
+    const db = makeDb({ 'staff_payment_links.update': { data: null, error: { code: 'XX', message: 'boom with row data' } } })
     const r = await issueStaffPaymentLink(db, ARGS)
-    expect(r.ok).toBe(false)
+    expect(r).toEqual({ ok: false, error: 'revoke_failed', code: 'XX' })
     expect(db.calls.some((c) => c.op === 'insert')).toBe(false)
   })
 })
@@ -203,5 +203,15 @@ describe('paymentLinkCopy', () => {
     expect(c.paid_text).toBe("You're all paid up. See you in class!")
     expect(c.expired_text).toBe('Gone')
     expect(c.whatsapp_text).toMatch(/^Hi \{first_name\}/)
+  })
+  it('carries the set-password email copy with a {studio} placeholder, overridable', () => {
+    const d = paymentLinkCopy(null)
+    expect(d.set_password_email_subject).toBe('Your {studio} account')
+    expect(d.set_password_email_body).toContain('{studio}')
+    expect(fillCopy(d.set_password_email_subject, { studio: 'UN1T Hatch Street' })).toBe('Your UN1T Hatch Street account')
+    expect(paymentLinkCopy({ set_password_email_subject: 'Hi from {studio}' }).set_password_email_subject).toBe('Hi from {studio}')
+  })
+  it('fillCopy keeps unknown placeholders and reads $& literally', () => {
+    expect(fillCopy('{studio} {other}', { studio: '$& Co' })).toBe('$& Co {other}')
   })
 })

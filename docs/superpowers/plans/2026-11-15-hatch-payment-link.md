@@ -1,4 +1,4 @@
-# PAYLINK.1 Hatch Street staff payment link — Implementation Plan
+# STAFFPAYLINK.1 Hatch Street staff payment link — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Ticket prefix `PAYLINK.1`; commits `PAYLINK.1 — <summary>`, ending `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Ticket prefix `STAFFPAYLINK.1`; commits `STAFFPAYLINK.1 — <summary>`, ending `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - The CRM never charges a card: only `createCheckoutLink` (un1t.online hosted checkout). Never `/purchases/charge`, `charge-custom`, `/credits/grant`.
 - Staff never accept terms for the customer: account creation only with `terms_accepted_at` recorded from the customer's own POST.
 - The token and the checkout URL are never logged, never stored on `staff_payment_links` (token: sha256 hex only). Log ids and codes only (`logWarn/logError`, module `paylink`).
@@ -94,7 +94,7 @@ Defaults (exact copy):
 **Files:**
 - Modify: `shared/permissions.js` (WEB_PERMISSIONS entry + every role default row, mirroring `un1t_comp_credits` exactly)
 - Modify: `shared/permission-bundles.js` (`un1t_payment_links: ['bundle_members']`)
-- Modify: `scripts/check-mobile-parity.mjs` (`WEB_ONLY_OK` reason: `"PAYLINK.1: Hatch payment link from the web contact page's Hatch card. No phone screen in this change."`)
+- Modify: `scripts/check-mobile-parity.mjs` (`WEB_ONLY_OK` reason: `"STAFFPAYLINK.1: Hatch payment link from the web contact page's Hatch card. No phone screen in this change."`)
 - Create: `src/lib/un1t-payment-link-access.js` exporting `UN1T_PAYMENT_LINKS_PERMISSION = 'un1t_payment_links'`, `canSendUn1tPaymentLink(user, locationId): boolean` (copy `un1t-comp-credits-access.js`)
 - Test: `src/lib/un1t-payment-link-access.test.js`
 
@@ -142,7 +142,7 @@ Behaviour: hidden when GET says `can.send` false and there is no `latest`. Dropd
 - Create: `src/app/api/public/buy/[token]/route.js`
 - Create: `src/lib/staff-payment-link-checkout.js` (`startStaffLinkCheckout`)
 - Test: `src/lib/staff-payment-link-checkout.test.js`, `src/app/buy/[token]/page.test.jsx`
-- Modify: `src/proxy.js` `publicPaths` (`'/buy/'`), `src/components/AppShell.jsx` `PUBLIC_PATHS` (`'/buy'`), `src/lib/brands.js` un1t-marketing `allowedPaths` (`'/buy/'`), `src/lib/tenant-domains-edge.js` `DB_BRAND_DEFAULTS.allowedPaths` (`'/buy/'`), `src/lib/page-slug.js` reserved (`'buy'`), `src/public-compliance-paths.test.jsx` (a PAYLINK.1 describe copying the UN1TDUN.1 one)
+- Modify: `src/proxy.js` `publicPaths` (`'/buy/'`), `src/components/AppShell.jsx` `PUBLIC_PATHS` (`'/buy'`), `src/lib/brands.js` un1t-marketing `allowedPaths` (`'/buy/'`), `src/lib/tenant-domains-edge.js` `DB_BRAND_DEFAULTS.allowedPaths` (`'/buy/'`), `src/lib/page-slug.js` reserved (`'buy'`), `src/public-compliance-paths.test.jsx` (a STAFFPAYLINK.1 describe copying the UN1TDUN.1 one)
 
 **Interfaces:**
 - `loadBuyPage(db, token): Promise<{ kind: 'not_found' } | { kind: 'paid'|'expired'|'unavailable', branding } | { kind: 'ready', branding, product: { title, price_label }, person: { first_name, email }, isNew: boolean }>` in `staff-payment-link-checkout.js`. Reads: link (Task 2 resolve), contact fresh by id (named columns), product from `un1t_products` (current, `isSellableUn1tProduct`), paid check over the mirror (`isPaymentForLink`), `isNew = !link.un1t_user_id && !contact.un1t_user_id` (no API call; a person whose account exists but is unlinked sees the ticks, and the POST then finds and links the account without creating one). Stamps `opened` (Task 2 `markOpened`). Makes no un1t.online call.
@@ -177,7 +177,7 @@ Per studio: live rows plus `expired` rows less than 3 days past expiry, with `un
 - Modify: `src/components/settings/integrations/Un1tOnlineIntegrationTab.jsx` and `src/app/api/locations/[id]/un1t-online/route.js` (a "Payment links" section: template name + the copy keys of `paymentLinkCopy`, validated strings ≤ 1000 chars, stored at `settings.un1t_online.payment_link`)
 - Test: the route's existing test file (add a case) 
 - Create: `docs/changelog/entries/<PR>.md` (after `gh pr create`)
-- Modify: `docs/architecture/REFERENCE.md` (a short § PAYLINK.1 pointing at the files)
+- Modify: `docs/architecture/REFERENCE.md` (a short § STAFFPAYLINK.1 pointing at the files)
 
 - [ ] **Step 1:** Failing route test: saves and returns `payment_link` copy; rejects a non-string. **Step 2:** Run → FAIL. **Step 3:** Implement. **Step 4:** Run → PASS.
 - [ ] **Step 5:** Full CI mirror (the 13 commands in CLAUDE.md) and `npm run build`, one at a time → all green.

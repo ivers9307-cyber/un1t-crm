@@ -1,4 +1,4 @@
-// POST /api/public/buy/[token] — PAYLINK.1: "Continue to payment" on a
+// POST /api/public/buy/[token] — STAFFPAYLINK.1: "Continue to payment" on a
 // staff-sent payment link (/buy/<token>).
 //
 // Public, no auth: the token in the path is the capability (32 random bytes;

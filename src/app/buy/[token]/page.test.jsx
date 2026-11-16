@@ -1,4 +1,4 @@
-// PAYLINK.1 — the /buy/<token> page. loadBuyPage (tested in
+// STAFFPAYLINK.1 — the /buy/<token> page. loadBuyPage (tested in
 // src/lib/staff-payment-link-checkout.test.js) is faked at its module
 // boundary; here: an unknown token 404s, the terms tick shows only for a new
 // customer, the plain states, and the ?paid=1 return (never "not paid").

@@ -1,4 +1,4 @@
-// PAYLINK.1 — who may send a un1t.online payment link at a studio: the
+// STAFFPAYLINK.1 — who may send a un1t.online payment link at a studio: the
 // un1t_payment_links web permission there (owner, manager and reception by
 // default; master always), resolved at the studio through the full tier
 // order, role templates included. Pure.

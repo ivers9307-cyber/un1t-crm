@@ -249,7 +249,7 @@ export async function proxy(request) {
   // reminder (WhatsApp URL button). The member has no session; the random
   // token in the path is the only credential, and the page only redirects to
   // the invoice's hosted payment page. Trailing slash: /pay/<other> stays gated.
-  // /buy/ — PAYLINK.1. A staff-sent payment link (WhatsApp "Pay now" after a
+  // /buy/ — STAFFPAYLINK.1. A staff-sent payment link (WhatsApp "Pay now" after a
   // call) and where un1t.online's hosted checkout returns the customer
   // (?paid=1 / ?cancelled=1). No session; the 32-byte token in the path is the
   // only credential (only its sha256 is stored). Trailing slash: /buyers stays gated.

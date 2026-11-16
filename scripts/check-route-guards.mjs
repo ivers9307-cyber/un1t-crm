@@ -118,7 +118,7 @@ const EXEMPT = {
   'src/app/api/openapi.json/route.js':
     'Spec read for any logged-in user — the middleware session gate is the auth (no tenant data; champ-app JWTs reading the spec is acceptable).',
   'src/app/api/public/buy/[token]/route.js':
-    'Capability-token URL (PAYLINK.1, mig 841): a staff-sent payment link the customer opens from WhatsApp with no session. The 32-byte token (only its sha256 stored) resolves ONE staff_payment_links row and the route acts only on that link\'s own contact, studio and product; per-IP rate limit; answers a state or un1t.online\'s hosted-checkout URL, never personal data. Also proxy-public under /api/public/.',
+    'Capability-token URL (STAFFPAYLINK.1, mig 841): a staff-sent payment link the customer opens from WhatsApp with no session. The 32-byte token (only its sha256 stored) resolves ONE staff_payment_links row and the route acts only on that link\'s own contact, studio and product; per-IP rate limit; answers a state or un1t.online\'s hosted-checkout URL, never personal data. Also proxy-public under /api/public/.',
   'src/app/api/unsubscribe/[token]/route.js':
     'Capability-token URL (per-contact unsubscribe token) + rate-limited — public by design, RFC 8058 one-click target.',
   'src/app/api/unsubscribe/host/[token]/route.js':

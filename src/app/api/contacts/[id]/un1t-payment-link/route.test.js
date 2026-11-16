@@ -1,4 +1,4 @@
-// PAYLINK.1 — staff sends a Hatch Street customer a un1t.online payment link.
+// STAFFPAYLINK.1 — staff sends a Hatch Street customer a un1t.online payment link.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -47,6 +47,7 @@ vi.mock('@/lib/whatsapp-conversations', async (orig) => ({
   contactWaPhone: (await orig()).contactWaPhone,
   loadSendConversation: vi.fn(),
 }))
+vi.mock('@/lib/log', async (orig) => ({ ...(await orig()), logError: vi.fn(), logWarn: vi.fn() }))
 vi.mock('@/lib/agent/core', () => ({ manualTakeoverPatch: vi.fn(() => ({ agent_handed_off_at: 'x' })) }))
 
 import { GET, POST } from './route.js'
@@ -54,14 +55,15 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { canSendUn1tPaymentLink } from '@/lib/un1t-payment-link-access'
 import { issueStaffPaymentLink, revokeStaffPaymentLink } from '@/lib/staff-payment-links'
-import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents } from '@/lib/whatsapp'
+import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents, renderTemplateBody } from '@/lib/whatsapp'
+import { logError } from '@/lib/log'
 import { loadSendConversation } from '@/lib/whatsapp-conversations'
 import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
 
 const LOC = 'c0000000-0000-0000-0000-000000000003'
 const OFFER = 'd0000000-0000-0000-0000-000000000009'
 const USER = { id: 'u-1', role: 'manager', locations: [{ id: LOC }] }
-let dbMock, contactRow, locationRow, templateRow, memberRow, writes, prefRow, adminPrefRow, messageInsertThrows
+let dbMock, contactRow, locationRow, templateRow, memberRow, writes, prefRow, adminPrefRow, messageInsertThrows, linkRow
 
 function makeDb() {
   writes = []
@@ -85,6 +87,7 @@ function makeDb() {
           if (table === 'whatsapp_templates') data = templateRow ? [templateRow] : []
           else if (table === 'whatsapp_conversations') data = [{ id: 'conv-1', window_expires_at: '2999-01-01T00:00:00Z' }]
           else if (table === 'contact_studios') data = memberRow ? [memberRow] : []
+          else if (table === 'staff_payment_links') data = linkRow ? [linkRow] : []
           else if (table === 'mia_purchase_offers') data = [{ id: OFFER, un1t_product_row_id: 'p-row' }]
           else if (table === 'un1t_products') data = [{ id: 'p-row', type: 'recurring' }]
           return Promise.resolve({ data, error: null }).then(res, rej)
@@ -109,6 +112,7 @@ beforeEach(() => {
   prefRow = null
   adminPrefRow = null
   messageInsertThrows = false
+  linkRow = null
   dbMock = makeDb()
   getCurrentUser.mockResolvedValue(USER)
   hasPermission.mockReturnValue(true)
@@ -225,18 +229,34 @@ describe('fix round 1', () => {
     expect((await res.json()).code).toBe('needs_template')
   })
 
-  it('a bookkeeping failure after a successful send keeps the link', async () => {
+  it('a bookkeeping failure after a successful send keeps the link, and the other steps still run', async () => {
     messageInsertThrows = true
     const res = await send()
     expect(res.status).toBe(200)
     expect(revokeStaffPaymentLink).not.toHaveBeenCalled()
+    expect(writes.some((w) => w.table === 'whatsapp_conversations' && w.op === 'update')).toBe(true)
+    expect(writes.some((w) => w.table === 'staff_payment_links' && w.op === 'update')).toBe(true)
+    expect(writes.some((w) => w.table === 'activities' && w.op === 'insert')).toBe(true)
   })
 
-  it('a failed issue returns a fixed message, not the raw error', async () => {
-    issueStaffPaymentLink.mockResolvedValueOnce({ ok: false, error: 'duplicate key value violates unique constraint' })
+  it('a template body that fails to render is logged as [Template: <name>] and the bookkeeping still runs', async () => {
+    isWindowOpen.mockReturnValue(false)
+    templateRow = goodTemplate()
+    renderTemplateBody.mockImplementationOnce(() => { throw new Error('bad template') })
+    const res = await send()
+    expect(res.status).toBe(200)
+    const msg = writes.find((w) => w.table === 'whatsapp_messages')
+    expect(msg.payload.body).toBe('[Template: hatch_pay]')
+    expect(writes.some((w) => w.table === 'activities')).toBe(true)
+  })
+
+  it('a failed issue returns a fixed message and logs codes only, not the raw error', async () => {
+    issueStaffPaymentLink.mockResolvedValueOnce({ ok: false, error: 'insert_failed', code: '23505' })
     const res = await send()
     expect(res.status).toBe(500)
     expect((await res.json()).error).toBe('Could not create the payment link. Please try again.')
+    const call = logError.mock.calls.find((c) => c[1] === 'link issue failed')
+    expect(call[2]).toEqual({ contactId: 'c-1', locationId: LOC, reason: 'insert_failed', code: '23505' })
   })
 })
 
@@ -254,5 +274,31 @@ describe('GET', () => {
 
   it('live_membership is null with no active membership', async () => {
     expect((await (await get()).json()).data.live_membership).toBeNull()
+  })
+
+  it('a live latest link past expires_at reads as expired; a live one in date keeps its status', async () => {
+    linkRow = { status: 'opened', product_title: 'x', created_at: '2026-01-01T00:00:00Z', paid_at: null, expires_at: '2026-01-08T00:00:00Z', last_error: null }
+    expect((await (await get()).json()).data.latest.status).toBe('expired')
+    linkRow = { ...linkRow, expires_at: '2999-01-01T00:00:00Z' }
+    expect((await (await get()).json()).data.latest.status).toBe('opened')
+    linkRow = { ...linkRow, status: 'paid', expires_at: '2026-01-08T00:00:00Z' }
+    expect((await (await get()).json()).data.latest.status).toBe('paid')
+  })
+
+  it('can.reason says why: writes off, WhatsApp opt-out, a free checkout; null when nothing is wrong', async () => {
+    expect((await (await get()).json()).data.can.reason).toBeNull()
+    locationRow.settings.un1t_online.writes_enabled = false
+    let can = (await (await get()).json()).data.can
+    expect(can.send).toBe(false)
+    expect(can.reason).toBe('un1t.online is not switched on for this studio.')
+    locationRow.settings.un1t_online.writes_enabled = true
+    prefRow = { whatsapp_marketing: false }
+    can = (await (await get()).json()).data.can
+    expect(can.send).toBe(false)
+    expect(can.reason).toBe('This customer has opted out of WhatsApp at this studio.')
+    prefRow = null
+    linkRow = { status: 'checkout_started', product_title: 'x', created_at: '2026-01-01T00:00:00Z', paid_at: null, expires_at: '2999-01-01T00:00:00Z', last_error: 'checkout_free' }
+    can = (await (await get()).json()).data.can
+    expect(can.reason).toBe('un1t.online says Aoife already has this product.')
   })
 })

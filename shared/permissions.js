@@ -172,7 +172,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   // written to the member's un1t.online account. Resolved at the booking
   // studio. Web-only (no phone screen; scripts/check-mobile-parity.mjs).
   { key: 'un1t_comp_credits', label: 'Add complimentary credits',  hint: "Add free class credits, with a use-by date and a reason, to a member's un1t.online account from the contact page. Owner/master/manager/reception by default." },
-  // PAYLINK.1 — the Hatch card's "Send payment link": a un1t.online hosted
+  // STAFFPAYLINK.1 — the Hatch card's "Send payment link": a un1t.online hosted
   // checkout link sent to the member on WhatsApp. Resolved at the studio.
   // Web-only (no phone screen; scripts/check-mobile-parity.mjs).
   { key: 'un1t_payment_links', label: 'Send payment links', hint: 'Send a un1t.online payment link for a membership or credit pack on WhatsApp from the contact page. Owner/master/manager/reception by default.' },

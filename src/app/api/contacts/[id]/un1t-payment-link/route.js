@@ -1,5 +1,5 @@
 // /api/contacts/[id]/un1t-payment-link — staff sends a Hatch Street (un1t.online)
-// customer a payment link on WhatsApp (PAYLINK.1).
+// customer a payment link on WhatsApp (STAFFPAYLINK.1).
 //
 // GET  ?locationId= → what the send card needs: the studio's sellable offers,
 //        the latest link, what can be sent right now, a live membership (shown
@@ -210,7 +210,7 @@ export async function GET(request, props) {
   const baseUrl = await resolveCustomerBaseUrl(db, locationId)
   const [latestRes, template, convRes, memberRes, refusal] = await Promise.all([
     db.from('staff_payment_links')
-      .select('status, product_title, created_at, paid_at, expires_at')
+      .select('status, product_title, created_at, paid_at, expires_at, last_error')
       .eq('location_id', locationId).eq('contact_id', contact.id)
       .order('created_at', { ascending: false }).limit(1),
     loadTemplate(db, locationId, copy.template_name),
@@ -231,6 +231,14 @@ export async function GET(request, props) {
   const hasPhone = !!(contact.wa_phone || contact.phone)
   const windowOpen = !!conversation && isWindowOpen(conversation)
   const templateReady = templateUsable(template, baseUrl)
+  const firstName = contact.first_name || (contact.name || '').split(' ')[0] || ''
+  const send = settings.writesEnabled && hasEmail && hasPhone && !refusal && (windowOpen || templateReady)
+  const reason = !settings.writesEnabled
+    ? 'un1t.online is not switched on for this studio.'
+    : refusal
+      || (latest?.last_error === 'checkout_free'
+        ? `un1t.online says ${firstName || 'this customer'} already has this product.`
+        : null)
 
   return json({
     success: true,
@@ -238,10 +246,11 @@ export async function GET(request, props) {
       first_name: contact.first_name || null,
       offers,
       latest: latest
-        ? { status: latest.status, product_title: latest.product_title, created_at: latest.created_at, paid_at: latest.paid_at, expires_at: latest.expires_at }
+        ? { status: displayStatus(latest), product_title: latest.product_title, created_at: latest.created_at, paid_at: latest.paid_at, expires_at: latest.expires_at }
         : null,
       can: {
-        send: settings.writesEnabled && hasEmail && hasPhone && !refusal && (windowOpen || templateReady),
+        send,
+        reason,
         has_email: hasEmail,
         has_phone: hasPhone,
         window_open: windowOpen,
@@ -251,6 +260,13 @@ export async function GET(request, props) {
       preview_text: renderCopyText(copy.whatsapp_text, { first_name: contact.first_name || '', studio: location.name || '', product: '{product}' }),
     },
   })
+}
+
+// A live link past expires_at reads as expired before the sweep stamps it.
+function displayStatus(link, now = Date.now()) {
+  if (!LIVE_STATUSES.includes(link.status)) return link.status
+  const exp = Date.parse(link.expires_at || '')
+  return !Number.isFinite(exp) || exp <= now ? 'expired' : link.status
 }
 
 function renderCopyText(text, vars) {
@@ -330,7 +346,7 @@ export async function POST(request, props) {
     createdBy: user.id,
   })
   if (!issued.ok) {
-    logError('paylink', 'link issue failed', { contactId: contact.id, locationId, detail: String(issued.error || '').slice(0, 200) })
+    logError('paylink', 'link issue failed', { contactId: contact.id, locationId, reason: issued.error ?? null, code: issued.code ?? null })
     return fail('Could not create the payment link. Please try again.', 500)
   }
 
@@ -364,52 +380,58 @@ export async function POST(request, props) {
   }
 
   // Everything below is best-effort: the link is already delivered, so a
-  // failure here is logged and never revokes it.
-  try {
-    if (templateName) {
-      body = renderTemplateBody(template, { ...contact, first_name: firstName }, { '1': 'first_name', '2': label }, { locationId }) || `[Template: ${template.name}]`
+  // failure here is logged and never revokes it. Each step has its own try, so
+  // one failure never skips the message log, the Mia pause or the activity.
+  const step = async (what, fn) => {
+    try {
+      const { error } = (await fn()) || {}
+      if (error) logError('paylink', `${what} failed`, { linkId: issued.linkId, code: error.code ?? null })
+    } catch (e) {
+      logError('paylink', `${what} threw`, { linkId: issued.linkId, errClass: e?.name })
     }
-    const nowIso = new Date().toISOString()
-    // The body never carries the token or URL (the URL rides the button).
-    const { error: msgErr } = await db.from('whatsapp_messages').insert({
-      conversation_id: conversation.id,
-      contact_id: contact.id,
-      location_id: locationId,
-      wa_message_id: result.messageId,
-      direction: 'outbound',
-      message_type: messageType,
-      body,
-      template_name: templateName,
-      status: 'sent',
-      sent_by: user.id,
-      sent_at: nowIso,
-    })
-    if (msgErr) logError('paylink', 'whatsapp_messages insert failed', { linkId: issued.linkId, code: msgErr.code ?? null })
-    // A staff send is a human take-over: pause Mia in this thread.
-    const { error: convErr } = await db.from('whatsapp_conversations').update({
-      last_message_at: nowIso,
-      last_message_direction: 'outbound',
-      last_message_preview: String(body).substring(0, 100),
-      ...manualTakeoverPatch(conversation.agent_handed_off_at),
-    }).eq('id', conversation.id).select('id')
-    if (convErr) logError('paylink', 'conversation update failed', { linkId: issued.linkId, code: convErr.code ?? null })
-    const { error: stampErr } = await db.from('staff_payment_links')
-      .update({ whatsapp_message_id: result.messageId, updated_at: new Date().toISOString() })
-      .eq('id', issued.linkId)
-      .in('status', LIVE_STATUSES)
-    if (stampErr) logWarn('paylink', 'whatsapp_message_id stamp failed', { linkId: issued.linkId, code: stampErr.code ?? null })
-    const { error: actErr } = await db.from('activities').insert({
-      contact_id: contact.id,
-      location_id: locationId,
-      type: 'un1t_payment_link_sent',
-      subject: `Payment link sent on WhatsApp: ${label}`,
-      note: null,
-      created_by: user.id,
-    })
-    if (actErr) logWarn('paylink', 'activity insert failed', { linkId: issued.linkId, code: actErr.code ?? null })
-  } catch (e) {
-    logError('paylink', 'post-send bookkeeping threw', { linkId: issued.linkId, errClass: e?.name })
   }
+  if (templateName) {
+    try {
+      body = renderTemplateBody(template, { ...contact, first_name: firstName }, { '1': 'first_name', '2': label }, { locationId }) || `[Template: ${templateName}]`
+    } catch (e) {
+      logWarn('paylink', 'template body render threw', { linkId: issued.linkId, errClass: e?.name })
+      body = `[Template: ${templateName}]`
+    }
+  }
+  const nowIso = new Date().toISOString()
+  // The body never carries the token or URL (the URL rides the button).
+  await step('whatsapp_messages insert', () => db.from('whatsapp_messages').insert({
+    conversation_id: conversation.id,
+    contact_id: contact.id,
+    location_id: locationId,
+    wa_message_id: result.messageId,
+    direction: 'outbound',
+    message_type: messageType,
+    body,
+    template_name: templateName,
+    status: 'sent',
+    sent_by: user.id,
+    sent_at: nowIso,
+  }))
+  // A staff send is a human take-over: pause Mia in this thread.
+  await step('conversation update', () => db.from('whatsapp_conversations').update({
+    last_message_at: nowIso,
+    last_message_direction: 'outbound',
+    last_message_preview: String(body ?? '').substring(0, 100),
+    ...manualTakeoverPatch(conversation.agent_handed_off_at),
+  }).eq('id', conversation.id).select('id'))
+  await step('whatsapp_message_id stamp', () => db.from('staff_payment_links')
+    .update({ whatsapp_message_id: result.messageId, updated_at: nowIso })
+    .eq('id', issued.linkId)
+    .in('status', LIVE_STATUSES))
+  await step('activity insert', () => db.from('activities').insert({
+    contact_id: contact.id,
+    location_id: locationId,
+    type: 'un1t_payment_link_sent',
+    subject: `Payment link sent on WhatsApp: ${label}`,
+    note: null,
+    created_by: user.id,
+  }))
 
   return json({ success: true, data: { linkId: issued.linkId, expiresAt: issued.expiresAt, via } })
 }

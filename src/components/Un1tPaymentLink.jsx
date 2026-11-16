@@ -1,6 +1,6 @@
 'use client'
 
-// PAYLINK.1 — staff send a un1t.online payment link on WhatsApp from the Hatch
+// STAFFPAYLINK.1 — staff send a un1t.online payment link on WhatsApp from the Hatch
 // card. Does its own GET (offers, latest link, what can be sent) so the card's
 // data is untouched. A non-2xx GET (a studio where it does not apply, or no
 // permission) renders nothing. The CRM never charges: the customer pays on
@@ -63,6 +63,7 @@ export default function Un1tPaymentLink({ contactId, locationId, studioName, zon
   if (!info) return null
   const can = info.can || {}
   const reasons = []
+  if (typeof can.reason === 'string' && can.reason) reasons.push(can.reason)
   if (!can.has_email) reasons.push('There is no email address on this contact, so they cannot make an account.')
   if (!can.has_phone) reasons.push('There is no phone number on this contact.')
   if (can.has_email && can.has_phone && !can.window_open && !can.template_ready) {

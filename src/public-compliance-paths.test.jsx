@@ -677,7 +677,7 @@ describe('UN1TDUN.1 — /pay-link is public on every host', () => {
   })
 })
 
-// ── 7f. PAYLINK.1 — a staff-sent payment link is public on every host ──
+// ── 7f. STAFFPAYLINK.1 — a staff-sent payment link is public on every host ──
 //
 // A customer opens <customer base>/buy/<token> from the WhatsApp "Pay now"
 // button staff sent after a call, and un1t.online's hosted checkout returns
@@ -685,7 +685,7 @@ describe('UN1TDUN.1 — /pay-link is public on every host', () => {
 // the studio's customer host, so all FOUR lists must carry it; the POST behind
 // the button is under /api/public/, already in every list.
 
-describe('PAYLINK.1 — /buy is public on every host', () => {
+describe('STAFFPAYLINK.1 — /buy is public on every host', () => {
   const BUY = '/buy/dG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9r'
   beforeEach(() => {
     tenantBrandImpl = async (hostname) =>
