@@ -216,12 +216,16 @@ export async function getPendingApprovals(db, user) {
     const p = visible[i]
     // One bad provider shouldn't blank the whole inbox. Log + return
     // an empty bucket so the UI still renders the other tabs.
+    // APPROVALSUNAVAIL.1 (October audit A17) — marked `unavailable`, so the
+    // inbox says it could not load this category instead of showing it as
+    // empty (a failed leave read used to read as "All clear").
     console.warn(`[approvals] provider '${p.key}' failed: ${s.reason?.message || s.reason}`)
-    return { key: p.key, label: p.label, reviewBase: p.reviewBase, count: 0, items: [], failedItems: [] }
+    return { key: p.key, label: p.label, reviewBase: p.reviewBase, count: 0, items: [], failedItems: [], unavailable: true }
   })
 
   const total = providers.reduce((sum, p) => sum + p.count, 0)
-  return { providers, total }
+  const unavailable = providers.filter((p) => p.unavailable).map((p) => p.label)
+  return { providers, total, unavailable }
 }
 
 /**
@@ -239,7 +243,17 @@ export async function getPendingApprovals(db, user) {
  * queue) pass nothing and keep counting everything. When a provider gains a
  * phone surface, delete its `noPhoneSurface` flag; nothing here changes.
  */
-export async function getPendingApprovalsCount(db, user, { phoneSurfaceOnly = false } = {}) {
+export async function getPendingApprovalsCount(db, user, opts = {}) {
+  return (await getPendingApprovalsCountDetail(db, user, opts)).count
+}
+
+/**
+ * APPROVALSUNAVAIL.1 — the count plus whether it is complete. A provider whose
+ * read failed adds nothing to `count` and sets `incomplete`, so a caller can
+ * say "could not check everything" rather than show 0 as an all-clear.
+ * @returns {Promise<{ count: number, incomplete: boolean }>}
+ */
+export async function getPendingApprovalsCountDetail(db, user, { phoneSurfaceOnly = false } = {}) {
   // Mirror the visibility filter from getPendingApprovals so the
   // sidebar badge matches what the inbox renders.
   const visible = APPROVALS_PROVIDERS
@@ -254,7 +268,9 @@ export async function getPendingApprovalsCount(db, user, { phoneSurfaceOnly = fa
       return count
     })
   )
-  return settled.reduce((sum, s) => sum + (s.status === 'fulfilled' ? (s.value || 0) : 0), 0)
+  const count = settled.reduce((sum, s) => sum + (s.status === 'fulfilled' ? (s.value || 0) : 0), 0)
+  const incomplete = settled.some((s) => s.status !== 'fulfilled')
+  return { count, incomplete }
 }
 
 // Permission helpers — exported so the API routes share the same

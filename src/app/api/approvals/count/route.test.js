@@ -10,12 +10,12 @@ vi.mock('@/lib/auth', async () => {
   return { ...actual, getCurrentUser: vi.fn() }
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/approvals/registry', () => ({ getPendingApprovalsCount: vi.fn() }))
+vi.mock('@/lib/approvals/registry', () => ({ getPendingApprovalsCountDetail: vi.fn() }))
 
 import { GET } from './route'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { getPendingApprovalsCount } from '@/lib/approvals/registry'
+import { getPendingApprovalsCountDetail as getPendingApprovalsCount } from '@/lib/approvals/registry'
 
 const req = () => new Request('http://x/api/approvals/count')
 const headCoach = { id: 'u1', role: 'head_coach', activeLocation: { id: 'loc1' } }
@@ -35,11 +35,11 @@ describe('GET /api/approvals/count', () => {
 
   it('delegates to getPendingApprovalsCount with the service-role db and the user', async () => {
     getCurrentUser.mockResolvedValue(headCoach)
-    getPendingApprovalsCount.mockResolvedValue(7)
+    getPendingApprovalsCount.mockResolvedValue({ count: 7, incomplete: false })
     const res = await GET(req())
     const body = await res.json()
     expect(res.status).toBe(200)
-    expect(body).toEqual({ success: true, data: { count: 7 } })
+    expect(body).toEqual({ success: true, data: { count: 7, incomplete: false } })
     expect(getPendingApprovalsCount).toHaveBeenCalledWith({ marker: 'db' }, headCoach)
   })
 
@@ -49,10 +49,10 @@ describe('GET /api/approvals/count', () => {
   // inside getPendingApprovalsCount, not in this route.
   it('does not 403 a staff session — permission: null, so an ineligible caller gets a quiet 0', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u2', role: 'staff', activeLocation: { id: 'loc1' } })
-    getPendingApprovalsCount.mockResolvedValue(0)
+    getPendingApprovalsCount.mockResolvedValue({ count: 0, incomplete: false })
     const res = await GET(req())
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, data: { count: 0 } })
+    expect(await res.json()).toEqual({ success: true, data: { count: 0, incomplete: false } })
   })
 
   // location: false — avoids a 400 for a session with no active location.
@@ -61,10 +61,10 @@ describe('GET /api/approvals/count', () => {
   // have anything to count.
   it('does not require an active location', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u3', role: 'owner', activeLocation: null })
-    getPendingApprovalsCount.mockResolvedValue(4)
+    getPendingApprovalsCount.mockResolvedValue({ count: 4, incomplete: false })
     const res = await GET(req())
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, data: { count: 4 } })
+    expect(await res.json()).toEqual({ success: true, data: { count: 4, incomplete: false } })
   })
 
   // Fix 4 (TDD step 1) — the synchronous APPROVALS_PROVIDERS.filter(...)

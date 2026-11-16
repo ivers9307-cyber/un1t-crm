@@ -90,23 +90,33 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: false, error: cloneErr.message }, { status: 500 })
   }
 
-  // 3. Duplicate the steps in order. Strip the source's id +
-  // sequence_id (Postgres assigns fresh ids on insert) plus the
-  // created_at / updated_at timestamps the DB default will set.
+  // 3. Duplicate the steps. Strip the source's id + sequence_id (Postgres
+  // assigns fresh ids on insert) plus the created_at / updated_at timestamps
+  // the DB default will set.
+  // SEQCLONE.1 (15 Nov feature audit, area 4) — every content column the
+  // runner reads is copied: the WhatsApp header image
+  // (whatsapp_header_media_url) used to be dropped, so a cloned template step
+  // with an image header went out without it. step_order is kept as it is,
+  // not renumbered: branch and jump targets in config.next_step_order name
+  // step_order values, so renumbering a sequence with gaps would point them
+  // at the wrong steps.
   const steps = (source.sequence_steps || []).slice().sort((a, b) => a.step_order - b.step_order)
   if (steps.length > 0) {
-    const stepRows = steps.map((s, i) => ({
+    const stepRows = steps.map((s) => ({
       sequence_id: cloned.id,
-      step_order: i + 1,
+      step_order: s.step_order,
       delay_days: s.delay_days ?? 0,
       delay_hours: s.delay_hours ?? 0,
       delay_minutes: s.delay_minutes ?? 0,
+      delay_type: s.delay_type || 'after_previous',
       step_type: s.step_type,
       subject: s.subject || '',
       html_content: s.html_content || '',
+      design_json: s.design_json ?? null,
       template_id: s.template_id || null,
       whatsapp_template_id: s.whatsapp_template_id || null,
       whatsapp_variables: s.whatsapp_variables || {},
+      whatsapp_header_media_url: s.whatsapp_header_media_url || null,
       sms_body: s.sms_body || null,
       config: s.config || {},
     }))

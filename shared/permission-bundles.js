@@ -176,6 +176,7 @@ export const KEY_BUNDLES = Object.freeze({
   // UN1TCOMP.1 — web-only, a contact-page action at a un1t.online studio
   // (the Hatch card sits with the class booking, class_roster's home).
   un1t_comp_credits: ['bundle_members'],
+  un1t_payment_links: ['bundle_members'],
   // Mobile-only Hyrox planner. Its webEquivalent is
   // 'approvals_hyrox_sessions' (an EXEMPT approval sub-permission, for
   // the parity linter only) but the SCREEN itself is the mobile mirror

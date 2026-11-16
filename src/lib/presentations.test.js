@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { naturalSortByName, clampIndex, hasAdvanced } from './presentations'
+import { naturalSortByName, clampIndex, hasAdvanced, validateDeckOrder } from './presentations'
 
 describe('presentations: naturalSortByName', () => {
   it('orders Slide2 before Slide10 (numeric-aware, not lexicographic)', () => {
@@ -42,5 +42,16 @@ describe('presentations: hasAdvanced', () => {
     expect(hasAdvanced(3, 3)).toBe(false)
     expect(hasAdvanced(null, 0)).toBe(true)   // first load
     expect(hasAdvanced(0, 0)).toBe(false)
+  })
+})
+
+describe('validateDeckOrder (PRESENTSAFE.1)', () => {
+  it('accepts the whole deck, each slide once, in any order', () => {
+    expect(validateDeckOrder(['b', 'a', 'c'], ['a', 'b', 'c'])).toEqual({ ok: true })
+  })
+  it('refuses a missing, repeated or foreign slide', () => {
+    expect(validateDeckOrder(['a', 'b'], ['a', 'b', 'c']).ok).toBe(false)
+    expect(validateDeckOrder(['a', 'a', 'b'], ['a', 'b', 'c']).ok).toBe(false)
+    expect(validateDeckOrder(['a', 'b', 'x'], ['a', 'b', 'c']).ok).toBe(false)
   })
 })
