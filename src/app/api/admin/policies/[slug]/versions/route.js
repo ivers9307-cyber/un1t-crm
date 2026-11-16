@@ -15,7 +15,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { publishVersion, policyOrgIdFor } from '@/lib/policies'
+import { publishVersion, policyOrgIdFor, isCalendarDate } from '@/lib/policies'
 import { logAuditEvent } from '@/lib/audit'
 import { canManagePolicies } from '@/lib/policies-access'
 
@@ -24,8 +24,11 @@ export const runtime = 'nodejs'
 const PublishSchema = z.object({
   body_markdown: z.string().min(1).max(200_000),
   change_summary: z.string().max(2000).nullable().optional(),
-  effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  // POLICYATOMIC.1 — a real calendar date, not just the shape: 2026-02-30
+  // used to pass here and fail inside the publish.
+  effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isCalendarDate, 'Not a real date'),
 })
+
 
 // C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct);
 // canManagePolicies lives in src/lib/policies-access.js. W0.5 (mig 713) —

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui'
 import { Labeled, Text, Area, Num, Select } from './nodeEditing'
 import AudienceBuilder from '@/components/AudienceBuilder'
 import AudienceCount from '@/components/communications/AudienceCount'
+import AudienceMatchStart from './AudienceMatchStart'
 import {
   ANNIVERSARY_FROM_FIELD_OPTIONS,
   DEFAULT_ANNIVERSARY_FROM_FIELD,
@@ -29,6 +30,14 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 // SEQEXIT.1 — the audience stopped being an entry gate and became a
 // continuing condition. The field looks identical, so the new meaning has
 // to be stated next to it; operators cannot infer it from an unchanged UI.
+// SEQCOOLDOWN.1 (15 Nov feature audit, area 4) — the old hint promised
+// "they can re-enter after N days", but sequence_enrollments allows one row per
+// person per flow (a full unique index), so nobody ever re-enters, whatever the
+// number. The hint now says what happens; making re-entry possible is a
+// product decision (it would let a sweep re-mail a whole finished cohort).
+export const COOLDOWN_HINT =
+  'Each contact goes through this flow once. A cooldown does not let anyone re-enter after it ends; it only stops them being enrolled while it lasts.'
+
 export const AUDIENCE_CONTINUOUS_HINT =
   'These conditions are checked again before every step, not just at enrolment — a contact who stops matching leaves the sequence.'
 
@@ -132,6 +141,11 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
   // from the stage-coverage read. null until loaded or if the fetch failed.
   const [stageBoards, setStageBoards] = useState(null)
   const [dirty, setDirty] = useState(false)
+  // SEQSTART.1 — the latest matching count, for the audience-match Start button.
+  const [matchingCount, setMatchingCount] = useState(null)
+  // What the server holds now (the PUT answers with the builder shape): the
+  // saved trigger, and the start stamp an audience edit clears.
+  const [saved, setSaved] = useState(sequence || null)
   const [busy, setBusy] = useState(null) // 'save' | 'rotate' | null
   const [feedback, setFeedback] = useState(null)
 
@@ -240,6 +254,7 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
       const data = await res.json()
       if (data.success) {
         setDirty(false); setFeedback({ ok: true, text: 'Settings saved' })
+        if (data.sequence) setSaved(data.sequence)
         if (data.sequence?.webhook_token) setWebhookToken(data.sequence.webhook_token)
         if (typeof data.sequence?.has_webhook_secret === 'boolean') setHasSecret(data.sequence.has_webhook_secret)
         // The typed/generated value stays visible until they leave the page
@@ -454,6 +469,16 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
                 locationId={sequence.location_id}
                 filter={audienceFilter || { logic: 'and', filters: [] }}
                 mode="matching"
+                onResult={(r) => setMatchingCount(r?.status === 'ready' && Number.isInteger(r.count) ? r.count : null)}
+              />
+            )}
+            {/* SEQSTART.1 — the one place an audience-match flow is started. */}
+            {triggerType === 'audience_match' && sequence?.id && (
+              <AudienceMatchStart
+                key={`${saved?.trigger_type}:${saved?.audience_seeded_at || ''}`}
+                sequence={{ ...sequence, ...saved }}
+                matchingCount={matchingCount}
+                dirty={dirty || saved?.trigger_type !== 'audience_match'}
               />
             )}
           </div>
@@ -506,7 +531,7 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
             )}
           </div>
 
-          <Labeled label="Re-enrolment cooldown (days)" hint="0 = enrol each contact once. N = they can re-enter after N days.">
+          <Labeled label="Re-enrolment cooldown (days)" hint={COOLDOWN_HINT}>
             <Num value={cooldown} onChange={v => { setCooldown(v); touch() }} max={3650} />
           </Labeled>
           <Labeled label="Internal note"><Area value={description} onChange={v => { setDescription(v); touch() }} rows={2} placeholder="Optional memo for your team" /></Labeled>

@@ -37,6 +37,7 @@ import { logError, logWarn } from '@/lib/log'
 import { freshCutoff, onlyFreshEvents } from '@/lib/un1t-online-freshness'
 import { refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
 import { UN1T_ID_PREFIX, parseAgentId } from './studio-ids'
+import { createBooking } from '@/lib/bookings-write'
 import { renderMiaCopy } from './mia-copy'
 
 // REGISTRYREAD.1b — what Mia is told when the auto lane has no usable Glofox
@@ -1665,24 +1666,28 @@ export async function executeBookingTool(toolName, input, ctx) {
         { requested })
     }
 
-    // Same insert shape as /api/public/book — the handle_new_booking
-    // DB trigger creates/matches the contact + deal; location_id is
-    // copied per the BOOKING.1 rule.
-    const { data: booking, error } = await db.from('bookings').insert({
-      event_type_id: eventType.id,
-      location_id: eventType.location_id || locationId || null,
-      booking_date: want.date,
-      start_time: slot.start,
-      end_time: slot.end,
-      customer_name: identity.name,
-      customer_email: identity.email,
-      customer_phone: identity.phone,
-      custom_responses: {},
+    // BOOKONE.1 — the shared create (the slot was found just above, so it is
+    // passed in rather than checked twice). The handle_new_booking DB trigger
+    // creates/matches the contact + deal. The database refuses an overlap
+    // that slips in between (mig 842), which is the same refusal as a slot
+    // taken since it was offered.
+    const created = await createBooking(db, {
+      event: { ...eventType, location_id: eventType.location_id || locationId || null },
+      date: want.date,
+      startTime: slot.start,
+      slot,
+      customer: { name: identity.name, email: identity.email, phone: identity.phone },
       source: 'agent',
-    }).select().single()
-    if (error) {
+    })
+    if (!created.ok && created.code === 'slot_taken') {
+      return consultationRefusal('slot_taken',
+        `${requested} was booked by someone else since it was offered. Nothing was booked. Say exactly that, re-run list_consultation_slots for that day and offer the fresh times by their labels.`,
+        { requested })
+    }
+    if (!created.ok) {
       return { error: 'booking_failed', message: 'The booking could not be created — offer to hand off.' }
     }
+    const booking = created.booking
 
     // Same fire-and-forget side-effects the public route runs:
     // sequences + the standard confirmation email/SMS.

@@ -246,13 +246,24 @@ export async function enqueueFromFteExpenseClaim(claimId) {
     }
   })
 
+  // APPROVEQUEUE.1 — idempotent: an item already in the queue (an earlier
+  // approve that reached the queue before failing) is not queued again.
+  const { data: queuedRows, error: qErr } = await db
+    .from('invoices_queue')
+    .select('id, source_fte_expense_item_id')
+    .in('source_fte_expense_item_id', items.map((it) => it.id))
+  if (qErr) return { ok: false, error: `Queue lookup failed: ${qErr.message}` }
+  const already = new Set((queuedRows || []).map((r) => r.source_fte_expense_item_id))
+  const toInsert = rows.filter((r) => !already.has(r.source_fte_expense_item_id))
+  if (toInsert.length === 0) return { ok: true, queueIds: (queuedRows || []).map((r) => r.id) }
+
   const { data: inserted, error: insErr } = await db
     .from('invoices_queue')
-    .insert(rows)
+    .insert(toInsert)
     .select('id')
   if (insErr) return { ok: false, error: `Queue insert failed: ${insErr.message}` }
 
-  return { ok: true, queueIds: (inserted || []).map((r) => r.id) }
+  return { ok: true, queueIds: [...(queuedRows || []).map((r) => r.id), ...(inserted || []).map((r) => r.id)] }
 }
 
 /**
@@ -288,6 +299,15 @@ export async function enqueueFromContractorInvoice(invoiceId) {
   // contractors submit phone photos too. Resolve what the file actually is
   // instead of asserting PDF (which produced an Anthropic 400 that read as
   // a corrupt document rather than a wrong label).
+  // APPROVEQUEUE.1 — idempotent: already queued is success, not a second row.
+  const { data: queuedInv, error: qiErr } = await db
+    .from('invoices_queue')
+    .select('id')
+    .eq('source_contractor_invoice_id', inv.id)
+    .limit(1)
+  if (qiErr) return { ok: false, error: `Queue lookup failed: ${qiErr.message}` }
+  if (queuedInv?.length) return { ok: true, queueIds: [queuedInv[0].id] }
+
   const attachment = await resolveAttachmentMeta(db, STORAGE_BUCKETS.contractor_invoice, inv.pdf_path)
   const { data: inserted, error: insErr } = await db
     .from('invoices_queue')
