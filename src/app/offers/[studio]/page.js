@@ -18,7 +18,7 @@ import { notFound, redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { offerIsUpcoming, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
 import { resolveOfferStudio, studioForKey, offersPageCopy } from '@/lib/offer-studios'
-import { heroFor, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, termForSlug, flagForSlug, offerFinePrint } from '@/lib/offers-storefront'
+import { heroFor, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, termForSlug, flagForSlug, offerFinePrint, offerValueLine, offerTermLine, splitMonthStrip } from '@/lib/offers-storefront'
 import { legacyOfferRedirect } from '@/lib/offers-legacy-redirect'
 import { displayZoneFor } from '@/lib/display-zone'
 import SaleCountdown from '@/components/offers/SaleCountdown'
@@ -27,10 +27,11 @@ import OfferMarquee from '@/components/offers/OfferMarquee'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+// `anchor` is the section id an audience link jumps to (AUDIENCE_TARGETS).
 const CATEGORY_META = {
-  gift_card:  { title: 'Gift Cards',  tag: 'Give the gift of training' },
-  membership: { title: 'Memberships', tag: 'Bonus time on the house' },
-  class_pack: { title: 'Class Packs', tag: 'Stock up · train on your schedule' },
+  gift_card:  { title: 'Gift Cards',  tag: 'Give the gift of training', anchor: 'gifts' },
+  membership: { title: 'Memberships', tag: 'Bonus time on the house', anchor: 'memberships' },
+  class_pack: { title: 'Class Packs', tag: 'Stock up · train on your schedule', anchor: 'packs' },
 }
 // Display order + hero copy: src/lib/offers-storefront.js (OFFERS.8).
 
@@ -50,36 +51,46 @@ function OfferCard({ offer, studio, flag, opensLabel }) {
   const isGift = offer.category === 'gift_card'
   // BLACKFRIDAY.9 — any studio's offer shows its own fine print when it has some.
   const finePrint = offerFinePrint(offer)
+  // OFFERSDESIGN.1 — a sale card leads with the free extra, states what it
+  // is on, and what the deal works out at. A flagged card (the biggest
+  // bonus) is green before any hover, so a phone sees it too.
+  const termLine = isGift ? null : offerTermLine(offer)
+  const valueLine = isGift ? null : offerValueLine(offer)
+  const best = !isGift && Boolean(flagForSlug(offer.slug))
   // OFFERSPOLISH.1 — the whole card is one link, so its name was every word
-  // on it. The name is now the term, the bonus, the price and the action (all
-  // visible text, in reading order); the prose is the link's description.
+  // on it. The name is the headline, the term, the price and the action
+  // (all visible text, in reading order); the prose is the description.
   const id = (part) => `ofr-${offer.id}-${part}`
-  const nameIds = [id('term'), !isGift && id('bonus'), !isGift && id('price'), id('go')].filter(Boolean).join(' ')
-  const descIds = [flag && id('flag'), id('desc'), !isGift && finePrint && id('fine')].filter(Boolean).join(' ')
+  const nameIds = (isGift
+    ? [id('term'), id('go')]
+    : [id('bonus'), termLine && id('on'), id('price'), id('go')]).filter(Boolean).join(' ')
+  const descIds = [flag && id('flag'), valueLine && id('value'), id('desc'), !isGift && finePrint && id('fine')].filter(Boolean).join(' ')
   return (
     <Link
       href={`/offers/${studio.key}/${offer.slug}`}
-      className="ofr-card"
+      className={best ? 'ofr-card ofr-card-best' : 'ofr-card'}
       aria-labelledby={nameIds}
       aria-describedby={descIds}
-      style={{ minHeight: isGift ? 340 : 400, borderRight: '1px solid var(--ofr-line-soft)' }}
+      style={{ minHeight: isGift ? 340 : 380, borderRight: '1px solid var(--ofr-line-soft)' }}
     >
       {flag && <span id={id('flag')} className="ofr-flag">{flag}</span>}
-      <span id={id('term')} className="ofr-display" style={{ fontSize: 'clamp(44px,5vw,64px)', lineHeight: .9 }}>
-        {term.num}
-        <small style={{ display: 'block', fontSize: 15, letterSpacing: '.3em', marginTop: 8 }}>{term.label}</small>
-      </span>
-      {!isGift && (
-        <span id={id('bonus')} className="ofr-display ofr-outline-thin" style={{ fontSize: 'clamp(22px,2.6vw,30px)', lineHeight: 1 }}>
-          {offer.bonus_headline}
+      {isGift ? (
+        <span id={id('term')} className="ofr-display" style={{ fontSize: 'clamp(44px,5vw,64px)', lineHeight: .9 }}>
+          {term.num}
+          <small style={{ display: 'block', fontSize: 15, letterSpacing: '.3em', marginTop: 8 }}>{term.label}</small>
+        </span>
+      ) : (
+        <span>
+          <span id={id('bonus')} className="ofr-display ofr-bonus">{offer.bonus_headline || term.label}</span>
+          {termLine && <span id={id('on')} className="ofr-display ofr-on">{termLine}</span>}
         </span>
       )}
-      <p id={id('desc')} className="ofr-meta">{offer.description}</p>
+      {isGift && <p id={id('desc')} className="ofr-meta">{offer.description}</p>}
       {!isGift && (
-        <span>
-          <span id={id('price')} className="ofr-display" style={{ fontSize: 'clamp(30px,3.4vw,42px)', fontVariantNumeric: 'tabular-nums', display: 'block' }}>
-            {formatEuro(offer.price_cents)}
-          </span>
+        <span style={{ marginTop: 'auto' }}>
+          <span id={id('price')} className="ofr-display ofr-price">{formatEuro(offer.price_cents)}</span>
+          {valueLine && <span id={id('value')} className="ofr-value">{valueLine}</span>}
+          <span id={id('desc')} className="ofr-meta" style={{ display: 'block', marginTop: 10 }}>{offer.description}</span>
           {finePrint && <span id={id('fine')} className="ofr-meta" style={{ display: 'block', fontSize: 12, marginTop: 6 }}>{finePrint}</span>}
         </span>
       )}
@@ -88,11 +99,36 @@ function OfferCard({ offer, studio, flag, opensLabel }) {
   )
 }
 
-function SectionHead({ idx, title, tag }) {
+/**
+ * OFFERSDESIGN.1 — a one-month membership as a full-width strip under the
+ * card grid (a fourth card used to sit alone on a second row). Its words are
+ * the offer row's own: name, bonus, price.
+ */
+function OfferStrip({ offer, studio, opensLabel }) {
+  const id = (part) => `ofr-${offer.id}-${part}`
   return (
-    <div style={{ padding: '64px 32px 30px', borderBottom: '1px solid var(--ofr-line)', display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '10px 24px' }}>
+    <Link
+      href={`/offers/${studio.key}/${offer.slug}`}
+      className="ofr-strip-offer"
+      aria-labelledby={`${id('name')} ${id('price')} ${id('go')}`}
+      aria-describedby={id('bonus')}
+    >
+      <span id={id('name')} className="ofr-display ofr-strip-name">{offer.name}</span>
+      <span className="ofr-strip-meta">
+        <span id={id('bonus')}>{offer.bonus_headline}</span>
+        <span aria-hidden="true"> · </span>
+        <span id={id('price')}>{formatEuro(offer.price_cents)}</span>
+      </span>
+      <span id={id('go')} className="ofr-go">{opensLabel || 'Lock it in'}</span>
+    </Link>
+  )
+}
+
+function SectionHead({ idx, title, tag, id }) {
+  return (
+    <div id={id} style={{ padding: '40px 32px 24px', scrollMarginTop: 16, borderBottom: '1px solid var(--ofr-line)', display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '10px 24px' }}>
       <span className="ofr-display" style={{ fontSize: 14, letterSpacing: '.3em', color: '#666', transform: 'translateY(-1.6em)' }}>{idx}</span>
-      <h2 className="ofr-display" style={{ fontSize: 'clamp(38px,6vw,68px)', lineHeight: .95, letterSpacing: '-.01em' }}>{title}</h2>
+      <h2 className="ofr-display" style={{ fontSize: 'clamp(32px,4.4vw,56px)', lineHeight: .95, letterSpacing: '-.01em' }}>{title}</h2>
       <span style={{ fontSize: 12, color: '#8a8a8a', letterSpacing: '.18em', textTransform: 'uppercase', marginLeft: 'auto' }}>{tag}</span>
     </div>
   )
@@ -101,7 +137,7 @@ function SectionHead({ idx, title, tag }) {
 function InfoBlocks({ blocks }) {
   if (!blocks?.length) return null
   return (
-    <section style={{ padding: '56px 32px', borderTop: '1px solid var(--ofr-line)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 20 }}>
+    <section id="members" style={{ scrollMarginTop: 16, padding: '56px 32px', borderTop: '1px solid var(--ofr-line)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 20 }}>
       {blocks.map((b) => (
         <div key={b.title} style={{ border: '1px solid var(--ofr-line)', padding: '26px 24px' }}>
           <h3 className="ofr-display" style={{ fontSize: 20, lineHeight: 1.05, marginBottom: 14 }}>{b.title}</h3>
@@ -111,6 +147,40 @@ function InfoBlocks({ blocks }) {
         </div>
       ))}
     </section>
+  )
+}
+
+/** OFFERSDESIGN.1 — the operator's questions and answers; nothing when there are none. */
+function Faq({ items }) {
+  if (!items?.length) return null
+  return (
+    <section id="faq" style={{ padding: '40px 32px 56px', borderTop: '1px solid var(--ofr-line)', scrollMarginTop: 16 }}>
+      <h2 className="ofr-display" style={{ fontSize: 'clamp(28px,3.6vw,44px)', margin: '0 0 12px' }}>Good to know</h2>
+      <div className="ofr-faq">
+        {items.map((f) => (
+          <details key={f.q}>
+            <summary>{f.q}</summary>
+            <p>{f.a}</p>
+          </details>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+/** The "who are you" row: links to sections that exist on this page only. */
+function AudienceRow({ links, present }) {
+  const shown = (links || []).filter((l) => present.has(l.target))
+  if (shown.length === 0) return null
+  return (
+    <nav className="ofr-who ofr-bleed" aria-label="Find your offer">
+      {shown.map((l) => (
+        <a key={`${l.title}-${l.target}`} href={`#${l.target}`}>
+          <span className="ofr-display">{l.title}</span>
+          {l.hint && <small>{l.hint} →</small>}
+        </a>
+      ))}
+    </nav>
   )
 }
 
@@ -156,6 +226,9 @@ export default async function OfferStudioPage(props) {
   const hero = heroFor(offers, copy, studio.label)
   // Decisions in src/lib/offers-storefront.js (tested there).
   const countdown = storefrontCountdown(offers, now)
+  const calmLabel = countdown?.label === 'Sale ends'
+    ? formatSaleDeadline(countdown.at, { zone }).split(',')[0]
+    : null
   const flagFor = (o) => (isCyberMondayOnly(o, offers) ? 'Cyber Monday only' : flagForSlug(o.slug))
   const opensLabelFor = (o) => (offerIsUpcoming(o, now)
     ? `Opens ${formatSaleDeadline(o.starts_at, { uppercase: false, zone })}`
@@ -164,29 +237,51 @@ export default async function OfferStudioPage(props) {
   const sections = CATEGORY_ORDER
     .map((cat) => ({ key: cat, meta: CATEGORY_META[cat], items: offers.filter((o) => o.category === cat) }))
     .filter((s) => s.items.length > 0)
+  // Sections an audience link may land on.
+  const present = new Set([
+    ...sections.map((s) => s.meta.anchor),
+    ...(copy.infoBlocks?.length ? ['members'] : []),
+    ...(copy.faq?.length ? ['faq'] : []),
+  ])
 
   return (
     <main>
-      <OfferMarquee text={hero.marquee.repeat(4)} />
+      <div className="ofr-bleed">
+        <OfferMarquee text={hero.marquee.repeat(4)} />
+      </div>
 
-      <header style={{ padding: '72px 32px 56px', borderBottom: '1px solid var(--ofr-line)' }}>
-        <p style={{ fontSize: 11, letterSpacing: '.3em', textTransform: 'uppercase', color: '#777', marginBottom: 30 }}>
-          <Link href="/offers" style={{ color: 'inherit', textDecoration: 'none' }}>← All studios</Link>
-        </p>
-        <p className="ofr-display" style={{ fontSize: 15, letterSpacing: '.55em', marginBottom: 52 }}>{studio.label.toUpperCase()}</p>
-        <h1 className="ofr-display" style={{ fontSize: 'clamp(52px,9vw,104px)', lineHeight: .92, letterSpacing: '-.01em' }}>
-          {hero.line1}<br /><span className="ofr-outline">{hero.line2}</span>
-        </h1>
-        <p style={{ marginTop: 26, maxWidth: '52ch', color: '#b5b5b5', fontSize: 16, lineHeight: 1.6 }}>
-          {hero.blurb}
-        </p>
-        {countdown && (
-          <div className="ofr-deadline">
-            <b>{countdown.label}</b>
-            <SaleCountdown endsAt={countdown.at} doneLabel={countdown.doneLabel} />
-          </div>
+      {/* OFFERSDESIGN.1 — full-bleed hero, the operator's photo behind the
+          headline (settings.offers_page.heroImage); none set, no photo. */}
+      <header className={copy.heroImage ? 'ofr-hero ofr-bleed ofr-hero-photo' : 'ofr-hero ofr-bleed'}>
+        {copy.heroImage && (
+          <img src={copy.heroImage} alt="" fetchPriority="high" decoding="async" />
         )}
+        <div className="ofr-hero-inner">
+          <p style={{ fontSize: 11, letterSpacing: '.3em', textTransform: 'uppercase', color: '#9a9a9a', margin: '0 0 14px' }}>
+            <Link href="/offers" style={{ color: 'inherit', textDecoration: 'none' }}>← All studios</Link>
+          </p>
+          <p className="ofr-display" style={{ fontSize: 13, letterSpacing: '.5em', margin: '0 0 18px' }}>{studio.label.toUpperCase()}</p>
+          <h1 className="ofr-display" style={{ fontSize: 'clamp(44px,5.6vw,88px)', lineHeight: .9, letterSpacing: '-.01em', margin: 0 }}>
+            {hero.line1}<br /><span className="ofr-outline">{hero.line2}</span>
+          </h1>
+          <p style={{ margin: '16px 0 20px', maxWidth: '46ch', color: '#d4d4d4', fontSize: 'clamp(15px,1.3vw,18px)', lineHeight: 1.6 }}>
+            {hero.blurb}
+          </p>
+          {(countdown || copy.proofLine) && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+              {countdown && (
+                <div className="ofr-deadline" style={{ marginTop: 0 }}>
+                  <b>{countdown.label}</b>
+                  <SaleCountdown endsAt={countdown.at} doneLabel={countdown.doneLabel} calmLabel={calmLabel} />
+                </div>
+              )}
+              {copy.proofLine && <p className="ofr-proof">{copy.proofLine}</p>}
+            </div>
+          )}
+        </div>
       </header>
+
+      <AudienceRow links={copy.audienceLinks} present={present} />
 
       {sections.length === 0 ? (
         <div style={{ padding: '80px 32px', textAlign: 'center' }}>
@@ -194,19 +289,28 @@ export default async function OfferStudioPage(props) {
           <p style={{ color: '#9a9a9a', marginTop: 12 }}>Keep an eye on your inbox — we&rsquo;ll let you know when the next one opens.</p>
         </div>
       ) : (
-        sections.map((s, i) => (
-          <div key={s.key}>
-            <SectionHead idx={String(i + 1).padStart(2, '0')} title={s.meta.title} tag={s.meta.tag} />
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
-              {s.items.map((o) => (
-                <OfferCard key={o.id} offer={o} studio={studio} flag={flagFor(o)} opensLabel={opensLabelFor(o)} />
+        sections.map((s, i) => {
+          const { grid, strip } = splitMonthStrip(s.items)
+          return (
+            <div key={s.key}>
+              <SectionHead id={s.meta.anchor} idx={String(i + 1).padStart(2, '0')} title={s.meta.title} tag={s.meta.tag} />
+              {grid.length > 0 && (
+                <div className="ofr-grid" style={{ '--ofr-cols': Math.min(3, grid.length) }}>
+                  {grid.map((o) => (
+                    <OfferCard key={o.id} offer={o} studio={studio} flag={flagFor(o)} opensLabel={opensLabelFor(o)} />
+                  ))}
+                </div>
+              )}
+              {strip.map((o) => (
+                <OfferStrip key={o.id} offer={o} studio={studio} opensLabel={opensLabelFor(o)} />
               ))}
             </div>
-          </div>
-        ))
+          )
+        })
       )}
 
       <InfoBlocks blocks={copy.infoBlocks} />
+      <Faq items={copy.faq} />
     </main>
   )
 }
