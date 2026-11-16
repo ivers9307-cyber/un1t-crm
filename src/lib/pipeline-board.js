@@ -177,6 +177,9 @@ export function boardDealMapper({ badge = true, glofoxCredits = true, signals = 
       // (stageShowsSignals); the card renders them iff this is true.
       // classesOf3 only rides with signals: DealCard reads it only when signals are present.
       ...(signals instanceof Map ? { signals: signals.get(contact.id) ?? null, showSignals: showSignals === true, classesOf3: classesOf3 === true } : {}),
+      // CARDSIGNALS.1 — a live funnel column, whether or not its signals read
+      // worked: the card's age footer turns amber and red only there.
+      ...(showSignals === true ? { live_funnel: true } : {}),
       age: dealAge(deal, Date.now()),
       // HATCHPIPE.5 — the card must know the badge is OFF, not merely that no
       // class is booked: a null next_class_at alone renders "No class booked"
