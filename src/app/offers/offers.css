@@ -16,8 +16,11 @@
      bar came and went. Browsers without dvh keep the line above. */
   min-height: 100dvh;
   font-family: var(--font-archivo), Helvetica, Arial, sans-serif;
+  /* The storefront's full-bleed bands are 100vw wide, which includes the
+     scrollbar on desktop; clip that sliver instead of scrolling sideways. */
+  overflow-x: clip;
 }
-.ofr-frame { max-width: 1100px; margin: 0 auto; border-left: 1px solid var(--ofr-line-soft); border-right: 1px solid var(--ofr-line-soft); }
+.ofr-frame { max-width: 1320px; margin: 0 auto; border-left: 1px solid var(--ofr-line-soft); border-right: 1px solid var(--ofr-line-soft); }
 .ofr-display { font-family: var(--font-archivo-black), 'Arial Black', sans-serif; text-transform: uppercase; }
 .ofr-outline { color: transparent; -webkit-text-stroke: 2px var(--ofr-paper); }
 .ofr-outline-thin { color: transparent; -webkit-text-stroke: 1.5px var(--ofr-paper); }
@@ -77,3 +80,62 @@
 .ofr-pay:disabled { opacity: .5; cursor: default; }
 .ofr-includes li { list-style: none; display: flex; gap: 16px; padding: 15px 0; border-bottom: 1px solid var(--ofr-line-soft); font-size: 15px; color: #cfcfcf; }
 .ofr-includes li::before { content: "—"; color: #666; }
+
+/* OFFERSDESIGN.1 — the storefront redesign.
+   .ofr-bleed breaks a band out of the centred frame to the window's edges;
+   the hero's text lines up with the frame's 32px inset at any width. */
+.ofr-bleed { width: 100vw; margin-left: calc(50% - 50vw); }
+.ofr-hero { position: relative; display: grid; align-items: end; min-height: clamp(320px, 46vh, 480px); border-bottom: 1px solid var(--ofr-line); overflow: hidden; }
+.ofr-hero > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 60% 40%; }
+.ofr-hero-photo::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, #000 0%, rgba(0,0,0,.88) 34%, rgba(0,0,0,.35) 70%, rgba(0,0,0,.15) 100%), linear-gradient(0deg, #000 0%, rgba(0,0,0,0) 40%); }
+.ofr-hero-inner { position: relative; z-index: 1; padding: clamp(28px, 4vh, 48px) max(32px, calc(50vw - 660px + 32px)); }
+.ofr-hero .ofr-deadline { background: rgba(0,0,0,.6); border-color: #555; }
+.ofr-proof { margin: 0; font-size: 13px; color: #e5e5e5; border: 1px solid #555; background: rgba(0,0,0,.6); padding: 12px 16px; }
+.ofr-count-calm { color: var(--ofr-paper); font-size: clamp(18px, 2vw, 26px); }
+
+.ofr-who { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); border-bottom: 1px solid var(--ofr-line); }
+.ofr-who a { display: block; padding: 16px clamp(14px, 2vw, 28px); border-right: 1px solid var(--ofr-line); color: inherit; text-decoration: none; transition: background .2s, color .2s; }
+.ofr-who a:last-child { border-right: 0; }
+.ofr-who a:hover { background: var(--ofr-paper); color: var(--ofr-ink); }
+.ofr-who a:focus-visible { outline: 3px solid #22c55e; outline-offset: -3px; }
+.ofr-who .ofr-display { display: block; font-size: clamp(12px, 1.2vw, 16px); }
+.ofr-who small { display: block; margin-top: 6px; font-size: 13px; color: #9a9a9a; }
+.ofr-who a:hover small { color: #444; }
+
+.ofr-grid { display: grid; grid-template-columns: repeat(var(--ofr-cols, 3), minmax(0, 1fr)); }
+.ofr-bonus { display: block; font-size: clamp(32px, 3.2vw, 48px); line-height: .92; }
+.ofr-on { display: block; margin-top: 10px; font-size: 12px; letter-spacing: .28em; color: #9a9a9a; }
+.ofr-price { display: block; font-size: clamp(32px, 3vw, 44px); font-variant-numeric: tabular-nums; }
+.ofr-value { display: block; margin-top: 4px; font-size: 14px; color: #cfcfcf; }
+.ofr-card-best { background: #22c55e; color: var(--ofr-ink); }
+.ofr-card-best .ofr-go { background: var(--ofr-ink); color: var(--ofr-paper); border-color: var(--ofr-ink); }
+.ofr-card-best .ofr-flag { background: var(--ofr-ink); color: #22c55e; }
+.ofr-card-best .ofr-meta, .ofr-card:hover .ofr-on, .ofr-card-best .ofr-on, .ofr-card:hover .ofr-value, .ofr-card-best .ofr-value { color: #0a3d1c; }
+
+.ofr-strip-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; padding: 24px 26px; border-bottom: 1px solid var(--ofr-line); color: inherit; text-decoration: none; transition: background .2s, color .2s; }
+.ofr-strip-offer:hover { background: var(--ofr-paper); color: var(--ofr-ink); }
+.ofr-strip-offer:hover .ofr-go { background: var(--ofr-ink); color: var(--ofr-paper); border-color: var(--ofr-ink); }
+.ofr-strip-offer:focus-visible { outline: 3px solid #22c55e; outline-offset: -3px; }
+.ofr-strip-name { font-size: clamp(20px, 2vw, 28px); }
+.ofr-strip-meta { flex: 1; color: #b5b5b5; font-size: 15px; }
+.ofr-strip-offer:hover .ofr-strip-meta { color: #444; }
+
+.ofr-faq { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 48px; }
+.ofr-faq details { border-bottom: 1px solid var(--ofr-line-soft); padding: 16px 0; }
+.ofr-faq summary { cursor: pointer; font-weight: 600; }
+.ofr-faq p { color: #b5b5b5; line-height: 1.6; margin: 10px 0 0; }
+
+@media (max-width: 900px) {
+  .ofr-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .ofr-faq { grid-template-columns: 1fr; }
+  /* Phones: the photo sits above the headline, so let its top half show. */
+  .ofr-hero > img { object-position: 50% 30%; height: 62%; }
+  .ofr-hero-photo::after { background: linear-gradient(0deg, #000 0%, #000 42%, rgba(0,0,0,.55) 58%, rgba(0,0,0,.05) 100%); }
+  .ofr-hero-photo .ofr-hero-inner { padding-top: 190px; }
+}
+@media (max-width: 600px) {
+  .ofr-grid { grid-template-columns: 1fr; }
+  .ofr-hero-inner { padding-inline: 20px; }
+  .ofr-who a { padding: 12px 10px; }
+  .ofr-who small { display: none; }
+}

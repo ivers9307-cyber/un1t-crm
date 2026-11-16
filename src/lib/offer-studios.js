@@ -66,7 +66,27 @@ export const DEFAULT_OFFERS_PAGE_COPY = {
       ],
     },
   ],
+  // OFFERSDESIGN.1 — the storefront redesign's operator fields. Each is
+  // optional: an empty one hides its part of the page, so nothing invented
+  // ever shows (no default photo, rating or FAQ answer).
+  //   heroImage     absolute https URL of the hero photo (a resized
+  //                 Supabase render URL keeps it light);
+  //   proofLine     one line of social proof beside the sale end date;
+  //   audienceLinks the "who are you" row under the hero: title, hint and
+  //                 the section it jumps to (memberships | packs | members);
+  //   faq           questions and answers above the footer.
+  heroImage: '',
+  proofLine: '',
+  audienceLinks: [
+    { title: 'New to UN1T', hint: 'See the memberships', target: 'memberships' },
+    { title: 'Coming back', hint: 'Rejoin offers', target: 'members' },
+    { title: 'Already a member', hint: 'Bring a friend', target: 'members' },
+  ],
+  faq: [],
 }
+
+// The sections an audience link may jump to (ids on the storefront page).
+export const AUDIENCE_TARGETS = ['memberships', 'packs', 'gifts', 'members', 'faq']
 
 function text(v, fallback, allowEmpty = false) {
   if (typeof v !== 'string') return fallback
@@ -78,6 +98,23 @@ function blocks(v, fallback) {
   if (!Array.isArray(v) || v.length === 0) return fallback
   const ok = v.every((b) => b && typeof b.title === 'string' && Array.isArray(b.lines)
     && b.lines.every((l) => typeof l === 'string'))
+  return ok ? v : fallback
+}
+
+function httpsUrl(v) {
+  return typeof v === 'string' && /^https:\/\/[^\s]+$/.test(v.trim()) ? v.trim() : ''
+}
+
+function audienceLinks(v, fallback) {
+  if (!Array.isArray(v)) return fallback
+  const ok = v.every((l) => l && typeof l.title === 'string' && l.title.trim()
+    && typeof l.hint === 'string' && AUDIENCE_TARGETS.includes(l.target))
+  return ok ? v : fallback
+}
+
+function faq(v, fallback) {
+  if (!Array.isArray(v)) return fallback
+  const ok = v.every((f) => f && typeof f.q === 'string' && f.q.trim() && typeof f.a === 'string' && f.a.trim())
   return ok ? v : fallback
 }
 
@@ -93,6 +130,10 @@ export function offersPageCopy(location) {
     blurb: text(s.blurb, d.blurb),
     legalLine: text(s.legalLine, d.legalLine, true),
     infoBlocks: blocks(s.infoBlocks, d.infoBlocks),
+    heroImage: httpsUrl(s.heroImage),
+    proofLine: text(s.proofLine, d.proofLine, true).trim(),
+    audienceLinks: audienceLinks(s.audienceLinks, d.audienceLinks),
+    faq: faq(s.faq, d.faq),
   }
 }
 
