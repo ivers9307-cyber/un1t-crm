@@ -1676,8 +1676,9 @@ export async function grantCompCredits(db, args = {}, deps = {}) {
 // person's un1t.online account with POST /credits/grant, the second caller of
 // that call after the trial re-grant. Called ONLY from src/lib/corp-promo-claim.js
 // (tests/un1t-online-write-guard.test.js), which has already judged the
-// person eligible. Amount and expiry come from the promo registry
-// (src/lib/corp-promos.js), never from a request.
+// person eligible. Amount and expiry come from the promo's corp_promos row,
+// never from a request; for an open week (OPENWEEK.1) they are the number of
+// classes the server judged valid and the days to the end of the window.
 
 /** The origin every promo grant's ledger row carries (mig 787). */
 export const UN1T_PROMO_ORIGIN = 'corp_promo'

@@ -25,7 +25,9 @@ import { sendCorpPromoEmail } from '@/lib/corp-promo-emails'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { escapeHtml } from '@/lib/html-escape'
 import { logError, logWarn } from '@/lib/log'
-import { queueFundedClassBooking, fundedBookingFromRow, FUNDED_BY } from '@/lib/class-first-booking'
+import { queueFundedClassBooking, fundedBookingFromRow, fundedBookingsFromPicks, FUNDED_BY } from '@/lib/class-first-booking'
+import { isOpenWeek, openWeekExpiresInDays } from '@/lib/open-week'
+import { openWeekClassListHtml } from '@/lib/open-week-format'
 
 const LOG = 'corp-promo'
 
@@ -39,13 +41,18 @@ const LOG = 'corp-promo'
  * @returns {Promise<{ kind: 'granted', expiresAt: string, credits: number }
  *   | { kind: 'ineligible', reason: string } | { kind: 'help_filed' } | { kind: 'unavailable' }>}
  */
-export async function fulfilCorpPromoClaim(db, { claim, location, contact, promo, copy, zone, trialProductId }, deps = {}) {
+export async function fulfilCorpPromoClaim(db, { claim, location, contact, promo, copy, zone, trialProductId, picks = [] }, deps = {}) {
   const d = {
     ensureUn1tAccount, runSetPasswordStep, grantPromoCredits, corpPromoEligibility, sendCorpPromoEmail, sendOpsAlert,
     now: () => new Date(), ...deps,
   }
   const locationId = claim.location_id
   const ids = { claimId: claim.id, locationId }
+  // OPENWEEK.1 — an open week grants exactly the classes picked, valid to the
+  // end of the window, and books each one.
+  const openWeek = isOpenWeek(promo) && Array.isArray(picks) && picks.length > 0
+  const amount = openWeek ? picks.length : promo.credits
+  const expiresInDays = openWeek ? openWeekExpiresInDays(promo, zone, d.now()) : promo.expiresInDays
 
   const stamp = async (patch) => {
     const { error } = await db.from('corp_promo_claims').update(patch).eq('id', claim.id).eq('location_id', locationId)
@@ -73,7 +80,9 @@ export async function fulfilCorpPromoClaim(db, { claim, location, contact, promo
             `<p><strong>Reason:</strong> ${escapeHtml(reason)}</p>` +
             `<p><strong>Person:</strong> ${escapeHtml(`${claim.first_name || ''} ${claim.last_name || ''}`.trim())} &lt;${escapeHtml(claim.customer_email)}&gt; ${escapeHtml(claim.customer_phone || '')}<br/>` +
             `<strong>Claim id:</strong> ${escapeHtml(claim.id)}</p>` +
-            `<p>Check their un1t.online account, add ${promo.credits} credits for ${promo.expiresInDays} days by hand if they qualify, then mark the card handled on the Approvals page.</p>`,
+            (openWeek
+              ? `<p>Check their un1t.online account, add ${amount} credits for ${expiresInDays} days by hand if they qualify, then book them into their picked classes:</p>${openWeekClassListHtml(picks, zone)}<p>Then mark the card handled on the Approvals page.</p>`
+              : `<p>Check their un1t.online account, add ${promo.credits} credits for ${promo.expiresInDays} days by hand if they qualify, then mark the card handled on the Approvals page.</p>`),
         })
       }
     } catch (e) {
@@ -103,7 +112,7 @@ export async function fulfilCorpPromoClaim(db, { claim, location, contact, promo
   // ── 2. Eligibility again, with the account's own history in view ──
   const elig = await d.corpPromoEligibility(db, {
     locationId, organizationId: location.organization_id ?? null, contactId: account.executingContactId ?? contact.id,
-    email: claim.customer_email, phone: claim.customer_phone, trialProductId, promoKey: promo.key,
+    email: claim.customer_email, phone: claim.customer_phone, trialProductId, promoKey: promo.key, openWeek,
   })
   if (!elig.ok) return failed('eligibility_unreadable')
   if (!elig.eligible) return ineligible(elig.reason)
@@ -113,7 +122,7 @@ export async function fulfilCorpPromoClaim(db, { claim, location, contact, promo
   try {
     grant = await d.grantPromoCredits(db, {
       locationId, un1tUserId, contactId: contact.id, promoKey: promo.key,
-      amount: promo.credits, expiresInDays: promo.expiresInDays, originRef: claim.id,
+      amount, expiresInDays, originRef: claim.id,
     })
   } catch (err) {
     if (err instanceof Un1tSettingsReadError) return failed(err.code || 'un1t_settings_unreadable')
@@ -124,9 +133,9 @@ export async function fulfilCorpPromoClaim(db, { claim, location, contact, promo
   if (grant.outcome === 'ineligible') return ineligible(grant.reason)
   if (grant.outcome === 'needs_staff') return help(grant.reason, grant.ledgerId ? { un1t_ledger_id: grant.ledgerId } : {})
 
-  const expiresAt = grant.expiresAt ?? new Date(d.now().getTime() + promo.expiresInDays * 24 * 3600 * 1000).toISOString()
-  const grantedRow = { ...claim, status: 'granted', un1t_user_id: un1tUserId, un1t_ledger_id: grant.ledgerId, credits: promo.credits, expires_at: expiresAt }
-  const stampErr = await stamp({ status: 'granted', reason: null, un1t_user_id: un1tUserId, un1t_ledger_id: grant.ledgerId, credits: promo.credits, expires_at: expiresAt })
+  const expiresAt = grant.expiresAt ?? new Date(d.now().getTime() + expiresInDays * 24 * 3600 * 1000).toISOString()
+  const grantedRow = { ...claim, status: 'granted', un1t_user_id: un1tUserId, un1t_ledger_id: grant.ledgerId, credits: amount, expires_at: expiresAt }
+  const stampErr = await stamp({ status: 'granted', reason: null, un1t_user_id: un1tUserId, un1t_ledger_id: grant.ledgerId, credits: amount, expires_at: expiresAt })
   // The credits are on the account whatever the row says: the person is told.
   if (stampErr?.code === '23505') {
     logWarn(LOG, 'a granted claim for this person already exists', { ...ids })
@@ -137,16 +146,21 @@ export async function fulfilCorpPromoClaim(db, { claim, location, contact, promo
   // ── 3b. CLASSFIRST.1 — the class they picked before their details: queued
   // now, booked against the promo's credits by the class-booking worker.
   // Best-effort: the credits are already on the account.
-  try {
-    const funded = fundedBookingFromRow(grantedRow, { fundedBy: FUNDED_BY.corpPromo })
-    if (funded) await queueFundedClassBooking(db, funded)
-  } catch (e) {
-    logWarn(LOG, 'funded class booking not queued', { ...ids, errClass: e?.name })
+  const funded = openWeek
+    ? fundedBookingsFromPicks(grantedRow, picks, { fundedBy: FUNDED_BY.corpPromo })
+    : [fundedBookingFromRow(grantedRow, { fundedBy: FUNDED_BY.corpPromo })].filter(Boolean)
+  // Each pick on its own: one failed queue never stops the others.
+  for (const f of funded) {
+    try {
+      await queueFundedClassBooking(db, f)
+    } catch (e) {
+      logWarn(LOG, 'funded class booking not queued', { ...ids, eventId: f.eventId, errClass: e?.name })
+    }
   }
 
   // ── 4. Tell them (best-effort: the credits are already on the account) ──
   // appLinks arrive from the set-password step (emailArgs), or from the caller on the direct send.
-  const sendEmail = (_db, args) => d.sendCorpPromoEmail(db, { claim: grantedRow, copy, studioName: location.name || '', zone, appLinks: args?.appLinks ?? null })
+  const sendEmail = (_db, args) => d.sendCorpPromoEmail(db, { claim: grantedRow, copy, studioName: location.name || '', zone, appLinks: args?.appLinks ?? null, ...(openWeek ? { classes: picks } : {}) })
   try {
     if (account.kind === 'created') {
       const { settings } = await readUn1tWriteSettings(db, locationId)
@@ -161,5 +175,5 @@ export async function fulfilCorpPromoClaim(db, { claim, location, contact, promo
   } catch (e) {
     logWarn(LOG, 'confirmation email or set-password step failed after the grant', { ...ids, code: e?.code ?? null, errClass: e?.name })
   }
-  return { kind: 'granted', expiresAt, credits: promo.credits }
+  return { kind: 'granted', expiresAt, credits: amount }
 }

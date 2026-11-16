@@ -187,3 +187,45 @@ describe('fulfilCorpPromoClaim', () => {
     expect((await run(d)).kind).toBe('granted')
   })
 })
+
+describe('fulfilCorpPromoClaim — OPENWEEK.1, every pick', () => {
+  const OW = promoView({ id: 'cp-ow', location_id: 'loc-h', key: 'hatch-open-week', name: 'Open Week (Hatch Street)', platform: 'un1t_online', credits: 5, expires_in_days: 14, live: true, tag: 'hatch-open-week', lead_source: 'corp_promo', kind: 'open_week', window_starts_on: '2026-11-23', window_ends_on: '2026-11-30', max_classes: 5, max_per_day: 1 })
+  const owClaim = { ...claim, contact_id: 'c-1', page_id: 'p-ow', promo_key: 'hatch-open-week' }
+  const picks = ['a', 'b', 'c'].map((id, i) => ({ event_id: `un1t:${id}`, name: id.toUpperCase(), starts_at: `2026-11-2${4 + i}T07:00:00.000Z`, day: `2026-11-2${4 + i}` }))
+  const runOw = (d, db = fakeDb().db) => fulfilCorpPromoClaim(db, { claim: owClaim, location, contact, promo: OW, copy: COPY, zone: 'Europe/Dublin', trialProductId: 'tp', picks }, d)
+
+  it('grants exactly the picks, valid to the end of the week, and books each one', async () => {
+    const f = fakeDb()
+    const d = deps({ now: () => new Date('2026-11-18T12:00:00Z') })
+    const r = await runOw(d, f.db)
+    expect(r).toMatchObject({ kind: 'granted', credits: 3 })
+    expect(d.grantPromoCredits).toHaveBeenCalledWith(f.db, expect.objectContaining({ promoKey: 'hatch-open-week', amount: 3, expiresInDays: 13 }))
+    expect(lastStatus(f.updates)).toMatchObject({ status: 'granted', credits: 3 })
+    expect(queueFundedClassBooking).toHaveBeenCalledTimes(3)
+    expect(queueFundedClassBooking.mock.calls.map((c) => c[1].eventId)).toEqual(['un1t:a', 'un1t:b', 'un1t:c'])
+    expect(d.corpPromoEligibility).toHaveBeenCalledWith(f.db, expect.objectContaining({ openWeek: true }))
+    expect(d.sendCorpPromoEmail).toHaveBeenCalledWith(f.db, expect.objectContaining({ classes: picks }))
+  })
+
+  it('a failed queue for one pick still queues the rest and stays granted', async () => {
+    queueFundedClassBooking.mockRejectedValueOnce(new Error('down')).mockRejectedValueOnce(new Error('down'))
+    const r = await runOw(deps({ now: () => new Date('2026-11-18T12:00:00Z') }))
+    expect(r.kind).toBe('granted')
+    expect(queueFundedClassBooking).toHaveBeenCalledTimes(3)
+  })
+
+  it('the staff alert names the classes to book by hand', async () => {
+    const d = deps({ now: () => new Date('2026-11-18T12:00:00Z'), grantPromoCredits: vi.fn(async () => ({ outcome: 'needs_staff', reason: 'un1t_promo_failed:x' })) })
+    await runOw(d)
+    const html = d.sendOpsAlert.mock.calls[0][0].htmlBody
+    expect(html).toContain('book them into their picked classes')
+    expect(html).toContain('A')
+    expect(html).toContain('C')
+  })
+
+  it('a normal promo still grants its own credits and expiry', async () => {
+    const d = deps()
+    await run(d)
+    expect(d.grantPromoCredits).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ amount: 3, expiresInDays: 7 }))
+  })
+})
