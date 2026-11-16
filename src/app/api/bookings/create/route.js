@@ -19,6 +19,8 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { logWarn } from '@/lib/log'
 import { readBookChatTemplate } from '@/lib/book-chat-copy'
+import { createBooking, BOOKING_EVENT_COLUMNS } from '@/lib/bookings-write'
+import { hasPermissionForLocation } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 
@@ -41,7 +43,7 @@ export async function POST(request) {
 
   const db = createServerClient()
   const { data: event } = await db.from('event_types')
-    .select('id, name, duration_minutes, location_id, active')
+    .select(BOOKING_EVENT_COLUMNS)
     .eq('id', body.event_type_id)
     .maybeSingle()
   if (!event || event.active === false) {
@@ -49,6 +51,11 @@ export async function POST(request) {
   }
   const guard = assertLocationAccess(user, event.location_id)
   if (guard) return guard
+  // BOOKONE.1 — booking is gated on the bookings permission at the event's
+  // studio (on by default for every role); the route used to check none.
+  if (!hasPermissionForLocation(user, event.location_id, 'bookings')) {
+    return NextResponse.json({ success: false, error: 'Bookings permission required' }, { status: 403 })
+  }
 
   const { data: contact } = await db.from('contacts')
     .select('id, name, first_name, last_name, email, phone, location_id')
@@ -67,41 +74,32 @@ export async function POST(request) {
     }, { status: 400 })
   }
 
-  // End time + still-available check — same shape as /api/public/book.
-  const [h, m] = body.start_time.split(':').map(Number)
-  const endMinutes = h * 60 + m + event.duration_minutes
-  const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`
-
-  const { data: conflicts } = await db.from('bookings')
-    .select('id')
-    .eq('event_type_id', body.event_type_id)
-    .eq('booking_date', body.booking_date)
-    .in('status', ['confirmed', 'completed'])
-    .lt('start_time', endTime)
-    .gt('end_time', body.start_time)
-  if (conflicts && conflicts.length > 0) {
-    return NextResponse.json({ success: false, error: 'This time slot is no longer available' }, { status: 409 })
-  }
-
   const customerName = contact.name
     || [contact.first_name, contact.last_name].filter(Boolean).join(' ')
     || contact.email
 
-  const { data, error } = await db.from('bookings').insert({
-    event_type_id: body.event_type_id,
-    location_id: event.location_id || null,   // BOOKING.1 — propagate
-    booking_date: body.booking_date,
-    start_time: body.start_time,
-    end_time: endTime,
-    customer_name: customerName,
-    customer_email: contact.email.toLowerCase().trim(),
-    customer_phone: contact.phone || null,
-    custom_responses: {},
+  // BOOKONE.1 — the shared create: the same slot rules the public page and
+  // the customer reschedule apply (staff used to be able to book outside
+  // hours, in the past or inside a blocked time), and the database refuses
+  // an overlap that slips past the check.
+  const created = await createBooking(db, {
+    event,
+    date: body.booking_date,
+    startTime: body.start_time,
+    customer: { name: customerName, email: contact.email, phone: contact.phone || null },
     source: 'staff_inbox',
-  }).select().single()
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  })
+  if (!created.ok) {
+    if (created.code === 'slot_check_failed') {
+      logWarn('booking.staff', 'slot check failed', { err: created.error, eventTypeId: event.id })
+      return NextResponse.json({ success: false, error: 'Could not check that time. Try again.' }, { status: 503 })
+    }
+    if (created.code === 'insert_failed') {
+      return NextResponse.json({ success: false, error: created.error?.message || 'Could not create the booking.' }, { status: 400 })
+    }
+    return NextResponse.json({ success: false, error: 'This time slot is not available. Pick one of the offered times.' }, { status: 409 })
   }
+  const data = created.booking
 
   // Best-effort side effects — identical to the public flow.
   try {

@@ -16,6 +16,12 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/sequences', () => ({ triggerSequencesForBooking: vi.fn(), triggerSequencesForFirstBooking: vi.fn() }))
 vi.mock('@/lib/booking-confirmations', () => ({ sendBookingConfirmation: vi.fn(async () => ({ channels_sent: ['email'] })) }))
+vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
+// BOOKONE.1 — the shared create is tested on its own (bookings-write.test.js).
+vi.mock('@/lib/bookings-write', () => ({
+  BOOKING_EVENT_COLUMNS: 'id',
+  createBooking: vi.fn(async () => ({ ok: true, booking: { id: 'bk-1' }, slot: { start: '10:00', end: '10:30' } })),
+}))
 
 let locationRead
 vi.mock('@/lib/supabase', () => ({
@@ -72,5 +78,38 @@ describe('POST /api/bookings/create: chat confirmation template (BOOKCHATCOPY.1)
     // underlying read error itself; the route logs that the default was used.
     expect(logWarn).toHaveBeenCalledWith('booking.staff', expect.any(String), expect.objectContaining({ err: 'read_failed' }))
     expect(logError).toHaveBeenCalledWith('agent-settings', expect.any(String), expect.objectContaining({ err: { message: 'read refused' } }))
+  })
+})
+
+// BOOKONE.1 — staff booking goes through the shared create, so it obeys the
+// slot rules, and it needs the bookings permission at the event's studio.
+describe('POST /api/bookings/create: the shared create (BOOKONE.1)', () => {
+  it('passes the staff booking to createBooking', async () => {
+    const { createBooking } = await import('@/lib/bookings-write')
+    await create()
+    expect(createBooking).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      date: '2026-10-06', startTime: '10:00', source: 'staff_inbox',
+      customer: expect.objectContaining({ email: 'person@example.test' }),
+    }))
+  })
+
+  it('a time outside the slot rules, or one taken meanwhile, is a 409', async () => {
+    const { createBooking } = await import('@/lib/bookings-write')
+    createBooking.mockResolvedValueOnce({ ok: false, code: 'slot_unavailable' })
+    expect((await create()).status).toBe(409)
+    createBooking.mockResolvedValueOnce({ ok: false, code: 'slot_taken' })
+    expect((await create()).status).toBe(409)
+  })
+
+  it('an unreadable slot check is a 503', async () => {
+    const { createBooking } = await import('@/lib/bookings-write')
+    createBooking.mockResolvedValueOnce({ ok: false, code: 'slot_check_failed', error: new Error('down') })
+    expect((await create()).status).toBe(503)
+  })
+
+  it('without the bookings permission at the studio it is refused', async () => {
+    const { hasPermissionForLocation } = await import('@/lib/permissions')
+    hasPermissionForLocation.mockReturnValueOnce(false)
+    expect((await create()).status).toBe(403)
   })
 })
