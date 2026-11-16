@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
-import { loadBuyPage, buyPageCopy } from '@/lib/staff-payment-link-checkout'
+import { loadBuyPage, buyPageCopy, fillFirstName as fill } from '@/lib/staff-payment-link-checkout'
 import { TRIAL_CARD, TRIAL_MUTED, TRIAL_SUMMARY } from '@/components/landing-page/trial-card'
 import BuyForm from './BuyForm'
 
@@ -23,11 +23,6 @@ export const metadata = {
   robots: { index: false, follow: false },
   referrer: 'no-referrer',
 }
-
-// {first_name} filled; with no name, the token and the comma before it go.
-const fill = (t, firstName) => (firstName
-  ? String(t || '').replace(/\{first_name\}/g, firstName)
-  : String(t || '').replace(/,?\s*\{first_name\}/g, ''))
 
 function AppLinks({ appLinks }) {
   if (!appLinks?.iosUrl && !appLinks?.androidUrl) return null
@@ -77,7 +72,9 @@ export default async function BuyPage(props) {
 
   // Back from un1t.online's checkout. Never a "not paid" message and never a
   // new checkout from here: the payment may not have reached the mirror yet.
-  if (sp.paid === '1') {
+  // Only for a link still payable or paid: an expired, revoked or
+  // product-gone link shows its own state.
+  if (sp.paid === '1' && (view.kind === 'ready' || view.kind === 'paid')) {
     const seen = view.kind === 'paid'
     return (
       <Shell branding={branding}>
@@ -114,7 +111,10 @@ export default async function BuyPage(props) {
         isNew={view.isNew}
         terms={view.terms}
         buttonText={copy.continue_button}
-        messages={{ paid: copy.paid_text, expired: copy.expired_text, unavailable: copy.unavailable_text, help: copy.help_text }}
+        messages={{
+          paid: copy.paid_text, expired: copy.expired_text, unavailable: copy.unavailable_text, help: copy.help_text,
+          confirming: `${fill(copy.confirming_text, view.person.first_name)} ${copy.retry_later_text}`,
+        }}
       />
     </Shell>
   )

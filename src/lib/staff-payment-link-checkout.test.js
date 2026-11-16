@@ -24,7 +24,7 @@ vi.mock('@/lib/landing-pages', () => ({ studioTermsCopy: m.termsCopy, studioPubl
 vi.mock('@/lib/un1t-online-legal', () => ({ readUn1tLegalDocs: m.legalDocs }))
 vi.mock('@/lib/log', () => ({ logWarn: m.warn, logError: m.error, logInfo: vi.fn() }))
 
-import { loadBuyPage, startStaffLinkCheckout, buyPageCopy } from './staff-payment-link-checkout'
+import { loadBuyPage, startStaffLinkCheckout, buyPageCopy, fillFirstName, PAYLINK_CHECKOUT_COOLDOWN_MS } from './staff-payment-link-checkout'
 
 const NOW = Date.parse('2026-11-15T12:00:00.000Z')
 const iso = (ms) => new Date(ms).toISOString()
@@ -42,7 +42,7 @@ const tx = (over = {}) => ({ un1t_id: 'tx-1', un1t_user_id: 'u-1', product_id: '
 
 // A recording fake: reads answer from `rows` (or `fail` → an error); updates
 // are recorded and answer `updateHits` rows.
-function makeDb({ link = LINK, contact = CONTACT, location = LOCATION, product = PRODUCT, txs = [], fail = {}, updateHits = 1 } = {}) {
+function makeDb({ link = LINK, contact = CONTACT, location = LOCATION, product = PRODUCT, txs = [], ledger = [], fail = {}, updateHits = 1 } = {}) {
   const reads = []
   const updates = []
   const db = {
@@ -64,6 +64,7 @@ function makeDb({ link = LINK, contact = CONTACT, location = LOCATION, product =
         if (table === 'locations') return { data: location, error: null }
         if (table === 'un1t_products') return { data: product, error: null }
         if (table === 'un1t_transactions') return { data: txs, error: null }
+        if (table === 'un1t_write_events') return { data: ledger, error: null }
         throw new Error(`unexpected read of ${table}`)
       }
       const b = {
@@ -112,10 +113,18 @@ describe('loadBuyPage (GET)', () => {
     expect(out.terms?.terms_url).toBe('/legal/un1t/hatch-street/terms')
   })
 
-  it('an existing member (linked contact) sees no tick', async () => {
+  it('an existing member (linked contact) sees no tick, but the terms ride along for a terms_required answer', async () => {
     const out = await loadBuyPage(makeDb({ contact: { ...CONTACT, un1t_user_id: 'u-9' } }), TOKEN, { now: NOW })
     expect(out.kind).toBe('ready')
     expect(out.isNew).toBe(false)
+    expect(out.terms?.terms_url).toBe('/legal/un1t/hatch-street/terms')
+  })
+
+  it('an existing member at a studio with no studio page still gets the page (no terms)', async () => {
+    m.publicPath.mockResolvedValue(null)
+    const out = await loadBuyPage(makeDb({ contact: { ...CONTACT, un1t_user_id: 'u-9' } }), TOKEN, { now: NOW })
+    expect(out.kind).toBe('ready')
+    expect(out.terms).toBe(null)
   })
 
   it('stamps opened on the first open only (the only GET write)', async () => {
@@ -266,16 +275,87 @@ describe('startStaffLinkCheckout (POST)', () => {
     expect(stamp.patch.checkout_count).toBe(3)
   })
 
-  it('free: true → paid', async () => {
+  it('free: true is never read as paid: help, last_error checkout_free (Ruling H)', async () => {
     m.createLink.mockResolvedValue({ checkoutUrl: null, free: true, ledgerId: 'led-2' })
     const db = makeDb()
-    expect((await run(db)).kind).toBe('paid')
+    expect(await run(db)).toEqual({ kind: 'help', reason: 'checkout_free' })
+    expect(linkUpdates(db).some((u) => u.patch.status === 'paid')).toBe(false)
+    expect(linkUpdates(db).at(-1).patch.last_error).toBe('checkout_free')
   })
 
   it('expired product → expired', async () => {
     const db = makeDb({ product: { ...PRODUCT, price_cents: 0 } })
     expect((await run(db)).kind).toBe('expired')
     expect(m.ensureAccount).not.toHaveBeenCalled()
+  })
+
+  describe('a recent checkout (Ruling J)', () => {
+    const MIN = 60_000
+    const LIVE_LINK = { ...LINK, status: 'checkout_started', un1t_user_id: 'u-1', checkout_count: 1 }
+    const event = (over = {}) => ({ id: 'led-1', stage: 'done', checkout_url: 'https://checkout.stripe.com/c/pay/first', idempotency_key: 'paylink:link-1:r0', created_at: iso(NOW - 5 * MIN), ...over })
+    beforeEach(() => { m.ensureAccount.mockResolvedValue({ kind: 'existing', un1tUserId: 'u-1', executingContactId: 'c-1' }) })
+
+    it('a fresh done checkout is handed back: same URL, no new key, no count bump', async () => {
+      const db = makeDb({ link: LIVE_LINK, ledger: [event()] })
+      expect(await run(db, { acceptTerms: false })).toEqual({ kind: 'redirect', url: 'https://checkout.stripe.com/c/pay/first' })
+      expect(m.createLink).not.toHaveBeenCalled()
+      expect(linkUpdates(db).some((u) => 'checkout_count' in u.patch)).toBe(false)
+      const read = db.reads.find((r) => r.table === 'un1t_write_events')
+      expect(read.filters).toEqual(expect.arrayContaining([
+        ['eq', 'location_id', 'loc-h'], ['eq', 'op', 'checkout'], ['eq', 'origin_ref', 'link-1'],
+        ['eq', 'un1t_user_id', 'u-1'], ['eq', 'target', 'prod-1'], ['range', 0, 99],
+      ]))
+    })
+
+    it('a checkout 30 minutes old: confirming, no new checkout', async () => {
+      const db = makeDb({ link: LIVE_LINK, ledger: [event({ created_at: iso(NOW - 30 * MIN) })] })
+      expect(await run(db)).toEqual({ kind: 'confirming' })
+      expect(m.createLink).not.toHaveBeenCalled()
+    })
+
+    it('an attempt still in doubt 30 minutes old: confirming too', async () => {
+      const db = makeDb({ link: LIVE_LINK, ledger: [event({ stage: 'unknown', checkout_url: null, created_at: iso(NOW - 30 * MIN) })] })
+      expect((await run(db)).kind).toBe('confirming')
+      expect(m.createLink).not.toHaveBeenCalled()
+    })
+
+    it('an attempt still open under 20 minutes resumes under its SAME key', async () => {
+      const db = makeDb({ link: LIVE_LINK, ledger: [event({ stage: 'sent', checkout_url: null, idempotency_key: 'paylink:link-1:r1', created_at: iso(NOW - 2 * MIN) })] })
+      expect((await run(db)).kind).toBe('redirect')
+      expect(m.createLink.mock.calls[0][1].idempotencyKey).toBe('paylink:link-1:r1')
+      expect(linkUpdates(db).find((u) => u.patch.status === 'checkout_started').patch.checkout_count).toBe(2)
+    })
+
+    it('a checkout 61 minutes old and an empty mirror: a new key r<n>', async () => {
+      const db = makeDb({ link: LIVE_LINK, ledger: [event({ created_at: iso(NOW - 61 * MIN) })] })
+      expect((await run(db)).kind).toBe('redirect')
+      expect(m.createLink.mock.calls[0][1].idempotencyKey).toBe('paylink:link-1:r1')
+      expect(PAYLINK_CHECKOUT_COOLDOWN_MS).toBe(60 * MIN)
+    })
+
+    it('the new key skips past every key the ledger holds (a lost count stamp)', async () => {
+      const db = makeDb({ link: { ...LIVE_LINK, checkout_count: 0 }, ledger: [event({ idempotency_key: 'paylink:link-1:r3', created_at: iso(NOW - 90 * MIN) })] })
+      await run(db)
+      expect(m.createLink.mock.calls[0][1].idempotencyKey).toBe('paylink:link-1:r4')
+    })
+
+    it('a refused newest attempt does not hold the customer back', async () => {
+      const db = makeDb({ link: LIVE_LINK, ledger: [event({ stage: 'refused', checkout_url: null, created_at: iso(NOW - 3 * MIN) })] })
+      expect((await run(db)).kind).toBe('redirect')
+      expect(m.createLink).toHaveBeenCalledTimes(1)
+    })
+
+    it('a 61-minute-old checkout with the payment in the mirror: paid, no checkout', async () => {
+      const db = makeDb({ link: LIVE_LINK, ledger: [event({ created_at: iso(NOW - 61 * MIN) })], txs: [tx()] })
+      expect((await run(db)).kind).toBe('paid')
+      expect(m.createLink).not.toHaveBeenCalled()
+    })
+
+    it('a ledger read error is unavailable, no checkout', async () => {
+      const db = makeDb({ link: LIVE_LINK, fail: { un1t_write_events: true } })
+      expect((await run(db)).kind).toBe('unavailable')
+      expect(m.createLink).not.toHaveBeenCalled()
+    })
   })
 
   it('a link that is not live answers its state', async () => {
@@ -319,6 +399,15 @@ describe('startStaffLinkCheckout (POST)', () => {
     const logged = JSON.stringify([...m.warn.mock.calls, ...m.error.mock.calls])
     expect(logged).not.toContain(TOKEN)
     expect(logged).not.toContain('checkout.stripe.com')
+  })
+})
+
+describe('fillFirstName', () => {
+  it('a name with replacement patterns is put in literally', () => {
+    expect(fillFirstName("You're in, {first_name}!", '$&$1')).toBe("You're in, $&$1!")
+  })
+  it('no name: the token and its comma go', () => {
+    expect(fillFirstName("You're in, {first_name}!", '')).toBe("You're in!")
   })
 })
 

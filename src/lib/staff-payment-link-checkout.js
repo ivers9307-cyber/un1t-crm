@@ -13,8 +13,12 @@
 //
 // NEVER A CHECKOUT FOR SOMEONE WHO HAS PAID: before an account step and again
 // once the account is known, the un1t_transactions mirror is read with the
-// link's own rule (isPaymentForLink). A mirror read that fails is "unknown",
-// and unknown is never "unpaid": no checkout, the page says try again.
+// link's own rule (isPaymentForLink). The mirror lags un1t.online by up to
+// ~17 minutes, so the link's own checkouts on the write ledger decide too: one
+// younger than 20 minutes is handed back as it is, one 20 to 60 minutes old
+// means "we're confirming, try again in a few minutes", and only after an hour
+// (or with none) is a new one made. A read that fails (mirror or ledger) is
+// "unknown", and unknown is never "unpaid": no checkout, the page says try again.
 //
 // The token and the checkout URL are never logged or stored on the row; logs
 // carry ids and codes only (module 'paylink'). Every read here runs on the
@@ -31,6 +35,7 @@ import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { appLinksFrom } from '@/lib/un1t-online-app-links'
 import { isSellableUn1tProduct } from '@/lib/agent/mia-offer-limits'
+import { UN1T_CHECKOUT_REUSE_MS } from '@/lib/trial-checkout-window'
 import { un1tPriceLabel } from '@/lib/agent/un1t-tools'
 import {
   resolveStaffPaymentLink, markOpened, isPaymentForLink, paymentLinkCopy, BUY_PATH, LIVE_STATUSES,
@@ -43,6 +48,11 @@ const CONTACT_COLS = 'id, first_name, last_name, name, email, phone, un1t_user_i
 const LOCATION_COLS = 'id, name, organization_id, settings'
 const PRODUCT_COLS = 'un1t_id, title, type, status, price_cents, currency, billing_interval, billing_interval_count'
 const TX_COLS = 'un1t_id, un1t_user_id, product_id, type, amount_cents, refunded, remote_created_at'
+const LEDGER_COLS = 'id, stage, checkout_url, idempotency_key, created_at'
+const OPEN_STAGES = new Set(['sent', 'unknown'])
+
+/** No new checkout while this link's newest one is younger than this (the mirror's lag, with margin). */
+export const PAYLINK_CHECKOUT_COOLDOWN_MS = 60 * 60_000
 
 // The page's own lines, over these defaults per key, from
 // locations.settings.un1t_online.payment_link (beside paymentLinkCopy's keys).
@@ -52,6 +62,7 @@ const PAGE_DEFAULTS = Object.freeze({
   set_password_text: 'Check your inbox for a code to set your password, then log in to the un1t.online app with this email address.',
   continue_button: 'Continue to payment',
   not_you_text: 'Not you? Reply to us on WhatsApp.',
+  retry_later_text: 'Please try again in a few minutes.',
 })
 
 /** paymentLinkCopy's keys plus the page's own lines. `un1tOnline` = locations.settings.un1t_online. */
@@ -61,6 +72,15 @@ export function buyPageCopy(un1tOnline) {
   const out = { ...paymentLinkCopy(s) }
   for (const [key, def] of Object.entries(PAGE_DEFAULTS)) out[key] = typeof s[key] === 'string' && s[key].trim() ? s[key] : def
   return out
+}
+
+/**
+ * {first_name} filled; with no name, the token and the comma before it go.
+ * A function replacer, so a `$&` or `$1` in a name is never read as a pattern.
+ */
+export function fillFirstName(template, firstName) {
+  const t = String(template || '')
+  return firstName ? t.replace(/\{first_name\}/g, () => firstName) : t.replace(/,?\s*\{first_name\}/g, () => '')
 }
 
 const errCode = (error) => ({ code: error?.code ?? null })
@@ -98,6 +118,24 @@ async function findPayment(db, link, userId) {
   if (error) throw Object.assign(new Error('transactions unreadable'), errCode(error))
   const probe = { ...link, un1t_user_id: String(userId) }
   return (Array.isArray(data) ? data : []).find((t) => isPaymentForLink(probe, t)) || null
+}
+
+// This link's checkouts for this account and product, newest first. Throws on a read error.
+async function readCheckoutLedger(db, link, userId) {
+  const { data, error } = await db.from('un1t_write_events').select(LEDGER_COLS)
+    .eq('location_id', link.location_id).eq('op', 'checkout').eq('origin_ref', link.id)
+    .eq('un1t_user_id', String(userId)).eq('target', link.un1t_product_id)
+    .order('created_at', { ascending: false }).range(0, 99)
+  if (error) throw Object.assign(new Error('checkout ledger unreadable'), errCode(error))
+  return Array.isArray(data) ? data : []
+}
+
+// n of a `paylink:<id>:r<n>` key, -1 for any other.
+function keyIndex(linkId, key) {
+  const prefix = `paylink:${linkId}:r`
+  if (typeof key !== 'string' || !key.startsWith(prefix)) return -1
+  const n = Number(key.slice(prefix.length))
+  return Number.isInteger(n) && n >= 0 ? n : -1
 }
 
 function productView(product) {
@@ -187,7 +225,9 @@ export async function loadBuyPage(db, token, { now = Date.now() } = {}) {
   // No API call: a person whose account exists but is not linked yet sees the
   // tick, and the POST then finds and links the account without creating one.
   const isNew = !link.un1t_user_id && !contact.un1t_user_id
-  const terms = isNew ? await termsFor(db, location) : null
+  // Always, when the studio has them: an existing member whose account turns
+  // out not to exist (terms_required) gets the tick without a reload.
+  const terms = await termsFor(db, location)
   if (isNew && !terms) {
     logWarn(LOG, 'no studio page for the terms links; page unavailable', { ...ids, code: 'no_public_path' })
     return { kind: 'unavailable', ...base }
@@ -202,7 +242,8 @@ export async function loadBuyPage(db, token, { now = Date.now() } = {}) {
  * un1t.online hosted checkout. Never throws.
  * @param {{ token: string, acceptTerms: boolean, now?: number }} args
  * @returns {Promise<{ kind: 'redirect', url: string } | { kind: 'not_found' }
- *   | { kind: 'paid'|'expired'|'unavailable'|'help', reason?: string } | { kind: 'terms_required' }>}
+ *   | { kind: 'paid'|'expired'|'unavailable'|'help', reason?: string } | { kind: 'terms_required' }
+ *   | { kind: 'confirming' }>}  confirming: a checkout made in the last hour may be paid; no new one
  */
 export async function startStaffLinkCheckout(db, { token, acceptTerms = false, now = Date.now() } = {}, deps = {}) {
   const {
@@ -328,8 +369,41 @@ export async function startStaffLinkCheckout(db, { token, acceptTerms = false, n
     }
   }
 
-  // ── 5. un1t.online's hosted checkout, back to this page on the customer host ──
-  const n = Number.isInteger(link.checkout_count) && link.checkout_count >= 0 ? link.checkout_count : 0
+  // ── 5. This link's checkouts so far (Ruling J). The mirror lags
+  // un1t.online by up to ~17 minutes, so a recent checkout may already be
+  // paid: reuse it (under 20 min), or hold off (20 to 60 min), never mint a
+  // second one in that window. ──
+  let ledger
+  try {
+    ledger = await readCheckoutLedger(db, link, userId)
+  } catch (err) {
+    logError(LOG, 'checkout ledger unreadable; no checkout', { ...ids, code: err?.code ?? null })
+    return { kind: 'unavailable' }
+  }
+  const newest = ledger[0] || null
+  let resumeKey = null
+  if (newest && newest.stage !== 'refused') {
+    const age = now - Date.parse(newest.created_at || '')
+    // An unreadable time cannot be told from a recent one.
+    if (!Number.isFinite(age) || age < 0) return { kind: 'confirming' }
+    if (age < UN1T_CHECKOUT_REUSE_MS) {
+      if (newest.stage === 'done' && typeof newest.checkout_url === 'string' && newest.checkout_url) {
+        return { kind: 'redirect', url: newest.checkout_url }
+      }
+      if (OPEN_STAGES.has(newest.stage) && newest.idempotency_key) resumeKey = newest.idempotency_key
+      else return { kind: 'confirming' }
+    } else if (age < PAYLINK_CHECKOUT_COOLDOWN_MS) {
+      return { kind: 'confirming' }
+    }
+  }
+
+  // ── 6. un1t.online's hosted checkout, back to this page on the customer host.
+  // A fresh key r<n>, n past every key this link has used (an attempt still
+  // open keeps its own key). ──
+  const counted = Number.isInteger(link.checkout_count) && link.checkout_count >= 0 ? link.checkout_count : 0
+  const n = Math.max(counted, ...ledger.map((e) => keyIndex(link.id, e?.idempotency_key) + 1))
+  const idempotencyKey = resumeKey || `paylink:${link.id}:r${n}`
+  const nextCount = Math.max(n, keyIndex(link.id, idempotencyKey) + 1)
   let checkout
   try {
     const baseUrl = await resolveCustomerBaseUrl(db, link.location_id)
@@ -337,7 +411,7 @@ export async function startStaffLinkCheckout(db, { token, acceptTerms = false, n
     checkout = await createLink(db, {
       locationId: link.location_id, userId, productId: link.un1t_product_id,
       successUrl: `${page}?paid=1`, cancelUrl: `${page}?cancelled=1`,
-      idempotencyKey: `paylink:${link.id}:r${n}`, origin: PAYLINK_ORIGIN, originRef: link.id, actor: null,
+      idempotencyKey, origin: PAYLINK_ORIGIN, originRef: link.id, actor: null,
     })
   } catch (err) {
     if (err instanceof Un1tSettingsReadError) return { kind: 'unavailable' }
@@ -353,8 +427,9 @@ export async function startStaffLinkCheckout(db, { token, acceptTerms = false, n
     return { kind: 'unavailable' }
   }
   if (checkout?.free === true) {
+    // Ruling H: never read as paid (no transaction behind it); staff check the account.
     logWarn(LOG, 'un1t.online answered the checkout as free', { ...ids, ledgerId: checkout.ledgerId ?? null, code: 'checkout_free' })
-    return markPaid(null, 'checkout_free')
+    return help('checkout_free')
   }
   if (typeof checkout?.checkoutUrl !== 'string' || !checkout.checkoutUrl) {
     logWarn(LOG, 'checkout carried no page to pay on', { ...ids, code: 'checkout_no_url' })
@@ -363,7 +438,7 @@ export async function startStaffLinkCheckout(db, { token, acceptTerms = false, n
 
   // A lost stamp is logged, never a reason to hold the customer back: the
   // sweep settles on un1t_user_id, and the next press reuses this key.
-  const { error, hit } = await updateLink({ status: 'checkout_started', checkout_count: n + 1, last_checkout_ledger_id: checkout.ledgerId ?? null })
+  const { error, hit } = await updateLink({ status: 'checkout_started', checkout_count: nextCount, last_checkout_ledger_id: checkout.ledgerId ?? null })
   if (error) logWarn(LOG, 'checkout not stamped', { ...ids, ledgerId: checkout.ledgerId ?? null, code: error.code ?? null })
   else if (!hit) {
     // Settled (paid by the sweep) or replaced while un1t.online answered:

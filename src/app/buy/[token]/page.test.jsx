@@ -102,6 +102,19 @@ describe('/buy/<token>', () => {
     expect(html).not.toMatch(/not paid/i)
   })
 
+  it('?paid=1 on an expired, revoked or product-gone link shows that state, not confirming', async () => {
+    load.mockResolvedValue({ kind: 'expired', branding: BRAND, copy: COPY, person: READY.person, appLinks: APPS })
+    const html = await render({ paid: '1' })
+    expect(html).toContain(esc(COPY.expired_text))
+    expect(html).not.toContain('confirming your payment')
+  })
+
+  it('a name carrying replacement patterns is shown literally', async () => {
+    load.mockResolvedValue({ kind: 'paid', branding: BRAND, copy: COPY, person: { first_name: '$&$1', email: '' }, appLinks: APPS })
+    const html = await render({ paid: '1' })
+    expect(html).toContain(esc("You're in, $&amp;$1!"))
+  })
+
   it('a loader that throws is the try-again page', async () => {
     load.mockRejectedValue(new Error('boom'))
     expect(await render()).toContain(esc(COPY.unavailable_text))
