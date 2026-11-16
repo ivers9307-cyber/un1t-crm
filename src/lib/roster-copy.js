@@ -342,13 +342,19 @@ export const COPY_MODE_OPTIONS = [
  *   has approved leave that day
  * @param {number} [r.skippedNotAtStudio]  STAFFDELETE.1 — skipped because the
  *   coach no longer works at the studio (included in skipped)
+ * @param {boolean} [r.targetWasEmpty]  COPYEMPTY.1 — the copy ran from the
+ *   empty-week card, so the target had no coaches: nothing copied and nothing
+ *   skipped means the SOURCE had none, not that everyone was already there.
  */
-export function copyResultToast({ period, mode, copied = 0, skipped = 0, skippedRemoved = 0, skippedOnLeave = 0, skippedNotAtStudio = 0 }) {
+export function copyResultToast({ period, mode, copied = 0, skipped = 0, skippedRemoved = 0, skippedOnLeave = 0, skippedNotAtStudio = 0, targetWasEmpty = false }) {
   const n = Number(copied) || 0
   const total = Number(skipped) || 0
   const removed = Math.min(Number(skippedRemoved) || 0, total)
   const onLeave = Math.min(Number(skippedOnLeave) || 0, total - removed)
   const copiedText = `Copied ${n} ${n === 1 ? 'shift' : 'shifts'}.`
+  if (total === 0 && n === 0 && targetWasEmpty) {
+    return { kind: 'warning', message: `Nothing to copy: last ${period} had no coaches on it.` }
+  }
   if (total === 0) {
     return { kind: 'success', message: n === 0 ? `${copiedText} Everyone was already on the target ${period}.` : copiedText }
   }

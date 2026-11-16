@@ -296,6 +296,35 @@ export function rosterToolbarModel({ isManager = false, viewType = 'week', selec
   }
 }
 
+/**
+ * COPYEMPTY.1 — whether the week on screen gets the "Copy last week" card.
+ *
+ * The nightly job builds each week's shifts with no coaches on them, so most
+ * weeks start empty and the first thing a manager does is copy the week before.
+ * That used to be a More-menu item followed by a mode chooser; on an empty week
+ * it is now a card with the copy as its main button.
+ *
+ * Shown to a manager in week view, once the week has loaded without an error,
+ * when no shift from Mon `from` to Sun `to` has a coach, and only for this week
+ * or a later one: copying into a past week is not something to suggest. A week
+ * with no shifts at all counts as empty (past the nightly horizon an exact copy
+ * builds the shifts too).
+ *
+ * @param {object[]} blocks  shift_blocks rows with nested shift_assignments
+ * @param {{ isManager?: boolean, viewType?: string, loading?: boolean, failed?: boolean,
+ *   from: string, to: string, thisWeekStart: string }} opts  ISO dates
+ * @returns {boolean}
+ */
+export function emptyWeekCopyPrompt(blocks, { isManager = false, viewType = 'week', loading = false, failed = false, from, to, thisWeekStart } = {}) {
+  if (!isManager || viewType !== 'week' || loading || failed) return false
+  if (!from || !to || !thisWeekStart || from < thisWeekStart) return false
+  for (const b of blocks || []) {
+    if (!b?.block_date || b.block_date < from || b.block_date > to) continue
+    if (liveAssignments(b.shift_assignments).length > 0) return false
+  }
+  return true
+}
+
 // How much a leave type says. When one person has two requests covering the
 // same day, the bar shows the one that says most: a named kind of leave beats
 // "Unavailable", which beats "Other", which beats a type this code never met.

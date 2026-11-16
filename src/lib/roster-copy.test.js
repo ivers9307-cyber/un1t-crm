@@ -662,3 +662,20 @@ describe('copyResultToast', () => {
       .toBe('Copied 1 shift. 1 skipped, on leave.')
   })
 })
+
+// COPYEMPTY.1 — the empty-week card copies into a week with no coaches, so an
+// empty result means the source week was empty.
+describe('copyResultToast from the empty-week card', () => {
+  it('says the last week had no coaches when nothing was copied or skipped', () => {
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 0, skipped: 0, targetWasEmpty: true }))
+      .toEqual({ kind: 'warning', message: 'Nothing to copy: last week had no coaches on it.' })
+  })
+  it('reports a normal copy as before', () => {
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 9, skipped: 0, targetWasEmpty: true }))
+      .toEqual({ kind: 'success', message: 'Copied 9 shifts.' })
+  })
+  it('keeps the old wording for a copy from the More menu', () => {
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 0, skipped: 0 }).message)
+      .toMatch(/Everyone was already on the target week/)
+  })
+})
