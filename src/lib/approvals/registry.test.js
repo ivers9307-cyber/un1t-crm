@@ -14,6 +14,7 @@ import {
   getPendingApprovalsCount,
   getPendingApprovals,
   filterRowsByLocationBundle,
+ getPendingApprovalsCountDetail,
 } from './registry'
 import { CATEGORY_BUNDLES } from '@shared/permission-bundles'
 
@@ -368,5 +369,56 @@ describe('registry per-category gating — bundle layer (BUNDLES.5 Task 2)', () 
     } finally {
       provider.countPending = original
     }
+  })
+})
+
+// APPROVALSUNAVAIL.1 (October audit A17) — a category whose read fails is
+// marked unavailable, never shown as an empty one, and the count says it is
+// incomplete.
+describe('a failed category is unavailable, not empty', () => {
+  const owner = {
+    role: 'owner',
+    activeLocation: { id: 'loc1', features: {} },
+    activeAssignment: { permissions: {} },
+    activeRoleTemplate: null,
+    rolesByLocation: { loc1: 'owner' },
+  }
+
+  function stubProviders(failKey) {
+    const saved = APPROVALS_PROVIDERS.map((p) => ({ fetchPending: p.fetchPending, countPending: p.countPending }))
+    for (const p of APPROVALS_PROVIDERS) {
+      const fail = p.key === failKey
+      p.fetchPending = async () => { if (fail) throw new Error('read failed'); return { count: 1, items: [{ id: `${p.key}-1` }] } }
+      p.countPending = async () => { if (fail) throw new Error('read failed'); return 1 }
+    }
+    return () => APPROVALS_PROVIDERS.forEach((p, i) => { p.fetchPending = saved[i].fetchPending; p.countPending = saved[i].countPending })
+  }
+
+  it('the inbox list marks the failed bucket and lists it', async () => {
+    const restore = stubProviders('time_off')
+    try {
+      const { providers, unavailable } = await getPendingApprovals({}, owner)
+      const leave = providers.find((p) => p.key === 'time_off')
+      expect(leave).toMatchObject({ count: 0, items: [], unavailable: true })
+      expect(unavailable).toEqual([leave.label])
+      expect(providers.filter((p) => p.key !== 'time_off').every((p) => !p.unavailable && p.count === 1)).toBe(true)
+    } finally { restore() }
+  })
+
+  it('nothing failed: no unavailable list', async () => {
+    const restore = stubProviders(null)
+    try {
+      expect((await getPendingApprovals({}, owner)).unavailable).toEqual([])
+      expect((await getPendingApprovalsCountDetail({}, owner)).incomplete).toBe(false)
+    } finally { restore() }
+  })
+
+  it('the count says it is incomplete, and the plain count is unchanged', async () => {
+    const restore = stubProviders('time_off')
+    try {
+      const detail = await getPendingApprovalsCountDetail({}, owner)
+      expect(detail.incomplete).toBe(true)
+      expect(await getPendingApprovalsCount({}, owner)).toBe(detail.count)
+    } finally { restore() }
   })
 })

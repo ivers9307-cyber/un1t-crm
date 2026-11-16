@@ -172,6 +172,10 @@ export const WEB_PERMISSIONS = Object.freeze([
   // written to the member's un1t.online account. Resolved at the booking
   // studio. Web-only (no phone screen; scripts/check-mobile-parity.mjs).
   { key: 'un1t_comp_credits', label: 'Add complimentary credits',  hint: "Add free class credits, with a use-by date and a reason, to a member's un1t.online account from the contact page. Owner/master/manager/reception by default." },
+  // STAFFPAYLINK.1 — the Hatch card's "Send payment link": a un1t.online hosted
+  // checkout link sent to the member on WhatsApp. Resolved at the studio.
+  // Web-only (no phone screen; scripts/check-mobile-parity.mjs).
+  { key: 'un1t_payment_links', label: 'Send payment links', hint: 'Send a un1t.online payment link for a membership or credit pack on WhatsApp from the contact page. Owner/master/manager/reception by default.' },
   { key: 'orders',     label: 'Orders',                          hint: 'Unified revenue view across race signups + car deposits (mig 085). Refund + retry-recovery flows live here.' },
   { key: 'car_processing', label: 'Car Processing',             hint: 'Tesla import tracker (CCF Autos). Off by default at user level — enable per user.' },
   // SPEND.P3 — company-card receipts. Permission gates SUBMISSION (who
@@ -362,6 +366,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     presentations: true,
     class_fees: true,
     un1t_comp_credits: true,
+    un1t_payment_links: true,
     orders: true, car_processing: true,
     card_receipts: true,
     invoices_inbox: true,
@@ -398,6 +403,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     presentations: false,
     class_fees: false,
     un1t_comp_credits: false,
+    un1t_payment_links: false,
     orders: false, car_processing: false,         // financial views off by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
@@ -438,6 +444,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     presentations: false,
     class_fees: false,
     un1t_comp_credits: true,
+    un1t_payment_links: true,
     orders: false, car_processing: false,
     card_receipts: false,
     invoices_inbox: false,
@@ -477,6 +484,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     presentations: true,
     class_fees: false,
     un1t_comp_credits: false,
+    un1t_payment_links: false,
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,
@@ -515,6 +523,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     presentations: true,
     class_fees: true,
     un1t_comp_credits: true,
+    un1t_payment_links: true,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     card_receipts: true,                           // managers commonly hold a company card
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
@@ -553,6 +562,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     presentations: true,
     class_fees: true,
     un1t_comp_credits: true,
+    un1t_payment_links: true,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     card_receipts: true,                           // owners hold a company card
     invoices_inbox: true,                          // owner approves their location's supplier invoices
