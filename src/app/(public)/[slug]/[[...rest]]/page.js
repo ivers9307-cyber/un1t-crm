@@ -386,7 +386,7 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     }
     const promo = resolved && resolved.live ? resolved : null
     // OPENWEEK.3 — before the visitor chooses a studio the page speaks for the
-    // organisation ("Open Week at UN1T Dublin"), never the first studio.
+    // organisation ("Open Week at <organisation name>"), never the first studio.
     const choosingStudio = !preview && studioChoices.length > 0
     const corpStudioName = choosingStudio && orgName ? orgName : (contextBrand?.locationName || contextBrand?.companyName || '')
     const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey, { platform: promo?.platform || resolved?.platform, kind: promo?.kind || resolved?.kind })
