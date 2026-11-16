@@ -28,6 +28,11 @@ vi.mock('@/lib/landing-pages', async (importOriginal) => {
   return { ...actual, resolvePublicPageRequest: vi.fn() }
 })
 
+// OPENWEEK.1 — the promo row and the window's read have their own tests.
+const ow = vi.hoisted(() => ({ promoRead: vi.fn(), listOw: vi.fn() }))
+vi.mock('@/lib/corp-promos-db', () => ({ readCorpPromo: ow.promoRead }))
+vi.mock('@/lib/open-week-claim', () => ({ readOpenWeekClasses: ow.listOw }))
+
 import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { fetchUpcomingEvents } from '@/lib/glofox'
@@ -63,6 +68,7 @@ beforeEach(() => {
   createServerClient.mockReturnValue(makeDb())
   resolvePublicPageRequest.mockReset()
   resolvePublicPageRequest.mockImplementation(async () => studioOk())
+  ow.promoRead.mockResolvedValue({ ok: true, promo: null })
 })
 
 describe('GET /api/public/classes — campaign (FIFTYPLUS.1)', () => {
@@ -210,5 +216,43 @@ describe('GET /api/public/classes — page (PAGES.1)', () => {
     res = await get('page=50plus')
     expect((await res.json()).data).toEqual({ classes: [], campaign: { configured: true, timetable_unavailable: true } })
     expect(fetchUpcomingEvents).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/public/classes — open week (OPENWEEK.1)', () => {
+  const OW = { key: 'hatch-open-week', live: true, kind: 'open_week', windowStartsOn: '2026-11-23', windowEndsOn: '2026-11-30', maxClasses: 5, maxPerDay: 1 }
+  const owPage = () => pageOk({ type: 'corp_promo', promo_key: 'hatch-open-week' }, { page: { id: 'p-ow', slug: 'openweek', offer_type: 'promo_credits' }, locationId: 'loc-h', publicPath: 'hatch-street' })
+
+  it("lists only the window's classes and says what the picker may take", async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce(owPage())
+    ow.promoRead.mockResolvedValueOnce({ ok: true, promo: OW })
+    ow.listOw.mockResolvedValueOnce({ ok: true, classes: [{ event_id: 'un1t:a', name: 'A', starts_at: '2026-11-24T07:00:00.000Z', day: '2026-11-24' }] })
+    const body = await (await get('page=openweek&studio=hatch-street')).json()
+    expect(ow.promoRead).toHaveBeenCalledWith(expect.anything(), { locationId: 'loc-h', key: 'hatch-open-week' })
+    expect(body.data.classes.map((c) => c.event_id)).toEqual(['un1t:a'])
+    expect(body.data.open_week).toEqual({ state: 'open', max_classes: 5, max_per_day: 1, starts_on: '2026-11-23', ends_on: '2026-11-30' })
+    expect(body.data.campaign).toEqual({ configured: true, timetable_unavailable: false })
+    expect(fetchUpcomingEvents).not.toHaveBeenCalled()
+  })
+
+  it('after the week lists nothing and says so; a failed read is the blip', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce(owPage())
+    ow.promoRead.mockResolvedValueOnce({ ok: true, promo: OW })
+    ow.listOw.mockResolvedValueOnce({ ok: false, code: 'over' })
+    let body = await (await get('page=openweek&studio=hatch-street')).json()
+    expect(body.data.classes).toEqual([])
+    expect(body.data.open_week.state).toBe('over')
+    resolvePublicPageRequest.mockResolvedValueOnce(owPage())
+    ow.promoRead.mockResolvedValueOnce({ ok: true, promo: OW })
+    ow.listOw.mockResolvedValueOnce({ ok: false, code: 'timetable_unavailable' })
+    body = await (await get('page=openweek&studio=hatch-street')).json()
+    expect(body.data.campaign).toEqual({ configured: true, timetable_unavailable: true })
+  })
+
+  it('a normal promo page carries no open_week', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk({ type: 'corp_promo', promo_key: 'hatch-3-free' }, { page: { id: 'p-c', slug: 'corp', offer_type: 'promo_credits' } }))
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: EVENTS })
+    const body = await (await get('page=corp&studio=hatch-street')).json()
+    expect(body.data).not.toHaveProperty('open_week')
   })
 })

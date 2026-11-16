@@ -29,6 +29,10 @@ import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { resolvePublicPageRequest } from '@/lib/landing-pages'
 import { offerConfigured } from '@/lib/landing-page-offers'
+import { readCorpPromo } from '@/lib/corp-promos-db'
+import { isOpenWeek } from '@/lib/open-week'
+import { readOpenWeekClasses } from '@/lib/open-week-claim'
+import { zoneOfLocation } from '@/lib/location-time'
 
 // UN1TWRITE.18 — does this studio's funnel need the terms and waiver tick
 // (un1t.online with the funnel on), and in the operator's words. An
@@ -111,6 +115,27 @@ async function pageGET(db, request, ip, params) {
     // classes left out; a un1t.online studio lists its synced un1t_events)
     // over the same 14 days, in the shape the pick step reads. The deny-list
     // alone governs here (no allow-list), as on /start.
+    // OPENWEEK.1 — a promo page whose promo is a live open week lists only
+    // the window's classes (the claim route judges picks on the same read)
+    // and tells the picker its limits.
+    if (offerType === 'promo_credits') {
+      const block = r.blocks.find((b) => b && typeof b === 'object' && b.type === 'corp_promo') || null
+      const key = typeof block?.promo_key === 'string' ? block.promo_key.trim() : ''
+      const read = key ? await readCorpPromo(db, { locationId: r.locationId, key }) : { ok: true, promo: null }
+      const promo = read.ok ? read.promo : null
+      if (promo && promo.live && isOpenWeek(promo)) {
+        const zone = zoneOfLocation(await locationZoneRow(db, r.locationId))
+        const [listed, terms] = await Promise.all([
+          readOpenWeekClasses(db, { locationId: r.locationId, blocks: r.blocks, promo, zone }),
+          termsFor(db, studio),
+        ])
+        const open_week = { state: listed.ok || listed.code !== 'over' ? 'open' : 'over', max_classes: promo.maxClasses, max_per_day: promo.maxPerDay, starts_on: promo.windowStartsOn, ends_on: promo.windowEndsOn }
+        return NextResponse.json({ success: true, data: {
+          classes: listed.ok ? listed.classes : [], terms, open_week,
+          campaign: { configured: true, timetable_unavailable: !listed.ok && listed.code === 'timetable_unavailable' },
+        } })
+      }
+    }
     if (offerType === 'paid_trial' || offerType === 'promo_credits') {
       const [read, terms] = await Promise.all([
         readPublicClasses(db, r.locationId, CAMPAIGN_DAYS, { blocks: r.blocks }),
@@ -123,6 +148,18 @@ async function pageGET(db, request, ip, params) {
   } catch (e) {
     logWarn('public-classes', 'page list failed', { err: e, pageId: r.pageId })
     return NextResponse.json({ success: true, data: { classes: [], campaign: { configured: true, timetable_unavailable: true } } })
+  }
+}
+
+// The studio's zone column for an open week list (zoneOfLocation falls back on a
+// missing row; a failed read is the default zone, as the listing labels do).
+async function locationZoneRow(db, locationId) {
+  try {
+    const { data, error } = await db.from('locations').select('timezone').eq('id', locationId).maybeSingle()
+    if (error) return null
+    return data
+  } catch {
+    return null
   }
 }
 
