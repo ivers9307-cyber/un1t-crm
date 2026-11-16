@@ -205,6 +205,9 @@ export async function rescheduleBookingByCustomer(db, { booking, date, startTime
     .eq('booking_date', booking.booking_date)
     .eq('start_time', oldStart)
     .select('id')
+  // BOOKONE.1 — the database overlap guard (mig 842): someone took the slot
+  // between the check and the write.
+  if (error?.code === '23P01') return { ok: false, code: 'slot_unavailable' }
   if (error) {
     logError('booking-self-service', 'customer reschedule write failed', { err: error, bookingId: booking.id })
     return { ok: false, code: 'save_failed' }

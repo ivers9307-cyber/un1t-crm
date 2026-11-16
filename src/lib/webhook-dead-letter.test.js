@@ -178,7 +178,13 @@ describe('deadLetterWebhook', () => {
     const db = makeDb()
     await expect(
       deadLetterWebhook(db, { provider: 'postmark', payload: {} })
-    ).resolves.toBeUndefined()
+    ).resolves.toEqual({ id: expect.anything() })
+  })
+
+  // XEROHOOK.1 — the result says whether the event was kept.
+  it('returns the captured row id, so a caller knows the event is kept', async () => {
+    const r = await deadLetterWebhook(makeDb(), { provider: 'postmark', payload: {} })
+    expect(r).toEqual({ id: expect.anything() })
   })
 
   // ── never throws ────────────────────────────────────────────────────────────
@@ -187,7 +193,7 @@ describe('deadLetterWebhook', () => {
     const db = makeDb({ insertError: { message: 'insert failed', code: '23000' } })
     await expect(
       deadLetterWebhook(db, { provider: 'glofox', payload: {} })
-    ).resolves.toBeUndefined()
+    ).resolves.toBeNull()
     expect(logWarn).toHaveBeenCalledWith(
       'webhook-dead-letter', 'capture failed',
       expect.objectContaining({ provider: 'glofox' })
@@ -198,7 +204,7 @@ describe('deadLetterWebhook', () => {
     const db = makeDb({ insertThrows: true })
     await expect(
       deadLetterWebhook(db, { provider: 'glofox', payload: {} })
-    ).resolves.toBeUndefined()
+    ).resolves.toBeNull()
     expect(logWarn).toHaveBeenCalledWith(
       'webhook-dead-letter', 'capture threw',
       expect.objectContaining({ provider: 'glofox' })
@@ -209,7 +215,7 @@ describe('deadLetterWebhook', () => {
     const db = { from: vi.fn().mockImplementation(() => { throw new Error('from exploded') }) }
     await expect(
       deadLetterWebhook(db, { provider: 'postmark', payload: { x: 1 } })
-    ).resolves.toBeUndefined()
+    ).resolves.toBeNull()
     expect(logWarn).toHaveBeenCalledWith(
       'webhook-dead-letter', 'capture threw',
       expect.objectContaining({ provider: 'postmark' })

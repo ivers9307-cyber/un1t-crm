@@ -86,7 +86,7 @@ describe('isReplayable', () => {
   it('returns false for prototype properties', () => expect(isReplayable('toString')).toBe(false))
 
   it('REPLAYABLE_PROVIDERS mirrors the registry keys (single source of truth)', () => {
-    expect(REPLAYABLE_PROVIDERS).toEqual(['inbody', 'postmark'])
+    expect(REPLAYABLE_PROVIDERS).toEqual(['inbody', 'postmark', 'xero'])
     expect(REPLAYABLE_PROVIDERS.every(isReplayable)).toBe(true)
   })
 })

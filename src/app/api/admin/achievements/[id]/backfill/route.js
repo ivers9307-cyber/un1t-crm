@@ -14,7 +14,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { logInfo, logWarn } from '@/lib/log'
-import { buildAchievementContext, runDetectors } from '@/lib/achievements'
+import { firstQualifyingSession } from '@/lib/achievements'
 import { selectAll } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
@@ -80,21 +80,28 @@ export async function POST(request, props) {
 
   let granted = 0
   let scanned = 0
+  let insertFailures = 0
   const BATCH = 200
 
   for (let offset = 0; offset < candidates.length; offset += BATCH) {
     const batch = candidates.slice(offset, offset + BATCH)
-    const { data: sessions } = await db
+    // ACHIEVEBACKFILL.1 (October audit A19) — paginated: 200 members' year
+    // of sessions is easily past PostgREST's 1,000-row cap, and a truncated
+    // read silently dropped later members' history. selectAll throws on a
+    // DB error, so the run fails rather than awarding from half a history.
+    const sessions = await selectAll((from, to) => db
       .from('heart_rate_sessions')
       .select('id, contact_id, location_id, booking_id, started_at, ended_at, effort_points, peak_hr_bpm, avg_hr_bpm, zones_seconds, max_hr_used, bookings:bookings(event_type_id)')
       .in('contact_id', batch)
       .not('ended_at', 'is', null)
       .gte('started_at', since)
       .order('started_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to))
 
-    // Bucket per contact.
+    // Bucket per contact (already oldest first).
     const perContact = new Map()
-    for (const s of sessions || []) {
+    for (const s of sessions) {
       s.event_type_id = s.bookings?.event_type_id || null
       const arr = perContact.get(s.contact_id) || []
       arr.push(s)
@@ -106,29 +113,28 @@ export async function POST(request, props) {
       const list = perContact.get(cid) || []
       if (list.length === 0) continue
       scanned++
-      // Treat the LATEST session as "this" — if the rule fires at
-      // any point in their timeline, the latest session is when
-      // they would have most recently met the criteria.
-      const latest = list[list.length - 1]
-      const history = list.slice(0, -1)
-      const ctx = buildAchievementContext(latest, history)
-      const fired = runDetectors([rule], ctx)
-      if (fired.length > 0) {
+      // Replay the history in order and award at the FIRST session the rule
+      // fires on (judging only the latest session missed every rule met
+      // earlier, e.g. a first Z5 minute months ago).
+      const hit = firstQualifyingSession(rule, list)
+      if (hit) {
         inserts.push({
           contact_id: cid,
           rule_id: rule.id,
           rule_slug: rule.slug,
-          source_session_id: latest.id,
-          metadata: { ...fired[0].metadata, backfilled: true },
+          source_session_id: hit.session.id,
+          metadata: { ...hit.fired.metadata, backfilled: true },
         })
       }
     }
 
     if (inserts.length > 0) {
+      // (contact_id, rule_id) is unique, so a re-run never awards twice.
       const { error: insErr, count } = await db
         .from('contact_achievements')
         .upsert(inserts, { onConflict: 'contact_id,rule_id', ignoreDuplicates: true, count: 'exact' })
       if (insErr) {
+        insertFailures += inserts.length
         logWarn('admin-achievements', 'backfill insert failed', { id, err: insErr })
       } else {
         granted += count || inserts.length
@@ -137,7 +143,7 @@ export async function POST(request, props) {
   }
 
   logInfo('admin-achievements', 'backfill complete', {
-    ruleId: id, slug: rule.slug, candidates: candidates.length, scanned, granted,
+    ruleId: id, slug: rule.slug, candidates: candidates.length, scanned, granted, insertFailures,
   })
 
   return NextResponse.json({
@@ -147,5 +153,8 @@ export async function POST(request, props) {
     already_earned: earnedSet.size,
     scanned,
     granted,
+    // A failed write is reported, not hidden: run the backfill again (it is
+    // safe to repeat) once the cause is fixed.
+    insert_failures: insertFailures,
   })
 }

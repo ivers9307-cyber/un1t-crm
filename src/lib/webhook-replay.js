@@ -102,11 +102,26 @@ export async function replayPostmark(db, payload) {
   if (error) throw new Error(error.message)
 }
 
+/**
+ * XEROHOOK.1 — re-run one Xero INVOICE webhook event (the stored payload is
+ * the event). Idempotent: it re-reads the live invoice and writes its current
+ * status. Throws when the event still cannot be recorded, so the row's
+ * attempts count up and it is retried with back-off.
+ */
+export async function replayXero(db, payload) {
+  const { processXeroInvoiceEvent } = await import('@/lib/xero/webhook-events')
+  const result = await processXeroInvoiceEvent(db, payload)
+  if (result.status === 'failed') {
+    throw new Error(`${result.reason}: ${result.error?.message || result.error || ''}`)
+  }
+}
+
 // ── registry ────────────────────────────────────────────────────────────────
 
 const REPLAYERS = {
   inbody:   replayInbody,
   postmark: replayPostmark,
+  xero:     replayXero,
   // glofox intentionally absent — action replay is NOT idempotent.
 }
 

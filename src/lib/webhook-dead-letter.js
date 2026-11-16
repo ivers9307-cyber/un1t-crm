@@ -75,7 +75,7 @@ export async function deadLetterWebhook(db, {
       .single()
     if (insErr) {
       logWarn('webhook-dead-letter', 'capture failed', { provider, err: insErr })
-      return
+      return null
     }
 
     // QSTASH.3 — push the replay. Nudge QStash to deliver this row to
@@ -96,7 +96,11 @@ export async function deadLetterWebhook(db, {
         // publishQueuePush swallows its own errors; belt-and-braces only.
       }
     }
+    // XEROHOOK.1 — say whether the event was kept, so a caller that would
+    // otherwise lose it (the Xero webhook) can ask the provider to retry.
+    return { id: inserted?.id ?? null }
   } catch (e) {
     logWarn('webhook-dead-letter', 'capture threw', { provider, err: e })
+    return null
   }
 }

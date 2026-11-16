@@ -28,6 +28,9 @@ import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { depositExpiryLabel } from '@/lib/cars'
 import { zoneOfLocation } from '@/lib/location-time'
+import { getOrder } from '@/lib/revolut'
+import { reissueDecision, depositUpdateForOrder, applyCarDepositUpdates } from '@/lib/car-deposit-revolut'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -77,6 +80,44 @@ export async function POST(request, props) {
   // Paid deposits keep their existing expiry untouched (the receipt
   // page renders forever for any status='paid' regardless of the
   // expiry timestamp).
+  // DEPOSITREISSUE.1 (mig 845) — the old Revolut order is not cancelled by a
+  // re-issue, so a buyer with the old page open can still pay it. Before the
+  // token rotates, ask Revolut what the old order is:
+  //   completed           -> it is paid: record it now, do not re-issue (409);
+  //   processing/authorised -> a payment is going through: do not re-issue (409);
+  //   pending             -> recorded in car_deposit_superseded_orders, which
+  //                          the webhook and the reconcile also match, then
+  //                          re-issued (no record, no re-issue: 503);
+  //   cancelled/failed    -> nothing can be paid on it: re-issued.
+  // An unreadable order is a 503: rotating on a guess is what orphaned money.
+  if (!isAlreadyPaid && car.deposit_revolut_order_id) {
+    let oldOrder
+    try {
+      oldOrder = await getOrder(car.deposit_revolut_order_id)
+    } catch (e) {
+      logError('issue-deposit-link', 'previous order unreadable; link not re-issued', { carId: car.id, err: e })
+      return NextResponse.json({ success: false, error: 'Could not check the previous deposit link with Revolut. Try again in a moment.' }, { status: 503 })
+    }
+    const decision = reissueDecision(oldOrder?.state)
+    if (decision === 'paid') {
+      const { state, updates } = depositUpdateForOrder({ order: oldOrder, car })
+      await applyCarDepositUpdates({ db, car, order: oldOrder, state, updates, guardStatus: true })
+      return NextResponse.json({ success: false, error: 'The buyer has already paid the deposit on the previous link. It is now recorded.', code: 'already_paid' }, { status: 409 })
+    }
+    if (decision === 'in_flight') {
+      return NextResponse.json({ success: false, error: 'A payment on the previous link is going through. Wait a minute and refresh before re-issuing.', code: 'payment_in_flight' }, { status: 409 })
+    }
+    if (decision === 'record_then_rotate') {
+      const { error: supErr } = await db.from('car_deposit_superseded_orders').upsert({
+        order_id: car.deposit_revolut_order_id, car_id: car.id, location_id: car.location_id,
+      }, { onConflict: 'order_id', ignoreDuplicates: true })
+      if (supErr) {
+        logError('issue-deposit-link', 'could not record the superseded order; link not re-issued', { carId: car.id, err: supErr })
+        return NextResponse.json({ success: false, error: 'Could not re-issue the link just now. Try again in a moment.' }, { status: 503 })
+      }
+    }
+  }
+
   const SEVENTY_TWO_HOURS_MS = 72 * 60 * 60 * 1000
   const expiresAt = isAlreadyPaid ? car.deposit_token_expires_at : new Date(Date.now() + SEVENTY_TWO_HOURS_MS).toISOString()
 
@@ -105,7 +146,11 @@ export async function POST(request, props) {
   const link = `${baseUrl}/deposit/${token}`
   // Nothing is sent — the operator shares the link themselves.
   updates.deposit_link_sent_via = null
-  await db.from('cars').update(updates).eq('id', car.id)
+  const { error: updErr } = await db.from('cars').update(updates).eq('id', car.id)
+  if (updErr) {
+    logError('issue-deposit-link', 'car update failed; link not issued', { carId: car.id, err: updErr })
+    return NextResponse.json({ success: false, error: 'Could not issue the link. Try again.' }, { status: 500 })
+  }
 
   // Project into the generic orders ledger (mig 085) so the
   // /orders Pending tab shows this even before the buyer pays.

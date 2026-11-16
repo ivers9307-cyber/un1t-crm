@@ -5,7 +5,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody, uuidLike } from '@/lib/validate'
 import { validateCustomResponses } from '@/lib/booking-validation'
 import { logWarn, logError } from '@/lib/log'
-import { findBookableSlot } from '@/lib/booking-slots'
+import { createBooking } from '@/lib/bookings-write'
 import { stampFirstTouchSource } from '@/lib/contact-first-touch-source'
 
 export const runtime = 'nodejs'
@@ -105,43 +105,28 @@ export async function POST(request) {
   // (/api/public/booking-manage/[token]/reschedule). Before it this route
   // checked only the overlap, so a scripted POST could book outside opening
   // hours or months ahead. An unreadable occupancy read fails closed.
-  let found
-  try {
-    found = await findBookableSlot(db, event, body.booking_date, body.start_time)
-  } catch (e) {
-    logError('booking', 'slot check failed (zone unreadable)', { err: e, eventTypeId: body.event_type_id })
-    return NextResponse.json({ success: false, error: 'We could not check that time. Please try again.' }, { status: 500 })
-  }
-  if (found.error) {
-    logError('booking', 'slot check failed (occupancy unreadable)', { err: found.error, eventTypeId: body.event_type_id })
-    return NextResponse.json({ success: false, error: 'We could not check that time. Please try again.' }, { status: 500 })
-  }
-  if (!found.slot) {
+  // BOOKONE.1 — the shared create (src/lib/bookings-write.js) runs that
+  // check and inserts; the database refuses an overlap that slips between
+  // the two (mig 842), answered as the same 409.
+  const created = await createBooking(db, {
+    event,
+    date: body.booking_date,
+    startTime: body.start_time,
+    customer: { name: body.customer_name, email: body.customer_email, phone: body.customer_phone || null },
+    customResponses: body.custom_responses || {},
+    source: body.source || 'booking_page',
+  })
+  if (!created.ok) {
+    if (created.code === 'slot_check_failed') {
+      logError('booking', 'slot check failed', { err: created.error, eventTypeId: body.event_type_id })
+      return NextResponse.json({ success: false, error: 'We could not check that time. Please try again.' }, { status: 500 })
+    }
+    if (created.code === 'insert_failed') {
+      return NextResponse.json({ success: false, error: created.error?.message || 'Could not create the booking.' }, { status: 400 })
+    }
     return NextResponse.json({ success: false, error: 'This time slot is no longer available' }, { status: 409 })
   }
-  const endTime = found.slot.end
-
-  // Create booking — the DB trigger handles contact creation, deal creation, and webhook.
-  // BOOKING.1 — copy event.location_id onto the booking. Without this
-  // the booking was invisible in /bookings (location-scoped) and any
-  // downstream code that reads booking.location_id directly (instead
-  // of going through event_types) was getting nulls.
-  const { data, error } = await db.from('bookings').insert({
-    event_type_id: body.event_type_id,
-    location_id: event.location_id || null,
-    booking_date: body.booking_date,
-    start_time: found.slot.start,
-    end_time: endTime,
-    customer_name: body.customer_name,
-    customer_email: body.customer_email.toLowerCase().trim(),
-    customer_phone: body.customer_phone || null,
-    custom_responses: body.custom_responses || {},
-    source: body.source || 'booking_page',
-  }).select().single()
-
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  }
+  const data = created.booking
 
   // CONSENT.4 — soft opt-in for marketing. The handle_new_booking
   // trigger has already created/matched a contact for this email +

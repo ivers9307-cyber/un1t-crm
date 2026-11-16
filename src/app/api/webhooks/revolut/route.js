@@ -34,7 +34,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
-import { depositUpdateForOrder, applyCarDepositUpdates } from '@/lib/car-deposit-revolut'
+import { depositUpdateForOrder, applyCarDepositUpdates, settleSupersededOrder } from '@/lib/car-deposit-revolut'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -88,6 +88,20 @@ export async function POST(request) {
     return NextResponse.json({ success: true, deferred: true })
   }
   if (!car) {
+    // DEPOSITREISSUE.1 (mig 845) — an order a re-issued link superseded is
+    // still the car's: a completed one marks it paid. Not claimed in the
+    // dedupe table (settling is idempotent on the row's settled_at), so a
+    // failed read just answers 200 deferred and the reconcile catches it.
+    try {
+      const superseded = await settleSupersededOrder({ db, orderId, getOrder })
+      if (superseded.outcome !== 'not_superseded') {
+        if (superseded.outcome === 'error') logWarn('revolut-webhook', 'superseded deposit order not settled; the reconcile retries', { orderId, err: superseded.error })
+        return NextResponse.json({ success: true, superseded: superseded.outcome })
+      }
+    } catch (e) {
+      logWarn('revolut-webhook', 'superseded deposit order check threw; the reconcile retries', { orderId, err: e })
+      return NextResponse.json({ success: true, deferred: true })
+    }
     // Another flow's order on the same merchant account (races, class
     // bookings, offers, donations) or a stale id. Normal traffic, so no
     // log; 200 so Revolut moves on.
