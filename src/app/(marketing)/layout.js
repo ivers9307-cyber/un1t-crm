@@ -48,25 +48,15 @@
 
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import HubTabs from '@/components/HubTabs'
+import { MARKETING_TABS } from '@/lib/hub-tabs'
 import { staffTabMetadata } from '@/lib/staff-tab-title'
 
 export const dynamic = 'force-dynamic'
 
-const TABS = [
-  // device_control is in this union for the same reason it's in the
-  // sidebar entry's anyPermission (review fix, HUBS.2f) — the
-  // Automations page's Studio music (Sonos) section (canDevices) gates
-  // on it alone, so a device_control-only holder needs the tab to show too.
-  { id: 'automations', label: 'Automations',  href: '/automations', perms: ['automations', 'email', 'whatsapp', 'device_control'] },
-  { id: 'landing',     label: 'Landing page', href: '/welcome',     perms: ['landing_page'], newTab: true },
-  { id: 'send',        label: 'Send',         href: '/communications/send',        perms: ['email', 'whatsapp'] },
-  { id: 'sent',        label: 'Sent',         href: '/communications/sent',        perms: ['email', 'whatsapp'] },
-  { id: 'templates',   label: 'Templates',    href: '/communications/templates',   perms: ['email', 'whatsapp'] },
-  { id: 'segments',    label: 'Segments',     href: '/communications/segments',    perms: ['email', 'whatsapp'], roles: MANAGER_ROLES },
-  { id: 'list-health', label: 'List health',  href: '/communications/list-health', perms: ['email'] },
-]
+// PALETTE.1 — the tab list lives in src/lib/hub-tabs.js (unchanged), shared
+// with the ⌘K palette so every tab is a jump target there too.
+const TABS = MARKETING_TABS
 
 // TABTITLE.1 — the tab names the ACTIVE studio for every page under this
 // layout (see src/lib/staff-tab-title.js). This is the OUTERMOST staff layout

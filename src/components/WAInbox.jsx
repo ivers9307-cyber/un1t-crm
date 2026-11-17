@@ -18,11 +18,12 @@ import { ChannelAvatar } from '@/components/inbox/ChannelBits'
 import HandledByControl from '@/components/inbox/HandledByControl'
 import AssignControl from '@/components/inbox/AssignControl'
 import MiaDecisionTrace from '@/components/inbox/MiaDecisionTrace'
+import WAAttachmentComposer from '@/components/inbox/WAAttachmentComposer'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image as ImageIcon, FileText, Mic, AlertCircle, RefreshCw,
   UserPlus, X, UserCheck, LayoutTemplate, CalendarPlus, MoreHorizontal,
-  Sparkles, Plus
+  Sparkles, Plus, Paperclip
 } from 'lucide-react'
 import { VOICE_TRANSCRIPT_SUBSCRIPTION, handleVoiceTranscriptUpdate } from '@/components/inbox/wa-voice-realtime'
 
@@ -156,6 +157,8 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
   // INBOX-REDESIGN.3.2 — the card-set picker row is now revealed on demand
   // from the "+" composer menu rather than always rendered.
   const [showCardSetPicker, setShowCardSetPicker] = useState(false)
+  // WAATTACH.1 — the photo/PDF panel under the composer.
+  const [showAttachment, setShowAttachment] = useState(false)
   // FLOW-SEND — drop the location's booking Flow into an open conversation
   // (availability comes back on the conversation GET).
   const [flowAvailable, setFlowAvailable] = useState(false)
@@ -443,6 +446,7 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
       setShowMoreMenu(false)
       setShowComposerMenu(false)
       setShowCardSetPicker(false)
+      setShowAttachment(false)
       // INBOX-REDESIGN.3.3 — the template picker now renders inside the
       // OPEN-window composer too (shared showTemplatePicker || selectedTemplate
       // condition), so leftover template state from a previous conversation
@@ -1332,6 +1336,16 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
                               <LayoutTemplate size={13} />
                               Template
                             </button>
+                            {/* WAATTACH.1 — a photo or PDF, inside the window only */}
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => { setShowComposerMenu(false); setShowAttachment(true) }}
+                              className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 flex items-center gap-2 transition-colors"
+                            >
+                              <Paperclip size={13} />
+                              Photo or PDF
+                            </button>
                             {/* C4 — curated card sets (hidden when the location has none configured) */}
                             {Array.isArray(cardSets) && cardSets.length > 0 && (
                               <button
@@ -1378,6 +1392,19 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
                         <Send size={16} className="text-un1t-text ml-0.5" />
                       </button>
                     </div>
+                    {showAttachment && (
+                      <WAAttachmentComposer
+                        key={selectedId}
+                        conversationId={selectedId}
+                        windowExpiry={windowExpiry}
+                        onClose={() => setShowAttachment(false)}
+                        onSent={async (warnings) => {
+                          if (!warnings?.length) setShowAttachment(false)
+                          await fetchMessages(selectedId)
+                          await fetchConversations()
+                        }}
+                      />
+                    )}
                     {/* C4 — send a curated card set as a media carousel;
                         revealed on demand from the "+" menu above instead of
                         always-visible (dismiss via the X). */}

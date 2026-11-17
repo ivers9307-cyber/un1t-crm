@@ -78,8 +78,15 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
       setError('First name or last name is required.')
       return
     }
-    if (!email.trim()) {
-      setError('Email is required.')
+    // PHONEONLY.1 — an email OR a phone number. A walk-in or a WhatsApp
+    // lead often has no email. An email already on file cannot be cleared
+    // here (the edit route keeps it), so say so rather than drop the change.
+    if (!email.trim() && !phone.trim()) {
+      setError('An email or a phone number is required.')
+      return
+    }
+    if (isEditing && !email.trim() && contact?.email) {
+      setError("An email on file can't be removed here.")
       return
     }
 
@@ -89,10 +96,12 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
     const fullName = [trimmedFirst, trimmedLast].filter(Boolean).join(' ')
 
     const payload = {
-      name: fullName || email.trim(),
+      name: fullName || email.trim() || phone.trim(),
       first_name: trimmedFirst || null,
       last_name: trimmedLast || null,
-      email: email.trim(),
+      // Omitted when blank: the create route takes null, the edit route
+      // takes no key (a phone-only contact keeps no email).
+      ...(email.trim() ? { email: email.trim() } : isEditing ? {} : { email: null }),
       phone: phone.trim() || null,
       // Sent on create, and on edit only when changed: a legacy value the
       // slug rule would refuse never blocks saving the rest of the form.
@@ -175,19 +184,21 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
             />
           </div>
         </div>
+        <p className="text-xs text-un1t-subtle">An email or a phone number is needed. Without an email the contact gets no email, and is not created in Glofox.</p>
         <div>
-          <label className="block text-sm text-un1t-subtle mb-1">Email *</label>
+          <label htmlFor="contact-email" className="block text-sm text-un1t-subtle mb-1">Email</label>
           <input
+            id="contact-email"
             type="email"
             value={email}
             onChange={e => setEmail(e.target.value)}
-            required
             className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           />
         </div>
         <div>
-          <label className="block text-sm text-un1t-subtle mb-1">Phone</label>
+          <label htmlFor="contact-phone" className="block text-sm text-un1t-subtle mb-1">Phone</label>
           <input
+            id="contact-phone"
             type="tel"
             value={phone}
             onChange={e => setPhone(e.target.value)}
