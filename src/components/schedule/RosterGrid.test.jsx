@@ -203,3 +203,26 @@ describe('RosterGrid', () => {
     expect(screen.getByTestId('roster-grid').textContent).not.toMatch(/€|salary|hourly/i)
   })
 })
+
+// GRIDEDIT.1 — each day cell of a team member gets an Add button.
+describe('RosterGrid — Add (GRIDEDIT.1)', () => {
+  it('gives every day of every team member an Add button that reports coach and date', () => {
+    const onAddShift = vi.fn()
+    render(<RosterGrid model={model()} onOpenBlock={vi.fn()} onAddShift={onAddShift} />)
+    expect(screen.getAllByTestId('grid-add')).toHaveLength(3 * 7)
+    fireEvent.click(screen.getByRole('button', { name: 'Add Alex Example to a shift on Wed 23' }))
+    expect(onAddShift).toHaveBeenCalledWith({ profileId: 'p-emp', name: 'Alex Example', date: '2026-09-23', dayLabel: 'Wed 23' })
+  })
+  it('no Add without the handler, in select mode, or for someone off the team', () => {
+    const { unmount } = render(<RosterGrid model={model()} onOpenBlock={vi.fn()} />)
+    expect(screen.queryAllByTestId('grid-add')).toHaveLength(0)
+    unmount()
+    const r2 = render(<RosterGrid model={model()} onOpenBlock={vi.fn()} onAddShift={vi.fn()} selectMode />)
+    expect(screen.queryAllByTestId('grid-add')).toHaveLength(0)
+    r2.unmount()
+    const off = model({ members: [M('p-emp', 'Alex Example', 'fte', 39), { ...M('p-gone', 'Former Coach', 'fte', 10), member: false }] })
+    render(<RosterGrid model={off} onOpenBlock={vi.fn()} onAddShift={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: /^Add Former Coach/ })).toBeNull()
+    expect(screen.getAllByRole('button', { name: /^Add Alex Example/ })).toHaveLength(7)
+  })
+})

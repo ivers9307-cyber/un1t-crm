@@ -8,12 +8,16 @@ import { sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { triggerSequencesForPipelineStageChange } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
 import { assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
+import { waPhoneFromPhone } from '@/lib/phone-validate'
 
 const ContactCreateSchema = z.object({
   name: z.string().min(1).max(200),
   first_name: z.string().max(100).optional(),
   last_name: z.string().max(100).optional(),
-  email,
+  // PHONEONLY.1 — email OR phone (a walk-in or WhatsApp lead often has no
+  // email). contacts.email is nullable; contacts_email_org_unique only
+  // binds a present address.
+  email: email.optional().nullable(),
   phone: phone.optional().nullable(),
   label: z.string().max(100).nullable().optional(),
   glofox_member_id: z.string().max(100).nullable().optional(),
@@ -21,6 +25,9 @@ const ContactCreateSchema = z.object({
   lead_source: leadSourceSchema.optional(),
   lead_created_at: z.string().datetime().optional(),
   location_id: uuidLike.optional(),
+}).refine((b) => Boolean(b.email) || Boolean(b.phone), {
+  message: 'An email or a phone number is required',
+  path: ['email'],
 })
 
 // POST /api/contacts — Create a contact.
@@ -78,12 +85,27 @@ export async function POST(request) {
     }
   }
 
+  // PHONEONLY.1 — with no email there is no unique index to catch a
+  // duplicate, so look for the same WhatsApp number (contacts.wa_phone, the
+  // trigger's derivation of phone) in the organisation first. A failed read
+  // refuses the create rather than risk a silent duplicate.
+  if (!body.email && body.phone) {
+    const dup = await phoneDuplicateInOrg(db, { phone: body.phone, locationId: body.location_id, orgId: auth.orgId })
+    if (dup.error) {
+      logWarn('contacts', 'phone duplicate check failed', { err: dup.error })
+      return NextResponse.json({ success: false, error: 'Could not create contact' }, { status: 500 })
+    }
+    if (dup.found) {
+      return NextResponse.json({ success: false, error: 'A contact with this phone number already exists in your organisation' }, { status: 409 })
+    }
+  }
+
   const { data, error } = await db.from('contacts').insert({
     name: body.name,
     first_name: body.first_name || body.name?.split(' ')[0],
     last_name: body.last_name || body.name?.split(' ').slice(1).join(' '),
-    email: body.email,
-    phone: body.phone,
+    email: body.email || null,
+    phone: body.phone || null,
     label: body.label,
     glofox_member_id: body.glofox_member_id,
     // C145 TRIALDEFAULT.1 (Richard, 2 Oct) — no default trial credits: a new
@@ -208,4 +230,30 @@ export async function GET(request) {
   }
 
   return NextResponse.json({ success: true, data })
+}
+
+// PHONEONLY.1 — is there already a contact with this WhatsApp number in the
+// organisation the new contact is created in? { found, error }.
+async function phoneDuplicateInOrg(db, { phone, locationId, orgId }) {
+  const wa = waPhoneFromPhone(phone)
+  if (!wa) return { found: false, error: null }
+  let org = orgId || null
+  if (!org) {
+    if (!locationId) return { found: false, error: null }
+    const { data: loc, error: locErr } = await db.from('locations').select('organization_id').eq('id', locationId).maybeSingle()
+    if (locErr) return { found: false, error: locErr }
+    org = loc?.organization_id || null
+  }
+  let locIds = [locationId].filter(Boolean)
+  if (org) {
+    // Not orgLocationIds(): it discards its read error, and an empty list
+    // here would read as "no duplicate".
+    const { data: locs, error: locsErr } = await db.from('locations').select('id').eq('organization_id', org)
+    if (locsErr) return { found: false, error: locsErr }
+    locIds = (locs || []).map((l) => l.id)
+  }
+  if (locIds.length === 0) return { found: false, error: null }
+  const { data, error } = await db.from('contacts').select('id').eq('wa_phone', wa).in('location_id', locIds).limit(1)
+  if (error) return { found: false, error }
+  return { found: (data || []).length > 0, error: null }
 }
