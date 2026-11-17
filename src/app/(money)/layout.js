@@ -48,26 +48,15 @@
 
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import HubTabs from '@/components/HubTabs'
+import { MONEY_TABS } from '@/lib/hub-tabs'
 import { staffTabMetadata } from '@/lib/staff-tab-title'
 
 export const dynamic = 'force-dynamic'
 
-const TABS = [
-  { id: 'overview', label: 'Overview',      href: '/accounting',    perms: ['accounting_hub'] },
-  { id: 'invoices', label: 'Invoices',      href: '/invoices',      perms: ['invoices_inbox'], badgeUrl: '/api/invoices-inbox/unread-count' },
-  { id: 'receipts', label: 'Card receipts', href: '/card-receipts', perms: ['card_receipts'] },
-  // HUBDOOR.4 — same floor HUBDOOR.2 gave Challenges in the Members strip:
-  // /orders gates on MANAGER_ROLES AND the key, so a staff/reception holder of
-  // `orders` alone was shown a tab that bounced them. A tab with no `roles`
-  // has no floor.
-  { id: 'orders',   label: 'Orders',        href: '/orders',        perms: ['orders'], roles: MANAGER_ROLES },
-  { id: 'offers',   label: 'Offer sales',   href: '/offer-sales',   perms: ['approvals_offer_purchases'] },
-  { id: 'class-fees', label: 'Class fees',  href: '/class-fees',    perms: ['class_fees'] },
-  { id: 'contractor-invoices', label: 'Contractor invoices', href: '/schedule/invoices', perms: ['approvals_contractor_invoices'] },
-  { id: 'expenses',            label: 'Staff expenses',      href: '/schedule/expenses', perms: ['approvals_fte_expenses'] },
-]
+// PALETTE.1 — the tab list lives in src/lib/hub-tabs.js (unchanged), shared
+// with the ⌘K palette so every tab is a jump target there too.
+const TABS = MONEY_TABS
 
 // TABTITLE.1 — the tab names the ACTIVE studio for every page under this
 // layout (see src/lib/staff-tab-title.js). This is the OUTERMOST staff layout

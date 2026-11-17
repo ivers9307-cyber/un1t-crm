@@ -106,7 +106,7 @@ const ContactCreate = z.object({
   name: z.string().min(1).max(200),
   first_name: z.string().max(100).optional(),
   last_name: z.string().max(100).optional(),
-  email,
+  email: email.optional().nullable().describe('Email or phone is required (PHONEONLY.1).'),
   phone: phone.optional().nullable(),
   label: z.string().max(100).nullable().optional(),
   glofox_member_id: z.string().max(100).nullable().optional(),
@@ -4106,13 +4106,15 @@ registry.registerPath({
   tags: ['Contacts'],
   security: [{ BearerAuth: [] }],
   summary: 'Create a contact',
+  description: 'An email or a phone number is required (PHONEONLY.1). Without an email the contact is not provisioned in Glofox.',
   request: { body: { content: { 'application/json': { schema: ContactCreate } } } },
   responses: {
     200: { description: 'Contact created', content: { 'application/json': { schema: SuccessResponse(Contact) } } },
     400: { description: 'Validation failed, location_id missing (cookie callers and per-organisation keys), or the insert failed (generic message; the database error is logged, never echoed)', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized, or (cookie caller) not Manager+ at location_id', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Per-organisation API key: location_id is not in your organisation. Cookie caller: not a member of location_id.', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'A contact with this email already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A contact with this email (or, with no email, this WhatsApp number) already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'No email given and the phone duplicate check could not be read (nothing created)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4494,6 +4496,52 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — master/owner only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// CONTACTTAGS.1 — bulk add / remove one manual tag at the active studio
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/bulk-tags',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add or remove one manual tag (contacts.tags) on up to 500 contacts at the active studio',
+  description: 'Master, or head coach / manager / owner with Contacts at the active studio. Contacts the studio cannot act on are counted in `skipped` and never named. Each row is a compare-and-set on the tags it read; a write that fails or keeps conflicting is counted in `failed`. A newly added tag fires matching tag_added sequences, as PUT /api/contacts/{id} does.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            contact_ids: z.array(uuidLike).min(1).max(500),
+            tag: z.string().min(1).max(64),
+            action: z.enum(['add', 'remove']),
+          }).openapi('ContactBulkTagsBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Per-outcome counts',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.object({
+              requested: z.number(),
+              updated: z.number(),
+              unchanged: z.number(),
+              skipped: z.number(),
+              failed: z.number(),
+            }),
+          }),
+        },
+      },
+    },
+    400: { description: 'Invalid body, unusable tag, or no active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Role or Contacts permission missing at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Contacts could not be read; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
