@@ -174,3 +174,29 @@ describe('GET /api/pipeline/deals — un1t card signals (HATCHCARD.1)', () => {
     expect(logWarn).toHaveBeenCalledWith('pipeline-deals', expect.stringMatching(/signals/), expect.objectContaining({ stageId: STAGE, locationId: LOC }))
   })
 })
+
+// BOARDFILTER.1 — Load more continues the filtered column.
+describe('GET /api/pipeline/deals — board filter (BOARDFILTER.1)', () => {
+  it('?q= and ?stuck=1 reach the deals read', async () => {
+    const seen = {}
+    db = {
+      from(table) {
+        const r = table === 'pipeline_stages' ? { data: { id: STAGE, pipeline_id: PIPELINE }, error: null }
+          : table === 'pipelines' ? { data: { module: 'acquisition' }, error: null }
+          : { data: [dealRow()], error: null }
+        const chain = {
+          select: () => chain, eq: () => chain, order: () => chain, range: () => chain,
+          ilike: (c, v) => { seen[table] = { ...(seen[table] || {}), ilike: [c, v] }; return chain },
+          or: (v) => { seen[table] = { ...(seen[table] || {}), or: v }; return chain },
+          maybeSingle: async () => r,
+          then: (res, rej) => Promise.resolve(r).then(res, rej),
+        }
+        return chain
+      },
+    }
+    const res = await GET(new Request(`http://localhost/api/pipeline/deals?stage_id=${STAGE}&q=pat&stuck=1`))
+    expect(res.status).toBe(200)
+    expect(seen.deals.ilike).toEqual(['title', '%pat%'])
+    expect(seen.deals.or).toMatch(/^stage_entered_at\.lte\./)
+  })
+})

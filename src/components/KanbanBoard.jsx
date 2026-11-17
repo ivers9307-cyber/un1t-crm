@@ -70,7 +70,10 @@ function sortColumn(deals) {
 // FEAT-PIPELINE-LAZY.1 — the server ships only the first page per column plus a
 // per-stage total count; each column lazily fetches more via /api/pipeline/deals
 // so the client never receives all (≤10k) open deals at once.
-export default function KanbanBoard({ initialStages, initialDeals, stageCounts = {}, view = 'active', manual = false, locationId, timezone = null, canTask = true }) {
+// BOARDFILTER.1 — `filterQuery` is the board's search/stuck filter as a query
+// string (boardFilterParams); Load more carries it so the next page continues
+// the filtered column.
+export default function KanbanBoard({ initialStages, initialDeals, stageCounts = {}, view = 'active', filterQuery = '', manual = false, locationId, timezone = null, canTask = true }) {
   // Accumulated deals per column, seeded from the server's first page.
   const [columnDeals, setColumnDeals] = useState(() => {
     const m = {}
@@ -113,7 +116,7 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
     setColumnLoading((p) => ({ ...p, [stageId]: true }))
     try {
       const offset = (columnDeals[stageId] || []).length
-      const res = await fetch(`/api/pipeline/deals?stage_id=${encodeURIComponent(stageId)}&offset=${offset}&view=${view}`)
+      const res = await fetch(`/api/pipeline/deals?stage_id=${encodeURIComponent(stageId)}&offset=${offset}&view=${view}${filterQuery ? `&${filterQuery}` : ''}`)
       const json = await res.json()
       if (json.success) {
         setColumnDeals((p) => ({ ...p, [stageId]: [...(p[stageId] || []), ...(json.deals || [])] }))
@@ -123,7 +126,7 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
     } finally {
       setColumnLoading((p) => ({ ...p, [stageId]: false }))
     }
-  }, [columnDeals, view])
+  }, [columnDeals, view, filterQuery])
 
   // WAITLIST.3 — optimistic move, reconciled by router.refresh() (which
   // re-reads the server-side per-stage totals behind the column badges).
