@@ -106,7 +106,7 @@ const ContactCreate = z.object({
   name: z.string().min(1).max(200),
   first_name: z.string().max(100).optional(),
   last_name: z.string().max(100).optional(),
-  email,
+  email: email.optional().nullable().describe('Email or phone is required (PHONEONLY.1).'),
   phone: phone.optional().nullable(),
   label: z.string().max(100).nullable().optional(),
   glofox_member_id: z.string().max(100).nullable().optional(),
@@ -4106,13 +4106,15 @@ registry.registerPath({
   tags: ['Contacts'],
   security: [{ BearerAuth: [] }],
   summary: 'Create a contact',
+  description: 'An email or a phone number is required (PHONEONLY.1). Without an email the contact is not provisioned in Glofox.',
   request: { body: { content: { 'application/json': { schema: ContactCreate } } } },
   responses: {
     200: { description: 'Contact created', content: { 'application/json': { schema: SuccessResponse(Contact) } } },
     400: { description: 'Validation failed, location_id missing (cookie callers and per-organisation keys), or the insert failed (generic message; the database error is logged, never echoed)', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized, or (cookie caller) not Manager+ at location_id', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Per-organisation API key: location_id is not in your organisation. Cookie caller: not a member of location_id.', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'A contact with this email already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A contact with this email (or, with no email, this WhatsApp number) already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'No email given and the phone duplicate check could not be read (nothing created)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4494,6 +4496,52 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — master/owner only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// CONTACTTAGS.1 — bulk add / remove one manual tag at the active studio
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/bulk-tags',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add or remove one manual tag (contacts.tags) on up to 500 contacts at the active studio',
+  description: 'Master, or head coach / manager / owner with Contacts at the active studio. Contacts the studio cannot act on are counted in `skipped` and never named. Each row is a compare-and-set on the tags it read; a write that fails or keeps conflicting is counted in `failed`. A newly added tag fires matching tag_added sequences, as PUT /api/contacts/{id} does.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            contact_ids: z.array(uuidLike).min(1).max(500),
+            tag: z.string().min(1).max(64),
+            action: z.enum(['add', 'remove']),
+          }).openapi('ContactBulkTagsBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Per-outcome counts',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.object({
+              requested: z.number(),
+              updated: z.number(),
+              unchanged: z.number(),
+              skipped: z.number(),
+              failed: z.number(),
+            }),
+          }),
+        },
+      },
+    },
+    400: { description: 'Invalid body, unusable tag, or no active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Role or Contacts permission missing at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Contacts could not be read; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -5490,6 +5538,48 @@ registry.registerPath({
     409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'The conversation or the location settings could not be read; nothing was sent', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta flow send failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAATTACH.1 — WhatsApp inbox photo/PDF upload slot (cookie auth)
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/conversations/{id}/attachments/sign',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Start a photo or PDF upload for an open conversation',
+  description: "Step 1 of sending a file from the inbox. Judges the declared file (JPEG or PNG up to 5 MB, PDF up to 16 MB) and mints a slot in the private whatsapp-media bucket under the conversation's studio, returning a signed upload token for exactly that path. The browser uploads the bytes straight to Storage, then calls POST /api/whatsapp/conversations/{id}/send with { type, attachment_path, caption?, file_name? }; the send route re-checks what Storage holds and mints Meta's link itself (a client media_url is refused). Gated on WhatsApp (web or mobile) at the conversation's studio; refused outside the 24-hour window.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            file_name: z.string().min(1).max(300),
+            mime: z.string().max(200),
+            size: z.number().int(),
+          }).openapi('WaAttachmentSign'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Upload slot minted',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.object({ path: z.string(), token: z.string(), content_type: z.string(), kind: z.enum(['image', 'document']) }),
+          }),
+        },
+      },
+    },
+    400: { description: 'Type or size not accepted, or the 24-hour window is closed (window_expired: true)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No WhatsApp permission at the conversation's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation not found, or at a studio the caller is not in', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The conversation could not be read, or Storage gave no upload token', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -7079,6 +7169,25 @@ registry.registerPath({
   },
 })
 
+// Manual arrival (ARRIVALFIX.1)
+registry.registerPath({
+  method: 'put',
+  path: '/api/attendance/arrival',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: "Enter or correct a coach's arrival by hand (attendance_reports)",
+  description: "Sets shift_assignments.arrived_at with arrival_source 'manual' for a shift at the caller's active studio. time is HH:MM on the shift's own date at the studio's clock and may not be in the future. An arrival the phone recorded (geofence) is never overwritten; a manual one may be corrected. The write is compare-and-set on the stamp that was read. A staff_attendance_events row (source manual) records who entered it.",
+  request: { body: { content: { 'application/json': { schema: z.object({ assignment_id: uuidLike, time: z.string() }) } } } },
+  responses: {
+    200: { description: '{ success, data: { assignment_id, arrived_at, arrival_source } }' },
+    400: { description: 'Malformed body, a time that does not exist on the date, or a future time', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: attendance_reports is not enabled for your role at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No live shift with that id at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: "The arrival was recorded by the coach's phone, or it changed while being edited", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The arrival could not be saved', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Geofence attendance (GEO-ATT, mig 463)
 registry.registerPath({
   method: 'get',
@@ -7461,6 +7570,21 @@ registry.registerPath({
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'An automatic credit cannot be removed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+// LEAVEBAL.1 — the whole studio's balances in one read.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/allowances/team',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "Every active staff member's holiday allowance (days) and lieu balance (hours) at the active studio",
+  description: "Query: year (default the active studio's current year). Master, owner, manager or head coach AT the active studio. One row per active, non-deleted member of staff there: holiday { total_days, carried_over, used_days, remaining, stored }, pending_days, lieu { credited_hours, taken_hours, balance_hours }; contractors are not_applicable with no holiday or lieu. A figure whose read failed is null and its part is named in `unreadable` (allowances, entitlements, pending, lieu), never 0. Also returns can_edit_allowance, can_record_lieu and the studio's today.",
+  responses: {
+    200: { description: 'Rows' },
+    400: { description: 'Malformed year, or no active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a manager at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Staff list unreadable', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 const PayrollSettingsBody = z.object({

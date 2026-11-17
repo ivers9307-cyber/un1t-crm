@@ -67,7 +67,30 @@
 // `canReadAvailability`, and a failed read is a named partial error. An
 // empty availability slice nobody mentions reads as "every coach is free".
 
+// ROTAREFRESH.1 — two changes for a manager filling a week.
+//
+// 1. `initialLoading`. `loading` is true during EVERY read, and the calendar
+//    swapped the whole grid for "Loading roster..." on it, so each assign,
+//    remove or save blanked the week and threw away the scroll position: 30
+//    shifts, 30 flashes. `initialLoading` is true only while there is no
+//    roster for the range on screen yet (first load, a new week or studio, or
+//    after a failed load of another range cleared it). A refresh of the range
+//    already shown keeps the grid and says `refreshing`. `loading` keeps its
+//    meaning (any read in flight) for the retry banner.
+//
+// 2. `refresh({ only })`. An edit on the calendar writes shifts, assignments,
+//    offers, swaps and rosters; it cannot change the templates, the coach
+//    list, bank holidays, approved leave or availability rules, yet every edit
+//    re-read all seven. `only` names the side slices to re-read (blocks are
+//    always read). A slice left out is skipped ONLY while the value it holds
+//    was loaded for exactly what is on screen (its scope key); otherwise it is
+//    read anyway, so a skipped slice can never be another week's or a failed
+//    one. EDIT_REFRESH_SLICES is the calendar's list.
+
 import { useState, useEffect, useCallback, useRef } from 'react'
+
+/** ROTAREFRESH.1 — the side slices an edit on the calendar can change (contractor spend follows assignments). */
+export const EDIT_REFRESH_SLICES = Object.freeze(['contractorSpend'])
 
 // ROSTER-FIX.6a-8 — a dead session is not a server fault, and every schedule
 // screen hits several endpoints at once, so an expired cookie showed up as a
@@ -221,6 +244,9 @@ export function useScheduleData({
   // message after nothing is not. Only this hook knows which happened, so it
   // says, rather than leaving the component to infer it from `loading` edges.
   const [successCount, setSuccessCount] = useState(0)
+  // ROTAREFRESH.1 — the range key the blocks in state belong to (null: none).
+  // State, not only the ref below, because initialLoading is derived from it.
+  const [blocksKey, setBlocksKey] = useState(null)
 
   // The range the data currently in state was actually loaded for. Compared
   // against the range that just failed to decide keep-vs-clear.
@@ -228,12 +254,18 @@ export function useScheduleData({
   // ROSTERLOAD.1 — the same idea, per non-blocks slice: the scope key each
   // slice's value in state was loaded for (null = nothing loaded / cleared).
   const loadedScope = useRef({})
+  // ROTAREFRESH.1 — the partial errors of the latest load, read when deciding
+  // what an edit may skip: a slice whose last read failed is always re-read.
+  const lastPartial = useRef(null)
 
   // Monotonic request id. Bumped before each fan-out; a response whose stamp
   // is no longer the current one is a loser and writes nothing.
   const generation = useRef(0)
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts) => {
+    // ROTAREFRESH.1 — `opts.only`: the side slices to re-read. Anything else
+    // (no opts, or a click event when wired straight to onClick) reads all.
+    const only = Array.isArray(opts?.only) ? new Set(opts.only) : null
     if (!locationId) {
       setLoading(false)
       return
@@ -263,12 +295,23 @@ export function useScheduleData({
       holidays: setHolidays, contractorSpend: setContractorSpend,
       availability: setAvailability,
     }
+    const ctx = { locationId, range: requestedRange, spendReferenceDate }
+    // ROTAREFRESH.1 — a slice is skipped only when asked AND what it holds is
+    // this exact scope's (never another week's, a cleared one, or one
+    // whose last read failed).
+    const skip = Object.fromEntries(SLICES.map((slice) => [
+      slice.key,
+      only != null && !only.has(slice.key) && !lastPartial.current?.[slice.key]
+        && loadedScope.current[slice.key] === slice.scope(ctx),
+    ]))
+    const SKIPPED = { skipped: true }
+    const readUnless = (key, read) => (skip[key] ? Promise.resolve(SKIPPED) : read())
     try {
       // ROSTERLOAD.1 — allSettled, not all: one read failing no longer throws
       // the others away. The order below is the SLICES order after blocks.
       const [blocksOutcome, ...sliceOutcomes] = await Promise.allSettled([
         readJson(`/api/schedule/blocks?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}`),
-        readJson(`/api/schedule/templates?location_id=${locationId}`),
+        readUnless('templates', () => readJson(`/api/schedule/templates?location_id=${locationId}`)),
         // ROSTER-FIX.6c — `?fields=picker`. Without it an admin caller's browser
         // received `*` (hourly_rate, annual_salary, overtime_rate) on every
         // calendar load, to render a coach dropdown and an hours panel. The
@@ -276,18 +319,18 @@ export function useScheduleData({
         // location links. CONTRACTVIS.1 — the contract hours the bars compare
         // against come only with include=contract, asked only by a caller who
         // may read them (canReadContract); the server decides per row anyway.
-        readJson(canReadContract ? '/api/staff?fields=picker&include=contract' : '/api/staff?fields=picker'),
-        readJson(`/api/schedule/time-off?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}&status=approved`),
-        readJson(`/api/locations/${locationId}/holidays?start=${startDate}&end=${endDate}`),
+        readUnless('staff', () => readJson(canReadContract ? '/api/staff?fields=picker&include=contract' : '/api/staff?fields=picker')),
+        readUnless('timeOff', () => readJson(`/api/schedule/time-off?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}&status=approved`)),
+        readUnless('holidays', () => readJson(`/api/locations/${locationId}/holidays?start=${startDate}&end=${endDate}`)),
         // ROSTERLOAD.1 (review B1) — no request a non-manager's session is
         // certain to be refused; `null` applies as "no spend figure".
-        canReadSpend
+        readUnless('contractorSpend', () => (canReadSpend
           ? readJson(`/api/schedule/contractor-spend?location_id=${locationId}&reference_date=${spendReferenceDate}`)
-          : Promise.resolve(null),
+          : Promise.resolve(null))),
         // AVAIL.1 — likewise manager-only; `null` applies as "no rules".
-        canReadAvailability
+        readUnless('availability', () => (canReadAvailability
           ? readJson(`/api/schedule/availability?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}`)
-          : Promise.resolve(null),
+          : Promise.resolve(null))),
       ])
       // allSettled never rejects, so this guard is now the ONLY one: a late
       // loser drops here for every slice, resolved or rejected.
@@ -301,7 +344,9 @@ export function useScheduleData({
         try { return { ok: true, value: apply(outcome.value) } } catch (e) { return { ok: false, reason: e } }
       }
       const blocksResult = judge(blocksOutcome, listOf)
-      const sliceResults = SLICES.map((slice, i) => judge(sliceOutcomes[i], slice.apply))
+      const sliceResults = SLICES.map((slice, i) => (skip[slice.key]
+        ? { ok: true, skipped: true }
+        : judge(sliceOutcomes[i], slice.apply)))
 
       // The roster failed to load if blocks failed (any status, including a
       // malformed body), or if a side read says the session is gone. A 403 on
@@ -309,10 +354,11 @@ export function useScheduleData({
       const fatal = sliceResults.find(r => !r.ok && isSessionEnded(r.reason))
       const rosterFailure = !blocksResult.ok ? blocksResult.reason : fatal?.reason
 
-      const ctx = { locationId, range: requestedRange, spendReferenceDate }
       const partial = {}
       SLICES.forEach((slice, i) => {
         const result = sliceResults[i]
+        // ROTAREFRESH.1 — not read: it already holds this scope's value.
+        if (result.skipped) return
         const scope = slice.scope(ctx)
         // A fatal load writes nothing new, for any slice: the same rule the
         // roster itself follows (keep what still belongs on screen).
@@ -332,7 +378,8 @@ export function useScheduleData({
           partial[slice.key] = { message: result.reason?.message || 'Could not load', kept }
         }
       })
-      setPartialErrors(Object.keys(partial).length ? partial : null)
+      lastPartial.current = Object.keys(partial).length ? partial : null
+      setPartialErrors(lastPartial.current)
 
       if (rosterFailure) {
         failRoster(rosterFailure)
@@ -341,6 +388,7 @@ export function useScheduleData({
 
       setBlocks(blocksResult.value)
       loadedRange.current = requestedRange
+      setBlocksKey(requestedRange)
       setError(null)
       setSuccessCount(n => n + 1)
     } catch (e) {
@@ -374,14 +422,20 @@ export function useScheduleData({
         // cleared by their own scope rule above.)
         setBlocks([])
         loadedRange.current = null
+        setBlocksKey(null)
       }
     }
   }, [locationId, startDate, endDate, spendReferenceDate, canReadSpend, canReadAvailability, canReadContract])
 
   useEffect(() => { refresh() }, [refresh])
 
+  // ROTAREFRESH.1 — no roster for what is on screen yet: the only time the
+  // calendar replaces the grid with its loading line.
+  const initialLoading = loading && blocksKey !== `${locationId}|${startDate}..${endDate}`
+
   return {
     blocks, templates, staff, timeOff, holidays, contractorSpend, availability,
-    loading, error, showingStaleData, partialErrors, successCount, refresh,
+    loading, initialLoading, refreshing: loading && !initialLoading,
+    error, showingStaleData, partialErrors, successCount, refresh,
   }
 }

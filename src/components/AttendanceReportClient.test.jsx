@@ -144,3 +144,42 @@ describe('AttendanceReportClient (ATTENDREPORT.1)', () => {
     expect(await screen.findByText('No shifts in this window.')).toBeTruthy()
   })
 })
+
+// ARRIVALFIX.1 — a row with no arrival can be given one by hand.
+describe('AttendanceReportClient — manual arrival (ARRIVALFIX.1)', () => {
+  const NO_ARRIVAL = { ...ROW, assignment_id: 'a2', actual_start: null, arrival_at: null, status: 'no_show', minutes_late: null, sources: [] }
+
+  it('offers Enter on a row with no arrival, and none on a phone arrival', async () => {
+    fetchMock.mockReturnValue(ok({ rows: [ROW, NO_ARRIVAL] }))
+    render(<AttendanceReportClient activeLocationName="Studio One" />)
+    await screen.findAllByText('Coach A')
+    expect(screen.getAllByRole('button', { name: /^Enter arrival for Coach A/ })).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: /^Edit arrival/ })).toBeNull()
+  })
+
+  it('saves the time through PUT /api/attendance/arrival and reloads', async () => {
+    fetchMock.mockImplementation((url, init) => (init?.method === 'PUT'
+      ? Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) })
+      : ok({ rows: [NO_ARRIVAL] })))
+    render(<AttendanceReportClient activeLocationName="Studio One" />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Enter arrival for Coach A/ }))
+    fireEvent.change(screen.getByLabelText('Arrived at'), { target: { value: '07:05' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save arrival' })) })
+    const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')
+    expect(putCall[0]).toBe('/api/attendance/arrival')
+    expect(JSON.parse(putCall[1].body)).toEqual({ assignment_id: 'a2', time: '07:05' })
+    expect(await screen.findByText(/saved as 07:05/)).toBeTruthy()
+    expect(fetchMock.mock.calls.filter(([, init]) => !init?.method || init.method === 'GET').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it("shows the server's refusal and keeps the dialog open", async () => {
+    fetchMock.mockImplementation((url, init) => (init?.method === 'PUT'
+      ? Promise.resolve({ ok: false, json: () => Promise.resolve({ success: false, error: 'An arrival cannot be in the future.' }) })
+      : ok({ rows: [NO_ARRIVAL] })))
+    render(<AttendanceReportClient activeLocationName="Studio One" />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Enter arrival for Coach A/ }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save arrival' })) })
+    expect((await screen.findByRole('alert')).textContent).toMatch(/future/)
+    expect(screen.getByLabelText('Arrived at')).toBeTruthy()
+  })
+})

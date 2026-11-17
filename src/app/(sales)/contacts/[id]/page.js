@@ -52,6 +52,10 @@ import SendKudosCard from '@/components/SendKudosCard'
 import ProgressPhotos from '@/components/ProgressPhotos'
 import InBodyProgress from '@/components/InBodyProgress'
 import { viewerZoneOf } from '@/lib/display-zone'
+import ContactTagsCard from '@/components/contact/ContactTagsCard'
+import { machineTagChips } from '@/lib/contact-manual-tags'
+import { TAG_RULES } from '@/lib/contact-events'
+import { describeTag } from '@/lib/sequences/tag-vocabulary'
 
 export const dynamic = 'force-dynamic'
 
@@ -205,6 +209,29 @@ export default async function ContactDetailPage(props) {
     }
   } catch { un1tStudios = [] }
   const bookableEventTypes = eventTypesRes?.data || []
+
+  // CONTACTTAGS.1 — the automatic tags (contact_tags, mig 085) for the Tags
+  // card: active rows only, named columns, and only rows with no studio or at
+  // a studio where the viewer holds Contacts (the rule un1tClients uses
+  // above). Display only: a failed read shows no automatic tags, never an
+  // error, and the manual tags (contacts.tags) still show.
+  let machineTags = []
+  {
+    const { data: tagRows, error: tagErr } = await db.from('contact_tags')
+      .select('tag, location_id, added_at')
+      .eq('contact_id', contact.id)
+      .is('removed_at', null)
+      .order('added_at', { ascending: false })
+      .limit(200)
+    if (!tagErr) {
+      const tagVisible = new Set(contactStudioIds(user, [...new Set((user.locations || []).map((l) => l?.id).filter(Boolean))]))
+      const ruleDescriptions = new Map(TAG_RULES.map((r) => [r.tag, r.description]))
+      machineTags = machineTagChips(tagRows, {
+        visible: (r) => !r.location_id || Boolean(user.isMaster) || tagVisible.has(r.location_id),
+        describe: (t) => describeTag(t, ruleDescriptions.get(t)),
+      })
+    }
+  }
 
   // PROFILE-ARREARS.1 — grouped contacts use the cross-account aggregate,
   // ungrouped ones the per-contact figure (the Overdue chase-list's source).
@@ -552,6 +579,14 @@ export default async function ContactDetailPage(props) {
             actingId={actingId}
             lensAll={lensAll}
             studioConsent={studioConsent}
+          />
+          {/* CONTACTTAGS.1 — manual tags (editable with the Edit button's gate)
+              and the automatic ones (read-only). Named fields only. */}
+          <ContactTagsCard
+            contactId={contact.id}
+            initialTags={Array.isArray(contact.tags) ? contact.tags : []}
+            machineTags={machineTags}
+            canEdit={actions.admin.canEdit}
           />
         </div>
 

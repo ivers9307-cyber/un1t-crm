@@ -21,6 +21,7 @@ import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
 import { unavailableFor, unavailableSummary, describeRule } from '@shared/availability'
 import { timeOffLeaveLabel } from '@shared/time-off'
 import { dayLeaveBars, dayAvailabilityRules } from './roster-card-model'
+import { liveAssignments } from './roster'
 
 export const ROSTER_LAYOUTS = Object.freeze(['days', 'coaches'])
 export const DEFAULT_ROSTER_LAYOUT = 'days'
@@ -377,4 +378,36 @@ export function restGapTitle(gap) {
   const where = (s) => (s?.location_name ? ` (${s.location_name})` : '')
   return `${hoursMinutesLabel(gap.rest_minutes)} rest: ends ${dayLabel(gap.before?.date)} ${formatTime12h(gap.before?.end)}${where(gap.before)}, `
     + `starts ${dayLabel(gap.after?.date)} ${formatTime12h(gap.after?.start)}${where(gap.after)}`
+}
+
+/**
+ * GRIDEDIT.1 — the shifts a coach can be added to from their day cell in the
+ * Coaches grid: every shift at this studio on `date` they are not already on,
+ * earliest first. A full shift is listed but marked `full` (the server refuses
+ * it with at_capacity, so the menu says so first). Pure.
+ *
+ * @param {object[]} blocks  the calendar's shift_blocks (this studio's), with
+ *   nested shift_assignments and shift_templates
+ * @param {{ profileId: string, date: string }} opts
+ * @returns {{ block_id: string, name: string, time: string, start: string, full: boolean, assigned: number, max: number|null }[]}
+ */
+export function gridAddOptions(blocks, { profileId, date } = {}) {
+  if (!profileId || !date) return []
+  return (blocks || [])
+    .filter((b) => b?.id && b.block_date === date)
+    .filter((b) => !liveAssignments(b.shift_assignments).some((a) => a.profile_id === profileId))
+    .map((b) => {
+      const assigned = liveAssignments(b.shift_assignments).length
+      const max = Number.isFinite(Number(b.max_coaches)) && Number(b.max_coaches) > 0 ? Number(b.max_coaches) : null
+      return {
+        block_id: b.id,
+        name: b.shift_templates?.name || b.name || 'Shift',
+        time: formatTimeRange12h(b.start_time, b.end_time),
+        start: String(b.start_time || ''),
+        full: max !== null && assigned >= max,
+        assigned,
+        max,
+      }
+    })
+    .sort((a, b) => a.start.localeCompare(b.start) || a.name.localeCompare(b.name))
 }

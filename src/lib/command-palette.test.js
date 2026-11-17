@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   NAV_COMMANDS,
+  JUMP_COMMANDS,
   CREATE_COMMANDS,
   commandAllowed,
   entityResult,
@@ -82,8 +83,10 @@ describe('visibleCommands', () => {
     const out = visibleCommands(NAV_COMMANDS, '', granted('contacts'))
     expect(out.map((c) => c.id)).toEqual(['contacts'])
   })
-  it('returns the full set for a master-like all-true predicate, sans query', () => {
-    expect(visibleCommands(NAV_COMMANDS, '', all).length).toBe(NAV_COMMANDS.length)
+  it('returns the full set for a master with an all-true predicate, sans query', () => {
+    // PALETTE.1 — a role-gated command (Orders) needs the user, not just keys.
+    const master = { role: 'master', profileRole: 'master', isMaster: true }
+    expect(visibleCommands(NAV_COMMANDS, '', all, master).length).toBe(NAV_COMMANDS.length)
   })
   it('gates the create commands too', () => {
     expect(visibleCommands(CREATE_COMMANDS, '', granted('contacts')).map((c) => c.id)).toEqual(['new-contact'])
@@ -249,7 +252,8 @@ function isRedirectStub(file) {
 // Every href the palette can navigate to, including the search results'.
 const SAMPLE_ROW = { id: 'ID', name: 'N', full_name: 'N' }
 const ALL_HREFS = [
-  ...NAV_COMMANDS.map((c) => [c.id, c.href]),
+  // PALETTE.1 — every jump target, curated and generated.
+  ...JUMP_COMMANDS.map((c) => [c.id, c.href]),
   ...CREATE_COMMANDS.map((c) => [c.id, c.href]),
   ...['contact', 'staff', 'event'].map((t) => [`search:${t}`, entityResult(t, SAMPLE_ROW).href]),
 ]
