@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   swapDayLabel, swapShiftWhen, postedSwapShift, swapReasonForPost, swapConfirmCopy, swapPostedCopy,
-  hasOpenSwap, annotateOpenSwaps,
+  hasOpenSwap, annotateOpenSwaps, canOfferSwap,
   SWAP_PENDING_LABEL, SWAP_PICKER_TITLE, SWAP_PICKER_EMPTY, SWAP_ALREADY_OPEN_MESSAGE, SWAP_REASON_MAX,
 } from './swap-cards'
 
@@ -185,5 +185,25 @@ describe('one success message for an open post, on both surfaces', () => {
   })
   it('says who is told, truthfully for both', () => {
     expect(swapPostedCopy(null).message).toBe('Coaches who can cover it and your managers have been notified.')
+  })
+})
+
+// PHONEHOME.1 (audit 3.9)
+describe('canOfferSwap', () => {
+  const now = new Date(2026, 7, 23, 12, 0).getTime()
+  const row = (over = {}) => ({ shift_assignment_id: 'a1', shift_date: '2026-08-23', shift_templates: { start_time: '17:00:00', end_time: '19:00:00' }, ...over })
+  it('a future shift of your own with no open swap', () => {
+    expect(canOfferSwap(row(), now)).toBe(true)
+  })
+  it('not once it has started', () => {
+    expect(canOfferSwap(row({ shift_templates: { start_time: '11:00:00', end_time: '13:00:00' } }), now)).toBe(false)
+  })
+  it('not without an assignment id, or with a swap already open', () => {
+    expect(canOfferSwap(row({ shift_assignment_id: null }), now)).toBe(false)
+    expect(canOfferSwap(row({ open_swap_status: 'pending' }), now)).toBe(false)
+  })
+  it('not for an untimed or undated row', () => {
+    expect(canOfferSwap(row({ shift_templates: {} }), now)).toBe(false)
+    expect(canOfferSwap(row({ shift_date: null }), now)).toBe(false)
   })
 })

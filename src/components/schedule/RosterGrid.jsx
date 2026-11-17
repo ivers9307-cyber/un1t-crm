@@ -10,11 +10,15 @@
 // next to the name so they are on screen without scrolling. Hours only:
 // nothing here is, or can be turned into, pay.
 //
-// READ-ONLY. A shift at this studio is a button that opens the same block
-// dialog a day card opens (in select mode it toggles selection, as a card
-// does: the calendar decides, in onOpenBlock). A shift at another studio is a
-// muted marker, not a control: that studio's dialog is not this screen's to
-// open. No drag-and-drop (GRID.1 plan, review notes).
+// A shift at this studio is a button that opens the same block dialog a day
+// card opens (in select mode it toggles selection, as a card does: the
+// calendar decides, in onOpenBlock). A shift at another studio is a muted
+// marker, not a control: that studio's dialog is not this screen's to open.
+// No drag-and-drop (GRID.1 plan, review notes).
+// GRIDEDIT.1 — the grid is no longer read-only: with `onAddShift`, each day
+// cell of a coach on this studio's team has an "Add" button, and the calendar
+// offers that day's shifts to put them on (gridAddOptions). Not in select
+// mode, where a click means "select".
 //
 // Every decision is in src/lib/roster-grid-model.js (pure, tested). This file
 // lays it out. 🔴 jsdom cannot see layout: the sticky first column, the
@@ -48,7 +52,7 @@ const hoursOrZero = (m) => (m > 0 ? hoursMinutesLabel(m) : '0h')
 export default function RosterGrid({
   model, loading = false, error = null, onRetry, onOpenBlock, canOpenBlock = () => true,
   selectMode = false, selectedBlockIds = null, onlyProfileId = null, holidays = [],
-  leaveMissing = false, availabilityMissing = false,
+  leaveMissing = false, availabilityMissing = false, onAddShift = null,
 }) {
   // A stale model is a grid for another week (GRID.1 review 2): not this
   // week's answer, so it is shown exactly as "not loaded yet".
@@ -110,6 +114,7 @@ export default function RosterGrid({
                 canOpenBlock={canOpenBlock}
                 selectMode={selectMode}
                 selected={selected}
+                onAddShift={onAddShift}
               />
             ))}
           </tbody>
@@ -124,7 +129,7 @@ export default function RosterGrid({
   )
 }
 
-function GridRow({ row, onOpenBlock, canOpenBlock, selectMode, selected }) {
+function GridRow({ row, onOpenBlock, canOpenBlock, selectMode, selected, onAddShift }) {
   const balance = adminBalanceLabel(row)
   const shortestRest = row.restGaps.length ? Math.min(...row.restGaps.map((g) => g.rest_minutes)) : null
   return (
@@ -178,10 +183,12 @@ function GridRow({ row, onOpenBlock, canOpenBlock, selectMode, selected }) {
         <span aria-hidden="true" className={TONE[balance.tone] || TONE.none}>{balance.text}</span>
         <span className="sr-only">{balance.srText}</span>
       </td>
-      {row.cells.map((cell) => (
+      {row.cells.map((cell, i) => (
         <GridCell
           key={cell.date}
           cell={cell}
+          addLabel={onAddShift && row.member && !selectMode ? `Add ${row.full_name} to a shift on ${DAY_LABELS[i]} ${Number(cell.date.slice(8, 10))}` : null}
+          onAdd={() => onAddShift?.({ profileId: row.profile_id, name: row.full_name, date: cell.date, dayLabel: `${DAY_LABELS[i]} ${Number(cell.date.slice(8, 10))}` })}
           onOpenBlock={onOpenBlock}
           canOpenBlock={canOpenBlock}
           selectMode={selectMode}
@@ -192,7 +199,7 @@ function GridRow({ row, onOpenBlock, canOpenBlock, selectMode, selected }) {
   )
 }
 
-function GridCell({ cell, onOpenBlock, canOpenBlock, selectMode, selected }) {
+function GridCell({ cell, onOpenBlock, canOpenBlock, selectMode, selected, addLabel = null, onAdd }) {
   return (
     <td className={`${CELL} min-w-[7.5rem]`}>
       <div className="flex flex-col gap-1">
@@ -248,6 +255,18 @@ function GridCell({ cell, onOpenBlock, canOpenBlock, selectMode, selected }) {
             <span className="block truncate">{chip.location_name || 'Another studio'}</span>
           </div>
         ))}
+        {addLabel && (
+          <button
+            type="button"
+            data-testid="grid-add"
+            onClick={onAdd}
+            aria-label={addLabel}
+            title={addLabel}
+            className="w-full rounded border border-dashed border-un1t-border px-1.5 py-0.5 text-left text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
+          >
+            + Add
+          </button>
+        )}
       </div>
     </td>
   )
