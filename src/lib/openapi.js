@@ -7572,6 +7572,21 @@ registry.registerPath({
     409: { description: 'An automatic credit cannot be removed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
+// LEAVEBAL.1 — the whole studio's balances in one read.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/allowances/team',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "Every active staff member's holiday allowance (days) and lieu balance (hours) at the active studio",
+  description: "Query: year (default the active studio's current year). Master, owner, manager or head coach AT the active studio. One row per active, non-deleted member of staff there: holiday { total_days, carried_over, used_days, remaining, stored }, pending_days, lieu { credited_hours, taken_hours, balance_hours }; contractors are not_applicable with no holiday or lieu. A figure whose read failed is null and its part is named in `unreadable` (allowances, entitlements, pending, lieu), never 0. Also returns can_edit_allowance, can_record_lieu and the studio's today.",
+  responses: {
+    200: { description: 'Rows' },
+    400: { description: 'Malformed year, or no active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a manager at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Staff list unreadable', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
 const PayrollSettingsBody = z.object({
   sunday_multiplier: z.number().min(1).max(3).nullable().describe('null = back to the default (4/3, time and a third)'),
 })
