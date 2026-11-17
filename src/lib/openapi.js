@@ -4497,6 +4497,52 @@ registry.registerPath({
   },
 })
 
+// CONTACTTAGS.1 — bulk add / remove one manual tag at the active studio
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/bulk-tags',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add or remove one manual tag (contacts.tags) on up to 500 contacts at the active studio',
+  description: 'Master, or head coach / manager / owner with Contacts at the active studio. Contacts the studio cannot act on are counted in `skipped` and never named. Each row is a compare-and-set on the tags it read; a write that fails or keeps conflicting is counted in `failed`. A newly added tag fires matching tag_added sequences, as PUT /api/contacts/{id} does.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            contact_ids: z.array(uuidLike).min(1).max(500),
+            tag: z.string().min(1).max(64),
+            action: z.enum(['add', 'remove']),
+          }).openapi('ContactBulkTagsBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Per-outcome counts',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.object({
+              requested: z.number(),
+              updated: z.number(),
+              unchanged: z.number(),
+              skipped: z.number(),
+              failed: z.number(),
+            }),
+          }),
+        },
+      },
+    },
+    400: { description: 'Invalid body, unusable tag, or no active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Role or Contacts permission missing at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Contacts could not be read; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // PERSON-LINK.2 — detection runner
 registry.registerPath({
   method: 'post',
