@@ -163,3 +163,67 @@ describe('initialHistorySyncState', () => {
     expect(initialHistorySyncState('2026-07-16T10:00:00.000Z')).toEqual({ status: 'pending', started_at: '2026-07-16T10:00:00.000Z' })
   })
 })
+
+// ── COEXSYNC.1 ──────────────────────────────────────────────────────────
+import {
+  requestSmbAppSync, requestCoexistenceSyncs, SMB_SYNC_API_URL,
+} from './whatsapp-embedded-signup.js'
+
+describe('getWabaPhoneNumber picks the number v5 named', () => {
+  it('returns the matching row, not the first', async () => {
+    globalThis.fetch = async () => ({ json: async () => ({ data: [
+      { id: '111', display_phone_number: '+353 1 000 0001', verified_name: 'Other' },
+      { id: '222', display_phone_number: '+353 1 000 0002', verified_name: 'Test Studio' },
+    ] }) })
+    const out = await getWabaPhoneNumber({ wabaId: '5', token: 'T', phoneNumberId: '222' })
+    expect(out).toEqual({ phoneNumberId: '222', displayPhone: '+353 1 000 0002', verifiedName: 'Test Studio' })
+  })
+  it('throws when the named number is not on the WABA', async () => {
+    globalThis.fetch = async () => ({ json: async () => ({ data: [{ id: '111' }] }) })
+    await expect(getWabaPhoneNumber({ wabaId: '5', token: 'T', phoneNumberId: '999' })).rejects.toThrow(/not on that WhatsApp Business account/)
+  })
+})
+
+describe('requestSmbAppSync', () => {
+  const NOW = '2026-11-17T12:00:00.000Z'
+  it('POSTs the sync type to /{id}/smb_app_data on v27.0', async () => {
+    const calls = []
+    globalThis.fetch = async (url, opts) => { calls.push({ url, opts }); return { ok: true, status: 200, json: async () => ({ messaging_product: 'whatsapp', request_id: 'r-1' }) } }
+    const out = await requestSmbAppSync({ phoneNumberId: '222', token: 'T', syncType: 'history', nowIso: NOW })
+    expect(out).toEqual({ ok: true, requested_at: NOW, request_id: 'r-1' })
+    expect(calls[0].url).toBe(`${SMB_SYNC_API_URL}/222/smb_app_data`)
+    expect(SMB_SYNC_API_URL).toBe('https://graph.facebook.com/v27.0')
+    expect(calls[0].opts.method).toBe('POST')
+    expect(calls[0].opts.headers.Authorization).toBe('Bearer T')
+    expect(JSON.parse(calls[0].opts.body)).toEqual({ messaging_product: 'whatsapp', sync_type: 'history' })
+  })
+  it('a Meta error is an outcome, not a throw', async () => {
+    globalThis.fetch = async () => ({ ok: false, status: 400, json: async () => ({ error: { message: 'already synced', code: 131000 } }) })
+    expect(await requestSmbAppSync({ phoneNumberId: '2', token: 'T', syncType: 'history', nowIso: NOW }))
+      .toEqual({ ok: false, attempted_at: NOW, error: 'already synced', meta_code: 131000 })
+  })
+  it('a network failure is an outcome, not a throw', async () => {
+    globalThis.fetch = async () => { throw new Error('socket hang up') }
+    expect(await requestSmbAppSync({ phoneNumberId: '2', token: 'T', syncType: 'history', nowIso: NOW }))
+      .toEqual({ ok: false, attempted_at: NOW, error: 'socket hang up', meta_code: null })
+  })
+})
+
+describe('requestCoexistenceSyncs', () => {
+  const NOW = '2026-11-17T12:00:00.000Z'
+  it('asks for contacts, then history', async () => {
+    const asked = []
+    const request = async ({ syncType }) => { asked.push(syncType); return { ok: true, requested_at: NOW, request_id: syncType } }
+    const out = await requestCoexistenceSyncs({ phoneNumberId: '2', token: 'T', nowIso: NOW, request })
+    expect(asked).toEqual(['smb_app_state_sync', 'history'])
+    expect(out.history.ok).toBe(true)
+  })
+  it('never re-asks for a sync Meta already accepted (each is one-shot)', async () => {
+    const asked = []
+    const request = async ({ syncType }) => { asked.push(syncType); return { ok: true, requested_at: NOW } }
+    const existing = { smb_app_state_sync: { ok: true, requested_at: 'earlier' }, history: { ok: false, error: 'x' } }
+    const out = await requestCoexistenceSyncs({ phoneNumberId: '2', token: 'T', existing, nowIso: NOW, request })
+    expect(asked).toEqual(['history'])
+    expect(out.smb_app_state_sync).toEqual({ ok: true, requested_at: 'earlier' })
+  })
+})

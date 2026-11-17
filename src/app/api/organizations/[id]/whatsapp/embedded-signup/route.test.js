@@ -30,6 +30,10 @@ vi.mock('@/lib/whatsapp-embedded-signup', async (importOriginal) => {
     registerNumber: vi.fn(async () => true),
     generatePin: vi.fn(() => '654321'),
     getWabaPhoneNumber: vi.fn(),
+    requestCoexistenceSyncs: vi.fn(async () => ({
+      smb_app_state_sync: { ok: true, requested_at: 'T0', request_id: 'r-c' },
+      history: { ok: true, requested_at: 'T0', request_id: 'r-h' },
+    })),
   }
 })
 
@@ -146,5 +150,50 @@ describe('embedded-signup at the organisation', () => {
     expect(row.access_token).toBe('SYNTH-BUSINESS-TOKEN-0000000000')
     expect(row.is_active).toBe(true)
     expect(row.signup_meta.pin).toBe('111111')
+  })
+})
+
+describe('COEXSYNC.1 — coexistence asks Meta for contacts and history', () => {
+  const COEX = { mode: 'coexistence', code: 'SYNTH-CODE', waba_id: '555', phone_number_id: '100200399', home_location_id: HOME }
+  beforeEach(() => {
+    es.getWabaPhoneNumber.mockResolvedValue({ phoneNumberId: '100200399', displayPhone: '+353 1 000 0009', verifiedName: 'Test Studio' })
+  })
+
+  it('a new coexistence number: no /register, the v5 number id is used, both syncs requested and recorded', async () => {
+    const state = setup()
+    const res = await post(COEX)
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json.success).toBe(true)
+    expect(es.registerNumber).not.toHaveBeenCalled()
+    expect(es.getWabaPhoneNumber).toHaveBeenCalledWith(expect.objectContaining({ wabaId: '555', phoneNumberId: '100200399' }))
+    expect(es.requestCoexistenceSyncs).toHaveBeenCalledWith(expect.objectContaining({ phoneNumberId: '100200399', token: 'SYNTH-BUSINESS-TOKEN-0000000000' }))
+    expect(json.smb_sync.history.ok).toBe(true)
+    const row = state.numbers.find((n) => n.phone_number_id === '100200399')
+    expect(row.source).toBe('coexistence')
+    expect(row.signup_meta.smb_sync.smb_app_state_sync.ok).toBe(true)
+    expect(row.signup_meta.history_sync.status).toBe('pending')
+  })
+
+  it('a failed history request keeps the connection and marks history request_failed', async () => {
+    es.requestCoexistenceSyncs.mockResolvedValueOnce({
+      smb_app_state_sync: { ok: true, requested_at: 'T0' },
+      history: { ok: false, attempted_at: 'T0', error: 'boom', meta_code: 1 },
+    })
+    const state = setup()
+    const res = await post(COEX)
+    expect(res.status).toBe(200)
+    expect((await res.json()).success).toBe(true)
+    const row = state.numbers.find((n) => n.phone_number_id === '100200399')
+    expect(row.is_active).toBe(true)
+    expect(row.signup_meta.history_sync.status).toBe('request_failed')
+    expect(row.signup_meta.smb_sync.history.error).toBe('boom')
+  })
+
+  it('a Cloud API connect never asks for a Business-app sync', async () => {
+    setup()
+    const res = await post({ ...DIALOG, home_location_id: HOME })
+    expect(res.status).toBe(200)
+    expect(es.requestCoexistenceSyncs).not.toHaveBeenCalled()
   })
 })

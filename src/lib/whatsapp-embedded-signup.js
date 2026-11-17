@@ -112,16 +112,69 @@ export function buildSignupMeta({ wabaId, pin, existingMeta, userId, probe, conn
  * — the number is already live on the WhatsApp Business app, so we read it
  * off the WABA rather than registering a new one.
  */
-export async function getWabaPhoneNumber({ wabaId, token }) {
+export async function getWabaPhoneNumber({ wabaId, token, phoneNumberId = null }) {
   const res = await fetch(
     `${META_API_URL}/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name`,
     { headers: { Authorization: `Bearer ${token}` } },
   )
   const json = await res.json()
   if (json.error) throw metaError(json, 'WABA phone-number lookup failed')
-  const first = json.data?.[0]
-  if (!first?.id) throw new Error('WABA returned no phone number (is coexistence linking complete?)')
-  return { phoneNumberId: first.id, displayPhone: first.display_phone_number || null, verifiedName: first.verified_name || null }
+  const rows = Array.isArray(json.data) ? json.data : []
+  // COEXSYNC.1: ES v5 names the number in its session info, so pick THAT one;
+  // only a v3-shaped finish (waba_id alone) falls back to the first number.
+  const hit = phoneNumberId ? rows.find((r) => String(r?.id) === String(phoneNumberId)) : rows[0]
+  if (!hit?.id) {
+    throw new Error(phoneNumberId
+      ? 'The connected number is not on that WhatsApp Business account.'
+      : 'WABA returned no phone number (is coexistence linking complete?)')
+  }
+  return { phoneNumberId: hit.id, displayPhone: hit.display_phone_number || null, verifiedName: hit.verified_name || null }
+}
+
+// ── COEXSYNC.1 — ask Meta for the Business app's contacts and chat history ──
+//
+// POST /{phone_number_id}/smb_app_data, once per sync_type, within 24 h of
+// onboarding (after that the business must offboard and onboard again).
+// Contacts first, then history, as Meta's coexistence guide orders them. The
+// answers arrive as `smb_app_state_sync` and `history` webhooks. On v27.0, the
+// version Meta's coexistence guide uses (the rest of the app is on v21.0).
+export const SMB_SYNC_API_URL = 'https://graph.facebook.com/v27.0'
+export const SMB_SYNC_TYPES = ['smb_app_state_sync', 'history']
+
+/** One sync request. Never throws: the outcome is data for signup_meta. */
+export async function requestSmbAppSync({ phoneNumberId, token, syncType, nowIso }) {
+  try {
+    const res = await fetch(`${SMB_SYNC_API_URL}/${phoneNumberId}/smb_app_data`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messaging_product: 'whatsapp', sync_type: syncType }),
+    })
+    let json = null
+    try { json = await res.json() } catch { json = null }
+    if (!res.ok || json?.error) {
+      return {
+        ok: false, attempted_at: nowIso,
+        error: json?.error?.message || `HTTP ${res.status}`,
+        meta_code: json?.error?.code ?? null,
+      }
+    }
+    return { ok: true, requested_at: nowIso, request_id: json?.request_id || null }
+  } catch (e) {
+    return { ok: false, attempted_at: nowIso, error: e?.message || 'network error', meta_code: null }
+  }
+}
+
+/**
+ * Run each sync Meta has not already accepted for this number (each is
+ * one-shot, so a reconnect never asks twice). Returns the new smb_sync map.
+ */
+export async function requestCoexistenceSyncs({ phoneNumberId, token, existing = {}, nowIso, request = requestSmbAppSync }) {
+  const out = { ...(existing || {}) }
+  for (const syncType of SMB_SYNC_TYPES) {
+    if (out[syncType]?.ok) continue
+    out[syncType] = await request({ phoneNumberId, token, syncType, nowIso })
+  }
+  return out
 }
 
 /** Initial history-sync state stamped into signup_meta at coexistence onboarding. */

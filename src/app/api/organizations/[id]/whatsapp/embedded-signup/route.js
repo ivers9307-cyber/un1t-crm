@@ -39,7 +39,9 @@ import {
   exchangeCodeForBusinessToken, subscribeAppToWaba, probeNumber,
   needsRegistration, generatePin, registerNumber, planPersistence,
   buildSignupMeta, getWabaPhoneNumber, initialHistorySyncState,
+  requestCoexistenceSyncs,
 } from '@/lib/whatsapp-embedded-signup'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -103,7 +105,7 @@ export async function POST(request, props) {
   let coexistenceNumber = null
   if (mode === 'coexistence') {
     try {
-      coexistenceNumber = await getWabaPhoneNumber({ wabaId: waba_id, token })
+      coexistenceNumber = await getWabaPhoneNumber({ wabaId: waba_id, token, phoneNumberId: bodyPhoneNumberId || null })
       phone_number_id = coexistenceNumber.phoneNumberId
     } catch (e) {
       return NextResponse.json({ success: false, error: `Coexistence phone-number lookup failed: ${e.message}` }, { status: 502 })
@@ -207,7 +209,8 @@ export async function POST(request, props) {
       .select('*')
       .single()
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-    return NextResponse.json({ success: true, data: publicShape(updated) })
+    const synced = mode === 'coexistence' ? await runCoexistenceSyncs(db, updated, token) : { row: updated }
+    return NextResponse.json({ success: true, data: publicShape(synced.row), ...(synced.smb_sync ? { smb_sync: synced.smb_sync } : {}) })
   }
 
   const { data: inserted, error: insertError } = await db
@@ -243,5 +246,52 @@ export async function POST(request, props) {
   // 763 dropped the trigger that did). A failure keeps the number and says so.
   const homeSwitchOn = await switchOnAtHome(db, { numberId: inserted.id, locationId: inserted.location_id, userId: user.id })
 
-  return NextResponse.json({ success: true, data: publicShape(inserted), home_switch_on: homeSwitchOn })
+  const synced = mode === 'coexistence' ? await runCoexistenceSyncs(db, inserted, token) : { row: inserted }
+  return NextResponse.json({
+    success: true, data: publicShape(synced.row), home_switch_on: homeSwitchOn,
+    ...(synced.smb_sync ? { smb_sync: synced.smb_sync } : {}),
+  })
+}
+
+// COEXSYNC.1 — after a coexistence number is saved, ask Meta for its
+// contacts and chat history (POST /{id}/smb_app_data, one-shot each, within
+// 24 h). Runs only once the number is persisted, so a failed request never
+// costs the connection; a failure is logged, kept on signup_meta.smb_sync
+// and shown on the numbers page, and connecting again retries only what
+// Meta has not accepted. Never throws.
+async function runCoexistenceSyncs(db, row, token) {
+  const nowIso = new Date().toISOString()
+  const meta = row.signup_meta || {}
+  const smbSync = await requestCoexistenceSyncs({
+    phoneNumberId: row.phone_number_id, token, existing: meta.smb_sync, nowIso,
+  })
+  for (const [syncType, result] of Object.entries(smbSync)) {
+    if (result && !result.ok && result.attempted_at === nowIso) {
+      logError('whatsapp-coexistence', 'smb_app_data sync request failed', {
+        number_id: row.id, sync_type: syncType, meta_code: result.meta_code, error: result.error,
+      })
+    }
+  }
+  const historyOk = smbSync.history?.ok === true
+  const nextMeta = {
+    ...meta,
+    smb_sync: smbSync,
+    history_sync: historyOk
+      ? (meta.history_sync?.status === 'request_failed' ? initialHistorySyncState(nowIso) : (meta.history_sync || initialHistorySyncState(nowIso)))
+      : { ...(meta.history_sync || {}), status: 'request_failed', started_at: meta.history_sync?.started_at || nowIso },
+  }
+  const { data: saved, error } = await db
+    .from('whatsapp_numbers')
+    .update({ signup_meta: nextMeta, updated_at: nowIso })
+    .eq('id', row.id)
+    .select('*')
+    .single()
+  if (error) {
+    // The requests went to Meta; only our note of them is lost. Log, keep the
+    // connection: a second request for a sync Meta already accepted is refused
+    // by Meta, never doubled.
+    logError('whatsapp-coexistence', 'smb_sync outcome not saved', { number_id: row.id, error: error.message })
+    return { row: { ...row, signup_meta: nextMeta }, smb_sync: smbSync }
+  }
+  return { row: saved, smb_sync: smbSync }
 }
