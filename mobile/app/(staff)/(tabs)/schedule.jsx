@@ -37,7 +37,7 @@ import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, blockStart as blockDefaultStart, blockEnd as blockDefaultEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
 import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES, scheduleViewFromParam } from '../../../lib/schedule-manage'
 import { myLeaveCancelOutcome } from '../../../lib/my-leave'
-import { hasOpenSwap, swapShiftWhen, swapPostedCopy, SWAP_PENDING_LABEL, SWAP_ALREADY_OPEN_MESSAGE } from '../../../lib/swap-cards'
+import { hasOpenSwap, swapShiftWhen, swapPostedCopy, canOfferSwap, SWAP_PENDING_LABEL, SWAP_ALREADY_OPEN_MESSAGE } from '../../../lib/swap-cards'
 import { createInFlightGuard } from '../../../lib/swap-flow'
 import LeaveFloatingButtons from '../../../components/LeaveFloatingButtons'
 import ManageMode from '../../../components/schedule/ManageMode'
@@ -256,7 +256,7 @@ function TeamShiftRow({ shift }) {
   )
 }
 
-function ShiftRow({ shift, onPress, onLongPress, nowMs, arrivalStale }) {
+function ShiftRow({ shift, onPress, onLongPress, onSwap, nowMs, arrivalStale }) {
   const tpl = shift.shift_templates
   // Override-aware effective times. mig 099/100 mirror trigger
   // pushes assignment-level overrides into the legacy shifts row,
@@ -301,9 +301,22 @@ function ShiftRow({ shift, onPress, onLongPress, nowMs, arrivalStale }) {
       </View>
       <View className="flex-row items-center">
         <Ionicons name="time-outline" size={14} color="#64748B" />
-        <Text className="text-sm text-un1t-subtle ml-1">
+        <Text className="text-sm text-un1t-subtle ml-1 flex-1">
           {timeRange(effStart, effEnd)} · {hours}h
         </Text>
+        {/* PHONEHOME.1 (audit 3.9) — swap was a long-press only. */}
+        {onSwap && canOfferSwap(shift, nowMs) ? (
+          <Pressable
+            onPress={onSwap}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={`Request a swap for ${tpl?.name || 'this shift'}`}
+            className="flex-row items-center px-2.5 py-1 rounded-full border border-un1t-border active:opacity-70"
+          >
+            <Ionicons name="swap-horizontal-outline" size={13} color="#111827" />
+            <Text className="text-xs font-medium text-un1t-text ml-1">Swap</Text>
+          </Pressable>
+        ) : null}
       </View>
       {/* ARRIVALSHOW.1 — what the app recorded as your arrival (arrived_at,
           never the Adjusted paid time below). */}
@@ -644,7 +657,14 @@ export default function Schedule() {
 
         {/* Week header */}
         <View className="flex-row items-center justify-between mb-3">
-          <Pressable onPress={() => setAnchor(addDays(anchor, -7))} className="p-2 -ml-2">
+          {/* PHONEHOME.1 — the arrows move the selected day with the week;
+              they used to leave it behind, so the new week read "No shifts". */}
+          <Pressable
+            onPress={() => { setAnchor(addDays(anchor, -7)); setSelected(addDays(selected, -7)) }}
+            accessibilityRole="button"
+            accessibilityLabel="Previous week"
+            className="p-2 -ml-2"
+          >
             <Ionicons name="chevron-back" size={22} color="#111827" />
           </Pressable>
           <Pressable
@@ -659,7 +679,12 @@ export default function Schedule() {
               {shortDate(anchor)} – {shortDate(addDays(anchor, 6))}
             </Text>
           </Pressable>
-          <Pressable onPress={() => setAnchor(addDays(anchor, 7))} className="p-2 -mr-2">
+          <Pressable
+            onPress={() => { setAnchor(addDays(anchor, 7)); setSelected(addDays(selected, 7)) }}
+            accessibilityRole="button"
+            accessibilityLabel="Next week"
+            className="p-2 -mr-2"
+          >
             <Ionicons name="chevron-forward" size={22} color="#111827" />
           </Pressable>
         </View>
@@ -766,6 +791,7 @@ export default function Schedule() {
                 shift={s}
                 onPress={canAdjust(s) ? () => setAdjustingShift(s) : undefined}
                 onLongPress={() => requestSwapForShift(s)}
+                onSwap={() => requestSwapForShift(s)}
                 nowMs={nowMs}
                 arrivalStale={arrivalStale}
               />
@@ -773,8 +799,8 @@ export default function Schedule() {
             {todays.length > 0 && (
               <Text className="text-[11px] text-un1t-muted text-center mt-1">
                 {isManagerRole(profile?.role)
-                  ? 'Tap to adjust times · long-press to request a swap.'
-                  : 'Long-press to request a swap. Your hours are set by your manager — if you worked different hours, tell them.'}
+                  ? 'Tap to adjust times. Swap posts a shift for someone else to take.'
+                  : 'Swap posts a shift for someone else to take. Your hours are set by your manager — if you worked different hours, tell them.'}
               </Text>
             )}
           </>

@@ -11,8 +11,17 @@
 //   (b) conversations whose OWN denormalised fields match (covers
 //       threads with no linked contact at all).
 //
+// WAMSGSEARCH.1 (2026-11-16) — (c) WhatsApp threads whose message TEXT
+// matches, found by searchWhatsAppMessageHits below (3+ characters, studios
+// where the caller holds WhatsApp only, a literal substring). Before it the
+// box said "people & messages" and matched only the 100-character preview.
+// Instagram message text is not searched: it lives in another table with no
+// helper here, and the inbox's Instagram volume is small.
+//
 // The pure string-building lives here so it's testable without a DB;
 // searchInboxContactIds is the one IO helper the routes share.
+
+import { escapeLikePattern } from './like-escape'
 
 // Real columns per table (verified against live information_schema,
 // 2026-07-25). Keep in sync with what the queue rows actually display.
@@ -58,12 +67,14 @@ export function escapeIlikeTerm(q) {
  * @param {string[]} contactIds ids from searchInboxContactIds (may be empty)
  * @returns {string}
  */
-export function buildInboxSearchOr(table, q, contactIds) {
+export function buildInboxSearchOr(table, q, contactIds, conversationIds = []) {
   const fields = INBOX_SEARCH_FIELDS[table]
   if (!fields) throw new Error(`buildInboxSearchOr: unknown table '${table}'`)
   const term = escapeIlikeTerm(q)
   const clauses = []
   if (contactIds?.length) clauses.push(`contact_id.in.(${contactIds.join(',')})`)
+  // WAMSGSEARCH.1 — threads whose message TEXT matched (searchWhatsAppMessageHits).
+  if (conversationIds?.length) clauses.push(`id.in.(${conversationIds.join(',')})`)
   for (const f of fields) clauses.push(`${f}.ilike.%${term}%`)
   return clauses.join(',')
 }
@@ -97,5 +108,91 @@ export async function searchInboxContactIds(db, { q, locationIds }) {
     return (data || []).map((r) => r.id)
   } catch {
     return []
+  }
+}
+
+// ─── WAMSGSEARCH.1 — WhatsApp message text ────────────────────────────────
+
+/** Below this many characters message text is not searched (every short word matches thousands of rows). */
+export const INBOX_MESSAGE_SEARCH_MIN_LENGTH = 3
+/** At most this many conversations come back from a message-text search. */
+export const INBOX_MESSAGE_SEARCH_CONVERSATION_CAP = 50
+// Matching messages read, newest first, to find those conversations. A busy
+// thread can hold many hits, so this is a multiple of the cap (and under
+// PostgREST's 1,000-row ceiling, so one page is the whole answer).
+export const INBOX_MESSAGE_SEARCH_ROW_CAP = 500
+const SNIPPET_RADIUS = 40
+
+/**
+ * A short piece of `body` around the first case-insensitive match of `term`,
+ * with an ellipsis where it was cut. The whole body (trimmed to twice the
+ * radius) when the match is not found, e.g. it spans a line break the
+ * database matched on.
+ *
+ * @param {string} body
+ * @param {string} term
+ * @returns {string}
+ */
+export function messageSnippet(body, term, radius = SNIPPET_RADIUS) {
+  const text = String(body || '').replace(/\s+/g, ' ').trim()
+  const needle = String(term || '').replace(/\s+/g, ' ').trim().toLowerCase()
+  const at = needle ? text.toLowerCase().indexOf(needle) : -1
+  if (at < 0) return text.length > radius * 2 ? `${text.slice(0, radius * 2).trimEnd()}…` : text
+  const start = Math.max(0, at - radius)
+  const end = Math.min(text.length, at + needle.length + radius)
+  return `${start > 0 ? '…' : ''}${text.slice(start, end).trim()}${end < text.length ? '…' : ''}`
+}
+
+/**
+ * Collapse matching message rows (newest first) into one hit per
+ * conversation: its newest match and a snippet of it, in order of that
+ * match, at most `cap`.
+ *
+ * @param {Array<{ conversation_id: string, body: string, created_at: string }>} rows
+ * @param {string} term
+ */
+export function collapseMessageHits(rows, term, cap = INBOX_MESSAGE_SEARCH_CONVERSATION_CAP) {
+  const hits = []
+  const seen = new Set()
+  for (const row of rows || []) {
+    if (!row?.conversation_id || seen.has(row.conversation_id)) continue
+    seen.add(row.conversation_id)
+    hits.push({ conversation_id: row.conversation_id, snippet: messageSnippet(row.body, term), matched_at: row.created_at || null })
+    if (hits.length >= cap) break
+  }
+  return hits
+}
+
+/**
+ * WhatsApp conversations whose message TEXT contains `q`, at the given
+ * studios only. The caller passes the studios where the person holds
+ * WhatsApp (web or mobile): message bodies are the inbox's content, so the
+ * scope is the permission's, not mere membership.
+ *
+ * A literal, case-insensitive substring: `%`, `_` and `\` in the query are
+ * escaped (escapeLikePattern) and the wildcards are ours. Best-effort like
+ * the contact lookup: a failed read answers { hits: [], failed: true } and
+ * the rest of the search still runs.
+ *
+ * @param {object} db  service-role client
+ * @param {{ q: string, locationIds: string[] }} args
+ * @returns {Promise<{ hits: Array<{ conversation_id: string, snippet: string, matched_at: string|null }>, failed: boolean }>}
+ */
+export async function searchWhatsAppMessageHits(db, { q, locationIds }) {
+  const term = String(q || '').trim()
+  if (term.length < INBOX_MESSAGE_SEARCH_MIN_LENGTH || !locationIds?.length) return { hits: [], failed: false }
+  try {
+    const { data, error } = await db
+      .from('whatsapp_messages')
+      .select('conversation_id, body, created_at')
+      .in('location_id', locationIds)
+      .not('conversation_id', 'is', null)
+      .ilike('body', `%${escapeLikePattern(term)}%`)
+      .order('created_at', { ascending: false })
+      .limit(INBOX_MESSAGE_SEARCH_ROW_CAP)
+    if (error) return { hits: [], failed: true }
+    return { hits: collapseMessageHits(data, term), failed: false }
+  } catch {
+    return { hits: [], failed: true }
   }
 }

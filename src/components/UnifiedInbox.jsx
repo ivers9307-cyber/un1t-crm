@@ -363,7 +363,10 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                       </span>
                     )}
                   </span>
-                  <span className="text-xs text-un1t-subtle truncate">{conv.last_message_preview || '—'}</span>
+                  {/* WAMSGSEARCH.1 — a thread found by its message text shows the matching words. */}
+                  {searchActive && conv.search_snippet
+                    ? <span className="text-xs text-un1t-muted truncate" data-search-snippet>{conv.search_snippet}</span>
+                    : <span className="text-xs text-un1t-subtle truncate">{conv.last_message_preview || '—'}</span>}
                 </div>
                 <div className="flex flex-col items-end gap-0.5">
                   <span className="text-xs text-un1t-muted shrink-0">{formatTime(conv.last_message_at)}</span>

@@ -116,3 +116,34 @@ describe('offerPageMode', () => {
     expect(offerPageMode({ open: false, upcoming: false })).toBe('ended')
   })
 })
+
+describe('offersPageCopy — storefront redesign fields (OFFERSDESIGN.1)', () => {
+  it('defaults hide the photo, proof and FAQ and keep three audience links', () => {
+    const c = offersPageCopy({ settings: {} })
+    expect(c.heroImage).toBe('')
+    expect(c.proofLine).toBe('')
+    expect(c.faq).toEqual([])
+    expect(c.audienceLinks.map((l) => l.target)).toEqual(['memberships', 'members', 'members'])
+  })
+
+  it('takes an operator photo only as an absolute https URL', () => {
+    const at = (heroImage) => offersPageCopy({ settings: { offers_page: { heroImage } } }).heroImage
+    expect(at(' https://x.supabase.co/a.jpg ')).toBe('https://x.supabase.co/a.jpg')
+    expect(at('http://x/a.jpg')).toBe('')
+    expect(at('/a.jpg')).toBe('')
+    expect(at('javascript:alert(1)')).toBe('')
+    expect(at(5)).toBe('')
+  })
+
+  it('keeps a well-formed FAQ and audience list, and falls back on a malformed one', () => {
+    const faq = [{ q: 'Q?', a: 'A.' }]
+    const links = [{ title: 'New', hint: 'Go', target: 'packs' }]
+    const c = offersPageCopy({ settings: { offers_page: { faq, audienceLinks: links, proofLine: ' 4.9 on Google ' } } })
+    expect(c.faq).toEqual(faq)
+    expect(c.audienceLinks).toEqual(links)
+    expect(c.proofLine).toBe('4.9 on Google')
+    const bad = offersPageCopy({ settings: { offers_page: { faq: [{ q: 'Q?' }], audienceLinks: [{ title: 'X', hint: '', target: 'nowhere' }] } } })
+    expect(bad.faq).toEqual([])
+    expect(bad.audienceLinks).toEqual(DEFAULT_OFFERS_PAGE_COPY.audienceLinks)
+  })
+})

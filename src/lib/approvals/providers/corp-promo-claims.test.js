@@ -75,11 +75,32 @@ describe('corpPromoClaimsProvider', () => {
 
   // WAYSIN.2 — the platform is the claim's own column; a row written before it
   // was stamped falls back to one read of the studio's promos.
-  it('platform from the claim row; no promo read when every row carries one', async () => {
-    const d = db([{ id: 'c1', promo_key: 'stillorgan-newstart', platform: 'glofox', reason: 'stalled' }])
+  it('platform from the claim row; no promo read when every row carries one and none is Glofox', async () => {
+    const d = db([{ id: 'c1', promo_key: 'hatch-3-free', platform: 'un1t_online', reason: 'stalled' }])
     const out = await corpPromoClaimsProvider.fetchPending(d, user)
-    expect(out.items[0].platform).toBe('glofox')
+    expect(out.items[0].platform).toBe('un1t_online')
     expect(d.promoReads).toEqual([])
+  })
+
+  // OPENWEEK.5 — a Glofox card names the promo's own plan, never "New Start".
+  it('claimWhy names the plan it was given, and a neutral plan without one', () => {
+    const plan = { planName: '2) Black Friday Open Week.' }
+    expect(claimWhy('grant_refused: ERROR_X', null, plan)).toBe('Glofox refused the 2) Black Friday Open Week. plan (ERROR_X). Nothing was bought.')
+    expect(claimWhy('grant_refused: ERROR_X')).toBe("Glofox refused the promo's plan (ERROR_X). Nothing was bought.")
+    expect(claimWhy('live_plan: trial', null, plan)).toContain('add 2) Black Friday Open Week. by hand')
+    expect(claimWhy('grant_unverified', null, plan)).toContain('€0 2) Black Friday Open Week. invoice')
+    for (const r of ['grant_refused: X', 'live_plan: trial', 'grant_unverified', 'stalled']) {
+      expect(claimWhy(r, { stage: 'purchasing' })).not.toContain('New Start')
+      expect(claimWhy(r, { stage: 'purchasing' }, plan)).not.toContain('New Start')
+    }
+  })
+
+  it('a Glofox card takes its plan name from one read of the studio\'s promos', async () => {
+    const promos = [{ id: 'p', location_id: 'loc-h', key: 'stillorgan-open-week', name: 'Open Week (Stillorgan)', platform: 'glofox', credits: 5, expires_in_days: 14, live: true, tag: 't', lead_source: 'corp_promo', glofox_membership_id: 'm', glofox_plan_code: 'c', glofox_plan_name: '2) Black Friday Open Week.' }]
+    const d = db([{ id: 'c1', promo_key: 'stillorgan-open-week', platform: 'glofox', reason: 'grant_refused: ERROR_X' }], null, { promos })
+    const out = await corpPromoClaimsProvider.fetchPending(d, user)
+    expect(out.items[0].why).toBe('Glofox refused the 2) Black Friday Open Week. plan (ERROR_X). Nothing was bought.')
+    expect(d.promoReads).toHaveLength(1)
   })
 
   it('an unstamped row takes the platform from one batch read of the studio\'s promos', async () => {

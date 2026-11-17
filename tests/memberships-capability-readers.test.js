@@ -68,6 +68,8 @@ const MANIFEST = Object.freeze({
   // matches of the net that are not the capability
   'src/lib/glofox-sync.js': NOT_CAP + "'memberships' names the Glofox membership read that failed",
   'src/lib/qualifications-server.js': NOT_CAP + "'memberships' names a failed read of coach memberships",
+  'src/app/offers/[studio]/page.js': NOT_CAP + "'memberships' is the storefront section's anchor id (OFFERSDESIGN.1)",
+  'src/lib/offer-studios.js': NOT_CAP + "'memberships' is an /offers audience-link target, the storefront section anchor (OFFERSDESIGN.1)",
   'src/lib/un1t-online-status.js': NOT_CAP + "'memberships' is a sync count key",
 })
 
