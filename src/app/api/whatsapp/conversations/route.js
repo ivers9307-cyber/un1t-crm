@@ -1,7 +1,8 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds, requireInboxPermission } from '@/lib/auth'
-import { INBOX_SEARCH_MIN_LENGTH, buildInboxSearchOr, searchInboxContactIds } from '@/lib/inbox-search-server'
+import { INBOX_SEARCH_MIN_LENGTH, buildInboxSearchOr, searchInboxContactIds, searchWhatsAppMessageHits } from '@/lib/inbox-search-server'
+import { hasPermissionForLocation, hasMobilePermissionForLocation } from '@/lib/permissions'
 
 // GET /api/whatsapp/conversations — list conversations (inbox)
 export async function GET(request) {
@@ -36,10 +37,22 @@ export async function GET(request) {
   // lookup — embedded-resource filters are unreliable, see CLAUDE.md) OR
   // the conversation's own denormalised fields.
   const q = (searchParams.get('q') || '').trim()
+  // WAMSGSEARCH.1 — snippet of the newest matching message, per thread.
+  const snippets = new Map()
   if (q.length >= INBOX_SEARCH_MIN_LENGTH) {
     const scopeIds = locationId ? [locationId] : getUserLocationIds(user)
-    const contactIds = await searchInboxContactIds(db, { q, locationIds: scopeIds })
-    query = query.or(buildInboxSearchOr('whatsapp_conversations', q, contactIds))
+    // WAMSGSEARCH.1 — message TEXT (3+ characters) only at the studios where
+    // the caller holds WhatsApp (web or mobile), the thread routes' rule
+    // (requireWhatsAppInboxAt): membership alone does not open the bodies.
+    const messageScope = scopeIds.filter((id) => (
+      hasPermissionForLocation(user, id, 'whatsapp') || hasMobilePermissionForLocation(user, id, 'whatsapp')
+    ))
+    const [contactIds, messageSearch] = await Promise.all([
+      searchInboxContactIds(db, { q, locationIds: scopeIds }),
+      searchWhatsAppMessageHits(db, { q, locationIds: messageScope }),
+    ])
+    for (const hit of messageSearch.hits) snippets.set(hit.conversation_id, hit.snippet)
+    query = query.or(buildInboxSearchOr('whatsapp_conversations', q, contactIds, [...snippets.keys()]))
   }
 
   const { data, error } = await query
@@ -54,7 +67,10 @@ export async function GET(request) {
       .eq('status', 'pending')
       .in('conversation_id', conversations.map(c => c.id))
     const pendingSet = new Set((pend || []).map(r => r.conversation_id))
-    for (const c of conversations) c.pending_approval = pendingSet.has(c.id)
+    for (const c of conversations) {
+      c.pending_approval = pendingSet.has(c.id)
+      if (snippets.has(c.id)) c.search_snippet = snippets.get(c.id)
+    }
   }
 
   return NextResponse.json({ success: true, conversations })
