@@ -20,18 +20,20 @@ import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 // (embedded-signup) does the rest: code→token, WABA webhook subscription,
 // conditional number registration, then upsert into whatsapp_numbers.
 //
-// `extras`/version checked against Meta's current ES v4 implementation
-// guide (2026-07): the documented sample is `extras: { setup: {} }` — no
-// `sessionInfoVersion` field (some third-party partner docs still carry
-// one; omitting it doesn't change the WA_EMBEDDED_SIGNUP payload shape,
-// which nests waba_id/phone_number_id under `data.data` in the current
-// docs' own example). FB.init's `version` is bumped to the
-// currently-documented 'v25.0'.
+// `extras`/version checked against Meta's ES v4 docs (2026-11). The
+// Cloud API sample is `extras: { setup: {} }`. The coexistence sample
+// ("Onboarding WhatsApp Business app users") adds
+// `featureType: 'whatsapp_business_app_onboarding'` AND
+// `sessionInfoVersion: '3'`; without the latter the dialog offered no
+// "connect your existing WhatsApp Business app" option (ESCOEXIST.1), so
+// coexistence sends both. Its FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING
+// event carries only waba_id; the route finds the number from the WABA.
+// FB.init's `version` is the currently-documented 'v27.0'.
 function loadFacebookSdk(appId) {
   return new Promise((resolve, reject) => {
     if (window.FB) return resolve(window.FB)
     window.fbAsyncInit = () => {
-      window.FB.init({ appId, autoLogAppEvents: false, xfbml: false, version: 'v25.0' })
+      window.FB.init({ appId, autoLogAppEvents: false, xfbml: false, version: 'v27.0' })
       resolve(window.FB)
     }
     const s = document.createElement('script')
@@ -103,7 +105,7 @@ export function ConnectWhatsAppCard({ organizationId, locations = [], canEdit, o
             response_type: 'code',
             override_default_response_type: true,
             extras: mode === 'coexistence'
-              ? { setup: {}, featureType: 'whatsapp_business_app_onboarding' }
+              ? { setup: {}, featureType: 'whatsapp_business_app_onboarding', sessionInfoVersion: '3' }
               : { setup: {} },
           },
         )
