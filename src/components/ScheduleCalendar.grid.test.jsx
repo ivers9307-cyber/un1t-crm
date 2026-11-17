@@ -199,3 +199,48 @@ describe('ScheduleCalendar: the Coaches layout (GRID.1)', () => {
     expect(await screen.findByTestId('roster-grid')).toBeTruthy()
   })
 })
+
+// GRIDEDIT.1 — the grid's Add puts a coach on one of the day's shifts.
+describe('ScheduleCalendar: Add from the Coaches grid (GRIDEDIT.1)', () => {
+  const second = { ...targetBlock, id: 'b-second', start_time: '18:00:00', end_time: '19:00:00', shift_templates: { ...targetBlock.shift_templates, name: 'Evening Conditioning' }, shift_assignments: [] }
+  function fetchWith(extra = {}) {
+    return vi.fn(async (url, init) => {
+      const u = String(url)
+      if (init?.method === 'POST' && u.includes('/assignments')) return ok(extra.post || { success: true, assigned: [{ profile_id: 'c-a' }], skipped: [], warnings: [] })
+      if (u.startsWith('/api/schedule/grid')) return ok({ success: true, data: GRID })
+      if (u.includes('/schedule/blocks')) return ok({ success: true, data: [targetBlock, second] })
+      if (u.includes('/api/staff')) return ok({ success: true, data: staff })
+      return ok({ success: true, data: [] })
+    })
+  }
+
+  it("offers only the day's shifts the coach is not on, and posts the pick", async () => {
+    global.fetch = fetchWith()
+    window.localStorage.setItem(KEY('u1'), 'coaches')
+    await renderLoaded()
+    await screen.findByTestId('roster-grid')
+    fireEvent.click(screen.getByRole('button', { name: 'Add Alex Example to a shift on Wed 6' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).queryByText(/Midday Strength/)).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: /Evening Conditioning/ }))
+    await waitFor(() => expect(global.fetch.mock.calls.some(([u, i]) => i?.method === 'POST' && String(u) === '/api/schedule/blocks/b-second/assignments')).toBe(true))
+    const [, init] = global.fetch.mock.calls.find(([u, i]) => i?.method === 'POST' && String(u) === '/api/schedule/blocks/b-second/assignments')
+    expect(JSON.parse(init.body)).toEqual({ profile_ids: ['c-a'] })
+    expect(await screen.findByText(/Added Alex Example to Evening Conditioning/)).toBeTruthy()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('says so when the day has no other shift', async () => {
+    window.localStorage.setItem(KEY('u1'), 'coaches')
+    await renderLoaded()
+    await screen.findByTestId('roster-grid')
+    fireEvent.click(screen.getByRole('button', { name: 'Add Alex Example to a shift on Wed 6' }))
+    expect(await screen.findByText(/No other shifts on this day/)).toBeTruthy()
+  })
+
+  it('a coach never gets Add', async () => {
+    window.localStorage.setItem(KEY('u2'), 'coaches')
+    await renderLoaded(coach)
+    expect(screen.queryAllByTestId('grid-add')).toHaveLength(0)
+  })
+})
