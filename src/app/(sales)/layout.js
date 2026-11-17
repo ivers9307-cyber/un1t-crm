@@ -7,15 +7,14 @@
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import HubTabs from '@/components/HubTabs'
+import { SALES_TABS } from '@/lib/hub-tabs'
 import { staffTabMetadata } from '@/lib/staff-tab-title'
 
 export const dynamic = 'force-dynamic'
 
-const TABS = [
-  { id: 'pipeline', label: 'Pipeline', href: '/pipeline',   perm: 'pipeline' },
-  { id: 'contacts', label: 'Contacts', href: '/contacts',   perm: 'contacts' },
-  { id: 'tasks',    label: 'Tasks',    href: '/activities', perm: 'activities' },
-]
+// PALETTE.1 — the tab list lives in src/lib/hub-tabs.js (unchanged), shared
+// with the ⌘K palette so every tab is a jump target there too.
+const TABS = SALES_TABS
 
 // TABTITLE.1 — the tab names the ACTIVE studio for every page under this
 // layout (see src/lib/staff-tab-title.js). This is the OUTERMOST staff layout
@@ -28,7 +27,7 @@ export async function generateMetadata() {
 export default async function SalesHubLayout({ children }) {
   const user = await getCurrentUser()
   if (!user) return children // pages own their auth redirects
-  const tabs = TABS.filter(t => hasPermission(user, t.perm)).map(({ perm: _p, ...t }) => t)
+  const tabs = TABS.filter(t => t.perms.some(p => hasPermission(user, p))).map(({ perms: _p, ...t }) => t)
   return (
     <>
       {tabs.length > 1 && (
