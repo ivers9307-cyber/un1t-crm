@@ -23,14 +23,14 @@ vi.mock('@/components/PipelineViewSwitcher', () => ({ default: () => <div>switch
 vi.mock('@/components/StageFollowupCoverage', () => ({ default: (props) => <div>{`coverage:${props.pipelineId}:${props.canEditSequences}`}</div> }))
 vi.mock('@/lib/sequence-access', () => ({ canBuildSequencesAt: vi.fn(() => false) }))
 // HATCHCARD.1 — the signals read is mocked; the rest of the module is real.
-vi.mock('@/lib/pipeline-card-signals', async (importOriginal) => ({ ...(await importOriginal()), loadUn1tCardSignals: vi.fn() }))
+vi.mock('@/lib/pipeline-card-signals', async (importOriginal) => ({ ...(await importOriginal()), loadCardSignals: vi.fn() }))
 
 import Page from './page.js'
 import KanbanBoard from '@/components/KanbanBoard'   // the mock above; its identity finds the board element
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
-import { loadUn1tCardSignals } from '@/lib/pipeline-card-signals'
+import { loadCardSignals } from '@/lib/pipeline-card-signals'
 import { canBuildSequencesAt } from '@/lib/sequence-access'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
@@ -295,18 +295,19 @@ describe('/pipeline — un1t card signals (HATCHCARD.1)', () => {
   }
   beforeEach(() => {
     boardProps.last = null
-    loadUn1tCardSignals.mockReset()
-    loadUn1tCardSignals.mockResolvedValue({ signals: new Map([['c1', SIG]]) })
+    loadCardSignals.mockReset()
+    loadCardSignals.mockResolvedValue({ signals: new Map([['c1', SIG]]) })
     membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: CAPS })
   })
 
   it('a un1t board: reads signals once, for the live funnel columns only, and attaches them', async () => {
     createServerClient.mockReturnValue(dbFor('acquisition_un1t'))
     renderToStaticMarkup(await Page({ searchParams: {} }))
-    expect(loadUn1tCardSignals).toHaveBeenCalledTimes(1)
-    const [, args] = loadUn1tCardSignals.mock.calls[0]
+    expect(loadCardSignals).toHaveBeenCalledTimes(1)
+    const [, args] = loadCardSignals.mock.calls[0]
     expect(args.locationId).toBe(LOC)
-    expect(args.contactIds).toEqual(['c1'])          // Converted (c2) carries none
+    expect(args.moduleName).toBe('acquisition_un1t')
+    expect(args.contacts.map((c) => c.id)).toEqual(['c1'])          // Converted (c2) carries none
     const byId = Object.fromEntries(boardProps.last.initialDeals.map((d) => [d.id, d]))
     expect(byId.d1.signals).toEqual(SIG)
   })
@@ -318,30 +319,35 @@ describe('/pipeline — un1t card signals (HATCHCARD.1)', () => {
     ]
     createServerClient.mockReturnValue(dbFor('acquisition_un1t', { board_type: 'offer', stageOverride: roleStages }))
     renderToStaticMarkup(await Page({ searchParams: {} }))
-    expect(loadUn1tCardSignals).toHaveBeenCalledTimes(1)
-    expect(loadUn1tCardSignals.mock.calls[0][1].contactIds).toEqual(['c1'])
+    expect(loadCardSignals).toHaveBeenCalledTimes(1)
+    expect(loadCardSignals.mock.calls[0][1].contacts.map((c) => c.id)).toEqual(['c1'])
     const byId = Object.fromEntries(boardProps.last.initialDeals.map((d) => [d.id, d]))
     expect(byId.d1.showSignals).toBe(true)
     expect(byId.d1.classesOf3).toBe(true)   // acquisition_un1t
     expect(byId.d1.signals).toEqual(SIG)
   })
 
-  it('a Glofox board: no signals read, no signals key on any card', async () => {
+  it('a Glofox board reads its signals too (CARDSIGNALS.1), for the live funnel columns only', async () => {
     createServerClient.mockReturnValue(dbFor('acquisition'))
     renderToStaticMarkup(await Page({ searchParams: {} }))
-    expect(loadUn1tCardSignals).not.toHaveBeenCalled()
-    expect(boardProps.last.initialDeals.every((d) => !('signals' in d))).toBe(true)
+    expect(loadCardSignals).toHaveBeenCalledTimes(1)
+    const [, args] = loadCardSignals.mock.calls[0]
+    expect(args.moduleName).toBe('acquisition')
+    expect(args.contacts.map((c) => c.id)).toEqual(['c1'])
+    const byId = Object.fromEntries(boardProps.last.initialDeals.map((d) => [d.id, d]))
+    expect(byId.d1.signals).toEqual(SIG)
+    expect(byId.d1.live_funnel).toBe(true)
   })
 
   it('the off-funnel view of a un1t board: no signals read', async () => {
     createServerClient.mockReturnValue(dbFor('acquisition_un1t'))
     renderToStaticMarkup(await Page({ searchParams: { view: 'dormant' } }))
-    expect(loadUn1tCardSignals).not.toHaveBeenCalled()
+    expect(loadCardSignals).not.toHaveBeenCalled()
   })
 
   it('a failed signals read renders the board without them, never throws', async () => {
     createServerClient.mockReturnValue(dbFor('acquisition_un1t'))
-    loadUn1tCardSignals.mockResolvedValue({ error: { message: 'boom' } })
+    loadCardSignals.mockResolvedValue({ error: { message: 'boom' } })
     const html = renderToStaticMarkup(await Page({ searchParams: {} }))
     expect(html).toContain('board:')
     expect(boardProps.last.initialDeals.every((d) => !('signals' in d))).toBe(true)

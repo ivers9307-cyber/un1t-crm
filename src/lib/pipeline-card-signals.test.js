@@ -6,6 +6,7 @@ vi.mock('@/lib/paid-trial-products', () => ({ paidTrialProductIdsFor: vi.fn() })
 import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 import {
   shapeCardSignals, loadUn1tCardSignals, cardSignalsEnabledForModule,
+  cardSignalSourceForModule, loadGlofoxCardSignals, loadCardSignals,
   SIGNAL_SLUGS, LAST_CLASS_WARM_DAYS,
 } from './pipeline-card-signals.js'
 
@@ -157,12 +158,20 @@ describe('shapeCardSignals (pure)', () => {
 })
 
 describe('cardSignalsEnabledForModule / SIGNAL_SLUGS', () => {
-  it('only a un1t.online board carries signals', () => {
-    expect(cardSignalsEnabledForModule('acquisition_un1t')).toBe(true)
-    expect(cardSignalsEnabledForModule('paid_trial_un1t')).toBe(true)
-    expect(cardSignalsEnabledForModule('acquisition')).toBe(false)
-    expect(cardSignalsEnabledForModule('paid_trial')).toBe(false)
+  it('every known board carries signals, from its own platform (CARDSIGNALS.1)', () => {
+    expect(cardSignalSourceForModule('acquisition_un1t')).toBe('un1t_online')
+    expect(cardSignalSourceForModule('paid_trial_un1t')).toBe('un1t_online')
+    for (const m of ['acquisition', 'paid_trial', 'programmes', 'offer']) {
+      expect(cardSignalSourceForModule(m)).toBe('glofox')
+      expect(cardSignalsEnabledForModule(m)).toBe(true)
+    }
+    expect(cardSignalSourceForModule(null)).toBeNull()
+    expect(cardSignalSourceForModule('no_such_board')).toBeNull()
     expect(cardSignalsEnabledForModule(null)).toBe(false)
+  })
+  it('the Programmes live funnel carries signals; its Converted does not', () => {
+    for (const s of ['programme_lead', 'programme_first_class']) expect(SIGNAL_SLUGS.has(s)).toBe(true)
+    expect(SIGNAL_SLUGS.has('programme_converted')).toBe(false)
   })
   it('the live funnel columns of both boards, never the piles or Converted', () => {
     for (const s of ['new_lead', 'rebook', 'first_class', 'second_class', 'trial_done', 'paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done']) {
@@ -297,5 +306,98 @@ describe('loadUn1tCardSignals — the trial window (HATCHCARD.2)', () => {
     expect(txs).toHaveLength(1)
     expect(txs[0].in.contact_id).toEqual(['c1'])
     expect(paidTrialProductIdsFor).toHaveBeenCalledWith(db, LOC)
+  })
+})
+
+describe('loadGlofoxCardSignals (CARDSIGNALS.1)', () => {
+  const OTHER = 'a0000000-0000-0000-0000-000000000001'
+  const tables = {
+    class_bookings: [
+      { id: 'b1', location_id: LOC, contact_id: 'c1', source_platform: 'glofox', starts_at: ago(3), status: 'BOOKED', attended: true },
+      { id: 'b2', location_id: LOC, contact_id: 'c1', source_platform: 'glofox', starts_at: ahead(1), status: 'BOOKED', attended: false },
+      { id: 'b3', location_id: LOC, contact_id: 'c1', source_platform: 'glofox', starts_at: ahead(2), status: 'WAITING', attended: false },
+      { id: 'b4', location_id: OTHER, contact_id: 'c1', source_platform: 'un1t_online', starts_at: ago(1), status: 'ATTENDED', attended: true },
+      { id: 'b5', location_id: LOC, contact_id: 'c2', source_platform: 'glofox', starts_at: ago(2), status: 'BOOKED', attended: false },
+    ],
+    whatsapp_conversations: [
+      { location_id: LOC, contact_id: 'c1', window_open_at: null, last_message_at: ago(4) },
+      { location_id: OTHER, contact_id: 'c2', window_open_at: ago(1), last_message_at: ago(1) },
+    ],
+    trial_purchases: [
+      { id: 'p1', location_id: LOC, contact_id: 'c1', status: 'granted', payment_status: 'paid', paid_at: ago(5), granted_at: ago(5), duration_days: 14 },
+      { id: 'p2', location_id: LOC, contact_id: 'c2', status: 'failed', payment_status: 'failed', paid_at: null, granted_at: null, duration_days: 14 },
+      { id: 'p3', location_id: OTHER, contact_id: 'c2', status: 'granted', payment_status: 'paid', paid_at: ago(1), granted_at: ago(1), duration_days: 14 },
+    ],
+  }
+  const contacts = [{ id: 'c1', trial_credits_remaining: 7 }, { id: 'c2', trial_credits_remaining: null }]
+
+  it('reads this studio\'s Glofox bookings and threads; credits come from the card', async () => {
+    const db = fakeDb(tables)
+    const { signals, error } = await loadGlofoxCardSignals(db, { locationId: LOC, contacts, nowMs: NOW })
+    expect(error).toBeUndefined()
+    // b1 attended, b2 the next class (the waitlist entry b3 is not), b4 another studio's
+    expect(signals.get('c1')).toMatchObject({ classes_attended: 1, credits_left: 7, next_class_at: ahead(1), last_class_days: 3, wa_state: 'no_reply', wa_days: 4, trial_kind: null })
+    // a past booking never attended is the missed class; no credits known, never messaged here
+    expect(signals.get('c2')).toMatchObject({ classes_attended: 0, credits_left: null, wa_state: 'never', missed_class: { outcome: 'not attended' } })
+    expect(db.calls.find((c) => c.table === 'class_bookings').eq.source_platform).toBe('glofox')
+    // trial_purchases only on the €39 board; contacts never re-read
+    expect(db.calls.map((c) => c.table)).not.toContain('trial_purchases')
+    expect(db.calls.map((c) => c.table)).not.toContain('contacts')
+  })
+
+  it('the €39 board: the live claim\'s 14-day window, from this studio\'s purchases only', async () => {
+    const db = fakeDb(tables)
+    const { signals } = await loadGlofoxCardSignals(db, { locationId: LOC, contacts, paidTrial: true, nowMs: NOW })
+    expect(signals.get('c1')).toMatchObject({ trial_kind: 'paid', trial_days_left: 9, trial_ends_at: ahead(9) })
+    expect(signals.get('c2').trial_kind).toBeNull()
+  })
+
+  it('every read is scoped to the studio, names its columns, and orders before it ranges', async () => {
+    const db = fakeDb(tables)
+    await loadGlofoxCardSignals(db, { locationId: LOC, contacts, paidTrial: true, nowMs: NOW })
+    expect(db.calls.length).toBe(3)
+    for (const c of db.calls) {
+      expect(c.eq.location_id).toBe(LOC)
+      expect(c.cols).not.toMatch(/\*/)
+      expect(c.range).not.toBeNull()
+      expect(c.order.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('a failed read returns { error }, never "nothing known"', async () => {
+    for (const t of ['class_bookings', 'whatsapp_conversations', 'trial_purchases']) {
+      const res = await loadGlofoxCardSignals(fakeDb(tables, { failOn: t }), { locationId: LOC, contacts, paidTrial: true, nowMs: NOW })
+      expect(res.signals).toBeUndefined()
+      expect(res.error).toBeTruthy()
+    }
+  })
+
+  it('no contacts: no reads', async () => {
+    const db = fakeDb(tables)
+    expect((await loadGlofoxCardSignals(db, { locationId: LOC, contacts: [], nowMs: NOW })).signals.size).toBe(0)
+    expect(db.calls).toHaveLength(0)
+  })
+})
+
+describe('loadCardSignals (CARDSIGNALS.1)', () => {
+  beforeEach(() => { paidTrialProductIdsFor.mockReset(); paidTrialProductIdsFor.mockResolvedValue(new Set()) })
+  it('a un1t.online board reads un1t.online rows; a Glofox board Glofox rows; €39 adds its purchases', async () => {
+    const un1t = fakeDb({})
+    await loadCardSignals(un1t, { moduleName: 'acquisition_un1t', locationId: LOC, contacts: [{ id: 'c1' }], nowMs: NOW })
+    expect(un1t.calls.find((c) => c.table === 'class_bookings').eq.source_platform).toBe('un1t_online')
+
+    const glofox = fakeDb({})
+    await loadCardSignals(glofox, { moduleName: 'acquisition', locationId: LOC, contacts: [{ id: 'c1' }], nowMs: NOW })
+    expect(glofox.calls.find((c) => c.table === 'class_bookings').eq.source_platform).toBe('glofox')
+    expect(glofox.calls.map((c) => c.table)).not.toContain('trial_purchases')
+
+    const paid = fakeDb({})
+    await loadCardSignals(paid, { moduleName: 'paid_trial', locationId: LOC, contacts: [{ id: 'c1' }], nowMs: NOW })
+    expect(paid.calls.map((c) => c.table)).toContain('trial_purchases')
+  })
+  it('an unknown board reads nothing and carries no signals', async () => {
+    const db = fakeDb({})
+    expect(await loadCardSignals(db, { moduleName: null, locationId: LOC, contacts: [{ id: 'c1' }], nowMs: NOW })).toEqual({ signals: null })
+    expect(db.calls).toHaveLength(0)
   })
 })

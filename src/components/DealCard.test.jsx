@@ -231,6 +231,34 @@ describe('DealCard — un1t card signals (HATCHCARD.1)', () => {
   })
 })
 
+// CARDSIGNALS.1 — a Glofox board's card with signals: the chips replace the
+// older credit count and next-class badge; any live funnel column ages.
+describe('DealCard — Glofox card signals (CARDSIGNALS.1)', () => {
+  const SIG = { classes_attended: 2, credits_left: 8, credits_unlimited: false, next_class_at: null, last_class_days: 1, last_class_warm: false, wa_state: 'never', wa_days: null }
+  const glofox = (over = {}) => ({
+    id: 'd-1', title: 'Ada', showSignals: true, signals: SIG, live_funnel: true,
+    contacts: { id: 'c-1', name: 'Ada Lovelace', pipeline_stage_slug: 'paid_trial_day_7', trial_credits_remaining: 8 },
+    age: { stage: '20d', tone: 'stale' },
+    ...over,
+  })
+  const r = (d) => renderToStaticMarkup(<DealCard deal={d} locationId="l-1" stageName="Day 7" stageSlug="paid_trial_day_7" />)
+  it('signals replace the old credit count and next-class badge (shown once each)', () => {
+    const html = r(glofox({ contacts: { id: 'c-1', name: 'Ada Lovelace', pipeline_stage_slug: 'new_lead', trial_credits_remaining: 8 } }))
+    expect(html).toContain('8 credits left')
+    expect(html).not.toContain('>8 credits<')
+    expect(html.match(/No class booked/g)).toHaveLength(1)
+  })
+  it('a €39 column turns stale like the free-trial columns', () => {
+    expect(r(glofox())).toContain('min-w-0 text-red-700')
+    expect(r(glofox({ live_funnel: undefined, showSignals: false, signals: undefined }))).toContain('min-w-0 text-un1t-subtle')
+  })
+  it('a failed signals read keeps the old badges', () => {
+    const html = r(glofox({ signals: undefined, showSignals: undefined, contacts: { id: 'c-1', name: 'Ada Lovelace', pipeline_stage_slug: 'new_lead', trial_credits_remaining: 8 } }))
+    expect(html).toContain('8 credits')
+    expect(html).toContain('No class booked')
+  })
+})
+
 // HATCHCARD.2 — the trial's end on the card.
 describe('DealCard — trial end chip (HATCHCARD.2)', () => {
   const base = { classes_attended: 0, credits_left: null, credits_unlimited: true, next_class_at: null, last_class_days: null, last_class_warm: false, wa_state: 'never', wa_days: null, trial_kind: null, trial_ends_at: null, trial_days_left: null, trial_ended_days: null }
