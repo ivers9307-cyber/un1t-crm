@@ -12,9 +12,10 @@ import { useState, useEffect, useRef } from 'react'
 import { Search, User, Users, Calendar, ArrowRight, Plus, Clock } from 'lucide-react'
 import { hasPermission } from '@/lib/permissions'
 import {
-  NAV_COMMANDS,
+  JUMP_COMMANDS,
   CREATE_COMMANDS,
   visibleCommands,
+  commandSublabel,
   sanitizeSearchTerm,
   MIN_CONTACT_SEARCH_LEN,
   addRecent,
@@ -102,8 +103,10 @@ export default function CommandPalette({ user }) {
 
   // Build the combined, ordered result list. Create + nav are permission
   // + query filtered via the pure helper; contacts come from the search.
-  const createResults = visibleCommands(CREATE_COMMANDS, query, hasPerm)
-  const navResults = visibleCommands(NAV_COMMANDS, query, hasPerm)
+  // PALETTE.1 — `user` answers the role / master / org-admin gates; with no
+  // user those commands are hidden (commandAllowed fails closed).
+  const createResults = visibleCommands(CREATE_COMMANDS, query, hasPerm, user)
+  const navResults = visibleCommands(JUMP_COMMANDS, query, hasPerm, user)
   // Recents show only on an empty query (the "where was I" browse state); when
   // shown, dedupe them out of the nav/create lists so nothing appears twice.
   const showRecents = !query.trim()
@@ -114,7 +117,7 @@ export default function CommandPalette({ user }) {
   const results = [
     ...recentResults,
     ...createResults.filter((c) => !recentHrefs.has(c.href)).map((c) => ({ key: `create:${c.id}`, type: 'create', label: c.label, href: c.href })),
-    ...navResults.filter((c) => !recentHrefs.has(c.href)).map((c) => ({ key: `nav:${c.id}`, type: 'go', label: c.label, href: c.href })),
+    ...navResults.filter((c) => !recentHrefs.has(c.href)).map((c) => ({ key: `nav:${c.id}`, type: 'go', label: c.label, sublabel: commandSublabel(c), href: c.href })),
     // Entity results come pre-shaped from /api/launcher/search (contact/staff/event).
     ...entities.filter((e) => !recentHrefs.has(e.href)),
   ]

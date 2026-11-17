@@ -54,7 +54,7 @@
 
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
-import { CalendarClock, BarChart3, Receipt, UserCheck, Wallet, CalendarOff, ArrowLeftRight, CalendarX, BadgeCheck } from 'lucide-react'
+import { CalendarClock, BarChart3, Receipt, UserCheck, Wallet, CalendarOff, ArrowLeftRight, CalendarX, BadgeCheck, Scale } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermission } from '@/lib/permissions'
 
@@ -110,6 +110,9 @@ export default function ScheduleTabs({ user }) {
     { key: 'reporting',  label: 'Reporting',  icon: BarChart3,      href: `${ROOT_HREF}?view=reporting`, show: isManager },
     { key: 'time-off',   label: 'Time Off',   icon: CalendarOff,    href: '/schedule/time-off',          show: isManager },
     { key: 'swaps',      label: 'Swaps',      icon: ArrowLeftRight, href: '/schedule/swaps',             show: isManager },
+    // LEAVEBAL.1 — the team's holiday allowance (days) and lieu (hours); same
+    // gate as Time Off / Swaps (the page and its routes re-judge per studio).
+    { key: 'leave-balances', label: 'Leave balances', icon: Scale, href: '/schedule/leave-balances', show: isManager },
     { key: 'invoices',   label: 'Invoices',   icon: Receipt,        href: '/schedule/invoices',          show: showInvoices },
     { key: 'expenses',   label: 'Expenses',   icon: Wallet,         href: '/schedule/expenses',          show: showExpenses },
     { key: 'attendance', label: 'Attendance', icon: UserCheck,      href: '/schedule/attendance',        show: showAttendance },

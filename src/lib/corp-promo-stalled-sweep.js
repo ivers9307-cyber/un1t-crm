@@ -8,7 +8,7 @@
 // A stuck row can carry a write-ahead `grant` marker ({ stage: 'purchasing' }
 // written before the purchase, or an outcome whose final status stamp
 // failed): the purchase may have gone through, so the alert says to check the
-// member's €0 New Start invoice in Glofox before adding the plan by hand. No
+// member's €0 invoice for the promo's plan in Glofox before adding it by hand. No
 // marker means nothing was bought.
 //
 // WAYSIN.2: a claim is a Glofox claim by its own platform column (mig 816),
@@ -100,7 +100,8 @@ async function alert(row, location, promo) {
     const person = `${row.first_name || ''} ${row.last_name || ''}`.trim()
     const mayHavePurchased = Boolean(row.grant)
     const advice = mayHavePurchased
-      ? 'The purchase may have gone through before it stopped. Check the member\'s €0 New Start invoice in Glofox before adding the plan by hand.'
+      // OPENWEEK.5 — the promo's own plan, never a hard-coded one.
+      ? `The purchase may have gone through before it stopped. Check the member's €0 ${promo?.glofox?.planName ? `${promo.glofox.planName} ` : ''}invoice in Glofox before adding the plan by hand.`
       : 'Nothing was bought.'
     await sendOpsAlert({
       organizationId: location.organization_id,

@@ -23,6 +23,7 @@ import { getBoardModule } from '../../shared/pipelines/index.js'
 import { shapeTrialWindow } from '@/lib/membership/reads/un1t-online-shape'
 import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 import { dayStrIn } from '@/lib/location-time'
+import { paidTrialClaim } from '../../shared/pipelines/paid-trial.js'
 
 const DAY_MS = 86_400_000
 /** Past this many days since the last class, the card's last-class chip turns amber. */
@@ -35,9 +36,21 @@ export const SIGNAL_READ_PAGE = 1000
 // The columns where a card carries signals (one list, shared with DealCard).
 export { SIGNAL_SLUGS } from './pipeline-card-signal-slugs.js'
 
-/** Only a board whose inputs are un1t.online carries signals (Glofox boards keep their own badges). */
+/**
+ * Where a board's card signals come from: 'un1t_online' (a board whose inputs
+ * are un1t.online), 'glofox' (every other known board: Stillorgan's
+ * acquisition, €39, Programmes and offer boards; CARDSIGNALS.1), or
+ * null for an unknown or absent module, which carries none.
+ */
+export function cardSignalSourceForModule(moduleName) {
+  const mod = getBoardModule(moduleName)
+  if (!mod) return null
+  return mod.inputSource === 'un1t_online' ? 'un1t_online' : 'glofox'
+}
+
+/** Does this board carry signals at all (the column then decides, stageShowsSignals)? */
 export function cardSignalsEnabledForModule(moduleName) {
-  return getBoardModule(moduleName)?.inputSource === 'un1t_online'
+  return cardSignalSourceForModule(moduleName) != null
 }
 
 const msOf = (v) => {
@@ -253,4 +266,92 @@ export async function loadUn1tCardSignals(db, { locationId, contactIds, nowMs = 
     }))
   }
   return { signals }
+}
+
+const isoOf = (ms) => (ms == null ? null : new Date(ms).toISOString())
+
+/**
+ * CARDSIGNALS.1 — the same signals for a Glofox board (UN1T Stillorgan): the
+ * acquisition, €39, Programmes and offer boards. Every input is the
+ * BOARD STUDIO's own: its Glofox bookings (class_bookings with source_platform
+ * 'glofox': a booking Glofox deleted is gone, so a past BOOKED row that was not
+ * attended is a no-show, "not attended"), its WhatsApp threads, and, on the €39
+ * board, its trial_purchases (the claim's window, paidTrialClaim: the same
+ * rule the board itself uses). Credits are the card's own
+ * contacts.trial_credits_remaining (Glofox's balance; Glofox is this studio's
+ * platform), passed in by the caller, which already read it with the deal, so
+ * nothing about the contact is read twice.
+ *
+ * Same contract as loadUn1tCardSignals: an entry for every id, or { error }.
+ *
+ * @param {object} db service-role client
+ * @param {{ locationId: string, contacts: {id: string, trial_credits_remaining?: number|null}[], paidTrial?: boolean, nowMs?: number, zone?: string|null }} a
+ */
+export async function loadGlofoxCardSignals(db, { locationId, contacts, paidTrial = false, nowMs = Date.now(), zone = null }) {
+  const creditsById = new Map()
+  for (const c of contacts || []) {
+    if (!c?.id) continue
+    if (!creditsById.has(c.id)) creditsById.set(c.id, c.trial_credits_remaining ?? null)
+  }
+  const ids = [...creditsById.keys()]
+  if (ids.length === 0) return { signals: new Map() }
+
+  const [bookings, conversations, purchases] = await Promise.all([
+    readAll((chunk) => db.from('class_bookings')
+      .select('id, contact_id, class_name, starts_at, status, attended')
+      .eq('location_id', locationId)
+      .eq('source_platform', 'glofox')
+      .in('contact_id', chunk)
+      .order('starts_at', { ascending: true })
+      .order('id'), ids),
+    readAll((chunk) => db.from('whatsapp_conversations')
+      .select('id, contact_id, window_open_at, last_message_at')
+      .eq('location_id', locationId)
+      .in('contact_id', chunk)
+      .order('id'), ids),
+    paidTrial
+      ? readAll((chunk) => db.from('trial_purchases')
+        .select('id, contact_id, status, payment_status, paid_at, granted_at, duration_days')
+        .eq('location_id', locationId)
+        .in('contact_id', chunk)
+        .order('id'), ids)
+      : Promise.resolve({ rows: [] }),
+  ])
+  const failed = bookings.error || conversations.error || purchases.error
+  if (failed) return { error: failed }
+
+  const byBooking = groupBy(bookings.rows)
+  const byThread = groupBy(conversations.rows)
+  const byPurchase = groupBy(purchases.rows)
+  const signals = new Map()
+  for (const id of ids) {
+    const n = Number(creditsById.get(id))
+    const credit = creditsById.get(id) != null && Number.isFinite(n) ? n : null
+    const claim = paidTrial ? paidTrialClaim(byPurchase.get(id) || [], nowMs) : null
+    signals.set(id, shapeCardSignals({
+      bookings: byBooking.get(id) || [],
+      clients: credit == null ? [] : [{ credit_balance: credit, credit_unlimited: false }],
+      conversations: byThread.get(id) || [],
+      trialWindow: claim ? { kind: 'paid', started_at: isoOf(claim.start), ends_at: isoOf(claim.end) } : null,
+      zone,
+      nowMs,
+    }))
+  }
+  return { signals }
+}
+
+/**
+ * The board's signals from whichever platform feeds it (cardSignalSourceForModule).
+ * `contacts` are the cards' contact rows ({ id, trial_credits_remaining }).
+ * Resolves { signals } or { error }; an unknown module resolves { signals: null }.
+ */
+export async function loadCardSignals(db, { moduleName, locationId, contacts, nowMs = Date.now(), zone = null }) {
+  const source = cardSignalSourceForModule(moduleName)
+  if (source === 'un1t_online') {
+    return loadUn1tCardSignals(db, { locationId, contactIds: (contacts || []).map((c) => c?.id), nowMs, zone })
+  }
+  if (source === 'glofox') {
+    return loadGlofoxCardSignals(db, { locationId, contacts, paidTrial: moduleName === 'paid_trial', nowMs, zone })
+  }
+  return { signals: null }
 }

@@ -25,7 +25,7 @@ import { hasAnyMobileFeature } from '../../../lib/permissions'
 import { usePhysicalLocation } from '../../../lib/use-physical-location'
 import { pickerLocations } from '../../../lib/control-location'
 import { promptLocationPick } from '../../../lib/pick-location-alert'
-import { shiftWindow, shiftTimeLabel, groupShiftsByDay, safeHomeTiles } from '../../../lib/home-logic'
+import { shiftWindow, shiftTimeLabel, groupShiftsByDay, safeHomeTiles, nextShift } from '../../../lib/home-logic'
 import { getMyShifts, getTeamShifts } from '../../../lib/schedule-api'
 import { readShiftsCache, writeShiftsCache } from '../../../lib/physical-cache'
 import { isoDate } from '../../../lib/dates'
@@ -58,7 +58,7 @@ function shiftLocationName(shift, locations) {
 }
 
 export default function Home() {
-  const { profile, activeLocation, locations } = useAuth()
+  const { profile, activeLocation, locations, error: authError, refresh: refreshAuth } = useAuth()
   const router = useRouter()
   // Destructured, and the id extracted, rather than written inline in the
   // dep arrays below: exhaustive-deps runs at ERROR here and demands the
@@ -232,7 +232,29 @@ export default function Home() {
     setRefreshing(false)
   }, [loadShifts, loadRoster, refreshPhysical, physStatus, physLocationId])
 
-  if (!profile) return null
+  // PHONEHOME.1 — this returned null: a failed profile read left a blank
+  // white screen with no way out. Say so and offer a retry; while the first
+  // read is still running, a spinner.
+  if (!profile) {
+    if (authError) {
+      return (
+        <View className="flex-1 bg-un1t-bg items-center justify-center p-6">
+          <Ionicons name="cloud-offline-outline" size={28} color="#94A3B8" />
+          <Text className="text-base font-semibold text-un1t-text mt-3">Couldn’t load your profile</Text>
+          <Text className="text-sm text-un1t-subtle mt-1 text-center">Check your connection and try again.</Text>
+          <Pressable
+            onPress={() => { refreshAuth().catch(() => {}) }}
+            accessibilityRole="button"
+            accessibilityLabel="Try loading your profile again"
+            className="mt-4 px-4 py-2 rounded-full bg-un1t-text active:opacity-70"
+          >
+            <Text className="text-sm font-semibold text-white">Try again</Text>
+          </Pressable>
+        </View>
+      )
+    }
+    return <View className="flex-1 bg-un1t-bg items-center justify-center"><ActivityIndicator color="#94A3B8" /></View>
+  }
   const firstName = profile.full_name?.split(' ')[0] || 'there'
 
   // Moved here from the old Home (HOME-LOC.8): the all-features-off
@@ -319,6 +341,10 @@ export default function Home() {
     ? safeHomeTiles(profile, optimisticLocation, activeLocation?.id)
     : []
   const groups = groupShiftsByDay(myShifts || [], todayIso)
+  // PHONEHOME.1 — on site, Home showed the studio but never the coach's own
+  // next shift, although it loads them. One card, tappable to that day.
+  const upcoming = myShifts ? nextShift(myShifts) : null
+  const openDay = (iso) => router.push({ pathname: '/(tabs)/schedule', params: { date: iso } })
   // ONE ROW PER COACH, via the same shared grouper the personal dashboard's
   // "On with you today" strip uses — a coach working three blocks today is
   // one person, and rendering them three times here while the Dashboard tab
@@ -392,6 +418,24 @@ export default function Home() {
               route, which is explicit about being remote. */}
           <Text className="text-xl font-semibold text-un1t-text mt-1 mb-1">{physLocation.name}</Text>
           <LocationPill location={physLocation} source="detected" />
+
+          {upcoming && (
+            <Pressable
+              onPress={() => openDay(upcoming.shift.shift_date)}
+              accessibilityRole="button"
+              accessibilityLabel={`Your ${upcoming.inProgress ? 'current' : 'next'} shift, ${upcoming.dayLabel} ${upcoming.time}. Opens the day in Schedule`}
+              className="flex-row items-center bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-3 active:opacity-70"
+            >
+              <Ionicons name="time-outline" size={18} color="#94A3B8" />
+              <View className="flex-1 ml-3">
+                <Text className="text-xs text-un1t-subtle">{upcoming.inProgress ? 'On now' : 'Your next shift'}</Text>
+                <Text className="text-sm font-medium text-un1t-text mt-0.5">
+                  {upcoming.dayLabel} · {upcoming.time} · {upcoming.shift.shift_templates?.name || 'Shift'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+            </Pressable>
+          )}
 
           {tiles.length > 0 ? (
             <View className="gap-3">
@@ -469,9 +513,12 @@ export default function Home() {
                     const name = showChips ? shiftLocationName(s, locations) : null
                     const c = name ? pickLocationColor(shiftLocationId(s)) : null
                     return (
-                      <View
+                      <Pressable
                         key={s.id || i}
-                        className={`flex-row items-center justify-between py-2.5 ${i > 0 ? 'border-t border-un1t-border' : ''}`}
+                        onPress={() => openDay(g.iso)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${s.shift_templates?.name || 'Shift'}, ${g.label} ${shiftTimeLabel(s)}. Opens the day in Schedule`}
+                        className={`flex-row items-center justify-between py-2.5 active:opacity-70 ${i > 0 ? 'border-t border-un1t-border' : ''}`}
                       >
                         <View className="flex-1 mr-2">
                           <Text className="text-sm font-medium text-un1t-text">{s.shift_templates?.name || 'Shift'}</Text>
@@ -482,7 +529,7 @@ export default function Home() {
                             <Text className={`text-[10px] font-semibold ${c.text}`}>{name}</Text>
                           </View>
                         ) : null}
-                      </View>
+                      </Pressable>
                     )
                   })}
                 </View>

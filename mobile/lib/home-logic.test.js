@@ -1,6 +1,6 @@
 // mobile/lib/home-logic.test.js
 import { describe, it, expect } from 'vitest'
-import { shiftWindow, shiftTimeLabel, groupShiftsByDay, homeTiles, safeHomeTiles } from './home-logic'
+import { shiftWindow, shiftTimeLabel, groupShiftsByDay, homeTiles, safeHomeTiles, nextShift } from './home-logic'
 import { addDays, shortDate, isoDate } from './dates'
 
 const shift = (date, start, name = 'Open') => ({
@@ -237,5 +237,30 @@ describe('safeHomeTiles', () => {
 
   it('no location at all is still nothing, whatever the active location is', () => {
     expect(safeHomeTiles(master, null, 'loc-hatch')).toEqual([])
+  })
+})
+
+// PHONEHOME.1
+describe('nextShift', () => {
+  const at = (h, m = 0) => new Date(2026, 7, 23, h, m) // 23 Aug 2026, local
+  const sh = (date, start, end, name = 'Open') => ({ shift_date: date, shift_templates: { name, start_time: start, end_time: end } })
+  it('the earliest shift that has not ended, labelled Today', () => {
+    const out = nextShift([sh('2026-08-24', '06:00:00', '09:00:00'), sh('2026-08-23', '17:00:00', '19:00:00', 'Evening')], at(12))
+    expect(out).toMatchObject({ dayLabel: 'Today', inProgress: false })
+    expect(out.shift.shift_templates.name).toBe('Evening')
+  })
+  it('a shift under way is the next one, marked in progress', () => {
+    expect(nextShift([sh('2026-08-23', '11:00:00', '13:00:00')], at(12))).toMatchObject({ inProgress: true, dayLabel: 'Today' })
+  })
+  it('skips finished and untimed shifts; Tomorrow by name', () => {
+    const out = nextShift([sh('2026-08-23', '06:00:00', '08:00:00'), { shift_date: '2026-08-23', shift_templates: { name: 'x' } }, sh('2026-08-24', '06:00:00', '08:00:00')], at(12))
+    expect(out.dayLabel).toBe('Tomorrow')
+  })
+  it('an end before the start ends the next day', () => {
+    expect(nextShift([sh('2026-08-22', '22:00:00', '02:00:00')], at(1))).toMatchObject({ inProgress: true })
+  })
+  it('null when nothing is left', () => {
+    expect(nextShift([sh('2026-08-23', '06:00:00', '08:00:00')], at(12))).toBeNull()
+    expect(nextShift(null, at(12))).toBeNull()
   })
 })

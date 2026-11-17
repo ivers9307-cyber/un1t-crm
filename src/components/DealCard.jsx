@@ -134,9 +134,14 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
   // HATCHPIPE.5 — a board with the next-class badge off (a un1t.online board,
   // boardDealMapper) marks its deals next_class_badge:false: no "Next: …" and
   // no "No class booked" there, since the badge never looked for a booking.
-  const showClassBadge = deal.next_class_badge !== false && BADGE_SLUGS.has(contact.pipeline_stage_slug)
+  // CARDSIGNALS.1 — the server's signals, when they came, replace the older
+  // next-class badge and credit count (which read the contact's Glofox snapshot).
+  const sig = deal.signals && deal.showSignals === true ? deal.signals : null
+  const showClassBadge = !sig && deal.next_class_badge !== false && BADGE_SLUGS.has(contact.pipeline_stage_slug)
   const age = deal.age || {}
-  const ageTone = BADGE_SLUGS.has(contact.pipeline_stage_slug)
+  // CARDSIGNALS.1 — any live funnel column ages (€39, Programmes, a
+  // configured board), not just the free-trial slugs.
+  const ageTone = (deal.live_funnel === true || BADGE_SLUGS.has(contact.pipeline_stage_slug))
     ? (AGE_TONES[age.tone] || AGE_TONES.quiet)
     : AGE_TONES.quiet
   const primaryAge = age.stage
@@ -154,7 +159,6 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
   // the server sent them. PIPEBUILD.2e — the server decides the column
   // (stageShowsSignals: slug set or stage role) and says so in showSignals.
   const columnSlug = stageSlug ?? contact.pipeline_stage_slug
-  const sig = deal.signals && deal.showSignals === true ? deal.signals : null
   // PIPEBUILD.3f — the server says whether this is a free-trial acquisition board.
   const classesOf3 = deal.classesOf3 === true
   const classesLabel = sig
@@ -201,7 +205,7 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
             {contact.lead_source}
           </span>
         )}
-        {contact.trial_credits_remaining != null && BADGE_SLUGS.has(contact.pipeline_stage_slug) && (
+        {!sig && contact.trial_credits_remaining != null && BADGE_SLUGS.has(contact.pipeline_stage_slug) && (
           <span className="inline-block mt-1.5 ml-1 text-[10px] px-1.5 py-0.5 bg-green-500/10 rounded text-green-700">
             {contact.trial_credits_remaining} credits
           </span>

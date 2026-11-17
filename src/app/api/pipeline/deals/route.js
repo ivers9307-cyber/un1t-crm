@@ -12,9 +12,10 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
 import { pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, classesOf3ForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
-import { loadUn1tCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
+import { loadCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
 import { stageShowsSignals } from '@/lib/pipeline-card-signal-slugs'
 import { zoneOfLocation } from '@/lib/location-time'
+import { parseBoardFilter, applyBoardFilter } from '@/lib/pipeline-board-filter'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,6 +37,9 @@ export async function GET(request) {
   // way the funnel's do. Only 'dormant' ships the trimmed selection.
   const view = searchParams.get('view') === 'dormant' ? 'dormant' : 'active'
   if (!stageId) return NextResponse.json({ success: false, error: 'stage_id required' }, { status: 400 })
+  // BOARDFILTER.1 — the board's search and "stuck" filter, the same as its
+  // first page, so the next page continues the filtered column.
+  const filter = parseBoardFilter(searchParams, { view })
 
   const db = createServerClient()
 
@@ -75,12 +79,12 @@ export async function GET(request) {
     }
   }
 
-  const { data, error } = await db
+  const { data, error } = await applyBoardFilter(db
     .from('deals')
     .select(pipelineDealSelect(view))
     .eq('status', 'open')
     .eq('location_id', locationId)
-    .eq('stage_id', stageId)
+    .eq('stage_id', stageId), filter)
     .order('created_at', { ascending: false })
     // Same tiebreak as the page's first page (created_at is not unique), so the
     // pages of an off-funnel column never overlap or skip a card.
@@ -90,15 +94,15 @@ export async function GET(request) {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
   // HATCHCARD.1 — the same signals the board's first page carries: a
-  // un1t.online board, the live view, a live funnel column. Decoration: a
+  // known board (un1t.online or Glofox, CARDSIGNALS.1), the live view, a live funnel column. Decoration: a
   // failed read answers the cards without them (ids-only warning).
   // PIPEBUILD.2e — the column is decided by stageShowsSignals (slug set on a
   // code-built board, stage role on a configured one); the card gets a boolean.
   const showSignals = stageShowsSignals({ board: { board_type: boardType }, stage })
   let signals = null
   if (view === 'active' && showSignals && cardSignalsEnabledForModule(boardModule)) {
-    const contactIds = (data || []).map((d) => d.contacts?.id).filter(Boolean)
-    const res = await loadUn1tCardSignals(db, { locationId, contactIds, zone: zoneOfLocation(user.activeLocation) })
+    const contacts = (data || []).map((d) => d.contacts).filter((c) => c?.id)
+    const res = await loadCardSignals(db, { moduleName: boardModule, locationId, contacts, zone: zoneOfLocation(user.activeLocation) })
     if (res?.error) logWarn('pipeline-deals', 'card signals read failed; cards sent without them', { stageId, locationId })
     else signals = res?.signals ?? null
   }

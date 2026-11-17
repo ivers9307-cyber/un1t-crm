@@ -87,7 +87,7 @@ import PublicationStatusChip from './schedule/PublicationStatusChip'
 import { timeOffLeaveLabel } from '@shared/time-off'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
-import { useScheduleData } from './schedule/useScheduleData'
+import { useScheduleData, EDIT_REFRESH_SLICES } from './schedule/useScheduleData'
 import { useWeekCost } from './schedule/useWeekCost'
 import { useDraftRosters } from './schedule/useDraftRosters'
 // ROSTERLOOK.1 — the toolbar row, and the pure model that says what is on it.
@@ -102,7 +102,7 @@ import { rosterToolbarModel, emptyWeekCopyPrompt, dayHeaderStatus, shiftCardMode
 // GRID.1 — the Coaches layout: the coach-by-day grid, its read, and its pure model.
 import RosterGrid from './schedule/RosterGrid'
 import { useRosterGrid, browserStorage } from './schedule/useRosterGrid'
-import { buildRosterGrid, loadRosterLayout, saveRosterLayout, DEFAULT_ROSTER_LAYOUT } from '@/lib/roster-grid-model'
+import { buildRosterGrid, gridAddOptions, loadRosterLayout, saveRosterLayout, DEFAULT_ROSTER_LAYOUT } from '@/lib/roster-grid-model'
 
 // LEAVE.2 — every leave type gets its own label (timeOffLeaveLabel) and
 // colour. Unpaid and "other" were missing, so approved unpaid/other leave
@@ -238,6 +238,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     saveRosterLayout(browserStorage(), user.id, next)
   }, [user.id])
   const [assignTarget, setAssignTarget] = useState(null) // { block } when picking a coach
+  // GRIDEDIT.1 — { profileId, name, date } while picking a shift from the grid.
+  const [gridAdd, setGridAdd] = useState(null)
+  const [gridAdding, setGridAdding] = useState(false)
   const [replaceTarget, setReplaceTarget] = useState(null) // REPLACE.1a — { block, assignment }
   const [createTarget, setCreateTarget] = useState(null) // { date } when adding an ad-hoc block
   const [publishing, setPublishing] = useState(false)
@@ -443,7 +446,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const rangeEnd = formatDate(viewType === 'month' ? monthGrid.end : weekEnd)
   const {
     blocks, templates, staff, timeOff, holidays, contractorSpend, availability,
-    loading, error, showingStaleData, partialErrors, successCount, refresh: fetchData,
+    loading, initialLoading, refreshing, error, showingStaleData, partialErrors, successCount, refresh: fetchData,
   } = useScheduleData({
     locationId,
     startDate: rangeStart,
@@ -549,7 +552,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // via its own `range` dep, so an extra bump there would just cause
   // a redundant overview fetch.
   const refreshAfterMutation = useCallback(async (opts = {}) => {
-    await fetchData()
+    // ROTAREFRESH.1 — an edit re-reads the shifts and what follows them
+    // (contractor spend), not the templates, coaches, holidays, leave and
+    // availability it cannot change. The grid stays on screen meanwhile.
+    await fetchData({ only: EDIT_REFRESH_SLICES })
     // ROSTER-FIX.6c — the hours panel used to be derived from `blocks`, so it
     // moved on its own. It is a separate fetch now and has to be told.
     refreshWeekCost()
@@ -640,7 +646,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const showEmptyWeekCopy = emptyWeekCopyPrompt(blocks, {
     isManager,
     viewType,
-    loading,
+    // ROTAREFRESH.1 — only the first load of a week hides it; a save's
+    // background refresh keeps the card (and the grid) on screen.
+    loading: initialLoading,
     failed: Boolean(error),
     from: formatDate(weekStart),
     to: formatDate(weekEnd),
@@ -691,7 +699,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
         showToast(data.error || 'Failed to assign coaches')
-        return
+        return { ok: false }
       }
       const lines = []
       if (data.warnings?.length > 0) lines.push(...data.warnings)
@@ -717,8 +725,31 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       // manage view filters on still-needed live; the sweep closes it within
       // five minutes); re-read so the dialog's offer line goes.
       offers.reload()
+      // GRIDEDIT.1 — the grid's Add says what happened; a warning toast above
+      // already did when something was skipped.
+      return { ok: true, warned: lines.length > 0, assigned: data.assigned?.length ?? 0 }
     } catch {
       showToast('Network error, please try again')
+      return { ok: false }
+    }
+  }
+
+  // GRIDEDIT.1 — the Coaches grid's "Add": one coach onto one of the day's
+  // shifts, through the same POST the assign dialog uses.
+  async function handleGridAdd(blockId) {
+    const target = gridAdd
+    if (!target || gridAdding) return
+    setGridAdding(true)
+    try {
+      const result = await handleAssignCoaches(blockId, [target.profileId])
+      if (!result?.ok) return
+      setGridAdd(null)
+      if (!result.warned && result.assigned > 0) {
+        const opt = gridAddOptions(blocks, { profileId: target.profileId, date: target.date }).find((o) => o.block_id === blockId)
+        showToast(`Added ${target.name}${opt ? ` to ${opt.name}, ${opt.time}` : ''}.`, 'success')
+      }
+    } finally {
+      setGridAdding(false)
     }
   }
 
@@ -1224,7 +1255,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // toolbar's right-hand group does not jump rows while a week loads.
   const publicationChip = isManager ? (
     <PublicationStatusChip
-      publication={loading ? null : publication}
+      publication={initialLoading ? null : publication}
       viewType={viewType}
       onOpenChangeLog={openChangeLog}
       triggerRef={changeLogTriggerRef}
@@ -1338,7 +1369,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         </div>
       )}
 
-      {!loading && !showEmptyWeekCopy && isManager && viewType === 'week' && staffingGapsThisWeek.total > 0 && (() => {
+      {!initialLoading && !showEmptyWeekCopy && isManager && viewType === 'week' && staffingGapsThisWeek.total > 0 && (() => {
         const anyEmpty = staffingGapsThisWeek.empty > 0
         return (
           <div
@@ -1366,7 +1397,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           scoped to one Mon-Sun week, which is what the caption underneath has
           always claimed — the browser version summed whatever range was loaded,
           so in month view it billed six weeks against a weekly contract. */}
-      {!loading && canSeeContract && (() => {
+      {!initialLoading && canSeeContract && (() => {
         const overOrAt = (weekCost?.coaches || []).filter((c) => c.status !== 'under')
         if (overOrAt.length === 0) return null
 
@@ -1405,8 +1436,16 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         )
       })()}
 
+      {/* ROTAREFRESH.1 — a refresh of the week on screen keeps the grid (and
+          the scroll position) and says so here; only a range with no roster
+          loaded yet shows the loading line. The live region stays mounted so
+          a screen reader hears it change. */}
+      <div role="status" aria-live="polite" className="h-5 mb-1 text-xs text-un1t-subtle text-right">
+        {refreshing ? 'Updating roster…' : ''}
+      </div>
+
       {/* Calendar Grid */}
-      {loading ? (
+      {initialLoading ? (
         <div className="text-center py-20 text-un1t-subtle">Loading roster...</div>
       ) : viewType === 'month' ? (
         // ── MONTH VIEW ──
@@ -1505,6 +1544,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           holidays={holidays}
           leaveMissing={leaveMissing}
           availabilityMissing={availabilityMissing}
+          onAddShift={viewMode === 'my' ? null : setGridAdd}
         />
       ) : (
         // ── WEEK VIEW ──
@@ -1682,7 +1722,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           the server leaves it out for a head coach. */}
       {/* ROSTER-FIX.6c: `staff` is the pay-free picker shape now, so no role
           gets rates here and the canSeePay prop had nothing left to gate. */}
-      {!loading && isManager && (
+      {!initialLoading && isManager && (
         <RosterSummaryPanel
           blocks={blocks}
           staff={locationStaff}
@@ -1835,6 +1875,17 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         />
       )}
 
+      {/* GRIDEDIT.1 — pick one of the day's shifts for a coach (Coaches grid) */}
+      {gridAdd && (
+        <GridAddShiftModal
+          target={gridAdd}
+          options={gridAddOptions(blocks, { profileId: gridAdd.profileId, date: gridAdd.date })}
+          busy={gridAdding}
+          onChoose={handleGridAdd}
+          onClose={() => setGridAdd(null)}
+        />
+      )}
+
       {/* COPYMODES.1 — Copy Last Week / Copy Last Month chooser */}
       {copyModal && (
         <CopyRosterModal
@@ -1957,6 +2008,49 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
 // /assignments POST whose response shape lists per-coach outcomes
 // so 'one of these is already assigned' becomes a footnote in the
 // confirmation rather than an interruption.
+// GRIDEDIT.1 — the day's shifts at this studio the coach is not on yet.
+// A full shift is shown but cannot be picked (the server would refuse it).
+function GridAddShiftModal({ target, options, busy, onChoose, onClose }) {
+  const day = target.dayLabel || target.date
+  return (
+    <Modal open onClose={onClose} title={`Add ${target.name}`} size="sm">
+      <div>
+        <p className="text-sm text-un1t-text mb-3">Pick a shift on {day}.</p>
+        {options.length === 0 ? (
+          <p className="text-sm text-un1t-subtle">No other shifts on this day. Add a shift from the Days view first.</p>
+        ) : (
+          <div className="space-y-2">
+            {options.map((opt) => (
+              <button
+                key={opt.block_id}
+                type="button"
+                disabled={busy || opt.full}
+                onClick={() => onChoose(opt.block_id)}
+                className="w-full text-left rounded-lg border border-un1t-border bg-un1t-surface px-3 py-2.5 hover:border-un1t-text/40 transition-colors disabled:opacity-60 disabled:hover:border-un1t-border focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
+              >
+                <div className="text-sm font-medium text-un1t-text">{opt.time} · {opt.name}</div>
+                <div className="text-xs text-un1t-subtle mt-0.5">
+                  {opt.max !== null ? `${opt.assigned} of ${opt.max} coaches` : `${opt.assigned} coach${opt.assigned === 1 ? '' : 'es'}`}
+                  {opt.full ? ' · full' : ''}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="flex justify-end mt-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-2 rounded-md text-sm border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 // COPYMODES.1 — "Exact copy" (a carbon copy of the source period) vs "From
 // templates" (the same coaches on each template slot at its defined times).
 // Choosing an option runs the copy straight away; Cancel / Esc do nothing.

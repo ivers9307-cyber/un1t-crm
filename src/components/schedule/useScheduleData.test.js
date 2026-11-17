@@ -681,3 +681,73 @@ describe('each slice settles on its own (ROSTERLOAD.1)', () => {
     }
   }
 })
+
+// ROTAREFRESH.1 — a refresh of the week on screen keeps the grid; an edit
+// re-reads only what it can change.
+describe('refresh without blanking the week (ROTAREFRESH.1)', () => {
+  const urls = () => global.fetch.mock.calls.map(([u]) => u)
+  const kinds = (list) => ['blocks', 'templates', 'api/staff', 'time-off', 'holidays', 'contractor-spend', 'availability']
+    .filter((k) => list.some((u) => u.includes(k)))
+
+  it('initialLoading only before the range has a roster; a refresh of it is "refreshing"', async () => {
+    const { result } = renderHook(() => useScheduleData(ARGS))
+    expect(result.current.initialLoading).toBe(true)
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.initialLoading).toBe(false)
+    expect(result.current.refreshing).toBe(false)
+
+    const held = []
+    global.fetch = vi.fn((url) => new Promise((r) => { held.push(() => r(okResponse(defaultBody(url)))) }))
+    let pending
+    act(() => { pending = result.current.refresh() })
+    expect(result.current.loading).toBe(true)
+    expect(result.current.initialLoading).toBe(false)    // the grid stays
+    expect(result.current.refreshing).toBe(true)
+    expect(result.current.blocks).toHaveLength(1)
+    await act(async () => { held.forEach((release) => release()); await pending })
+    expect(result.current.refreshing).toBe(false)
+  })
+
+  it('a new week is initialLoading again (no roster for it yet)', async () => {
+    const { result, rerender } = renderHook((p) => useScheduleData(p), { initialProps: ARGS })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    global.fetch = vi.fn(() => new Promise(() => {}))
+    rerender({ ...ARGS, startDate: '2026-05-11', endDate: '2026-05-17' })
+    expect(result.current.initialLoading).toBe(true)
+    expect(result.current.refreshing).toBe(false)
+  })
+
+  it('refresh({ only }) re-reads blocks and the named slices, keeps the rest', async () => {
+    const { result } = renderHook(() => useScheduleData(ARGS))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    global.fetch.mockClear()
+    await act(async () => { await result.current.refresh({ only: ['contractorSpend'] }) })
+    expect(kinds(urls())).toEqual(['blocks', 'contractor-spend'])
+    expect(result.current.templates.map((t) => t.id)).toEqual(['t1'])
+    expect(result.current.staff).toHaveLength(1)
+    expect(result.current.timeOff).toHaveLength(1)
+    expect(result.current.holidays).toHaveLength(1)
+    expect(result.current.partialErrors).toBeNull()
+  })
+
+  it('a slice whose last read failed is re-read even when an edit leaves it out', async () => {
+    global.fetch = vi.fn(async (url) => (url.includes('/holidays')
+      ? { ok: false, status: 500, json: async () => ({ success: false, error: 'boom' }) }
+      : okResponse(defaultBody(url))))
+    const { result } = renderHook(() => useScheduleData(ARGS))
+    await waitFor(() => expect(result.current.partialErrors?.holidays).toBeTruthy())
+    global.fetch = vi.fn(async (url) => okResponse(defaultBody(url)))
+    await act(async () => { await result.current.refresh({ only: ['contractorSpend'] }) })
+    expect(kinds(urls())).toEqual(['blocks', 'holidays', 'contractor-spend'])
+    expect(result.current.partialErrors).toBeNull()
+    expect(result.current.holidays).toHaveLength(1)
+  })
+
+  it('no options (or a click event) still reads everything', async () => {
+    const { result } = renderHook(() => useScheduleData(ARGS))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    global.fetch.mockClear()
+    await act(async () => { await result.current.refresh({ type: 'click' }) })
+    expect(kinds(urls())).toHaveLength(7)
+  })
+})

@@ -380,7 +380,9 @@ export async function sendMediaMessage(to, type, mediaUrl, caption, opts = {}) {
   const mediaTypes = {
     image: { image: { link: mediaUrl, caption } },
     video: { video: { link: mediaUrl, caption } },
-    document: { document: { link: mediaUrl, caption, filename: caption || 'document' } },
+    // WAATTACH.1 — opts.filename (the picked file's name) when the caller has
+    // one; the caption-as-filename fallback is what every other caller had.
+    document: { document: { link: mediaUrl, caption, filename: opts.filename || caption || 'document' } },
     audio: { audio: opts.voice === true ? { link: mediaUrl, voice: true } : { link: mediaUrl } },
   }
 
