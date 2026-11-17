@@ -14,17 +14,14 @@
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import HubTabs from '@/components/HubTabs'
+import { TEAM_TABS } from '@/lib/hub-tabs'
 import { staffTabMetadata } from '@/lib/staff-tab-title'
 
 export const dynamic = 'force-dynamic'
 
-const TABS = [
-  { id: 'schedule',  label: 'Schedule',  href: '/schedule',  perms: ['schedule'] },
-  { id: 'contracts', label: 'Contracts', href: '/contracts', perms: ['contracts'] },
-  // No perms — /policies is login-gated only, so the tab shows for every
-  // signed-in user (mirrors the page's own gate, same rule as always).
-  { id: 'policies',  label: 'Policies',  href: '/policies' },
-]
+// PALETTE.1 — the tab list lives in src/lib/hub-tabs.js (unchanged), shared
+// with the ⌘K palette so every tab is a jump target there too.
+const TABS = TEAM_TABS
 
 // TABTITLE.1 — the tab names the ACTIVE studio for every page under this
 // layout (see src/lib/staff-tab-title.js). This is the OUTERMOST staff layout

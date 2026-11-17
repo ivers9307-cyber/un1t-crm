@@ -57,9 +57,10 @@ const HELP_ADVICE = Object.freeze({
   glofox_read_failed: 'Their Glofox account could not be read, so nothing was bought. Check it in Glofox, then add the plan by hand if they qualify.',
   grant_unrecorded: 'The purchase marker could not be written, so nothing was bought. Add the plan by hand if they qualify.',
   grant_refused: 'Glofox refused the plan purchase, so nothing was bought.',
-  grant_unverified: "The plan purchase may have gone through (Glofox gave no clear answer, or another attempt on this claim could not be checked). Check the member's invoices in Glofox for a €0 New Start invoice BEFORE adding anything by hand.",
+  // OPENWEEK.5 — {plan} is the promo's own Glofox plan (adviceFor fills it).
+  grant_unverified: "The plan purchase may have gone through (Glofox gave no clear answer, or another attempt on this claim could not be checked). Check the member's invoices in Glofox for a €0 {plan}invoice BEFORE adding anything by hand.",
 })
-const adviceFor = (reason) => HELP_ADVICE[String(reason).split(':')[0]] || ''
+const adviceFor = (reason, planName = null) => (HELP_ADVICE[String(reason).split(':')[0]] || '').replace('{plan}', planName ? `${planName} ` : '')
 
 /**
  * @param {object} db service-role client
@@ -139,7 +140,7 @@ export async function fulfilGlofoxCorpPromoClaim(db, { claim, location, contact,
           subject: `Promo needs a hand: ${person} (${location.name || 'studio'})`.replace(/\s+/g, ' '),
           htmlBody:
             `<p>Someone claimed the ${escapeHtml(promo.name || promo.key)} promo, but their free classes could not be put on their Glofox account automatically. Nothing was charged.</p>` +
-            `<p><strong>Reason:</strong> ${escapeHtml(reason)}<br/>${escapeHtml(adviceFor(reason))}</p>` +
+            `<p><strong>Reason:</strong> ${escapeHtml(reason)}<br/>${escapeHtml(adviceFor(reason, promo.glofox?.planName || null))}</p>` +
             `<p><strong>Person:</strong> ${escapeHtml(person)} &lt;${escapeHtml(claim.customer_email || '')}&gt; ${escapeHtml(claim.customer_phone || '')}<br/>` +
             (memberId ? `<strong>Glofox member id:</strong> ${escapeHtml(memberId)}<br/>` : '') +
             `<strong>Claim id:</strong> ${escapeHtml(claim.id)}</p>` +

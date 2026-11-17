@@ -106,7 +106,7 @@ const ContactCreate = z.object({
   name: z.string().min(1).max(200),
   first_name: z.string().max(100).optional(),
   last_name: z.string().max(100).optional(),
-  email,
+  email: email.optional().nullable().describe('Email or phone is required (PHONEONLY.1).'),
   phone: phone.optional().nullable(),
   label: z.string().max(100).nullable().optional(),
   glofox_member_id: z.string().max(100).nullable().optional(),
@@ -4106,13 +4106,15 @@ registry.registerPath({
   tags: ['Contacts'],
   security: [{ BearerAuth: [] }],
   summary: 'Create a contact',
+  description: 'An email or a phone number is required (PHONEONLY.1). Without an email the contact is not provisioned in Glofox.',
   request: { body: { content: { 'application/json': { schema: ContactCreate } } } },
   responses: {
     200: { description: 'Contact created', content: { 'application/json': { schema: SuccessResponse(Contact) } } },
     400: { description: 'Validation failed, location_id missing (cookie callers and per-organisation keys), or the insert failed (generic message; the database error is logged, never echoed)', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized, or (cookie caller) not Manager+ at location_id', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Per-organisation API key: location_id is not in your organisation. Cookie caller: not a member of location_id.', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'A contact with this email already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A contact with this email (or, with no email, this WhatsApp number) already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'No email given and the phone duplicate check could not be read (nothing created)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4494,6 +4496,52 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — master/owner only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// CONTACTTAGS.1 — bulk add / remove one manual tag at the active studio
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/bulk-tags',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add or remove one manual tag (contacts.tags) on up to 500 contacts at the active studio',
+  description: 'Master, or head coach / manager / owner with Contacts at the active studio. Contacts the studio cannot act on are counted in `skipped` and never named. Each row is a compare-and-set on the tags it read; a write that fails or keeps conflicting is counted in `failed`. A newly added tag fires matching tag_added sequences, as PUT /api/contacts/{id} does.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            contact_ids: z.array(uuidLike).min(1).max(500),
+            tag: z.string().min(1).max(64),
+            action: z.enum(['add', 'remove']),
+          }).openapi('ContactBulkTagsBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Per-outcome counts',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.object({
+              requested: z.number(),
+              updated: z.number(),
+              unchanged: z.number(),
+              skipped: z.number(),
+              failed: z.number(),
+            }),
+          }),
+        },
+      },
+    },
+    400: { description: 'Invalid body, unusable tag, or no active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Role or Contacts permission missing at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Contacts could not be read; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -5490,6 +5538,48 @@ registry.registerPath({
     409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'The conversation or the location settings could not be read; nothing was sent', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta flow send failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAATTACH.1 — WhatsApp inbox photo/PDF upload slot (cookie auth)
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/conversations/{id}/attachments/sign',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Start a photo or PDF upload for an open conversation',
+  description: "Step 1 of sending a file from the inbox. Judges the declared file (JPEG or PNG up to 5 MB, PDF up to 16 MB) and mints a slot in the private whatsapp-media bucket under the conversation's studio, returning a signed upload token for exactly that path. The browser uploads the bytes straight to Storage, then calls POST /api/whatsapp/conversations/{id}/send with { type, attachment_path, caption?, file_name? }; the send route re-checks what Storage holds and mints Meta's link itself (a client media_url is refused). Gated on WhatsApp (web or mobile) at the conversation's studio; refused outside the 24-hour window.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            file_name: z.string().min(1).max(300),
+            mime: z.string().max(200),
+            size: z.number().int(),
+          }).openapi('WaAttachmentSign'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Upload slot minted',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.object({ path: z.string(), token: z.string(), content_type: z.string(), kind: z.enum(['image', 'document']) }),
+          }),
+        },
+      },
+    },
+    400: { description: 'Type or size not accepted, or the 24-hour window is closed (window_expired: true)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No WhatsApp permission at the conversation's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation not found, or at a studio the caller is not in', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The conversation could not be read, or Storage gave no upload token', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

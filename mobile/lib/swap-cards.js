@@ -125,3 +125,17 @@ export function annotateOpenSwaps(shifts, postedSwaps) {
   }
   return (Array.isArray(shifts) ? shifts : []).map((sh) => ({ ...sh, open_swap_status: byShift.get(sh.id) ?? null }))
 }
+
+// PHONEHOME.1 (audit 3.9) — whether a shift row shows the visible "Swap"
+// button. Swap used to be a 400 ms long-press explained in 11-point text.
+// Shown on the coach's own shift with an assignment id, no swap already open,
+// that has not started yet (phone-local, like shift_date). Long-press still
+// works too.
+export function canOfferSwap(shift, nowMs = Date.now()) {
+  if (!shift?.shift_assignment_id || hasOpenSwap(shift)) return false
+  const m = String(effectiveShiftStart(shift) || '').match(/^(\d{2}):(\d{2})/)
+  const d = String(shift.shift_date || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m || !d) return false
+  const start = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(m[1]), Number(m[2])).getTime()
+  return start > nowMs
+}

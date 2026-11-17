@@ -30,8 +30,14 @@ const WHY = Object.freeze({
 // A stalled claim may have bought only if it got as far as recording a grant.
 const grantStarted = (grant) => !!grant && typeof grant === 'object' && !!(grant.stage || grant.outcome)
 
-/** The card's sentence for a claim's reason code (grant: the row's grant jsonb). */
-export function claimWhy(reason, grant = null) {
+/**
+ * The card's sentence for a claim's reason code (grant: the row's grant jsonb).
+ * OPENWEEK.5 — `planName` is the promo's own Glofox plan (corp_promos
+ * glofox_plan_name); without it the card says "the promo's plan", never a
+ * plan of another promo.
+ */
+export function claimWhy(reason, grant = null, { planName = null } = {}) {
+  const plan = typeof planName === 'string' && planName.trim() ? planName.trim() : null
   const r = String(reason || '')
   if (WHY[r]) return WHY[r]
   if (r.startsWith('un1t_account_refused')) return `un1t.online could not give them an account (${r.split(':').slice(1).join(':').trim() || 'no reason given'}). Nothing was granted.`
@@ -39,19 +45,22 @@ export function claimWhy(reason, grant = null) {
   const detail = r.split(':').slice(1).join(':').trim() || 'no reason given'
   const code = r.split(':')[0]
   if (code === 'glofox_not_configured') return 'Glofox is not connected at this studio, so nothing was tried or bought.'
-  if (code === 'live_plan') return 'They already hold a live plan or credits at Stillorgan in Glofox. Nothing was bought. Check their account and add New Start by hand only if that is right.'
+  if (code === 'live_plan') return `They already hold a live plan or credits at Stillorgan in Glofox. Nothing was bought. Check their account and add ${plan || "the promo's plan"} by hand only if that is right.`
   if (code === 'glofox_read_failed') return 'We could not read their Glofox account. Nothing was bought.'
-  if (code === 'grant_refused') return `Glofox refused the New Start plan (${detail}). Nothing was bought.`
+  if (code === 'grant_refused') return `Glofox refused ${plan ? `the ${plan} plan` : "the promo's plan"} (${detail}). Nothing was bought.`
   if (code === 'grant_unrecorded') return 'We could not record the Glofox purchase, so nothing was bought.'
   if (code === 'stalled' && !grantStarted(grant)) return 'The claim stopped before anything was bought. Nothing was bought.'
-  if (code === 'grant_unverified' || code === 'stalled') return 'The New Start purchase in Glofox may have gone through. Check the member\'s €0 New Start invoice in Glofox before adding the plan by hand.'
+  if (code === 'grant_unverified' || code === 'stalled') return `The plan purchase in Glofox may have gone through. Check the member's €0 ${plan ? `${plan} ` : ''}invoice in Glofox before adding the plan by hand.`
   if (code === 'account_needs_review') return `We could not choose their Glofox account safely (${detail}). Nothing was bought.`
   if (code === 'account_create_failed') return `We could not find or create their Glofox account (${detail}). Nothing was bought.`
   return r ? `Stopped with: ${r}` : 'The free credits were not put on the account.'
 }
 
-/** One card. `promoPlatforms`: key -> platform from the fallback read, for rows with no platform. */
-export function toItem(r, promoPlatforms = null) {
+/**
+ * One card. `promoPlatforms`: key -> platform from the studio's promos, for rows
+ * with no platform; `promoPlans`: key -> Glofox plan name (OPENWEEK.5).
+ */
+export function toItem(r, promoPlatforms = null, promoPlans = null) {
   const name = `${r.first_name || ''} ${r.last_name || ''}`.trim()
   return {
     kind: 'help',
@@ -70,7 +79,7 @@ export function toItem(r, promoPlatforms = null) {
     glofoxMemberId: r.glofox_member_id || null,
     platform: r.platform || promoPlatforms?.get(r.promo_key) || null,
     checkInvoice: /^grant_unverified/.test(String(r.reason || '')) || (/^stalled/.test(String(r.reason || '')) && grantStarted(r.grant)),
-    why: claimWhy(r.reason, r.grant),
+    why: claimWhy(r.reason, r.grant, { planName: promoPlans?.get(r.promo_key) || null }),
   }
 }
 
@@ -94,12 +103,17 @@ export const corpPromoClaimsProvider = {
     if (error) throw new Error(`corp_promo_claims: ${error.message}`)
     const rows = data || []
     let promoPlatforms = null
-    if (rows.some((r) => !r.platform)) {
+    let promoPlans = null
+    // One read of the studio's promos when a card needs it: a row with no
+    // platform, or a Glofox row (its card names the promo's plan).
+    if (rows.some((r) => !r.platform || r.platform === 'glofox')) {
       const res = await listCorpPromos(db, { locationId: activeId })
-      if (res.ok) promoPlatforms = new Map(res.promos.map((p) => [p.key, p.platform]))
-      else logWarn('approvals', 'corp promos unreadable; platform unknown on unstamped claims', { locationId: activeId })
+      if (res.ok) {
+        promoPlatforms = new Map(res.promos.map((p) => [p.key, p.platform]))
+        promoPlans = new Map(res.promos.filter((p) => p.glofox?.planName).map((p) => [p.key, p.glofox.planName]))
+      } else logWarn('approvals', 'corp promos unreadable; platform and plan unknown on those cards', { locationId: activeId })
     }
-    const items = rows.map((r) => toItem(r, promoPlatforms))
+    const items = rows.map((r) => toItem(r, promoPlatforms, promoPlans))
     return { count: items.length, items }
   },
 
