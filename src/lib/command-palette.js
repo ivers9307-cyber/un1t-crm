@@ -6,12 +6,22 @@
 // sub-views + the 2 radars, which are dashboard tabs now) are shared
 // with the Sidebar via nav-items.js so the two gates can't drift.
 import { DASHBOARD_LINK_PERM_KEYS } from './nav-items'
+// PALETTE.1 — the palette also offers every hub tab and every settings
+// row as a jump target, generated from the same data the tab strips, the
+// hub index redirects and the /settings index render from.
+import { HUB_TABS } from './hub-tabs'
+import { HUB_INDEX_CHAINS } from './hub-index-chains'
+import { SETTINGS_TREE } from './settings-tree'
+import { isActiveOrgAdmin } from './org-admin'
+import { MANAGER_ROLES } from './schemas'
 
-// Curated jump destinations. Deliberately a hand-maintained subset of
-// the Sidebar nav rather than an import of `ALL_NAV` — the palette wants
-// flat label+href+permission tuples, not the sidebar's icon/section/
-// children structure. When a top-level destination is added to the
-// sidebar and is worth jumping to, add it here too.
+// Curated jump destinations. A hand-maintained list of the top-level
+// destinations, kept for their labels and ids (recents and tests key on
+// them). PALETTE.1: it is no longer the whole list — JUMP_COMMANDS below
+// adds every hub tab and every /settings row, generated from their own data,
+// and a curated entry here wins over a generated one with the same href.
+// A curated entry's gate must equal the generated one's for that href
+// (command-palette.test.js), so curating a label never loosens a gate.
 export const NAV_COMMANDS = [
   { id: 'dashboard', label: 'Dashboard', href: '/dashboard', dashboardGroup: true },
   { id: 'pipeline', label: 'Pipeline', href: '/pipeline', permission: 'pipeline' },
@@ -21,7 +31,10 @@ export const NAV_COMMANDS = [
   // standalone URLs are forever-aliased in next.config redirects.
   { id: 'churn-radar', label: 'Churn Radar', href: '/dashboard/churn-radar', permission: 'churn_radar' },
   { id: 'lead-radar', label: 'Lead Radar', href: '/dashboard/lead-radar', permission: 'lead_radar' },
-  { id: 'bookings', label: 'Bookings', href: '/bookings', anyPermission: ['events', 'bookings'] },
+  // PALETTE.1 — was anyPermission ['events', 'bookings'], but /bookings gates
+  // on `bookings` alone (hub-index-chains.js: `events` reaches no surface),
+  // so an events-only holder was offered a page that bounced them.
+  { id: 'bookings', label: 'Bookings', href: '/bookings', permission: 'bookings' },
   // HUBS.2f — relabelled "Messages" to match the sidebar's collapsed entry
   // (nav-items.js), and email_inbox folded into the OR for the same reason
   // as the sidebar's: an accounts@/sales@-only user (email_inbox only)
@@ -34,6 +47,10 @@ export const NAV_COMMANDS = [
   // palette search for "inbox" finds it and it is not confused with sending.
   // The id, href and permission are unchanged.
   { id: 'email-mail', label: 'Mail', href: '/communications/mail', permission: 'email_inbox' },
+  // PALETTE.1 — the Messages hub's other tab ((hub)/inbox/page.js gates on
+  // `whatsapp`). Curated because that strip is a client component with no
+  // data list to generate from.
+  { id: 'inbox', label: 'WhatsApp & Instagram inbox', href: '/communications/inbox', permission: 'whatsapp' },
   { id: 'schedule', label: 'Schedule', href: '/schedule', permission: 'schedule' },
   { id: 'events', label: 'Events', href: '/events', permission: 'races' },
   // EQUIP-MAINT.1 — mirrors the nav-items.js Sidebar entry's gate.
@@ -53,7 +70,9 @@ export const NAV_COMMANDS = [
   // the broadcast entry below; the palette is the fast path, so it lands on
   // the page that actually renders.
   { id: 'cars', label: 'Car Processing', href: '/cars/active', permission: 'car_processing' },
-  { id: 'orders', label: 'Orders', href: '/orders', permission: 'orders' },
+  // PALETTE.1 — role floor added: (money)/orders/page.js also requires
+  // MANAGER_ROLES (the Money strip and hub-index-chains.js carry the same).
+  { id: 'orders', label: 'Orders', href: '/orders', permission: 'orders', roles: MANAGER_ROLES },
   { id: 'invoices', label: 'Invoices', href: '/invoices', permission: 'invoices_inbox' },
   { id: 'approvals', label: 'Approvals', href: '/approvals', permission: 'approvals_inbox' },
   { id: 'issues', label: 'Issues', href: '/issues', permission: 'issues_inbox' },
@@ -80,15 +99,180 @@ export const CREATE_COMMANDS = [
   // the entry that should pass it.
   { id: 'new-broadcast', label: 'New WhatsApp broadcast', href: '/communications/send', permission: 'whatsapp' },
   { id: 'new-event', label: 'New event', href: '/events/new', permission: 'races' },
+  // PALETTE.1 — the /settings index's Add Location button. The page gates on
+  // `user.role === 'master'` (the active role, not profileRole), so roles.
+  { id: 'new-location', label: 'New location', href: '/settings/locations/new', roles: ['master'] },
 ]
+
+// PALETTE.1 — a generated label where the tab's own label means nothing out
+// of its strip (the Money hub's first tab says only "Overview").
+const LABEL_OVERRIDES = Object.freeze({
+  '/accounting': 'Accounting overview',
+})
+
+// PALETTE.1 — words people type that are not in a page's label. Keyed by
+// href so a curated and a generated entry for the same page share them.
+// Matching is per word (matchesQuery), so 'whatsapp numbers' needs both.
+export const PALETTE_KEYWORDS = Object.freeze({
+  '/settings': ['preferences', 'config', 'configuration'],
+  '/settings/holidays': ['holidays', 'bank holidays', 'public holidays', 'closures'],
+  '/settings/class-categories': ['classes', 'cardio', 'strength', 'conditioning'],
+  '/settings/pipelines': ['boards', 'offers', 'funnel'],
+  '/settings/promos': ['corporate', 'corp', 'partner', 'free classes'],
+  '/settings/hosts': ['stripe', 'organisers', 'connect'],
+  '/achievements': ['badges'],
+  '/settings/service-credentials': ['strava', 'garmin', 'apple health', 'credentials'],
+  '/settings/staff': ['staff', 'team', 'employees', 'users', 'people', 'coaches'],
+  '/settings/staff/new': ['staff', 'invite', 'new staff', 'add user', 'hire'],
+  '/settings/impersonate': ['impersonate', 'view as', 'sign in as'],
+  '/settings/email-domain': ['email', 'dns', 'dkim', 'sending domain'],
+  '/settings/notifications': ['push', 'alerts', 'reminders'],
+  '/settings/customer-agent': ['mia', 'ai', 'bot', 'agent', 'instagram', 'whatsapp'],
+  '/settings/scoring': ['points', 'heart rate', 'zones'],
+  '/settings/integrations-hub': ['integrations', 'connections', 'glofox', 'xero', 'whatsapp numbers', 'instagram', 'meta', 'zoom', 'integration health'],
+  '/settings/status-page': ['status', 'outage'],
+  '/admin/webhook-dead-letter': ['webhooks', 'dead letters', 'failed deliveries', 'postmark'],
+  '/settings/billing': ['plan', 'subscription', 'wallet', 'platform invoices'],
+  '/settings/usage': ['caps', 'limits', 'ai usage'],
+  '/settings/glofox-import': ['glofox', 'import', 'members'],
+  '/settings/marketing-import': ['consent', 'import', 'marketing preferences'],
+  '/settings/api-keys': ['api', 'api keys', 'tokens', 'developer', 'integration key'],
+  '/settings/landing-page': ['website', 'pages', 'landing', 'welcome'],
+  '/settings/audit-log': ['audit', 'logs', 'history'],
+  '/account/access-history': ['impersonation', 'audit', 'access'],
+  '/settings/locations/new': ['studio', 'location', 'add location'],
+  '/schedule': ['rota', 'roster', 'shifts', 'hours', 'payroll'],
+  '/schedule/invoices': ['payroll', 'contractor', 'pay'],
+  '/schedule/expenses': ['payroll', 'expenses', 'reimbursement'],
+  '/contracts': ['employment', 'hr'],
+  '/policies': ['hr', 'handbook'],
+  '/accounting': ['xero', 'bookkeeping', 'finance', 'accounts'],
+  '/card-receipts': ['receipts', 'company card', 'expenses'],
+  '/offer-sales': ['offers', 'sales'],
+  '/class-fees': ['late cancel', 'no show', 'fees'],
+  '/communications/inbox': ['whatsapp', 'instagram', 'dm', 'chat'],
+  '/communications/sent': ['campaigns', 'broadcasts', 'history'],
+  '/communications/templates': ['email templates', 'whatsapp templates'],
+  '/communications/segments': ['audiences', 'lists'],
+  '/communications/list-health': ['bounces', 'unsubscribes', 'deliverability'],
+  '/automations': ['sequences', 'drips', 'flows', 'sonos', 'music'],
+  '/admin/fleet': ['devices', 'tablets', 'restart'],
+  '/live': ['heart rate', 'hr'],
+  '/pulse': ['survey', 'feedback'],
+})
+
+// The hub-index chain step whose target is `href`, if any. The chain is the
+// module that guarantees a step's keys/roles match its destination's own
+// gate (hub-index-chains.js header), so a tab's gate is read from there
+// first and from the tab only where no chain step points at it.
+function chainStepFor(href) {
+  for (const hub of Object.values(HUB_INDEX_CHAINS)) {
+    const step = hub.chain.find((s) => s.target === href)
+    if (step) return step
+  }
+  return null
+}
+
+function hubTabCommand(hubHref, section, tab) {
+  const step = chainStepFor(tab.href)
+  const keys = step ? step.keys : tab.perms
+  const roles = step ? step.roles : tab.roles
+  return {
+    id: `hub:${hubHref.slice(1)}:${tab.id}`,
+    label: LABEL_OVERRIDES[tab.href] || tab.label,
+    href: tab.href,
+    section,
+    ...(keys ? { anyPermission: [...keys] } : { openToAll: true }),
+    ...(roles ? { roles: [...roles] } : {}),
+  }
+}
+
+function settingsRowCommand(group, row) {
+  // The row's gate verbatim (settings-tree.js vocabulary, one field per
+  // row), which commandAllowed evaluates exactly as settingsRowVisible does.
+  return {
+    id: `settings:${row.id}`,
+    label: row.label,
+    href: row.href,
+    section: 'Settings',
+    group: group.label,
+    ...row.gate,
+  }
+}
+
+/**
+ * Every generated jump destination: each hub tab (bar the one that opens
+ * the public site in a new tab) and each /settings row that has a page.
+ * Pure; no dedupe (buildJumpCommands does that).
+ */
+export function generatedJumpCommands() {
+  const out = []
+  for (const [hubHref, hub] of Object.entries(HUB_TABS)) {
+    for (const tab of hub.tabs) {
+      if (tab.newTab) continue
+      out.push(hubTabCommand(hubHref, hub.section, tab))
+    }
+  }
+  for (const group of SETTINGS_TREE) {
+    for (const row of group.rows) {
+      if (!row.href) continue // "coming soon" rows have no page
+      out.push(settingsRowCommand(group, row))
+    }
+  }
+  return out
+}
+
+/**
+ * Curated first, then every generated destination whose href is not already
+ * a curated jump or a quick-create (the Marketing strip's `Send` is the
+ * 'Send a message' create action). Curated entries keep their label and
+ * gate and borrow the generated entry's section; all pick up PALETTE_KEYWORDS.
+ */
+export function buildJumpCommands(curated = NAV_COMMANDS, generated = generatedJumpCommands(), creates = CREATE_COMMANDS) {
+  const byHref = new Map()
+  for (const g of generated) if (!byHref.has(g.href)) byHref.set(g.href, g)
+  const taken = new Set([...curated, ...creates].map((c) => c.href))
+  const withKeywords = (c) => (PALETTE_KEYWORDS[c.href] ? { ...c, keywords: PALETTE_KEYWORDS[c.href] } : c)
+  const curatedOut = curated.map((c) => {
+    const g = byHref.get(c.href)
+    return withKeywords(g && !c.section ? { ...c, section: g.section, ...(g.group ? { group: g.group } : {}) } : c)
+  })
+  const seen = new Set()
+  const generatedOut = []
+  for (const g of generated) {
+    if (taken.has(g.href) || seen.has(g.href)) continue
+    seen.add(g.href)
+    generatedOut.push(withKeywords(g))
+  }
+  return [...curatedOut, ...generatedOut]
+}
+
+/** What the palette offers under "Go to": curated + generated, deduped by href. */
+export const JUMP_COMMANDS = buildJumpCommands()
 
 /**
  * Is a command visible to this user? `hasPerm` is a `(key) => boolean`
  * predicate the caller supplies (so this module stays free of the
  * permissions/user coupling). Mirrors the Sidebar `matches()` gates.
+ *
+ * PALETTE.1 — `user` (the getCurrentUser() object the palette is handed)
+ * answers the role-shaped gates a permission predicate cannot:
+ *   roles       — user.role (the ACTIVE-LOCATION role, the field every
+ *                 role-gated page reads) is one of these
+ *   masterOnly  — user.profileRole or user.role is 'master' (the
+ *                 settings-tree and Sidebar formula)
+ *   orgAdmin    — isActiveOrgAdmin(user) (src/lib/org-admin.js)
+ *   openToAll   — any signed-in user
+ * Every gate a command carries must pass (AND), and each of these FAILS
+ * CLOSED: with no user, or no role on it, the command is hidden rather
+ * than offered as a link its page would bounce.
  */
-export function commandAllowed(cmd, hasPerm) {
+export function commandAllowed(cmd, hasPerm, user = null) {
   if (!cmd) return false
+  if (cmd.roles && (typeof user?.role !== 'string' || !cmd.roles.includes(user.role))) return false
+  if (cmd.masterOnly && !(user?.profileRole === 'master' || user?.role === 'master')) return false
+  if (cmd.orgAdmin && !(user && isActiveOrgAdmin(user))) return false
+  if (cmd.openToAll && !user) return false
   if (cmd.always) return true
   if (cmd.dashboardGroup) return DASHBOARD_LINK_PERM_KEYS.some((k) => !!hasPerm(k))
   if (cmd.anyPermission) return cmd.anyPermission.some((k) => !!hasPerm(k))
@@ -96,16 +280,39 @@ export function commandAllowed(cmd, hasPerm) {
   return true
 }
 
-/** Case-insensitive substring match of the query against a label. */
-export function matchesQuery(label, query) {
-  const q = (query || '').trim().toLowerCase()
-  if (!q) return true
-  return String(label || '').toLowerCase().includes(q)
+/** The text a command is searched by: label, section, `Section › Label`, group, keywords. */
+function searchFields(target) {
+  if (target == null || typeof target !== 'object') return [String(target ?? '')]
+  const fields = [target.label || '']
+  if (target.section) fields.push(target.section, `${target.section} › ${target.label || ''}`)
+  if (target.group) fields.push(target.group)
+  if (Array.isArray(target.keywords)) fields.push(...target.keywords)
+  return fields
+}
+
+/**
+ * Case-insensitive match of the query against a label (a string) or a
+ * command (label, section, group and keywords). PALETTE.1: matched per
+ * word, each word a substring of one of those fields, so "api keys",
+ * "settings holidays" and "Settings › Bank" all find their page. A
+ * one-word query against a label is the old substring match.
+ */
+export function matchesQuery(target, query) {
+  const words = String(query || '').toLowerCase().split(/[\s›>]+/).filter(Boolean)
+  if (!words.length) return true
+  const fields = searchFields(target).map((f) => String(f).toLowerCase())
+  return words.every((w) => fields.some((f) => f.includes(w)))
 }
 
 /** Permission-gate + query-filter a static command list. */
-export function visibleCommands(commands, query, hasPerm) {
-  return (commands || []).filter((c) => commandAllowed(c, hasPerm) && matchesQuery(c.label, query))
+export function visibleCommands(commands, query, hasPerm, user = null) {
+  return (commands || []).filter((c) => commandAllowed(c, hasPerm, user) && matchesQuery(c, query))
+}
+
+/** The line under a jump result: `Settings › Security`, `Money`, or ''. */
+export function commandSublabel(cmd) {
+  if (!cmd?.section) return ''
+  return cmd.group ? `${cmd.section} › ${cmd.group}` : cmd.section
 }
 
 /**

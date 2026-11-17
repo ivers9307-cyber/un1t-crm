@@ -50,19 +50,15 @@
 
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import HubTabs from '@/components/HubTabs'
+import { MARKETING_SEND_TABS } from '@/lib/hub-tabs'
 import CommsShell from '@/components/communications/CommsShell'
 
 export const dynamic = 'force-dynamic'
 
-const TABS = [
-  { id: 'send',        label: 'Send',        href: '/communications/send',        perms: ['email', 'whatsapp'] },
-  { id: 'sent',        label: 'Sent',        href: '/communications/sent',        perms: ['email', 'whatsapp'] },
-  { id: 'templates',   label: 'Templates',   href: '/communications/templates',   perms: ['email', 'whatsapp'] },
-  { id: 'segments',    label: 'Segments',    href: '/communications/segments',    perms: ['email', 'whatsapp'], roles: MANAGER_ROLES },
-  { id: 'list-health', label: 'List health', href: '/communications/list-health', perms: ['email'] },
-]
+// PALETTE.1 — the tab list lives in src/lib/hub-tabs.js (unchanged), shared
+// with the ⌘K palette so every tab is a jump target there too.
+const TABS = MARKETING_SEND_TABS
 
 export default async function MarketingEraLayout({ children }) {
   const user = await getCurrentUser()
