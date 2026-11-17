@@ -93,6 +93,18 @@ describe('ScheduleTabs — tabs render as links to the real sibling pages', () =
     expect(linkFor('Swaps').getAttribute('href')).toBe('/schedule/swaps')
   })
 
+  // LEAVEBAL.1 — the team's leave balances: same gate as Time Off / Swaps.
+  it('shows Leave balances to manager roles only, linking to /schedule/leave-balances', () => {
+    render(<ScheduleTabs user={user({ role: 'staff' })} />)
+    expect(screen.queryByText('Leave balances')).toBeNull()
+    cleanup()
+    for (const role of ['head_coach', 'manager', 'owner', 'master']) {
+      render(<ScheduleTabs user={user({ role })} />)
+      expect(linkFor('Leave balances').getAttribute('href'), role).toBe('/schedule/leave-balances')
+      cleanup()
+    }
+  })
+
   it('hides Invoices + Expenses for a plain FTE-less staffer with no grants', () => {
     render(<ScheduleTabs user={user()} />)
     expect(screen.queryByText('Invoices')).toBeNull()

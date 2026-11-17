@@ -86,7 +86,7 @@ import PublicationStatusChip from './schedule/PublicationStatusChip'
 import { timeOffLeaveLabel } from '@shared/time-off'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
-import { useScheduleData } from './schedule/useScheduleData'
+import { useScheduleData, EDIT_REFRESH_SLICES } from './schedule/useScheduleData'
 import { useWeekCost } from './schedule/useWeekCost'
 import { useDraftRosters } from './schedule/useDraftRosters'
 // ROSTERLOOK.1 — the toolbar row, and the pure model that says what is on it.
@@ -445,7 +445,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const rangeEnd = formatDate(viewType === 'month' ? monthGrid.end : weekEnd)
   const {
     blocks, templates, staff, timeOff, holidays, contractorSpend, availability,
-    loading, error, showingStaleData, partialErrors, successCount, refresh: fetchData,
+    loading, initialLoading, refreshing, error, showingStaleData, partialErrors, successCount, refresh: fetchData,
   } = useScheduleData({
     locationId,
     startDate: rangeStart,
@@ -551,7 +551,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // via its own `range` dep, so an extra bump there would just cause
   // a redundant overview fetch.
   const refreshAfterMutation = useCallback(async (opts = {}) => {
-    await fetchData()
+    // ROTAREFRESH.1 — an edit re-reads the shifts and what follows them
+    // (contractor spend), not the templates, coaches, holidays, leave and
+    // availability it cannot change. The grid stays on screen meanwhile.
+    await fetchData({ only: EDIT_REFRESH_SLICES })
     // ROSTER-FIX.6c — the hours panel used to be derived from `blocks`, so it
     // moved on its own. It is a separate fetch now and has to be told.
     refreshWeekCost()
@@ -1231,7 +1234,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // toolbar's right-hand group does not jump rows while a week loads.
   const publicationChip = isManager ? (
     <PublicationStatusChip
-      publication={loading ? null : publication}
+      publication={initialLoading ? null : publication}
       viewType={viewType}
       onOpenChangeLog={openChangeLog}
       triggerRef={changeLogTriggerRef}
@@ -1308,7 +1311,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       {/* Staffing-gaps summary — week view only, manager only.
           ROSTERVIS.1 — counts below-minimum shifts as well as empty ones; red
           while any shift has no coach, amber when every gap is a short one. */}
-      {!loading && isManager && viewType === 'week' && staffingGapsThisWeek.total > 0 && (() => {
+      {!initialLoading && isManager && viewType === 'week' && staffingGapsThisWeek.total > 0 && (() => {
         const anyEmpty = staffingGapsThisWeek.empty > 0
         return (
           <div
@@ -1336,7 +1339,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           scoped to one Mon-Sun week, which is what the caption underneath has
           always claimed — the browser version summed whatever range was loaded,
           so in month view it billed six weeks against a weekly contract. */}
-      {!loading && canSeeContract && (() => {
+      {!initialLoading && canSeeContract && (() => {
         const overOrAt = (weekCost?.coaches || []).filter((c) => c.status !== 'under')
         if (overOrAt.length === 0) return null
 
@@ -1375,8 +1378,16 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         )
       })()}
 
+      {/* ROTAREFRESH.1 — a refresh of the week on screen keeps the grid (and
+          the scroll position) and says so here; only a range with no roster
+          loaded yet shows the loading line. The live region stays mounted so
+          a screen reader hears it change. */}
+      <div role="status" aria-live="polite" className="h-5 mb-1 text-xs text-un1t-subtle text-right">
+        {refreshing ? 'Updating roster…' : ''}
+      </div>
+
       {/* Calendar Grid */}
-      {loading ? (
+      {initialLoading ? (
         <div className="text-center py-20 text-un1t-subtle">Loading roster...</div>
       ) : viewType === 'month' ? (
         // ── MONTH VIEW ──
@@ -1653,7 +1664,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           the server leaves it out for a head coach. */}
       {/* ROSTER-FIX.6c: `staff` is the pay-free picker shape now, so no role
           gets rates here and the canSeePay prop had nothing left to gate. */}
-      {!loading && isManager && (
+      {!initialLoading && isManager && (
         <RosterSummaryPanel
           blocks={blocks}
           staff={locationStaff}

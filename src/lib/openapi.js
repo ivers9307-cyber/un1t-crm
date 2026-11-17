@@ -7215,6 +7215,25 @@ registry.registerPath({
   },
 })
 
+// Manual arrival (ARRIVALFIX.1)
+registry.registerPath({
+  method: 'put',
+  path: '/api/attendance/arrival',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: "Enter or correct a coach's arrival by hand (attendance_reports)",
+  description: "Sets shift_assignments.arrived_at with arrival_source 'manual' for a shift at the caller's active studio. time is HH:MM on the shift's own date at the studio's clock and may not be in the future. An arrival the phone recorded (geofence) is never overwritten; a manual one may be corrected. The write is compare-and-set on the stamp that was read. A staff_attendance_events row (source manual) records who entered it.",
+  request: { body: { content: { 'application/json': { schema: z.object({ assignment_id: uuidLike, time: z.string() }) } } } },
+  responses: {
+    200: { description: '{ success, data: { assignment_id, arrived_at, arrival_source } }' },
+    400: { description: 'Malformed body, a time that does not exist on the date, or a future time', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: attendance_reports is not enabled for your role at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No live shift with that id at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: "The arrival was recorded by the coach's phone, or it changed while being edited", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The arrival could not be saved', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Geofence attendance (GEO-ATT, mig 463)
 registry.registerPath({
   method: 'get',
@@ -7597,6 +7616,21 @@ registry.registerPath({
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'An automatic credit cannot be removed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+// LEAVEBAL.1 — the whole studio's balances in one read.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/allowances/team',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "Every active staff member's holiday allowance (days) and lieu balance (hours) at the active studio",
+  description: "Query: year (default the active studio's current year). Master, owner, manager or head coach AT the active studio. One row per active, non-deleted member of staff there: holiday { total_days, carried_over, used_days, remaining, stored }, pending_days, lieu { credited_hours, taken_hours, balance_hours }; contractors are not_applicable with no holiday or lieu. A figure whose read failed is null and its part is named in `unreadable` (allowances, entitlements, pending, lieu), never 0. Also returns can_edit_allowance, can_record_lieu and the studio's today.",
+  responses: {
+    200: { description: 'Rows' },
+    400: { description: 'Malformed year, or no active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a manager at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Staff list unreadable', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 const PayrollSettingsBody = z.object({
