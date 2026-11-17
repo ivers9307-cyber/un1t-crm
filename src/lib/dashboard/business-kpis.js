@@ -16,7 +16,7 @@ import { buildBusinessBriefing } from '@shared/business-briefing'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
 import { providesCapability } from '@/lib/membership/state-for-page'
-import { loadRadar } from '@/lib/churn-radar-data'
+import { cachedChurnRadar } from '@/lib/dashboard/churn-count'
 import { displayZoneFor } from '@/lib/display-zone'
 
 // UN1TREAD.3 — the numbers come through the membership read seam, not from
@@ -80,7 +80,8 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
       // queries throwing must not reject the whole Promise.all and
       // discard four healthy data points.
       (supportsRead(m, 'membershipCounts') ? m.reads.membershipCounts(db, locationId) : Promise.resolve(null)).catch(() => null),
-      radarOk ? loadRadar(db, locationId).catch(() => null) : Promise.resolve(null),
+      // CHURNONE.1 — the cached live radar, shared with the rail and the radar tab.
+      radarOk ? cachedChurnRadar(db, locationId).catch(() => null) : Promise.resolve(null),
       getPendingApprovalsCount(db, user).catch(() => 0),
       churnSnapshot,
     ])

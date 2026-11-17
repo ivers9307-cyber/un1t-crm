@@ -15,6 +15,9 @@
 
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { radarReadsFor } from '@/lib/membership/reads/index'
+import { membershipReadsFor } from '@/lib/membership/reads'
+import { providesCapability } from '@/lib/membership/state-for-page'
+import { cachedChurnRadar, highRiskOf } from '@/lib/dashboard/churn-count'
 import { totalLabel } from '@/lib/radar-copy'
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
@@ -86,15 +89,15 @@ async function arrearsRow(db, locationId) {
   return null
 }
 
-// 4. Churn — latest snapshot count (cheap; the KPI card carries the
-// live radar number, this row is the pointer).
+// 4. Churn. CHURNONE.1 — the LIVE high-risk count, the number the KPI card
+// shows (it used to read last Monday's snapshot, so the same page gave two
+// answers). Through the shared radar cache, so the page scans once. Only
+// where the studio's source supplies memberships, as the card's gate.
 async function churnRow(db, locationId) {
   try {
-    const { data } = await db.from('churn_radar_snapshots')
-      .select('high_risk, captured_at')
-      .eq('location_id', locationId)
-      .order('captured_at', { ascending: false }).limit(1)
-    const hi = data?.[0]?.high_risk || 0
+    const m = await membershipReadsFor(db, locationId)
+    if (!m?.reads || !providesCapability(m, 'memberships')) return null
+    const hi = highRiskOf(await cachedChurnRadar(db, locationId))
     if (hi > 0) {
       return {
         key: 'churn', chip: 'Churn', tone: 'amber',

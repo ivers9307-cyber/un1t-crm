@@ -16,6 +16,7 @@ import WAMediaContent from '@/components/WAMediaContent'
 import ApprovalActionCard from '@/components/ApprovalActionCard'
 import { ChannelAvatar } from '@/components/inbox/ChannelBits'
 import HandledByControl from '@/components/inbox/HandledByControl'
+import AssignControl from '@/components/inbox/AssignControl'
 import MiaDecisionTrace from '@/components/inbox/MiaDecisionTrace'
 import WAAttachmentComposer from '@/components/inbox/WAAttachmentComposer'
 import {
@@ -992,6 +993,10 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {/* INBOXASSIGN.1 — who owns this thread. */}
+                {conversation && (
+                  <AssignControl channel="whatsapp" conversationId={conversation.id} assignedTo={conversation.assigned_to || null} />
+                )}
                 {conversation && canUseWebControls && (
                   <HandledByControl
                     channel="wa"

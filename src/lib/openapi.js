@@ -2907,11 +2907,13 @@ registry.registerPath({
       view: z.enum(['inbox', 'needs_reply', 'sent', 'archived']).optional(),
       before: z.string().optional(),
       q: z.string().optional(),
+      // INBOXASSIGN.1 — narrows whatever the view or search left; rows carry assigned_to + assignee_name.
+      owner: z.enum(['mine', 'unassigned']).optional(),
     }),
   },
   responses: {
     200: { description: '{ mailboxes, conversations, next_before, needs_reply_count, counts_partial?, counts_unavailable?, search_partial }' },
-    400: { description: 'Missing location_id / unknown view', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Missing location_id / unknown view / unknown owner filter', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing email_inbox permission or foreign location', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Mailbox visibility or list query failed — NOT an empty inbox', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -5693,6 +5695,50 @@ registry.registerPath({
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
+
+// INBOXASSIGN.1 — thread ownership on all three channels (cookie auth).
+// One shape per channel; each route keeps its channel's own thread gate.
+for (const [path, tag, gate] of [
+  ['/api/whatsapp/conversations/{id}/assign', 'WhatsApp', 'WhatsApp (web or mobile) at the THREAD\u2019s studio, after membership (404)'],
+  ['/api/instagram/conversations/{id}/assign', 'Instagram', 'the Instagram thread routes\u2019 gate (the `whatsapp` key, then membership of the thread\u2019s studio, 404)'],
+  ['/api/email/mail/{id}/assign', 'Email', 'loadConversationForUser (membership, `email_inbox` at the conversation\u2019s studio, sight of its mailbox; every refusal a 404)'],
+]) {
+  registry.registerPath({
+    method: 'get',
+    path,
+    tags: [tag],
+    security: [{ CookieAuth: [] }],
+    summary: 'Who owns this thread, and who may be named',
+    description: `The current owner (assigned_to + assignee_name), the viewer\u2019s id, and the staff who can work this thread at its studio \u2014 { id, full_name } only: active, not deleted, a member of the thread\u2019s studio and holding the channel there. Gate: ${gate}. A failed lookup is a 500, never an empty list.`,
+    request: { params: z.object({ id: uuidLike }) },
+    responses: {
+      200: { description: '{ assigned_to, assignee_name, viewer_id, staff: [{ id, full_name }] }' },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+      404: { description: 'No such thread, or not yours', content: { 'application/json': { schema: ErrorResponse } } },
+      500: { description: 'Staff lookup failed', content: { 'application/json': { schema: ErrorResponse } } },
+    },
+  })
+  registry.registerPath({
+    method: 'post',
+    path,
+    tags: [tag],
+    security: [{ CookieAuth: [] }],
+    summary: 'Set or clear who owns this thread',
+    description: `assignee: 'me' takes it, null clears it, a profile id names a colleague who must be assignable (see the GET; otherwise 400 assignee_not_eligible). Last write wins. The write is pinned to the thread\u2019s id and studio; a failed write is a 500 and a write that matched no row (the thread moved or vanished) is a 409, never a success. Writes nothing but assigned_to. The inbound push for an owned thread pages its owner. Gate: ${gate}.`,
+    request: {
+      params: z.object({ id: uuidLike }),
+      body: { content: { 'application/json': { schema: z.object({ assignee: z.union([z.literal('me'), z.null(), uuidLike]) }) } } },
+    },
+    responses: {
+      200: { description: '{ assigned_to, assignee_name }' },
+      400: { description: 'Invalid body, or the named person cannot work this thread', content: { 'application/json': { schema: ErrorResponse } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+      404: { description: 'No such thread, or not yours', content: { 'application/json': { schema: ErrorResponse } } },
+      409: { description: 'The thread changed under the write (or, for mail, was merged away)', content: { 'application/json': { schema: ErrorResponse } } },
+      500: { description: 'Lookup or write failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+    },
+  })
+}
 
 // WhatsApp spend telemetry (cookie auth)
 registry.registerPath({

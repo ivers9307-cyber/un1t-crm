@@ -34,7 +34,7 @@ import { readableText } from '@/lib/mail-entities'
  * non-empty — `q=` with nothing after it would ask the route to search for
  * nothing rather than not search at all, which is a different query.
  */
-export function buildMailUrl({ locationId, mailboxId, viewId, before, q } = {}) {
+export function buildMailUrl({ locationId, mailboxId, viewId, before, q, owner } = {}) {
   const params = new URLSearchParams()
   if (locationId) params.set('location_id', locationId)
   if (mailboxId) params.set('mailbox_id', mailboxId)
@@ -43,6 +43,8 @@ export function buildMailUrl({ locationId, mailboxId, viewId, before, q } = {}) 
   if (viewId && viewId !== DEFAULT_MAIL_VIEW) params.set('view', viewId)
   if (before) params.set('before', before)
   if (q) params.set('q', q)
+  // INBOXASSIGN.1 — 'mine' / 'unassigned'; 'any' is the route's default and is never sent.
+  if (owner && owner !== 'any') params.set('owner', owner)
   return `/api/email/mail?${params.toString()}`
 }
 
