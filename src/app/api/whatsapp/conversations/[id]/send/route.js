@@ -12,6 +12,8 @@ import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { flowButtonIndex, flowButtonComponentFor } from '@/lib/whatsapp-template-buttons'
 import { flowTokenFor } from '@/lib/whatsapp-flow/config'
 import { templateSendBlock, SEND_BLOCK_TEXT, renderSentTemplateBody } from '@shared/wa-template-send'
+import { WA_ATTACHMENT_TEXT, waAttachmentFileName } from '@/lib/wa-outbound-attachment'
+import { resolveWaAttachmentForSend } from '@/lib/wa-outbound-attachment-server'
 
 const SendMessageSchema = z.object({
   type: z.enum(['text', 'template', 'image', 'video', 'document', 'audio']).optional(),
@@ -20,7 +22,14 @@ const SendMessageSchema = z.object({
   template_name: z.string().max(200).optional(),
   template_language: z.string().max(20).optional(),
   template_components: z.array(z.unknown()).optional(),
+  // WAATTACH.1 — no longer honoured: a media send names an attachment slot
+  // and the route mints Meta's link itself. Kept in the schema so an old
+  // client gets the plain refusal below rather than a schema error.
   media_url: url.optional(),
+  // WAATTACH.1 — a slot minted by …/attachments/sign for THIS conversation.
+  attachment_path: z.string().max(400).optional(),
+  // The picked file's name, shown on a document in WhatsApp.
+  file_name: z.string().max(300).optional(),
   caption: z.string().max(1024).optional(),
 })
 
@@ -93,6 +102,8 @@ export async function POST(request, props) {
   let templateName = null
   let templateVariables = null
   let send // () => Promise<{ messageId }>: the ONE call that reaches Meta
+  let previewText = null // the list preview, when it differs from the thread text
+  let sentMedia = null // WAATTACH.1 — { storagePath, mime } of an attachment
   // WAREPLYNUMBER.1 (C86) — reply from the number the customer wrote to
   // (recorded on the thread by the webhook), else the studio default.
   const replyOpts = { locationId: conversation.location_id, replyInConversation: conversation.id }
@@ -192,8 +203,34 @@ export async function POST(request, props) {
     if (!isWindowOpen(conversation)) {
       return NextResponse.json({ success: false, error: WINDOW_EXPIRED, window_expired: true }, { status: 400 })
     }
-    messageBody = body.caption || `[${messageType}]`
-    send = () => sendMediaMessage(phone, messageType, body.media_url, body.caption, replyOpts)
+    // WAATTACH.1 — the file is one this thread's staff uploaded to the
+    // private bucket (…/attachments/sign), judged here on what Storage holds,
+    // and Meta's link to it is minted HERE. A client-supplied media_url is
+    // refused: no screen ever sent one, and it would let a client send any
+    // URL as if it were our file.
+    if (!body.attachment_path) {
+      return NextResponse.json({ success: false, error: WA_ATTACHMENT_TEXT.mediaUrlRefused }, { status: 400 })
+    }
+    const attachment = await resolveWaAttachmentForSend(db, {
+      path: body.attachment_path, locationId: conversation.location_id, conversationId: conversation.id,
+    })
+    if (!attachment.ok) {
+      if (attachment.status >= 500) {
+        logError(LOG, 'attachment not sendable; nothing sent', { conversationId: params.id, locationId: conversation.location_id, err: attachment.error })
+      }
+      return NextResponse.json({ success: false, error: attachment.error }, { status: attachment.status })
+    }
+    if (attachment.kind !== messageType) {
+      return NextResponse.json({ success: false, error: WA_ATTACHMENT_TEXT.mismatch }, { status: 400 })
+    }
+    const caption = String(body.caption || '').trim() || null
+    const fileName = attachment.kind === 'document' ? waAttachmentFileName(body.file_name) : null
+    // The thread shows the file itself; the text is the caption, or for a PDF
+    // with none, its name. The list preview always says what was sent.
+    messageBody = caption || fileName || ''
+    previewText = caption ? `${attachment.kind === 'image' ? '[Photo]' : '[PDF]'} ${caption}` : (fileName ? `[PDF] ${fileName}` : '[Photo]')
+    sentMedia = { storagePath: body.attachment_path, mime: attachment.contentType }
+    send = () => sendMediaMessage(phone, attachment.kind, attachment.url, caption, { ...replyOpts, ...(fileName && { filename: fileName }) })
   } else {
     // Text message — 24h window only
     if (!isWindowOpen(conversation)) {
@@ -227,8 +264,11 @@ export async function POST(request, props) {
       wa_message_id: result?.messageId,
       direction: 'outbound',
       message_type: messageType,
-      body: messageBody,
-      media_url: body.media_url || null,
+      body: messageBody || null,
+      // WAATTACH.1 — the inbox renders the file from the bucket (re-signed by
+      // /api/whatsapp/media/[id]); Meta's hour-long link is never stored.
+      media_url: null,
+      ...(sentMedia && { media_storage_path: sentMedia.storagePath, media_mime_type: sentMedia.mime }),
       template_name: templateName,
       template_variables: templateVariables,
       status: 'sent',
@@ -257,7 +297,7 @@ export async function POST(request, props) {
     const { error: err } = await db.from('whatsapp_conversations').update({
       last_message_at: now,
       last_message_direction: 'outbound',
-      last_message_preview: messageBody?.substring(0, 100),
+      last_message_preview: (previewText || messageBody)?.substring(0, 100),
       ...manualTakeoverPatch(conversation.agent_handed_off_at),
     }).eq('id', params.id)
     updateError = err

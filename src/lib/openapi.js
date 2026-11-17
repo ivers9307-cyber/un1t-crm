@@ -5493,6 +5493,48 @@ registry.registerPath({
   },
 })
 
+// WAATTACH.1 — WhatsApp inbox photo/PDF upload slot (cookie auth)
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/conversations/{id}/attachments/sign',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Start a photo or PDF upload for an open conversation',
+  description: "Step 1 of sending a file from the inbox. Judges the declared file (JPEG or PNG up to 5 MB, PDF up to 16 MB) and mints a slot in the private whatsapp-media bucket under the conversation's studio, returning a signed upload token for exactly that path. The browser uploads the bytes straight to Storage, then calls POST /api/whatsapp/conversations/{id}/send with { type, attachment_path, caption?, file_name? }; the send route re-checks what Storage holds and mints Meta's link itself (a client media_url is refused). Gated on WhatsApp (web or mobile) at the conversation's studio; refused outside the 24-hour window.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            file_name: z.string().min(1).max(300),
+            mime: z.string().max(200),
+            size: z.number().int(),
+          }).openapi('WaAttachmentSign'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Upload slot minted',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.object({ path: z.string(), token: z.string(), content_type: z.string(), kind: z.enum(['image', 'document']) }),
+          }),
+        },
+      },
+    },
+    400: { description: 'Type or size not accepted, or the 24-hour window is closed (window_expired: true)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No WhatsApp permission at the conversation's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation not found, or at a studio the caller is not in', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The conversation could not be read, or Storage gave no upload token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WhatsApp inbox block action (cookie auth)
 registry.registerPath({
   method: 'post',
