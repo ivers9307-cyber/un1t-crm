@@ -38,6 +38,7 @@ const HISTORY_SYNC_NOTES = {
   complete: 'History imported',
   declined: 'History sharing was declined',
   expired: 'History import window expired',
+  request_failed: 'History import request failed — connect the number again within 24 hours to retry',
 }
 
 export const FIELD_HELP = {
