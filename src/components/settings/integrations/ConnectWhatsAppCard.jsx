@@ -13,22 +13,42 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 
-// WA-TECHPROV.5 — Embedded Signup v4 launcher. The FB JS SDK is loaded on
+// WA-TECHPROV.5 — Embedded Signup launcher (v5 since ESV5.1). The FB JS SDK is loaded on
 // demand (never globally, so it doesn't clash with other pages); the
 // session-info postMessage listener captures waba_id/phone_number_id,
 // FB.login's callback supplies the response code, and the exchange route
 // (embedded-signup) does the rest: code→token, WABA webhook subscription,
 // conditional number registration, then upsert into whatsapp_numbers.
 //
-// `extras`/version checked against Meta's ES v4 docs (2026-11). The
-// Cloud API sample is `extras: { setup: {} }`. The coexistence sample
-// ("Onboarding WhatsApp Business app users") adds
-// `featureType: 'whatsapp_business_app_onboarding'` AND
-// `sessionInfoVersion: '3'`; without the latter the dialog offered no
-// "connect your existing WhatsApp Business app" option (ESCOEXIST.1), so
-// coexistence sends both. Its FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING
-// event carries only waba_id; the route finds the number from the WABA.
+// ESV5.1 — Embedded Signup v5 (Meta, released 20 Oct 2026). On v4 the
+// coexistence `featureType` never produced the "connect your existing
+// WhatsApp Business app" choice for us (and v4 ignores sessionInfoVersion,
+// so ESCOEXIST.1 changed nothing). v5 turns Business-app onboarding ON by
+// default: `extras: { version: 'v5' }`. The plain Connect button opts out
+// with `features: [{ name: 'whatsapp_business_app_onboarding', enabled:
+// false }]`, which Meta says wins even over featureType.
+// v5 session info: `messaging_account_ids` replaces `waba_id` (we read
+// both), plus `phone_number_id` and `is_on_biz_app`; the event is
+// FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING when is_on_biz_app is true. What
+// the person actually did in the dialog decides the mode, not the button.
 // FB.init's `version` is the currently-documented 'v27.0'.
+export const BIZ_APP_FEATURE = 'whatsapp_business_app_onboarding'
+export function launchExtras(mode) {
+  return mode === 'coexistence'
+    ? { version: 'v5' }
+    : { version: 'v5', features: [{ name: BIZ_APP_FEATURE, enabled: false }] }
+}
+// One WA_EMBEDDED_SIGNUP message folded into what we already hold.
+export function foldSessionInfo(prev, msg) {
+  const d = msg?.data || {}
+  const wabaId = d.waba_id ?? (Array.isArray(d.messaging_account_ids) ? d.messaging_account_ids[0] : undefined)
+  const onBizApp = d.is_on_biz_app === true || msg?.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'
+  return {
+    waba_id: wabaId ?? prev.waba_id,
+    phone_number_id: d.phone_number_id ?? prev.phone_number_id,
+    on_biz_app: onBizApp || prev.on_biz_app === true,
+  }
+}
 function loadFacebookSdk(appId) {
   return new Promise((resolve, reject) => {
     if (window.FB) return resolve(window.FB)
@@ -81,10 +101,7 @@ export function ConnectWhatsAppCard({ organizationId, locations = [], canEdit, o
       try {
         const data = JSON.parse(event.data)
         if (data?.type === 'WA_EMBEDDED_SIGNUP') {
-          sessionInfo.current = {
-            waba_id: data.data?.waba_id ?? sessionInfo.current.waba_id,
-            phone_number_id: data.data?.phone_number_id ?? sessionInfo.current.phone_number_id,
-          }
+          sessionInfo.current = foldSessionInfo(sessionInfo.current, data)
         }
       } catch { /* FB widgets also postMessage non-JSON — ignore */ }
     }
@@ -95,6 +112,7 @@ export function ConnectWhatsAppCard({ organizationId, locations = [], canEdit, o
   async function connect(mode = 'cloud_api') {
     setError(null)
     setBusy(true)
+    sessionInfo.current = {}
     try {
       const FB = await loadFacebookSdk(launch.app_id)
       const authCode = await new Promise((resolve) => {
@@ -104,26 +122,27 @@ export function ConnectWhatsAppCard({ organizationId, locations = [], canEdit, o
             config_id: launch.config_id,
             response_type: 'code',
             override_default_response_type: true,
-            extras: mode === 'coexistence'
-              ? { setup: {}, featureType: 'whatsapp_business_app_onboarding', sessionInfoVersion: '3' }
-              : { setup: {} },
+            extras: launchExtras(mode),
           },
         )
       })
       if (!authCode) { setBusy(false); return }   // dialog abandoned = no-op
 
-      const { waba_id, phone_number_id } = sessionInfo.current
+      const { waba_id, phone_number_id, on_biz_app } = sessionInfo.current
+      // v5 offers the Business-app path from the Connect existing number
+      // button; if the person chose a new number there instead, it is Cloud API.
+      const signupMode = on_biz_app ? 'coexistence' : 'cloud_api'
       if (!waba_id) {
         throw new Error('Signup finished but no WhatsApp Business account details arrived — close the dialog and retry.')
       }
-      if (mode === 'cloud_api' && !phone_number_id) {
+      if (signupMode === 'cloud_api' && !phone_number_id) {
         throw new Error('Signup finished but no number details arrived — close the dialog and retry.')
       }
 
       const res = await fetch(`/api/organizations/${organizationId}/whatsapp/embedded-signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, code: authCode, waba_id, phone_number_id, home_location_id: homeLocationId || undefined }),
+        body: JSON.stringify({ mode: signupMode, code: authCode, waba_id, phone_number_id, home_location_id: homeLocationId || undefined }),
       })
       const json = await res.json()
       if (!json.success) throw new Error(json.error || 'Connection failed')
