@@ -32,6 +32,9 @@ import WAInbox from '@/components/WAInbox'
 import IGInbox from '@/components/IGInbox'
 import CommandCentre from '@/components/CommandCentre'
 import { ChannelGlyph, ChannelAvatar } from '@/components/inbox/ChannelBits'
+import OwnerFilter from '@/components/inbox/OwnerFilter'
+import OwnerTag from '@/components/inbox/OwnerTag'
+import { matchesOwnerFilter } from '@/lib/inbox-owner'
 import { channelOf } from '../../shared/channels'
 
 function formatTime(dateStr) {
@@ -83,6 +86,8 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
   const [igConvs, setIgConvs] = useState([])
   const [loading, setLoading] = useState(true)
   const [queueFilter, setQueueFilter] = useState('needs_reply')
+  // INBOXASSIGN.1 — Anyone / Mine / Unassigned, on top of the queue chips.
+  const [ownerFilter, setOwnerFilter] = useState('any')
   const [search, setSearch] = useState('')
   // INBOX-SEARCH.1 — server hits for the current query, or null when not
   // searching. The plain lists cap at the latest 50 per channel, so the
@@ -230,6 +235,8 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
   } else {
     visible = queueMatched.filter(conv => matchesSearch(`${rowName(conv)} ${conv.last_message_preview || ''}`, search))
   }
+  // INBOXASSIGN.1 — the owner filter narrows the queue and search alike.
+  visible = visible.filter(conv => matchesOwnerFilter(conv, ownerFilter, userId))
   const needsReplyCount = merged.filter(needsReply).length
   const handoffCount = merged.filter(isAgentHandoff).length
   const approvalsCount = merged.filter(isPendingApproval).length
@@ -311,6 +318,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
             </button>
           ))}
         </div>
+        <OwnerFilter value={ownerFilter} onChange={setOwnerFilter} className="px-3 py-1.5 border-b border-un1t-border" />
 
         <div className="flex-1 overflow-y-auto">
           {loading && <p className="p-4 text-sm text-un1t-subtle text-center">Loading…</p>}
@@ -326,7 +334,9 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
             <p className="p-4 text-xs text-un1t-subtle text-center">
               {search.trim()
                 ? `No matches for "${search.trim()}"`
-                : queueFilter === 'handoff'
+                : ownerFilter !== 'any'
+                  ? (ownerFilter === 'mine' ? 'Nothing assigned to you here.' : 'Nothing unassigned here.')
+                  : queueFilter === 'handoff'
                   ? 'No agent handoffs waiting — the agent is handling things. 🤖'
                   : 'Queue clear — nothing needs a reply. 🎉'}
             </p>
@@ -362,6 +372,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                         Approval
                       </span>
                     )}
+                    <OwnerTag row={conv} userId={userId} />
                   </span>
                   {/* WAMSGSEARCH.1 — a thread found by its message text shows the matching words. */}
                   {searchActive && conv.search_snippet

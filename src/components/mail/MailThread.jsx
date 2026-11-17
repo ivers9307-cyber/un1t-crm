@@ -36,6 +36,7 @@ import { createPortal } from 'react-dom'
 import { Archive, ArchiveRestore, Link2, Mail, MailOpen, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import { EmptyState, Modal } from '@/components/ui'
 import ConversationThread from '@/components/mail/ConversationThread'
+import AssignControl from '@/components/inbox/AssignControl'
 import { requesterLabel } from '@/lib/mail/conversation-display'
 import { isArchived, needsReply, isUnread, isSpam, MAIL_SHORTCUTS } from './mail-vocabulary'
 // MAIL-REFINE.1 (03) — relating conversations. All decisions are pure and live
@@ -299,16 +300,29 @@ export default function MailThread({
         ) : null
       }
       controls={
-        <MailControls
-          archived={archived}
-          spam={spam}
-          unread={unread}
-          saving={actionSaving}
-          onArchive={onArchive}
-          onSpam={onSpam}
-          onMarkRead={onMarkRead}
-          onMarkUnread={onMarkUnread}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          {/* INBOXASSIGN.1 — who owns this conversation (the WhatsApp and
+              Instagram threads use the same control). A merged-away
+              conversation takes no owner. */}
+          {conversationId && !conversation?.merged_into_id && (
+            <AssignControl
+              channel="mail"
+              conversationId={conversationId}
+              assignedTo={conversation?.assigned_to || null}
+              onChanged={() => onThreadChanged?.()}
+            />
+          )}
+          <MailControls
+            archived={archived}
+            spam={spam}
+            unread={unread}
+            saving={actionSaving}
+            onArchive={onArchive}
+            onSpam={onSpam}
+            onMarkRead={onMarkRead}
+            onMarkUnread={onMarkUnread}
+          />
+        </div>
       }
       // MAIL-READER.1 (05) — reading mode folds the header to one line, and
       // ONE action survives the fold. On this surface that is Archive: it is

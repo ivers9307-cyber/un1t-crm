@@ -9,6 +9,12 @@ import {
 } from './_helpers'
 import { scopeToVisibleMailboxes } from './_conversation'
 import { searchConversationIds } from './_search'
+import { attachAssigneeNames } from '@/lib/inbox-assignment'
+
+// INBOXASSIGN.1 — the owner filter, orthogonal to the view (and kept under a
+// search): `mine` is assigned to the caller, `unassigned` to nobody. Anything
+// else is a 400, like an unknown view.
+export const MAIL_OWNER_FILTERS = Object.freeze(['mine', 'unassigned'])
 
 // GET /api/email/mail — THE email surface's conversation list (MAIL-TRIAL.B,
 // sole surface since RETIRE-TICKETS.1).
@@ -79,6 +85,14 @@ export async function GET(request) {
   if (view && !MAIL_VIEWS.includes(view)) {
     return NextResponse.json(
       { success: false, error: `Unknown view — expected one of ${MAIL_VIEWS.join(', ')}` },
+      { status: 400 }
+    )
+  }
+
+  const owner = searchParams.get('owner')
+  if (owner && !MAIL_OWNER_FILTERS.includes(owner)) {
+    return NextResponse.json(
+      { success: false, error: `Unknown owner filter — expected one of ${MAIL_OWNER_FILTERS.join(', ')}` },
       { status: 400 }
     )
   }
@@ -216,6 +230,11 @@ export async function GET(request) {
   // ever moves a backfilled address onto this surface.
   if (before) query = query.lte('last_message_at', before)
 
+  // INBOXASSIGN.1 — the owner filter narrows whatever the view or search
+  // left; it can only remove rows.
+  if (owner === 'mine') query = query.eq('assigned_to', user.id)
+  else if (owner === 'unassigned') query = query.is('assigned_to', null)
+
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
@@ -229,6 +248,8 @@ export async function GET(request) {
   // could not read the messages at all", `partial` is "this page is bigger
   // than one scan". Neither is allowed to render as "all read".
   const counts = await loadConversationCounts(db, page.map(t => t.id))
+  // INBOXASSIGN.1 — the owner's name on each row, best effort.
+  await attachAssigneeNames(db, page)
 
   const conversations = page.map(t => {
     const c = counts.counts.get(t.id) || null

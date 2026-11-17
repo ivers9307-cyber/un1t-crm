@@ -36,6 +36,7 @@ import { NO_MAILBOX_EMPTY, threadRefreshMs } from '@/lib/mail/conversation-displ
 import ComposeForm from '@/components/mail/ComposeForm'
 import ForwardForm from '@/components/mail/ForwardForm'
 import MailList from './MailList'
+import OwnerFilter from '@/components/inbox/OwnerFilter'
 import MailRail from './MailRail'
 import MailThread from './MailThread'
 import MailDock from './MailDock'
@@ -117,6 +118,9 @@ export default function MailSurface({ locationId, locationName, userId, location
 
   const [mailboxId, setMailboxId] = useState(null)
   const [viewId, setViewId] = useState(DEFAULT_MAIL_VIEW)
+  // INBOXASSIGN.1 — Anyone / Mine / Unassigned. One studio's list only: the
+  // All-locations digest does not take it, so the chips hide there.
+  const [ownerFilter, setOwnerFilter] = useState('any')
 
   // ── MAIL-ALLLOC.1 scope ──────────────────────────────────────────────
   //
@@ -225,7 +229,8 @@ export default function MailSurface({ locationId, locationName, userId, location
   } = useDockSlot({ hasReader: !!selectedId })
 
   const view = mailView(viewId)
-  const listUrl = buildMailUrl({ locationId: scopedId, mailboxId, viewId, q: debouncedQuery })
+  const ownerParam = allMode ? undefined : ownerFilter
+  const listUrl = buildMailUrl({ locationId: scopedId, mailboxId, viewId, q: debouncedQuery, owner: ownerParam })
 
   // Hydrate the density preference AFTER mount, never during render — the
   // server has no localStorage, so reading it in the initial useState would
@@ -622,7 +627,7 @@ export default function MailSurface({ locationId, locationName, userId, location
     setLoadingMore(true)
     try {
       const res = await fetch(
-        buildMailUrl({ locationId: scopedId, mailboxId, viewId, before: nextBefore, q: debouncedQuery }),
+        buildMailUrl({ locationId: scopedId, mailboxId, viewId, before: nextBefore, q: debouncedQuery, owner: ownerParam }),
         { cache: 'no-store' }
       )
       const body = await res.json()
@@ -1585,6 +1590,7 @@ export default function MailSurface({ locationId, locationName, userId, location
               placeholder="Search mail"
               className="min-w-0 flex-1 rounded-md border border-un1t-border bg-un1t-surface px-2.5 py-1 text-[13px] text-un1t-text placeholder:text-un1t-muted focus:border-un1t-muted focus:outline-none"
             />
+            {!allMode && <OwnerFilter value={ownerFilter} onChange={setOwnerFilter} className="shrink-0" />}
             {/* MAIL-DENSITY.1's two-button toggle — Compact/Comfortable, not a
                 select, so the current density is always visible without a
                 click. */}
@@ -1607,6 +1613,7 @@ export default function MailSurface({ locationId, locationName, userId, location
 
           <MailList
             conversations={conversations}
+            userId={userId}
             loading={loading}
             selectedId={selectedId}
             // Audit A2 — a mouse CLICK on a row is "open this": it restores a

@@ -19,6 +19,7 @@ import LinkInstagramContactModal from '@/components/communications/LinkInstagram
 import ApprovalActionCard from '@/components/ApprovalActionCard'
 import { ChannelAvatar } from '@/components/inbox/ChannelBits'
 import HandledByControl from '@/components/inbox/HandledByControl'
+import AssignControl from '@/components/inbox/AssignControl'
 import MiaDecisionTrace from '@/components/inbox/MiaDecisionTrace'
 import WAMediaContent from '@/components/WAMediaContent'
 import { isServableInstagramMedia as igHasMedia } from '@shared/whatsapp-media'
@@ -419,6 +420,10 @@ export default function IGInbox({ locationId, timezone = null, initialConversati
                     <Check size={11} />
                     {conversation.resolved_at ? 'Reopen' : 'Resolve'}
                   </button>
+                )}
+                {/* INBOXASSIGN.1 — who owns this thread (same control as WhatsApp). */}
+                {conversation && (
+                  <AssignControl channel="instagram" conversationId={conversation.id} assignedTo={conversation.assigned_to || null} />
                 )}
                 <HandledByControl
                   channel="ig"

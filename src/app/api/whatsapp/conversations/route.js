@@ -1,6 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds, requireInboxPermission } from '@/lib/auth'
+import { attachAssigneeNames } from '@/lib/inbox-assignment'
 import { INBOX_SEARCH_MIN_LENGTH, buildInboxSearchOr, searchInboxContactIds, searchWhatsAppMessageHits } from '@/lib/inbox-search-server'
 import { hasPermissionForLocation, hasMobilePermissionForLocation } from '@/lib/permissions'
 
@@ -72,6 +73,10 @@ export async function GET(request) {
       if (snippets.has(c.id)) c.search_snippet = snippets.get(c.id)
     }
   }
+
+  // INBOXASSIGN.1 — each row's owner name for the queue (best effort;
+  // profiles has no client grant, so the name resolves here or nowhere).
+  await attachAssigneeNames(db, conversations)
 
   return NextResponse.json({ success: true, conversations })
 }
