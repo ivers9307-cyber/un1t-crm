@@ -7169,6 +7169,25 @@ registry.registerPath({
   },
 })
 
+// Manual arrival (ARRIVALFIX.1)
+registry.registerPath({
+  method: 'put',
+  path: '/api/attendance/arrival',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: "Enter or correct a coach's arrival by hand (attendance_reports)",
+  description: "Sets shift_assignments.arrived_at with arrival_source 'manual' for a shift at the caller's active studio. time is HH:MM on the shift's own date at the studio's clock and may not be in the future. An arrival the phone recorded (geofence) is never overwritten; a manual one may be corrected. The write is compare-and-set on the stamp that was read. A staff_attendance_events row (source manual) records who entered it.",
+  request: { body: { content: { 'application/json': { schema: z.object({ assignment_id: uuidLike, time: z.string() }) } } } },
+  responses: {
+    200: { description: '{ success, data: { assignment_id, arrived_at, arrival_source } }' },
+    400: { description: 'Malformed body, a time that does not exist on the date, or a future time', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: attendance_reports is not enabled for your role at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No live shift with that id at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: "The arrival was recorded by the coach's phone, or it changed while being edited", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The arrival could not be saved', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Geofence attendance (GEO-ATT, mig 463)
 registry.registerPath({
   method: 'get',

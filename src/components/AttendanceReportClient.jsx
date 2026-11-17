@@ -8,11 +8,17 @@
 // rostered one), which is what lateness is measured from. An adjusted end is
 // shown beside it ("ends 23:00", "ends 00:30 next day"), since pending vs
 // no-show is judged on it.
+// ARRIVALFIX.1 — a row with no arrival offers "Enter" (and a hand-entered one
+// "Edit"): a manager types the time the coach arrived, which is saved through
+// PUT /api/attendance/arrival. A phone (geofence) arrival is never editable.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Download, RefreshCw } from 'lucide-react'
 import { todayStrIn } from '@/lib/location-time'
 import { defaultAttendancePeriod, attendanceCsv } from '@/lib/attendance-report'
+import { manualArrivalAction } from '@/lib/manual-arrival'
+import Modal from '@/components/ui/Modal'
+import Button from '@/components/ui/Button'
 
 const STATUS_META = {
   on_time:  { label: 'On time', cls: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
@@ -32,6 +38,9 @@ export default function AttendanceReportClient({ activeLocationName, timeZone })
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
+  // ARRIVALFIX.1 — the row whose arrival is being entered, or null.
+  const [arrivalRow, setArrivalRow] = useState(null)
+  const [notice, setNotice] = useState(null)
 
   // Every load takes a number; only the latest one's answer (success or
   // failure) is shown, and only it ends `loading`. Without this a slow earlier
@@ -148,6 +157,10 @@ export default function AttendanceReportClient({ activeLocationName, timeZone })
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>
       )}
 
+      {notice && (
+        <div role="status" className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</div>
+      )}
+
       {data?.warnings?.includes('sources_unavailable') && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           Arrival sources could not be loaded, so some Source badges may be missing. Refresh to try again.
@@ -195,6 +208,16 @@ export default function AttendanceReportClient({ activeLocationName, timeZone })
                   {r.arrival_inferred && (
                     <span className="ml-1 font-sans text-un1t-subtle" title="Already on site from an earlier shift">on site</span>
                   )}
+                  {manualArrivalAction(r) && (
+                    <button
+                      type="button"
+                      onClick={() => { setNotice(null); setArrivalRow(r) }}
+                      className="ml-2 font-sans text-xs font-medium text-un1t-text underline underline-offset-2 hover:no-underline"
+                      aria-label={`${manualArrivalAction(r) === 'add' ? 'Enter arrival' : 'Edit arrival'} for ${r.profile_name} on ${r.block_date}`}
+                    >
+                      {manualArrivalAction(r) === 'add' ? 'Enter' : 'Edit'}
+                    </button>
+                  )}
                 </td>
                 <td className="px-3 py-2">
                   <span className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_META[r.status]?.cls || ''}`}>
@@ -213,11 +236,79 @@ export default function AttendanceReportClient({ activeLocationName, timeZone })
         </table>
       </div>
 
+      {arrivalRow && (
+        <ManualArrivalModal
+          row={arrivalRow}
+          onClose={() => setArrivalRow(null)}
+          onSaved={(time) => {
+            setNotice(`Arrival for ${arrivalRow.profile_name} on ${arrivalRow.block_date} saved as ${time}.`)
+            setArrivalRow(null)
+            load()
+          }}
+        />
+      )}
+
       <p className="mt-3 text-xs text-un1t-subtle">
         Showing data for <strong>{activeLocationName || data?.location?.name || 'active location'}</strong>.
         Switch locations with the location picker to see other studios.
       </p>
     </div>
+  )
+}
+
+// ARRIVALFIX.1 — enter the time a coach arrived, at the studio's clock, on the
+// shift's own date. The server refuses a future time and a phone arrival.
+function ManualArrivalModal({ row, onClose, onSaved }) {
+  const [time, setTime] = useState(() => (row.actual_start || row.effective_start || row.scheduled_start || '').slice(0, 5))
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState(null)
+
+  async function save(e) {
+    e.preventDefault()
+    if (saving) return
+    setSaving(true); setErr(null)
+    try {
+      const res = await fetch('/api/attendance/arrival', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignment_id: row.assignment_id, time }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) {
+        setErr(json.error || 'Could not save the arrival. Try again.')
+        return
+      }
+      onSaved(time)
+    } catch {
+      setErr('Network error, the arrival was not saved. Try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={row.actual_start ? 'Edit arrival' : 'Enter arrival'} size="sm">
+      <form onSubmit={save}>
+        <p className="text-sm text-un1t-text mb-3">
+          {row.profile_name}, {row.block_date}, shift starting {(row.effective_start || row.scheduled_start || '').slice(0, 5)}.
+        </p>
+        <label htmlFor="manual-arrival-time" className="mb-1 block text-xs font-medium text-neutral-700">Arrived at</label>
+        <input
+          id="manual-arrival-time"
+          type="time"
+          required
+          value={time}
+          onChange={(e) => setTime(e.target.value.slice(0, 5))}
+          className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+        />
+        <p className="mt-2 text-xs text-un1t-subtle">Studio time. Shown on the report as a manual arrival.</p>
+        {err && <p role="alert" className="mt-3 text-sm text-red-700">{err}</p>}
+        <div className="mt-4 flex justify-end gap-2">
+          <Button type="button" variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
+          <Button type="submit" size="sm" loading={saving} disabled={!time}>Save arrival</Button>
+        </div>
+      </form>
+    </Modal>
   )
 }
 
