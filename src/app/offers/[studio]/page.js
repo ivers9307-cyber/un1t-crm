@@ -106,14 +106,20 @@ function OfferCard({ offer, studio, flag, opensLabel }) {
  */
 function OfferStrip({ offer, studio, opensLabel }) {
   const id = (part) => `ofr-${offer.id}-${part}`
+  // OFFERSTRIPFINE.1 — the strip shows the offer's fine print under its name
+  // (e.g. a minimum commitment), as the cards do.
+  const finePrint = offerFinePrint(offer)
   return (
     <Link
       href={`/offers/${studio.key}/${offer.slug}`}
       className="ofr-strip-offer"
       aria-labelledby={`${id('name')} ${id('price')} ${id('go')}`}
-      aria-describedby={id('bonus')}
+      aria-describedby={[id('bonus'), finePrint && id('fine')].filter(Boolean).join(' ')}
     >
-      <span id={id('name')} className="ofr-display ofr-strip-name">{offer.name}</span>
+      <span>
+        <span id={id('name')} className="ofr-display ofr-strip-name">{offer.name}</span>
+        {finePrint && <span id={id('fine')} className="ofr-meta" style={{ display: 'block', fontSize: 12, marginTop: 6 }}>{finePrint}</span>}
+      </span>
       <span className="ofr-strip-meta">
         <span id={id('bonus')}>{offer.bonus_headline}</span>
         <span aria-hidden="true"> · </span>
