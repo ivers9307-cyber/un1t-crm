@@ -20,25 +20,15 @@
 
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { CHALLENGE_ADMIN_ROLES } from '@/lib/challenges-access'
 import HubTabs from '@/components/HubTabs'
+import { MEMBERS_TABS } from '@/lib/hub-tabs'
 import { staffTabMetadata } from '@/lib/staff-tab-title'
 
 export const dynamic = 'force-dynamic'
 
-const TABS = [
-  { id: 'bookings',   label: 'Bookings',    href: '/bookings',                perms: ['bookings'] },
-  { id: 'events',     label: 'Events',      href: '/events',                  perms: ['races'] },
-  // HUBDOOR.2 — `roles` is the destination's role floor. /challenges gates
-  // on MANAGER_ROLES as well as the key (canAdminChallenges), so offering
-  // the tab on the key alone showed a staff-role holder of `challenges` a
-  // tab that bounced them. A tab with no `roles` has no floor.
-  { id: 'challenges', label: 'Challenges',  href: '/challenges',              perms: ['challenges'], roles: CHALLENGE_ADMIN_ROLES },
-  { id: 'pulse',      label: 'Pulse',       href: '/pulse',                   perms: ['pulse_admin'] },
-  { id: 'live',       label: 'Live class',  href: '/live',                    perms: ['studio_management', 'class_roster'] },
-  { id: 'timer',      label: 'Class timer', href: '/studio-management/timer', perms: ['class_timer'] },
-  { id: 'hyrox',      label: 'Hyrox',       href: '/hyrox',                   perms: ['approvals_hyrox_sessions'] },
-]
+// PALETTE.1 — the tab list lives in src/lib/hub-tabs.js (unchanged), shared
+// with the ⌘K palette so every tab is a jump target there too.
+const TABS = MEMBERS_TABS
 
 // TABTITLE.1 — the tab names the ACTIVE studio for every page under this
 // layout (see src/lib/staff-tab-title.js). This is the OUTERMOST staff layout

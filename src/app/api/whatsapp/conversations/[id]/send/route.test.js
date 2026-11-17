@@ -133,8 +133,19 @@ function makeDb({
   templateRows = null,
   templateEq = [],
   updateResult = { error: null },
+  // WAATTACH.1 — what Storage holds at an attachment slot, and the link.
+  stored = [],
+  listError = null,
+  signedUrl = { data: { signedUrl: 'https://storage.example.test/signed?token=t' }, error: null },
+  storageCalls = [],
 } = {}) {
   return {
+    storage: {
+      from: vi.fn((bucket) => ({
+        list: vi.fn(async (folder, opts) => { storageCalls.push(['list', bucket, folder, opts]); return { data: listError ? null : stored, error: listError } }),
+        createSignedUrl: vi.fn(async (path, ttl) => { storageCalls.push(['sign', bucket, path, ttl]); return signedUrl }),
+      })),
+    },
     from: vi.fn((table) => {
       if (table === 'whatsapp_conversations') {
         return {
@@ -513,8 +524,8 @@ describe('the reply goes from the thread number (C86)', () => {
     sendMediaMessage.mockResolvedValue({ messageId: 'wamid.MEDIA' })
     createServerClient.mockReturnValue(makeDb())
     expect((await POST(postReq({ type: 'text', text: 'hello' }), props)).status).toBe(200)
-    createServerClient.mockReturnValue(makeDb())
-    expect((await POST(postReq({ type: 'image', media_url: 'https://example.test/a.jpg', caption: 'c' }), props)).status).toBe(200)
+    createServerClient.mockReturnValue(makeDb({ stored: [storedObject(IMG_NAME, 'image/jpeg', 1000)] }))
+    expect((await POST(postReq({ type: 'image', attachment_path: IMG_PATH, caption: 'c' }), props)).status).toBe(200)
     createServerClient.mockReturnValue(makeDb({ template: { data: TPL_PLAIN, error: null } }))
     expect((await POST(templateReq(TPL_PLAIN, [bodyParams('ALPHA')]), props)).status).toBe(200)
     const want = { locationId: LOC_ID, replyInConversation: CONV_ID }
@@ -564,5 +575,106 @@ describe("templates are the thread studio's (ORGCONTACTS.0)", () => {
     const res = await POST(templateReq(TPL_FLOW, [bodyParams('ALPHA')]), props)
     expect(res.status).toBe(200)
     expect(sendTemplateMessage).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+// ─── WAATTACH.1 — a photo or PDF uploaded from the inbox ────────────────────
+
+const ATTACH_ID = '99999999-9999-4999-8999-999999999999'
+const IMG_NAME = `${ATTACH_ID}.jpg`
+const PDF_NAME = `${ATTACH_ID}.pdf`
+const IMG_PATH = `${LOC_ID}/outbound/${CONV_ID}/${IMG_NAME}`
+const PDF_PATH = `${LOC_ID}/outbound/${CONV_ID}/${PDF_NAME}`
+function storedObject(name, mimetype, size) {
+  return { name, metadata: { mimetype, size } }
+}
+
+describe('attachments are sent with a link the route mints (WAATTACH.1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getCurrentUser.mockResolvedValue(USER)
+    isWindowOpen.mockReturnValue(true)
+    sendMediaMessage.mockResolvedValue({ messageId: 'wamid.FILE' })
+  })
+
+  it('checks the stored photo, signs it server-side for an hour, and logs the bucket path, not the link', async () => {
+    const insertSpy = captureInsert()
+    const storageCalls = []
+    createServerClient.mockReturnValue(makeDb({ insertSpy, storageCalls, stored: [storedObject(IMG_NAME, 'image/jpeg', 2048)] }))
+    const res = await POST(postReq({ type: 'image', attachment_path: IMG_PATH, caption: '  See you at 7  ' }), props)
+    expect(res.status).toBe(200)
+    expect(storageCalls).toEqual([
+      ['list', 'whatsapp-media', `${LOC_ID}/outbound/${CONV_ID}`, { search: IMG_NAME }],
+      ['sign', 'whatsapp-media', IMG_PATH, 3600],
+    ])
+    expect(sendMediaMessage).toHaveBeenCalledWith(
+      '15555550100', 'image', 'https://storage.example.test/signed?token=t', 'See you at 7',
+      { locationId: LOC_ID, replyInConversation: CONV_ID },
+    )
+    expect(insertSpy.captured()).toMatchObject({
+      message_type: 'image', body: 'See you at 7', media_url: null,
+      media_storage_path: IMG_PATH, media_mime_type: 'image/jpeg', direction: 'outbound', sent_by: USER_ID,
+    })
+  })
+
+  it("sends a PDF under the picked file's name; with no caption the thread shows the name", async () => {
+    const insertSpy = captureInsert()
+    createServerClient.mockReturnValue(makeDb({ insertSpy, stored: [storedObject(PDF_NAME, 'application/pdf', 3 * 1024 * 1024)] }))
+    const res = await POST(postReq({ type: 'document', attachment_path: PDF_PATH, file_name: 'Timetable' }), props)
+    expect(res.status).toBe(200)
+    expect(sendMediaMessage.mock.calls[0][1]).toBe('document')
+    expect(sendMediaMessage.mock.calls[0][3]).toBeNull()
+    expect(sendMediaMessage.mock.calls[0][4]).toEqual({ locationId: LOC_ID, replyInConversation: CONV_ID, filename: 'Timetable.pdf' })
+    expect(insertSpy.captured()).toMatchObject({ message_type: 'document', body: 'Timetable.pdf', media_storage_path: PDF_PATH })
+  })
+
+  it('refuses a client media_url: nothing is sent', async () => {
+    createServerClient.mockReturnValue(makeDb())
+    const res = await POST(postReq({ type: 'image', media_url: 'https://evil.example.test/a.jpg' }), props)
+    expect(res.status).toBe(400)
+    expect(sendMediaMessage).not.toHaveBeenCalled()
+  })
+
+  it("refuses another conversation's or another studio's slot without reading Storage", async () => {
+    const storageCalls = []
+    createServerClient.mockReturnValue(makeDb({ storageCalls }))
+    const other = `${LOC_ID}/outbound/f0000000-0000-0000-0000-000000000006/${IMG_NAME}`
+    expect((await POST(postReq({ type: 'image', attachment_path: other }), props)).status).toBe(400)
+    const otherStudio = `f0000000-0000-0000-0000-000000000006/outbound/${CONV_ID}/${IMG_NAME}`
+    expect((await POST(postReq({ type: 'image', attachment_path: otherStudio }), props)).status).toBe(400)
+    expect(storageCalls).toEqual([])
+    expect(sendMediaMessage).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['nothing was uploaded', [], 400],
+    ['the stored file is over 5 MB', [storedObject(IMG_NAME, 'image/jpeg', 5 * 1024 * 1024 + 1)], 400],
+    ['the stored type is not the slot type', [storedObject(IMG_NAME, 'image/png', 100)], 400],
+    ['the stored type is not allowed', [storedObject(IMG_NAME, 'text/html', 100)], 400],
+  ])('refuses when %s', async (_label, stored, status) => {
+    createServerClient.mockReturnValue(makeDb({ stored }))
+    expect((await POST(postReq({ type: 'image', attachment_path: IMG_PATH }), props)).status).toBe(status)
+    expect(sendMediaMessage).not.toHaveBeenCalled()
+  })
+
+  it('refuses a photo slot sent as a document, and answers 500 when Storage cannot be read or signed', async () => {
+    createServerClient.mockReturnValue(makeDb({ stored: [storedObject(IMG_NAME, 'image/jpeg', 100)] }))
+    expect((await POST(postReq({ type: 'document', attachment_path: IMG_PATH }), props)).status).toBe(400)
+    createServerClient.mockReturnValue(makeDb({ listError: { message: 'down' } }))
+    expect((await POST(postReq({ type: 'image', attachment_path: IMG_PATH }), props)).status).toBe(500)
+    createServerClient.mockReturnValue(makeDb({ stored: [storedObject(IMG_NAME, 'image/jpeg', 100)], signedUrl: { data: null, error: { message: 'x' } } }))
+    expect((await POST(postReq({ type: 'image', attachment_path: IMG_PATH }), props)).status).toBe(500)
+    expect(sendMediaMessage).not.toHaveBeenCalled()
+  })
+
+  it('refuses an attachment outside the 24-hour window before reading Storage', async () => {
+    isWindowOpen.mockReturnValue(false)
+    const storageCalls = []
+    createServerClient.mockReturnValue(makeDb({ storageCalls }))
+    const res = await POST(postReq({ type: 'image', attachment_path: IMG_PATH }), props)
+    expect(res.status).toBe(400)
+    expect((await res.json()).window_expired).toBe(true)
+    expect(storageCalls).toEqual([])
   })
 })

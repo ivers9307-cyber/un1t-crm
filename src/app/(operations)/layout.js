@@ -51,20 +51,14 @@
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import HubTabs from '@/components/HubTabs'
+import { OPERATIONS_TABS } from '@/lib/hub-tabs'
 import { staffTabMetadata } from '@/lib/staff-tab-title'
 
 export const dynamic = 'force-dynamic'
 
-const TABS = [
-  { id: 'maintenance',   label: 'Maintenance',   href: '/maintenance',       perms: ['equipment_admin', 'equipment_inspect'] },
-  { id: 'studio',        label: 'Studio',        href: '/studio-management', perms: ['studio_management'] },
-  { id: 'tv',            label: 'TV displays',   href: '/tv-displays',       perms: ['tv_displays'] },
-  { id: 'presentations', label: 'Presentations', href: '/presentations',     perms: ['presentations'] },
-  { id: 'checklists',    label: 'Checklists',    href: '/checklists',        perms: ['studio_management'] },
-  // ADMIN.2h Task 2 — href is OUTSIDE the (operations) group (see header
-  // comment): arriving here renders no strip, same as (members)'s `live`.
-  { id: 'fleet',         label: 'Fleet',         href: '/admin/fleet',       perms: ['fleet_restart', 'fleet_admin'] },
-]
+// PALETTE.1 — the tab list lives in src/lib/hub-tabs.js (unchanged), shared
+// with the ⌘K palette so every tab is a jump target there too.
+const TABS = OPERATIONS_TABS
 
 // TABTITLE.1 — the tab names the ACTIVE studio for every page under this
 // layout (see src/lib/staff-tab-title.js). This is the OUTERMOST staff layout
