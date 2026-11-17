@@ -10,12 +10,12 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
-vi.mock('@/lib/pipeline-card-signals', async (importOriginal) => ({ ...(await importOriginal()), loadUn1tCardSignals: vi.fn() }))
+vi.mock('@/lib/pipeline-card-signals', async (importOriginal) => ({ ...(await importOriginal()), loadCardSignals: vi.fn() }))
 
 import { GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { logWarn } from '@/lib/log'
-import { loadUn1tCardSignals } from '@/lib/pipeline-card-signals'
+import { loadCardSignals } from '@/lib/pipeline-card-signals'
 
 const LOC = 'loc-1'
 const STAGE = 'stage-1'
@@ -110,13 +110,13 @@ describe('GET /api/pipeline/deals — un1t card signals (HATCHCARD.1)', () => {
       deals: { data: [dealRow()], error: null },
     })
   }
-  beforeEach(() => { loadUn1tCardSignals.mockReset(); loadUn1tCardSignals.mockResolvedValue({ signals: new Map([['c1', SIG]]) }) })
+  beforeEach(() => { loadCardSignals.mockReset(); loadCardSignals.mockResolvedValue({ signals: new Map([['c1', SIG]]) }) })
 
   it('a un1t board\'s live column: the page\'s contacts are read once and each card carries its signals', async () => {
     withStage('new_lead', 'acquisition_un1t')
     const body = await (await GET(req())).json()
-    expect(loadUn1tCardSignals).toHaveBeenCalledTimes(1)
-    expect(loadUn1tCardSignals.mock.calls[0][1]).toMatchObject({ locationId: LOC, contactIds: ['c1'] })
+    expect(loadCardSignals).toHaveBeenCalledTimes(1)
+    expect(loadCardSignals.mock.calls[0][1]).toMatchObject({ moduleName: 'acquisition_un1t', locationId: LOC, contacts: [expect.objectContaining({ id: 'c1' })] })
     expect(body.deals[0].signals).toEqual(SIG)
   })
   it('a configured board decides by stage role: a checkpoint column shows signals, a converted one does not', async () => {
@@ -132,11 +132,11 @@ describe('GET /api/pipeline/deals — un1t card signals (HATCHCARD.1)', () => {
     expect(live.deals[0].signals).toEqual(SIG)
     expect(live.deals[0].showSignals).toBe(true)
     expect(live.deals[0].classesOf3).toBe(true)   // acquisition_un1t
-    loadUn1tCardSignals.mockClear()
+    loadCardSignals.mockClear()
     configured({ slug: 'bought', stage_role: 'converted', is_dormant: false })
     const done = await (await GET(req())).json()
     expect('signals' in done.deals[0]).toBe(false)
-    expect(loadUn1tCardSignals).not.toHaveBeenCalled()
+    expect(loadCardSignals).not.toHaveBeenCalled()
   })
   it('classesOf3 follows the board kind: true on acquisition_un1t, false on paid_trial_un1t', async () => {
     withStage('new_lead', 'acquisition_un1t')
@@ -146,24 +146,57 @@ describe('GET /api/pipeline/deals — un1t card signals (HATCHCARD.1)', () => {
     expect(paid.showSignals).toBe(true)
     expect(paid.classesOf3).toBe(false)
   })
-  it('a Glofox board, a pile column, or the dormant view: no read and no signals key', async () => {
-    withStage('new_lead', 'acquisition')
+  it('a Glofox board\'s live column carries signals too (CARDSIGNALS.1), read for that board', async () => {
+    withStage('paid_trial_day_7', 'paid_trial')
+    const card = (await (await GET(req())).json()).deals[0]
+    expect(loadCardSignals.mock.calls[0][1]).toMatchObject({ moduleName: 'paid_trial', locationId: LOC })
+    expect(card.signals).toEqual(SIG)
+    expect(card.live_funnel).toBe(true)
+  })
+  it('a pile column, or the dormant view: no read and no signals key', async () => {
+    withStage('dormant', 'acquisition')
     expect('signals' in (await (await GET(req())).json()).deals[0]).toBe(false)
     withStage('dormant', 'acquisition_un1t')
     expect('signals' in (await (await GET(req())).json()).deals[0]).toBe(false)
     withStage('new_lead', 'acquisition_un1t')
     const dormantReq = new Request(`http://localhost/api/pipeline/deals?stage_id=${STAGE}&view=dormant`)
     expect('signals' in (await (await GET(dormantReq)).json()).deals[0]).toBe(false)
-    expect(loadUn1tCardSignals).not.toHaveBeenCalled()
+    expect(loadCardSignals).not.toHaveBeenCalled()
   })
   it('a failed signals read still answers 200 with the cards, ids-only warning', async () => {
     withStage('new_lead', 'acquisition_un1t')
-    loadUn1tCardSignals.mockResolvedValue({ error: { message: 'boom' } })
+    loadCardSignals.mockResolvedValue({ error: { message: 'boom' } })
     const res = await GET(req())
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.deals).toHaveLength(1)
     expect('signals' in body.deals[0]).toBe(false)
     expect(logWarn).toHaveBeenCalledWith('pipeline-deals', expect.stringMatching(/signals/), expect.objectContaining({ stageId: STAGE, locationId: LOC }))
+  })
+})
+
+// BOARDFILTER.1 — Load more continues the filtered column.
+describe('GET /api/pipeline/deals — board filter (BOARDFILTER.1)', () => {
+  it('?q= and ?stuck=1 reach the deals read', async () => {
+    const seen = {}
+    db = {
+      from(table) {
+        const r = table === 'pipeline_stages' ? { data: { id: STAGE, pipeline_id: PIPELINE }, error: null }
+          : table === 'pipelines' ? { data: { module: 'acquisition' }, error: null }
+          : { data: [dealRow()], error: null }
+        const chain = {
+          select: () => chain, eq: () => chain, order: () => chain, range: () => chain,
+          ilike: (c, v) => { seen[table] = { ...(seen[table] || {}), ilike: [c, v] }; return chain },
+          or: (v) => { seen[table] = { ...(seen[table] || {}), or: v }; return chain },
+          maybeSingle: async () => r,
+          then: (res, rej) => Promise.resolve(r).then(res, rej),
+        }
+        return chain
+      },
+    }
+    const res = await GET(new Request(`http://localhost/api/pipeline/deals?stage_id=${STAGE}&q=pat&stuck=1`))
+    expect(res.status).toBe(200)
+    expect(seen.deals.ilike).toEqual(['title', '%pat%'])
+    expect(seen.deals.or).toMatch(/^stage_entered_at\.lte\./)
   })
 })

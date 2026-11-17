@@ -39,6 +39,7 @@
 // client. No avatar, same as Task 6 — the sender NAME is what an operator
 // scans for.
 
+import OwnerTag from '@/components/inbox/OwnerTag'
 import { Inbox, Search, Archive, ArchiveRestore, Mail, MailOpen, Paperclip, AlertCircle } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import { requesterLabel, relativeTime } from '@/lib/mail/conversation-display'
@@ -47,6 +48,8 @@ import { DEFAULT_DENSITY } from './mail-preferences'
 
 export default function MailList({
   conversations = [],
+  // INBOXASSIGN.1 — the viewer, so a row they own reads "You".
+  userId = null,
   loading = false,
   selectedId,
   onSelect,
@@ -199,6 +202,7 @@ export default function MailList({
                     mailbox={mailboxById[c.mailbox_id] || null}
                     countsUnavailable={countsUnavailable}
                     density={density}
+                    userId={userId}
                   />
                 </li>
               ))}
@@ -341,7 +345,7 @@ function MailSection({
  */
 function MailRow({
   conversation, selected, busy, onSelect, onArchive, onMarkRead, onMarkUnread,
-  showMailbox, mailbox, countsUnavailable, density,
+  showMailbox, mailbox, countsUnavailable, density, userId = null,
 }) {
   const name = requesterLabel(conversation)
   const unread = isUnread(conversation)
@@ -378,6 +382,8 @@ function MailRow({
       {accountTag}
     </span>
   )
+  // INBOXASSIGN.1 — the owner, compactly ("You" or a first name).
+  const ownerNode = <OwnerTag row={conversation} userId={userId} />
   const archivedNode = archived && (
     <span className="shrink-0 rounded-full bg-slate-500/10 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
       Archived
@@ -450,6 +456,7 @@ function MailRow({
               {countNode}
               {accountNode}
               {archivedNode}
+              {ownerNode}
               <span className="ml-auto shrink-0 pl-2 text-right text-[11px] tabular-nums text-un1t-muted">
                 {time}
               </span>
@@ -512,6 +519,7 @@ function MailRow({
           <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
             {accountNode}
             {archivedNode}
+            {ownerNode}
             {clipNode}
             <span
               data-testid="mail-row-subject"

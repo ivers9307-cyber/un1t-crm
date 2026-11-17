@@ -3,7 +3,7 @@
 // and toolbar make is made HERE, in pure functions, because jsdom cannot see
 // layout and a component test can only say "this text is present".
 import { describe, it, expect } from 'vitest'
-import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines, rosterToolbarModel, dayLeaveBars, dayUnavailableBars, dayAvailabilityRules } from './roster-card-model'
+import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines, rosterToolbarModel, emptyWeekCopyPrompt, dayLeaveBars, dayUnavailableBars, dayAvailabilityRules } from './roster-card-model'
 
 const TODAY = '2026-09-21'
 const block = (over = {}) => ({
@@ -512,5 +512,49 @@ describe('shiftCardModel — briefing (BLOCKEDIT.1)', () => {
   it('no briefing (or a blank one) is no marker', () => {
     expect(shiftCardModel(block(), [], null).hasBriefing).toBe(false)
     expect(shiftCardModel(block({ briefing: '  ' }), [], null).hasBriefing).toBe(false)
+  })
+})
+
+// COPYEMPTY.1
+describe('emptyWeekCopyPrompt', () => {
+  const WEEK = { from: '2026-09-21', to: '2026-09-27', thisWeekStart: '2026-09-21' }
+  const opts = (over = {}) => ({ isManager: true, viewType: 'week', loading: false, failed: false, ...WEEK, ...over })
+  const empty = block({ shift_assignments: [] })
+
+  it('shows for a manager on a loaded week whose shifts have no coach', () => {
+    expect(emptyWeekCopyPrompt([empty, block({ id: 'b2', block_date: '2026-09-27', shift_assignments: [] })], opts())).toBe(true)
+  })
+
+  it('shows for a week with no shifts at all', () => {
+    expect(emptyWeekCopyPrompt([], opts())).toBe(true)
+  })
+
+  it('hides once any shift in the week has a coach', () => {
+    expect(emptyWeekCopyPrompt([empty, block({ id: 'b2', block_date: '2026-09-24', shift_assignments: [coach('p1', 'Ann')] })], opts())).toBe(false)
+  })
+
+  it('a cancelled assignment is not a coach', () => {
+    expect(emptyWeekCopyPrompt([block({ shift_assignments: [coach('p1', 'Ann', { status: 'cancelled' })] })], opts())).toBe(true)
+  })
+
+  it('ignores shifts outside the week (month data, a neighbouring day)', () => {
+    const outside = block({ id: 'b3', block_date: '2026-09-28', shift_assignments: [coach('p1', 'Ann')] })
+    expect(emptyWeekCopyPrompt([empty, outside], opts())).toBe(true)
+  })
+
+  it('never shows to a coach, in month view, while loading, or after a failed load', () => {
+    expect(emptyWeekCopyPrompt([empty], opts({ isManager: false }))).toBe(false)
+    expect(emptyWeekCopyPrompt([empty], opts({ viewType: 'month' }))).toBe(false)
+    expect(emptyWeekCopyPrompt([empty], opts({ loading: true }))).toBe(false)
+    expect(emptyWeekCopyPrompt([empty], opts({ failed: true }))).toBe(false)
+  })
+
+  it('shows for a later week but not a past one', () => {
+    expect(emptyWeekCopyPrompt([], opts({ from: '2026-10-05', to: '2026-10-11' }))).toBe(true)
+    expect(emptyWeekCopyPrompt([], opts({ from: '2026-09-14', to: '2026-09-20' }))).toBe(false)
+  })
+
+  it('shows nothing when a date is missing', () => {
+    expect(emptyWeekCopyPrompt([], opts({ thisWeekStart: undefined }))).toBe(false)
   })
 })

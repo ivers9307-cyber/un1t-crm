@@ -23,7 +23,7 @@
 // (RETIRE-SHIFTS-MIRROR.5c). The legacy public.shifts mirror is gone (mig 238).
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { Plus, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, Pencil, Check, CalendarX, Repeat } from 'lucide-react'
+import { Plus, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, Pencil, Check, CalendarX, Repeat, Copy } from 'lucide-react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
@@ -61,6 +61,7 @@ import { blocksToShiftRows } from '@/lib/roster-summary'
 // two more in the manager screens. NOT fmtTime: see the note beside it.
 import { formatTime12h as formatTime } from '@/lib/schedule-overlap'
 import Modal from '@/components/ui/Modal'
+import Button from '@/components/ui/Button'
 import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
 // COPYLEAVE.1 — the publish modal's clash wording (pure, unit-tested there).
 import { leaveClashesHeadline, leaveRangeLabel } from '@/lib/roster-publish-advisories'
@@ -86,7 +87,7 @@ import PublicationStatusChip from './schedule/PublicationStatusChip'
 import { timeOffLeaveLabel } from '@shared/time-off'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
-import { useScheduleData } from './schedule/useScheduleData'
+import { useScheduleData, EDIT_REFRESH_SLICES } from './schedule/useScheduleData'
 import { useWeekCost } from './schedule/useWeekCost'
 import { useDraftRosters } from './schedule/useDraftRosters'
 // ROSTERLOOK.1 — the toolbar row, and the pure model that says what is on it.
@@ -97,7 +98,7 @@ import BlockEditForm from './schedule/BlockEditForm'
 import { blockEditNoticeText } from '@/lib/block-edit'
 import { briefingOf } from '@shared/shift-briefing'
 import MonthCell from './schedule/MonthCell'
-import { rosterToolbarModel, dayHeaderStatus, shiftCardModel, monthCellLines, dayLeaveBars, dayUnavailableBars } from '@/lib/roster-card-model'
+import { rosterToolbarModel, emptyWeekCopyPrompt, dayHeaderStatus, shiftCardModel, monthCellLines, dayLeaveBars, dayUnavailableBars } from '@/lib/roster-card-model'
 // GRID.1 — the Coaches layout: the coach-by-day grid, its read, and its pure model.
 import RosterGrid from './schedule/RosterGrid'
 import { useRosterGrid, browserStorage } from './schedule/useRosterGrid'
@@ -445,7 +446,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const rangeEnd = formatDate(viewType === 'month' ? monthGrid.end : weekEnd)
   const {
     blocks, templates, staff, timeOff, holidays, contractorSpend, availability,
-    loading, error, showingStaleData, partialErrors, successCount, refresh: fetchData,
+    loading, initialLoading, refreshing, error, showingStaleData, partialErrors, successCount, refresh: fetchData,
   } = useScheduleData({
     locationId,
     startDate: rangeStart,
@@ -551,7 +552,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // via its own `range` dep, so an extra bump there would just cause
   // a redundant overview fetch.
   const refreshAfterMutation = useCallback(async (opts = {}) => {
-    await fetchData()
+    // ROTAREFRESH.1 — an edit re-reads the shifts and what follows them
+    // (contractor spend), not the templates, coaches, holidays, leave and
+    // availability it cannot change. The grid stays on screen meanwhile.
+    await fetchData({ only: EDIT_REFRESH_SLICES })
     // ROSTER-FIX.6c — the hours panel used to be derived from `blocks`, so it
     // moved on its own. It is a separate fetch now and has to be told.
     refreshWeekCost()
@@ -636,6 +640,19 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     from: formatDate(weekStart),
     to: formatDate(weekEnd),
     todayIso: todayStr,
+  })
+  // COPYEMPTY.1 — an empty week (this one or later) offers "Copy last week"
+  // as a card on the week itself; the More menu keeps the same action.
+  const showEmptyWeekCopy = emptyWeekCopyPrompt(blocks, {
+    isManager,
+    viewType,
+    // ROTAREFRESH.1 — only the first load of a week hides it; a save's
+    // background refresh keeps the card (and the grid) on screen.
+    loading: initialLoading,
+    failed: Boolean(error),
+    from: formatDate(weekStart),
+    to: formatDate(weekEnd),
+    thisWeekStart: formatDate(getMonday(new Date())),
   })
 
   // ROSTERVIS.1 — is the period on screen published? Week view: the week.
@@ -1075,14 +1092,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // COPYMODES.1 — both copy buttons open a chooser (Exact copy / From
   // templates) instead of a confirm(); the chosen mode is POSTed.
   function handleCopyWeek() {
-    const prevWeekStart = addDays(weekStart, -7)
-    setCopyModal({
-      period: 'week',
-      sourceLabel: `the week of ${formatDate(prevWeekStart)}`,
-      targetLabel: 'this week',
-      source: formatDate(prevWeekStart),
-      target: formatDate(weekStart),
-    })
+    setCopyModal({ ...lastWeekCopyJob(), targetWasEmpty: false })
   }
 
   function handleCopyMonth() {
@@ -1105,8 +1115,22 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     })
   }
 
-  async function runCopy(mode) {
-    const job = copyModal
+  // COPYEMPTY.1 — the empty-week card's buttons run the copy straight away
+  // (no chooser): the card itself says what will be copied, and into where.
+  function lastWeekCopyJob() {
+    const prevWeekStart = addDays(weekStart, -7)
+    return {
+      period: 'week',
+      sourceLabel: `the week of ${formatDate(prevWeekStart)}`,
+      targetLabel: 'this week',
+      source: formatDate(prevWeekStart),
+      target: formatDate(weekStart),
+      targetWasEmpty: true,
+    }
+  }
+
+  async function runCopy(mode, jobOverride = null) {
+    const job = jobOverride || copyModal
     if (!job || copying) return
     setCopyModal(null)
     setCopying(true)
@@ -1126,7 +1150,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         showToast(data.error || (isWeek ? 'Failed to copy week' : 'Failed to copy month'))
         return
       }
-      const result = copyResultToast({ period: job.period, mode, copied: data.copied, skipped: data.skipped, skippedRemoved: data.skipped_removed, skippedOnLeave: data.skipped_on_leave, skippedNotAtStudio: data.skipped_not_at_studio })
+      const result = copyResultToast({ period: job.period, mode, targetWasEmpty: job.targetWasEmpty === true, copied: data.copied, skipped: data.skipped, skippedRemoved: data.skipped_removed, skippedOnLeave: data.skipped_on_leave, skippedNotAtStudio: data.skipped_not_at_studio })
       showToast(result.message, result.kind)
       refreshAfterMutation()
     } catch {
@@ -1231,7 +1255,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // toolbar's right-hand group does not jump rows while a week loads.
   const publicationChip = isManager ? (
     <PublicationStatusChip
-      publication={loading ? null : publication}
+      publication={initialLoading ? null : publication}
       viewType={viewType}
       onOpenChangeLog={openChangeLog}
       triggerRef={changeLogTriggerRef}
@@ -1308,7 +1332,44 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       {/* Staffing-gaps summary — week view only, manager only.
           ROSTERVIS.1 — counts below-minimum shifts as well as empty ones; red
           while any shift has no coach, amber when every gap is a short one. */}
-      {!loading && isManager && viewType === 'week' && staffingGapsThisWeek.total > 0 && (() => {
+      {/* COPYEMPTY.1 — no coach on any shift this week: the copy is the next
+          step, so it is the card's button (exact copy, no chooser). It stands
+          in for the red gaps banner, which would only say the same thing. */}
+      {showEmptyWeekCopy && (
+        <div
+          data-testid="empty-week-copy"
+          className="mb-4 flex flex-wrap items-center gap-3 p-3 rounded-lg border border-un1t-border bg-un1t-surface text-sm"
+        >
+          <div className="flex-1 min-w-[14rem]">
+            <div className="font-medium text-un1t-text">No coaches on this week yet</div>
+            <div className="text-xs text-un1t-subtle mt-0.5">
+              Copy last week&apos;s coaches onto these shifts, then change what&apos;s different.
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              icon={Copy}
+              loading={copying}
+              onClick={() => runCopy('exact', lastWeekCopyJob())}
+              title={COPY_MODE_OPTIONS.find((o) => o.mode === 'exact')?.description}
+            >
+              Copy last week
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={copying}
+              onClick={() => runCopy('template', lastWeekCopyJob())}
+              title={COPY_MODE_OPTIONS.find((o) => o.mode === 'template')?.description}
+            >
+              Use template times
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {!initialLoading && !showEmptyWeekCopy && isManager && viewType === 'week' && staffingGapsThisWeek.total > 0 && (() => {
         const anyEmpty = staffingGapsThisWeek.empty > 0
         return (
           <div
@@ -1336,7 +1397,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           scoped to one Mon-Sun week, which is what the caption underneath has
           always claimed — the browser version summed whatever range was loaded,
           so in month view it billed six weeks against a weekly contract. */}
-      {!loading && canSeeContract && (() => {
+      {!initialLoading && canSeeContract && (() => {
         const overOrAt = (weekCost?.coaches || []).filter((c) => c.status !== 'under')
         if (overOrAt.length === 0) return null
 
@@ -1375,8 +1436,16 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         )
       })()}
 
+      {/* ROTAREFRESH.1 — a refresh of the week on screen keeps the grid (and
+          the scroll position) and says so here; only a range with no roster
+          loaded yet shows the loading line. The live region stays mounted so
+          a screen reader hears it change. */}
+      <div role="status" aria-live="polite" className="h-5 mb-1 text-xs text-un1t-subtle text-right">
+        {refreshing ? 'Updating roster…' : ''}
+      </div>
+
       {/* Calendar Grid */}
-      {loading ? (
+      {initialLoading ? (
         <div className="text-center py-20 text-un1t-subtle">Loading roster...</div>
       ) : viewType === 'month' ? (
         // ── MONTH VIEW ──
@@ -1653,7 +1722,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           the server leaves it out for a head coach. */}
       {/* ROSTER-FIX.6c: `staff` is the pay-free picker shape now, so no role
           gets rates here and the canSeePay prop had nothing left to gate. */}
-      {!loading && isManager && (
+      {!initialLoading && isManager && (
         <RosterSummaryPanel
           blocks={blocks}
           staff={locationStaff}
