@@ -234,7 +234,11 @@ describe('restamp_dates — real run', () => {
   // 12:45, which the mig 458 trigger stamped. Its stage date is already true.
   it('a deal that moved stage since it was created keeps its stage_entered_at (kept_moved); created_at is still restamped', async () => {
     const { deals, ev } = world()
-    const MOVED_AT = '2026-10-18T12:45:00.000000+00:00' // an hour after the run created it
+    // Relative, not the live 18 Oct 12:45: the restamp clamps created_at to
+    // no later than stage_entered_at, so a fixed move date fell behind the
+    // ago(30) evidence on 17 Nov 2026 and the restamped created_at was
+    // clamped (a calendar time bomb). Five days ago is after both RUN and ago(30).
+    const MOVED_AT = ago(5)
     deals.push(deal('d-moved', 'c-moved', 's-second', { stage_entered_at: MOVED_AT }))
     ev.set('c-moved', evidence({ attended_starts: [ago(20), ago(9)], last_attended_at: ago(9) }))
     seam(ev)
