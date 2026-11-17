@@ -13,6 +13,7 @@ import { fetchRevenueMTD, fetchArrearsSummary } from '@shared/dashboard-data'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { computeMembershipCounts } from '@/lib/membership-snapshot'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { invalidateRadar } from '@/lib/radar-cache'
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
 import { un1tOnlineReads as un1t } from '@/lib/membership/reads/un1t-online'
 
@@ -74,6 +75,9 @@ function happyPathMocks() {
 beforeEach(() => {
   vi.resetAllMocks()
   happyPathMocks()
+  // CHURNONE.1 — the radar goes through the shared 60s cache; each test
+  // starts with it empty.
+  invalidateRadar('churn', LOC)
 })
 
 describe('buildBusinessKpis', () => {
