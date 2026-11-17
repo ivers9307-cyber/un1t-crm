@@ -12,7 +12,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
 import { pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, classesOf3ForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
-import { loadUn1tCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
+import { loadCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
 import { stageShowsSignals } from '@/lib/pipeline-card-signal-slugs'
 import { zoneOfLocation } from '@/lib/location-time'
 import { parseBoardFilter, applyBoardFilter } from '@/lib/pipeline-board-filter'
@@ -94,15 +94,15 @@ export async function GET(request) {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
   // HATCHCARD.1 — the same signals the board's first page carries: a
-  // un1t.online board, the live view, a live funnel column. Decoration: a
+  // known board (un1t.online or Glofox, CARDSIGNALS.1), the live view, a live funnel column. Decoration: a
   // failed read answers the cards without them (ids-only warning).
   // PIPEBUILD.2e — the column is decided by stageShowsSignals (slug set on a
   // code-built board, stage role on a configured one); the card gets a boolean.
   const showSignals = stageShowsSignals({ board: { board_type: boardType }, stage })
   let signals = null
   if (view === 'active' && showSignals && cardSignalsEnabledForModule(boardModule)) {
-    const contactIds = (data || []).map((d) => d.contacts?.id).filter(Boolean)
-    const res = await loadUn1tCardSignals(db, { locationId, contactIds, zone: zoneOfLocation(user.activeLocation) })
+    const contacts = (data || []).map((d) => d.contacts).filter((c) => c?.id)
+    const res = await loadCardSignals(db, { moduleName: boardModule, locationId, contacts, zone: zoneOfLocation(user.activeLocation) })
     if (res?.error) logWarn('pipeline-deals', 'card signals read failed; cards sent without them', { stageId, locationId })
     else signals = res?.signals ?? null
   }

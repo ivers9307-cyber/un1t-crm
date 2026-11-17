@@ -20,6 +20,7 @@ import { api } from './api'
 import { readImpersonate, writeImpersonate, clearImpersonate } from './impersonate'
 import { performFullSignOut } from './sign-out'
 import { isReviewDemoEmail, reviewLoginOtp } from './review-login'
+import { readActiveLocationId, writeActiveLocationId, rememberAfterMe } from './active-location-store'
 
 const AuthContext = createContext(null)
 
@@ -36,8 +37,24 @@ export function AuthProvider({ children }) {
   const [impersonatingFrom, setImpersonatingFrom] = useState(null)
 
   const refresh = useCallback(async (locationOverride) => {
-    const result = await api('/api/mobile/me', { locationId: locationOverride })
+    // PHONEHOME.1 — with no explicit pick, ask for the studio this person last
+    // chose on this phone (active-location-store), not the server default.
+    let userId = null
+    try {
+      const { data } = await supabase.auth.getSession()
+      userId = data?.session?.user?.id || null
+    } catch { /* no session: the server default */ }
+    const remembered = locationOverride ? null : await readActiveLocationId(userId)
+    const asked = locationOverride || remembered || undefined
+    const result = await api('/api/mobile/me', { locationId: asked })
     if (result.success && result.data) {
+      const answered = result.data.activeLocation?.id || null
+      const impersonating = Boolean(result.data.impersonatingFrom)
+      if (!impersonating && locationOverride && answered === locationOverride) {
+        writeActiveLocationId(userId, answered)
+      } else if (rememberAfterMe({ asked: remembered, answered, impersonating }) === 'clear') {
+        writeActiveLocationId(userId, null)
+      }
       setProfile(result.data.profile)
       setLocations(result.data.locations || [])
       setActiveLocation(result.data.activeLocation || null)

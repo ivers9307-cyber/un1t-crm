@@ -4,7 +4,7 @@
 // the nine while it loads, and always the contact's current value.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, act } from '@testing-library/react'
+import { render, cleanup, act, fireEvent } from '@testing-library/react'
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }))
 vi.mock('next/link', () => ({ default: ({ children, href }) => <a href={href}>{children}</a> }))
@@ -53,5 +53,30 @@ describe('ContactForm lead source', () => {
     let view
     await act(async () => { view = render(<ContactForm locationId={LOC} />) })
     expect(values(view.container)).toEqual(['', ...DEFAULT_LEAD_SOURCES])
+  })
+})
+
+// PHONEONLY.1 — an email OR a phone.
+describe('ContactForm — phone-only (PHONEONLY.1)', () => {
+  const posts = () => fetchMock.mock.calls.filter(([, i]) => i?.method === 'POST')
+
+  it('saves a new contact with a phone and no email', async () => {
+    let view
+    await act(async () => { view = render(<ContactForm locationId={LOC} />) })
+    const inputs = view.container.querySelectorAll('input[type="text"]')
+    fireEvent.change(inputs[0], { target: { value: 'Walk' } })
+    fireEvent.change(view.container.querySelector('#contact-phone'), { target: { value: '087 123 4567' } })
+    await act(async () => { fireEvent.submit(view.container.querySelector('form')) })
+    const [, init] = posts()[0]
+    expect(JSON.parse(init.body)).toMatchObject({ email: null, phone: '087 123 4567', name: 'Walk' })
+  })
+
+  it('asks for one of the two when both are blank', async () => {
+    let view
+    await act(async () => { view = render(<ContactForm locationId={LOC} />) })
+    fireEvent.change(view.container.querySelectorAll('input[type="text"]')[0], { target: { value: 'Walk' } })
+    await act(async () => { fireEvent.submit(view.container.querySelector('form')) })
+    expect(view.container.textContent).toMatch(/An email or a phone number is required/)
+    expect(posts()).toEqual([])
   })
 })

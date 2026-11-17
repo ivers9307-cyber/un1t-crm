@@ -52,7 +52,7 @@ import { membershipStateForPage, membershipSettingsHref, canManageMembershipSour
 import Link from 'next/link'
 import { Button } from '@/components/ui'
 import { zoneOfLocation } from '@/lib/location-time'
-import { loadUn1tCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
+import { loadCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
 import { stageShowsSignals } from '@/lib/pipeline-card-signal-slugs'
 import { logWarn } from '@/lib/log'
 import { parseBoardFilter, applyBoardFilter, boardFilterActive, boardFilterParams } from '@/lib/pipeline-board-filter'
@@ -225,16 +225,17 @@ export default async function PipelinePage(props) {
       }))
     : []
 
-  // HATCHCARD.1 — a un1t.online board's live funnel columns carry each card's
-  // signals (classes done, credits left, next and last class, last WhatsApp),
-  // read ONCE for the page from the board studio's own rows. Decoration: a
+  // HATCHCARD.1 — a board's live funnel columns carry each card's signals
+  // (classes done, credits left, next and last class, last WhatsApp), read
+  // ONCE for the page from the board studio's own rows (un1t.online or, since
+  // CARDSIGNALS.1, Glofox). Decoration: a
   // failed read logs and renders the board without them, never blanks it.
   let signals = null
   if (view === 'active' && cardSignalsEnabledForModule(activePipeline.module)) {
-    const contactIds = perStage
+    const contacts = perStage
       .filter((sg) => stageShowsSignals({ board: activePipeline, stage: sg.stage }))
-      .flatMap((sg) => sg.rows.map((d) => d.contacts?.id).filter(Boolean))
-    const res = await loadUn1tCardSignals(db, { locationId, contactIds, zone: zoneOfLocation(user.activeLocation) })
+      .flatMap((sg) => sg.rows.map((d) => d.contacts).filter((c) => c?.id))
+    const res = await loadCardSignals(db, { moduleName: activePipeline.module, locationId, contacts, zone: zoneOfLocation(user.activeLocation) })
     if (res?.error) logWarn('pipeline-page', 'card signals read failed; board shown without them', { locationId, pipelineId: activePipeline.id })
     else signals = res?.signals ?? null
   }

@@ -275,7 +275,13 @@ export async function processClassBookingRequest(db, request) {
       }
       if (un1t.membershipSource === 'un1t_online') {
         const bareUuid = UUID_RE.test(String(request.glofox_event_id || ''))
-        if (un1t.settings.funnelEnabled && (isUn1tEventId(request.glofox_event_id) || bareUuid)) {
+        // OPENWEEK.4 — a funded row (an open week or /corp claim: the credits
+        // are already on the account) is booked whenever un1t.online writes are
+        // on, funnel or not. The funnel switch decides only whether NEW people
+        // are given a free trial; a funded row never grants one (the processor's
+        // trialMode 'funded').
+        const autoBook = un1t.settings.funnelEnabled || (Boolean(request.funded_by) && un1t.settings.writesEnabled)
+        if (autoBook && (isUn1tEventId(request.glofox_event_id) || bareUuid)) {
           const { processUn1tClassBookingRequest } = await import('@/lib/un1t-online-booking-processor')
           return processUn1tClassBookingRequest(db, request, { settings: un1t.settings, studioName: un1t.studioName, organizationId: un1t.organizationId })
         }

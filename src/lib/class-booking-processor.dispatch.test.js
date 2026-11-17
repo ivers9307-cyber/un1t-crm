@@ -74,6 +74,28 @@ describe('dispatch at a studio with no Glofox', () => {
     expect(processUn1tClassBookingRequest).toHaveBeenCalledOnce()
   })
 
+  it('OPENWEEK.4: a funded row (credits already on the account) is booked by the processor with the funnel off, writes on', async () => {
+    readUn1tWriteSettings.mockResolvedValue({ ...un1t(false), settings: { writesEnabled: true, funnelEnabled: false } })
+    const out = await processClassBookingRequest(makeDb(), { ...req('un1t:ev-1'), funded_by: 'corp_promo', funded_by_id: 'claim-1' })
+    expect(out).toEqual({ outcome: 'booked', detail: 'un1t:bk' })
+    expect(processUn1tClassBookingRequest).toHaveBeenCalledOnce()
+    expect(cardReason()).toBeUndefined()
+  })
+
+  it('OPENWEEK.4: a funded row with writes off is still booked by hand', async () => {
+    readUn1tWriteSettings.mockResolvedValue(un1t(false))
+    await processClassBookingRequest(makeDb(), { ...req('un1t:ev-1'), funded_by: 'corp_promo', funded_by_id: 'claim-1' })
+    expect(processUn1tClassBookingRequest).not.toHaveBeenCalled()
+    expect(cardReason()).toBe('manual_booking')
+  })
+
+  it('OPENWEEK.4: an unfunded row with writes on and the funnel off is still booked by hand (no free trial)', async () => {
+    readUn1tWriteSettings.mockResolvedValue({ ...un1t(false), settings: { writesEnabled: true, funnelEnabled: false } })
+    await processClassBookingRequest(makeDb(), req('un1t:ev-1'))
+    expect(processUn1tClassBookingRequest).not.toHaveBeenCalled()
+    expect(cardReason()).toBe('manual_booking')
+  })
+
   it('a failed settings read throws (the queue retries)', async () => {
     readUn1tWriteSettings.mockRejectedValue(new Un1tSettingsReadError('x'))
     await expect(processClassBookingRequest(makeDb(), req('un1t:ev-1'))).rejects.toBeInstanceOf(Un1tSettingsReadError)
