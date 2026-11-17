@@ -247,6 +247,7 @@ export const EXPECTED = {
   'PATCH whatsapp/conversations/[id]/route.js': ['inbox-at-location', 'Read/resolve a thread.'],
   'POST whatsapp/conversations/[id]/add-contact/route.js': ['web-inbox-at-location', 'INBOXWEBONLY3.1: links a thread to a contact; web only, so the WEB key at the thread\'s studio.'],
   'PATCH whatsapp/conversations/[id]/agent/route.js': ['web-inbox-at-location', 'INBOXWEBONLY3.1: Mia pause / take-over; web only, so the WEB key at the thread\'s studio.'],
+  'POST whatsapp/conversations/[id]/assign/route.js': ['inbox-at-location', 'INBOXASSIGN.1: sets or clears the thread\'s owner; the thread routes\' pair at the thread\'s studio, and a named owner must hold WhatsApp there too (src/lib/inbox-assignment.js).'],
   'POST whatsapp/conversations/[id]/block/route.js': ['inbox-at-location', 'Blocks a sender.'],
   'POST whatsapp/conversations/[id]/move/route.js': ['inbox-at-location', 'Moves a thread to another studio of the same organisation (WAHOMESTUDIO.1); the target studio is judged by the same pair.'],
   'POST whatsapp/conversations/[id]/react/route.js': ['inbox-at-location', 'Reacts to a message.'],
