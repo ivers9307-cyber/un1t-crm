@@ -95,3 +95,43 @@ export function homeTiles(profile, location) {
 export function safeHomeTiles(profile, location, activeLocationId) {
   return homeTiles(profile, location).filter((t) => t.locAware || location?.id === activeLocationId)
 }
+
+// PHONEHOME.1 — the coach's next shift: the earliest one that has not ended
+// yet (in progress counts), from the shifts Home already loads. Phone-local
+// time, like shift_date itself (dates.js isoDate). An end at or before the
+// start ends the next day (payroll's rule). Untimed shifts are skipped: there
+// is nothing to say about "next" without a time.
+function atLocal(iso, hhmm) {
+  const d = parseIsoDate(iso)
+  const m = String(hhmm || '').match(/^(\d{2}):(\d{2})/)
+  if (!d || !m) return null
+  d.setHours(Number(m[1]), Number(m[2]), 0, 0)
+  return d
+}
+
+/**
+ * @param {object[]} shifts  /api/schedule/shifts rows (shift_date + times)
+ * @param {Date} [now]
+ * @returns {{ shift: object, dayLabel: string, time: string, inProgress: boolean } | null}
+ */
+export function nextShift(shifts, now = new Date()) {
+  const todayIso = isoDate(now)
+  let best = null
+  for (const s of shifts || []) {
+    const start = atLocal(s?.shift_date, effShiftStart(s))
+    let end = atLocal(s?.shift_date, effShiftEnd(s))
+    if (!start || !end) continue
+    if (end <= start) end = addDays(end, 1)
+    if (end <= now) continue
+    if (!best || start < best.start) best = { s, start }
+  }
+  if (!best) return null
+  const tomorrowIso = isoDate(addDays(parseIsoDate(todayIso), 1))
+  const iso = best.s.shift_date
+  return {
+    shift: best.s,
+    dayLabel: iso === todayIso ? 'Today' : iso === tomorrowIso ? 'Tomorrow' : shortDate(parseIsoDate(iso)),
+    time: shiftTimeLabel(best.s),
+    inProgress: best.start <= now,
+  }
+}
