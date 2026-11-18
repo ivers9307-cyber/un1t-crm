@@ -961,7 +961,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                       disabled={full}
                       onClick={() => pickWave(w)}
                       aria-pressed={selected}
-                      title={w.label ? `${time} — ${w.label}${full ? ' (full)' : ''}` : full ? `${time} (full)` : time}
+                      title={w.label ? `${time} — ${w.label}${full ? ' (sold out)' : ''}` : full ? `${time} (sold out)` : time}
                       className={`px-2 py-2.5 rounded-xl border text-center transition-colors ${
                         selected
                           ? 'border-white bg-white/10 text-white'
@@ -977,7 +977,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                         </div>
                       )}
                       {full && !w.label && (
-                        <div className="text-[10px] leading-tight mt-0.5">Full</div>
+                        <div className="text-[10px] leading-tight mt-0.5">Sold out</div>
                       )}
                     </button>
                   )
