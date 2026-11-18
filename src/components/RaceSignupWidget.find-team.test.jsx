@@ -182,3 +182,18 @@ describe('RaceSignupWidget — FINDTEAMWAVE.1 time closed to solos', () => {
     expect(screen.getByText('Team name *')).toBeTruthy()
   })
 })
+
+describe('RaceSignupWidget — WAVESOLDOUT.1', () => {
+  it('shows a full start time as sold out and does not let it be picked', async () => {
+    await renderWidget({
+      ...RACE,
+      waves: [
+        { id: 'w8', start_time: '08:00:00', label: null, is_full: true },
+        { id: 'w9', start_time: '09:00:00', label: null, is_full: false },
+      ],
+    })
+    const full = screen.getByRole('button', { name: /08:00/ })
+    expect(full.textContent).toContain('Sold out')
+    expect(full.disabled).toBe(true)
+  })
+})
