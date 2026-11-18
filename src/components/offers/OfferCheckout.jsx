@@ -39,7 +39,7 @@ function TermsTick({ terms, checked, onChange, invalid = false, inputRef = null 
   )
 }
 
-export default function OfferCheckout({ studio, slug, priceLabel, provider = 'revolut', terms = null, resumePurchaseId = null, cancelled = false }) {
+export default function OfferCheckout({ studio, slug, priceLabel, provider = 'revolut', terms = null, resumePurchaseId = null, cancelled = false, soldOutLabel = 'Sold out' }) {
   const isUn1t = provider === 'un1t_online'
   // resumePurchaseId: set when Revolut redirected the buyer back after an
   // app-handoff payment (Revolut Pay on mobile) — start by confirming that
@@ -99,6 +99,12 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
       if (r.status === 202 && j.code === 'help_filed') {
         setHelpMessage(j.error || 'The team has your details and will be in touch today.')
         setStep('help')
+        return
+      }
+      // OFFERSTOCK.1 — the last one went while this form was open.
+      if (r.status === 409 && j.code === 'sold_out') {
+        setHelpMessage(j.error || null)
+        setStep('sold_out')
         return
       }
       if (r.status === 410) throw new Error('The sale has ended.')
@@ -181,6 +187,15 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
       <div className="text-center py-10">
         <p className="ofr-display text-2xl mb-4">We&rsquo;ll be in touch</p>
         <p className="text-sm" style={{ color: '#9a9a9a' }}>{helpMessage}</p>
+      </div>
+    )
+  }
+
+  if (step === 'sold_out') {
+    return (
+      <div className="text-center py-10" role="status">
+        <p className="ofr-display text-2xl mb-4">{soldOutLabel}</p>
+        {helpMessage && <p className="text-sm" style={{ color: '#9a9a9a' }}>{helpMessage}</p>}
       </div>
     )
   }

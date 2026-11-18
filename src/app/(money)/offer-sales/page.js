@@ -8,8 +8,13 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import OfferSalesList from '@/components/OfferSalesList'
+import OfferStockPanel from '@/components/OfferStockPanel'
 import { zoneOfLocation } from '@/lib/location-time'
 import { logError } from '@/lib/log'
+import { hasRoleAtLocation } from '@/lib/role-at-location'
+import { ADMIN_ROLES } from '@/lib/schemas'
+import { storefrontOffers } from '@/lib/offers-storefront'
+import { readOfferStockCounts } from '@/lib/offer-stock'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,6 +27,27 @@ const PURCHASE_COLUMNS = `
 const PAGE_SIZE = 1000
 // A runaway guard, never reached by a real sale: 10,000 unfulfilled sales.
 const PENDING_MAX_PAGES = 10
+
+// OFFERSTOCK.1 — the studio's live and upcoming offers with their real counts,
+// as plain values for the client panel. Null when the offers can't be read.
+async function loadStockRows(db, locationId) {
+  const { data, error } = await db
+    .from('sale_offers')
+    .select('id, name, active, starts_at, ends_at, stock_limit')
+    .eq('location_id', locationId)
+    .eq('active', true)
+    .order('sort', { ascending: true })
+  if (error) {
+    logError('offers', 'offers unreadable for stock limits', { locationId, code: error.code ?? null })
+    return null
+  }
+  const offers = storefrontOffers(data)
+  const counts = await readOfferStockCounts(db, offers.map((o) => o.id))
+  return offers.map((o) => {
+    const c = counts?.get(o.id)
+    return { id: o.id, name: o.name, limit: o.stock_limit, sold: c?.sold ?? null, held: c?.held ?? 0 }
+  })
+}
 
 export default async function OfferSalesPage() {
   const user = await getCurrentUser()
@@ -39,6 +65,7 @@ export default async function OfferSalesPage() {
   let fulfilled = []
   let pendingTruncated = false
   let loadFailed = false
+  let stockRows = []
   if (activeId) {
     for (let page = 0; ; page++) {
       if (page >= PENDING_MAX_PAGES) { pendingTruncated = true; break }
@@ -75,6 +102,11 @@ export default async function OfferSalesPage() {
     } else {
       fulfilled = done || []
     }
+
+    if (hasRoleAtLocation(user, activeId, ADMIN_ROLES)) {
+      stockRows = await loadStockRows(db, activeId)
+      if (stockRows === null) loadFailed = true
+    }
   }
 
   return (
@@ -95,6 +127,7 @@ export default async function OfferSalesPage() {
           Showing the oldest {pending.length.toLocaleString('en-IE')} sales to fulfil. Mark some fulfilled to see the rest.
         </p>
       )}
+      <OfferStockPanel offers={stockRows || []} />
       <OfferSalesList
         pending={pending}
         fulfilled={fulfilled}

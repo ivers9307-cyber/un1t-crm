@@ -29,6 +29,8 @@ import { sqlCode, ident, splitTop } from './sql-code.js'
  * and does not tell overloads apart).
  */
 export const CLOSED_FUNCTIONS = [
+  { fn: 'public.offer_stock_counts', args: '(uuid[], text)', closedBy: 850,
+    why: 'OFFERSTOCK.1: reads purchase counts and can test a buyer email; the server pages and checkout call it as service_role' },
   { fn: 'private.mobile_can_location_ids_for', args: '(uuid, text)', closedBy: 691,
     why: 'answers which locations ANY user id may act at; only the auth_ wrapper is for clients' },
   { fn: 'private.shift_template_qualification_cap', args: '()', closedBy: 695,

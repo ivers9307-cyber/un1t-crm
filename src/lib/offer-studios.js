@@ -83,6 +83,12 @@ export const DEFAULT_OFFERS_PAGE_COPY = {
     { title: 'Already a member', hint: 'Bring a friend', target: 'members' },
   ],
   faq: [],
+  // OFFERSTOCK.1 — the stock wording. {n} is how many are really left.
+  stockLeft: 'Only {n} left',
+  stockReserved: 'Last ones in checkout',
+  stockReservedBody: "The last ones are in someone's checkout right now. Any payment that isn't finished comes back within about 35 minutes.",
+  soldOut: 'Sold out',
+  soldOutBody: 'Every one of these has gone. Have a look at the other offers.',
 }
 
 // The sections an audience link may jump to (ids on the storefront page).
@@ -134,6 +140,11 @@ export function offersPageCopy(location) {
     proofLine: text(s.proofLine, d.proofLine, true).trim(),
     audienceLinks: audienceLinks(s.audienceLinks, d.audienceLinks),
     faq: faq(s.faq, d.faq),
+    stockLeft: text(s.stockLeft, d.stockLeft),
+    stockReserved: text(s.stockReserved, d.stockReserved),
+    stockReservedBody: text(s.stockReservedBody, d.stockReservedBody),
+    soldOut: text(s.soldOut, d.soldOut),
+    soldOutBody: text(s.soldOutBody, d.soldOutBody),
   }
 }
 
@@ -167,12 +178,14 @@ export function offerRail(location, offer) {
  * honoured), except when it carries `cancelled=1`: un1t.online's cancel URL is
  * the success URL plus that flag, and a buyer who cancelled must never see
  * "Thanks, your payment is with un1t.online".
- * @param {{ open: boolean, upcoming: boolean, purchase?: string|null, cancelled?: boolean }} args
- * @returns {'resume'|'form'|'upcoming'|'ended'}
+ * A sold-out offer (OFFERSTOCK.1) replaces the form; a buyer returning from a
+ * payment still resumes, because their purchase is already under way.
+ * @param {{ open: boolean, upcoming: boolean, purchase?: string|null, cancelled?: boolean, soldOut?: boolean }} args
+ * @returns {'resume'|'form'|'sold_out'|'upcoming'|'ended'}
  */
-export function offerPageMode({ open, upcoming, purchase = null, cancelled = false }) {
+export function offerPageMode({ open, upcoming, purchase = null, cancelled = false, soldOut = false }) {
   if (purchase && !cancelled) return 'resume'
-  if (open) return 'form'
+  if (open) return soldOut ? 'sold_out' : 'form'
   if (upcoming) return 'upcoming'
   return 'ended'
 }

@@ -23,7 +23,8 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { createOrder } from '@/lib/revolut'
-import { resolveOfferStudio, offerRail } from '@/lib/offer-studios'
+import { resolveOfferStudio, offerRail, offersPageCopy } from '@/lib/offer-studios'
+import { offerStockStatus, readOfferStockCounts, stockRefusalState } from '@/lib/offer-stock'
 import { startUn1tOfferCheckout } from '@/lib/offer-checkout-un1t'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
@@ -75,6 +76,27 @@ function brandOrigin(request) {
     }
   } catch { /* fall through to default */ }
   return 'https://www.un1tdublin.com'
+}
+
+// OFFERSTOCK.1 — the refusal a buyer sees when the limit stops the checkout.
+function stockRefused(state, location) {
+  const copy = offersPageCopy(location)
+  return NextResponse.json({
+    success: false,
+    code: state,
+    error: state === 'sold_out' ? copy.soldOutBody : copy.stockReservedBody,
+  }, { status: 409 })
+}
+
+// An early look, so a buyer of a finished offer gets no provider order and no
+// new account. The buyer's own hold does not count against them. An unreadable
+// count lets the checkout go on: the database trigger is the binding check.
+async function stockGate(db, offer, email, location) {
+  if (offer.stock_limit == null) return null
+  const counts = await readOfferStockCounts(db, [offer.id], { excludeEmail: email })
+  const status = counts ? offerStockStatus(offer, counts.get(offer.id)) : null
+  if (!status || status.left > 0) return null
+  return stockRefused(status.state, location)
 }
 
 /**
@@ -135,10 +157,12 @@ export async function handleOfferCheckout(request, { studio: studioKey, slug }) 
     })
     return NOT_CONFIGURED()
   }
+  const stockRefusal = await stockGate(db, offer, body.email, location)
+  if (stockRefusal) return stockRefusal
   if (rail === 'un1t_online') {
     return un1tCheckout(db, { body, studio, location, offer, purchaseId })
   }
-  return revolutCheckout(db, { request, body, studio, offer, purchaseId })
+  return revolutCheckout(db, { request, body, studio, location, offer, purchaseId })
 }
 
 async function un1tCheckout(db, { body, studio, location, offer, purchaseId }) {
@@ -235,6 +259,7 @@ async function un1tCheckout(db, { body, studio, location, offer, purchaseId }) {
     // The URL goes to the browser once; it is never stored or logged.
     return NextResponse.json({ success: true, data: { purchaseId, checkout: { provider: 'un1t_online', url: outcome.checkoutUrl } } })
   }
+  if (outcome.kind === 'stock_refused') return stockRefused(outcome.state, location)
   if (outcome.kind === 'help_filed') {
     return NextResponse.json({
       success: false, code: 'help_filed', error: "We couldn't open the checkout. The team has your details and will be in touch today.",
@@ -243,7 +268,7 @@ async function un1tCheckout(db, { body, studio, location, offer, purchaseId }) {
   return BUSY()
 }
 
-async function revolutCheckout(db, { request, body, studio, offer, purchaseId }) {
+async function revolutCheckout(db, { request, body, studio, location, offer, purchaseId }) {
   let order
   try {
     order = await createOrder({
@@ -281,6 +306,10 @@ async function revolutCheckout(db, { request, body, studio, offer, purchaseId })
     payment_provider: 'revolut',
     origin: 'page',
   })
+  // OFFERSTOCK.1 — someone took the last one between the early look and here.
+  // The order's token never leaves the server, so nobody can pay it and it expires.
+  const stockState = stockRefusalState(error)
+  if (stockState) return stockRefused(stockState, location)
   if (error) {
     // Never hand back a checkout token we can't reconcile: the webhook
     // would have no row to land on.

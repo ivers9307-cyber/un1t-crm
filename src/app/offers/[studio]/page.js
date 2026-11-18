@@ -16,7 +16,8 @@
 import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
-import { offerIsUpcoming, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
+import { offerIsOpen, offerIsUpcoming, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
+import { readOfferStock, offerStockLine } from '@/lib/offer-stock'
 import { resolveOfferStudio, studioForKey, offersPageCopy } from '@/lib/offer-studios'
 import { heroFor, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, termForSlug, flagForSlug, offerFinePrint, offerValueLine, offerTermLine, splitMonthStrip } from '@/lib/offers-storefront'
 import { legacyOfferRedirect } from '@/lib/offers-legacy-redirect'
@@ -46,7 +47,7 @@ function termFor(offer) {
   return { num: '', label: offer.name }
 }
 
-function OfferCard({ offer, studio, flag, opensLabel }) {
+function OfferCard({ offer, studio, flag, opensLabel, stockLine = null, soldOutLabel = null }) {
   const term = termFor(offer)
   const isGift = offer.category === 'gift_card'
   // BLACKFRIDAY.9 — any studio's offer shows its own fine print when it has some.
@@ -64,11 +65,11 @@ function OfferCard({ offer, studio, flag, opensLabel }) {
   const nameIds = (isGift
     ? [id('term'), id('go')]
     : [id('bonus'), termLine && id('on'), id('price'), id('go')]).filter(Boolean).join(' ')
-  const descIds = [flag && id('flag'), valueLine && id('value'), id('desc'), !isGift && finePrint && id('fine')].filter(Boolean).join(' ')
+  const descIds = [flag && id('flag'), stockLine && id('stock'), valueLine && id('value'), id('desc'), !isGift && finePrint && id('fine')].filter(Boolean).join(' ')
   return (
     <Link
       href={`/offers/${studio.key}/${offer.slug}`}
-      className={best ? 'ofr-card ofr-card-best' : 'ofr-card'}
+      className={['ofr-card', best && !soldOutLabel && 'ofr-card-best', soldOutLabel && 'ofr-card-out'].filter(Boolean).join(' ')}
       aria-labelledby={nameIds}
       aria-describedby={descIds}
       style={{ minHeight: isGift ? 340 : 380, borderRight: '1px solid var(--ofr-line-soft)' }}
@@ -94,7 +95,8 @@ function OfferCard({ offer, studio, flag, opensLabel }) {
           {finePrint && <span id={id('fine')} className="ofr-meta" style={{ display: 'block', fontSize: 12, marginTop: 6 }}>{finePrint}</span>}
         </span>
       )}
-      <span id={id('go')} className="ofr-go">{opensLabel || (isGift ? 'Buy this card' : 'Lock it in')}</span>
+      {stockLine && <span id={id('stock')} className="ofr-stock">{stockLine}</span>}
+      <span id={id('go')} className="ofr-go">{soldOutLabel || opensLabel || (isGift ? 'Buy this card' : 'Lock it in')}</span>
     </Link>
   )
 }
@@ -104,7 +106,7 @@ function OfferCard({ offer, studio, flag, opensLabel }) {
  * card grid (a fourth card used to sit alone on a second row). Its words are
  * the offer row's own: name, bonus, price.
  */
-function OfferStrip({ offer, studio, opensLabel }) {
+function OfferStrip({ offer, studio, opensLabel, stockLine = null, soldOutLabel = null }) {
   const id = (part) => `ofr-${offer.id}-${part}`
   // OFFERSTRIPFINE.1 — the strip shows the offer's fine print under its name
   // (e.g. a minimum commitment), as the cards do.
@@ -112,9 +114,9 @@ function OfferStrip({ offer, studio, opensLabel }) {
   return (
     <Link
       href={`/offers/${studio.key}/${offer.slug}`}
-      className="ofr-strip-offer"
+      className={soldOutLabel ? 'ofr-strip-offer ofr-card-out' : 'ofr-strip-offer'}
       aria-labelledby={`${id('name')} ${id('price')} ${id('go')}`}
-      aria-describedby={[id('bonus'), finePrint && id('fine')].filter(Boolean).join(' ')}
+      aria-describedby={[id('bonus'), stockLine && id('stock'), finePrint && id('fine')].filter(Boolean).join(' ')}
     >
       <span>
         <span id={id('name')} className="ofr-display ofr-strip-name">{offer.name}</span>
@@ -125,7 +127,8 @@ function OfferStrip({ offer, studio, opensLabel }) {
         <span aria-hidden="true"> · </span>
         <span id={id('price')}>{formatEuro(offer.price_cents)}</span>
       </span>
-      <span id={id('go')} className="ofr-go">{opensLabel || 'Lock it in'}</span>
+      {stockLine && <span id={id('stock')} className="ofr-stock">{stockLine}</span>}
+      <span id={id('go')} className="ofr-go">{soldOutLabel || opensLabel || 'Lock it in'}</span>
     </Link>
   )
 }
@@ -246,6 +249,12 @@ export default async function OfferStudioPage(props) {
   const opensLabelFor = (o) => (offerIsUpcoming(o, now)
     ? `Opens ${formatSaleDeadline(o.starts_at, { uppercase: false, zone })}`
     : null)
+  // OFFERSTOCK.1 — real stock, for the offers open now that carry a limit.
+  const stock = await readOfferStock(db, offers.filter((o) => offerIsOpen(o, now)))
+  const stockProps = (o) => ({
+    stockLine: offerStockLine(stock.get(o.id), copy),
+    soldOutLabel: stock.get(o.id)?.state === 'sold_out' ? copy.soldOut : null,
+  })
 
   const sections = CATEGORY_ORDER
     .map((cat) => ({ key: cat, meta: CATEGORY_META[cat], items: offers.filter((o) => o.category === cat) }))
@@ -310,12 +319,12 @@ export default async function OfferStudioPage(props) {
               {grid.length > 0 && (
                 <div className="ofr-grid" style={{ '--ofr-cols': Math.min(3, grid.length) }}>
                   {grid.map((o) => (
-                    <OfferCard key={o.id} offer={o} studio={studio} flag={flagFor(o)} opensLabel={opensLabelFor(o)} />
+                    <OfferCard key={o.id} offer={o} studio={studio} flag={flagFor(o)} opensLabel={opensLabelFor(o)} {...stockProps(o)} />
                   ))}
                 </div>
               )}
               {strip.map((o) => (
-                <OfferStrip key={o.id} offer={o} studio={studio} opensLabel={opensLabelFor(o)} />
+                <OfferStrip key={o.id} offer={o} studio={studio} opensLabel={opensLabelFor(o)} {...stockProps(o)} />
               ))}
             </div>
           )
