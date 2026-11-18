@@ -54,7 +54,7 @@ import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { eventIsPublic, resolveMasterLocationId } from '@/lib/host-events'
 import { resolveEventAttribution } from '@/lib/event-attribution-server'
 import { claimWaitlistOnRegistration, claimWaitlistByEmail } from '@/lib/event-waitlist'
-import { resolveFindTeamSettings, soloTeamName } from '@/lib/find-team'
+import { resolveFindTeamSettings, soloTeamName, isSoloClosedForWave } from '@/lib/find-team'
 import { resolveEventTeam } from '@/lib/event-team'
 import { holdingPlaces, pendingLapsed } from '@/lib/entry-policy'
 
@@ -452,6 +452,11 @@ export async function POST(request, props) {
       error: 'Selected wave does not belong to this race.',
       code: 'invalid_wave',
     }, { status: 400 })
+  }
+  // FINDTEAMWAVE.1 — this start time takes teams only. Refused before any team
+  // row exists, so there is nothing to discard.
+  if (findTeam && isSoloClosedForWave(resolveFindTeamSettings(race), wave.id)) {
+    return NextResponse.json({ success: false, error: resolveFindTeamSettings(race).closed_note, code: 'find_team_wave_closed' }, { status: 409 })
   }
   if (wave.capacity != null) {
     // EVENTS-CAPACITY-MODE.1 — enforce the wave cap by teams (one per

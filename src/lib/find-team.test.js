@@ -6,8 +6,7 @@ import {
   FindTeamSettingsSchema,
   resolveFindTeamSettings,
   soloTeamName,
-  countsTowardTeamCapacity,
-} from './find-team.js'
+  countsTowardTeamCapacity, isSoloClosedForWave } from './find-team.js'
 
 describe('FIND_TEAM_DEFAULTS', () => {
   it('is off by default with operator-editable copy', () => {
@@ -94,5 +93,20 @@ describe('countsTowardTeamCapacity', () => {
     expect(countsTowardTeamCapacity({ status: 'pending_payment', looking_for_team: true }, { held: true })).toBe(false)
     expect(countsTowardTeamCapacity({ status: 'placed' }, { held: true })).toBe(false)
     expect(countsTowardTeamCapacity({ status: 'cancelled' }, { held: true })).toBe(false)
+  })
+})
+
+describe('FINDTEAMWAVE.1 — start times closed to solos', () => {
+  const W = 'a0000000-0000-0000-0000-000000000001'
+  it('is open by default and closed only for a listed wave', () => {
+    expect(isSoloClosedForWave(resolveFindTeamSettings({ find_team: { enabled: true } }), W)).toBe(false)
+    const s = resolveFindTeamSettings({ find_team: { enabled: true, closed_wave_ids: [W] } })
+    expect(isSoloClosedForWave(s, W)).toBe(true)
+    expect(isSoloClosedForWave(s, 'other')).toBe(false)
+    expect(isSoloClosedForWave(s, null)).toBe(false)
+  })
+  it('saves wave ids and refuses anything else', () => {
+    expect(FindTeamSettingsSchema.safeParse({ closed_wave_ids: [W] }).success).toBe(true)
+    expect(FindTeamSettingsSchema.safeParse({ closed_wave_ids: ['8am'] }).success).toBe(false)
   })
 })

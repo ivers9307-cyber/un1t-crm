@@ -337,16 +337,18 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         const sizes = j.data.allowed_team_sizes || [1]
         const initial = [...sizes].sort((a, b) => a - b)[0]
         // FINDTEAMDEFAULT.1 — same test as findTeamEnabled further down.
-        if ((j.data.kind || 'race') === 'race' && j.data.find_team?.enabled) {
+        // Auto-select only when exactly one time has space; with two
+        // open times (races or EVENT-MULTITIME.1 classes) the customer
+        // chooses. A single-time event is still auto-selected.
+        const initialWave = initialWaveId(j.data.waves)
+        // FINDTEAMWAVE.1 — a time closed to solos opens on the team sizes.
+        const initialClosed = (j.data.waves || []).some((w) => w.id === initialWave && w.solo_closed)
+        if ((j.data.kind || 'race') === 'race' && j.data.find_team?.enabled && !initialClosed) {
           setFindTeam(true)
           setTeamSize(1)
         } else {
           setTeamSize(initial)
         }
-        // Auto-select only when exactly one time has space; with two
-        // open times (races or EVENT-MULTITIME.1 classes) the customer
-        // chooses. A single-time event is still auto-selected.
-        const initialWave = initialWaveId(j.data.waves)
         if (initialWave) setWaveId(initialWave)
       })
       .catch(e => setLoadError(e.message || 'Network error'))
@@ -665,6 +667,15 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // other kinds show every time once there's more than one; [] = no
   // picker. Every operator surface still sees the full schedule.
   // HOSTSERIES.1 — a hosted event (host_name set) lists every session plainly.
+  // FINDTEAMWAVE.1 — the chosen start time takes teams only.
+  const soloClosedHere = findTeamEnabled && wavesArr.some((w) => w.id === waveId && w.solo_closed)
+  const pickWave = (w) => {
+    setWaveId(w.id)
+    if (findTeam && w.solo_closed) {
+      setFindTeam(false)
+      setTeamSize([...(race.allowed_team_sizes || [1])].sort((a, b) => a - b)[0])
+    }
+  }
   const pickerWaves = timePickerWaves(kind, wavesArr, { hosted: !!race.host_name, windowMinutes: resolveWaveWindowMinutes(race) })
 
   // ── Render-only derived values (no behaviour change) ──────────────
@@ -948,7 +959,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                       key={w.id}
                       type="button"
                       disabled={full}
-                      onClick={() => setWaveId(w.id)}
+                      onClick={() => pickWave(w)}
                       aria-pressed={selected}
                       title={w.label ? `${time} — ${w.label}${full ? ' (full)' : ''}` : full ? `${time} (full)` : time}
                       className={`px-2 py-2.5 rounded-xl border text-center transition-colors ${
@@ -1005,11 +1016,14 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                 {findTeamEnabled && (
                   <button
                     type="button"
+                    disabled={soloClosedHere}
                     onClick={() => { setFindTeam(true); setTeamSize(1) }}
                     className={`text-sm px-4 py-2.5 rounded-xl border font-semibold transition-colors ${
                       findTeam
                         ? 'border-white bg-white text-black'
-                        : 'border-white/15 bg-white/5 text-white/70 hover:border-white/40'
+                        : soloClosedHere
+                          ? 'border-white/10 bg-white/[0.03] text-white/40 line-through cursor-not-allowed'
+                          : 'border-white/15 bg-white/5 text-white/70 hover:border-white/40'
                     }`}
                   >
                     {race.find_team.label}
@@ -1034,6 +1048,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               </div>
               {findTeam && race.find_team.blurb && (
                 <p className="text-[11px] text-white/60 mt-1.5">{race.find_team.blurb}</p>
+              )}
+              {soloClosedHere && race.find_team.closed_note && (
+                <p className="text-[11px] text-white/60 mt-1.5">{race.find_team.closed_note}</p>
               )}
             </div>
           )}

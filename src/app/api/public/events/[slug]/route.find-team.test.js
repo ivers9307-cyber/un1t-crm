@@ -93,6 +93,19 @@ describe('GET /api/public/events/[slug] — find_team', () => {
     expect(JSON.stringify(disabled.body)).not.toContain('PRIVATE')
   })
 
+  it('FINDTEAMWAVE.1 — flags only the closed wave and adds the note', async () => {
+    const { body } = await get(makeRace({
+      find_team: { enabled: true, closed_wave_ids: ['w1'] },
+      waves: [
+        { id: 'w1', start_time: '08:00:00', capacity: 10, label: null, display_order: 0 },
+        { id: 'w2', start_time: '09:00:00', capacity: 10, label: null, display_order: 1 },
+      ],
+    }))
+    expect(body.data.waves.map((w) => w.solo_closed)).toEqual([true, undefined])
+    expect(body.data.find_team.closed_note).toMatch(/Solo places are closed/)
+    expect(JSON.stringify(body)).not.toContain('closed_wave_ids')
+  })
+
   it('is absent for a non-race kind even when the settings say enabled', async () => {
     const { body } = await get(makeRace({ kind: 'workshop', find_team: { enabled: true } }))
     expect('find_team' in body.data).toBe(false)
