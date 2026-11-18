@@ -10,6 +10,8 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   return { ...real, getCurrentUser: vi.fn() }
 })
 
+import { createFakeDb } from '../../../../../../tests/helpers/fake-db.js'
+
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { GET } = await import('./route.js')
@@ -61,31 +63,11 @@ const TABLES = {
   ],
 }
 
-function buildDb({ fail = {} } = {}) {
-  const asked = []
-  return {
-    asked,
-    from: (t) => {
-      const preds = []
-      const chain = {
-        select: () => chain,
-        eq: (c, v) => { preds.push((r) => r[c] === v); return chain },
-        in: (c, vs) => { asked.push({ t, c, vs }); preds.push((r) => vs.includes(r[c])); return chain },
-        is: (c, v) => { preds.push((r) => (r[c] ?? null) === v); return chain },
-        gte: (c, v) => { preds.push((r) => r[c] >= v); return chain },
-        lte: (c, v) => { preds.push((r) => r[c] <= v); return chain },
-        order: () => chain,
-        range: () => chain,
-        then: (res, rej) => {
-          if (fail[t]) return Promise.resolve({ data: null, error: { message: `${t} down` } }).then(res, rej)
-          const rows = (TABLES[t] || []).filter((r) => preds.every((p) => p(r)))
-          return Promise.resolve({ data: rows, error: null }).then(res, rej)
-        },
-      }
-      return chain
-    },
-  }
-}
+// FAKEDB.1 — the shared fake, checked against the real schema.
+const buildDb = ({ fail = {} } = {}) => createFakeDb({
+  tables: TABLES,
+  errors: Object.fromEntries(Object.keys(fail).map((t) => [t, { select: { message: `${t} down` } }])),
+})
 
 const req = (qs = '') => new Request(`http://x/api/schedule/allowances/team${qs}`)
 
@@ -131,7 +113,7 @@ describe('GET /api/schedule/allowances/team', () => {
     expect(names).toEqual(['Ann Coach', 'Bob Coach', 'Cat Contractor'])
     expect(names).not.toContain('Zed Elsewhere')
     // The foreign studio's person is never even asked about.
-    for (const a of db.asked) expect(a.vs).not.toContain('zed')
+    for (const f of db.calls.flatMap((c) => c.filters || []).filter((x) => x.op === 'in')) expect(f.value).not.toContain('zed')
 
     const [ann, bob, cat] = json.data.rows
     expect(ann.holiday).toEqual({ stored: true, total_days: 22, carried_over: 2, used_days: 5, remaining: 19 })
