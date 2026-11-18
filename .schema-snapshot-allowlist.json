@@ -89,60 +89,6 @@
       "expires": "2027-02-15"
     },
     {
-      "key": "column:instagram_conversations.agent_activity_notified_at",
-      "side": "live_only",
-      "reason": "On the live table with no file creating it (probably the applied add_agent_activity_notified_at); the agent code reads it. Needs a catch-up migration.",
-      "expires": "2027-02-15"
-    },
-    {
-      "key": "column:whatsapp_conversations.agent_activity_notified_at",
-      "side": "live_only",
-      "reason": "On the live table with no file creating it (probably the applied add_agent_activity_notified_at); the agent code reads it. Needs a catch-up migration.",
-      "expires": "2027-02-15"
-    },
-    {
-      "key": "column:whatsapp_numbers.embedded_signup_session_id",
-      "side": "live_only",
-      "reason": "On the live table with no file creating it (probably the applied whatsapp_coexistence_181 / whatsapp_numbers_embedded_signup, which have no file). Needs a catch-up migration.",
-      "expires": "2027-02-15"
-    },
-    {
-      "key": "column:whatsapp_numbers.history_sync_completed_at",
-      "side": "live_only",
-      "reason": "On the live table with no file creating it (probably the applied whatsapp_coexistence_181 / whatsapp_numbers_embedded_signup, which have no file). Needs a catch-up migration.",
-      "expires": "2027-02-15"
-    },
-    {
-      "key": "column:whatsapp_numbers.history_sync_error",
-      "side": "live_only",
-      "reason": "On the live table with no file creating it (probably the applied whatsapp_coexistence_181 / whatsapp_numbers_embedded_signup, which have no file). Needs a catch-up migration.",
-      "expires": "2027-02-15"
-    },
-    {
-      "key": "column:whatsapp_numbers.history_sync_started_at",
-      "side": "live_only",
-      "reason": "On the live table with no file creating it (probably the applied whatsapp_coexistence_181 / whatsapp_numbers_embedded_signup, which have no file). Needs a catch-up migration.",
-      "expires": "2027-02-15"
-    },
-    {
-      "key": "column:whatsapp_numbers.history_sync_status",
-      "side": "live_only",
-      "reason": "On the live table with no file creating it (probably the applied whatsapp_coexistence_181 / whatsapp_numbers_embedded_signup, which have no file). Needs a catch-up migration.",
-      "expires": "2027-02-15"
-    },
-    {
-      "key": "column:whatsapp_numbers.is_on_biz_app",
-      "side": "live_only",
-      "reason": "On the live table with no file creating it (probably the applied whatsapp_coexistence_181 / whatsapp_numbers_embedded_signup, which have no file). Needs a catch-up migration.",
-      "expires": "2027-02-15"
-    },
-    {
-      "key": "column:whatsapp_numbers.platform_type",
-      "side": "live_only",
-      "reason": "On the live table with no file creating it (probably the applied whatsapp_coexistence_181 / whatsapp_numbers_embedded_signup, which have no file). Needs a catch-up migration.",
-      "expires": "2027-02-15"
-    },
-    {
       "key": "column:race_events.2",
       "side": "repo_only",
       "reason": "Replay parser artifact: a numeric fragment of an ALTER read as a column. No such column exists on the live table.",
@@ -158,18 +104,6 @@
       "key": "function:rls_auto_enable",
       "side": "live_only",
       "reason": "Created by the Supabase platform on the project, not by this repo; no file should own it.",
-      "expires": "2027-02-15"
-    },
-    {
-      "key": "table:app_claim_tokens",
-      "side": "live_only",
-      "reason": "On the live database with no file creating it (probably the applied 460_account_claim_tokens). Needs a catch-up migration.",
-      "expires": "2027-02-15"
-    },
-    {
-      "key": "table:claim_link_requests",
-      "side": "live_only",
-      "reason": "On the live database with no file creating it (probably the applied 460_account_claim_tokens). Needs a catch-up migration.",
       "expires": "2027-02-15"
     }
   ]
