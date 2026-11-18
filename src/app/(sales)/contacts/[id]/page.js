@@ -97,11 +97,13 @@ export default async function ContactDetailPage(props) {
   // page. We deliberately do NOT add person_group_id to the main contact
   // SELECT above (that column may not exist pre-migration); the try/catch
   // here is the safe path.
-  let person = null
-  try {
-    const pg = await getPersonGroup(db, contact.id)
-    if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
-  } catch { person = null }
+  // PROFILEFAST.1 — started here, awaited with the first batch below.
+  const personP = (async () => {
+    try {
+      const pg = await getPersonGroup(db, contact.id)
+      return pg?.group?.id ? await aggregatePerson(db, pg.group.id) : null
+    } catch { return null }
+  })()
 
   const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, contactArrears, cancellationLink, primaryPipeline, un1tBilling, contactStudios, primarySourceState] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
@@ -138,6 +140,7 @@ export default async function ContactDetailPage(props) {
     // Glofox card's mode. A failed read is null: the card behaves as before.
     membershipSourceState(db, contact.location_id).catch(() => null),
   ])
+  const person = await personP
   // CARDLENS.2 — short studio names for the tags; empty for a one-studio person.
   const studioNames = studioNameMap(contactStudios.rows)
   const glofoxMode = glofoxCardMode({
@@ -154,20 +157,110 @@ export default async function ContactDetailPage(props) {
   const actingId = pickActingStudio({ options: actingOptions, requested: searchParams?.studio, activeLocationId: user.activeLocation?.id, primaryLocationId: contact.location_id })
     || contact.location_id
 
+  // PROFILEFAST.1 — every read below depends only on the contact, the viewer
+  // and the acting studio, so they all start NOW and each is awaited where it
+  // is used. They used to run one after another (about ten round trips in a
+  // row). Each keeps its own error handling: a failed read still degrades
+  // exactly as before.
+  const { whatsapp: canWhatsApp, email: canEmail } = contactChannelFlags(user, actingId)
+  const canConsultations = canLoadContactConsultations(user, contact.location_id)
+  // A supabase-js builder sends nothing until it is awaited, so each single
+  // read is started with Promise.resolve() (Promise.all starts its own).
+  const eventTypesP = Promise.resolve(db.from('event_types').select('id, name, slug, duration_minutes, availability, active').eq('location_id', contact.location_id).eq('active', true).order('name'))
+  const catalogP = contact.glofox_membership_plan && contact.location_id
+    ? Promise.resolve(db.from('glofox_memberships').select('name_clean, plan_names, description').eq('location_id', contact.location_id))
+    : null
+  const un1tP = (async () => {
+    // UN1TWRITE.15 — the un1t.online studios this contact can be booked at
+    // from here: an account there (un1t_clients), writes on, and the viewer a
+    // member. Only the writes_enabled boolean leaves the settings (a JSON
+    // path), never the settings object. Best-effort: no card on a failed read.
+    // CARDLENS.8 — the same rows carry each studio's un1t.online counters for
+    // the membership cards, kept only where the viewer holds Contacts (the rule
+    // loadUn1tBilling applies to payments).
+    let studios = []
+    let un1tClients = []
+    try {
+      const { data: clientRows, error: clientErr } = await db.from('un1t_clients')
+        .select('location_id, last_attended_at, bookings_30d_attended, credit_balance, credit_unlimited, ltv_cents, synced_at').eq('contact_id', contact.id).limit(50)
+      const un1tVisible = new Set(contactStudioIds(user, [...new Set((user.locations || []).map((l) => l?.id).filter(Boolean))]))
+      if (!clientErr) un1tClients = (clientRows || []).filter((r) => un1tVisible.has(r.location_id))
+      const ids = [...new Set((clientRows || []).map((r) => r.location_id).filter(Boolean))]
+      if (!clientErr && ids.length > 0) {
+        const { data: locs, error: locErr } = await db.from('locations')
+          .select('id, name, membership_source, writes_enabled:settings->un1t_online->writes_enabled').in('id', ids)
+        if (!locErr) {
+          studios = un1tBookingStudios({
+            user,
+            clientRows,
+            locations: (locs || []).map((l) => ({ id: l.id, name: l.name, membership_source: l.membership_source, writes_enabled: l.writes_enabled === true })),
+          })
+        }
+      }
+    } catch { studios = [] }
+    return { studios, clients: un1tClients }
+  })()
+  const tagRowsP = Promise.resolve(db.from('contact_tags')
+    .select('tag, location_id, added_at')
+    .eq('contact_id', contact.id)
+    .is('removed_at', null)
+    .order('added_at', { ascending: false })
+    .limit(200))
+  const journeyP = (async () => {
+    try { return await loadContactJourney(db, id) } catch { return null }
+  })()
+  const seqEmailP = Promise.all([
+    db.from('sequence_enrollments')
+      .select('id, next_step_at, email_sequences(name)')
+      .eq('contact_id', id)
+      .eq('status', 'active')
+      .order('next_step_at', { ascending: true }),
+    // CONTACT-MSG.1 — email send history (campaigns + sequences) with
+    // Postmark delivery/engagement state, so "what have we emailed and
+    // did it land?" is answerable without leaving the contact page.
+    db.from('email_sends')
+      .select('id, location_id, created_at, source_type, subject, status, sent_at, delivered_at, opened_at, clicked_at, bounced_at, bounce_type, complained_at')
+      .eq('contact_id', id)
+      .order('sent_at', { ascending: false, nullsFirst: false })
+      .limit(8),
+  ])
+  const templatesP = canWhatsApp
+    ? Promise.resolve(db.from('whatsapp_templates')
+      .select('name, language, components, status, category')
+      .eq('location_id', actingId)
+      .eq('category', 'UTILITY')
+      .eq('status', 'APPROVED')
+      .order('name', { ascending: true }))
+    : null
+  const consultReadsP = canConsultations
+    ? Promise.all([
+      db.from('consultations').select('*').eq('contact_id', contact.id).order('consulted_at', { ascending: false }),
+      db.from('coaching_goals').select('*').eq('contact_id', contact.id).order('created_at', { ascending: false }),
+      db.from('consultation_photos').select('*').eq('contact_id', contact.id).order('taken_at', { ascending: false }),
+      db.from('inbody_scans').select('*').eq('contact_id', contact.id).order('scanned_at', { ascending: false }),
+      // Location staff for the coach <select> + name resolution. The
+      // permissions JSONB isn't needed here, so a slim join is fine.
+      db.from('profile_locations')
+        .select('profiles:profile_id ( id, full_name )')
+        .eq('location_id', contact.location_id),
+    ])
+    : null
+  const consultZoneP = canConsultations ? getLocationZone(db, contact.location_id).catch(() => DEFAULT_TZ) : null
+  const bookingZonesP = getLocationZones(db, [contact.location_id, ...(bookingsRes.data || []).map((b) => b.location_id)])
+    .catch(() => new Map())
+
   // BOOK-ON-PROFILE.1 — bookable consultation event types for the contact's
   // studio, so the profile's Book card matches the inbox Book tab. The card
   // books at the primary studio (its routes judge it), so these are the
   // primary's even when the page acts elsewhere.
-  const eventTypesRes = await db.from('event_types').select('id, name, slug, duration_minutes, availability, active').eq('location_id', contact.location_id).eq('active', true).order('name')
+  const eventTypesRes = await eventTypesP
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
   // commitment terms) from the studio membership catalog by plan name.
   // Current-catalog plans resolve; archived/promo plans Glofox no longer
   // returns won't, and we just show the plan name without terms.
-  if (contact.glofox_membership_plan && contact.location_id) {
-    const { data: catalogRows } = await db.from('glofox_memberships')
-      .select('name_clean, plan_names, description')
-      .eq('location_id', contact.location_id)
+  if (catalogP) {
+    const { data: catalogRows } = await catalogP
     const catMatch = matchCatalogToPlan(catalogRows || [], {
       plan: contact.glofox_membership_plan,
       planFull: contact.glofox_membership_plan_full,
@@ -181,33 +274,7 @@ export default async function ContactDetailPage(props) {
   const bookings = bookingsRes.data || []
   const waConversations = waConvRes.data || []
 
-  // UN1TWRITE.15 — the un1t.online studios this contact can be booked at
-  // from here: an account there (un1t_clients), writes on, and the viewer a
-  // member. Only the writes_enabled boolean leaves the settings (a JSON
-  // path), never the settings object. Best-effort: no card on a failed read.
-  let un1tStudios = []
-  // CARDLENS.8 — the same rows carry each studio's un1t.online counters for
-  // the membership cards, kept only where the viewer holds Contacts (the rule
-  // loadUn1tBilling applies to payments).
-  let un1tClients = []
-  try {
-    const { data: clientRows, error: clientErr } = await db.from('un1t_clients')
-      .select('location_id, last_attended_at, bookings_30d_attended, credit_balance, credit_unlimited, ltv_cents, synced_at').eq('contact_id', contact.id).limit(50)
-    const un1tVisible = new Set(contactStudioIds(user, [...new Set((user.locations || []).map((l) => l?.id).filter(Boolean))]))
-    if (!clientErr) un1tClients = (clientRows || []).filter((r) => un1tVisible.has(r.location_id))
-    const ids = [...new Set((clientRows || []).map((r) => r.location_id).filter(Boolean))]
-    if (!clientErr && ids.length > 0) {
-      const { data: locs, error: locErr } = await db.from('locations')
-        .select('id, name, membership_source, writes_enabled:settings->un1t_online->writes_enabled').in('id', ids)
-      if (!locErr) {
-        un1tStudios = un1tBookingStudios({
-          user,
-          clientRows,
-          locations: (locs || []).map((l) => ({ id: l.id, name: l.name, membership_source: l.membership_source, writes_enabled: l.writes_enabled === true })),
-        })
-      }
-    }
-  } catch { un1tStudios = [] }
+  const { studios: un1tStudios, clients: un1tClients } = await un1tP
   const bookableEventTypes = eventTypesRes?.data || []
 
   // CONTACTTAGS.1 — the automatic tags (contact_tags, mig 085) for the Tags
@@ -217,12 +284,7 @@ export default async function ContactDetailPage(props) {
   // error, and the manual tags (contacts.tags) still show.
   let machineTags = []
   {
-    const { data: tagRows, error: tagErr } = await db.from('contact_tags')
-      .select('tag, location_id, added_at')
-      .eq('contact_id', contact.id)
-      .is('removed_at', null)
-      .order('added_at', { ascending: false })
-      .limit(200)
+    const { data: tagRows, error: tagErr } = await tagRowsP
     if (!tagErr) {
       const tagVisible = new Set(contactStudioIds(user, [...new Set((user.locations || []).map((l) => l?.id).filter(Boolean))]))
       const ruleDescriptions = new Map(TAG_RULES.map((r) => [r.tag, r.description]))
@@ -303,26 +365,9 @@ export default async function ContactDetailPage(props) {
   // tail, or expired without completing), so the compact block below only
   // renders for in-window members. Best-effort — a failed read (or a DB
   // without the journey data) must not blank the profile.
-  let journey = null
-  try {
-    journey = await loadContactJourney(db, id)
-  } catch { journey = null }
+  const journey = await journeyP
 
-  const [seqRes, emailRes] = await Promise.all([
-    db.from('sequence_enrollments')
-      .select('id, next_step_at, email_sequences(name)')
-      .eq('contact_id', id)
-      .eq('status', 'active')
-      .order('next_step_at', { ascending: true }),
-    // CONTACT-MSG.1 — email send history (campaigns + sequences) with
-    // Postmark delivery/engagement state, so "what have we emailed and
-    // did it land?" is answerable without leaving the contact page.
-    db.from('email_sends')
-      .select('id, location_id, created_at, source_type, subject, status, sent_at, delivered_at, opened_at, clicked_at, bounced_at, bounce_type, complained_at')
-      .eq('contact_id', id)
-      .order('sent_at', { ascending: false, nullsFirst: false })
-      .limit(8),
-  ])
+  const [seqRes, emailRes] = await seqEmailP
   const activeSequences = seqRes.data || []
   const messages = buildMessageHistory((emailRes.data || []).filter(inLens))
 
@@ -331,7 +376,7 @@ export default async function ContactDetailPage(props) {
   // ROLESWEEP.1c — each flag is the send route's own decision: the web OR the
   // mobile toggle at the CONTACT's location, not the active studio. canWhatsApp
   // also gates the template read below.
-  const { whatsapp: canWhatsApp, email: canEmail } = contactChannelFlags(user, actingId)
+  // (canWhatsApp / canEmail: contactChannelFlags, computed with the reads above.)
   // CARDLENS.6 — the 24h window and the Book card's thread are the acting
   // studio's thread: a send for that studio files there (WAORGNUMBER.4).
   const latestWaConversation = waConversations.find((c) => c.location_id === actingId) || null
@@ -341,14 +386,8 @@ export default async function ContactDetailPage(props) {
   // Approved WhatsApp UTILITY templates the composer offers once the
   // 24h window has closed. Loaded only when the caller can WhatsApp.
   let composerTemplates = []
-  if (canWhatsApp) {
-    const { data: rawTemplates } = await db
-      .from('whatsapp_templates')
-      .select('name, language, components, status, category')
-      .eq('location_id', actingId)
-      .eq('category', 'UTILITY')
-      .eq('status', 'APPROVED')
-      .order('name', { ascending: true })
+  if (templatesP) {
+    const { data: rawTemplates } = await templatesP
     composerTemplates = (rawTemplates || [])
       .filter(isSendableUtilityTemplate)
       .map((t) => ({
@@ -368,7 +407,7 @@ export default async function ContactDetailPage(props) {
   // ROLESWEEP.1c — judged at the CONTACT's location: a caller with
   // consultations on at their active studio and off at the contact's must not
   // get this contact's consultations, goals, photos or scans loaded.
-  const canConsultations = canLoadContactConsultations(user, contact.location_id)
+  // (canConsultations: computed with the reads above.)
   // ROLEUI.1 — the action buttons, each the decision of the route it calls,
   // judged at the CONTACT's location (never user.role, the active studio's).
   // ORGCONTACTS.4 — Edit widens to the studios the person has a relationship
@@ -382,17 +421,7 @@ export default async function ContactDetailPage(props) {
   const work = lensAll ? { ...actingWork, canNote: false, canTask: false, canSequence: false, canCancelForm: false, canCold: false, canLinkAccounts: false, canStartWhatsApp: false } : actingWork
   let consultationsTab = null
   if (canConsultations) {
-    const [consultsRes, goalsRes, photosRes, scansRes, coachLinksRes] = await Promise.all([
-      db.from('consultations').select('*').eq('contact_id', contact.id).order('consulted_at', { ascending: false }),
-      db.from('coaching_goals').select('*').eq('contact_id', contact.id).order('created_at', { ascending: false }),
-      db.from('consultation_photos').select('*').eq('contact_id', contact.id).order('taken_at', { ascending: false }),
-      db.from('inbody_scans').select('*').eq('contact_id', contact.id).order('scanned_at', { ascending: false }),
-      // Location staff for the coach <select> + name resolution. The
-      // permissions JSONB isn't needed here, so a slim join is fine.
-      db.from('profile_locations')
-        .select('profiles:profile_id ( id, full_name )')
-        .eq('location_id', contact.location_id),
-    ])
+    const [consultsRes, goalsRes, photosRes, scansRes, coachLinksRes] = await consultReadsP
 
     const consultations = consultsRes.data || []
     const contactGoals = goalsRes.data || []
@@ -427,7 +456,7 @@ export default async function ContactDetailPage(props) {
 
     // TZ.13 — a new consultation defaults to today in the contact's home
     // studio zone. Display default only, so an unreadable zone falls back.
-    const consultZone = await getLocationZone(db, contact.location_id).catch(() => DEFAULT_TZ)
+    const consultZone = await consultZoneP
     consultationsTab = (
       <div className="space-y-5">
         <SendKudosCard contactId={contact.id} />
@@ -448,8 +477,7 @@ export default async function ContactDetailPage(props) {
   // TZ.7: each booking's date is its own studio's calendar day (a contact can
   // book at more than one), falling back to the contact's studio. One batched
   // zone read; display only, so an unreadable zone splits on the default day.
-  const bookingZones = await getLocationZones(db, [contact.location_id, ...bookings.map((b) => b.location_id)])
-    .catch(() => new Map())
+  const bookingZones = await bookingZonesP
   const nowMs = Date.now()
   const contactZone = bookingZones.get(contact.location_id) || DEFAULT_TZ
   // The contact's own studio day (the needs-attention chips below).
