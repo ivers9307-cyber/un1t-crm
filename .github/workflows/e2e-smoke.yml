@@ -1,9 +1,11 @@
 # E2E-SMOKE.1 — scheduled browser smoke against production.
 #
-# Read-only journeys (login → dashboard / unified inbox / invoices /
-# pipeline) via Playwright; see e2e/smoke.spec.mjs. Deliberately NOT
-# per-PR: it needs real credentials and a live target, and the per-PR
-# pipeline (web-ci.yml) already covers tests/lint/build.
+# Read-only journeys via Playwright. Deliberately NOT per-PR: it needs a live
+# target, and the per-PR pipeline (web-ci.yml) already covers tests/lint/build.
+#   e2e/public-flows.spec.mjs  (E2EPUBLIC.1) public booking and /trial, up to
+#                              the last click before a write. Needs no login.
+#   e2e/smoke.spec.mjs         login → dashboard / unified inbox / invoices /
+#                              pipeline. Needs the two secrets below.
 #
 # Injection posture: the only user-controllable input (workflow_dispatch
 # base_url) is consumed exclusively via env: assignment — never
@@ -13,8 +15,8 @@
 #   E2E_SMOKE_EMAIL     dedicated smoke user (see the spec header for
 #                       the permissions it needs)
 #   E2E_SMOKE_PASSWORD  its password
-# Until both secrets exist the job exits early and green — no red
-# noise, but the run log says SKIPPED loudly.
+# Until both secrets exist the login journeys show as skipped and the run log
+# carries a warning; the public journeys run regardless.
 
 name: E2E smoke
 
@@ -36,37 +38,33 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # issues: write is for the tracking issue a scheduled failure opens.
+    permissions:
+      contents: read
+      issues: write
     steps:
-      - name: Check secrets
-        id: gate
+      - name: Warn when the login journeys cannot run
         env:
           E2E_EMAIL: ${{ secrets.E2E_SMOKE_EMAIL }}
           E2E_PASSWORD: ${{ secrets.E2E_SMOKE_PASSWORD }}
         run: |
           if [ -z "$E2E_EMAIL" ] || [ -z "$E2E_PASSWORD" ]; then
-            echo "::warning::E2E smoke SKIPPED — E2E_SMOKE_EMAIL / E2E_SMOKE_PASSWORD secrets not configured."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Login journeys SKIPPED — E2E_SMOKE_EMAIL / E2E_SMOKE_PASSWORD secrets not configured. Public journeys still run."
           fi
 
       - uses: actions/checkout@v7
-        if: steps.gate.outputs.configured == 'true'
 
       - uses: actions/setup-node@v7
-        if: steps.gate.outputs.configured == 'true'
         with:
           node-version: 24
           cache: npm
 
       - name: Install deps + Chromium
-        if: steps.gate.outputs.configured == 'true'
         run: |
           npm ci
           npx playwright install --with-deps chromium
 
       - name: Run smoke pack
-        if: steps.gate.outputs.configured == 'true'
         env:
           E2E_BASE_URL: ${{ github.event.inputs.base_url || 'https://crm.repset.ie' }}
           E2E_EMAIL: ${{ secrets.E2E_SMOKE_EMAIL }}
@@ -74,9 +72,33 @@ jobs:
         run: npm run test:e2e
 
       - name: Upload report
-        if: always() && steps.gate.outputs.configured == 'true'
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: playwright-report/
           retention-days: 14
+
+      # A scheduled run has no PR to show a red X on, so a failure opens (or
+      # adds to) one tracking issue. Same pattern as dependency-audit.yml.
+      - name: Open a tracking issue on scheduled failure
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: 'E2E smoke: a production journey failed'
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --repo "$REPO" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          body=$(printf '%s\n' \
+            "The daily browser check failed against production." \
+            "" \
+            "Run: $RUN_URL" \
+            "" \
+            "The run's playwright-report artifact shows which journey stopped and where.")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body "$body"
+          fi
