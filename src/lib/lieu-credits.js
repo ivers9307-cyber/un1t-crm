@@ -229,7 +229,10 @@ export async function getLieuBalance(db, profileId, year) {
 /**
  * Every ledger row of these people dated on or before `to`, for the WRC pack
  * and the Staff Cost report (both judge a period and a running balance).
- * @returns {Promise<{ rows: Array<object>, error: object|null }>}
+ * @param {import('@/lib/supabase').Db} db
+ * @param {string[]} profileIds
+ * @param {{ to?: string | null, from?: string | null }} [opts]
+ * @returns {Promise<{ rows: Array<any>, error: { message: string } | null }>}
  */
 export async function readLieuLedgerForProfiles(db, profileIds, { to, from = null } = {}) {
   const ids = [...new Set((profileIds || []).filter(Boolean))]

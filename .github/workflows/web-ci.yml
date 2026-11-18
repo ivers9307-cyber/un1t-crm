@@ -530,6 +530,12 @@ jobs:
       - name: Schema snapshot matches migrations
         run: npm run check:schema-snapshot
 
+      # DBTYPES.1: files that start with `// @ts-check` are type-checked against
+      # database types generated from the schema snapshot: table, column and
+      # function names, write payloads, nullable reads. Opt-in, file by file.
+      - name: Database types
+        run: npm run check:types
+
       # Phase 0b of the Repset merge — the staff + member mobile apps are
       # merging into ONE binary, after which staff-app JS ships to every
       # member phone. Nothing secret-shaped may live in mobile/** or

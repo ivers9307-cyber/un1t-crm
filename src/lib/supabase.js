@@ -1,6 +1,12 @@
 import { createClient } from '@supabase/supabase-js'
 import { createBrowserClient as createSSRBrowserClient } from '@supabase/ssr'
 
+// DBTYPES.1 — the database client, typed from supabase/schema/snapshot.json.
+// A file that starts with `// @ts-check` gets its table, column and function
+// names checked (npm run check:types). A helper handed a client declares
+// `@param {import('@/lib/supabase').Db} db`.
+/** @typedef {import('@supabase/supabase-js').SupabaseClient<import('../../supabase/schema/database').Database>} Db */
+
 // Browser client (uses anon key, stores session in cookies via @supabase/ssr).
 //
 // `options` is passed straight through to @supabase/ssr's createBrowserClient.
@@ -28,6 +34,7 @@ export function createBrowserClient(options) {
 // learned"). The wrapper was retired under NEXT.16 (Next 15+ defaults
 // fetch to `cache: 'no-store'`, so the Supabase client's internal
 // fetch is no longer cached by the framework).
+/** @returns {Db} */
 export function createServerClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,

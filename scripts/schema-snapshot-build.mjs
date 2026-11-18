@@ -3,6 +3,7 @@
 // (see supabase/schema/snapshot-queries.sql).
 import fs from 'node:fs'
 import { buildSnapshot, stringifySnapshot } from './lib/schema-snapshot.mjs'
+import { renderDatabaseTypes } from './lib/db-types.mjs'
 
 const arg = (name) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : null }
 const [columnsFile, restFile, through] = [arg('columns'), arg('rest'), Number(arg('through'))]
@@ -16,4 +17,6 @@ const snapshot = buildSnapshot({
   through,
 })
 fs.writeFileSync('supabase/schema/snapshot.json', stringifySnapshot(snapshot))
+// DBTYPES.1 — the database types are generated from the snapshot, so they move together.
+fs.writeFileSync('supabase/schema/database.d.ts', renderDatabaseTypes(JSON.parse(stringifySnapshot(snapshot))))
 console.log(`✓ wrote supabase/schema/snapshot.json: ${Object.keys(snapshot.relations).length} relations, ${snapshot.functions.length} functions, through migration ${through}`)

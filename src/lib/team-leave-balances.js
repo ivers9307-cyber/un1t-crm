@@ -1,3 +1,4 @@
+// @ts-check
 // LEAVEBAL.1 — one studio's leave balances in one read, for the manager's
 // Schedule › Leave balances screen (GET /api/schedule/allowances/team).
 //
@@ -32,13 +33,25 @@ const ID_CHUNK = 200
 
 export const TEAM_LEAVE_PARTS = Object.freeze(['allowances', 'entitlements', 'pending', 'lieu'])
 
+/**
+ * @template T
+ * @param {T[]} arr
+ * @param {number} n
+ * @returns {T[][]}
+ */
 function chunk(arr, n) {
   const out = []
   for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
   return out
 }
 
+/**
+ * @template R
+ * @param {(from: number, to: number) => PromiseLike<{ data: R[] | null, error: { message: string } | null }>} make
+ * @returns {Promise<{ rows: R[], error: { message: string } | null }>}
+ */
 async function pageAll(make) {
+  /** @type {R[]} */
   const rows = []
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await make(from, from + PAGE - 1)
@@ -49,8 +62,15 @@ async function pageAll(make) {
   return { rows, error: null }
 }
 
-/** Reads `make(idsPart, from, to)` for every chunk of ids, paged. */
+/**
+ * Reads `make(idsPart, from, to)` for every chunk of ids, paged.
+ * @template R
+ * @param {string[]} ids
+ * @param {(part: string[], from: number, to: number) => PromiseLike<{ data: R[] | null, error: { message: string } | null }>} make
+ * @returns {Promise<{ rows: R[], error: { message: string } | null }>}
+ */
 async function readByIds(ids, make) {
+  /** @type {R[]} */
   const rows = []
   for (const part of chunk(ids, ID_CHUNK)) {
     const res = await pageAll((a, b) => make(part, a, b))
@@ -60,9 +80,13 @@ async function readByIds(ids, make) {
   return { rows, error: null }
 }
 
+/** @typedef {{ id: string, full_name: string | null, employment_type: string | null }} StaffRow */
+
 /**
  * Active, non-deleted staff at one studio: { id, full_name, employment_type }.
- * @returns {Promise<{ staff: Array<object>, error: object|null }>}
+ * @param {import('@/lib/supabase').Db} db
+ * @param {string} locationId
+ * @returns {Promise<{ staff: StaffRow[], error: { message: string } | null }>}
  */
 export async function readStudioStaff(db, locationId) {
   const links = await pageAll((a, b) => db.from('profile_locations')
@@ -88,11 +112,11 @@ export async function readStudioStaff(db, locationId) {
  * unreadable and its figures come back null.
  *
  * @param {object} args
- * @param {Array<{id:string, full_name:string|null, employment_type:string|null}>} args.staff
- * @param {Array<object>|null} args.allowances  staff_allowances rows for the year
- * @param {Array<object>|null} args.entitlements  profile_compensation rows
- * @param {Array<object>|null} args.pending  pending holiday time_off_requests rows
- * @param {Array<object>|null} args.lieuRows  staff_lieu_credits rows dated in the year
+ * @param {StaffRow[]} args.staff
+ * @param {Array<{ profile_id: string, total_days: number, used_days: number, carried_over: number }>|null} args.allowances  staff_allowances rows for the year
+ * @param {Array<{ profile_id: string, annual_leave_entitlement: number | null }>|null} args.entitlements  profile_compensation rows
+ * @param {Array<{ profile_id: string, total_days: number | null }>|null} args.pending  pending holiday time_off_requests rows
+ * @param {Array<any>|null} args.lieuRows  staff_lieu_credits rows dated in the year
  */
 export function buildTeamLeaveRows({ staff, allowances, entitlements, pending, lieuRows }) {
   const allowanceBy = allowances ? new Map(allowances.map((r) => [r.profile_id, r])) : null
@@ -138,6 +162,9 @@ export function buildTeamLeaveRows({ staff, allowances, entitlements, pending, l
 
 /**
  * The whole screen for one studio and year.
+ * @param {import('@/lib/supabase').Db} db
+ * @param {string} locationId
+ * @param {number | string} year
  * @returns {Promise<{ rows: Array<object>|null, unreadable: string[], error: object|null }>}
  *   `error` only when the staff list itself could not be read.
  */
@@ -147,6 +174,7 @@ export async function readTeamLeaveBalances(db, locationId, year) {
   if (error) return { rows: null, unreadable: [], error }
 
   const ids = staff.map((p) => p.id)
+  /** @type {string[]} */
   const unreadable = []
   if (ids.length === 0) return { rows: [], unreadable, error: null }
 
@@ -176,6 +204,11 @@ export async function readTeamLeaveBalances(db, locationId, year) {
     readLieuLedgerForProfiles(db, ids, { from: `${y}-01-01`, to: `${y}-12-31` }),
   ])
 
+  /**
+   * @template R
+   * @param {string} part
+   * @param {{ rows: R[], error: { message: string } | null }} res
+   */
   const ok = (part, res) => {
     if (!res.error) return res.rows
     unreadable.push(part)
