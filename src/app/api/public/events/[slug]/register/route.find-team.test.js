@@ -440,3 +440,21 @@ describe('register route: find_team', () => {
     })
   })
 })
+
+describe('FINDTEAMWAVE.1 — a start time closed to solos', () => {
+  beforeEach(() => { race = { ...RACE, find_team: { enabled: true, closed_wave_ids: [W1] } } })
+
+  it('refuses a solo and writes nothing', async () => {
+    const res = await post(SOLO)
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('find_team_wave_closed')
+    expect(q('teams', 'insert')).toHaveLength(0)
+    expect(q('race_registrations', 'insert')).toHaveLength(0)
+  })
+
+  it('still takes a team', async () => {
+    const res = await post(TEAM)
+    expect(res.status).toBe(200)
+    expect(q('race_registrations', 'insert')).toHaveLength(1)
+  })
+})

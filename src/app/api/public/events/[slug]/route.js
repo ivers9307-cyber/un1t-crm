@@ -17,7 +17,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { getOrgBrandName } from '@/lib/location-branding'
 import { resolveCharitySettings, computeCharityTotals, resolveCharityVideo } from '@/lib/charity-donations'
 import { resolveEntryAmountSettings } from '@/lib/charity-entry-amount'
-import { resolveFindTeamSettings } from '@/lib/find-team'
+import { resolveFindTeamSettings, isSoloClosedForWave } from '@/lib/find-team'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -82,6 +82,8 @@ export async function GET(request, props) {
   )
   const mode = data.capacity_mode === 'people' ? 'people' : 'teams'
   const publicWaves = []
+  // FINDTEAMWAVE.1 — only a race with the option on has solo places to close.
+  const soloSettings = data.kind === 'race' ? resolveFindTeamSettings(data) : null
   for (const w of wavesIn) {
     let isFull = false
     if (w.capacity != null) {
@@ -116,6 +118,7 @@ export async function GET(request, props) {
       label: w.label,
       display_order: w.display_order,
       is_full: isFull,
+      ...(soloSettings?.enabled && isSoloClosedForWave(soloSettings, w.id) ? { solo_closed: true } : {}),
     })
   }
 
@@ -172,9 +175,13 @@ export async function GET(request, props) {
 
   // FINDTEAM.3 — the resolved "find me a team" option, only for a race that has
   // it switched on. The raw settings (confirmation/placed copy) stay server-side.
-  const findTeamSettings = data.kind === 'race' ? resolveFindTeamSettings(data) : null
-  const findTeam = findTeamSettings?.enabled
-    ? { enabled: true, label: findTeamSettings.label, blurb: findTeamSettings.blurb }
+  const findTeam = soloSettings?.enabled
+    ? {
+      enabled: true,
+      label: soloSettings.label,
+      blurb: soloSettings.blurb,
+      ...(publicWaves.some((w) => w.solo_closed) ? { closed_note: soloSettings.closed_note } : {}),
+    }
     : null
 
   return NextResponse.json({

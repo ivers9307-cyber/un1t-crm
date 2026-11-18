@@ -3,6 +3,7 @@
 // them into a team later. No IO, no React/Next/Supabase.
 
 import { z } from 'zod'
+import { UUID_SHAPE } from './uuid-shape'
 
 export const FIND_TEAM_DEFAULTS = Object.freeze({
   enabled: false,
@@ -13,6 +14,9 @@ export const FIND_TEAM_DEFAULTS = Object.freeze({
     "You booked a solo place. We'll put you with a team in your wave and email you once you're placed.",
   placed_subject: "You're on a team for {{event_name}}",
   placed_intro: "Good news, {{first_name}}: you've been placed with team {{team_name}} in the {{when}} wave.",
+  // FINDTEAMWAVE.1 — start times that take teams only, and what the signup says there.
+  closed_wave_ids: Object.freeze([]),
+  closed_note: 'Solo places are closed for this time. Enter as a team, or pick another time to book on your own.',
 })
 
 const copy = z.string().trim().max(2000)
@@ -25,6 +29,8 @@ export const FindTeamSettingsSchema = z.object({
   confirmation_paragraph: copy.optional(),
   placed_subject: copy.optional(),
   placed_intro: copy.optional(),
+  closed_wave_ids: z.array(z.string().regex(UUID_SHAPE)).max(200).optional(),
+  closed_note: copy.optional(),
 })
 
 /**
@@ -42,6 +48,17 @@ export function resolveFindTeamSettings(race) {
   }
   out.enabled = out.enabled === true
   return out
+}
+
+/**
+ * FINDTEAMWAVE.1 — has this start time stopped taking solo entrants? Teams can
+ * still book it. Takes the resolved settings.
+ * @param {{ closed_wave_ids?: string[] }|null|undefined} settings
+ * @param {string|null|undefined} waveId
+ * @returns {boolean}
+ */
+export function isSoloClosedForWave(settings, waveId) {
+  return !!waveId && Array.isArray(settings?.closed_wave_ids) && settings.closed_wave_ids.includes(waveId)
 }
 
 /**

@@ -1424,7 +1424,7 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       />
 
       {kind === 'race' && (
-        <FindTeamSection values={findTeamForm} onChange={setFindTeamField} />
+        <FindTeamSection values={findTeamForm} onChange={setFindTeamField} waves={waves} />
       )}
       {kind !== 'lead_gen' && (
         <EntryPolicySection values={entryPolicyForm} onChange={setEntryPolicyField} />
@@ -2184,13 +2184,14 @@ function CharityDaySection({ enabled, onEnabled, values, onChange, eventId = nul
 
 // FINDTEAM.6 — "Find me a team" copy fields: blank = omitted from the saved
 // object, so FIND_TEAM_DEFAULTS apply (the schema takes no null for text).
-const FIND_TEAM_TEXT_KEYS = ['label', 'blurb', 'confirmation_paragraph', 'placed_subject', 'placed_intro']
+const FIND_TEAM_TEXT_KEYS = ['label', 'blurb', 'confirmation_paragraph', 'placed_subject', 'placed_intro', 'closed_note']
 
 /** race_events.find_team (jsonb) -> the form's state: a boolean and strings. */
 function findTeamToForm(saved) {
   const s = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}
   const f = { enabled: s.enabled === true }
   for (const k of FIND_TEAM_TEXT_KEYS) f[k] = typeof s[k] === 'string' ? s[k] : ''
+  f.closed_wave_ids = Array.isArray(s.closed_wave_ids) ? s.closed_wave_ids : []
   return f
 }
 
@@ -2201,12 +2202,14 @@ function findTeamFromForm(f) {
     const v = String(f[k] ?? '').trim()
     if (v) out[k] = v
   }
+  // FINDTEAMWAVE.1 — a save must never reopen a closed time.
+  if (f.closed_wave_ids?.length) out.closed_wave_ids = f.closed_wave_ids
   return out
 }
 
 // FINDTEAM.6 — the "Find me a team" section: a switch, the choice's copy and
 // the placed email. Presentation only; state lives in RaceEventForm.
-function FindTeamSection({ values, onChange }) {
+function FindTeamSection({ values, onChange, waves }) {
   const input = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
   const labelCls = 'block text-sm text-un1t-subtle mb-1'
   const enabled = values.enabled
@@ -2245,6 +2248,31 @@ function FindTeamSection({ values, onChange }) {
             <label htmlFor="find-team-blurb" className={labelCls}>Short description</label>
             <textarea id="find-team-blurb" rows={2} value={values.blurb} onChange={(e) => onChange('blurb', e.target.value)} placeholder={FIND_TEAM_DEFAULTS.blurb} className={input} />
             <p className="text-[11px] text-un1t-muted mt-1">Shown under the choice on the public signup.</p>
+          </div>
+          {/* FINDTEAMWAVE.1 — only saved times have an id to close. */}
+          {waves.some((w) => w.id) && (
+            <div>
+              <div className={labelCls}>Start times closed to solo entrants</div>
+              <div className="flex flex-wrap gap-3">
+                {waves.filter((w) => w.id).map((w) => (
+                  <label key={w.id} className="flex items-center gap-1.5 text-sm text-un1t-text">
+                    <input
+                      type="checkbox"
+                      checked={values.closed_wave_ids.includes(w.id)}
+                      onChange={(e) => onChange('closed_wave_ids', e.target.checked
+                        ? [...values.closed_wave_ids, w.id]
+                        : values.closed_wave_ids.filter((id) => id !== w.id))}
+                    />
+                    {w.start_time}
+                  </label>
+                ))}
+              </div>
+              <p className="text-[11px] text-un1t-muted mt-1">Teams can still book these times.</p>
+            </div>
+          )}
+          <div>
+            <label htmlFor="find-team-closed-note" className={labelCls}>Message when solo places are closed</label>
+            <textarea id="find-team-closed-note" rows={2} value={values.closed_note} onChange={(e) => onChange('closed_note', e.target.value)} placeholder={FIND_TEAM_DEFAULTS.closed_note} className={input} />
           </div>
           <div>
             <label htmlFor="find-team-confirmation" className={labelCls}>Confirmation paragraph</label>

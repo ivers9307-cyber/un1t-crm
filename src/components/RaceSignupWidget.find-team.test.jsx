@@ -150,3 +150,35 @@ describe('RaceSignupWidget — Find me a team', () => {
     expect(body.members).toHaveLength(1)
   })
 })
+
+describe('RaceSignupWidget — FINDTEAMWAVE.1 time closed to solos', () => {
+  const NOTE = 'Solo places are closed for this time.'
+  const TWO = {
+    ...RACE,
+    find_team: { ...RACE.find_team, closed_note: NOTE },
+    waves: [
+      { id: 'w8', start_time: '08:00:00', label: null, is_full: false, solo_closed: true },
+      { id: 'w9', start_time: '09:00:00', label: null, is_full: false },
+    ],
+  }
+
+  it('picking the closed time moves to the team sizes and disables the solo choice', async () => {
+    await renderWidget(TWO)
+    fireEvent.click(screen.getByRole('button', { name: '08:00' }))
+    expect(screen.getByRole('button', { name: 'Find me a team' }).disabled).toBe(true)
+    expect(screen.getByText(NOTE)).toBeTruthy()
+    expect(screen.getByText('Team name *')).toBeTruthy()
+  })
+
+  it('another time still offers the solo choice', async () => {
+    await renderWidget(TWO)
+    fireEvent.click(screen.getByRole('button', { name: '09:00' }))
+    expect(screen.getByRole('button', { name: 'Find me a team' }).disabled).toBe(false)
+    expect(screen.queryByText(NOTE)).toBeNull()
+  })
+
+  it('opens on the team sizes when the closed time is the only one left', async () => {
+    await renderWidget({ ...TWO, waves: [TWO.waves[0]] })
+    expect(screen.getByText('Team name *')).toBeTruthy()
+  })
+})
