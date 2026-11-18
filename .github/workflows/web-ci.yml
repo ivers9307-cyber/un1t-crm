@@ -523,6 +523,13 @@ jobs:
       - name: RPC name existence
         run: npm run check:rpc-names
 
+      # SCHEMASNAP.1: supabase/schema/snapshot.json is the live schema, captured
+      # read-only. Replays the migrations up to the snapshot and fails on any
+      # table, column or function on one side only (a hand change, or a file
+      # that never ran). Known differences: .schema-snapshot-allowlist.json.
+      - name: Schema snapshot matches migrations
+        run: npm run check:schema-snapshot
+
       # Phase 0b of the Repset merge — the staff + member mobile apps are
       # merging into ONE binary, after which staff-app JS ships to every
       # member phone. Nothing secret-shaped may live in mobile/** or

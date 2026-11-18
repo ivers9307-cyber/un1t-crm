@@ -29,6 +29,7 @@
     "check:dublin-zone": "node scripts/check-dublin-zone.mjs",
     "check:select-columns": "node scripts/check-select-columns.mjs",
     "check:rpc-names": "node scripts/check-rpc-names.mjs",
+    "check:schema-snapshot": "node scripts/check-schema-snapshot.mjs",
     "changelog": "node scripts/changelog.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
     "postinstall": "node scripts/copy-ffmpeg-core.mjs",
