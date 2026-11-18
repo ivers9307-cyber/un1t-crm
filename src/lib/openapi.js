@@ -860,6 +860,23 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'patch',
+  path: '/api/offer-stock/{id}',
+  tags: ['Approvals'],
+  summary: "Set or clear a sale offer's stock limit",
+  description: "Session auth; owner, manager or master at the offer's studio. Ids outside the caller's studios return 404. `stock_limit` null removes the limit. Paid sales count against it wherever they were made, and checkouts opened in the last 35 minutes hold a place.",
+  request: { body: { content: { 'application/json': { schema: z.object({ stock_limit: z.number().int().min(1).max(100000).nullable() }) } } } },
+  responses: {
+    200: { description: '{ id, stock_limit }' },
+    400: { description: 'Invalid limit', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an owner, manager or master at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown or inaccessible offer', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The limit was not saved', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'post',
   path: '/api/offer-purchases/{id}/fulfil',
   tags: ['Approvals'],

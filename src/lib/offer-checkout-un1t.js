@@ -31,6 +31,7 @@ import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { escapeHtml } from '@/lib/html-escape'
 import { oneLine } from '@/lib/sale-offers'
+import { stockRefusalState } from '@/lib/offer-stock'
 import { logWarn, logError } from '@/lib/log'
 
 const LOG = 'offers'
@@ -45,7 +46,7 @@ export const UN1T_OFFER_ORIGIN = 'web_offer'
  *   terms: { terms_accepted_at: string, terms_source: string, terms_version: string|null },
  *   buyer: { name: string, email: string, phone: string },
  *   studioKey?: string }} args studioKey: the /offers/<studio> path segment (default hatch-street)
- * @returns {Promise<{ kind: 'redirect', checkoutUrl: string } | { kind: 'help_filed' } | { kind: 'unavailable', code: string }>}
+ * @returns {Promise<{ kind: 'redirect', checkoutUrl: string } | { kind: 'help_filed' } | { kind: 'unavailable', code: string } | { kind: 'stock_refused', state: 'sold_out'|'all_reserved' }>}
  */
 export async function startUn1tOfferCheckout(db, { offer, location, contact, purchaseId, terms, buyer, studioKey = 'hatch-street' }) {
   const locationId = location.id
@@ -69,6 +70,9 @@ export async function startUn1tOfferCheckout(db, { offer, location, contact, pur
     terms_source: terms.terms_source,
     terms_version: terms.terms_version ?? null,
   })
+  // OFFERSTOCK.1 — the stock trigger refused this checkout: nothing was started.
+  const stockState = stockRefusalState(insErr)
+  if (stockState) return { kind: 'stock_refused', state: stockState }
   if (insErr) {
     logError(LOG, 'un1t offer purchase insert failed', { purchaseId, locationId, offerId: offer.id, code: insErr.code ?? null })
     return { kind: 'unavailable', code: 'purchase_insert_failed' }

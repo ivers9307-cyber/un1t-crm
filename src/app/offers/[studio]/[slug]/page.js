@@ -15,7 +15,8 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { offerIsOpen, offerIsUpcoming, offerHasDeadline, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
-import { resolveOfferStudio, offerRail, offerPageMode } from '@/lib/offer-studios'
+import { resolveOfferStudio, offerRail, offerPageMode, offersPageCopy } from '@/lib/offer-studios'
+import { readOfferStock, offerStockLine } from '@/lib/offer-stock'
 import { studioTermsCopy } from '@/lib/landing-pages'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import SaleCountdown from '@/components/offers/SaleCountdown'
@@ -114,7 +115,12 @@ export default async function OfferPage(props) {
   const priceLabel = formatEuro(offer.price_cents)
   const rail = offerRail(location, offer)
   const provider = rail === 'not_configured' ? null : rail
-  const mode = offerPageMode({ open, upcoming, purchase: resumePurchaseId, cancelled })
+  // OFFERSTOCK.1 — real stock, read fresh on every request. While the last ones
+  // are only held, the form stays: the holder may be this visitor, retrying.
+  const copy = offersPageCopy(location)
+  const stock = open ? (await readOfferStock(db, [offer])).get(offer.id) ?? null : null
+  const stockLine = offerStockLine(stock, copy)
+  const mode = offerPageMode({ open, upcoming, purchase: resumePurchaseId, cancelled, soldOut: stock?.state === 'sold_out' })
   const showCheckout = provider !== null && (mode === 'resume' || mode === 'form')
   const unavailable = provider === null && (mode === 'resume' || mode === 'form')
   // un1t.online's terms and waiver tick, in the studio page's own words. The
@@ -158,6 +164,10 @@ export default async function OfferPage(props) {
       <div style={{ padding: '64px 32px', background: '#0d0d0d', display: 'flex', flexDirection: 'column' }}>
         <div style={{ marginBottom: 18 }}>
           <span className="ofr-display" style={{ fontSize: 56, fontVariantNumeric: 'tabular-nums', display: 'block' }}>{priceLabel}</span>
+          {stockLine && mode === 'form' && <span className="ofr-stock" style={{ marginTop: 8 }}>{stockLine}</span>}
+          {stock?.state === 'all_reserved' && mode === 'form' && (
+            <span style={{ display: 'block', color: '#9a9a9a', marginTop: 8, fontSize: 13, lineHeight: 1.5 }}>{copy.stockReservedBody}</span>
+          )}
         </div>
         {/* A ?purchase= return resumes whatever the window says: a late
             payment is honoured, so a buyer coming back after the close sees
@@ -171,7 +181,13 @@ export default async function OfferPage(props) {
             terms={terms}
             resumePurchaseId={mode === 'resume' ? resumePurchaseId : null}
             cancelled={cancelled}
+            soldOutLabel={copy.soldOut}
           />
+        ) : mode === 'sold_out' ? (
+          <div style={{ paddingTop: 24 }}>
+            <p className="ofr-display" style={{ fontSize: 28 }}>{copy.soldOut}</p>
+            <p style={{ color: '#9a9a9a', marginTop: 12, fontSize: 14, lineHeight: 1.6 }}>{copy.soldOutBody}</p>
+          </div>
         ) : unavailable ? (
           <div style={{ paddingTop: 24 }}>
             <p className="ofr-display" style={{ fontSize: 28 }}>Not available right now</p>
