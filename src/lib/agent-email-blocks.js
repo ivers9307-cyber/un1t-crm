@@ -1,7 +1,8 @@
 // MCPEMAIL.1 — the blocks an agent supplies for a marketing email, and the
 // server-side renderer that turns them into the HTML stored on the campaign.
-// The agent never supplies HTML: everything is escaped, then only three inline
-// patterns are interpreted (**bold**, *italic*, [label](https://…)).
+// The agent never supplies HTML: everything is escaped, then only four inline
+// patterns are interpreted (**bold**, *italic*, ~~red strikethrough~~,
+// [label](https://…)).
 // Merge tags pass through untouched; applyMergeTags() fills them at send time.
 // No footer, unsubscribe link or preheader is added here (the send path owns them).
 import { z } from 'zod'
@@ -134,10 +135,14 @@ const esc = (s) =>
 
 const ESC_LINK_RE = /\[([^\]]+)\]\((https:\/\/[^)\s]+|\{\{(?:unsubscribe_url|preference_url)\}\})\)/g
 const LINK_COLOUR = '#1a1a1a'
+// EMAILSTRIKE.1 — the outer colour paints the line and the inner one keeps the
+// words readable, which works in mail clients without text-decoration-color.
+const STRIKE_COLOUR = '#d11a2a'
 const FONT = "'Helvetica Neue', Arial, sans-serif"
 
 function emphasis(escaped) {
   return escaped
+    .replace(/~~([^~]+?)~~/g, `<span style="color:${STRIKE_COLOUR}; text-decoration:line-through;"><span style="color:${LINK_COLOUR};">$1</span></span>`)
     .replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*\s][^*]*?)\*/g, '<em>$1</em>')
 }

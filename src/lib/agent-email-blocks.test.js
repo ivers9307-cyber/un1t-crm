@@ -24,6 +24,18 @@ describe('agent email blocks', () => {
     expect(html).toContain('&lt;script&gt;')
   })
 
+  it('EMAILSTRIKE.1 — renders ~~text~~ with a red line over readable text', () => {
+    const html = render([{ type: 'list', items: ['~~8:00am~~ **Sold out**', '10:15am'] }])
+    expect(html).toContain('<span style="color:#d11a2a; text-decoration:line-through;"><span style="color:#1a1a1a;">8:00am</span></span> <strong>Sold out</strong>')
+    expect(html).toContain('>10:15am</li>')
+  })
+
+  it('EMAILSTRIKE.1 — escapes what is inside a strikethrough', () => {
+    const html = render([{ type: 'paragraph', text: '~~<img src=x>~~' }])
+    expect(html).toContain('&lt;img src=x&gt;')
+    expect(html).not.toContain('<img src=x>')
+  })
+
   it('renders bold, italic and an https link, and leaves other punctuation alone', () => {
     const html = render([{ type: 'paragraph', text: 'A **bold** and *it* [go](https://x.ie/a?b=1&c=2) _under_ # not-a-heading' }])
     expect(html).toContain('<strong>bold</strong>')
