@@ -45,7 +45,12 @@ export function roleAtDeletion(profile) {
   return profile?.deleted_role ?? profile?.role ?? null
 }
 
-/** Narrow a `profiles` query to rows that are not tombstones. Returns the builder. */
+/**
+ * Narrow a `profiles` query to rows that are not tombstones. Returns the builder.
+ * @template Q
+ * @param {Q} query
+ * @returns {Q}
+ */
 export function excludeTombstones(query) {
   return query.is('deleted_at', null)
 }

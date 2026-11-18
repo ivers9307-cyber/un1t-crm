@@ -30,6 +30,8 @@
     "check:select-columns": "node scripts/check-select-columns.mjs",
     "check:rpc-names": "node scripts/check-rpc-names.mjs",
     "check:schema-snapshot": "node scripts/check-schema-snapshot.mjs",
+    "check:types": "node scripts/check-types.mjs",
+    "db:types": "node scripts/generate-db-types.mjs",
     "changelog": "node scripts/changelog.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
     "postinstall": "node scripts/copy-ffmpeg-core.mjs",
