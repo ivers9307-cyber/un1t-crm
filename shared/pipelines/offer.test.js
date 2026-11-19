@@ -69,3 +69,32 @@ describe('offer module', () => {
     expect(offerClaimLive(claim, conv, claim.end + 22 * DAY, c)).toBe(false)
   })
 })
+
+describe('OPENWEEK.8 — Done only for people who trained enough', () => {
+  const DONE2 = { role: 'done', slug: 'o_b_done', name: 'Completed', min_classes: 2 }
+  const board = cfg([N, F, DONE2, CONV])
+  const after = claim.end + DAY
+
+  it('after the end, 2 or more classes is Done', () => {
+    expect(classify(attended(2), after, claim, board)).toBe('o_b_done')
+    expect(classify(attended(3), after, claim, board)).toBe('o_b_done')
+  })
+
+  it('after the end, 0 or 1 class stays where it was', () => {
+    expect(classify(attended(1), after, claim, board)).toBe('o_b_first_class')
+    expect(classify(attended(0), after, claim, board)).toBe('o_b_new')
+  })
+
+  it('before the end, 2 classes is still Active', () => {
+    expect(classify(attended(2), claim.start + DAY, claim, board)).toBe('o_b_first_class')
+  })
+
+  it('offerClaimEnd: a fixed end wins over the day count, never before the start', async () => {
+    const { offerClaimEnd } = await import('./offer.js')
+    const fixed = cfg([N, DONE2], { ends_at: '2026-11-30T00:00:00.000Z' })
+    expect(offerClaimEnd(START, fixed)).toBe(Date.parse('2026-11-30T00:00:00.000Z'))
+    expect(offerClaimEnd(START, board)).toBe(START + 14 * DAY)
+    const past = cfg([N, DONE2], { ends_at: '2026-10-01T00:00:00.000Z' })
+    expect(offerClaimEnd(START, past)).toBe(START + 14 * DAY)
+  })
+})

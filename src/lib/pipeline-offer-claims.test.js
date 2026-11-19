@@ -226,6 +226,15 @@ describe('loadOfferClaimsForLocation', () => {
     expect([...out.offersByContact.keys()]).toEqual(['c1'])
     expect(out.offersByContact.get('c1').get('o_corp')).toEqual({ start: T0, end: T0 + 7 * DAY, source: 'corp_promo', claimedAt: iso(T0) })
   })
+  it('OPENWEEK.8: a board with ends_at ends every claim then, whenever it started', async () => {
+    const END = T0 + 10 * DAY
+    const boards = [board('o_corp', { type: 'corp_promo', values: ['acme'] }, { duration_days: 7, ends_at: iso(END) })]
+    const { db } = fakeDb({ corp_promo_claims: [
+      { id: 'k1', location_id: LOC, contact_id: 'c1', promo_key: 'acme', status: 'granted', created_at: iso(T0), updated_at: iso(T0) },
+    ] })
+    const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }], now: T0 })
+    expect(out.offersByContact.get('c1').get('o_corp')).toMatchObject({ start: T0, end: END })
+  })
   it('leadSourceRecordedOnce', async () => {
     const boards = [board('o_lead', { type: 'lead_source', values: ['meta_x'] })]
     // PIPEBUILD.5m — every claim is dated by the contact's own times: a last

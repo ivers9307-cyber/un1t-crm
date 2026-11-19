@@ -124,3 +124,35 @@ describe('stageSlugFor', () => {
     expect(parseOfferConfig({ ...full(), signer: 'x'.repeat(41) }, { boardKey: KEY }).errors).toContain('signer must be 40 characters or fewer')
   })
 })
+
+describe('OPENWEEK.8 — a fixed end and a class floor for Done', () => {
+  const ow = (extra = {}, done = {}) => parseOfferConfig({
+    entry: { type: 'corp_promo', values: ['hatch-open-week'] },
+    stages: [
+      { role: 'new', slug: 'o_ow_new', name: 'Leads' },
+      { role: 'first_class', slug: 'o_ow_first_class', name: 'Active' },
+      { role: 'done', slug: 'o_ow_done', name: 'Completed', ...done },
+      { role: 'converted', slug: 'o_ow_converted', name: 'Converted' },
+    ],
+    ...extra,
+  }, { boardKey: 'o_ow' })
+
+  it('keeps ends_at (an ISO instant) and the done stage min_classes', () => {
+    const r = ow({ ends_at: '2026-11-30T00:00:00.000Z' }, { min_classes: 2 })
+    expect(r.ok).toBe(true)
+    expect(r.config.ends_at).toBe('2026-11-30T00:00:00.000Z')
+    expect(r.config.stages[2]).toEqual({ role: 'done', slug: 'o_ow_done', name: 'Completed', min_classes: 2 })
+  })
+
+  it('leaves both out when they are not given', () => {
+    const r = ow()
+    expect(r.config).not.toHaveProperty('ends_at')
+    expect(r.config.stages[2]).not.toHaveProperty('min_classes')
+  })
+
+  it('refuses an unreadable ends_at and a bad min_classes', () => {
+    expect(ow({ ends_at: 'next sunday' }).errors).toContain('ends_at must be a date and time')
+    expect(ow({}, { min_classes: 0 }).errors.join(' ')).toMatch(/min_classes/)
+    expect(ow({}, { min_classes: 2.5 }).errors.join(' ')).toMatch(/min_classes/)
+  })
+})
