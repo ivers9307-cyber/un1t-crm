@@ -89,6 +89,7 @@ const DEFAULT_PIPELINES = [
 function fakeDb({
   contacts = [], deals = [], stages = STAGES,
   pipelines = DEFAULT_PIPELINES, runRow = { id: 'run-1' },
+  contactStudios = [], contactStudiosError = null,
 } = {}) {
   const writes = {
     runInsert: null,
@@ -157,6 +158,10 @@ function fakeDb({
       if (table === 'pipeline_stages') return resolve({ data: applyFilters(stages), error: null })
       if (table === 'contacts')        return resolve({ data: applyFilters(contacts), error: null })
       if (table === 'deals')           return resolve({ data: applyFilters(deals), error: null })
+      // STUDIOLINKED.1 — the links that bring in contacts filed at another studio.
+      if (table === 'contact_studios') {
+        return resolve(contactStudiosError ? { data: null, error: contactStudiosError } : { data: applyFilters(contactStudios), error: null })
+      }
       return resolve({ data: [], error: null })
     }
     return c
@@ -514,6 +519,8 @@ describe('HATCHPIPE.2 — contacts-input path is unchanged', () => {
       ['contacts',
         ['select', 'id, name, email, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, last_attended_at, total_attended_7d, total_attended_30d, last_payment_at, joined_at, created_at, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at, gympass_member_id, last_lead_source_at'],
         ['eq', 'location_id', 'loc-st'], ['order', 'id', { ascending: true }], ['range', 0, 999]],
+      // STUDIOLINKED.1 — the links that bring in contacts filed at another studio (none here).
+      ['contact_studios', ['select', 'contact_id'], ['eq', 'location_id', 'loc-st'], ['eq', 'status', 'active'], ['order', 'contact_id', { ascending: true }], ['range', 0, 999]],
       ['deals',
         // PIPE3 — pipeline_id joined the read (a cross-board move must know the board it leaves).
         ['select', 'id, contact_id, stage_id, pipeline_id'],
@@ -1913,6 +1920,8 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
       ['contacts',
         ['select', 'id, name, email, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, last_attended_at, total_attended_7d, total_attended_30d, last_payment_at, joined_at, created_at, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at, gympass_member_id, last_lead_source_at'],
         ['eq', 'location_id', STILL], ['order', 'id', { ascending: true }], ['range', 0, 999]],
+      // STUDIOLINKED.1 — the links that bring in contacts filed at another studio (none here).
+      ['contact_studios', ['select', 'contact_id'], ['eq', 'location_id', STILL], ['eq', 'status', 'active'], ['order', 'contact_id', { ascending: true }], ['range', 0, 999]],
       ['locations', ['select', 'settings'], ['eq', 'id', STILL], ['maybeSingle']],
       ['trial_purchases',
         ['select', 'id, contact_id, status, payment_status, paid_at, granted_at, duration_days, plan_code, landing_path, page_id'],
@@ -3000,5 +3009,52 @@ describe('offer_un1t on the un1t path (PIPEBUILD.3b)', () => {
     const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
     expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['o_c'], board_histogram: { acquisition: 1, o_x: 1 } })
     expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'o_c', reason: 'un1t_online_studio' }))
+  })
+})
+
+describe('STUDIOLINKED.1 — contacts linked to the studio but filed at another', () => {
+  const lead = (id, location_id) => ({
+    id, name: `Lead ${id}`, email: `${id}@x.com`, location_id,
+    glofox_membership_status: 'lead', recent_bookings: [],
+    joined_at: isoDaysAgo(2), created_at: isoDaysAgo(2), trial_credits_remaining: null,
+  })
+
+  it('places a contact filed at another studio that holds an active link here', async () => {
+    const { db, writes } = fakeDb({
+      contacts: [lead('home', 'loc-1'), lead('linked', 'loc-2'), lead('elsewhere', 'loc-2')],
+      contactStudios: [
+        { contact_id: 'home', location_id: 'loc-1', status: 'active' },
+        { contact_id: 'linked', location_id: 'loc-1', status: 'active' },
+        { contact_id: 'ended', location_id: 'loc-1', status: 'ended' },
+        { contact_id: 'elsewhere', location_id: 'loc-2', status: 'active' },
+      ],
+    })
+    const out = await reclassifyAllContacts(db, { locationId: 'loc-1' })
+    expect(out.ok).toBe(true)
+    expect(out.contacts_seen).toBe(2)
+    const created = writes.dealInserts.map((d) => d.contact_id).sort()
+    expect(created).toEqual(['home', 'linked'])
+    expect(writes.dealInserts.every((d) => d.location_id === 'loc-1')).toBe(true)
+  })
+
+  it('a contact filed here and linked here is read once', async () => {
+    const { db, writes } = fakeDb({
+      contacts: [lead('home', 'loc-1')],
+      contactStudios: [{ contact_id: 'home', location_id: 'loc-1', status: 'active' }],
+    })
+    const out = await reclassifyAllContacts(db, { locationId: 'loc-1' })
+    expect(out.contacts_seen).toBe(1)
+    expect(writes.dealInserts).toHaveLength(1)
+  })
+
+  it('an unreadable link fails the run and places nobody', async () => {
+    const { db, writes } = fakeDb({
+      contacts: [lead('home', 'loc-1')],
+      contactStudiosError: { message: 'boom' },
+    })
+    const out = await reclassifyAllContacts(db, { locationId: 'loc-1' })
+    expect(out.ok).toBe(false)
+    expect(out.error).toMatch(/contact load/)
+    expect(writes.dealInserts).toHaveLength(0)
   })
 })

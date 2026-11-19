@@ -587,6 +587,20 @@ export async function reclassifyAllContacts(db, args) {
       if (contacts.length >= HARD_LIMIT) break     // hit the safety cap
       pageStart += PAGE_SIZE
     }
+    // STUDIOLINKED.1 (Richard, 19 Nov 2026) — and every contact LINKED to this
+    // studio whose record is filed at another one (an active contact_studios
+    // row here, ORGCONTACTS). A Hatch lead who signs up at Stillorgan keeps
+    // their Hatch record, so the location_id read above never saw them: the
+    // Glofox sync placed them on its own, and this run never moved them on.
+    // The un1t.online path already reads by link (pipelineInputs). An
+    // unreadable link fails the run like an unreadable contact page.
+    if (!pageErr && contacts.length < HARD_LIMIT) {
+      const linked = await loadStudioLinkedContacts(db, {
+        locationId, selectCols, have: new Set(contacts.map((c) => c.id)), room: HARD_LIMIT - contacts.length,
+      })
+      if (linked.error) pageErr = linked.error
+      else contacts.push(...linked.contacts)
+    }
   }
   const contactsErr = pageErr
   if (contactsErr) {
@@ -1578,6 +1592,39 @@ async function loadUn1tInputs(db, locationId, now) {
     return { ok: false, source, state, reason: 'read_failed', err: res?.error ? boundedErr(res.error) : 'malformed answer' }
   }
   return { ok: true, data }
+}
+
+/**
+ * STUDIOLINKED.1 — the contacts with an active contact_studios row at
+ * `locationId` that the location_id read did not already return (`have`),
+ * at most `room` of them. Two reads: the links (paged), then the contacts by
+ * id in chunks.
+ * @returns {Promise<{ contacts: object[], error?: object }>}
+ */
+export async function loadStudioLinkedContacts(db, { locationId, selectCols, have, room }) {
+  const PAGE = 1000
+  const CHUNK = 200
+  const ids = []
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db.from('contact_studios').select('contact_id')
+      .eq('location_id', locationId).eq('status', 'active')
+      .order('contact_id', { ascending: true }).range(from, from + PAGE - 1)
+    if (error) return { contacts: [], error }
+    for (const r of data || []) if (r?.contact_id && !have.has(r.contact_id)) ids.push(r.contact_id)
+    if ((data || []).length < PAGE) break
+  }
+  const out = []
+  for (let i = 0; i < ids.length && out.length < room; i += CHUNK) {
+    const { data, error } = await db.from('contacts').select(selectCols)
+      .in('id', ids.slice(i, i + CHUNK)).order('id', { ascending: true })
+    if (error) return { contacts: [], error }
+    for (const c of data || []) {
+      if (!c?.id || have.has(c.id) || out.length >= room) continue
+      have.add(c.id)
+      out.push(c)
+    }
+  }
+  return { contacts: out }
 }
 
 async function markRun(db, runId, fields, startedAt) {
