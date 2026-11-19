@@ -13,6 +13,8 @@ vi.mock('@/lib/contact-events', () => ({ emitEvent: vi.fn(async () => {}), apply
 vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn(), logInfo: vi.fn() }))
 const fileRefundCard = vi.fn()
 vi.mock('@/lib/un1t-online-approval', () => ({ fileRefundCard: (...a) => fileRefundCard(...a) }))
+const markDonationRefunded = vi.fn(async () => ({ changed: true }))
+vi.mock('@/lib/donation-payments', () => ({ markDonationRefunded: (...a) => markDonationRefunded(...a) }))
 
 const { getCurrentUser } = await import('@/lib/auth')
 const { createServerClient } = await import('@/lib/supabase')
@@ -106,5 +108,30 @@ describe('refunding a paid trial or offer', () => {
     const res = await post()
     expect(res.status).toBe(409)
     expect(fileRefundCard).not.toHaveBeenCalled()
+  })
+
+  // ORDERSMORE.1
+  it('a full donation refund marks the donation refunded, by the person who refunded it', async () => {
+    createServerClient.mockReturnValue(fakeDb({ ...BASE, source_type: 'donation', source_id: 'd1', payment_provider: 'revolut', payment_provider_ref: 'rev-d' }))
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect(markDonationRefunded).toHaveBeenCalledWith(expect.objectContaining({ donationId: 'd1', byProfileId: 'u1' }))
+  })
+
+  it('a donation that could not be marked refunded is logged; the refund still stands', async () => {
+    markDonationRefunded.mockRejectedValueOnce(new Error('db down'))
+    createServerClient.mockReturnValue(fakeDb({ ...BASE, source_type: 'donation', source_id: 'd1', payment_provider: 'revolut', payment_provider_ref: 'rev-d' }))
+    const res = await post()
+    expect(res.status).toBe(200)
+  })
+
+  it.each([['staff_payment_link', 'staff_payment_links'], ['class_fee', 'class_fees']])('a un1t.online %s files a refund card, reading the buyer from %s', async (sourceType, table) => {
+    const db = fakeDb({ ...BASE, source_type: sourceType, source_id: 's9', payment_provider: 'un1t_online', payment_provider_ref: 'tx-9' })
+    createServerClient.mockReturnValue(db)
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect(refundPayment).not.toHaveBeenCalled()
+    expect(fileRefundCard).toHaveBeenCalledWith(db, expect.objectContaining({ un1tUserId: 'un1t-u9', transactionIds: ['tx-9'], originRef: 'o1' }))
+    expect(db.calls.find((c) => c.table === table)).toBeTruthy()
   })
 })

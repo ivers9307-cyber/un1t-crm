@@ -29,6 +29,10 @@ const SOURCE_LABELS = {
   car_deposit: 'Car deposit',
   trial_purchase: 'Paid trial',
   offer_purchase: 'Offer',
+  class_booking: 'Class booking',
+  donation: 'Donation',
+  staff_payment_link: 'Payment link',
+  class_fee: 'Class fee',
 }
 
 // What the second line of the Source cell says, from the order's metadata.
@@ -37,6 +41,10 @@ export function orderSourceDetail(row) {
   if (row.source_type === 'race_registration') return '' // race name lookup would require extra join
   if (row.source_type === 'trial_purchase') return meta.product_name || ''
   if (row.source_type === 'offer_purchase') return meta.offer_name || ''
+  if (row.source_type === 'class_booking') return meta.class_name || ''
+  if (row.source_type === 'donation') return ''
+  if (row.source_type === 'staff_payment_link') return meta.product_title || ''
+  if (row.source_type === 'class_fee') return meta.class_title || ''
   return [meta.car_make, meta.car_model, meta.irish_reg].filter(Boolean).join(' ')
 }
 
@@ -152,6 +160,10 @@ export default function OrdersTable() {
           <option value="car_deposit">Car deposits</option>
           <option value="trial_purchase">Paid trials</option>
           <option value="offer_purchase">Offers</option>
+          <option value="class_booking">Class bookings</option>
+          <option value="donation">Donations</option>
+          <option value="staff_payment_link">Payment links</option>
+          <option value="class_fee">Class fees</option>
         </select>
         <input
           type="date"

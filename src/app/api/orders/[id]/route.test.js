@@ -114,7 +114,7 @@ function mockDb({
       const select = vi.fn(() => ({ eq }))
       return { select }
     }
-    if (table === 'trial_purchases' || table === 'offer_purchases') {
+    if (['trial_purchases', 'offer_purchases', 'class_booking_requests', 'donations', 'staff_payment_links', 'class_fees'].includes(table)) {
       // ORDERSTRIALS.1 — .select().eq('id').eq('location_id').maybeSingle()
       const filters = []
       const maybe = vi.fn(() => Promise.resolve({ data: sourceRows[table] ?? null, error: null }))
@@ -237,5 +237,20 @@ describe('GET /api/orders/[id]', () => {
     const body = await (await GET(FAKE_REQUEST, { params: { id: 'order-1' } })).json()
     expect(body.data.source).toEqual({ kind: 'offer_purchase', purchase })
     expect(lastSource.offer_purchases.filters).toEqual([['id', 'src-1'], ['location_id', 'loc-A']])
+  })
+
+  // ORDERSMORE.1 — every new source is read at the order's studio.
+  it.each([
+    ['class_booking', 'class_booking_requests', 'booking'],
+    ['donation', 'donations', 'donation'],
+    ['staff_payment_link', 'staff_payment_links', 'link'],
+    ['class_fee', 'class_fees', 'fee'],
+  ])('returns the %s summary, read at the order\'s studio', async (sourceType, table, key) => {
+    getCurrentUser.mockResolvedValue(manager)
+    const row = { id: 'src-1' }
+    createServerClient.mockReturnValue(mockDb({ order: { ...baseOrder, source_type: sourceType }, sourceRows: { [table]: row } }))
+    const body = await (await GET(FAKE_REQUEST, { params: { id: 'order-1' } })).json()
+    expect(body.data.source).toEqual({ kind: sourceType, [key]: row })
+    expect(lastSource[table].filters).toEqual([['id', 'src-1'], ['location_id', 'loc-A']])
   })
 })
