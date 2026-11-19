@@ -8,6 +8,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import OrdersTable from '@/components/OrdersTable'
+import OrdersSummary from '@/components/OrdersSummary'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,9 +24,10 @@ export default async function OrdersIndexPage() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-un1t-text">Orders</h1>
         <p className="text-sm text-un1t-subtle mt-1">
-          Every transaction across races, cars, and future revenue streams.
+          Every payment the CRM takes: races, car deposits, trials, offers, class bookings, donations, payment links and class fees.
         </p>
       </header>
+      <OrdersSummary />
       <OrdersTable />
     </div>
   )

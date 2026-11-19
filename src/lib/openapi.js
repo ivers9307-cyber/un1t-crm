@@ -2090,6 +2090,21 @@ registry.registerPath({
   },
 })
 
+// ORDERSVIEW.1 — the owner totals above the Orders list.
+registry.registerPath({
+  method: 'get',
+  path: '/api/orders/summary',
+  tags: ['Orders'],
+  summary: 'Order totals by kind and studio, and recent refunds',
+  description: 'Session auth, Manager+ with the orders permission, scoped to the active studio (a master with none sees every studio). Completed and refunded orders only; currencies are kept apart. Optional `from` / `to` (ISO) filter on created_at.',
+  request: { query: z.object({ from: z.string().optional(), to: z.string().optional() }) },
+  responses: {
+    200: { description: '{ totals: [{ location_id, source_type, currency, orders, gross_cents, refunded_cents, net_cents }], studios, refunds, truncated }' },
+    403: { description: 'Not allowed', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Could not read the orders', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/events/{id}/donations/{donationId}/refunded',
