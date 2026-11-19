@@ -69,6 +69,7 @@ const ROUTES = {
   'receipt-coverage-weekly': await import('./receipt-coverage-weekly/route.js'),
 }
 const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
+const { sendEmail } = await import('@/lib/postmark')
 const { buildMorningBriefingEmail } = await import('@/lib/morning-briefing')
 const { buildAdReportEmail } = await import('@/lib/ads/report')
 const { locationIdsWithoutCapability } = await import('@/lib/membership/locations-for-source')
@@ -100,7 +101,6 @@ beforeEach(() => {
 const CASES = [
   // Monday 6 Jul 2026 (IST / EDT)
   ['morning-briefing', ['2026-07-06T05:00:00Z', '2026-07-06T06:00:00Z', '2026-07-06T07:00:00Z', '2026-07-06T10:00:00Z', '2026-07-06T11:00:00Z']],
-  ['churn-radar-digest', ['2026-07-06T06:00:00Z', '2026-07-06T07:00:00Z', '2026-07-06T08:00:00Z', '2026-07-06T11:00:00Z', '2026-07-06T12:00:00Z']],
   ['ad-report-email', ['2026-07-01T06:00:00Z', '2026-07-01T07:00:00Z', '2026-07-01T08:00:00Z', '2026-07-01T11:00:00Z', '2026-07-01T12:00:00Z']],
   ['run-scheduled-reports', ['2026-07-01T06:00:00Z', '2026-07-01T07:00:00Z', '2026-07-01T08:00:00Z', '2026-07-01T11:00:00Z', '2026-07-01T12:00:00Z']],
   // Friday 3 Jul 2026: 08:00 IST = 07:00Z (the old 07:00 UTC firing), 08:00 EDT = 12:00Z
@@ -112,9 +112,11 @@ describe('TZ.6 location-loop daily crons act once per location, at its slot', ()
     expect(await ticks(cron, isos)).toEqual([DUB, NYC])
   })
 
-  it('morning-briefing and churn-radar-digest do nothing on a Tuesday', async () => {
-    expect(await ticks('morning-briefing', ['2026-07-07T06:00:00Z', '2026-07-07T10:00:00Z'])).toEqual([])
-    expect(await ticks('churn-radar-digest', ['2026-07-07T07:00:00Z', '2026-07-07T11:00:00Z'])).toEqual([])
+  // OWNERDAILY.1 — the briefing is daily now; the Monday digest sends nothing.
+  it('the briefing acts on a Tuesday too; the radar digest acts for nobody, ever', async () => {
+    expect(await ticks('morning-briefing', ['2026-07-07T06:00:00Z', '2026-07-07T10:00:00Z'])).toEqual([DUB, NYC])
+    expect(await ticks('churn-radar-digest', ['2026-07-06T07:00:00Z', '2026-07-06T11:00:00Z'])).toEqual([])
+    expect(sendEmail.mock.calls.filter(([a]) => a?.tag === 'churn-radar-digest')).toEqual([])
   })
 
   it('receipt-coverage-weekly in winter: 08:00 GMT is 08:00Z (the old 08:00 UTC firing), not 07:00Z', async () => {
@@ -158,8 +160,8 @@ describe('TZ.6 location-loop daily crons act once per location, at its slot', ()
 
   it('a slot tick that crashes does not stamp', async () => {
     locationIdsWithoutCapability.mockRejectedValueOnce(new Error('boom'))
-    vi.setSystemTime(Date.parse('2026-07-06T07:00:00Z'))
-    await expect(ROUTES['churn-radar-digest'].GET(req())).rejects.toThrow('boom')
+    vi.setSystemTime(Date.parse('2026-07-06T06:00:00Z'))
+    await expect(ROUTES['morning-briefing'].GET(req())).rejects.toThrow('boom')
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 

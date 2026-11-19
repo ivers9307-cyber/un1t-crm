@@ -33,7 +33,6 @@ const MANIFEST = Object.freeze({
   // crons
   'src/app/api/cron/churn-radar-snapshot/route.js': 'weekly Hatch churn_radar_snapshots row (Mon 06:00 UTC) via the seam-aware loadRadar',
   'src/app/api/cron/lead-radar-snapshot/route.js': 'weekly Hatch lead_radar_snapshots row (Mon 06:30 UTC) via the seam-aware loadFunnel',
-  'src/app/api/cron/churn-radar-digest/route.js': "Monday digest email to Hatch's churn_digest_recipients list (staff only; an empty list sends nothing)",
   'src/app/api/cron/morning-briefing/route.js': "the Studio pulse strip in Hatch's briefing (counts via the seam, comparator hidden until 30 days of snapshots)",
   // pages
   'src/app/dashboard/churn-radar/page.js': 'full radar page at Hatch, incl. the digest and dunning settings cards',
