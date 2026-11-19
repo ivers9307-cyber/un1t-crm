@@ -47,6 +47,7 @@
 // nothing is written. A failed side effect counts in `failed`, is logged with
 // ids and codes only (never an email, phone or raw PostgREST error, whose
 // details can name them), and never stops the rest of the run.
+import { sendOfferPurchaseConversion } from './offer-purchase-conversion'
 import { linkOrCreateContactForPurchase, notifyStaffOfPaidPurchase, OFFER_SALE_TAG } from '@/lib/sale-offers'
 import { writeContactTag } from '@/lib/contact-tags'
 import { runSetPasswordStep } from '@/lib/un1t-online-account'
@@ -254,6 +255,8 @@ async function settlePageRow(db, row, offer, t, nowMs, out) {
   }
   out.matchedPage++
   const purchase = { ...row, ...patch }
+  // OFFERTRACK.1 — the Meta Purchase for a page sale, once, as this run settled it. Never throws.
+  await sendOfferPurchaseConversion(db, row.id)
 
   let contactId = row.contact_id ?? null
   try {

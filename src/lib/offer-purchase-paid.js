@@ -5,14 +5,17 @@
 // reconcile cron (/api/cron/revolut-reconcile). Call it only when
 // markOfferPurchaseState returned `{ changed: true, state: 'paid' }`.
 //
-// Contact link/tag, the staff ops alert, then the buyer receipt. The receipt
+// The Meta Purchase (OFFERTRACK.1), the contact link/tag, the staff ops alert, then the buyer receipt. The receipt
 // deliberately says "within 24 hours", NOT "it's ready": fulfilment is a
 // manual Glofox step that has not happened yet. Throws on a failure so each
 // caller logs it under its own module; none of them may fail its response.
 import { linkOrCreateContactForPurchase, notifyStaffOfPaidPurchase } from './sale-offers'
 import { sendOfferPurchaseEmail } from './offer-purchase-emails'
+import { sendOfferPurchaseConversion } from './offer-purchase-conversion'
 
 export async function runOfferPaidSideEffects(db, purchase) {
+  // OFFERTRACK.1 — the Meta Purchase, once, here at the paid transition. Never throws.
+  await sendOfferPurchaseConversion(db, purchase.id)
   const { contactId } = await linkOrCreateContactForPurchase(db, purchase)
   await notifyStaffOfPaidPurchase(db, purchase, purchase.offer || {})
   await sendOfferPurchaseEmail(db, {
