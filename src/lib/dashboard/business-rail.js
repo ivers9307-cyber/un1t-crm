@@ -17,7 +17,7 @@ import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { radarReadsFor } from '@/lib/membership/reads/index'
 import { membershipReadsFor } from '@/lib/membership/reads'
 import { providesCapability } from '@/lib/membership/state-for-page'
-import { cachedChurnRadar, highRiskOf } from '@/lib/dashboard/churn-count'
+import { cachedChurnRadar, highRiskOf, arrearsOf } from '@/lib/dashboard/churn-count'
 import { totalLabel } from '@/lib/radar-copy'
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
@@ -65,23 +65,20 @@ async function failedRow(db, locationId, now) {
   return null
 }
 
-// 3. Arrears — same source as the KPI card (PAST_DUE post-reconcile).
-// UN1TRADAR.2 — through the membership seam by source key (the Glofox
-// adapter's `arrears` is fetchArrearsSummary, so Stillorgan's text is
-// unchanged); a source with no arrears read, or a failed one, omits the row.
+// 3. Arrears. ARREARSONE.1 — the KPI card's number (overdue memberships minus
+// the dismissed, the radar's Overdue tab), through the shared radar cache so
+// the page scans once. Only where the studio's source supplies memberships;
+// a failed or missing radar omits the row.
 async function arrearsRow(db, locationId) {
   try {
-    const { source, reads } = await radarReadsFor(db, locationId)
-    if (typeof reads.arrears !== 'function') return null
-    const res = await reads.arrears(db, locationId)
-    if (res.success && res.data.memberCount > 0) {
-      const n = res.data.memberCount
+    const m = await membershipReadsFor(db, locationId)
+    if (!m?.reads || !providesCapability(m, 'memberships')) return null
+    const a = arrearsOf(await cachedChurnRadar(db, locationId))
+    if (a && a.memberCount > 0) {
+      const n = a.memberCount
       return {
         key: 'arrears', chip: 'Arrears', tone: 'amber',
-        // Glofox keeps its exact text; other sources get the dash-free form
-        text: source === 'glofox'
-          ? `${n} member${n === 1 ? '' : 's'} — €${Math.round(res.data.totalCents / 100).toLocaleString('en-IE')} owed`
-          : `${n} member${n === 1 ? ' owes' : 's owe'} ${totalLabel(res.data.totalCents, { estimated: res.data.estimated === true })}`,
+        text: `${n} member${n === 1 ? ' owes' : 's owe'} ${totalLabel(a.totalCents, { estimated: a.estimated })}`,
         href: '/dashboard/churn-radar',
       }
     }

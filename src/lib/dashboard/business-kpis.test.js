@@ -67,7 +67,9 @@ function happyPathMocks() {
   fetchRevenueMTD.mockResolvedValue({ success: true, data: { totalCents: 1234500, paidCount: 42, deltaPct: 12.4 } })
   fetchArrearsSummary.mockResolvedValue({ success: true, data: { totalCents: 45000, memberCount: 3 } })
   computeMembershipCounts.mockResolvedValue({ active_recurring: 210, monthly_recurring: 250 })
-  loadRadar.mockResolvedValue({ summary: { highRisk: 5 } })
+  // ARREARSONE.1 — arrears are the radar's Overdue count (overdue memberships
+  // minus the dismissed), not the invoice table's past-due total.
+  loadRadar.mockResolvedValue({ summary: { highRisk: 5, overdue: 3, overdueValueCents: 45000 } })
   getPendingApprovalsCount.mockResolvedValue(2)
   membershipStateForPage.mockResolvedValue(GLOFOX_STATE)
 }
@@ -86,7 +88,7 @@ describe('buildBusinessKpis', () => {
     const vm = await buildBusinessKpis(db, USER, LOC)
     expect(vm).not.toBeNull()
     expect(vm.revenue).toEqual({ totalCents: 1234500, paidCount: 42, deltaPct: 12.4 })
-    expect(vm.arrearsData).toEqual({ totalCents: 45000, memberCount: 3 })
+    expect(vm.arrearsData).toEqual({ totalCents: 45000, memberCount: 3, estimated: false })
     expect(vm.memberCount).toBe(210) // active_recurring wins over monthly_recurring
     expect(vm.churnCount).toBe(5)
     expect(vm.churnDelta).toBe(2) // 5 live − 3 in the week-old snapshot
@@ -103,7 +105,7 @@ describe('buildBusinessKpis', () => {
   })
 
   it('degrades arrears to null — not a fake {0,0} — and drops its label', async () => {
-    fetchArrearsSummary.mockResolvedValue({ success: false, error: 'nope' })
+    loadRadar.mockResolvedValue({ summary: { highRisk: 5 } })
     const vm = await buildBusinessKpis(mockDb({ data: [] }), USER, LOC)
     expect(vm.arrearsData).toBeNull()
     expect(vm.briefing).not.toContain('in arrears')
@@ -149,8 +151,7 @@ describe('buildBusinessKpis', () => {
   })
 
   it('omits zero-count labels entirely (Nothing urgent)', async () => {
-    fetchArrearsSummary.mockResolvedValue({ success: true, data: { totalCents: 0, memberCount: 0 } })
-    loadRadar.mockResolvedValue({ summary: { highRisk: 0 } })
+    loadRadar.mockResolvedValue({ summary: { highRisk: 0, overdue: 0, overdueValueCents: 0 } })
     getPendingApprovalsCount.mockResolvedValue(0)
     const vm = await buildBusinessKpis(mockDb({ data: [] }), USER, LOC)
     expect(vm.briefing).toContain('Nothing urgent.')
@@ -165,7 +166,7 @@ describe('buildBusinessKpis: through the read seam (UN1TREAD.3)', () => {
     const vm = await buildBusinessKpis(db, USER, LOC, now)
     expect(vm).toEqual({
       revenue: { totalCents: 1234500, paidCount: 42, deltaPct: 12.4 },
-      arrearsData: { totalCents: 45000, memberCount: 3 },
+      arrearsData: { totalCents: 45000, memberCount: 3, estimated: false },
       memberCount: 210,
       churnCount: 5,
       churnDelta: 2,
@@ -175,7 +176,8 @@ describe('buildBusinessKpis: through the read seam (UN1TREAD.3)', () => {
       gate: { state: 'configured', showNumbers: true },
     })
     expect(fetchRevenueMTD).toHaveBeenCalledWith(db, LOC, new Date(now), expect.any(String))
-    expect(fetchArrearsSummary).toHaveBeenCalledWith(db, LOC)
+    // ARREARSONE.1 — the invoice table's past-due total is no longer read here.
+    expect(fetchArrearsSummary).not.toHaveBeenCalled()
     expect(computeMembershipCounts).toHaveBeenCalledWith(db, LOC)
     expect(loadRadar).toHaveBeenCalledWith(db, LOC)
   })

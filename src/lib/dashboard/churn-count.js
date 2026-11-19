@@ -1,4 +1,6 @@
-// CHURNONE.1 — one churn number on the Business page.
+// CHURNONE.1 — one churn number on the Business page. ARREARSONE.1 — and one
+// arrears number: overdue memberships, minus the ones staff dismissed (Richard's
+// decision, 19 Nov 2026), the radar's own Overdue count, everywhere.
 //
 // The KPI card counted high-risk members LIVE (loadRadar) while the "Needs
 // you" rail on the same page read last Monday's churn_radar_snapshots row,
@@ -22,4 +24,17 @@ export function cachedChurnRadar(db, locationId) {
 export function highRiskOf(radar) {
   const n = radar?.summary?.highRisk
   return Number.isFinite(n) ? n : null
+}
+
+/**
+ * ARREARSONE.1 — the arrears figure every page shows: members whose membership
+ * payment is overdue, minus those staff dismissed (the Churn Radar's Overdue
+ * tab), with what they owe. Pure. null when the radar is missing or has no
+ * overdue count: the caller shows nothing rather than a false zero.
+ * @returns {{ memberCount: number, totalCents: number, estimated: boolean } | null}
+ */
+export function arrearsOf(radar) {
+  const s = radar?.summary
+  if (!s || !Number.isFinite(s.overdue)) return null
+  return { memberCount: s.overdue, totalCents: Number(s.overdueValueCents) || 0, estimated: s.overdueValueEstimated === true }
 }
