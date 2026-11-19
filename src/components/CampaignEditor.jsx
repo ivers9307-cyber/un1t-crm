@@ -11,8 +11,9 @@ import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 import CopyAssist from './communications/CopyAssist'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import { isCampaignContentEditable, campaignLockedReason } from '@/lib/campaign-editability'
-import { UNLAYER_MERGE_TAGS, MERGE_TAG_REFERENCE } from '@/lib/merge-tags'
+import { MERGE_TAG_REFERENCE } from '@/lib/merge-tags'
 import { useLocationBrand } from './use-location-brand'
+import { useUnlayerEditor } from './communications/useUnlayerEditor'
 
 // FILTER-P1.6 — what the send path ACTUALLY gates on, per
 // buildAudienceQueryAsync (src/lib/postmark.js): the campaign's location, the
@@ -31,7 +32,6 @@ const COUNT_DEBOUNCE_MS = 400
 
 export default function CampaignEditor({ campaign, locationId, locationTimeZone = null, userId: _userId, initialAudienceFilter = null }) {
   const router = useRouter()
-  const editorRef = useRef(null)
 
   const [tab, setTab] = useState('design')  // design, code, audience, settings
   const [name, setName] = useState(campaign?.name || '')
@@ -124,7 +124,6 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
   const [editorMode, setEditorMode] = useState(
     campaign?.html_content && !campaign?.design_json ? 'code' : 'visual'
   )  // visual or code
-  const [unlayerLoaded, setUnlayerLoaded] = useState(false)
 
   // CAMPAIGN.1 — send-test state. testEmail defaults to the
   // operator's address; testStatus is { kind: 'idle'|'sending'|'sent'|'error', msg? }.
@@ -137,66 +136,16 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
   // automatically after 3s.
   const [savedAt, setSavedAt] = useState(null)
 
-  // Load Unlayer script
-  useEffect(() => {
-    if (typeof window !== 'undefined' && !window.unlayer) {
-      const script = document.createElement('script')
-      script.src = 'https://editor.unlayer.com/embed.js'
-      script.async = true
-      script.onload = () => setUnlayerLoaded(true)
-      document.body.appendChild(script)
-    } else if (window.unlayer) {
-      setUnlayerLoaded(true)
-    }
-  }, [])
-
-  // Initialize Unlayer editor
-  useEffect(() => {
-    if (unlayerLoaded && tab === 'design' && editorMode === 'visual' && editorRef.current) {
-      // Clear previous instance
-      editorRef.current.innerHTML = ''
-
-      window.unlayer.init({
-        id: 'unlayer-editor',
-        projectId: undefined,  // No account needed for basic features
-        displayMode: 'email',
-        appearance: {
-          theme: 'dark',
-          panels: {
-            tools: { dock: 'left' },
-          },
-        },
-        tools: {
-          image: { enabled: true },
-          button: { enabled: true },
-          divider: { enabled: true },
-          heading: { enabled: true },
-          html: { enabled: true },
-          menu: { enabled: true },
-          social: { enabled: true },
-          text: { enabled: true },
-          timer: { enabled: true },
-          video: { enabled: true },
-        },
-        // K3 — from @/lib/merge-tags, which is checked against what
-        // applyMergeTags() actually substitutes. Do not re-inline this list.
-        mergeTags: [...UNLAYER_MERGE_TAGS],
-        features: {
-          textEditor: {
-            spellChecker: true,
-          },
-        },
-      })
-
-      // Load existing design if editing
-      if (designJson) {
-        window.unlayer.loadDesign(designJson)
-      }
-    }
-    // designJson is intentionally NOT a dep — re-loading it after the
-    // user starts editing would clobber their in-progress changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unlayerLoaded, tab, editorMode])
+  // EDITORHOOK.1 — the Unlayer script load and init are the shared hook's
+  // (src/components/communications/useUnlayerEditor.js), the same one the quick
+  // composer uses. It (re)inits whenever the Design tab shows in visual mode and
+  // loads the design held in state then, so a Design → Audience → Design round
+  // trip keeps the operator's work (stashUnlayerToState puts it in state first).
+  const { ref: unlayerRef } = useUnlayerEditor({
+    mountId: 'unlayer-editor',
+    active: tab === 'design' && editorMode === 'visual',
+    initialDesign: designJson,
+  })
 
   // Get HTML and design JSON from Unlayer.
   // CAMPAIGN.3 — the exportHtml callback never fires when the Unlayer
@@ -941,7 +890,7 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
               // `flex-1` and 600px without. No `flex-1` here — same shape as
               // the two mounts that never broke (UnifiedSendComposer
               // `h-[560px]`, HostEmails `height: 620`).
-              <div id="unlayer-editor" ref={editorRef} style={{ height: '75vh', minHeight: '600px' }} />
+              <div id="unlayer-editor" ref={unlayerRef} style={{ height: '75vh', minHeight: '600px' }} />
             ) : (
               <textarea
                 value={htmlContent}
