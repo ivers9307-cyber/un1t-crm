@@ -75,17 +75,17 @@
 // mid-send cancels.
 
 import { describeAudienceQueryError, MAX_UUIDS_PER_URL } from './audience-filter.js'
-import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, consentColumnFor, isTransientSendError, getDefaultMailboxAddress } from './postmark.js'
+import { buildAudienceQueryAsync, buildUnsubscribeUrl, sendBatch, consentFieldForStream, consentColumnFor, isTransientSendError, getDefaultMailboxAddress } from './postmark.js'
 import { resolveEmailSender } from './tenant-email.js'
 import { withRequestedFrom } from './from-address.js'
-import { injectPreheader, htmlToPlainText } from './email-content.js'
+import { renderCampaignEmail } from './campaign-render.js'
 import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbOutcome, subjectForVariant, AB_FALLBACK_VARIANT } from './campaign-ab.js'
 import { frequencyCapFromLocationSettings, capCutoffIso, stampMarketingTouch, CAMPAIGN_CAP_SKIP_AFTER_MS } from './frequency-cap.js'
 import { loadNonOpenerContactIds } from './campaign-resend.js'
 import { resolveCustomerBaseUrl } from './tenant-host.js'
 import { getLocationBranding } from './location-branding.js'
 import { logInfo } from './log.js'
-import { buildCampaignViewUrl, prependViewInBrowserLink, fetchLocationEmailCopy } from './campaign-web-view.js'
+import { buildCampaignViewUrl, fetchLocationEmailCopy } from './campaign-web-view.js'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { withSendMarker } from './postmark-send-marker.js'
 import { zoneOfLocation } from './location-time.js'
@@ -837,49 +837,31 @@ export async function tickCampaignSend(db, campaign) {
       ? `${baseUrl}/preferences/${prefs.unsubscribe_token}`
       : null
 
-    const merged = applyMergeTags(campaign.html_content, contact, {
-      location_name: campaign.locations?.name || '',
-      company_name: companyName,
-      unsubscribe_url: unsubscribeUrl,
-      preference_url: preferenceUrl,
-      zone: mergeZone, // TZ.17 — {{current_year}} on the sending studio's calendar
-    })
-    const personalizedHtml = unsubscribeUrl ? appendUnsubscribeFooter(merged, unsubscribeUrl) : merged
-
-    // CAMPAIGN-REL.4 — derive the plain-text alternative from the
-    // rendered content BEFORE the preheader goes in (the preheader is
-    // inbox chrome, not content — it shouldn't lead the text part).
-    const textBody = htmlToPlainText(personalizedHtml)
-
-    // CAMPAIGN-REL.3 — campaigns.preview_text was collected/stored by
-    // the editor but never used at send time. Inject it as a standard
-    // hidden preheader, first thing inside the body, merge tags applied.
-    const previewText = campaign.preview_text
-      ? applyMergeTags(campaign.preview_text, contact, { location_name: campaign.locations?.name || '', company_name: companyName, zone: mergeZone })
-      : null
-    // WEBVIEW.1 — "view in browser", inserted AFTER the plain-text part is
-    // derived (the text alternative is never clipped, so it does not need the
-    // link) and BEFORE the preheader, so the hidden preheader still leads the
-    // body for inbox preview.
-    //
-    // Broadcast only, like the unsubscribe footer: a utility/transactional
-    // email is small enough that Gmail never clips it, and hosting a public
-    // copy of one would be a step backwards.
-    //
-    // The URL is per-CAMPAIGN, not per-recipient — identical for everyone on
-    // this send. That is the whole PII design (see campaign-web-view.js): a
-    // view-in-browser link is the most-forwarded link in any email, so it must
-    // not resolve to anybody's personal data.
-    const htmlWithWebView = stream === 'broadcast'
-      ? prependViewInBrowserLink(personalizedHtml, campaignViewUrl, emailCopy)
-      : personalizedHtml
-
-    const finalHtml = previewText ? injectPreheader(htmlWithWebView, previewText) : htmlWithWebView
-
+    // CAMPAIGNRENDER.1 — the one render the editor's test and the agent's test
+    // also use (src/lib/campaign-render.js): merge tags, the unsubscribe
+    // footer (broadcast only, when there is a link), the plain-text part
+    // (before the inbox chrome), the view-in-browser link (broadcast only;
+    // per-CAMPAIGN, never per-recipient, see campaign-web-view.js), then the
+    // hidden preheader. The subject gets the same extras as the body.
     // CAMPAIGN-AB — per-recipient subject: variant A/B in the test
     // slice, the winning subject for the remainder. Non-A/B campaigns
     // always resolve to campaign.subject (identical to before).
     const rawSubject = subjectForVariant(campaign, row.ab_variant, abWinnerOverride)
+    const rendered = renderCampaignEmail({
+      campaign,
+      subject: rawSubject,
+      contact,
+      extras: {
+        location_name: campaign.locations?.name || '',
+        company_name: companyName,
+        unsubscribe_url: unsubscribeUrl,
+        preference_url: preferenceUrl,
+        zone: mergeZone, // TZ.17 — {{current_year}} on the sending studio's calendar
+      },
+      broadcast: stream === 'broadcast',
+      viewUrl: campaignViewUrl,
+      emailCopy,
+    })
 
     return {
       to: contact.email,
@@ -889,15 +871,9 @@ export async function tickCampaignSend(db, campaign) {
       // panel as usable "in your subject line or email body" — resolved to
       // applyMergeTags' '' fallbacks. 'News from {{location_name}}' shipped as
       // 'News from ' while the identical tag in the body rendered correctly.
-      subject: applyMergeTags(rawSubject, contact, {
-        location_name: campaign.locations?.name || '',
-        company_name: companyName,
-        unsubscribe_url: unsubscribeUrl,
-        preference_url: preferenceUrl,
-        zone: mergeZone,
-      }),
-      htmlBody: finalHtml,
-      textBody,
+      subject: rendered.subject,
+      htmlBody: rendered.html,
+      textBody: rendered.text,
       // W1.E2 — the operator's From NAME is a display name on the resolved
       // address (sendBatch applies it); no `from` header is built here. The
       // address is tenantSender's (FROMDOMAIN: campaign.from_email when it is

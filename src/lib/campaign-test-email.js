@@ -1,16 +1,12 @@
 // MCPEMAIL.1 — the test email `send_email_for_approval` sends to the person who
 // asked for it, and the parser for the time a campaign is to go out.
 //
-// The body goes through the same four steps the real send runs, in the same
-// order (src/lib/campaign-sender.js: applyMergeTags → appendUnsubscribeFooter
-// → prependViewInBrowserLink → injectPreheader), so what is tested is what is
-// sent. Its unsubscribe, preferences and view-in-browser links are
+// The body goes through the real send's own render (renderCampaignEmail,
+// src/lib/campaign-render.js), so what is tested is what is sent. Its unsubscribe, preferences and view-in-browser links are
 // placeholders that act on no contact. A staff banner above it carries the
 // approve link, which appears nowhere but in this email.
 
-import { applyMergeTags, appendUnsubscribeFooter } from '@/lib/postmark'
-import { prependViewInBrowserLink } from '@/lib/campaign-web-view'
-import { injectPreheader } from '@/lib/email-content'
+import { renderCampaignEmail } from '@/lib/campaign-render'
 import { escapeHtml } from '@/lib/html-escape'
 import { zoneOfLocation, zonedWallClockToInstant, instantToZonedParts } from '@/lib/location-time'
 
@@ -111,17 +107,12 @@ export function buildCampaignTestEmail({
     zone: zoneOfLocation(studio),
   }
 
-  const merged = applyMergeTags(campaign.html_content, contact, extras)
-  const withFooter = appendUnsubscribeFooter(merged, unsubscribeUrl)
-  const withWebView = prependViewInBrowserLink(withFooter, viewUrl, emailCopy)
-  const previewText = campaign.preview_text
-    ? applyMergeTags(campaign.preview_text, contact, {
-      location_name: extras.location_name, company_name: extras.company_name, zone: extras.zone,
-    })
-    : null
-  const body = previewText ? injectPreheader(withWebView, previewText) : withWebView
+  // CAMPAIGNRENDER.1 — the real send's own render, so what is tested is what is sent.
+  const rendered = renderCampaignEmail({
+    campaign, subject: campaign.subject, contact, extras, broadcast: true, viewUrl, emailCopy,
+  })
 
-  const html = prependInsideBody(body, banner({ studio, campaign, audienceEligible, sendsAs, sendAtLabel, resendLabel, approveUrl }))
-  const subject = '[TEST] ' + applyMergeTags(campaign.subject || '', contact, extras)
+  const html = prependInsideBody(rendered.html, banner({ studio, campaign, audienceEligible, sendsAs, sendAtLabel, resendLabel, approveUrl }))
+  const subject = '[TEST] ' + rendered.subject
   return { subject, html }
 }

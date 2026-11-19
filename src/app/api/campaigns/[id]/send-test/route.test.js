@@ -185,3 +185,17 @@ describe("send-test — links on the campaign location's tenant host (W1.L3a)", 
     expect(sendEmail.mock.calls[0][0].subject).toContain('/preferences/test-token')
   })
 })
+
+// CAMPAIGNRENDER.1 — the test is the real send's render, chrome included.
+describe('send-test — the email matches what recipients get', () => {
+  it('carries the unsubscribe footer, the view-in-browser link, the preheader and a text part', async () => {
+    campaignRow.preview_text = 'Sneak peek for {{first_name}}'
+    await post()
+    const arg = sendEmail.mock.calls[0][0]
+    expect(arg.htmlBody).toContain('/unsubscribe/test-token')
+    expect(arg.htmlBody).toContain('/view-email/test-token')
+    expect(arg.htmlBody).toContain('Sneak peek for')
+    expect(arg.textBody).toContain('Hi ')
+  })
+})
+
