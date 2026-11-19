@@ -6,6 +6,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermission } from '@/lib/permissions'
 import { canWriteSegmentsAt } from '@/lib/segment-access'
 import { canBulkTagAt } from '@/lib/contact-bulk-tag-gate'
+import { canExportContactsAt } from '@/lib/contact-export-gate'
 import ContactsView from '@/components/ContactsView'
 import { zoneOfLocation } from '@/lib/location-time'
 import ContactsHeaderActions from '@/components/ContactsHeaderActions'
@@ -115,6 +116,8 @@ export default async function ContactsPage(props) {
   const canMerge = user.role === 'owner' || user.role === 'master'
   // CONTACTTAGS.1 — bulk Add / Remove tag: POST /api/contacts/bulk-tags's own gate.
   const canTag = canBulkTagAt(user, locationId)
+  // CONTACTEXPORT.1 — owners and masters only (the route's own gate).
+  const canExport = canExportContactsAt(user, locationId)
   // SEGMENTROUTE.1 (R1): the segment routes' own write rule (Contacts AND
   // Email) at the studio this page lists, so Save and delete show only to
   // callers the API lets save.
@@ -187,6 +190,7 @@ export default async function ContactsPage(props) {
           canMerge={canMerge}
           canDelete={canDelete}
           canTag={canTag}
+          canExport={canExport}
           canSaveSegments={canSaveSegments}
         />
       )}

@@ -13,7 +13,7 @@
 
 import { useState, useMemo } from 'react'
 import Link from 'next/link'
-import { ChevronRight, Mail, X, GitMerge, Trash2, Tag } from 'lucide-react'
+import { ChevronRight, Mail, X, GitMerge, Trash2, Tag, Download } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { useStudioStages } from '@/lib/use-studio-stages'
 
@@ -138,7 +138,7 @@ function LinkedMarker({ contact }) {
   )
 }
 
-export default function ContactsTable({ contacts, locationId, crossoverContext = {}, listFlags = {}, canMerge = false, canDelete = false, canTag = false }) {
+export default function ContactsTable({ contacts, locationId, crossoverContext = {}, listFlags = {}, canMerge = false, canDelete = false, canTag = false, canExport = false }) {
   const { bySlug: stageBySlug } = useStudioStages(locationId)
   // Set<contactId>. Set so toggle is O(1) and resilient to the contact
   // list changing under us (filter / search updates).
@@ -171,6 +171,34 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
 
   function clearSelection() {
     setSelectedIds(new Set())
+  }
+
+  // CONTACTEXPORT.1 — a CSV of the selected contacts; the route records it.
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState(null)
+  async function exportSelected() {
+    setExporting(true); setExportError(null)
+    try {
+      const res = await fetch('/api/contacts/export', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_ids: Array.from(selectedIds) }),
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        setExportError(j.error || `Export failed (${res.status})`)
+        return
+      }
+      const url = URL.createObjectURL(await res.blob())
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'contacts.csv'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setExportError(e.message || 'Network error')
+    } finally {
+      setExporting(false)
+    }
   }
 
   const selectedCount = selectedIds.size
@@ -216,6 +244,18 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
               </button>
             </>
           )}
+          {canExport && (
+            <button
+              type="button"
+              onClick={exportSelected}
+              disabled={exporting}
+              className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1.5 disabled:opacity-50"
+              title="Download the selected contacts as a CSV. Each export is recorded in the audit log."
+            >
+              <Download size={12} /> {exporting ? 'Exporting…' : 'Export'}
+            </button>
+          )}
+          {exportError && <span role="alert" className="text-xs text-red-700">{exportError}</span>}
           {/* Merge — owner-only. Visible only when exactly 2 rows
               are selected (the merge API takes survivor + loser). */}
           {canMerge && selectedCount === 2 && (

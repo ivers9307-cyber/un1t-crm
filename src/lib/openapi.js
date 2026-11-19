@@ -2142,6 +2142,21 @@ registry.registerPath({
   },
 })
 
+// CONTACTEXPORT.1 — owners and masters download selected contacts as a CSV.
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/export',
+  tags: ['Contacts'],
+  summary: 'Export the selected contacts at the active studio as a CSV',
+  description: 'Session auth; Contacts and owner or master at the active studio. Body { contact_ids: uuid[] (1..5000) }; only the studio\'s contacts are exported. Every export is written to the audit log first; if it cannot be recorded, nothing is exported (503).',
+  request: { body: { content: { 'application/json': { schema: z.object({ contact_ids: z.array(uuidLike).min(1).max(5000) }).openapi('ContactExport') } } } },
+  responses: {
+    200: { description: 'text/csv' },
+    403: { description: 'Not an owner or master', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Could not read or record; nothing exported', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/events/{id}/donations/{donationId}/refunded',
