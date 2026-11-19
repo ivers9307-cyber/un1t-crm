@@ -16,11 +16,11 @@ const { POST } = await import('./route.js')
 
 const L1 = 'a0000000-0000-0000-0000-000000000001'
 const manager = {
-  id: 'u1', full_name: 'Richard', email: 'r@x.ie', role: 'manager', profileRole: 'manager',
+  id: 'u1', full_name: 'Richard', email: 'r@x.ie', role: 'owner', profileRole: 'owner',
   activeLocation: { id: L1 },
-  rolesByLocation: { [L1]: 'manager' },
-  assignmentsByLocation: { [L1]: { role: 'manager', permissions: { orders: true } } },
-  locations: [{ id: L1, role: 'manager', features: { orders: true } }],
+  rolesByLocation: { [L1]: 'owner' },
+  assignmentsByLocation: { [L1]: { role: 'owner', permissions: { orders: true } } },
+  locations: [{ id: L1, role: 'owner', features: { orders: true } }],
 }
 const ORDER = { id: 'o1', status: 'completed', payment_provider: 'revolut', payment_provider_ref: 'ord-1', amount_cents: 1000, currency: 'EUR',
   location_id: L1, source_type: 'race_registration', source_id: 'gp1', contact_id: 'c1', contact_email: 'aoife@x.ie' }
@@ -42,9 +42,14 @@ function fakeDb({ sourceKind = 'move_gap', sourceError = null } = {}) {
       b.then = (res, rej) => Promise.resolve(answer()).then(res, rej)
       return b
     },
+    // REFUNDLEDGER.1 — the claim and the recorded outcome.
+    async rpc(name) {
+      if (name === 'claim_order_refund') return { data: { ok: true, refund_id: 'r1', amount_cents: 1000, idempotency_key: 'refund:o1:r1', is_full: true }, error: null }
+      return { data: { ok: true, refunded_total_cents: 1000, is_full: true }, error: null }
+    },
   }
 }
-const post = () => POST(new Request('http://localhost/api/orders/o1/refund', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }), { params: Promise.resolve({ id: 'o1' }) })
+const post = () => POST(new Request('http://localhost/api/orders/o1/refund', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'Moved back' }) }), { params: Promise.resolve({ id: 'o1' }) })
 
 beforeEach(() => {
   vi.clearAllMocks()

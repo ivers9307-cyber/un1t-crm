@@ -9,44 +9,35 @@
 //
 // Auth: same fail-closed CRON_SECRET pattern as the other crons.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
+import { logError, logWarn } from '@/lib/log'
 import { closeStaleImpersonations } from '@/lib/impersonation'
 import { closeStaleSupportSessions } from '@/lib/support-session'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
+export const maxDuration = 60
 
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'close-stale-impersonations' }, async ({ db }) => {
   const result = await closeStaleImpersonations(db)
-
   if (!result.ok) {
-    console.warn(`[cron][close-stale-impersonations] ${result.error}`)
-    return NextResponse.json({ success: false, error: result.error }, { status: 500 })
+    logError('cron.close-stale-impersonations', 'impersonation sweep failed', { error: result.error })
+    return { ok: false, body: { error: 'Impersonation sweep failed' } }
   }
-
   // SUPPORT-ACCESS (Repset Phase 3) — the same reaper closes stale
   // support_sessions rows (mig 431) at the shared session max-age. A
   // failure here is logged but does NOT fail the cron (the impersonation
   // sweep already succeeded + will heartbeat).
   const support = await closeStaleSupportSessions(db)
   if (!support.ok) {
-    console.warn(`[cron][close-stale-impersonations] support: ${support.error}`)
+    logWarn('cron.close-stale-impersonations', 'support session sweep failed', { error: support.error })
   }
-
-  await stampHeartbeat('close-stale-impersonations')
-
-  return NextResponse.json({
-    success: true,
-    stale: result.stale,
-    closed: result.closed,
-    support: { stale: support.stale, closed: support.closed },
-  })
-}
+  return {
+    body: {
+      stale: result.stale,
+      closed: result.closed,
+      support: { stale: support.stale, closed: support.closed },
+    },
+  }
+})

@@ -182,6 +182,9 @@ export default async function OfferPage(props) {
             resumePurchaseId={mode === 'resume' ? resumePurchaseId : null}
             cancelled={cancelled}
             soldOutLabel={copy.soldOut}
+            offerName={offer.name}
+            priceCents={offer.price_cents}
+            currency={offer.currency}
           />
         ) : mode === 'sold_out' ? (
           <div style={{ paddingTop: 24 }}>

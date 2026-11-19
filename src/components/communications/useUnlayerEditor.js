@@ -6,6 +6,11 @@
 // fallback (the callback never fires if the iframe isn't mounted). Visual-only;
 // the full campaign editor keeps code-mode + the advanced toggles. Use a UNIQUE
 // mountId so it can never collide with another Unlayer instance's global init.
+//
+// EDITORHOOK.1 — the full campaign editor uses this hook too (it had its own
+// copy of the script load and init). `initialDesign` is loaded into the canvas
+// on every (re)init: the value as it is at that moment, so a caller that keeps
+// its latest design in state gets it back after switching tabs.
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 // K3 — from @/lib/merge-tags, which is checked against what
@@ -19,7 +24,7 @@ import { UNLAYER_MERGE_TAGS } from '@/lib/merge-tags'
 // Exported so callers can compare/re-use it rather than re-wording the reason.
 export const EXPORT_FAILED = "The email designer didn't finish loading — nothing was sent. Wait for the designer, then try again."
 
-export function useUnlayerEditor({ mountId, active = true } = {}) {
+export function useUnlayerEditor({ mountId, active = true, initialDesign = null } = {}) {
   const [loaded, setLoaded] = useState(false)
   // COMMSFIX.D.4a — has the operator actually put work into the canvas? The
   // mount div only exists while the email channel is selected and this hook
@@ -27,6 +32,11 @@ export function useUnlayerEditor({ mountId, active = true } = {}) {
   // whether a channel switch would destroy anything worth asking about.
   const [dirty, setDirty] = useState(false)
   const ref = useRef(null)
+  // Read at init time, never a dependency: re-loading a design after the
+  // operator starts editing would wipe their changes.
+  const designRef = useRef(initialDesign)
+  // Declared before the init effect, so it runs first on the same commit.
+  useEffect(() => { designRef.current = initialDesign })
 
   // Load the Unlayer embed script once (shared global across the app).
   useEffect(() => {
@@ -65,6 +75,7 @@ export function useUnlayerEditor({ mountId, active = true } = {}) {
       mergeTags: [...UNLAYER_MERGE_TAGS],
       features: { textEditor: { spellChecker: true } },
     })
+    if (designRef.current) window.unlayer.loadDesign(designRef.current)
     // COMMSFIX.D.4a — Unlayer fires design:updated on every real edit. A fresh
     // init starts clean, so `dirty` means "this canvas holds operator work".
     // Guarded: older embed builds may not expose addEventListener.
