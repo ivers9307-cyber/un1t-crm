@@ -34,8 +34,6 @@ export function termForSlug(slug) {
 // works out at. Read off the slug's term and the bonus headline; anything
 // it cannot read returns null and the card shows no value line.
 
-const WEEKS_PER_MONTH = 52 / 12
-
 /** The free extra in a bonus headline: { n, unit: 'month'|'week'|'class' } or null. */
 export function parseBonus(headline) {
   if (typeof headline !== 'string') return null
@@ -51,9 +49,10 @@ function euros(cents, decimals) {
 }
 
 /**
- * "About €145 a month" for a membership (price over the term plus the free
- * time), "About €12.75 a class" for a class pack (price over every class,
- * bonus included). Null for gift cards and anything unreadable.
+ * "About €12.75 a class" for a class pack (price over every class, bonus
+ * included). Null for memberships (OFFERSABOUT.1: the "About €145 a month"
+ * line was taken off the membership cards), gift cards and anything
+ * unreadable.
  */
 export function offerValueLine(offer) {
   if (!offer || !Number.isFinite(offer.price_cents) || offer.price_cents <= 0) return null
@@ -62,11 +61,6 @@ export function offerValueLine(offer) {
   if (!term || !bonus) return null
   const base = Number(term.num)
   if (!Number.isFinite(base) || base <= 0) return null
-  if (offer.category === 'membership' && term.label.startsWith('MONTH')) {
-    const extra = bonus.unit === 'month' ? bonus.n : bonus.unit === 'week' ? bonus.n / WEEKS_PER_MONTH : null
-    if (extra === null) return null
-    return `About ${euros(Math.round(offer.price_cents / (base + extra)), 0)} a month`
-  }
   if (offer.category === 'class_pack' && term.label === 'CLASSES' && bonus.unit === 'class') {
     return `About ${euros(Math.round(offer.price_cents / (base + bonus.n)), 2)} a class`
   }

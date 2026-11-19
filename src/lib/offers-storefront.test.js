@@ -197,10 +197,11 @@ describe('bonus-first cards (OFFERSDESIGN.1)', () => {
     expect(parseBonus(null)).toBeNull()
   })
 
-  it('a membership states its price over the term plus the free time', () => {
-    expect(offerValueLine(m('1-year-membership-bf-2026', '+3 MONTHS FREE', 216900))).toBe('About €145 a month')
-    expect(offerValueLine(m('6-month-membership-bf-2026', '+6 WEEKS FREE', 114400))).toBe('About €155 a month')
-    expect(offerValueLine(m('3-month-membership-bf-2026', '+3 WEEKS FREE', 62700))).toBe('About €170 a month')
+  it('a membership card shows no "About ... a month" line', () => {
+    expect(offerValueLine(m('1-year-membership-bf-2026', '+3 MONTHS FREE', 216900))).toBeNull()
+    expect(offerValueLine(m('6-month-membership-bf-2026', '+6 WEEKS FREE', 114400))).toBeNull()
+    expect(offerValueLine(m('3-month-membership-bf-2026', '+3 WEEKS FREE', 62700))).toBeNull()
+    expect(offerValueLine(m('1-month-membership-bf-2026', '+2 WEEKS FREE', 9900))).toBeNull()
   })
 
   it('a class pack states its price over every class, bonus included', () => {
