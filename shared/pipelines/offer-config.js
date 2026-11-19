@@ -137,6 +137,12 @@ function parseStages(raw, boardKey, errors) {
     const stage = { role: s.role, slug, name }
     if (s.role === 'checkpoint') stage.day = s.day
     if (s.role === 'class_n') stage.count = s.count
+    // OPENWEEK.8 — a Done stage may require classes attended: below the floor
+    // the person stays on their attendance column after the end.
+    if (s.role === 'done' && s.min_classes != null) {
+      if (!Number.isInteger(s.min_classes) || s.min_classes < 1 || s.min_classes > 50) errors.push(`${at}.min_classes must be a whole number from 1 to 50`)
+      else stage.min_classes = s.min_classes
+    }
     out.push(stage)
   })
   if ((roleCounts.new || 0) !== 1) errors.push('stages needs exactly one new stage')
@@ -169,10 +175,18 @@ export function parseOfferConfig(raw, { boardKey, module } = {}) {
   }
   const offer_name = optionalText(raw.offer_name, 'offer_name', OFFER_NAME_MAX, errors)
   const signer = optionalText(raw.signer, 'signer', SIGNER_MAX, errors)
+  // OPENWEEK.8 — a fixed end for every claim (an ISO instant), in place of
+  // start + duration_days: an offer that runs to a date, like open week.
+  let ends_at
+  if (raw.ends_at != null) {
+    if (typeof raw.ends_at !== 'string' || !Number.isFinite(Date.parse(raw.ends_at))) errors.push('ends_at must be a date and time')
+    else ends_at = raw.ends_at
+  }
   if (errors.length) return { ok: false, errors }
   const config = { entry, stages, duration_days, quiet_days, converted_window_days }
   if (offer_name) config.offer_name = offer_name
   if (signer) config.signer = signer
   if (mia_notes !== undefined) config.mia_notes = mia_notes
+  if (ends_at !== undefined) config.ends_at = ends_at
   return { ok: true, config }
 }
