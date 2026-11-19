@@ -28,6 +28,7 @@ import { isOpenWeek, openWeekState, openWeekStartMs } from '@/lib/open-week'
 import { reminderPlan, isReminderDue, reminderParams } from '@/lib/open-week-reminders'
 import { zoneOfLocation, zonedWallClockToInstant, addDaysISO } from '@/lib/location-time'
 import { logError, logWarn } from '@/lib/log'
+import { insertClaim, releaseClaim } from '@/lib/customer-nudge-claim'
 
 export const REMINDER_TYPE = 'open_week_reminder'
 const LOG = 'open-week-reminders'
@@ -81,24 +82,15 @@ async function alreadyClaimed(db, bookingIds) {
 }
 
 async function claim(db, contactId, bookingId) {
-  try {
-    const { data, error } = await db.from('customer_engagement_nudges')
-      .insert({ contact_id: contactId, type: REMINDER_TYPE, dedup_key: `cb:${bookingId}` }).select('id')
-    if (error) return error.code === UNIQUE_VIOLATION ? { taken: true } : { error }
-    return { id: data?.[0]?.id ?? null }
-  } catch (e) {
-    return { error: { message: e?.message || String(e) } }
-  }
+  const { data, error } = await insertClaim(db, contactId, REMINDER_TYPE, `cb:${bookingId}`)
+  if (error) return error.code === UNIQUE_VIOLATION ? { taken: true } : { error }
+  return { id: data?.[0]?.id ?? null }
 }
 
 async function release(db, claimId, ids) {
   if (!claimId) return
-  try {
-    const { error } = await db.from('customer_engagement_nudges').delete().eq('id', claimId)
-    if (error) logError(LOG, 'claim not released; this reminder will not be retried', { ...ids, code: error.code ?? null })
-  } catch (e) {
-    logError(LOG, 'claim release threw; this reminder will not be retried', { ...ids, errClass: e?.name })
-  }
+  const error = await releaseClaim(db, claimId)
+  if (error) logError(LOG, 'claim not released; this reminder will not be retried', { ...ids, code: error.code ?? null })
 }
 
 /**
