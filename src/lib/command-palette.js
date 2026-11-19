@@ -121,6 +121,7 @@ export const PALETTE_KEYWORDS = Object.freeze({
   '/settings/class-categories': ['classes', 'cardio', 'strength', 'conditioning'],
   '/settings/pipelines': ['boards', 'offers', 'funnel'],
   '/settings/promos': ['corporate', 'corp', 'partner', 'free classes'],
+  '/settings/offers': ['offers', 'sale', 'pack', 'gift card', 'black friday'],
   '/settings/hosts': ['stripe', 'organisers', 'connect'],
   '/achievements': ['badges'],
   '/settings/service-credentials': ['strava', 'garmin', 'apple health', 'credentials'],
