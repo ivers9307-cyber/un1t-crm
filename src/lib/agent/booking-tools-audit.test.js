@@ -286,3 +286,20 @@ describe('auto-mode class cancellation does the same', () => {
     expect(trace[0]).toMatchObject({ status: 'pending', stage: 'executing' })
   })
 })
+
+// BOOKLAYER.1 — Glofox refuses a late cancellation with a 200 and
+// success:false. Judged on HTTP ok alone that was told to the customer as
+// cancelled; through the shared booking layer it is a refusal.
+describe('a late-cancel refusal sent as a 200 is not a cancellation', () => {
+  it('reports it as not cancelled and records the refusal', async () => {
+    const trace = []
+    glofox.cancelBooking.mockImplementation(async () => {
+      trace.push({ step: 'glofox_cancelBooking' })
+      return { ok: true, status: 200, body: { success: false, message_code: 'LATE_CANCELLATION_NOT_ALLOWED' } }
+    })
+    const res = await executeBookingTool('cancel_class_booking',
+      { booking_id: EVENT_ID, class_name: 'ARENA' }, ctx(trace))
+    expect(res).toMatchObject({ cancelled: false, reason: 'LATE_CANCELLATION_NOT_ALLOWED' })
+    expect(trace.at(-1)).toMatchObject({ step: 'audit_update' })
+  })
+})

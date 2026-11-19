@@ -507,6 +507,15 @@ describe('PATCH class_cancellation approval — executing account override', () 
 
     expect(cancelBooking).toHaveBeenCalledWith(expect.anything(), '64bb00000000000000000001', 'gm1')
   })
+
+  // BOOKLAYER.1 — a late-cancel refusal Glofox sends as a 200 is a failure.
+  it('a 200 carrying success:false is not a cancellation', async () => {
+    cancelBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { success: false, message_code: 'LATE_CANCELLATION_NOT_ALLOWED' } })
+    db = makeDbFor(cancelRow({}), updates)
+    const json = await (await approve()).json()
+    expect(json.executed).toMatchObject({ ok: false, message_code: 'LATE_CANCELLATION_NOT_ALLOWED' })
+    expect(updates.at(-1).patch.status).toBe('failed')
+  })
 })
 
 describe('PATCH approval — REGISTRYREAD.1a unreadable Glofox settings', () => {

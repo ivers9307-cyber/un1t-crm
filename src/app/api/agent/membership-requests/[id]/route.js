@@ -24,6 +24,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { staffActorName } from '@/lib/staff-actor-name'
 import { resolveAgentSettingsForLocation } from '@/lib/agent/settings-resolve'
 import { isMiaUn1tCard } from '@/lib/agent/mia-un1t-card'
+import { bookingOpsFor } from '@/lib/booking-ops'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -424,7 +425,7 @@ export async function PATCH(request, { params }) {
 
   // AGENT-CANCEL.1 — approving a drafted cancellation executes it.
   if (executing && row.kind === 'class_cancellation' && !un1tCancellation) {
-    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, cancelBooking } =
+    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } =
       await import('@/lib/glofox')
     const { data: contact } = await db.from('contacts')
       .select('glofox_member_id')
@@ -446,17 +447,21 @@ export async function PATCH(request, { params }) {
       finalStatus = 'failed'
       details = { ...details, result: { ok: false, message_code: 'NOT_EXECUTABLE' } }
     } else {
-      const result = await cancelBooking(creds, details.booking_id, executingMemberId)
-      const messageCode = result?.body?.message_code || result?.body?.message || null
+      // BOOKLAYER.1 — the shared booking layer, which also reads a late-cancel
+      // refusal Glofox sends as a 200 with success:false.
+      const cancel = await bookingOpsFor('glofox').cancel({ creds }, { glofoxMemberId: executingMemberId, bookingId: details.booking_id })
+      const result = cancel.raw || {}
+      const cancelOk = cancel.verdict === 'done'
+      const messageCode = cancelOk ? null : (result?.body?.message_code || result?.body?.message || null)
       executed = {
-        ok: result.ok, status: result.status, message_code: messageCode,
+        ok: cancelOk, status: result.status, message_code: messageCode,
         // GLOFOXPOSTRETRY.1 — Glofox answered 5xx and a read found it cancelled.
         ...(result.recovered ? { recovered: result.recovered } : {}),
       }
       details = { ...details, result: executed }
-      finalStatus = result.ok ? 'actioned' : 'failed'
+      finalStatus = cancelOk ? 'actioned' : 'failed'
 
-      if (result.ok && row.conversation_id) {
+      if (cancelOk && row.conversation_id) {
         try {
           const { sendAgentThreadMessage, buildCancellationConfirmationText } = await import('@/lib/agent/notify')
           await sendAgentThreadMessage(db, {
@@ -662,7 +667,7 @@ export async function PATCH(request, { params }) {
   }
 
   if (executing && row.kind === 'class_booking' && !expiredBeforeExecution && !manualBooking && !un1tBooking) {
-    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, GLOFOX_BOOKING_MODEL } =
+    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } =
       await import('@/lib/glofox')
     // PERSON-ACCT.9 — the row is FILED against the contact this booking
     // belongs to for attribution (the /start funnel row carries the ctwa_clid
@@ -761,17 +766,15 @@ export async function PATCH(request, { params }) {
         details = { ...details, result: executed }
         finalStatus = 'failed'
       } else {
-        const result = await createBooking(creds, {
-          user_id: contact.glofox_member_id,
-          model: GLOFOX_BOOKING_MODEL,
-          model_id: details.event_id,
-        })
-        // Glofox can 200 with a failure body (YOU_HAVE_NO_CREDITS_LEFT) —
-        // success needs the created booking id, not just HTTP ok. alreadyBooked
-        // counts as success: the member IS in the class (MIA-BOOK.1 — staff may
-        // have booked them manually before approving a fallback card).
-        const { booked, bookingId, messageCode, alreadyBooked } = interpretBookingResult(result)
-        const success = booked || alreadyBooked
+        // BOOKLAYER.1 — the shared booking layer judges Glofox's 200-with-a-
+        // failure-body (YOU_HAVE_NO_CREDITS_LEFT) and counts "already booked"
+        // as done: the member IS in the class (MIA-BOOK.1 — staff may have
+        // booked them manually before approving a fallback card).
+        const booking = await bookingOpsFor('glofox').book({ creds }, { glofoxMemberId: contact.glofox_member_id, eventId: details.event_id })
+        const result = booking.raw || {}
+        const success = booking.verdict === 'done'
+        const bookingId = booking.id
+        const messageCode = !success && booking.code && !String(booking.code).startsWith('status_') ? booking.code : null
         executed = {
           ok: success, status: result.status, message_code: messageCode, glofox_booking_id: bookingId,
           // GLOFOXPOSTRETRY.1 — Glofox answered 5xx and a read found the booking.

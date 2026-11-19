@@ -24,7 +24,7 @@
 // Pure helpers are unit-tested in booking-tools.test.js; the executor
 // does the IO and never throws (mirrors executeAccountTool).
 
-import { GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
+import { bookingOpsFor } from '@/lib/booking-ops'
 import {
   linkedAccountsForContact, corroborated, findBookingAcrossAccounts, hasBookableMembership,
   electWriteAccount, fanUpcomingBookings, summariseBookingFan, directSiblingRows, reusableSibling, chunkIds,
@@ -983,7 +983,7 @@ export async function executeBookingTool(toolName, input, ctx) {
 
     const {
       glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation,
-      fetchUserBookingsResult, fetchUserCreditsResult, createBooking, interpretBookingResult,
+      fetchUserBookingsResult, fetchUserCreditsResult,
     } = await import('@/lib/glofox')
     const { computeCreditsRemaining } = await import('@/lib/glofox-sync')
     const creds = await glofoxCredentialsForLocation(db, locationId)
@@ -1223,18 +1223,17 @@ export async function executeBookingTool(toolName, input, ctx) {
       kind: 'class_booking', status: 'pending', contactId: electedContactId,
       details: bookingDetails({ stage: 'executing' }),
     })
-    const result = await createBooking(creds, {
-      user_id: electedMemberId,
-      model: GLOFOX_BOOKING_MODEL,
-      model_id: input.event_id,
-    })
-    // Glofox can 200 with a failure body (YOU_HAVE_NO_CREDITS_LEFT) —
-    // success needs the created booking id, not just HTTP ok. alreadyBooked
-    // counts as success: the member IS in the class (e.g. staff booked them
+    // BOOKLAYER.1 — through the shared booking layer, which judges Glofox's
+    // 200-with-a-failure-body (YOU_HAVE_NO_CREDITS_LEFT) and counts "already
+    // booked" as done: the member IS in the class (e.g. staff booked them
     // manually before approving a fallback card).
-    const { booked, bookingId, messageCode, alreadyBooked } = interpretBookingResult(result)
-    const success = booked || alreadyBooked
-    const resultDetails = { ok: success, status: result.status, message_code: messageCode, glofox_booking_id: bookingId }
+    const booking = await bookingOpsFor('glofox').book({ creds }, { glofoxMemberId: electedMemberId, eventId: input.event_id })
+    const result = booking.raw
+    const success = booking.verdict === 'done'
+    const bookingId = booking.id
+    // Glofox's own code; a bare HTTP status is no code (the old judge's null).
+    const messageCode = !success && booking.code && !String(booking.code).startsWith('status_') ? booking.code : null
+    const resultDetails = { ok: success, status: result?.status, message_code: messageCode, glofox_booking_id: bookingId }
     if (success) {
       await finalizeBookingRequest(db, ctx, auditId, {
         kind: 'class_booking', status: 'actioned',
@@ -1426,7 +1425,7 @@ export async function executeBookingTool(toolName, input, ctx) {
       mode,
     }
 
-    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, cancelBooking, fetchUserBookingsResult } =
+    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUserBookingsResult } =
       await import('@/lib/glofox')
     const creds = await glofoxCredentialsForLocation(db, locationId)
     // Resolved here rather than returned on, because draft mode has never
@@ -1515,14 +1514,19 @@ export async function executeBookingTool(toolName, input, ctx) {
     const auditId = await logBookingRequest(db, ctx, {
       kind: 'class_cancellation', status: 'pending', details: { ...details, stage: 'executing' },
     })
-    const result = await cancelBooking(creds, input.booking_id, executingMemberId)
-    const messageCode = result?.body?.message_code || result?.body?.message || null
+    // BOOKLAYER.1 — the shared layer also reads a late-cancel refusal Glofox
+    // sends as a 200 with success:false; judged on HTTP ok alone that was
+    // reported to the customer as cancelled.
+    const cancel = await bookingOpsFor('glofox').cancel({ creds }, { glofoxMemberId: executingMemberId, bookingId: input.booking_id })
+    const result = cancel.raw
+    const cancelled = cancel.verdict === 'done'
+    const messageCode = cancelled ? null : (result?.body?.message_code || result?.body?.message || null)
     await finalizeBookingRequest(db, ctx, auditId, {
       kind: 'class_cancellation',
-      status: result.ok ? 'actioned' : 'failed',
-      details: { ...details, result: { ok: result.ok, status: result.status, message_code: messageCode } },
+      status: cancelled ? 'actioned' : 'failed',
+      details: { ...details, result: { ok: cancelled, status: result?.status, message_code: messageCode } },
     })
-    if (!result.ok) {
+    if (!cancelled) {
       return {
         cancelled: false,
         reason: messageCode || 'CANCELLATION_FAILED',
