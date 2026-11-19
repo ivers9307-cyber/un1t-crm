@@ -13,11 +13,8 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
-import {
-  cancelBooking,
-  glofoxCredentialsForLocation,
-  missingGlofoxCredentialsForLocation,
-} from '@/lib/glofox'
+import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
+import { bookingOpsFor } from '@/lib/booking-ops'
 
 export const runtime = 'nodejs'
 
@@ -62,16 +59,17 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Glofox is not configured for this studio.' }, { status: 400 })
   }
 
-  const result = await cancelBooking(creds, body.booking_id, contact.glofox_member_id)
-  if (!result.ok || result.body?.success === false) {
-    const msg = result.body?.message || result.body?.message_code || `Glofox cancel failed (HTTP ${result.status})`
+  // BOOKINGOPS.1 — judged by the shared booking layer (a late-cancel rule
+  // arrives as a 200 with success:false); the answer's wording is this route's.
+  const result = await bookingOpsFor('glofox').cancel({ creds }, { glofoxMemberId: contact.glofox_member_id, bookingId: body.booking_id })
+  if (result.verdict !== 'done') {
     return NextResponse.json({
       success: false,
-      error: msg,
-      glofox_status: result.status,
-      glofox_body: result.body,
+      error: result.message,
+      glofox_status: result.raw?.status,
+      glofox_body: result.raw?.body,
     }, { status: 502 })
   }
 
-  return NextResponse.json({ success: true, glofox_body: result.body })
+  return NextResponse.json({ success: true, glofox_body: result.raw?.body })
 }
