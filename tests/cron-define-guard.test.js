@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
+import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../src/app/api/cron')
 const LEGACY = new Set([
@@ -57,7 +58,7 @@ describe('scheduled jobs use defineCron', () => {
   })
 
   it('a wrapped job leaves the secret and the heartbeat to the wrapper', () => {
-    const handRolled = jobs.filter((j) => usesWrapper(j.src) && /CRON_SECRET|stampHeartbeat\(/.test(j.src.replace(/^\s*\/\/.*$/gm, '')))
+    const handRolled = jobs.filter((j) => usesWrapper(j.src) && /CRON_SECRET|stampHeartbeat\(/.test(stripComments(j.src)))
     expect(handRolled.map((j) => j.name)).toEqual([])
   })
 
