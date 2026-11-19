@@ -105,15 +105,14 @@ export const KEY_BUNDLES = Object.freeze({
   pipeline: ['bundle_sales'],
   contacts: ['bundle_sales'],
   activities: ['bundle_sales'],
-  // lead_radar / churn_radar / engagement_analytics render INSIDE the
+  // churn_radar / engagement_analytics render INSIDE the
   // Dashboard tab strip (DASHBOARD_LINK_PERM_KEYS ORs them into the
   // pinned Dashboard sidebar link's visibility), which is why they
   // could be mistaken for core dashboard_* keys — but they are
   // distinct, substantive features (retention/lead-triage tooling), so
   // they get real bundle homes by data domain rather than riding
-  // dashboard_*'s core exemption. lead_radar triages leads / trials /
-  // ClassPass — pipeline/CRM territory.
-  lead_radar: ['bundle_sales'],
+  // dashboard_*'s core exemption. (lead_radar went with the Lead Radar,
+  // CONTACTLOG.2.)
   // JUDGEMENT CALL (plan's 17 unassigned — no natural hub in
   // nav-items.js; AppShell mounts the AssistantBubble globally, not
   // inside any one hub route). Its own hint reads "In-app chat
@@ -155,7 +154,7 @@ export const KEY_BUNDLES = Object.freeze({
   tasks: ['bundle_sales'],
 
   // ---- bundle_members — src/lib/nav-items.js '/members' anyPermission ----
-  // churn_radar / engagement_analytics: see the lead_radar note above —
+  // churn_radar / engagement_analytics: see the note above —
   // dashboard-tab-strip surfaces, bundled by data domain (at-risk /
   // engaged MEMBERS), not core dashboard_* keys.
   churn_radar: ['bundle_members'],
@@ -296,7 +295,7 @@ export const KEY_BUNDLES = Object.freeze({
 export const CORE_KEYS = Object.freeze([
   // The three cross-platform dashboard sub-views + the ads dashboard —
   // literal `dashboard_*` keys only. Distinct from churn_radar /
-  // lead_radar / engagement_analytics, which are separate bundled
+  // engagement_analytics, which are separate bundled
   // features that merely render as additional dashboard tabs (see the
   // KEY_BUNDLES comments above).
   'dashboard_personal',

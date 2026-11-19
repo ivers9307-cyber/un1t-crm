@@ -44,7 +44,6 @@ describe('commandAllowed', () => {
   it('gates the dashboard group open for radar-only users too', () => {
     const cmd = { dashboardGroup: true }
     expect(commandAllowed(cmd, granted('churn_radar'))).toBe(true)
-    expect(commandAllowed(cmd, granted('lead_radar'))).toBe(true)
   })
   it('returns false for a nullish command', () => {
     expect(commandAllowed(null, all)).toBe(false)
@@ -65,10 +64,11 @@ describe('matchesQuery', () => {
 
 describe('visibleCommands', () => {
   it('applies both the permission gate and the query filter', () => {
-    const out = visibleCommands(NAV_COMMANDS, 'rad', granted('churn_radar', 'lead_radar'))
+    const out = visibleCommands(NAV_COMMANDS, 'rad', granted('churn_radar'))
     const ids = out.map((c) => c.id)
     expect(ids).toContain('churn-radar')
-    expect(ids).toContain('lead-radar')
+    // CONTACTLOG.2 — the Lead Radar is retired, so it is never offered
+    expect(ids).not.toContain('lead-radar')
     // 'pipeline' would match neither the query nor the granted set
     expect(ids).not.toContain('pipeline')
   })
@@ -77,7 +77,6 @@ describe('visibleCommands', () => {
   it('points the radar commands at their dashboard-tab homes', () => {
     const byId = Object.fromEntries(NAV_COMMANDS.map((c) => [c.id, c]))
     expect(byId['churn-radar'].href).toBe('/dashboard/churn-radar')
-    expect(byId['lead-radar'].href).toBe('/dashboard/lead-radar')
   })
   it('hides commands the user lacks permission for', () => {
     const out = visibleCommands(NAV_COMMANDS, '', granted('contacts'))

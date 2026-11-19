@@ -501,13 +501,13 @@ describe('hasPermission three-tier resolution (mig 058: per-location override)',
 })
 
 describe('MOBILE-RADAR — radar mobile permissions', () => {
-  it('churn_radar + lead_radar are registered mobile permission keys', () => {
+  it('churn_radar is a registered mobile permission key; lead_radar is retired (CONTACTLOG.2)', () => {
     expect(MOBILE_PERMISSION_KEYS).toContain('churn_radar')
-    expect(MOBILE_PERMISSION_KEYS).toContain('lead_radar')
+    expect(MOBILE_PERMISSION_KEYS).not.toContain('lead_radar')
   })
 
   it('mobile radar entries map to the matching web permission', () => {
-    for (const key of ['churn_radar', 'lead_radar']) {
+    for (const key of ['churn_radar']) {
       const entry = MOBILE_PERMISSIONS.find(m => m.key === key)
       expect(entry, `${key} mobile entry`).toBeDefined()
       expect(entry.webEquivalent).toBe(key)
@@ -515,7 +515,7 @@ describe('MOBILE-RADAR — radar mobile permissions', () => {
   })
 
   it('role defaults: owner/head_coach on, manager/staff off', () => {
-    for (const key of ['churn_radar', 'lead_radar']) {
+    for (const key of ['churn_radar']) {
       expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.owner[key]).toBe(true)
       expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.head_coach[key]).toBe(true)
       expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.manager[key]).toBe(false)
@@ -539,8 +539,8 @@ describe('hasMobilePermission — server-side .mobile gate', () => {
   it('falls back to the mobile role default when there is no override', () => {
     expect(hasMobilePermission(u({ role: 'head_coach' }), 'churn_radar')).toBe(true)
     expect(hasMobilePermission(u({ role: 'staff' }), 'churn_radar')).toBe(false)
-    expect(hasMobilePermission(u({ role: 'owner' }), 'lead_radar')).toBe(true)
-    expect(hasMobilePermission(u({ role: 'manager' }), 'lead_radar')).toBe(false)
+    expect(hasMobilePermission(u({ role: 'owner' }), 'churn_radar')).toBe(true)
+    expect(hasMobilePermission(u({ role: 'manager' }), 'churn_radar')).toBe(false)
   })
 
   it('reads the per-user override from the .mobile namespace', () => {
@@ -551,8 +551,8 @@ describe('hasMobilePermission — server-side .mobile gate', () => {
     )).toBe(true)
     // Explicit false denies even for a role whose default is true.
     expect(hasMobilePermission(
-      u({ role: 'owner', activeAssignment: { permissions: { mobile: { lead_radar: false } } } }),
-      'lead_radar',
+      u({ role: 'owner', activeAssignment: { permissions: { mobile: { churn_radar: false } } } }),
+      'churn_radar',
     )).toBe(false)
   })
 

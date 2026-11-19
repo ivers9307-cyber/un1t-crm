@@ -16,7 +16,7 @@
 //   pipelineInputs    { success, data: { contacts, snapshots, evidence, unlinked } } | { success:false, error }
 //   trialEligibility  { success, data: { eligible, reasons, regrant } } | { success:false, error }
 //
-//   radarMembers / winbackContacts / leadContacts / radarPastDue (UN1TRADAR.1-2,
+//   radarMembers / winbackContacts / radarPastDue (UN1TRADAR.1-2,
 //   ./un1t-online-radar.js): the churn / lead radar rows in the scorer's shape;
 //   each THROWS on a failed read.
 //   arrears           ← fetchArrearsSummary       { success, data: { totalCents, memberCount, estimated } } | { success:false, error }
@@ -36,8 +36,7 @@
 // counts at Stillorgan if they are a Glofox member there). The one exception is
 // `pipelineInputs`, which reads `contacts` BY ID (never by location) for exactly
 // the people this studio's clients link to, and only six named columns. The
-// radar reads (./un1t-online-radar.js) also read `contacts` by id (name, and
-// lead fields), and leadContacts the contacts this studio owns.
+// radar reads (./un1t-online-radar.js) also read `contacts` by id (name).
 // `pipelineInputs` and `trialEligibility` also read the CRM's own write ledger,
 // `un1t_write_events` (op 'trial' rows, via listLedgerTrials; `trialEligibility`
 // also its 'trial_regrant' rows), still filtered by location_id and, in
@@ -57,7 +56,7 @@ import {
   shapePastDue, normaliseUn1tInvoiceStatus, glofoxInterval,
   shapePipelineSnapshot, shapePipelineDateEvidence, shapeTrialEligibility, shapeTrialRegrant, shapeFormOnlySnapshot,
 } from './un1t-online-shape'
-import { radarMembers, winbackContacts, leadContacts, radarPastDue, arrears } from './un1t-online-radar'
+import { radarMembers, winbackContacts, radarPastDue, arrears } from './un1t-online-radar'
 import { freshCutoff } from '@/lib/un1t-online-freshness'
 // HATCH39 — the studio's paid-trial products (settings ∪ the /trial page), the one source.
 import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
@@ -959,7 +958,6 @@ export const un1tOnlineReads = Object.freeze({
   // UN1TRADAR.1 — the radar row fetches (./un1t-online-radar.js)
   radarMembers,
   winbackContacts,
-  leadContacts,
   // UN1TRADAR.2 — arrears on spec A's pastDue (./un1t-online-radar.js)
   radarPastDue,
   arrears,

@@ -44,7 +44,7 @@ export const MOBILE_NAV_FEATURES = Object.freeze([
   { key: 'expenses', label: 'Expenses',  permKeys: ['expenses'], employmentType: 'fte',        barEligible: true },
   // More-only in Phase 1 (pushed routes outside the (tabs) group).
   { key: 'tasks',     label: 'Tasks',            permKeys: ['tasks'],                       barEligible: false },
-  { key: 'radar',     label: 'Radar',            permKeys: ['churn_radar', 'lead_radar'],   barEligible: false },
+  { key: 'radar',     label: 'Radar',            permKeys: ['churn_radar'],   barEligible: false },
   { key: 'issues',    label: 'Report a problem', permKeys: ['issues'],                      barEligible: false },
   { key: 'contracts', label: 'Contracts',        permKeys: ['contracts'],                   barEligible: false },
   { key: 'policies',  label: 'Policies',         permKeys: ['policies'],                    barEligible: false },

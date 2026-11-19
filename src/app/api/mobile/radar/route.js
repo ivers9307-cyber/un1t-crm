@@ -1,16 +1,18 @@
 // GET /api/mobile/radar
 //
 // MOBILE-RADAR — read-only radar glance for the iOS app. Returns the
-// churn + lead radar SUMMARIES only (headline counts + weekly trend +
+// churn radar SUMMARY only (headline counts + weekly trend +
 // outreach effectiveness) — never the scored member/contact lists. The
 // full triage dashboards (win-back, quarantine, cleanup) stay on web;
 // this endpoint backs a read-only More-tab screen.
 //
-// Each section is gated on the caller's MOBILE permission
-// (permissions.mobile.churn_radar / .lead_radar) — separate from the
-// web sidebar permission so an operator can grant the phone glance
-// without the desktop dashboard. A section the caller can't see comes
-// back null; if they can see neither the route is 403.
+// Gated on the caller's MOBILE permission (permissions.mobile.churn_radar)
+// — separate from the web sidebar permission so an operator can grant the
+// phone glance without the desktop dashboard.
+//
+// CONTACTLOG.2 — the Lead Radar is retired (the board's "Not contacted"
+// filter replaces it). `lead` stays in the answer, always null, so a phone
+// on an older bundle hides the section instead of breaking.
 //
 // Auth: Supabase JWT in the Authorization header (getCurrentUser's
 // Bearer fallback) + the x-active-location header from the mobile
@@ -21,12 +23,11 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasMobilePermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadRadar } from '@/lib/churn-radar-data'
-import { loadFunnel } from '@/lib/lead-radar-data'
 import { radarAvailability } from '@/lib/radar-availability'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-// loadRadar + loadFunnel each page a few thousand rows and run the
+// loadRadar pages a few thousand rows and run the
 // scoring. Single-tenant in practice; 60s leaves ample headroom.
 export const maxDuration = 60
 
@@ -42,8 +43,7 @@ export async function GET() {
   }
 
   const canChurn = hasMobilePermission(user, 'churn_radar')
-  const canLead = hasMobilePermission(user, 'lead_radar')
-  if (!canChurn && !canLead) {
+  if (!canChurn) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -58,16 +58,13 @@ export async function GET() {
     avail = await radarAvailability(db, locationId, { module: 'mobile-radar' })
   } catch (e) {
     const err = e.message || 'fetch_failed'
-    if (canChurn) data.churnError = err
-    if (canLead) data.leadError = err
+    data.churnError = err
     return NextResponse.json({ success: true, data })
   }
   if (!avail.available) return NextResponse.json({ success: true, data })
 
-  // Each radar is independent — one failing (or being unentitled)
-  // must not sink the other. Errors surface as a per-section flag so
-  // the screen can show a partial result rather than a blank error.
-  if (canChurn) {
+  // A failed load surfaces as a per-section flag, as before.
+  {
     try {
       const { summary } = await loadRadar(db, locationId)
       data.churn = {
@@ -86,22 +83,6 @@ export async function GET() {
       }
     } catch (e) {
       data.churnError = e.message || 'fetch_failed'
-    }
-  }
-
-  if (canLead) {
-    try {
-      const { summary } = await loadFunnel(db, locationId)
-      data.lead = {
-        funnelTotal: summary.funnelTotal || 0,
-        attending: summary.funnel?.attending || 0,
-        fresh: summary.funnel?.fresh || 0,
-        cleanupTotal: summary.cleanupTotal || 0,
-        conversion: summary.conversion || null,
-        trend: summary.trend || null,
-      }
-    } catch (e) {
-      data.leadError = e.message || 'fetch_failed'
     }
   }
 

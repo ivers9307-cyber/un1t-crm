@@ -1,10 +1,9 @@
 // UN1TRADAR.1 — the un1t.online radar reads (spec B §2): the I/O half of
 // ./un1t-online-radar-shape.js. Registered on un1tOnlineReads as
-// radarMembers / winbackContacts / leadContacts.
+// radarMembers / winbackContacts (the lead read went with the Lead Radar, CONTACTLOG.2).
 //
 //   radarMembers(db, L, { nowMs })     → Row[]      the churn radar's active base
 //   winbackContacts(db, L, { nowMs })  → Row[]      live rows + ex-members
-//   leadContacts(db, L, { nowMs })     → LeadRow[]  spec A's snapshot, lead-radar shaped
 //   radarPastDue(db, L, { nowMs })     → fetchPastDue's shape, from spec A's pastDue (UN1TRADAR.2)
 //   arrears(db, L)                     → fetchArrearsSummary's { success, data } (+ estimated)
 //
@@ -12,8 +11,7 @@
 // empty radar). SCOPE: every un1t_* and contact_studios query filters
 // `location_id = L`, the studio the MEMBERSHIP is held at, so a contact owned
 // by Stillorgan with a Hatch membership counts at Hatch. `contacts` is read BY
-// ID for the people those rows link to (name; and for leads email, phone,
-// lead_source), plus, for leads only, the contacts L itself owns. Service-role
+// ID for the people those rows link to (name). Service-role
 // client; reads only. Every list read is selectAll paginated with an explicit
 // order; `.in()` lists are chunked (event ids at 200, contact ids at 300).
 import { MEMBERSHIP_FACT_READ_COLS, membershipRowsFromStudioRows } from '../membership-facts.js'
@@ -26,7 +24,7 @@ import { MEMBER_STATUSES } from './un1t-online-shape'
 import { freshCutoff, un1tOnlineReads } from './un1t-online'
 // HATCH39 — a €39 trial is never a pack holder on the radar.
 import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
-import { shapeRadarMembers, shapeWinbackRows, shapeLeadRows, foldPastDue, arrearsFromFold } from './un1t-online-radar-shape'
+import { shapeRadarMembers, shapeWinbackRows, foldPastDue, arrearsFromFold } from './un1t-online-radar-shape'
 
 const PAGE = 1000
 const EVENT_CHUNK = 200
@@ -48,7 +46,6 @@ const PRODUCT_COLS = 'un1t_id, type, price_cents, title'
 const EVENT_COLS = 'un1t_id, starts_at'
 const BOOKING_COLS = 'un1t_user_id, event_id, status'
 const BOOKED_AT_COLS = 'un1t_user_id, contact_id, remote_created_at'
-const LEAD_CONTACT_COLS = 'id, name, email, phone, lead_source, joined_at, created_at'
 
 // selectAll stops SILENTLY at its hard cap; a radar that read a truncated
 // table would be wrong without saying so, so reaching the cap is a failure.
@@ -171,45 +168,6 @@ export async function winbackContacts(db, locationId, { nowMs = Date.now() } = {
   const missing = endedMemberships.map((m) => m.contact_id).filter((id) => id != null && !input.contactsById.has(id))
   if (missing.length) for (const [id, c] of await contactsByIds(db, missing, 'id, name')) input.contactsById.set(id, c)
   return shapeWinbackRows({ ...input, allSubs, freshCutoffIso, endedMemberships })
-}
-
-/**
- * Lead rows at L from spec A's pipeline snapshot (pipelineInputs), plus the
- * contacts L owns with no linked un1t client in it. Throws when
- * pipelineInputs answers success:false or any read fails.
- */
-export async function leadContacts(db, locationId, { nowMs = Date.now() } = {}) {
-  if (!locationId) throw new Error('No location')
-  const pipe = await un1tOnlineReads.pipelineInputs(db, locationId, { now: nowMs })
-  if (!pipe?.success) throw new Error(pipe?.error || 'pipelineInputs failed')
-  const pipeline = pipe.data
-  const inPipeline = new Set(pipeline.contacts.map((c) => c.id))
-  const [contactsById, owned, clients, bookedAt] = await Promise.all([
-    contactsByIds(db, [...inPipeline], LEAD_CONTACT_COLS),
-    selectAll((from, to) => db
-      .from('contacts')
-      .select(LEAD_CONTACT_COLS)
-      .eq('location_id', locationId)
-      .order('id', { ascending: true })
-      .range(from, to), { pageSize: PAGE }),
-    listAt(db, locationId, 'un1t_clients', 'un1t_user_id, contact_id'),
-    listBookedAt(db, locationId, nowMs),
-  ])
-  const contactOfUser = new Map(clients.filter((c) => c.contact_id != null).map((c) => [c.un1t_user_id, c.contact_id]))
-  const clientContacts = new Set(contactOfUser.values())
-  const newestBookingAtByContact = latestBy(
-    bookedAt,
-    (b) => (b.un1t_user_id != null ? contactOfUser.get(b.un1t_user_id) : null) ?? b.contact_id ?? null,
-    (b) => b.remote_created_at,
-  )
-  return shapeLeadRows({
-    pipeline,
-    contactsById,
-    // spec §2c: owned contacts with NO un1t_clients row here (fresh or stale);
-    // a stale client is an account un1t.online dropped, not a new lead
-    ownedWithoutClient: owned.filter((c) => !inPipeline.has(c.id) && !clientContacts.has(c.id)),
-    newestBookingAtByContact,
-  })
 }
 
 const ID_CHUNK = 200

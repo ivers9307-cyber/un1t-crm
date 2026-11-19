@@ -93,9 +93,9 @@ describe('resolveDashboardTarget', () => {
       expect(resolveDashboardTarget(u)).toBe('/dashboard/churn-radar')
     })
 
-    it('falls back to the lead radar when churn radar is also revoked', () => {
+    it('never lands on the retired Lead Radar (CONTACTLOG.2)', () => {
       const u = user({ perms: { ...noDashboards, churn_radar: false, lead_radar: true } })
-      expect(resolveDashboardTarget(u)).toBe('/dashboard/lead-radar')
+      expect(resolveDashboardTarget(u)).not.toBe('/dashboard/lead-radar')
     })
 
     it('prefers churn radar over lead radar when both are held', () => {

@@ -1,7 +1,7 @@
 // UN1TRADAR.1 — may this location's radar read APIs answer with data?
 //
 // The radar pages already gate on the memberships capability; the read APIs
-// (/api/churn-radar*, /api/lead-radar*, /api/mobile/radar, the today-feed
+// (/api/churn-radar*, /api/mobile/radar, the today-feed
 // churn row) did not, so at a source without membership data they computed
 // Glofox-shaped zeros. They now ask this first: while the location's PROVIDER
 // lacks `memberships` (the static capability, as radarReadsFor reports it)
@@ -38,7 +38,7 @@ export async function syncDataAsOf(db, locationId) {
 /**
  * @param {object} db  service-role client
  * @param {string} locationId
- * @param {{ module: string, withZone?: boolean }} opts  the log module ('churn-radar' | 'lead-radar' | …);
+ * @param {{ module: string, withZone?: boolean }} opts  the log module ('churn-radar' | 'mobile-radar' | …);
  *   withZone: also read the studio's zone for the "as of HH:MM" line (only
  *   the radar page's own route draws it); withOutreach: also say whether a
  *   WhatsApp number is switched on at the studio (`outreachAvailable`:

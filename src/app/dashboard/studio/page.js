@@ -297,7 +297,7 @@ async function LocationColumn({ user, location }) {
             sublabel={acq ? 'entered the funnel' : UNAVAILABLE}
             delta={acq?.leadsDelta}
             windowDays={W}
-            href="/dashboard/lead-radar"
+            href="/pipeline"
           />
           <ScoreCell
             label="Trials done"

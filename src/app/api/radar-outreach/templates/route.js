@@ -10,7 +10,7 @@
 // UTILITY-only by construction: a marketing template can never appear
 // here, so radar outreach is always a utility message. Read-only.
 //
-// Access: churn_radar OR lead_radar — both radars share this picker.
+// Access: churn_radar (the Lead Radar that shared this picker is retired, CONTACTLOG.2).
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
@@ -26,7 +26,7 @@ export async function GET() {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'churn_radar') && !hasPermission(user, 'lead_radar')) {
+  if (!hasPermission(user, 'churn_radar')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
   const locationId = user.activeLocation?.id

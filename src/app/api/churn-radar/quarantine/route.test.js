@@ -1,4 +1,4 @@
-// UN1TRADAR.3 — bulk quarantine and lead cleanup act on owned contacts and on
+// UN1TRADAR.3 — bulk quarantine acts on owned contacts and on
 // crossovers at the ACTIVE studio only. The contacts write (Glofox studio,
 // 'stale' / 'archive') touches owned contacts only: a crossover's row belongs
 // to another studio.
@@ -13,7 +13,6 @@ vi.mock('@/lib/membership/reads/index', () => ({ radarReadsFor: vi.fn(async () =
 
 import { crossoverIdsAt } from '@/lib/contact-crossovers'
 import { POST as quarantinePOST } from './route.js'
-import { POST as cleanupPOST } from '../../lead-radar/cleanup/route.js'
 
 const L = 'loc-1'
 const USER = { id: 'user-1', profileRole: 'master', activeLocation: { id: L }, rolesByLocation: { [L]: 'owner' } }
@@ -49,7 +48,6 @@ beforeEach(() => { vi.clearAllMocks(); writes = []; db = mockDb(['owned-1']) })
 describe('bulk radar triage and crossovers', () => {
   for (const [name, POST, path, decision, table, action] of [
     ['quarantine', quarantinePOST, '/api/churn-radar/quarantine', 'stale', 'churn_radar_actions', 'quarantine_stale'],
-    ['cleanup', cleanupPOST, '/api/lead-radar/cleanup', 'archive', 'lead_radar_actions', 'cleanup_archive'],
   ]) {
     it(`${name}: scopes owned ∪ crossover ids only; the contacts write is owned only`, async () => {
       crossoverIdsAt.mockResolvedValueOnce(new Set(['cross-1']))
@@ -86,7 +84,6 @@ import { contactsAtStudio, upsertContactStudio } from '@/lib/contact-studios'
 describe("the radar archive writes the studio row's stage and the contact column only at the primary studio", () => {
   for (const [name, POST, path, decision] of [
     ['quarantine', quarantinePOST, '/api/churn-radar/quarantine', 'stale'],
-    ['cleanup', cleanupPOST, '/api/lead-radar/cleanup', 'archive'],
   ]) {
     it(`${name}: owned + crossover ACTIVE rows get stage_slug dormant at this studio; an ended row is left alone (M5); the contacts column stays owned-only; no row → no mark`, async () => {
       crossoverIdsAt.mockResolvedValueOnce(new Set(['cross-1', 'ended-1']))

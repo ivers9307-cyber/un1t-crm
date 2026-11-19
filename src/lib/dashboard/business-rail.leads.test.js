@@ -1,10 +1,20 @@
 // UN1TRADAR.3 — the rail's "uncontacted leads" row reads the acquisition board
 // when the location's primary board is something else (Hatch: the manual
 // waitlist board), and is unchanged where the primary board is acquisition.
+// CONTACTLOG.2 — "contacted" is the board's rule now (loadRecentlyContacted,
+// stubbed here over the fake's `contact_log` rows), and the row opens the
+// board's "Not contacted" view.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/approvals/registry', () => ({ getPendingApprovalsCount: vi.fn(async () => 0) }))
 vi.mock('@/lib/membership/reads/index', () => ({ radarReadsFor: vi.fn() }))
+vi.mock('@/lib/contact-log', () => ({
+  loadRecentlyContacted: vi.fn(async (db, { locationId, contactIds }) => {
+    db.log.push({ table: 'contact_log', filters: [['eq', 'location_id', locationId], ['in', 'contact_id', contactIds]] })
+    if (db.errors.contact_log) return { ok: false }
+    return { ok: true, contacted: new Set((db.tables.contact_log || []).filter((r) => r.location_id === locationId && contactIds.includes(r.contact_id)).map((r) => r.contact_id)) }
+  }),
+}))
 
 import { radarReadsFor } from '@/lib/membership/reads/index'
 import { buildNeedsYouRail } from './business-rail'
@@ -18,6 +28,8 @@ function tableDb(tables, errors = {}) {
   const log = []
   return {
     log,
+    tables,
+    errors,
     from(table) {
       const s = { table, filters: [] }
       const b = {}
@@ -58,7 +70,6 @@ function hatchTables(extra = {}) {
       { id: 'd1', location_id: L, pipeline_id: 'p-acq', stage_id: 's-new', status: 'open', contact_id: 'a', created_at: OLD },
       { id: 'd2', location_id: L, pipeline_id: 'p-acq', stage_id: 's-new', status: 'open', contact_id: 'b', created_at: OLD },
     ],
-    lead_radar_actions: [],
     contacts: [{ id: 'x', location_id: L, pipeline_stage_slug: 'new_lead', joined_at: OLD }, { id: 'y', location_id: L, pipeline_stage_slug: 'new_lead', joined_at: OLD }, { id: 'z', location_id: L, pipeline_stage_slug: 'new_lead', joined_at: OLD }],
     ...extra,
   }
@@ -72,9 +83,8 @@ describe('rail leadsRow', () => {
         { id: 'c1', location_id: L, pipeline_stage_slug: 'new_lead', joined_at: OLD },
         { id: 'c2', location_id: L, pipeline_stage_slug: 'new_lead', joined_at: NEW },
       ],
-      lead_radar_actions: [],
-    })
-    expect(await leadsRowOf(db)).toEqual({ key: 'leads', chip: 'Leads', tone: 'teal', text: '1 lead uncontacted > 24h', href: '/dashboard/lead-radar' })
+      })
+    expect(await leadsRowOf(db)).toEqual({ key: 'leads', chip: 'Leads', tone: 'teal', text: '1 lead uncontacted > 24h', href: '/pipeline?nocontact=1' })
     expect(db.log.some((q) => q.table === 'deals')).toBe(false)
   })
 
@@ -92,7 +102,7 @@ describe('rail leadsRow', () => {
         { id: 'd4', location_id: L, pipeline_id: 'p-acq', stage_id: 's-trial', status: 'open', contact_id: 'd', created_at: OLD },
         { id: 'd5', location_id: L, pipeline_id: 'p-acq', stage_id: 's-new', status: 'won', contact_id: 'e', created_at: OLD },
       ],
-      lead_radar_actions: [{ contact_id: 'b', location_id: L, action: 'contacted' }],
+      contact_log: [{ contact_id: 'b', location_id: L }],
       // the contacts column follows the waitlist board here: never counted
       contacts: [{ id: 'x', location_id: L, pipeline_stage_slug: 'new_lead', joined_at: OLD }, { id: 'y', location_id: L, pipeline_stage_slug: 'new_lead', joined_at: OLD }, { id: 'z', location_id: L, pipeline_stage_slug: 'new_lead', joined_at: OLD }],
     })
@@ -111,8 +121,7 @@ describe('rail leadsRow', () => {
     const tables = {
       pipelines: [{ id: 'p-acq', location_id: L, key: 'acquisition', is_primary: true, enabled: true }],
       contacts: [{ id: 'c1', location_id: L, pipeline_stage_slug: 'new_lead', joined_at: OLD }],
-      lead_radar_actions: [],
-    }
+      }
     radarReadsFor.mockResolvedValue({ source: 'glofox', reads: {}, providesMemberships: true, pinArrears: false })
     const withCap = await leadsRowOf(tableDb(tables))
     radarReadsFor.mockResolvedValue(NOT_YET)
@@ -137,19 +146,19 @@ describe('rail leadsRow', () => {
 
   it('acquisition branch: the contacting-actions read is scoped to the studio', async () => {
     const db = tableDb(hatchTables({
-      lead_radar_actions: [
-        { contact_id: 'a', location_id: 'other-studio', action: 'contacted' },
-        { contact_id: 'b', location_id: L, action: 'outreach_sent' },
+      contact_log: [
+        { contact_id: 'a', location_id: 'other-studio' },
+        { contact_id: 'b', location_id: L },
       ],
     }))
     // b is contacted HERE; a was contacted at another studio, so still counts
     expect((await leadsRowOf(db)).text).toBe('1 lead uncontacted > 24h')
-    const q = db.log.find((x) => x.table === 'lead_radar_actions')
+    const q = db.log.find((x) => x.table === 'contact_log')
     expect(q.filters).toContainEqual(['eq', 'location_id', L])
   })
 
   it('acquisition branch: a failed contacting-actions read omits the row, never an over-count', async () => {
-    const db = tableDb(hatchTables(), { lead_radar_actions: { message: 'boom' } })
+    const db = tableDb(hatchTables(), { contact_log: { message: 'boom' } })
     expect(await leadsRowOf(db)).toBeNull()
   })
 

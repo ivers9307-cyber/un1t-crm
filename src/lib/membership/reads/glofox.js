@@ -10,11 +10,10 @@ import { fetchMembershipFlows } from '@/lib/membership-flows'
 import { fetchMrr, fetchGrowth, fetchEngagement } from '@shared/studio-kpis'
 import { fetchRevenueMTD, fetchArrearsSummary } from '@shared/dashboard-data'
 import { fetchGlofoxActiveMemberContactIds } from '@/lib/membership/glofox-active-members'
-// UN1TRADAR.1 — the radar reads load churn-radar-data / lead-radar-data at
+// UN1TRADAR.1 — the radar reads load churn-radar-data at
 // CALL time: those modules import the seam (reads/index → state-for-page →
 // registry → this file), so a static import would close a module cycle.
 const churnData = () => import('@/lib/churn-radar-data')
-const leadData = () => import('@/lib/lead-radar-data')
 
 export const glofoxReads = Object.freeze({
   membershipCounts: (...args) => computeMembershipCounts(...args),
@@ -27,7 +26,6 @@ export const glofoxReads = Object.freeze({
   // UN1TRADAR.1 — the radar row fetches: today's contacts / glofox_invoices readers
   radarMembers: async (...args) => (await churnData()).fetchMembers(...args),
   winbackContacts: async (...args) => (await churnData()).fetchWinbackContacts(...args),
-  leadContacts: async (...args) => (await leadData()).fetchNonMembers(...args),
   radarPastDue: async (...args) => (await churnData()).fetchPastDue(...args),
   // PIPEEXCL.1 — active members, for other studios' acquisition boards
   activeMemberContactIds: (...args) => fetchGlofoxActiveMemberContactIds(...args),

@@ -19,7 +19,6 @@ const SEGMENTS = [
   // place). Short labels keep five segments readable; the pages keep
   // their own permission gates, this strip is display-only.
   { id: 'churn',    label: 'Churn',    href: '/dashboard/churn-radar', perm: 'churn_radar' },
-  { id: 'leads',    label: 'Leads',    href: '/dashboard/lead-radar',  perm: 'lead_radar'  },
   // P2-7 — engagement→churn analytics (friend-count vs retention + app adoption).
   { id: 'engagement', label: 'Engagement', href: '/dashboard/engagement', perm: 'engagement_analytics' },
   // ADS-REPORT — paid-ad performance joins the dashboard tab family (moved out of the sidebar).

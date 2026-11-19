@@ -29,8 +29,6 @@ import { maybeEnrolUn1tDunning } from '@/lib/un1t-dunning'
 import { POST as actionPOST } from './action/route.js'
 import { POST as refreshPOST } from './refresh-member/route.js'
 import { POST as quarantinePOST } from './quarantine/route.js'
-import { POST as cleanupPOST } from '../lead-radar/cleanup/route.js'
-import { POST as leadActionPOST } from '../lead-radar/action/route.js'
 
 const L = 'loc-hatch'
 const USER = { id: 'u1', profileRole: 'master', activeLocation: { id: L }, rolesByLocation: { [L]: 'owner' } }
@@ -70,14 +68,6 @@ describe('acting routes at a un1t.online studio', () => {
     expect(res.status).toBe(200)
     expect(writes.some((w) => w.table === 'contacts')).toBe(false)
     expect(writes.find((w) => w.insert).insert[0]).toMatchObject({ contact_id: 'c1', action: 'quarantine_stale' })
-  })
-
-  it('cleanup archive at a un1t studio logs only', async () => {
-    asSource('un1t_online')
-    const res = await cleanupPOST(req('/api/lead-radar/cleanup', { decision: 'archive', contact_ids: ['c1'] }))
-    expect(res.status).toBe(200)
-    expect(writes.some((w) => w.table === 'contacts')).toBe(false)
-    expect(writes.find((w) => w.insert).insert[0]).toMatchObject({ contact_id: 'c1', action: 'cleanup_archive' })
   })
 
   it('Glofox studio: stale still writes dormant (unchanged)', async () => {
@@ -123,9 +113,6 @@ describe('acting routes at a un1t.online studio', () => {
     expect(writes).toEqual([])
     expect(logInfo).toHaveBeenCalledWith('churn-radar', 'outreach refused: studio has no WhatsApp number', { locationId: L })
     expect(logInfo.mock.calls.filter(([, m]) => m === 'outreach refused: studio has no WhatsApp number')).toHaveLength(1)
-    const lead = await leadActionPOST(req('/api/lead-radar/action', { contact_id: 'c1', action: 'outreach_sent', template_name: 'checkin' }))
-    expect(lead.status).toBe(409)
-    expect(logInfo).toHaveBeenCalledWith('lead-radar', 'outreach refused: studio has no WhatsApp number', { locationId: L })
   })
 })
 
@@ -133,9 +120,9 @@ describe('an unreadable membership source (radarReadsFor throws)', () => {
   const unreadable = () => radarReadsFor.mockRejectedValue(Object.assign(new Error('source unreadable'), { code: 'MEMBERSHIP_SOURCE_UNREADABLE' }))
   const SOURCE_503 = { success: false, error: "Could not read this studio's membership source. Try again shortly." }
 
-  it('quarantine stale and cleanup archive answer 503 with a JSON body and write nothing', async () => {
+  it('quarantine stale answers 503 with a JSON body and writes nothing', async () => {
     unreadable()
-    for (const [post, path, decision] of [[quarantinePOST, '/api/churn-radar/quarantine', 'stale'], [cleanupPOST, '/api/lead-radar/cleanup', 'archive']]) {
+    for (const [post, path, decision] of [[quarantinePOST, '/api/churn-radar/quarantine', 'stale']]) {
       const res = await post(req(path, { decision, contact_ids: ['c1'] }))
       expect(res.status).toBe(503)
       expect(await res.json()).toEqual(SOURCE_503)
@@ -146,7 +133,6 @@ describe('an unreadable membership source (radarReadsFor throws)', () => {
   it('keep decisions never read the source, so they still log', async () => {
     unreadable()
     expect((await quarantinePOST(req('/api/churn-radar/quarantine', { decision: 'keep', contact_ids: ['c1'] }))).status).toBe(200)
-    expect((await cleanupPOST(req('/api/lead-radar/cleanup', { decision: 'keep', contact_ids: ['c1'] }))).status).toBe(200)
     expect(radarReadsFor).not.toHaveBeenCalled()
   })
 

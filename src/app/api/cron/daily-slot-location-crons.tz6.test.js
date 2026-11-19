@@ -24,7 +24,6 @@ vi.mock('@/lib/morning-briefing', () => ({
   shapePulseMetrics: vi.fn(() => []),
 }))
 vi.mock('@/lib/churn-radar-data', () => ({ loadRadar: vi.fn(async (_db, id) => { acted.push(['churn-radar-digest', id]); return { summary: {} } }) }))
-vi.mock('@/lib/lead-radar-data', () => ({ loadFunnel: vi.fn(async () => ({ summary: {} })) }))
 vi.mock('@/lib/churn-radar-digest', () => ({ buildDigestEmail: vi.fn(() => ({ subject: 's', html: '<p/>' })) }))
 vi.mock('@/lib/membership/locations-for-source', () => ({ locationIdsWithoutCapability: vi.fn(async () => ({ ids: new Set(), error: null })) }))
 vi.mock('@/lib/ads/read', () => ({ loadAdsDashboard: vi.fn(async (_db, id) => { acted.push(['ad-report-email', id]); return { kpis: {}, perAd: [] } }) }))

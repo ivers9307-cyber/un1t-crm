@@ -30,7 +30,6 @@ export const NAV_COMMANDS = [
   // SIDEBAR-IA.1 — radars live under the dashboard tab strip; the old
   // standalone URLs are forever-aliased in next.config redirects.
   { id: 'churn-radar', label: 'Churn Radar', href: '/dashboard/churn-radar', permission: 'churn_radar' },
-  { id: 'lead-radar', label: 'Lead Radar', href: '/dashboard/lead-radar', permission: 'lead_radar' },
   // PALETTE.1 — was anyPermission ['events', 'bookings'], but /bookings gates
   // on `bookings` alone (hub-index-chains.js: `events` reaches no surface),
   // so an events-only holder was offered a page that bounced them.
