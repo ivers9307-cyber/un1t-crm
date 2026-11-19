@@ -7,7 +7,9 @@
 // state and applies it through the webhooks' own helpers. At most 50 provider
 // calls a tick. It then re-runs the side effects of paid Revolut donations
 // whose receipt or contact link did not land (REVPAY.12, at most 25 a tick,
-// counted as receipt_*; never unhealthy). Design, window, budget and backoff:
+// counted as receipt_*; never unhealthy), and confirms Revolut refunds the
+// refund route never heard back about (REFUNDCONFIRM.1, counted as refund_*;
+// never unhealthy). Design, window, budget and backoff:
 // src/lib/revolut-reconcile.js.
 //
 // Heartbeat 'revolut-reconcile' (mig 773, 900 + 1200). Stamped when the run

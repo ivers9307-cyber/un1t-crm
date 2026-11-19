@@ -43,7 +43,7 @@ import { validateBody } from '@/lib/validate'
 import { logError, logInfo } from '@/lib/log'
 import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 import { fileRefundCard } from '@/lib/un1t-online-approval'
-import { markDonationRefunded } from '@/lib/donation-payments'
+import { applyRefundToSource } from '@/lib/order-refund-cascade'
 
 // ORDERSTRIALS.1 — the source rows a un1t.online order can come from, and
 // where the buyer's un1t.online user id lives on each.
@@ -339,46 +339,10 @@ export async function POST(request, props) {
   const isFull = finished.is_full === true
   const refundedTotal = Number(finished.refunded_total_cents) || 0
 
-  // Cascade to source. Both target tables have their own status enum.
-  // EVENT-MOVE.5 — the write answers the payment's kind: a refunded price
-  // difference (move_gap) skips tag rules below, which are written for entry
-  // payments. It never un-settles the move (staff decide).
-  let sourceKind = null
-  if (order.source_type === 'race_registration') {
-    const { data: srcRows, error: srcErr } = await db.from('race_payments')
-      .update({
-        status: isFull ? 'refunded' : 'completed',
-        refunded_at: nowIso,
-        refunded_amount_cents: refundedTotal,
-      })
-      .eq('id', order.source_id)
-      .select('kind')
-    if (srcErr) {
-      // The money has gone back; the source row did not follow. Logged so it
-      // can be put right; tag rules then run as they always did.
-      logError('orders-refund', 'refund issued but race_payments was NOT updated', { err: srcErr, orderId: order.id, paymentId: order.source_id })
-    } else {
-      sourceKind = srcRows?.[0]?.kind || null
-    }
-  } else if (order.source_type === 'donation' && isFull) {
-    // ORDERSMORE.1 — a fully refunded donation leaves the event's total. The
-    // order already says refunded; a failed write is logged to be put right.
-    try {
-      await markDonationRefunded({ db, donationId: order.source_id, byProfileId: user.id })
-    } catch (donErr) {
-      logError('orders-refund', 'refund issued but the donation was NOT marked refunded', { err: donErr, orderId: order.id, donationId: order.source_id })
-    }
-  } else if (order.source_type === 'car_deposit' && isFull) {
-    // Car deposits are fixed-amount; only a full refund clears the deposit.
-    // The order row already says refunded, so a failed write is logged to be
-    // put right by hand (the same posture as race_payments above).
-    const { error: carErr } = await db.from('cars')
-      .update({ deposit_status: 'refunded' })
-      .eq('id', order.source_id)
-    if (carErr) {
-      logError('orders-refund', 'refund issued but cars.deposit_status was NOT updated', { err: carErr, orderId: order.id, carId: order.source_id })
-    }
-  }
+  // Cascade to source (REFUNDCONFIRM.1: one helper, shared with the Revolut
+  // refund check). EVENT-MOVE.5 — it answers the payment's kind: a refunded
+  // price difference (move_gap) skips the tag rules below.
+  const { sourceKind } = await applyRefundToSource(db, order, { isFull, refundedTotal, actorId: user.id, nowIso })
 
   // Event + tag re-evaluation. Best-effort — refund is already
   // committed to Revolut + DB.
