@@ -149,15 +149,16 @@ describe('NewPageDialog', () => {
     renderDialog({ canCreateAll: false })
     expect(screen.queryByLabelText('All studios')).toBeNull()
     const offer = screen.getByLabelText('Offer')
-    expect([...offer.options].map((o) => o.value)).toEqual(['paid_trial', 'class_funnel', 'one_class', 'promo_credits', 'none'])
+    expect([...offer.options].map((o) => o.value)).toEqual(['paid_trial', 'class_funnel', 'one_class', 'promo_credits', 'sale', 'none'])
     expect([...offer.options].map((o) => o.textContent)).toEqual([
-      'Paid trial', 'Free class with a timetable', 'One class', 'Free classes (promo code)', 'No offer',
+      'Paid trial', 'Free class with a timetable', 'One class', 'Free classes (promo code)', 'Sale (packs, memberships, gift cards)', 'No offer',
     ])
     const descriptions = {
       paid_trial: 'A trial sold for a price: price card, buyer form, checkout, then the plan or product on their account.',
       class_funnel: "Pick a class from the studio's timetable, leave details, book; optional consult upsell.",
       one_class: 'A booking page for one class and one trial plan: coach video, date tiles, details, booked.',
       promo_credits: 'A corporate or partner promo: a fixed number of free classes claimed with a code.',
+      sale: "The studio's chosen packs, memberships and gift cards, each bought on its own page.",
       none: 'A page of content blocks only: no booking card or trial for sale.',
     }
     for (const [value, text] of Object.entries(descriptions)) {

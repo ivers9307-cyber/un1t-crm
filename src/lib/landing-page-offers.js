@@ -18,7 +18,7 @@ import { campaignFunnelConfig } from '@/lib/campaign-funnel'
 import { classFunnelConfigFromBlocks } from '@/lib/public-landing'
 import { manualTimetableConfigFromBlocks } from '@/lib/manual-timetable'
 
-export const OFFER_TYPES = Object.freeze(['paid_trial', 'class_funnel', 'one_class', 'promo_credits', 'none'])
+export const OFFER_TYPES = Object.freeze(['paid_trial', 'class_funnel', 'one_class', 'promo_credits', 'sale', 'none'])
 
 /** The page-level name of each offer type (the New page dialog and the Pages list). */
 export const OFFER_TYPE_LABELS = Object.freeze({
@@ -26,6 +26,7 @@ export const OFFER_TYPE_LABELS = Object.freeze({
   class_funnel: 'Free class with a timetable',
   one_class: 'One class',
   promo_credits: 'Free classes (promo code)',
+  sale: 'Sale (packs, memberships, gift cards)',
   none: 'No offer',
 })
 
@@ -35,6 +36,8 @@ export const OFFER_TYPE_DESCRIPTIONS = Object.freeze({
   class_funnel: 'Pick a class from the studio\'s timetable, leave details, book; optional consult upsell.',
   one_class: 'A booking page for one class and one trial plan: coach video, date tiles, details, booked.',
   promo_credits: 'A corporate or partner promo: a fixed number of free classes claimed with a code.',
+  // SALEPAGE.1 (mig 860) — the studio's offers from Settings > Offers.
+  sale: 'The studio\'s chosen packs, memberships and gift cards, each bought on its own page.',
   none: 'A page of content blocks only: no booking card or trial for sale.',
 })
 
@@ -44,6 +47,7 @@ export const OFFER_BLOCK_TYPE = Object.freeze({
   class_funnel: 'class_funnel',
   one_class: 'campaign_funnel',
   promo_credits: 'corp_promo',
+  sale: 'sale_offers',
 })
 
 /** The inverse of OFFER_BLOCK_TYPE: a block type to its offer type, or null for any other block. */
@@ -62,6 +66,8 @@ export const STUDIO_OFFER_KEYS = Object.freeze({
   class_funnel: ['trial_membership_id', 'trial_plan_code', 'price_cents', 'currency', 'consult_slug', 'timetable', 'timetable_start_date', 'min_notice_hours'],
   campaign_funnel: ['trial_membership_id', 'trial_plan_code', 'class_keywords'],
   corp_promo: ['promo_key'],
+  // SALEPAGE.1 — which of the studio's sale_offers rows the page shows, in order.
+  sale_offers: ['offer_ids'],
 })
 
 /** Keys a block used to carry that the page now owns itself (the page's slug replaces `campaign`). */
@@ -147,6 +153,9 @@ const SCHEMA_SHAPES = {
   corp_promo: {
     promo_key: z.string().max(64),
   },
+  sale_offers: {
+    offer_ids: z.array(z.string().max(64)).max(30),
+  },
 }
 
 /** The validator for a studio row's `offer`, by block type: strict, every key optional. */
@@ -170,9 +179,12 @@ export function defaultAttribution({ publicPath, slug }) {
  * Is this offer ready to take a customer? Judged by the same functions the
  * public routes use, on the merged block. A corp_promo block is ready when its
  * promo_key is among `promos`, the studio's promo rows the caller preloaded
- * (listCorpPromos, src/lib/corp-promos.js); no list, no promo.
+ * (listCorpPromos, src/lib/corp-promos.js); no list, no promo. A sale_offers
+ * block is ready when it names at least one offer and every one it names is
+ * among `saleOffers`, the studio's offers that can be sold now
+ * (sellableSaleOffers, src/lib/sale-offers-block.js).
  */
-export function offerConfigured(blockType, mergedBlock, { landingPath, product = null, promos = [] } = {}) {
+export function offerConfigured(blockType, mergedBlock, { landingPath, product = null, promos = [], saleOffers = [] } = {}) {
   if (blockType === 'paid_trial') {
     return paidTrialConfigFromBlocks([mergedBlock], landingPath, { product }) !== null
   }
@@ -187,6 +199,11 @@ export function offerConfigured(blockType, mergedBlock, { landingPath, product =
   if (blockType === 'corp_promo') {
     const key = typeof mergedBlock?.promo_key === 'string' ? mergedBlock.promo_key.trim() : ''
     return key !== '' && Array.isArray(promos) && promos.some((p) => p?.key === key)
+  }
+  if (blockType === 'sale_offers') {
+    const ids = Array.isArray(mergedBlock?.offer_ids) ? mergedBlock.offer_ids : []
+    const sellable = new Set((saleOffers || []).map((o) => o?.id))
+    return ids.length > 0 && ids.every((id) => sellable.has(id))
   }
   return false
 }

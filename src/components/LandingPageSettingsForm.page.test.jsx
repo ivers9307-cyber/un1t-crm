@@ -261,7 +261,7 @@ describe('LandingPageSettingsForm (page mode): the pinned offer block', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add section' }))
     const offerTypes = BLOCK_TYPES.filter((t) => t.offer)
-    expect(offerTypes.map((t) => t.type).sort()).toEqual(['campaign_funnel', 'class_funnel', 'corp_promo', 'paid_trial'])
+    expect(offerTypes.map((t) => t.type).sort()).toEqual(['campaign_funnel', 'class_funnel', 'corp_promo', 'paid_trial', 'sale_offers'])
     for (const t of offerTypes) expect(screen.queryByText(t.description), t.type).toBeNull()
     expect(screen.getByText(BLOCK_TYPES.find((t) => t.type === 'pillars').description)).toBeTruthy()
 

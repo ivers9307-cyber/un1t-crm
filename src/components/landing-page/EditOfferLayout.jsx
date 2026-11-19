@@ -40,6 +40,7 @@ import EditableText from './EditableText'
 import CampaignFunnel, { EDITABLE_COPY_KEYS } from './CampaignFunnel'
 import PaidTrialFunnel from './PaidTrialFunnel'
 import CorpPromoFunnel from './CorpPromoFunnel'
+import SaleOffersCard, { saleOffersCopy } from './SaleOffersCard'
 import ClassFunnel from '@/components/ClassFunnel'
 import { campaignFunnelCopy, campaignFunnelClientCopy } from '@/lib/campaign-funnel'
 import { oneClassPresentation, classFirstStepCopy } from '@/lib/class-first-funnel'
@@ -109,6 +110,11 @@ export function liveOffer(layout, pinned, onEditField) {
 
   if (pinned.type === 'class_funnel') {
     return <ClassFunnel {...props} {...classFunnelWordProps(pinned)} />
+  }
+
+  if (pinned.type === 'sale_offers') {
+    // SALEPAGE.1 — the words are the page's; which offers show is the studio's.
+    return <SaleOffersCard {...props} copy={saleOffersCopy(pinned)} />
   }
 
   return layout.offer ?? null

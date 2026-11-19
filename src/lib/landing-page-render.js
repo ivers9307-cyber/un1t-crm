@@ -13,6 +13,8 @@ const LAYOUT_BY_OFFER = Object.freeze({
   class_funnel: 'frosted',
   promo_credits: 'one_class',
   one_class: 'one_class',
+  // SALEPAGE.1 — the offer list in the frosted card over the hero photo.
+  sale: 'frosted',
   none: 'blocks',
 })
 
