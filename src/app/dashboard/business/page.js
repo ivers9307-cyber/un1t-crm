@@ -38,10 +38,9 @@ async function KpiBriefingBlock({ user, locationId }) {
   // src/lib/dashboard/business-kpis.js so /api/dashboard/business (the
   // mobile Business dashboard's data route) computes the SAME numbers.
   // Returns null on failure (its internal try/catch), per the header.
-  // W1.M3a — every tile in the row is Glofox-derived (Revenue MTD and
-  // reads glofox_invoices, In arrears the radar Overdue count (ARREARSONE.1),
-  // Members the membership counts, Churn
-  // risk the radar), so at a studio with no membership source the row is
+  // W1.M3a — every tile in the row is Glofox-derived (Revenue MTD reads
+  // glofox_invoices, In arrears the radar's Overdue count (ARREARSONE.1),
+  // Members the membership counts, Churn risk the radar), so at a studio with no membership source the row is
   // four honest-looking zeros. The briefing line stays (pending approvals
   // are source-independent); the row renders only behind the gate. The
   // state is read alongside the numbers (cached 60 s per location).
