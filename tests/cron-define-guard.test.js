@@ -20,7 +20,7 @@ const LEGACY = new Set([
   'fleet-health',
   'glofox-arrears-reconcile', 'glofox-attendance-history', 'glofox-attendance-refresh',
   'glofox-data-quality', 'glofox-detail-backfill', 'glofox-sync', 'health-check',
-  'instagram-feed-sync', 'instagram-token-refresh', 'lead-radar-snapshot',
+  'instagram-feed-sync', 'instagram-token-refresh',
   'lieu-credits', 'membership-snapshot', 'mia-purchase-intents', 'morning-briefing',
   'notify-onboarding-pace', 'notify-streak-at-risk', 'notify-winback', 'person-detect-scan',
   'poll-imap-mailboxes', 'process-class-bookings', 'process-contact-imports',

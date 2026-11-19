@@ -22,8 +22,8 @@ import { READS_BY_SOURCE } from './registry'
 export const READ_KEYS = Object.freeze([
   'membershipCounts', 'mrr', 'membershipFlows', 'growth', 'engagement', 'revenueMtd', 'arrears',
   'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility',
-  // UN1TRADAR.1 — the radar row fetches (churn, win-back, lead, arrears fold)
-  'radarMembers', 'winbackContacts', 'leadContacts', 'radarPastDue',
+  // UN1TRADAR.1 — the radar row fetches (churn, win-back, arrears fold)
+  'radarMembers', 'winbackContacts', 'radarPastDue',
   // PIPEEXCL.1 — the studio's active members, for other studios' acquisition boards
   'activeMemberContactIds',
 ])

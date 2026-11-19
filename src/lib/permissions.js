@@ -89,7 +89,7 @@ export function hasPermission(user, key) {
  * resolver still short-circuits master once the location gate passes).
  *
  * @param {{role: string, activeLocation?: object, activeAssignment?: {permissions?: object}|null}|null|undefined} user
- * @param {string} key  e.g. 'churn_radar', 'lead_radar', 'pipeline'
+ * @param {string} key  e.g. 'churn_radar', 'pipeline'
  * @returns {boolean}
  */
 export function hasMobilePermission(user, key) {

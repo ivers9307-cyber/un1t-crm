@@ -60,12 +60,8 @@ export const WEB_PERMISSIONS = Object.freeze([
   // for zero-activity records. Owner + head_coach by default — a
   // retention oversight tool, not a staff surface.
   { key: 'churn_radar', label: 'Churn Radar',                   hint: 'At-risk member radar — attendance-based churn signals, win-back actions, and quarantine triage. Owner + head coach by default.' },
-  // LEAD-RADAR.1 — non-member triage radar. Splits the ~7,100
-  // lead/trial/classpass base into a Funnel (live cohort worth a
-  // follow-up) and a Cleanup list (dormant records to archive).
-  // Owner + head_coach by default — an acquisition oversight tool,
-  // mirroring churn_radar's defaults.
-  { key: 'lead_radar', label: 'Lead Radar',                     hint: 'Non-member triage radar — funnel of leads / trials / ClassPass worth converting, plus cleanup of dormant records. Owner + head coach by default.' },
+  // (LEAD-RADAR.1's lead_radar key was retired with the Lead Radar,
+  // CONTACTLOG.2: the board's "Not contacted" filter replaces it.)
   // P2-7 — engagement→churn analytics dashboard tab (/dashboard/engagement).
   // Cross-tabs the member base by friend-count tier against churn-risk +
   // attendance ("members with more friends churn less") and tracks app /
@@ -348,7 +344,6 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     dashboard_personal: true, dashboard_studio: true, dashboard_business: true, dashboard_ads: true,
     pipeline: true, contacts: true, activities: true,
     churn_radar: true,
-    lead_radar: true,
     engagement_analytics: true,
     pulse_admin: true,
     events: true, bookings: true, races: true,
@@ -390,7 +385,6 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     dashboard_personal: true, dashboard_studio: false, dashboard_business: false, dashboard_ads: false,
     pipeline: true, contacts: true, activities: true,
     churn_radar: false,                            // retention oversight — not a staff surface
-    lead_radar: false,                             // acquisition oversight — not a staff surface
     engagement_analytics: false,                   // retention analytics — not a staff surface
     pulse_admin: false,                            // Pulse operator hub — retention oversight, not a staff surface
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
@@ -432,7 +426,6 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     dashboard_personal: true, dashboard_studio: false, dashboard_business: false, dashboard_ads: false,
     pipeline: true, contacts: true, activities: true,
     churn_radar: false,
-    lead_radar: false,
     engagement_analytics: false,
     pulse_admin: false,
     events: true, bookings: true, races: true,       // front desk runs the booking desk
@@ -468,7 +461,6 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false, dashboard_ads: false,
     pipeline: true, contacts: true, activities: true,
     churn_radar: true,                             // head coaches own member retention
-    lead_radar: true,                              // head coaches own lead/trial conversion
     engagement_analytics: true,                    // retention analytics — head coaches own retention
     pulse_admin: true,                             // Pulse operator hub — head coaches own retention
     events: true, bookings: true, races: true,
@@ -508,7 +500,6 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false, dashboard_ads: true,
     pipeline: true, contacts: true, activities: true,
     churn_radar: false,                            // owner + head_coach by default; grant per-user if needed
-    lead_radar: false,                             // owner + head_coach by default; grant per-user if needed
     engagement_analytics: true,                    // managers track engagement / retention by default
     pulse_admin: true,                             // managers run the Pulse operator hub
     events: true, bookings: true, races: true,
@@ -547,7 +538,6 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     dashboard_personal: true, dashboard_studio: true, dashboard_business: true, dashboard_ads: true,
     pipeline: true, contacts: true, activities: true,
     churn_radar: true,
-    lead_radar: true,
     engagement_analytics: true,
     pulse_admin: true,
     events: true, bookings: true, races: true,
@@ -649,10 +639,9 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // view reached from the More tab. Separate .mobile toggle so an
   // operator can grant the phone glance independently of the desktop
   // dashboard. Owner + head_coach by default, mirroring the web
-  // churn_radar / lead_radar permissions; webEquivalent links them
+  // churn_radar permission; webEquivalent links them
   // for the parity linter.
   { key: 'churn_radar',        label: 'Churn Radar (glance)',     hint: 'Read-only at-risk member summary — counts + weekly trend. Triage stays on web.', webEquivalent: 'churn_radar' },
-  { key: 'lead_radar',         label: 'Lead Radar (glance)',      hint: 'Read-only lead funnel summary — counts + weekly trend. Triage stays on web.',    webEquivalent: 'lead_radar' },
   // MOBILE-PERMS — personal / self-service surfaces that previously had
   // NO per-user toggle (gated only by employment_type, or universal-by-
   // design). Each now has an admin toggle so a studio can hide it per
@@ -838,7 +827,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     car_processing: true,
     races: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
-    churn_radar: true, lead_radar: true,
+    churn_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
@@ -878,7 +867,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     car_processing: false,
     races: false,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
-    churn_radar: false, lead_radar: false,  // retention/acquisition oversight — not a staff surface
+    churn_radar: false,  // retention oversight — not a staff surface
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: false, notify_instagram: false, notify_email: false, notify_agent_activity: false,
@@ -925,7 +914,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     car_processing: false,
     races: false,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
-    churn_radar: false, lead_radar: false,
+    churn_radar: false,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: true, notify_instagram: false, notify_email: false, notify_agent_activity: true,
@@ -962,7 +951,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     car_processing: false,
     races: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
-    churn_radar: true, lead_radar: true,    // head coaches own retention + conversion
+    churn_radar: true,    // head coaches own retention
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: false, notify_agent_activity: true,
@@ -1005,7 +994,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     car_processing: false,
     races: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
-    churn_radar: false, lead_radar: false,  // owner + head_coach by default; grant per-user if needed
+    churn_radar: false,  // owner + head_coach by default; grant per-user if needed
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
@@ -1050,7 +1039,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     car_processing: false,         // CCF Autos — per-user opt-in, matches web
     races: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
-    churn_radar: true, lead_radar: true,
+    churn_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,

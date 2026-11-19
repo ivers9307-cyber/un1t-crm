@@ -17,7 +17,6 @@ import {
   MEMBER_STATUSES, UN1T_ENDED_SUB_STATUSES, UN1T_LIVE_SUB_STATUSES, glofoxInterval, packHolderIds, isActiveSub,
 } from './un1t-online-shape'
 import { isRealMembershipPlan } from '@/lib/churn-radar'
-import { NON_MEMBER_STATUSES } from '@/lib/lead-radar'
 
 const DAY_MS = 86_400_000
 const WINDOW_7D_MS = 7 * DAY_MS
@@ -392,86 +391,6 @@ export function shapeWinbackRows({ allSubs = [], freshCutoffIso = null, endedMem
     })
   }
   return out
-}
-
-/**
- * Lead-radar rows (spec B §2c), keyed exactly as lead-radar-data.js's
- * CONTACT_COLUMNS. The status is spec A's pipeline snapshot status, UNCHANGED,
- * so a person carries the same membership status on Hatch's board and its lead
- * radar (the board's own stage rules, dismissals and pack-customer piles stay
- * the board's, as the Glofox lead radar ignores them too):
- *   - a member or credit_member snapshot is never a lead row, whatever its
- *     bookings; an ex_member is not one either, unless it has a Gympass
- *     booking (below);
- *   - otherwise a snapshot carrying gympass_member_id is rendered
- *     'classpass_payg' on the LEAD ROW only, so the unchanged scorer sends it
- *     to the read-only aggregator view with the ClassPass rows, as the board's
- *     Gympass pile (an ex-member with a Gympass booking included: the board
- *     checks Gympass before ex-member).
- * joined_at and last_attended_at come from the snapshot; last_booked_at from
- * the person's newest booking here; name, email, phone and lead_source from
- * their contact. Membership is judged at this studio only (G1): the contact's
- * own glofox_membership_status is never read.
- *
- * `ownedWithoutClient` are contacts this studio OWNS with no un1t_clients row
- * here (lead forms, campaigns): each is a 'lead', joined_at from
- * contacts.joined_at, else created_at (Hatch was never bulk-imported, so
- * created_at is real there; Claude's call 5).
- *
- * @param {object} a
- * @param {{ contacts: object[], snapshots: Map<string, object> }} a.pipeline  pipelineInputs' data
- * @param {Map<string, object>} a.contactsById  { name, email, phone, lead_source }
- * @param {object[]} a.ownedWithoutClient       contacts { id, name, email, phone, lead_source, joined_at, created_at }
- * @param {Map<string, string>} a.newestBookingAtByContact
- * @returns {object[]}
- */
-export function shapeLeadRows({
-  pipeline = { contacts: [], snapshots: new Map() }, contactsById = new Map(),
-  ownedWithoutClient = [], newestBookingAtByContact = new Map(),
-} = {}) {
-  const rows = []
-  const seen = new Set()
-  for (const person of pipeline.contacts ?? []) {
-    const snapshot = pipeline.snapshots?.get?.(person.id)
-    if (!snapshot || seen.has(person.id)) continue
-    const snapStatus = snapshot.glofox_membership_status
-    // A member or credit member is never a lead, Gympass bookings or not: the
-    // board graduates them out of the Gympass pile (shared/pipeline-classifier.js).
-    if (snapStatus === 'member' || snapStatus === 'credit_member') continue
-    // The board checks Gympass BEFORE ex-member, so an ex-member with a Gympass
-    // booking is in the Gympass pile there and the aggregator view here.
-    const status = snapshot.gympass_member_id ? 'classpass_payg' : snapStatus
-    if (!NON_MEMBER_STATUSES.includes(status)) continue
-    seen.add(person.id)
-    const c = contactsById.get(person.id) ?? {}
-    rows.push({
-      id: person.id,
-      name: c.name ?? person.name ?? null,
-      email: c.email ?? person.email ?? null,
-      phone: c.phone ?? null,
-      glofox_membership_status: status,
-      last_attended_at: snapshot.last_attended_at ?? null,
-      last_booked_at: newestBookingAtByContact.get(person.id) ?? null,
-      joined_at: snapshot.joined_at ?? null,
-      lead_source: c.lead_source ?? null,
-    })
-  }
-  for (const c of ownedWithoutClient) {
-    if (c?.id == null || seen.has(c.id)) continue
-    seen.add(c.id)
-    rows.push({
-      id: c.id,
-      name: c.name ?? null,
-      email: c.email ?? null,
-      phone: c.phone ?? null,
-      glofox_membership_status: 'lead',
-      last_attended_at: null,
-      last_booked_at: newestBookingAtByContact.get(c.id) ?? null,
-      joined_at: c.joined_at ?? c.created_at ?? null,
-      lead_source: c.lead_source ?? null,
-    })
-  }
-  return rows
 }
 
 // ---------------------------------------------------------------------------

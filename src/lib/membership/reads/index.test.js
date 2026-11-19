@@ -25,11 +25,11 @@ const LOC = 'a0000000-0000-4000-8000-00000000000a'
 beforeEach(() => vi.clearAllMocks())
 
 describe('membershipReadsFor', () => {
-  it('exposes the sixteen read keys', () => {
+  it('exposes the fifteen read keys', () => {
     expect(READ_KEYS).toEqual([
       'membershipCounts', 'mrr', 'membershipFlows', 'growth', 'engagement', 'revenueMtd', 'arrears',
       'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility',
-      'radarMembers', 'winbackContacts', 'leadContacts', 'radarPastDue',
+      'radarMembers', 'winbackContacts', 'radarPastDue',
       'activeMemberContactIds',
     ])
     expect(Object.isFrozen(READ_KEYS)).toBe(true)
@@ -115,8 +115,9 @@ describe('supportsRead', () => {
 // UN1TRADAR.1 — the radar reads resolve by SOURCE KEY in any state, so
 // Stillorgan's radar survives a Glofox credential glitch.
 describe('radarReadsFor', () => {
-  it('READ_KEYS lists the four radar keys', () => {
-    expect(READ_KEYS).toEqual(expect.arrayContaining(['radarMembers', 'winbackContacts', 'leadContacts', 'radarPastDue']))
+  it('READ_KEYS lists the three radar keys', () => {
+    expect(READ_KEYS).toEqual(expect.arrayContaining(['radarMembers', 'winbackContacts', 'radarPastDue']))
+    expect(READ_KEYS).not.toContain('leadContacts')
   })
 
   for (const state of ['configured', 'unconfigured', 'unknown']) {

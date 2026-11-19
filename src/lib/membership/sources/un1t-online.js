@@ -9,11 +9,11 @@
 // member's paid and trial credits are read from the un1t_* tables by Mia's
 // un1t read executor (src/lib/agent/un1t-tools.js). UN1TRADAR.4: `memberships` is
 // on: every surface behind it reads the membership seam (spec B §8):
-//   - /dashboard/churn-radar and /dashboard/lead-radar (incl. the digest and
+//   - /dashboard/churn-radar (incl. the digest and
 //     dunning settings cards), /dashboard/engagement, the studio scorecard's
 //     radar cells and the business Churn risk KPI;
-//   - the churn-radar-snapshot and lead-radar-snapshot crons (Mon 06:00 / 06:30
-//     UTC), the Monday digest to the studio's own recipient list, and the
+//   - the churn-radar-snapshot cron (Mon 06:00 UTC; the lead-radar one went
+//     with the Lead Radar, CONTACTLOG.2), the Monday digest to the studio's own recipient list, and the
 //     morning briefing's Studio pulse strip;
 //   - the radar read APIs, /api/mobile/radar and the today-feed churn row
 //     answer un1t data instead of data:null; provides_memberships is true on

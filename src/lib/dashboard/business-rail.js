@@ -13,6 +13,7 @@
 // failure isolation per category), gathered via Promise.allSettled
 // (belt-and-braces) with order fixed structurally by the array literal.
 
+import { loadRecentlyContacted } from '@/lib/contact-log'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { radarReadsFor } from '@/lib/membership/reads/index'
 import { membershipReadsFor } from '@/lib/membership/reads'
@@ -114,9 +115,11 @@ async function leadsRow(db, locationId, now) {
     // UN1TRADAR.3 — contacts.pipeline_stage_slug follows the PRIMARY board
     // (mig 595). Where that is not the acquisition board (Hatch: the manual
     // waitlist), count the acquisition board's own deals instead, but only
-    // once the studio's provider supplies memberships (UN1TRADAR.4): the row
-    // links to the lead radar, which is gated on that capability until then,
-    // so before the flip a manual-primary studio keeps main's contacts count.
+    // once the studio's provider supplies memberships (UN1TRADAR.4); before
+    // the flip a manual-primary studio keeps main's contacts count.
+    // CONTACTLOG.2 — "contacted" is the board's rule (loadRecentlyContacted:
+    // a call, WhatsApp or email logged here lately), and the row opens the
+    // board's "Not contacted" view; the Lead Radar it used to open is gone.
     // An acquisition-primary studio (Stillorgan) never reaches the check.
     const { data: boards, error: boardErr } = await db.from('pipelines')
       .select('id, key, is_primary, enabled')
@@ -125,7 +128,7 @@ async function leadsRow(db, locationId, now) {
     if (primary && primary.key !== 'acquisition' && await providesMembershipsAt(db, locationId)) {
       const acq = (boards || []).find((p) => p.key === 'acquisition' && p.enabled)
       if (!acq) return null
-      return leadsRowRender(await uncontactedAcquisitionLeads(db, locationId, acq.id, cutoffIso))
+      return leadsRowRender(await uncontactedAcquisitionLeads(db, locationId, acq.id, cutoffIso, now))
     }
     const { data: leads } = await db.from('contacts')
       .select('id')
@@ -133,18 +136,7 @@ async function leadsRow(db, locationId, now) {
       .lte('joined_at', cutoffIso)
       .limit(100)
     const ids = (leads || []).map(l => l.id)
-    let uncontacted = ids.length
-    if (ids.length) {
-      // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- ids is capped at 100 leads above; contacting actions per contact are a tiny set, so 1000 captures every row
-      const { data: actions } = await db.from('lead_radar_actions')
-        .select('contact_id')
-        .in('contact_id', ids)
-        .in('action', ['contacted', 'outreach_sent'])
-        .limit(1000)
-      const touched = new Set((actions || []).map(a => a.contact_id))
-      uncontacted = ids.filter(id => !touched.has(id)).length
-    }
-    return leadsRowRender(uncontacted)
+    return leadsRowRender(await uncontactedOf(db, locationId, ids, now))
   } catch { /* omitted */ }
   return null
 }
@@ -154,7 +146,7 @@ function leadsRowRender(uncontacted) {
   return {
     key: 'leads', chip: 'Leads', tone: 'teal',
     text: `${uncontacted} lead${uncontacted === 1 ? '' : 's'} uncontacted > 24h`,
-    href: '/dashboard/lead-radar',
+    href: '/pipeline?nocontact=1',
   }
 }
 
@@ -170,10 +162,10 @@ async function providesMembershipsAt(db, locationId) {
 }
 
 // Open deals at the acquisition board's new_lead stage created over 24h ago
-// (capped at 100, as the contacts query is), minus contacted / outreach-sent
-// at THIS studio. A failed read throws, so the row is omitted (as every rail
+// (capped at 100, as the contacts query is), minus the ones contacted at THIS
+// studio lately (uncontactedOf). A failed read throws, so the row is omitted (as every rail
 // row is on failure) rather than over-counting uncontacted leads.
-async function uncontactedAcquisitionLeads(db, locationId, pipelineId, cutoffIso) {
+async function uncontactedAcquisitionLeads(db, locationId, pipelineId, cutoffIso, now) {
   const { data: stages, error: stageErr } = await db.from('pipeline_stages')
     .select('id')
     .eq('location_id', locationId)
@@ -193,17 +185,17 @@ async function uncontactedAcquisitionLeads(db, locationId, pipelineId, cutoffIso
     .limit(100)
   if (dealErr) throw dealErr
   const ids = [...new Set((deals || []).map((d) => d.contact_id).filter(Boolean))]
+  return uncontactedOf(db, locationId, ids, now)
+}
+
+// CONTACTLOG.2 — of `ids`, how many have no contact logged at the studio in
+// CONTACT_WINDOW_DAYS. A failed read throws, so the row is omitted rather than
+// over-counting uncontacted leads.
+async function uncontactedOf(db, locationId, ids, now) {
   if (ids.length === 0) return 0
-  // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- ids is capped at 100 deals above; contacting actions per contact are a tiny set, so 1000 captures every row
-  const { data: actions, error: actionErr } = await db.from('lead_radar_actions')
-    .select('contact_id')
-    .eq('location_id', locationId)
-    .in('contact_id', ids)
-    .in('action', ['contacted', 'outreach_sent'])
-    .limit(1000)
-  if (actionErr) throw actionErr
-  const touched = new Set((actions || []).map((a) => a.contact_id))
-  return ids.filter((id) => !touched.has(id)).length
+  const res = await loadRecentlyContacted(db, { locationId, contactIds: ids, nowMs: now.getTime() })
+  if (!res.ok) throw new Error('contact log read failed')
+  return ids.filter((id) => !res.contacted.has(id)).length
 }
 
 export async function buildNeedsYouRail(db, user, locationId, now = new Date()) {

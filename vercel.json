@@ -113,10 +113,6 @@
       "schedule": "0 6 * * 1"
     },
     {
-      "path": "/api/cron/lead-radar-snapshot",
-      "schedule": "30 6 * * 1"
-    },
-    {
       "path": "/api/cron/churn-radar-digest",
       "schedule": "0 * * * *"
     },

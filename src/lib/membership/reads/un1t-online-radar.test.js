@@ -7,7 +7,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.f
 vi.mock('@/lib/paid-trial-products', () => ({ paidTrialProductIdsFor: vi.fn(async () => new Set()) }))
 
 import { logInfo } from '@/lib/log'
-import { radarMembers, winbackContacts, leadContacts, radarPastDue, arrears } from './un1t-online-radar'
+import { radarMembers, winbackContacts, radarPastDue, arrears } from './un1t-online-radar'
 import { un1tOnlineReads } from './un1t-online'
 
 const HATCH = 'loc-hatch'
@@ -248,7 +248,7 @@ describe('radarMembers', () => {
   it('is registered on un1tOnlineReads', () => {
     expect(un1tOnlineReads.radarMembers).toBe(radarMembers)
     expect(un1tOnlineReads.winbackContacts).toBe(winbackContacts)
-    expect(un1tOnlineReads.leadContacts).toBe(leadContacts)
+    expect(un1tOnlineReads).not.toHaveProperty('leadContacts')
   })
 })
 
@@ -284,64 +284,6 @@ describe('winbackContacts', () => {
   })
 })
 
-describe('leadContacts', () => {
-  it('lists a un1t lead from the pipeline snapshot and an owned contact with no client', async () => {
-    const { db } = makeDb(seed({
-      un1t_subscriptions: [],
-      un1t_clients: [client({ last_attended_at: iso(NOW - 5 * DAY) })],
-      contacts: [
-        contact({ glofox_membership_status: 'member' }), // a Stillorgan member: a Hatch lead
-        contact({ id: 'own', name: 'Owned', location_id: HATCH, lead_source: 'form', created_at: '2026-10-10T00:00:00Z' }),
-      ],
-    }))
-    const rows = await leadContacts(db, HATCH, { nowMs: NOW })
-    const byId = Object.fromEntries(rows.map((r) => [r.id, r]))
-    expect(byId.c1).toMatchObject({ glofox_membership_status: 'lead', email: 'alex@example.com', last_booked_at: iso(NOW - 3 * DAY) })
-    expect(byId.own).toMatchObject({ glofox_membership_status: 'lead', joined_at: '2026-10-10T00:00:00Z', lead_source: 'form' })
-  })
-
-  it('leadContacts last_booked_at looks back 400 days: 399 counts, 401 does not', async () => {
-    const run = async (days) => {
-      const { db } = makeDb(seed({
-        un1t_subscriptions: [],
-        un1t_clients: [client({ last_attended_at: null })],
-        un1t_bookings: [{ id: id(), location_id: HATCH, un1t_user_id: 'u1', contact_id: 'c1', event_id: 'old', status: 'attended', remote_created_at: iso(NOW - days * DAY) }],
-        contacts: [contact({ glofox_membership_status: 'member' })],
-      }))
-      const rows = await leadContacts(db, HATCH, { nowMs: NOW })
-      return rows.find((r) => r.id === 'c1')?.last_booked_at ?? null
-    }
-    expect(await run(399)).toBe(iso(NOW - 399 * DAY))
-    expect(await run(401)).toBeNull()
-  })
-
-  it('leadContacts throws when pipelineInputs returns success:false', async () => {
-    // un1t_products is read only by pipelineInputs here, which answers success:false on it
-    const { db } = makeDb(seed(), { fail: ['un1t_products'] })
-    await expect(leadContacts(db, HATCH, { nowMs: NOW })).rejects.toThrow()
-  })
-
-  it('an owned contact whose only client row is stale is not listed as a lead', async () => {
-    const { db } = makeDb(seed({
-      un1t_subscriptions: [],
-      un1t_clients: [client(), client({ un1t_user_id: 'old', contact_id: 'own', synced_at: STALE })],
-      contacts: [contact(), contact({ id: 'own', location_id: HATCH })],
-    }))
-    const rows = await leadContacts(db, HATCH, { nowMs: NOW })
-    expect(rows.map((r) => r.id)).not.toContain('own')
-  })
-
-  it('owned contacts are read by location; everything else by id', async () => {
-    const { db, log } = makeDb(seed({ un1t_subscriptions: [] }))
-    await leadContacts(db, HATCH, { nowMs: NOW })
-    const byLocation = log.filter((q) => q.table === 'contacts' && q.filters.some(([k, c]) => k === 'eq' && c === 'location_id'))
-    // HATCH39 — pipelineInputs now reads the studio's own contacts by location too (form-only enquiries).
-    expect(byLocation.length).toBeGreaterThanOrEqual(1)
-    for (const q of byLocation) expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
-  })
-})
-
-// UN1TRADAR.2 — arrears from spec A's pastDue (un1t_invoices + subscriptions).
 describe('radarPastDue and arrears', () => {
   const pdSeed = (extra = {}) => seed({
     un1t_subscriptions: [

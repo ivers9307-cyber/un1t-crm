@@ -19,26 +19,17 @@ vi.mock('@/lib/churn-radar-data', () => ({
   loadAwaitingAuth: vi.fn(async () => ({ charges: [], summary: { total: 0 } })),
   loadQuarantine: vi.fn(async () => []),
 }))
-vi.mock('@/lib/lead-radar-data', () => ({
-  loadFunnel: vi.fn(async () => ({ funnel: [], summary: { funnelTotal: 0 } })),
-  loadClassPass: vi.fn(async () => ({ classpass: [], summary: {} })),
-  loadCleanup: vi.fn(async () => ({ cleanup: [], summary: {} })),
-}))
 
 import { getCurrentUser } from '@/lib/auth'
 import { radarCache } from '@/lib/radar-cache'
 import { radarAvailability } from '@/lib/radar-availability'
 import * as churnData from '@/lib/churn-radar-data'
-import * as leadData from '@/lib/lead-radar-data'
 import { GET as churnGET } from './route'
 import { GET as winbackGET } from './winback/route'
 import { GET as overdueGET } from './overdue/route'
 import { GET as unpaidGET } from './unpaid-charges/route'
 import { GET as awaitingGET } from './awaiting-authorization/route'
 import { GET as quarantineGET } from './quarantine/route'
-import { GET as leadGET } from '../lead-radar/route'
-import { GET as classpassGET } from '../lead-radar/classpass/route'
-import { GET as cleanupGET } from '../lead-radar/cleanup/route'
 
 const L = 'loc-1'
 const req = (path) => new Request(`http://localhost${path}`)
@@ -49,9 +40,6 @@ const ROUTES = [
   ['unpaid-charges', unpaidGET, '/api/churn-radar/unpaid-charges', 'loadUnpaidCharges', churnData],
   ['awaiting-authorization', awaitingGET, '/api/churn-radar/awaiting-authorization', 'loadAwaitingAuth', churnData],
   ['quarantine', quarantineGET, '/api/churn-radar/quarantine', 'loadQuarantine', churnData],
-  ['lead-radar', leadGET, '/api/lead-radar', 'loadFunnel', leadData],
-  ['classpass', classpassGET, '/api/lead-radar/classpass', 'loadClassPass', leadData],
-  ['cleanup', cleanupGET, '/api/lead-radar/cleanup', 'loadCleanup', leadData],
 ]
 
 beforeEach(() => {
@@ -82,12 +70,12 @@ describe('radar read APIs and the memberships capability', () => {
       expect(body.dataAsOf).toBeNull()
       // the radar page's own route also carries the studio zone for its freshness
       // line; the routes behind an outreach button say whether a number is on
-      const extra = { 'churn-radar': ['dataAsOfZone', 'outreachAvailable'], winback: ['outreachAvailable'], 'lead-radar': ['outreachAvailable'] }[name] || []
+      const extra = { 'churn-radar': ['dataAsOfZone', 'outreachAvailable'], winback: ['outreachAvailable'] }[name] || []
       expect(Object.keys(body).sort()).toEqual(['data', 'dataAsOf', 'source', 'success', ...extra].sort())
       expect(mod[loader]).toHaveBeenCalledTimes(1)
     })
 
-    if (['churn-radar', 'winback', 'lead-radar'].includes(name)) {
+    if (['churn-radar', 'winback'].includes(name)) {
       it(`${name}: an unread WhatsApp number is null (unknown), never false`, async () => {
         radarAvailability.mockResolvedValue({ available: true, source: 'glofox', dataAsOf: null, dataAsOfZone: null, outreachAvailable: null })
         expect((await (await GET(req(path))).json()).outreachAvailable).toBeNull()

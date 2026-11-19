@@ -32,11 +32,9 @@ const RA = "radarAvailability gate: answers un1t data at Hatch instead of data:n
 const MANIFEST = Object.freeze({
   // crons
   'src/app/api/cron/churn-radar-snapshot/route.js': 'weekly Hatch churn_radar_snapshots row (Mon 06:00 UTC) via the seam-aware loadRadar',
-  'src/app/api/cron/lead-radar-snapshot/route.js': 'weekly Hatch lead_radar_snapshots row (Mon 06:30 UTC) via the seam-aware loadFunnel',
   'src/app/api/cron/morning-briefing/route.js': "the Studio pulse strip in Hatch's briefing (counts via the seam, comparator hidden until 30 days of snapshots)",
   // pages
   'src/app/dashboard/churn-radar/page.js': 'full radar page at Hatch, incl. the digest and dunning settings cards',
-  'src/app/dashboard/lead-radar/page.js': 'full lead radar page at Hatch',
   'src/app/dashboard/engagement/page.js': 'loadEngagementChurn cross-tab at Hatch (rows through the seam)',
   'src/app/dashboard/studio/page.js': 'radar-derived scorecard cells (radarOk) at Hatch',
   'src/app/dashboard/business/page.js': 'business page gate: the churn KPI and membership block read the seam',
@@ -49,9 +47,6 @@ const MANIFEST = Object.freeze({
   'src/app/api/churn-radar/unpaid-charges/route.js': RA + ' (un1t: UNAVAILABLE_TAB, no invoice data)',
   'src/app/api/churn-radar/awaiting-authorization/route.js': RA + ' (un1t: UNAVAILABLE_TAB, no invoice data)',
   'src/app/api/churn-radar/quarantine/route.js': RA + ' (GET); the POST writes contacts only at a Glofox source',
-  'src/app/api/lead-radar/route.js': RA,
-  'src/app/api/lead-radar/classpass/route.js': RA,
-  'src/app/api/lead-radar/cleanup/route.js': RA + ' (GET); the POST writes contacts only at a Glofox source',
   'src/app/api/mobile/radar/route.js': RA + ' (phone radar sections)',
   'src/lib/today-feed-data.js': 'radarAvailability gate: the today-feed churn row counts Hatch members',
   'src/lib/radar-availability.js': 'the radar read gate itself (providesMemberships from radarReadsFor)',
@@ -62,7 +57,7 @@ const MANIFEST = Object.freeze({
   'src/lib/membership/reads/index.js': "radarReadsFor's providesMemberships: the static capability every radar gate reads",
   'src/lib/membership/locations-for-source.js': 'locationIdsWithoutCapability: Hatch leaves the without-memberships list, so the snapshot and digest crons visit it',
   'src/lib/account-home.js': "portfolio home: Hatch's Members tile counts total_members through the seam's membershipCounts instead of the glofox_* head-count (Glofox studios unchanged)",
-  'src/lib/dashboard/business-rail.js': "business rail Leads row: at Hatch (manual primary board) counts the acquisition board's uncontacted new_lead deals and links to the lead radar; arrearsRow reads radarReadsFor too",
+  'src/lib/dashboard/business-rail.js': "business rail Leads row: at Hatch (manual primary board) counts the acquisition board's uncontacted new_lead deals and links to the board's Not contacted view; arrearsRow reads radarReadsFor too",
   'mobile/lib/membership-source-copy.js': 'phone source card: no "does not provide membership data" card at Hatch (reads provides_memberships)',
   // matches of the net that are not the capability
   'src/lib/glofox-sync.js': NOT_CAP + "'memberships' names the Glofox membership read that failed",

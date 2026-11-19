@@ -11,7 +11,6 @@ vi.mock('@/lib/contact-crossovers', () => ({ isCrossoverAt: vi.fn(async () => fa
 
 import { isCrossoverAt } from '@/lib/contact-crossovers'
 import { POST as churnAction } from './route.js'
-import { POST as leadAction } from '../../lead-radar/action/route.js'
 import { POST as refreshMember } from '../refresh-member/route.js'
 
 const HATCH = 'loc-hatch'
@@ -39,7 +38,6 @@ beforeEach(() => { vi.clearAllMocks(); inserts = []; db = mockDb() })
 describe('single-contact radar actions and crossovers', () => {
   for (const [name, POST, path, table] of [
     ['churn action', churnAction, '/api/churn-radar/action', 'churn_radar_actions'],
-    ['lead action', leadAction, '/api/lead-radar/action', 'lead_radar_actions'],
   ]) {
     it(`${name}: a crossover at the active studio is accepted`, async () => {
       isCrossoverAt.mockResolvedValueOnce(true)

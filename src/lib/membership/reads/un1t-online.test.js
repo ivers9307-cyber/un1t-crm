@@ -121,8 +121,8 @@ const call = (db, key) => ({
 beforeEach(() => vi.clearAllMocks())
 
 describe('un1tOnlineReads surface', () => {
-  it('implements six reads plus pastDue, paymentsFor, pipelineInputs, trialEligibility, the four radar reads and arrears (UN1TRADAR.2), and pins arrears', () => {
-    expect(Object.keys(un1tOnlineReads).sort()).toEqual([...READS, 'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility', 'radarMembers', 'winbackContacts', 'leadContacts', 'radarPastDue', 'arrears', 'pinArrears', 'activeMemberContactIds'].sort())
+  it('implements six reads plus pastDue, paymentsFor, pipelineInputs, trialEligibility, the three radar reads and arrears (UN1TRADAR.2), and pins arrears', () => {
+    expect(Object.keys(un1tOnlineReads).sort()).toEqual([...READS, 'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility', 'radarMembers', 'winbackContacts', 'radarPastDue', 'arrears', 'pinArrears', 'activeMemberContactIds'].sort())
     expect(Object.isFrozen(un1tOnlineReads)).toBe(true)
     expect(typeof un1tOnlineReads.arrears).toBe('function')
     expect(un1tOnlineReads.pinArrears).toBe(true)

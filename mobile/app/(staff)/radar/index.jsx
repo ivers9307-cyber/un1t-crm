@@ -1,16 +1,15 @@
 // MOBILE-RADAR — read-only radar glance.
 //
-// A headline-numbers view of the churn + lead radars, reached from the
+// A headline-numbers view of the churn radar, reached from the
 // More tab. Read-only by design: the scored member/contact lists and
 // every triage action (win-back, quarantine, cleanup) stay on the web
 // radar. This screen shows the summary counts, the week-over-week
 // trend (once the weekly snapshot crons have run), and the outreach /
 // follow-up effectiveness lines.
 //
-// Each section renders only if the signed-in user has the matching
-// mobile permission (.mobile.churn_radar / .mobile.lead_radar). The
-// More-tab row that routes here is gated on the same pair, so at least
-// one section is always present when this screen opens.
+// It renders for a user with the mobile churn_radar permission; the More-tab
+// row that routes here is gated on the same key. CONTACTLOG.2 retired the
+// Lead Radar half (the web board's "Not contacted" filter replaces it).
 
 import { useState, useEffect, useCallback } from 'react'
 import {
@@ -45,13 +44,6 @@ const CHURN_ROWS = [
   { label: 'Quarantine',     key: 'quarantine',         goodDir: 'down' },
   { label: 'Revenue at risk', key: 'revenueAtRiskCents', goodDir: 'down', money: true },
   { label: 'Overdue value',  key: 'overdueValueCents',  goodDir: 'down', money: true },
-]
-
-const LEAD_ROWS = [
-  { label: 'Funnel total',  key: 'funnelTotal',  goodDir: null },
-  { label: 'Attending',    key: 'attending',    goodDir: 'up' },
-  { label: 'Fresh leads',  key: 'fresh',        goodDir: 'up' },
-  { label: 'Cleanup queue', key: 'cleanupTotal', goodDir: 'down' },
 ]
 
 // ▲ / ▼ delta vs last week. Green when the move is in the good
@@ -120,7 +112,6 @@ function EffectivenessLine({ text }) {
 export default function RadarGlance() {
   const { activeLocation, profile } = useAuth()
   const canChurn = !!profile && canMobile(profile, 'churn_radar', activeLocation)
-  const canLead = !!profile && canMobile(profile, 'lead_radar', activeLocation)
 
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -136,7 +127,7 @@ export default function RadarGlance() {
       setData(null)
       return
     }
-    setData(res.data || { churn: null, lead: null })
+    setData(res.data || { churn: null })
   }, [activeLocation])
 
   useEffect(() => {
@@ -151,7 +142,6 @@ export default function RadarGlance() {
   }
 
   const churn = data?.churn || null
-  const lead = data?.lead || null
 
   return (
     <View className="flex-1 bg-un1t-bg">
@@ -218,39 +208,7 @@ export default function RadarGlance() {
               </View>
             )}
 
-            {lead && (
-              <RadarCard
-                icon="trending-up-outline"
-                title="Lead radar"
-                subtitle="Non-member funnel worth a follow-up."
-              >
-                {LEAD_ROWS.map((r, i) => (
-                  <StatRow
-                    key={r.key}
-                    label={r.label}
-                    value={fmtCount(lead[r.key])}
-                    delta={lead.trend?.deltas?.[r.key]}
-                    goodDir={r.goodDir}
-                    isLast={i === LEAD_ROWS.length - 1 && !lead.conversion?.contacted}
-                  />
-                ))}
-                {lead.conversion?.contacted > 0 && (
-                  <EffectivenessLine
-                    text={`Follow-ups: ${lead.conversion.progressed} of ${lead.conversion.contacted} leads contacted in the last 90 days booked or attended afterwards (${Math.round((lead.conversion.progressionRate || 0) * 100)}%).`}
-                  />
-                )}
-              </RadarCard>
-            )}
-
-            {data?.leadError && canLead && (
-              <View className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-6">
-                <Text className="text-amber-700 text-xs">
-                  Lead radar could not be loaded right now. Pull down to retry.
-                </Text>
-              </View>
-            )}
-
-            {!churn && !lead && !error && (
+            {!churn && !error && (
               <View className="py-16 items-center px-6">
                 <Ionicons name="radio-outline" size={32} color="#94A3B8" />
                 <Text className="text-base font-semibold text-un1t-text mt-3">
@@ -262,10 +220,10 @@ export default function RadarGlance() {
               </View>
             )}
 
-            {(churn || lead) && (
+            {churn && (
               <Text className="text-xs text-un1t-muted text-center mt-1 px-4">
-                Read-only glance. Open the radar on the web to contact members,
-                run win-backs or triage the cleanup list.
+                Read-only glance. Open the radar on the web to contact members
+                or run win-backs.
               </Text>
             )}
           </>

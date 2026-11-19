@@ -7,12 +7,10 @@ vi.mock('@/lib/permissions', () => ({ hasMobilePermission: vi.fn(() => true) }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({ tag: 'db' })) }))
 vi.mock('@/lib/radar-availability', () => ({ radarAvailability: vi.fn() }))
 vi.mock('@/lib/churn-radar-data', () => ({ loadRadar: vi.fn(async () => ({ radar: [], summary: { activeBase: 3, overdueValueCents: 100 } })) }))
-vi.mock('@/lib/lead-radar-data', () => ({ loadFunnel: vi.fn(async () => ({ funnel: [], summary: { funnelTotal: 2 } })) }))
 
 import { getCurrentUser } from '@/lib/auth'
 import { radarAvailability } from '@/lib/radar-availability'
 import { loadRadar } from '@/lib/churn-radar-data'
-import { loadFunnel } from '@/lib/lead-radar-data'
 import { GET } from './route'
 
 const L = 'loc-1'
@@ -27,14 +25,13 @@ describe('/api/mobile/radar availability', () => {
     const body = await (await GET()).json()
     expect(body).toEqual({ success: true, data: { churn: null, lead: null } })
     expect(loadRadar).not.toHaveBeenCalled()
-    expect(loadFunnel).not.toHaveBeenCalled()
   })
 
-  it('a Glofox studio still gets both sections', async () => {
+  it('a Glofox studio gets the churn section; lead is always null (CONTACTLOG.2)', async () => {
     radarAvailability.mockResolvedValue({ available: true, source: 'glofox', dataAsOf: null })
     const body = await (await GET()).json()
     expect(body.data.churn.activeBase).toBe(3)
-    expect(body.data.lead.funnelTotal).toBe(2)
+    expect(body.data.lead).toBeNull()
     expect(body.data.churn).not.toHaveProperty('overdueValueEstimated')
   })
 
@@ -43,7 +40,7 @@ describe('/api/mobile/radar availability', () => {
     const body = await (await GET()).json()
     expect(body.data.churn).toBeNull()
     expect(body.data.churnError).toBe('membership source unreadable')
-    expect(body.data.leadError).toBe('membership source unreadable')
+    expect(body.data).not.toHaveProperty('leadError')
   })
 })
 

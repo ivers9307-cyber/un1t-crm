@@ -521,7 +521,6 @@ describe('Radar relocation', () => {
       'dashboard_studio',
       'dashboard_business',
       'churn_radar',
-      'lead_radar',
       'engagement_analytics',
       'dashboard_ads',
     ])

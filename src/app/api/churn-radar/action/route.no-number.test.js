@@ -1,4 +1,4 @@
-// WACONFIGFALLBACK.1 — the churn and lead radars' WhatsApp actions at a
+// WACONFIGFALLBACK.1 — the churn radar's WhatsApp actions at a
 // location with no WhatsApp number of its own. They used to send on the
 // global env number (another studio's). Now the resolver refuses: 409 with
 // its message (the win-back used to blame the member's message window), and
@@ -19,7 +19,6 @@ vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 
 import { POST as churnPOST } from './route.js'
-import { POST as leadPOST } from '../../lead-radar/action/route.js'
 import { sendTextMessage } from '@/lib/whatsapp'
 import { sendRadarOutreach } from '@/lib/radar-outreach'
 import { WhatsAppNumberMissingError } from '@/lib/whatsapp-number-missing'
@@ -90,14 +89,5 @@ describe('churn radar — no WhatsApp number at the active location', () => {
     sendRadarOutreach.mockRejectedValue(new Error('Template not found'))
     const res = await churnPOST(req('http://localhost/api/churn-radar/action', { contact_id: 'c1', action: 'outreach_sent', template_name: 'checkin' }))
     expect(res.status).toBe(502)
-  })
-})
-
-describe('lead radar — no WhatsApp number at the active location', () => {
-  it('outreach_sent → 409, nothing logged', async () => {
-    const res = await leadPOST(req('http://localhost/api/lead-radar/action', { contact_id: 'c1', action: 'outreach_sent', template_name: 'checkin' }))
-    expect(res.status).toBe(409)
-    expect(await res.json()).toEqual(NO_NUMBER)
-    expect(inserts).toEqual([])
   })
 })

@@ -47,9 +47,9 @@
 // all collapsed to single hub entries — every multi-entry section from
 // the original HUBS.2a regroup has gone through the pattern.
 //
-// The radars (churn/lead) are deliberately NOT here — SIDEBAR-IA.1
-// relocated them under the Dashboard tab strip (/dashboard/churn-radar,
-// /dashboard/lead-radar). DASHBOARD_LINK_PERM_KEYS below ORs their
+// The churn radar is deliberately NOT here — SIDEBAR-IA.1 relocated it
+// under the Dashboard tab strip (/dashboard/churn-radar; the Lead Radar
+// was retired by CONTACTLOG.2). DASHBOARD_LINK_PERM_KEYS below ORs their
 // permissions into the Dashboard link so a radar-only user still gets
 // an entry point (dashboard-redirect.js lands them on their radar).
 
@@ -71,7 +71,6 @@ export const DASHBOARD_LINK_PERM_KEYS = [
   'dashboard_studio',
   'dashboard_business',
   'churn_radar',
-  'lead_radar',
   'engagement_analytics',
   // ADS-REPORT.3 — /dashboard/ads joined the dashboard tab family
   // (paid-ad performance + cost-per-booking). Same OR-in-the-
