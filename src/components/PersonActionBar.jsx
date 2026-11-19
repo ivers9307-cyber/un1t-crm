@@ -19,9 +19,10 @@
 
 import { useRouter } from 'next/navigation'
 import { useState, useRef, useEffect } from 'react'
-import { MoreVertical, MessageSquare, CheckSquare, Repeat, Snowflake, RotateCcw, FileX } from 'lucide-react'
+import { MoreVertical, MessageSquare, CheckSquare, Repeat, Snowflake, RotateCcw, FileX, UserCheck } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { postActivityWrite } from '@/lib/activity-write-gate'
+import { CONTACT_CHANNELS, CONTACT_OUTCOMES } from '@/lib/contact-log'
 
 // SequencePicker is heavy + only needed once the operator opens an
 // action — lazy-load it (mirrors the DealCard PERF.3 note).
@@ -32,6 +33,9 @@ const SendCancellationFormModal = dynamic(() => import('./SendCancellationFormMo
 const ACTION_DEFS = {
   message: { label: 'Message', icon: MessageSquare },
   task: { label: 'Task', icon: CheckSquare },
+  // CONTACTLOG.1 — a call, WhatsApp or email on the contact's timeline
+  // (POST /api/contacts/[id]/contact-log).
+  log_contact: { label: 'Log a contact', icon: UserCheck },
   sequence: { label: 'Sequence', icon: Repeat },
   // FUNNEL.4 — label/icon are dynamic (see renderColdItem); this entry just
   // keeps 'cold' a recognised action so callers can opt in via `actions`.
@@ -138,6 +142,31 @@ export default function PersonActionBar({
     })
     setSaving(false)
     if (!outcome.ok) { setTaskError(outcome.message); return }
+    setOverlay(null)
+    router.refresh()
+  }
+
+  // CONTACTLOG.1 — pick the channel, then one click per outcome; the note is
+  // optional. A refusal keeps the overlay open with the route's reason, like
+  // the task form.
+  async function logContact(outcome, e) {
+    e?.preventDefault()
+    e?.stopPropagation()
+    if (saving) return
+    const form = e?.currentTarget?.form
+    const fd = form ? new FormData(form) : null
+    const note = fd ? (fd.get('note') || '').toString().trim() : ''
+    const channel = (fd?.get('channel') || 'call').toString()
+    setSaving(true)
+    setTaskError(null)
+    const result = await postActivityWrite(`/api/contacts/${contactId}/contact-log`, {
+      location_id: locationId,
+      channel,
+      outcome,
+      note: note || null,
+    })
+    setSaving(false)
+    if (!result.ok) { setTaskError(result.message); return }
     setOverlay(null)
     router.refresh()
   }
@@ -255,6 +284,55 @@ export default function PersonActionBar({
               >
                 {saving ? 'Saving...' : 'Save task'}
               </button>
+            </div>
+          </form>
+        </Overlay>
+      )}
+
+      {/* CONTACTLOG.1 — log a contact: channel, outcome, note optional. */}
+      {overlay === 'log_contact' && (
+        <Overlay onClose={() => setOverlay(null)}>
+          <form
+            onSubmit={(e) => e.preventDefault()}
+            onClick={(e) => e.stopPropagation()}
+            className="bg-un1t-surface border border-un1t-border rounded-lg p-4 w-80 shadow-lg space-y-2"
+            aria-label="Log a contact"
+          >
+            <p className="text-sm font-medium text-un1t-text">Log a contact</p>
+            <fieldset className="flex gap-1">
+              <legend className="sr-only">How</legend>
+              {Object.entries(CONTACT_CHANNELS).map(([key, label]) => (
+                <label key={key} className="flex-1 cursor-pointer">
+                  <input type="radio" name="channel" value={key} defaultChecked={key === 'call'} className="peer sr-only" />
+                  <span className="block text-center text-xs px-2 py-1.5 rounded border border-un1t-border text-un1t-subtle peer-checked:bg-un1t-text peer-checked:text-un1t-bg peer-checked:border-un1t-text peer-focus-visible:ring-2 peer-focus-visible:ring-un1t-accent">
+                    {label}
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            <textarea
+              name="note"
+              rows={2}
+              placeholder="Optional note..."
+              maxLength={2000}
+              className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted"
+            />
+            {taskError && <p role="alert" className="text-xs text-red-400">{taskError}</p>}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => setOverlay(null)} className="text-xs text-un1t-subtle hover:text-un1t-text mr-auto">
+                Cancel
+              </button>
+              {Object.entries(CONTACT_OUTCOMES).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  disabled={saving}
+                  onClick={(e) => logContact(key, e)}
+                  className="text-xs px-3 py-1 bg-un1t-text text-un1t-bg rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
+                >
+                  {label.charAt(0).toUpperCase() + label.slice(1)}
+                </button>
+              ))}
             </div>
           </form>
         </Overlay>

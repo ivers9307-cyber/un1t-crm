@@ -4,7 +4,8 @@
 // this module never computes "today" itself.
 
 const FUNNEL_SLUGS = new Set(['new_lead', 'rebook', 'first_class', 'second_class', 'trial_done'])
-const MESSAGE_TYPES = new Set(['whatsapp_sent', 'whatsapp_received', 'sms_sent', 'email'])
+// CONTACTLOG.1 — a logged contact (call, WhatsApp, email) reads as a message.
+const MESSAGE_TYPES = new Set(['whatsapp_sent', 'whatsapp_received', 'sms_sent', 'email', 'contact_log'])
 
 // Unified timeline: notes + activities, newest first. Extracted from
 // the contact page (the shape feeds its activityIcons map). The spread

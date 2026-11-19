@@ -12,7 +12,7 @@
 
 import { useState } from 'react'
 import {
-  Mail, Calendar, MessageSquare, CheckSquare, Clock, BookOpen, ArrowRight, MessageCircle,
+  Mail, Calendar, MessageSquare, CheckSquare, Clock, BookOpen, ArrowRight, MessageCircle, UserCheck,
 } from 'lucide-react'
 import { timelineFilterGroup } from '@/lib/contact-view'
 import StudioTag from './StudioTag'
@@ -28,6 +28,8 @@ const activityIcons = {
   whatsapp_sent: { bg: 'bg-green-500/20', color: 'text-green-700', label: 'WhatsApp Sent' },
   whatsapp_received: { bg: 'bg-green-500/20', color: 'text-green-700', label: 'WhatsApp Received' },
   sms_sent: { bg: 'bg-cyan-500/20', color: 'text-cyan-700', label: 'SMS Sent' },
+  // CONTACTLOG.1 — a call, WhatsApp or email staff logged by hand.
+  contact_log: { bg: 'bg-sky-500/20', color: 'text-sky-700', label: 'Contact logged' },
 }
 
 const FILTERS = [
@@ -142,6 +144,7 @@ export default function ContactTimeline({
             : item.activityType === 'email' ? Mail
             : item.activityType === 'meeting' ? Calendar
             : item.activityType === 'whatsapp_sent' || item.activityType === 'whatsapp_received' ? MessageCircle
+            : item.activityType === 'contact_log' ? UserCheck
             : CheckSquare
 
           return (

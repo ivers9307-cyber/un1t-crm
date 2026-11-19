@@ -133,3 +133,36 @@ describe('PersonActionBar Task item (C148)', () => {
     expect(refresh).not.toHaveBeenCalled()
   })
 })
+
+describe('PersonActionBar — Log a contact (CONTACTLOG.1)', () => {
+  const open = () => {
+    render(<PersonActionBar contactId={C1} locationId={LOC} actions={['log_contact']} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /log a contact/i }))
+  }
+
+  it('posts the chosen channel and outcome with the note, then refreshes', async () => {
+    answer = { ok: true, status: 200, body: { success: true, data: { id: 'a1', subject: 'WhatsApp: no reply' } } }
+    open()
+    fireEvent.click(screen.getByLabelText('WhatsApp'))
+    fireEvent.change(screen.getByPlaceholderText('Optional note...'), { target: { value: ' sent twice ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'No reply' }))
+    await waitFor(() => expect(refresh).toHaveBeenCalled())
+    expect(calls).toEqual([{ url: `/api/contacts/${C1}/contact-log`, method: 'POST', body: { location_id: LOC, channel: 'whatsapp', outcome: 'no_reply', note: 'sent twice' } }])
+  })
+
+  it('a call is the default channel', async () => {
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Got through' }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].body).toMatchObject({ channel: 'call', outcome: 'reached', note: null })
+  })
+
+  it('a refusal keeps the overlay open with the reason', async () => {
+    answer = REFUSED
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Got through' }))
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'No Tasks permission at this location')
+    expect(refresh).not.toHaveBeenCalled()
+  })
+})

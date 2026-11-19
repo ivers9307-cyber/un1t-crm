@@ -7,17 +7,19 @@
 // searched whole and a reload or shared link keeps the filter. Typing waits
 // briefly before it navigates; Enter goes at once. The open contact drawer is
 // closed by a new filter (its card may no longer be on the board).
+// CONTACTLOG.1 — "Not contacted" (?nocontact=1) sits beside Stuck, on the same view.
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
-import { Search, X, Clock } from 'lucide-react'
+import { Search, X, Clock, UserX } from 'lucide-react'
 import { BOARD_SEARCH_MAX } from '@/lib/pipeline-board-filter'
+import { CONTACT_WINDOW_DAYS } from '@/lib/contact-log'
 
 /** Pause after the last keystroke before the board reloads. */
 export const BOARD_SEARCH_DEBOUNCE_MS = 350
 
 // `showStuck` is false on the Off funnel view, where the piles never alarm.
-export default function PipelineBoardFilter({ q = null, stuck = false, showStuck = true }) {
+export default function PipelineBoardFilter({ q = null, stuck = false, nocontact = false, showStuck = true }) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -28,7 +30,7 @@ export default function PipelineBoardFilter({ q = null, stuck = false, showStuck
   useEffect(() => { setText(q ?? '') }, [q])
   useEffect(() => () => clearTimeout(timer.current), [])
 
-  function go({ nextQ = text, nextStuck = stuck } = {}) {
+  function go({ nextQ = text, nextStuck = stuck, nextNocontact = nocontact } = {}) {
     clearTimeout(timer.current)
     const p = new URLSearchParams(searchParams?.toString() ?? '')
     const term = String(nextQ ?? '').trim()
@@ -36,8 +38,10 @@ export default function PipelineBoardFilter({ q = null, stuck = false, showStuck
     else p.delete('q')
     if (nextStuck) p.set('stuck', '1')
     else p.delete('stuck')
+    if (nextNocontact) p.set('nocontact', '1')
+    else p.delete('nocontact')
     p.delete('contact')
-    if ((p.get('q') ?? '') === (q ?? '') && p.has('stuck') === stuck) return
+    if ((p.get('q') ?? '') === (q ?? '') && p.has('stuck') === stuck && p.has('nocontact') === nocontact) return
     const qs = p.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }
@@ -92,6 +96,22 @@ export default function PipelineBoardFilter({ q = null, stuck = false, showStuck
       >
         <Clock size={14} aria-hidden="true" />
         Stuck 21+ days
+      </button>
+      )}
+      {showStuck && (
+      <button
+        type="button"
+        aria-pressed={nocontact}
+        onClick={() => go({ nextNocontact: !nocontact })}
+        className={`inline-flex items-center gap-1.5 h-9 px-3 text-sm rounded-lg border transition-colors ${
+          nocontact
+            ? 'bg-blue-500/10 text-blue-700 border-blue-500/40'
+            : 'bg-white text-un1t-subtle border-un1t-border hover:text-un1t-text'
+        }`}
+        title={`People with no call, WhatsApp or email logged here in the last ${CONTACT_WINDOW_DAYS} days`}
+      >
+        <UserX size={14} aria-hidden="true" />
+        Not contacted
       </button>
       )}
     </form>

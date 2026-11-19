@@ -55,7 +55,7 @@ describe('ContactHeaderBand — the kebab follows the routes it calls (ROLEUI.2)
   })
 
   it('each item follows its own flag', () => {
-    expect(actionsOf(render({ actionGates: { canTask: true } }))).toEqual(['message', 'task'])
+    expect(actionsOf(render({ actionGates: { canTask: true } }))).toEqual(['message', 'log_contact', 'task'])
     expect(actionsOf(render({ actionGates: { canSequence: true } }))).toEqual(['message', 'sequence'])
     expect(actionsOf(render({ actionGates: { canCancelForm: true } }))).toEqual(['message', 'cancel_form'])
     expect(actionsOf(render({ actionGates: { canCold: true } }))).toEqual(['message', 'cold'])
@@ -74,13 +74,13 @@ describe('ContactHeaderBand — Cold on a derived board', () => {
   it('offers Cold when manual is not passed at all', () => {
     // Stillorgan's acquisition board — and every caller that cannot resolve a
     // board — renders through this default. Nothing about it changes.
-    expect(actionsOf(render({}))).toEqual(['message', 'task', 'sequence', 'cancel_form', 'cold'])
+    expect(actionsOf(render({}))).toEqual(['message', 'log_contact', 'task', 'sequence', 'cancel_form', 'cold'])
   })
 })
 
 describe('ContactHeaderBand — Cold is hidden on a manual board', () => {
   it('drops Cold when manual is true', () => {
-    expect(actionsOf(render({ manual: true }))).toEqual(['message', 'task', 'sequence', 'cancel_form'])
+    expect(actionsOf(render({ manual: true }))).toEqual(['message', 'log_contact', 'task', 'sequence', 'cancel_form'])
   })
 
   it('keeps every other action', () => {

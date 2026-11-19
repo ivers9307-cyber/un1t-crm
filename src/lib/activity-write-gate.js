@@ -46,14 +46,16 @@ export function canWriteActivitiesAt(user, locationId) {
 
 /**
  * The per-person kebab (PersonActionBar) items for a board: `task` is a
- * browser `activities` insert, so it goes where canWriteActivitiesAt says no.
+ * browser `activities` insert, so it goes where canWriteActivitiesAt says no
+ * (and 'log_contact' with it).
  *
  * @param {string[]} actions
  * @param {{ canTask?: boolean }} [gates]
  * @returns {string[]}
  */
 export function personActionsFor(actions, { canTask = true } = {}) {
-  return (actions || []).filter((a) => canTask || a !== 'task')
+  // CONTACTLOG.1 — 'log_contact' writes `activities` under the same rule.
+  return (actions || []).filter((a) => canTask || (a !== 'task' && a !== 'log_contact'))
 }
 
 const NOT_SAVED = 'Not saved: the task could not be saved. Try again.'

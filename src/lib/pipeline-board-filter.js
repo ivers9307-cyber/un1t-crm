@@ -16,6 +16,14 @@
 // in the pipeline, except a deal backfilled before PIPELINE_BACKFILL_CUTOFF,
 // whose import-dated age never alarms. Change the two together.
 //
+// CONTACTLOG.1 — "Not contacted" (?nocontact=1, Funnel view only) keeps the
+// cards whose contact has no call, WhatsApp or email logged at the board's
+// studio in CONTACT_WINDOW_DAYS (src/lib/contact-log.js). Unlike the two above it is applied to the cards
+// already read, not in the query: it applies only where a column ships whole
+// (the Funnel view and manual boards, initialPageSizeFor), so a column's count
+// is still what it shows, and no list of ids rides in a URL. The Off funnel
+// piles page through /api/pipeline/deals and never take it.
+//
 // Pure apart from the query builder it is handed.
 
 import { escapeLikePattern } from '@/lib/like-escape'
@@ -33,17 +41,32 @@ export const BOARD_SEARCH_MAX = 80
  * card there is 21+ days old (8,741 of 8,863 at Stillorgan, 16 Nov 2026).
  * @param {{ get?: Function } | Record<string, unknown> | null} sp URLSearchParams or a plain object
  * @param {{ view?: string }} [opts]
- * @returns {{ q: string|null, stuck: boolean }}
+ * @returns {{ q: string|null, stuck: boolean, nocontact: boolean }}
  */
 export function parseBoardFilter(sp, { view = 'active' } = {}) {
   const read = (k) => (typeof sp?.get === 'function' ? sp.get(k) : sp?.[k])
   const raw = read('q')
   const q = typeof raw === 'string' ? raw.trim().replace(/\s+/g, ' ').slice(0, BOARD_SEARCH_MAX) : ''
-  return { q: q || null, stuck: view !== 'dormant' && read('stuck') === '1' }
+  return {
+    q: q || null,
+    stuck: view !== 'dormant' && read('stuck') === '1',
+    nocontact: view !== 'dormant' && read('nocontact') === '1',
+  }
 }
 
 export function boardFilterActive(filter) {
-  return Boolean(filter?.q) || filter?.stuck === true
+  return Boolean(filter?.q) || filter?.stuck === true || filter?.nocontact === true
+}
+
+/**
+ * CONTACTLOG.1 — drop the cards whose contact was contacted (`contacted`, a
+ * Set of contact ids from loadRecentlyContacted). A card with no contact
+ * cannot be contacted, so it goes too.
+ * @param {Array<{ contacts?: { id?: string }|null }>} rows deals read with pipelineDealSelect
+ * @param {Set<string>} contacted
+ */
+export function keepNotContacted(rows, contacted) {
+  return (rows || []).filter((d) => d?.contacts?.id && !contacted.has(d.contacts.id))
 }
 
 /** The filter as URL params (only what is set), for links and the Load-more fetch. */
@@ -51,6 +74,7 @@ export function boardFilterParams(filter) {
   const p = new URLSearchParams()
   if (filter?.q) p.set('q', filter.q)
   if (filter?.stuck) p.set('stuck', '1')
+  if (filter?.nocontact) p.set('nocontact', '1')
   return p
 }
 

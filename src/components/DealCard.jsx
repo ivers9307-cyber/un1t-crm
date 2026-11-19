@@ -106,8 +106,8 @@ const statusColors = {
 // making anyway — so neither pays a per-render lookup after all. Both default
 // to `derived`, so a caller that cannot resolve a board still shows Cold.
 const CARD_ACTIONS = {
-  derived: ['message', 'task', 'sequence', 'cold'],
-  manual: ['message', 'task', 'sequence'],
+  derived: ['message', 'log_contact', 'task', 'sequence', 'cold'],
+  manual: ['message', 'log_contact', 'task', 'sequence'],
 }
 
 // Funnel columns 1–4 show the next-class badge; Converted and the

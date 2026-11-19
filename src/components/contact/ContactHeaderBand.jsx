@@ -67,15 +67,16 @@ const BADGE_SLUGS = new Set(['new_lead', 'rebook', 'first_class', 'second_class'
 // `manual` is resolved server-side by the page (the contact's location's
 // primary pipeline), so this component adds NO fetch of its own.
 const HEADER_ACTIONS = {
-  derived: ['message', 'task', 'sequence', 'cancel_form', 'cold'],
-  manual: ['message', 'task', 'sequence', 'cancel_form'],
+  derived: ['message', 'log_contact', 'task', 'sequence', 'cancel_form', 'cold'],
+  manual: ['message', 'log_contact', 'task', 'sequence', 'cancel_form'],
 }
 
 // ROLEUI.2 — which flag (contactWorkGates in src/lib/contact-page-gates.js,
 // judged at the contact's location) lets each kebab item through. Message
 // has none: it deep-links to the composer, which gates its own channels.
 // Missing flags hide the item: the menu fails closed.
-const ACTION_GATE = { task: 'canTask', sequence: 'canSequence', cancel_form: 'canCancelForm', cold: 'canCold' }
+// CONTACTLOG.1 — Log a contact writes `activities` under the Task rule.
+const ACTION_GATE = { task: 'canTask', log_contact: 'canTask', sequence: 'canSequence', cancel_form: 'canCancelForm', cold: 'canCold' }
 
 export function headerActions(manual, actionGates) {
   return HEADER_ACTIONS[manual ? 'manual' : 'derived']
@@ -176,8 +177,8 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
                 (WAITLIST.6: Cold only on a derived board). */}
             <PersonActionBar
               contactId={contact.id}
-              // CARDLENS.6 — the kebab's Task and Sequence act at the page's
-              // acting studio (the only two items that read locationId).
+              // CARDLENS.6 — the kebab's Task, Log a contact and Sequence act at
+              // the page's acting studio (the items that read locationId).
               locationId={actingLocationId || contact.location_id}
               actions={headerActions(manual, actionGates)}
               isCold={contact.pipeline_stage_slug === 'cold_lead'}

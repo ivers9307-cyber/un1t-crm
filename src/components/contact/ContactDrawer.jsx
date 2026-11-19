@@ -45,8 +45,8 @@ const TONE_CHIP = {
 // pipelines.mode to draw the tabs). So the board context is free here: no
 // lookup, and no fetch on a panel that opens dozens of times a shift.
 const DRAWER_ACTIONS = {
-  derived: ['task', 'sequence', 'cancel_form', 'cold'],
-  manual: ['task', 'sequence', 'cancel_form'],
+  derived: ['log_contact', 'task', 'sequence', 'cancel_form', 'cold'],
+  manual: ['log_contact', 'task', 'sequence', 'cancel_form'],
 }
 
 // Compact label/value row for the key-details card. Rows with no value
