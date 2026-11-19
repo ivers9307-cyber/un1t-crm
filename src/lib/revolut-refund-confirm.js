@@ -58,7 +58,7 @@ async function completedCentsFor(db, orderId, orderRefundedCents) {
     .select('amount_cents')
     .eq('order_id', orderId)
     .eq('status', 'completed')
-    .limit(1000)
+    .limit(200) // one order holds a handful of refunds at most
   if (error) throw error
   const sum = (data || []).reduce((s, r) => s + (Number(r.amount_cents) || 0), 0)
   // The same rule as claim_order_refund: a refund made outside the ledger
