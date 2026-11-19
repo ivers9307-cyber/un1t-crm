@@ -19,7 +19,7 @@ import { createServerClient } from '@/lib/supabase'
 import { offerIsOpen, offerIsUpcoming, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
 import { readOfferStock, offerStockLine } from '@/lib/offer-stock'
 import { resolveOfferStudio, studioForKey, offersPageCopy } from '@/lib/offer-studios'
-import { heroFor, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, termForSlug, flagForSlug, offerFinePrint, offerValueLine, offerTermLine, splitMonthStrip } from '@/lib/offers-storefront'
+import { heroFor, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, termForSlug, flagForSlug, offerFinePrint, offerTermLine, splitMonthStrip } from '@/lib/offers-storefront'
 import { legacyOfferRedirect } from '@/lib/offers-legacy-redirect'
 import { displayZoneFor } from '@/lib/display-zone'
 import SaleCountdown from '@/components/offers/SaleCountdown'
@@ -53,10 +53,9 @@ function OfferCard({ offer, studio, flag, opensLabel, stockLine = null, soldOutL
   // BLACKFRIDAY.9 — any studio's offer shows its own fine print when it has some.
   const finePrint = offerFinePrint(offer)
   // OFFERSDESIGN.1 — a sale card leads with the free extra, states what it
-  // is on, and what the deal works out at. A flagged card (the biggest
+  // is on. A flagged card (the biggest
   // bonus) is green before any hover, so a phone sees it too.
   const termLine = isGift ? null : offerTermLine(offer)
-  const valueLine = isGift ? null : offerValueLine(offer)
   const best = !isGift && Boolean(flagForSlug(offer.slug))
   // OFFERSPOLISH.1 — the whole card is one link, so its name was every word
   // on it. The name is the headline, the term, the price and the action
@@ -65,7 +64,7 @@ function OfferCard({ offer, studio, flag, opensLabel, stockLine = null, soldOutL
   const nameIds = (isGift
     ? [id('term'), id('go')]
     : [id('bonus'), termLine && id('on'), id('price'), id('go')]).filter(Boolean).join(' ')
-  const descIds = [flag && id('flag'), stockLine && id('stock'), valueLine && id('value'), id('desc'), !isGift && finePrint && id('fine')].filter(Boolean).join(' ')
+  const descIds = [flag && id('flag'), stockLine && id('stock'), id('desc'), !isGift && finePrint && id('fine')].filter(Boolean).join(' ')
   return (
     <Link
       href={`/offers/${studio.key}/${offer.slug}`}
@@ -90,7 +89,6 @@ function OfferCard({ offer, studio, flag, opensLabel, stockLine = null, soldOutL
       {!isGift && (
         <span style={{ marginTop: 'auto' }}>
           <span id={id('price')} className="ofr-display ofr-price">{formatEuro(offer.price_cents)}</span>
-          {valueLine && <span id={id('value')} className="ofr-value">{valueLine}</span>}
           <span id={id('desc')} className="ofr-meta" style={{ display: 'block', marginTop: 10 }}>{offer.description}</span>
           {finePrint && <span id={id('fine')} className="ofr-meta" style={{ display: 'block', fontSize: 12, marginTop: 6 }}>{finePrint}</span>}
         </span>
