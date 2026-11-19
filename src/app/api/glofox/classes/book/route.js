@@ -6,8 +6,8 @@
 // per the 2026-06-11 dry-run probe (see GLOFOX_BOOKING_MODEL in
 // src/lib/glofox.js). Glofox enforces capacity / double-booking /
 // waitlist server-side; its message_code is surfaced verbatim on a
-// failure; the result is judged by interpretBookingResult() like every
-// other booking path (GLOFOXWRITEJUDGE.1).
+// failure; the result is judged by the shared booking layer
+// (bookingOpsFor, BOOKLAYER.1) like every other booking path.
 
 import { NextResponse } from 'next/server'
 import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
@@ -18,12 +18,10 @@ import { validateBody, uuidLike } from '@/lib/validate'
 import { readBookChatTemplate } from '@/lib/book-chat-copy'
 import { logWarn } from '@/lib/log'
 import {
-  createBooking,
-  GLOFOX_BOOKING_MODEL,
   glofoxCredentialsForLocation,
-  interpretBookingResult,
   missingGlofoxCredentialsForLocation,
 } from '@/lib/glofox'
+import { bookingOpsFor } from '@/lib/booking-ops'
 import { serverErrorResponse } from '@/lib/error-events'
 
 export const runtime = 'nodejs'
@@ -79,70 +77,23 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Glofox is not configured for this studio.' }, { status: 400 })
   }
 
-  let model = GLOFOX_BOOKING_MODEL
-  let discoveredModel = null
-  let result = await createBooking(creds, {
-    user_id: contact.glofox_member_id,
-    model,
-    model_id: body.event_id,
-  })
-
-  // Self-discovery (UIX-P3b.3): the live E2E showed our model guess
-  // fails Glofox's enum ("The selected model is invalid"). When that
-  // exact error comes back, sweep the candidate tokens with FAKE
-  // 24-hex ids (cannot create anything), pick the event-family value
-  // the enum accepts, and retry the real booking ONCE with it. This
-  // path goes dead the moment GLOFOX_BOOKING_MODEL is corrected.
-  const enumInvalid = r => /selected model is invalid/i.test(r?.body?.message || r?.body?.message_code || '')
-  if (enumInvalid(result)) {
-    const fakeId = '0123456789abcdef01234567'
-    const candidates = [
-      'event', 'events', 'Event', 'EVENT',
-      'class', 'classes', 'Class',
-      'course', 'courses', 'appointment', 'facility', 'booking', 'program',
-    ].filter(c => c !== model)
-    const accepted = []
-    for (const candidate of candidates) {
-      const probe = await createBooking(creds, { user_id: fakeId, model: candidate, model_id: fakeId })
-      if (!enumInvalid(probe)) {
-        accepted.push(candidate)
-      }
-    }
-    // The thing we're booking IS an event (from /2.0/events), so an
-    // event-family token wins; otherwise only act when unambiguous.
-    discoveredModel = accepted.find(c => /event/i.test(c)) || (accepted.length === 1 ? accepted[0] : null)
-    if (discoveredModel) {
-      model = discoveredModel
-      result = await createBooking(creds, {
-        user_id: contact.glofox_member_id,
-        model,
-        model_id: body.event_id,
-      })
-    } else if (accepted.length > 0) {
-      return NextResponse.json({
-        success: false,
-        error: `Glofox rejected the booking model. Accepted values found: ${accepted.join(', ')} — none clearly maps to events; needs a code update.`,
-        accepted_models: accepted,
-      }, { status: 502 })
-    }
-  }
-
-  // GLOFOXWRITEJUDGE.1 — judged like the /start processor, Mia and the approval
-  // route: Glofox answers 200 with a failure code, and its success body wraps
-  // the booking as { success, Booking }. Already booked (Glofox's member+event
-  // dedupe) is a success: the member IS in the class.
-  const verdict = interpretBookingResult(result)
-  const discovered = discoveredModel ? { discovered_model: discoveredModel } : {}
-  if (verdict.alreadyBooked) {
+  // BOOKLAYER.1 — the shared booking layer: one judge for Glofox's
+  // 200-with-a-failure-body and its success wrapper, the same as the /start
+  // processor, Mia and the approval route. "Already booked" (Glofox's
+  // member+event dedupe) is a success: the member IS in the class. The old
+  // model self-discovery sweep went with it: GLOFOX_BOOKING_MODEL has booked
+  // every class through the processor since, so the sweep never ran.
+  const booking = await bookingOpsFor('glofox').book({ creds }, { glofoxMemberId: contact.glofox_member_id, eventId: body.event_id })
+  const result = booking.raw || {}
+  if (booking.verdict === 'done' && booking.alreadyBooked) {
     return NextResponse.json({
       success: true,
       already_booked: true,
-      glofox_booking_id: verdict.bookingId,
+      glofox_booking_id: booking.id,
       glofox_body: result.body,
-      ...discovered,
     })
   }
-  if (!verdict.booked) {
+  if (booking.verdict !== 'done') {
     // Surface Glofox's own words: exactly what the operator needs to see.
     const msg = result.body?.message || result.body?.message_code || `Glofox booking failed (HTTP ${result.status})`
     return NextResponse.json({
@@ -150,7 +101,6 @@ export async function POST(request) {
       error: msg,
       glofox_status: result.status,
       glofox_body: result.body,
-      ...discovered,
     }, { status: 502 })
   }
 
@@ -164,10 +114,9 @@ export async function POST(request) {
 
   return NextResponse.json({
     success: true,
-    glofox_booking_id: verdict.bookingId,
+    glofox_booking_id: booking.id,
     glofox_body: result.body,
     chat_template: chat.template,
     ...(result.recovered ? { recovered: result.recovered } : {}),
-    ...discovered,
   })
 }
