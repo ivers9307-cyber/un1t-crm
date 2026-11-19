@@ -7,7 +7,8 @@
 // booking_class_confirmed WhatsApp. Any failure → review, except a read
 // that could not be made (unreadable settings, an unreadable credits
 // balance): those THROW so the queue retries them first.
-import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, fetchUserCreditsResult, fetchUserBookingsResult, GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
+import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUserCreditsResult, fetchUserBookingsResult } from '@/lib/glofox'
+import { bookingOpsFor } from '@/lib/booking-ops'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { CLASS_BOOKING_MAX_ATTEMPTS } from '@/lib/class-booking-attempts'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
@@ -669,20 +670,16 @@ export async function processClassBookingRequest(db, request) {
     }
   }
 
-  const result = await createBooking(creds, { user_id: memberId, model: GLOFOX_BOOKING_MODEL, model_id: request.glofox_event_id })
-  // Success needs the created booking id — Glofox can 200 with a failure
-  // body (YOU_HAVE_NO_CREDITS_LEFT), so HTTP ok alone is not enough.
-  const { booked, bookingId, messageCode } = interpretBookingResult(result)
-  // Glofox dedupes member+event server-side. A re-run (e.g. the reaper requeued
-  // a row whose first attempt booked but died before persisting) returns
-  // "already booked" — that's a SUCCESS, not a failure to push to staff review.
-  const alreadyBooked = messageCode === 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
-  if (!booked && !alreadyBooked) {
-    return toReview(`booking_failed:${messageCode || `status_${result?.status}`}`)
+  // BOOKINGOPS.1 — the shared booking layer judges Glofox's answer: a 200 with
+  // a failure body is refused, and "already booked" (a re-run whose first
+  // attempt landed, e.g. one the reaper requeued) is done, not a review card.
+  const result = await bookingOpsFor('glofox').book({ creds }, { glofoxMemberId: memberId, eventId: request.glofox_event_id })
+  if (result.verdict !== 'done') {
+    return toReview(`booking_failed:${result.code}`)
   }
   // Persist the Glofox booking id so re-runs and the /approvals view can see
   // the real booking (null on the already-booked re-run path).
-  await setStatus(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: bookingId })
+  await setStatus(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: result.id })
   let confirmed = false
   let classTime = null
   try {

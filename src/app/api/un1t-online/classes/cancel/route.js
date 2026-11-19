@@ -15,7 +15,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { gateUn1tStaffBooking, staffWriteAnswer, UN1T_STAFF_COPY } from '@/lib/un1t-staff-booking'
 import { Un1tSettingsReadError } from '@/lib/un1t-online-settings'
-import { cancel } from '@/lib/un1t-online-write-ops'
+import { bookingOpsFor } from '@/lib/booking-ops'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -50,7 +50,8 @@ export async function POST(request) {
 
   let r
   try {
-    r = await cancel(db, {
+    // BOOKINGOPS.1 — through the shared booking layer.
+    r = await bookingOpsFor('un1t_online').cancel({ db }, {
       locationId: b.location_id, contactId: b.contact_id, un1tUserId: gate.un1tUserId, bookingId: b.booking_id,
       origin: 'staff', actor: { id: user.id },
     })
