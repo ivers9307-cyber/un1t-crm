@@ -40,8 +40,8 @@ async function KpiBriefingBlock({ user, locationId }) {
   // Returns null on failure (its internal try/catch), per the header.
   // W1.M3a — every tile in the row is Glofox-derived (Revenue MTD reads
   // glofox_invoices, In arrears the radar's Overdue count (ARREARSONE.1),
-  // Members the membership counts, Churn risk the radar), so at a studio with no membership source the row is
-  // four honest-looking zeros. The briefing line stays (pending approvals
+  // Members the membership counts, Churn risk the radar), so at a studio
+  // with no membership source the row is four honest-looking zeros. The briefing line stays (pending approvals
   // are source-independent); the row renders only behind the gate. The
   // state is read alongside the numbers (cached 60 s per location).
   // UN1TREAD.3 — numbers or gate is decided by the view-model itself
