@@ -85,6 +85,7 @@ import {
 } from './donation-payments'
 import { resolveCharitySettings } from './charity-donations'
 import { logError, logWarn } from './log'
+import { sweepRevolutRefunds, REFUND_CONFIRM_BUDGET } from './revolut-refund-confirm'
 
 const LOG_MODULE = 'revolut-reconcile'
 
@@ -561,11 +562,13 @@ async function sweepPaidDonations({ db, nowMs, counts, budget, pastDeadline }) {
  * @param {Function} [args.publish]  QStash nudge, injected in tests
  * @param {number} [args.budget]
  * @param {number} [args.receiptBudget]  rows the paid-donation receipt sweep may take (REVPAY.12)
+ * @param {number} [args.refundBudget]  rows each Revolut refund check may take (REFUNDCONFIRM.1)
  * @returns {Promise<{ healthy: boolean, counts: object }>}
  */
 export async function runRevolutReconcile({
   db, now = new Date(), getOrder = cronGetOrder, publish = publishQueuePush, budget = RECONCILE_BUDGET,
   runDeadlineMs = RECONCILE_RUN_DEADLINE_MS, clock = Date.now, receiptBudget = RECEIPT_SWEEP_BUDGET,
+  refundBudget = REFUND_CONFIRM_BUDGET,
 }) {
   const startedMs = clock()
   const nowMs = now.getTime()
@@ -646,6 +649,18 @@ export async function runRevolutReconcile({
   } catch (e) {
     counts.receipt_errors = (counts.receipt_errors || 0) + 1
     logError(LOG_MODULE, 'paid-donation receipt sweep threw', { err: e })
+  }
+
+  // REFUNDCONFIRM.1 — Revolut refunds confirmed from Revolut's own record.
+  // Counts only (refund_*): it never makes the run unhealthy, and its provider
+  // calls are not counted in `calls` for the same reason.
+  try {
+    await sweepRevolutRefunds({
+      db, getOrder, nowMs, counts, budget: refundBudget, pastDeadline: () => clock() - startedMs > runDeadlineMs,
+    })
+  } catch (e) {
+    counts.refund_errors = (counts.refund_errors || 0) + 1
+    logError(LOG_MODULE, 'Revolut refund check threw', { err: e })
   }
 
   const everyProviderCallFailed = calls.made > 0 && calls.failed === calls.made
