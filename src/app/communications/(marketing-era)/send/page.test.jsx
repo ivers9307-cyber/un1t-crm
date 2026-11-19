@@ -78,15 +78,15 @@ describe('/communications/send is WhatsApp only', () => {
   it('sends an email-only holder to New email, keeping a segment link', async () => {
     perms = new Set(['email'])
     await expect(SendPage({ searchParams: Promise.resolve({ segment_id: 'seg-9' }) }))
-      .rejects.toThrow('NEXT_REDIRECT:/communications/new-email?segment_id=seg-9')
+      .rejects.toThrow(/NEXT_REDIRECT:\/communications\/new-email\?segment_id=seg-9$/)
     await expect(SendPage({ searchParams: Promise.resolve({ segment: 'race 2026' }) }))
-      .rejects.toThrow('NEXT_REDIRECT:/communications/new-email?segment=race+2026')
+      .rejects.toThrow(/NEXT_REDIRECT:\/communications\/new-email\?segment=race\+2026$/)
     await expect(SendPage({ searchParams: Promise.resolve({}) }))
       .rejects.toThrow(/NEXT_REDIRECT:\/communications\/new-email$/)
   })
 
   it('sends someone with neither permission back to Communications', async () => {
     perms = new Set()
-    await expect(SendPage({ searchParams: Promise.resolve({}) })).rejects.toThrow('NEXT_REDIRECT:/communications')
+    await expect(SendPage({ searchParams: Promise.resolve({}) })).rejects.toThrow(/NEXT_REDIRECT:\/communications$/)
   })
 })
