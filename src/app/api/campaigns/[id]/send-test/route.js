@@ -20,7 +20,10 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { sendEmail, applyMergeTags } from '@/lib/postmark'
+import { sendEmail } from '@/lib/postmark'
+import { renderCampaignEmail } from '@/lib/campaign-render'
+import { fetchLocationEmailCopy } from '@/lib/campaign-web-view'
+import { zoneOfLocation } from '@/lib/location-time'
 import { resolveEmailSender } from '@/lib/tenant-email'
 import { withRequestedFrom } from '@/lib/from-address'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
@@ -64,7 +67,7 @@ export async function POST(request, props) {
   const db = createServerClient()
   const { data: campaign, error: campErr } = await db
     .from('campaigns')
-    .select('id, name, subject, html_content, from_name, from_email, reply_to, location_id, locations(name)')
+    .select('id, name, subject, preview_text, html_content, from_name, from_email, reply_to, location_id, locations(name, timezone)')
     .eq('id', params.id)
     .single()
   if (campErr || !campaign) {
@@ -120,21 +123,28 @@ export async function POST(request, props) {
 
   // W1.S1a — {{company_name}}, as the real send resolves it.
   const { companyName } = await getLocationBranding(db, campaign.location_id)
-  const html = applyMergeTags(campaign.html_content, renderContact, {
-    location_name: campaign.locations?.name || '',
-    company_name: companyName || '',
-    unsubscribe_url: unsubscribeUrl,
-    preference_url: preferenceUrl,
+  // CAMPAIGNRENDER.1 — the real send's own render (src/lib/campaign-render.js):
+  // footer, view-in-browser link and preheader included, which this test used
+  // to leave out, so it did not show what recipients get. The view link is a
+  // placeholder that resolves no hosted copy.
+  const emailCopy = await fetchLocationEmailCopy(db, campaign.location_id)
+  const rendered = renderCampaignEmail({
+    campaign,
+    subject: campaign.subject,
+    contact: renderContact,
+    extras: {
+      location_name: campaign.locations?.name || '',
+      company_name: companyName || '',
+      unsubscribe_url: unsubscribeUrl,
+      preference_url: preferenceUrl,
+      zone: zoneOfLocation(campaign.locations),
+    },
+    broadcast: true,
+    viewUrl: `${baseUrl}/view-email/test-token`,
+    emailCopy,
   })
-  // COMMSFIX.D.4b — same extras as the body (and as the real send), so the
-  // test reproduces the delivered subject instead of silently dropping
-  // {{location_name}} / {{unsubscribe_url}} / {{preference_url}}.
-  const subject = '[TEST] ' + applyMergeTags(campaign.subject, renderContact, {
-    location_name: campaign.locations?.name || '',
-    company_name: companyName || '',
-    unsubscribe_url: unsubscribeUrl,
-    preference_url: preferenceUrl,
-  })
+  const html = rendered.html
+  const subject = '[TEST] ' + rendered.subject
 
   // W1.E2 — a test send matches a real one: the campaign's location resolves
   // the sender (brand on the platform address pre-domain, the org's verified
@@ -150,6 +160,7 @@ export async function POST(request, props) {
       to: recipient,
       subject,
       htmlBody: html,
+      textBody: rendered.text,
       sender,
       fromName: campaign.from_name || undefined,
       replyTo: campaign.reply_to,
