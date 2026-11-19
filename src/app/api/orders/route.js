@@ -103,7 +103,7 @@ export async function GET(request) {
       amount_cents, currency, status,
       payment_provider, payment_provider_ref,
       retry_of_order_id, superseded_by_order_id,
-      created_at, completed_at, failed_at, abandoned_at, refunded_at,
+      created_at, completed_at, failed_at, abandoned_at, refunded_at, refunded_amount_cents,
       metadata,
       location:locations!location_id ( id, timezone )
     `, { count: 'exact' })
