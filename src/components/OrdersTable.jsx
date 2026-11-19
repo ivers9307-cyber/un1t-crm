@@ -24,7 +24,7 @@ const STATUS_TABS = [
   { id: 'cancelled', label: 'Cancelled', accent: 'slate' },
 ]
 
-const SOURCE_LABELS = {
+export const SOURCE_LABELS = {
   race_registration: 'Race signup',
   car_deposit: 'Car deposit',
   trial_purchase: 'Paid trial',
@@ -584,7 +584,7 @@ function StatusPill({ status }) {
   )
 }
 
-function formatMoney(cents, currency) {
+export function formatMoney(cents, currency) {
   if (!Number.isFinite(cents)) return ''
   const major = (cents / 100).toFixed(2)
   if (currency === 'EUR') return `€${major}`
