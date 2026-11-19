@@ -90,6 +90,16 @@ export function shapePulseMetrics(bundle) {
   ]
 
   if (radar) {
+    // OWNERDAILY.1 — churn risk, beside arrears (the Overdue row below).
+    if (Number.isFinite(radar.highRisk)) {
+      metrics.push({
+        key: 'high_risk',
+        label: 'High churn risk',
+        value: radar.highRisk,
+        delta: d(radar.highRisk, prevChurn?.high_risk),
+        since: churnSince,
+      })
+    }
     metrics.push(
       {
         key: 'paused',
@@ -125,7 +135,7 @@ export function shapePulseMetrics(bundle) {
 // the "bad" metrics (paused/overdue); for the base metrics growth is
 // good. Null delta (no comparator yet) renders nothing — the trend
 // builds as snapshots accrue.
-const SHRINK_IS_GOOD = new Set(['paused', 'overdue'])
+const SHRINK_IS_GOOD = new Set(['paused', 'overdue', 'high_risk'])
 function deltaChip(m) {
   if (m.delta === null || m.delta === undefined || !m.since) return ''
   if (m.delta === 0) {
@@ -136,6 +146,33 @@ function deltaChip(m) {
   const good = SHRINK_IS_GOOD.has(m.key) ? !up : up
   const color = good ? '#047857' : '#b91c1c'
   return `<span style="color:${color};font-size:12px;font-weight:600;">${arrow} ${Math.abs(m.delta)} since ${esc(m.since)}</span>`
+}
+
+/**
+ * OWNERDAILY.1 — revenue month to date and yesterday's new leads and trials,
+ * above the pulse strip. A figure that could not be read is left out, never
+ * shown as zero; nothing readable, no section. Pure.
+ * @param {{ revenue?: { totalCents: number, deltaPct: number|null }|null, newLeads?: number|null, trials?: number|null }|null} h
+ */
+export function headlineHtml(h) {
+  if (!h) return ''
+  const cells = []
+  if (h.revenue) {
+    const pct = Number.isFinite(h.revenue.deltaPct) ? ` (${h.revenue.deltaPct >= 0 ? '+' : ''}${Math.round(h.revenue.deltaPct)}% on last month)` : ''
+    cells.push(['Revenue this month', euro(h.revenue.totalCents), pct])
+  }
+  if (Number.isFinite(h.newLeads)) cells.push(['New leads yesterday', String(h.newLeads), ''])
+  if (Number.isFinite(h.trials)) cells.push(['Trials bought yesterday', String(h.trials), ''])
+  if (cells.length === 0) return ''
+  return `
+    <h3 style="margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;">Money and leads</h3>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
+      ${cells.map(([label, value, note]) => `
+      <tr>
+        <td style="padding:7px 0;border-bottom:1px solid #f1f5f9;color:#334155;font-size:13px;">${esc(label)}${note ? `<div style="color:#94a3b8;font-size:11px;">${esc(note.trim())}</div>` : ''}</td>
+        <td style="padding:7px 0;border-bottom:1px solid #f1f5f9;text-align:right;white-space:nowrap;"><span style="color:#111827;font-size:15px;font-weight:700;">${esc(value)}</span></td>
+      </tr>`).join('')}
+    </table>`
 }
 
 /**
@@ -152,8 +189,8 @@ export function buildMorningBriefingEmail(rows, opts = {}) {
   // members"). All-clear gets an explicit calm subject.
   const fragments = list.slice(0, 2).map((r) => `${r.count} ${String(r.label).toLowerCase()}`)
   const subject = list.length === 0
-    ? `Morning briefing — ${locationName}: all clear`
-    : `Morning briefing — ${locationName}: ${fragments.join(', ')}${list.length > 2 ? ', …' : ''}`
+    ? `Daily briefing — ${locationName}: all clear`
+    : `Daily briefing — ${locationName}: ${fragments.join(', ')}${list.length > 2 ? ', …' : ''}`
 
   const rowHtml = list.map((r) => {
     const items = (r.items || [])
@@ -202,13 +239,14 @@ export function buildMorningBriefingEmail(rows, opts = {}) {
 
   const html = `
   <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;">
-    <h2 style="margin:0 0 2px;font-size:18px;color:#111827;">Morning briefing — ${esc(locationName)}</h2>
+    <h2 style="margin:0 0 2px;font-size:18px;color:#111827;">Daily briefing — ${esc(locationName)}</h2>
     <p style="margin:0 0 16px;color:#64748b;font-size:13px;">${esc(dateLabel)}</p>
+    ${headlineHtml(opts.headline)}
     ${pulseHtml}
     ${body}
     <p style="margin:18px 0 0;color:#94a3b8;font-size:12px;">
       The live view is always on <a href="${appUrl}/dashboard/today" style="color:#4f46e5;">your Today dashboard</a>.
-      This briefing goes to the same recipients as the Monday radar digest.
+      It replaces the Monday briefing and the Monday radar digest, and goes to the same recipients.
     </p>
   </div>`
 

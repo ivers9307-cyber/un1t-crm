@@ -19,7 +19,8 @@ const NY = { id: 'loc-ny', timezone: 'America/New_York' }
 // The pre-TZ.6 vercel.json entries, frozen: [minute, UTC hour, cron day-of-week or null].
 const LEGACY_SCHEDULE = {
   'equipment-inspection-reminder': [0, 6, null],
-  'morning-briefing': [0, 6, 1],
+  // OWNERDAILY.1 (19 Nov 2026) made the briefing daily; before, Mondays only.
+  'morning-briefing': [0, 6, null],
   'ad-report-email': [0, 7, null],
   'churn-radar-digest': [0, 7, 1],
   'run-scheduled-reports': [0, 7, null],
@@ -145,10 +146,10 @@ describe('TZ.6 America/New_York acts at its LOCAL hour across both 2026 US DST c
     expect(dailySlotDue('America/New_York', at('2026-11-01T14:00:00Z'), slot).due).toBe(false) // 09:00 EST
   })
 
-  it('weekday slots read the LOCAL weekday: Monday 06:00 in Sydney is Sunday 20:00Z', () => {
-    const slot = DAILY_SLOTS['morning-briefing']
-    expect(dailySlotDue('Australia/Sydney', at('2026-07-05T20:00:00Z'), slot)).toMatchObject({ due: true, day: '2026-07-06', legacy: false })
-    expect(dailySlotDue('Europe/Dublin', at('2026-07-05T20:00:00Z'), slot).due).toBe(false)
+  it('weekday slots read the LOCAL weekday: Monday 07:00 in Sydney is Sunday 21:00Z', () => {
+    const slot = DAILY_SLOTS['churn-radar-digest']
+    expect(dailySlotDue('Australia/Sydney', at('2026-07-05T21:00:00Z'), slot)).toMatchObject({ due: true, day: '2026-07-06', legacy: false })
+    expect(dailySlotDue('Europe/Dublin', at('2026-07-05T21:00:00Z'), slot).due).toBe(false)
   })
 
   it('a local-anchored slot is local for Dublin too (receipt-coverage-weekly: Friday 08:00 wall clock)', () => {

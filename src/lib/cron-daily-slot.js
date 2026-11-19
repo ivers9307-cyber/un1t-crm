@@ -95,7 +95,8 @@ const CLAIM_BATCH = 500 // rows per upsert: the RETURNING set stays under the 1k
  */
 export const DAILY_SLOTS = Object.freeze({
   'equipment-inspection-reminder': Object.freeze({ hour: 6 }),
-  'morning-briefing': Object.freeze({ hour: 6, weekday: 1 }),
+  // OWNERDAILY.1 — the owner briefing is daily now (was Mondays).
+  'morning-briefing': Object.freeze({ hour: 6 }),
   'ad-report-email': Object.freeze({ hour: 7 }),
   'churn-radar-digest': Object.freeze({ hour: 7, weekday: 1 }),
   'run-scheduled-reports': Object.freeze({ hour: 7 }),

@@ -70,7 +70,7 @@ export async function fetchStudioPulse(db, locationId, nowMs = Date.now()) {
         'snapshot_date, monthly_recurring, class_packs, payg, total_members',
         locationId, monthStartIso, nowMs),
       pickComparator(db, 'churn_radar_snapshots', 'captured_at',
-        'captured_at, paused, overdue',
+        'captured_at, paused, overdue, high_risk',
         locationId, monthStartIso, nowMs),
     ])
     const s = radarRes?.summary || {}
@@ -78,6 +78,8 @@ export async function fetchStudioPulse(db, locationId, nowMs = Date.now()) {
       counts,
       radar: {
         paused: s.paused || 0, overdue: s.overdue || 0, overdueValueCents: s.overdueValueCents || 0,
+        // OWNERDAILY.1 — the churn half of the daily briefing.
+        highRisk: Number.isFinite(s.highRisk) ? s.highRisk : null,
         overdueValueEstimated: s.overdueValueEstimated === true,
         arrearsUnavailable: s.unpaidCharges === null,
       },
