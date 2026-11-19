@@ -605,7 +605,7 @@ function structuralChange(stored, next, row, patch) {
   const s = isObj(stored) ? stored : {}
   if (stableJson(s.entry) !== stableJson(next.entry)) return true
   if (!sameSet(stageSlugs(s), stageSlugs(next))) return true
-  for (const k of ['duration_days', 'quiet_days', 'converted_window_days']) {
+  for (const k of ['duration_days', 'quiet_days', 'converted_window_days', 'ends_at']) {
     if ((s[k] ?? null) !== (next[k] ?? null)) return true
   }
   return false

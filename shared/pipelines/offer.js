@@ -39,11 +39,22 @@ export function stagesFor(config) {
     slug: s.slug,
     name: s.name,
     stage_role: s.role,
-    role_config: s.role === 'class_n' ? { count: s.count } : s.role === 'checkpoint' ? { day: s.day } : {},
+    role_config: s.role === 'class_n' ? { count: s.count } : s.role === 'checkpoint' ? { day: s.day }
+      : s.role === 'done' && s.min_classes != null ? { min_classes: s.min_classes } : {},
     display_order: 900 + i,
     color: COLORS[s.role],
     is_dormant: false,
   }))
+}
+
+/**
+ * OPENWEEK.8 — when a claim that started at `start` ends: the board's fixed
+ * `ends_at` when it is after the start, else start + duration_days.
+ */
+export function offerClaimEnd(start, config) {
+  const fixed = config?.ends_at ? Date.parse(config.ends_at) : NaN
+  if (Number.isFinite(fixed) && fixed > start) return fixed
+  return start + config.duration_days * DAY_MS
 }
 
 const msOf = (iso) => {
@@ -76,7 +87,9 @@ export function classify(contact, now, claim, config) {
   const attended = attendedSince(contact, claim.start)
 
   if (convertedSince(contact, claim.end) && one('converted')) return one('converted')
-  if (now >= claim.end && one('done')) return one('done')
+  const done = byRole('done')[0]
+  // OPENWEEK.8 — a Done with a class floor takes only those who reached it.
+  if (now >= claim.end && done && (done.min_classes == null || attended >= done.min_classes)) return done.slug
 
   const passed = byRole('checkpoint').filter((s) => now >= claim.start + s.day * DAY_MS)
   if (passed.length) return passed.reduce((a, b) => (b.day > a.day ? b : a)).slug

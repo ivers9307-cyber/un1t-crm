@@ -26,8 +26,8 @@
 import { logWarn } from './log.js'
 import { selectAll } from './select-all.js'
 import { parseOfferConfig } from '../../shared/pipelines/offer-config.js'
-import { offerClaimLive } from '../../shared/pipelines/offer.js'
-import { paidTrialClaim, DAY_MS } from '../../shared/pipelines/paid-trial.js'
+import { offerClaimLive, offerClaimEnd } from '../../shared/pipelines/offer.js'
+import { paidTrialClaim } from '../../shared/pipelines/paid-trial.js'
 import { OFFER_MODULES } from '../../shared/pipelines/router.js'
 import {
   PURCHASE_COLS, toProgrammeClaim, pendingRecordedClaims, upsertBoardClaims,
@@ -229,8 +229,10 @@ export function withoutOfferPurchases(purchases, entries) {
   return (purchases || []).filter((p) => !entries.some((e) => purchaseMatchesEntry(p, e)))
 }
 
-const claimOf = (start, durationDays, source) => ({
-  start, end: start + durationDays * DAY_MS, source, claimedAt: new Date(start).toISOString(),
+// OPENWEEK.8 — the end is the board's (offerClaimEnd: a fixed ends_at, else
+// start + duration_days).
+const claimOf = (start, board, source) => ({
+  start, end: offerClaimEnd(start, board.config), source, claimedAt: new Date(start).toISOString(),
 })
 
 /**
@@ -269,7 +271,7 @@ const failed = (reason, table, locationId, e) => {
 // Is a stored recorded claim still live on THIS board? The board's own quiet and
 // converted windows, over the claim's { start, end } (offerClaimLive's shape).
 const boardIsLive = (board) => (stored, contact, now) => offerClaimLive(
-  { start: stored.claimedAt, end: stored.claimedAt + board.durationDays * DAY_MS }, contact, now, board.config)
+  { start: stored.claimedAt, end: offerClaimEnd(stored.claimedAt, board.config) }, contact, now, board.config)
 
 // Who/what a descriptor's signal is, for the three recorded types.
 function matcherFor(board, tagAtByContact) {
@@ -367,7 +369,7 @@ async function loadOffers(db, { locationId, boards, contacts, now, scopeContactI
         if (at == null) continue
         if (!best.has(r.contact_id) || at > best.get(r.contact_id)) best.set(r.contact_id, at)
       }
-      for (const [contactId, at] of best) addOffer(offersByContact, contactId, board.key, claimOf(at, board.durationDays, 'corp_promo'))
+      for (const [contactId, at] of best) addOffer(offersByContact, contactId, board.key, claimOf(at, board, 'corp_promo'))
     }
   }
 
@@ -421,7 +423,7 @@ async function loadOffers(db, { locationId, boards, contacts, now, scopeContactI
       pending.push(...rows)
       const merged = new Map(have)
       for (const r of rows) merged.set(r.contact_id, { claimedAt: Date.parse(r.claimed_at), source: r.source })
-      for (const [contactId, c] of merged) addOffer(offersByContact, contactId, board.key, claimOf(c.claimedAt, board.durationDays, board.entry.type))
+      for (const [contactId, c] of merged) addOffer(offersByContact, contactId, board.key, claimOf(c.claimedAt, board, board.entry.type))
     }
   }
 
@@ -473,7 +475,7 @@ export function un1tProductOfferClaim(transactions, config, now = Date.now()) { 
     const at = parseMs(t.remote_created_at)
     if (at != null && (best == null || at > best)) best = at
   }
-  return best == null ? null : { start: best, end: best + config.duration_days * DAY_MS }
+  return best == null ? null : { start: best, end: offerClaimEnd(best, config) }
 }
 
 const IN_CHUNK = 200
@@ -563,7 +565,7 @@ export async function loadUn1tOfferClaims(db, { locationId, boards, contactIds, 
     for (const board of productBoards) {
       for (const [contactId, list] of byContact) {
         const c = un1tProductOfferClaim(list, board.config, now)
-        if (c) addOffer(offersByContact, contactId, board.key, claimOf(c.start, board.config.duration_days, 'un1t_product'))
+        if (c) addOffer(offersByContact, contactId, board.key, claimOf(c.start, board, 'un1t_product'))
       }
     }
   }
