@@ -187,18 +187,18 @@ describe('loadNonOpenerContactIds', () => {
 // Route helper: campaigns select → due parents; campaign_recipients
 // head-count → non-opener count; campaigns insert → child; campaigns
 // update → flag clear.
-function spawnRoute({ parents, nonOpeners = 5, insertResult = { data: [{ id: 'child-1' }] } }) {
+function spawnRoute({ parents, nonOpeners = 5, insertResult = { data: [{ id: 'child-1' }] }, countError = null, updateError = null }) {
   const calls = { inserts: [], updates: [], counts: 0 }
   const route = (state) => {
     if (state.table === 'campaigns') {
       const first = state.ops[0]
       if (first.method === 'select') return { data: parents }
       if (first.method === 'insert') { calls.inserts.push(first.args[0]); return insertResult }
-      if (first.method === 'update') { calls.updates.push({ set: first.args[0], state }); return {} }
+      if (first.method === 'update') { calls.updates.push({ set: first.args[0], state }); return updateError ? { error: updateError } : {} }
     }
     if (state.table === 'campaign_recipients') {
       calls.counts++
-      return { count: nonOpeners }
+      return countError ? { count: null, error: countError } : { count: nonOpeners }
     }
     return {}
   }
@@ -293,3 +293,25 @@ describe('spawnDueResends', () => {
     expect(calls.inserts.map(r => r.subject)).toEqual(['New line', 'B line'])
   })
 })
+
+// EMAILCOUNT.1 — a failed count is not "nobody left to chase".
+describe('spawnDueResends when a read or write fails', () => {
+  it('a failed non-opener count keeps the flag and spawns nothing', async () => {
+    const { route, calls } = spawnRoute({ parents: [parent()], countError: { message: 'timeout' } })
+    const { db } = makeDb(route)
+    const summary = await spawnDueResends(db, { getCapStatus: uncapped, now })
+    expect(summary.spawned).toBe(0)
+    expect(calls.inserts).toHaveLength(0)
+    expect(calls.updates).toHaveLength(0)
+    expect(summary.errors).toEqual([{ parent_id: 'parent-1', error: 'non-opener count failed: timeout' }])
+  })
+
+  it('a flag that could not be cleared is reported, and the child still counts as spawned', async () => {
+    const { route } = spawnRoute({ parents: [parent()], updateError: { message: 'down' } })
+    const { db } = makeDb(route)
+    const summary = await spawnDueResends(db, { getCapStatus: uncapped, now })
+    expect(summary.spawned).toBe(1)
+    expect(summary.errors).toEqual([{ parent_id: 'parent-1', error: 'resend flag not cleared: down' }])
+  })
+})
+

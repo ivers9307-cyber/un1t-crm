@@ -1125,10 +1125,11 @@ describe('tickCampaignSend — marketing frequency cap (FREQ-CAP.1)', () => {
   // Route for the "everything remaining is cap-deferred" shape: recipients
   // exist (existingCount=5), the cap-filtered chunk fetch is empty, and the
   // unfiltered queued head-count still shows rows.
-  const capHeldRoute = ({ queuedRemaining = 3 }) => (state) => {
+  const capHeldRoute = ({ queuedRemaining = 3, queuedCountError = null }) => (state) => {
     if (state.table !== 'campaign_recipients') return { data: [] }
     const first = state.ops[0]
     if (first.method === 'select' && first.args[1]?.head) {
+      if (hasEq(state, 'status', 'queued') && queuedCountError) return { count: null, error: queuedCountError }
       return hasEq(state, 'status', 'queued') ? { count: queuedRemaining } : { count: 5 }
     }
     if (first.method === 'select' && hasEq(state, 'status', 'sending')) return { data: [] }
@@ -1168,6 +1169,19 @@ describe('tickCampaignSend — marketing frequency cap (FREQ-CAP.1)', () => {
     )
     expect(skip).toBeTruthy()
     expect(hasEq(skip, 'status', 'queued')).toBe(true)
+  })
+
+  // EMAILCOUNT.1 — a failed count read is not an empty queue.
+  it('a failed cap-held count leaves the campaign open with a warning, never finalised', async () => {
+    const { db, statements } = makeDb(capHeldRoute({ queuedCountError: { message: 'timeout' } }))
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, capCampaign({ send_started_at: new Date().toISOString() }))
+
+    expect(result.phase).toBe('cap_deferred')
+    expect(result.error).toBeUndefined()
+    expect(result.warning).toMatch(/cap-held count failed/)
+    expect(campaignUpdates(statements).some(u => u.status === 'sent')).toBe(false)
   })
 
   it('finalises normally when the cap is on and the queue is truly empty', async () => {
