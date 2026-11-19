@@ -1,29 +1,34 @@
 // POST /api/orders/[id]/refund
 //
-// Operator-initiated refund for a completed order. Manager+ at the
-// order's location.
+// Operator-initiated refund for a completed order. Owners and masters at
+// the order's location, with a reason (REFUNDLEDGER.1, Richard's decision
+// 19 Nov 2026).
 //
-// Body (optional):
-//   amount_cents?: number   // partial refund; omit for full
-//   reason?: string         // free-text, stored on metadata.refund_reason
+// Body:
+//   amount_cents?: number   // partial refund; omit for the whole remaining balance
+//   reason: string          // required; stored on the refund row
 //
-// Flow:
+// Flow (REFUNDLEDGER.1, mig 853):
 //   1. Resolve the order + verify caller has access
-//   2. Reject if not status='completed' or an unsupported provider
-//   3. Refund via the order's provider — Revolut (internal events/deposits)
+//   2. Reject an unsupported provider (resolveRefund)
+//   3. CLAIM the refund in the database (claim_order_refund): the order row is
+//      locked and a 'requested' refund recorded before any money moves, so two
+//      refunds can never be in flight on one order. The same amount asked again
+//      resumes that refund with the same idempotency key.
+//   4. Refund via the order's provider — Revolut (internal events/deposits)
 //      or the host's Stripe connected account (third-party events). A FULL
 //      refund also returns UN1T's per-ticket booking fee; a partial keeps it.
-//   4. Update orders.status='refunded', set refunded_at +
-//      refunded_amount_cents
-//   5. Cascade to source row (race_payments / cars.deposit_status)
-//   6. Emit ORDER_REFUNDED event + apply tag rules
+//   5. Record the answer (finish_order_refund): completed adds to the order's
+//      total and flips it to 'refunded' when nothing is left; a refusal frees
+//      the order; no answer keeps it held for a retry.
+//   6. Cascade to source row (race_payments / cars.deposit_status)
+//   7. Emit ORDER_REFUNDED event + apply tag rules
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import { RevolutError } from '@/lib/revolut'
 import { paymentsFor } from '@/lib/payments'
 import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
@@ -36,8 +41,22 @@ export const dynamic = 'force-dynamic'
 
 const Body = z.object({
   amount_cents: z.number().int().positive().optional(),
-  reason: z.string().max(500).optional(),
+  reason: z.string().trim().min(1, 'Give a reason for the refund.').max(500),
 })
+
+// Who may refund: owners and masters at the order's studio (masters pass
+// hasRoleAtLocation). REFUNDLEDGER.1 — managers could refund before.
+const REFUND_ROLES = Object.freeze(['owner'])
+const REFUND_ROLE_ERROR = 'Only owners and masters can refund an order.'
+
+// claim_order_refund's refusals, in this route's words.
+const CLAIM_REFUSALS = {
+  not_found: () => ({ status: 404, error: 'Order not found' }),
+  invalid_status: (r) => ({ status: 409, error: `Only completed orders can be refunded (current status: ${r.status}).` }),
+  already_refunded: () => ({ status: 409, error: 'This order has already been fully refunded.' }),
+  refund_exceeds_order: (r) => ({ status: 400, error: `That is more than the ${r.remaining_cents} cents left to refund on this order.` }),
+  refund_in_progress: (r) => ({ status: 409, error: `Another refund of ${r.amount_cents} cents on this order has not finished. Retry that same amount to finish it before refunding a different amount.` }),
+}
 
 /**
  * Pure decision logic for whether an order can be refunded and what
@@ -123,8 +142,8 @@ export async function POST(request, props) {
   if (!hasPermissionAtAnyLocation(user, 'orders')) {
     return NextResponse.json({ success: false, error: 'Orders feature is disabled at this location' }, { status: 403 })
   }
-  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  if (!hasRoleAtAnyLocation(user, REFUND_ROLES)) {
+    return NextResponse.json({ success: false, error: REFUND_ROLE_ERROR }, { status: 403 })
   }
 
   const validation = await validateBody(request, Body, { allowEmpty: true })
@@ -147,8 +166,8 @@ export async function POST(request, props) {
   if (!hasPermissionForLocation(user, order.location_id, 'orders')) {
     return NextResponse.json({ success: false, error: 'Orders feature is disabled at this location' }, { status: 403 })
   }
-  if (!hasRoleAtLocation(user, order.location_id, MANAGER_ROLES)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  if (!hasRoleAtLocation(user, order.location_id, REFUND_ROLES)) {
+    return NextResponse.json({ success: false, error: REFUND_ROLE_ERROR }, { status: 403 })
   }
 
   // Partial vs full — delegates all guards to the pure resolveRefund helper.
@@ -160,12 +179,33 @@ export async function POST(request, props) {
       code: resolution.code,
     }, { status: resolution.status })
   }
-  const refundAmount = resolution.refundAmount
+
+  // REFUNDLEDGER.1 — claim before any money moves. The order row is locked
+  // inside the function, so a second refund cannot pass the same balance check.
+  const { data: claim, error: claimErr } = await db.rpc('claim_order_refund', {
+    p_order_id: order.id,
+    p_amount_cents: body.amount_cents ?? null,
+    p_reason: body.reason,
+    p_actor_id: user.id,
+  })
+  if (claimErr || !claim) {
+    logError('orders-refund', 'refund claim failed', { err: claimErr, orderId: order.id })
+    return NextResponse.json({ success: false, error: 'Could not start the refund. Nothing was refunded. Try again.', code: 'claim_failed' }, { status: 503 })
+  }
+  if (!claim.ok) {
+    const refusal = (CLAIM_REFUSALS[claim.code] || (() => ({ status: 409, error: 'This order cannot be refunded right now.' })))(claim)
+    return NextResponse.json({ success: false, error: refusal.error, code: claim.code }, { status: refusal.status })
+  }
+  const refundAmount = claim.amount_cents
+  const finish = (status, providerRefundId = null, error = null) => db.rpc('finish_order_refund', {
+    p_refund_id: claim.refund_id, p_status: status, p_provider_refund_id: providerRefundId, p_error: error,
+  })
 
   // Dispatch to the order's payment provider. Revolut → refundOrder, which
-  // sends the idempotency key below as the Idempotency-Key header (REVPAY.1:
-  // until then the key was dropped and nothing deduped a retried refund);
+  // sends the idempotency key below as the Idempotency-Key header (REVPAY.1);
   // Stripe Connect → a refund on the host's connected account, same key.
+  // The key is the claimed refund's own, so a resumed refund resends the
+  // SAME key and the provider returns the refund it already made.
   // A FULL refund also returns UN1T's booking fee (refundApplicationFee) so the
   // customer is made whole; a PARTIAL refund keeps the fee and comes out of the
   // host's portion. Provider errors → a clean 502. (EVENTS-HOST.7)
@@ -174,19 +214,19 @@ export async function POST(request, props) {
     refundResult = await paymentsFor(order.payment_provider).refundPayment(order.payment_provider_ref, {
       amountCents: refundAmount,
       currency: order.currency || 'EUR',
-      description: body.reason || `Refund of order ${order.id}`,
+      description: body.reason,
       connectedAccountId: order.connected_account_id || null,
-      refundApplicationFee: resolution.isFull,
-      // Cumulative total is unique per refund step → retry-safe without
-      // colliding two distinct partial refunds of the same amount.
-      idempotencyKey: `refund:${order.id}:${resolution.newRefundedTotal}`,
+      refundApplicationFee: claim.is_full,
+      idempotencyKey: claim.idempotency_key,
     })
   } catch (e) {
     const status = e instanceof RevolutError ? Math.min(Math.max(e.status || 502, 400), 599) : 502
-    // REVPAY.1 — no answer (timeout / network) or a 5xx means Revolut may have
-    // refunded anyway. Say so, rather than "failed": the same refund retried
-    // carries the same idempotency key, so it cannot pay out twice.
+    // REVPAY.1 — no answer (timeout / network) or a 5xx means the provider may
+    // have refunded anyway. The claim stays held ('unknown'), so no other
+    // amount can be refunded until this one is retried and answered.
     const outcomeUnknown = e instanceof RevolutError && (e.code === 'timeout' || e.code === 'network' || (e.status || 0) >= 500)
+    const { error: finishErr } = await finish(outcomeUnknown ? 'unknown' : 'failed', null, String(e?.message || 'provider error').slice(0, 500))
+    if (finishErr) logError('orders-refund', 'refund outcome not recorded on the claim', { err: finishErr, orderId: order.id, refundId: claim.refund_id })
     if (outcomeUnknown) {
       logError('orders-refund', 'refund outcome unknown (no answer or 5xx from the provider)', { err: e, orderId: order.id, provider: order.payment_provider })
       return NextResponse.json({
@@ -202,46 +242,25 @@ export async function POST(request, props) {
     }, { status })
   }
 
-  // Update orders row. Partial refunds keep the order 'completed' (a valid
-  // enum value) with the CUMULATIVE refunded_amount_cents recorded; only a
-  // refund that clears the remaining balance flips it to 'refunded'.
-  // (Previously every refund — partial included — was mislabelled 'refunded',
-  // which both hid partials and blocked any legitimate top-up refund.)
-  const nowIso = new Date().toISOString()
-  const newStatus = resolution.isFull ? 'refunded' : order.status
-  const updates = {
-    status: newStatus,
-    refunded_at: nowIso,
-    refunded_amount_cents: resolution.newRefundedTotal,
-    metadata: {
-      ...(order.metadata || {}),
-      refund_reason: body.reason || null,
-      refund_actor_id: user.id,
-      refund_provider: order.payment_provider,
-      refund_provider_id: refundResult?.refundId || null,
-      // Back-compat: readers that keyed on the Revolut-specific field.
-      refund_revolut_id: order.payment_provider === 'revolut' ? (refundResult?.refundId || null) : null,
-    },
-  }
-  // REVPAY.1 — the money has gone back; if the ledger write fails, say so
-  // plainly instead of answering success over an order that still reads
-  // 'completed' with nothing refunded. Retrying is safe: the order row is
-  // unchanged, so a retry of the same refund recomputes the SAME idempotency
-  // key, Revolut returns the refund it already made, and this write runs again.
-  // The cascade and events wait for that successful retry (running them now
-  // would emit ORDER_REFUNDED twice).
-  const { error: orderWriteErr } = await db.from('orders').update(updates).eq('id', order.id)
-  if (orderWriteErr) {
-    logError('orders-refund', 'refund issued but the orders row was NOT updated', {
-      err: orderWriteErr, orderId: order.id, refundId: refundResult?.refundId || null, refundedTotal: resolution.newRefundedTotal,
+  // REFUNDLEDGER.1 — the money has gone back. Record it on the claim; the
+  // function adds it to the order's total and status. If that write fails the
+  // claim stays 'requested', so a retry of the same amount resumes it with the
+  // same key and records it then. The cascade and events wait for that retry.
+  const { data: finished, error: finishErr } = await finish('completed', refundResult?.refundId || null)
+  if (finishErr || !finished?.ok) {
+    logError('orders-refund', 'refund issued but NOT recorded', {
+      err: finishErr, orderId: order.id, refundId: claim.refund_id, providerRefundId: refundResult?.refundId || null,
     })
     return NextResponse.json({
       success: false,
-      error: 'The refund went through with the payment provider, but it could not be recorded here. Retry the SAME refund (same amount) to record it: it will not pay out twice. Do not refund a different amount until it shows as refunded.',
+      error: 'The refund went through with the payment provider, but it could not be recorded here. Retry the SAME refund (same amount) to record it: it will not pay out twice.',
       code: 'refund_not_recorded',
       data: { order_id: order.id, refund_id: refundResult?.refundId || null },
     }, { status: 500 })
   }
+  const nowIso = new Date().toISOString()
+  const isFull = finished.is_full === true
+  const refundedTotal = Number(finished.refunded_total_cents) || 0
 
   // Cascade to source. Both target tables have their own status enum.
   // EVENT-MOVE.5 — the write answers the payment's kind: a refunded price
@@ -251,9 +270,9 @@ export async function POST(request, props) {
   if (order.source_type === 'race_registration') {
     const { data: srcRows, error: srcErr } = await db.from('race_payments')
       .update({
-        status: resolution.isFull ? 'refunded' : 'completed',
+        status: isFull ? 'refunded' : 'completed',
         refunded_at: nowIso,
-        refunded_amount_cents: resolution.newRefundedTotal,
+        refunded_amount_cents: refundedTotal,
       })
       .eq('id', order.source_id)
       .select('kind')
@@ -264,7 +283,7 @@ export async function POST(request, props) {
     } else {
       sourceKind = srcRows?.[0]?.kind || null
     }
-  } else if (order.source_type === 'car_deposit' && resolution.isFull) {
+  } else if (order.source_type === 'car_deposit' && isFull) {
     // Car deposits are fixed-amount; only a full refund clears the deposit.
     // The order row already says refunded, so a failed write is logged to be
     // put right by hand (the same posture as race_payments above).
@@ -290,7 +309,7 @@ export async function POST(request, props) {
       metadata: {
         amount_cents: refundAmount,
         currency: order.currency,
-        reason: body.reason || null,
+        reason: body.reason,
         actor_id: user.id,
       },
     })
