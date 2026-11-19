@@ -5,27 +5,21 @@
 // could read cron_health; a delivery failure is logged and retried next tick,
 // never a reason to look healthy-but-silent.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { runStaleJobWatchdog, WATCHDOG_NAME } from '@/lib/stale-job-watchdog'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization')
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+export const GET = defineCron({ heartbeat: WATCHDOG_NAME }, async ({ db }) => {
+  const result = await runStaleJobWatchdog(db)
+  if (!result.ok) return { ok: false, body: { error: 'cron_health unreadable' } }
+  return {
+    body: { data: result },
+    outcome: {
+      newly_stale: result.newlyStale.length, alerted: result.alerted, recovered: result.recovered.length,
+      digest: result.digest, stale: result.stale,
+    },
   }
-  const result = await runStaleJobWatchdog(createServerClient())
-  if (!result.ok) {
-    return NextResponse.json({ success: false, error: 'cron_health unreadable' }, { status: 500 })
-  }
-  await stampHeartbeat(WATCHDOG_NAME, {
-    newly_stale: result.newlyStale.length, alerted: result.alerted, recovered: result.recovered.length,
-    digest: result.digest, stale: result.stale,
-  })
-  return NextResponse.json({ success: true, data: result })
-}
+})
