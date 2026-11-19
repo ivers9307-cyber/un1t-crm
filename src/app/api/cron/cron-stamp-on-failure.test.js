@@ -9,15 +9,18 @@ vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/sonos/reconcile', () => ({ runSonosReconcile: vi.fn() }))
 vi.mock('@/lib/class-climate-runner', () => ({ runClassClimate: vi.fn() }))
+vi.mock('@/lib/bathroom-climate-runner', () => ({ runBathroomClimate: vi.fn() }))
 vi.mock('@/lib/pipeline-reclassify', () => ({ reclassifyAllContacts: vi.fn() }))
 
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { runSonosReconcile } from '@/lib/sonos/reconcile'
 import { runClassClimate } from '@/lib/class-climate-runner'
+import { runBathroomClimate } from '@/lib/bathroom-climate-runner'
 import { reclassifyAllContacts } from '@/lib/pipeline-reclassify'
 import * as sonos from './sonos-reconcile/route.js'
 import * as climate from './class-climate/route.js'
+import * as bathroom from './bathroom-climate/route.js'
 import * as classify from './pipeline-classify/route.js'
 import * as reminders from './send-class-booking-reminders/route.js'
 import * as agentReview from './agent-review/route.js'
@@ -37,10 +40,11 @@ let saved
 beforeEach(() => { vi.clearAllMocks(); saved = process.env.CRON_SECRET; process.env.CRON_SECRET = 'shh' })
 afterEach(() => { if (saved === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = saved })
 
-describe('sonos-reconcile and class-climate stamp only a run that did not fail', () => {
+describe('sonos-reconcile, class-climate and bathroom-climate stamp only a run that did not fail', () => {
   it.each([
     ['sonos-reconcile', sonos, runSonosReconcile],
     ['class-climate', climate, runClassClimate],
+    ['bathroom-climate', bathroom, runBathroomClimate], // CRONWRAP.2
   ])('%s', async (name, route, run) => {
     createServerClient.mockReturnValue({})
     run.mockResolvedValueOnce({ ok: false, error: 'schedules unreadable' })

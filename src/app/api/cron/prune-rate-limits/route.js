@@ -1,38 +1,20 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-/**
- * GET /api/cron/prune-rate-limits
- * Daily Vercel cron — deletes rate_limit_buckets rows whose expires_at has
- * already passed. Without this, the table grows unbounded; even at modest
- * traffic that's a few hundred KB/day forever.
- *
- * Secured by CRON_SECRET (Vercel cron sends Authorization: Bearer <secret>).
- */
-export async function GET(request) {
-  const cronSecret = process.env.CRON_SECRET
-  const authHeader = request.headers.get('authorization')
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+export const maxDuration = 60
 
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'prune-rate-limits' }, async ({ db }) => {
   const now = new Date().toISOString()
-
   const { error, count } = await db
     .from('rate_limit_buckets')
     .delete({ count: 'exact' })
     .lt('expires_at', now)
-
   if (error) {
-    console.error('[cron] prune-rate-limits failed:', error.message)
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('cron.prune-rate-limits', 'prune failed', { err: error })
+    return { ok: false, body: { error: 'Prune failed' } }
   }
-
-  await stampHeartbeat('prune-rate-limits')
-  return NextResponse.json({ success: true, deleted: count ?? 0 })
-}
+  return { body: { deleted: count ?? 0 } }
+})
