@@ -30,48 +30,8 @@ export function termForSlug(slug) {
   return null
 }
 
-// OFFERSDESIGN.1 — the card leads with the bonus and states what the deal
-// works out at. Read off the slug's term and the bonus headline; anything
-// it cannot read returns null and the card shows no value line.
-
-const WEEKS_PER_MONTH = 52 / 12
-
-/** The free extra in a bonus headline: { n, unit: 'month'|'week'|'class' } or null. */
-export function parseBonus(headline) {
-  if (typeof headline !== 'string') return null
-  const m = headline.match(/(\d+)\s*(MONTHS?|WEEKS?|CLASS(?:ES)?)\b/i)
-  if (!m) return null
-  const unit = m[2].toLowerCase().startsWith('month') ? 'month' : m[2].toLowerCase().startsWith('week') ? 'week' : 'class'
-  return { n: Number(m[1]), unit }
-}
-
-function euros(cents, decimals) {
-  const v = cents / 100
-  return `€${v.toLocaleString('en-IE', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`
-}
-
-/**
- * "About €145 a month" for a membership (price over the term plus the free
- * time), "About €12.75 a class" for a class pack (price over every class,
- * bonus included). Null for gift cards and anything unreadable.
- */
-export function offerValueLine(offer) {
-  if (!offer || !Number.isFinite(offer.price_cents) || offer.price_cents <= 0) return null
-  const term = typeof offer.slug === 'string' ? termForSlug(offer.slug) : null
-  const bonus = parseBonus(offer.bonus_headline)
-  if (!term || !bonus) return null
-  const base = Number(term.num)
-  if (!Number.isFinite(base) || base <= 0) return null
-  if (offer.category === 'membership' && term.label.startsWith('MONTH')) {
-    const extra = bonus.unit === 'month' ? bonus.n : bonus.unit === 'week' ? bonus.n / WEEKS_PER_MONTH : null
-    if (extra === null) return null
-    return `About ${euros(Math.round(offer.price_cents / (base + extra)), 0)} a month`
-  }
-  if (offer.category === 'class_pack' && term.label === 'CLASSES' && bonus.unit === 'class') {
-    return `About ${euros(Math.round(offer.price_cents / (base + bonus.n)), 2)} a class`
-  }
-  return null
-}
+// OFFERSDESIGN.1 — the card leads with the bonus. OFFERSABOUT.1 took the
+// "About €X a month / a class" value line off every card.
 
 /** The small line under the bonus: "On 12 months", "On 30 classes". Null when unreadable. */
 export function offerTermLine(offer) {
