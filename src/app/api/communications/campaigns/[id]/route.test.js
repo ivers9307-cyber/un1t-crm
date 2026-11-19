@@ -244,3 +244,29 @@ describe('DELETE [id]', () => {
     expect((await del()).status).toBe(500)
   })
 })
+
+// EDITORRESEND.1 — resend to non-openers is marketing only and needs a wait.
+describe('PUT [id] — resend to non-openers', () => {
+  it('400 for a resend on a utility email, and nothing is written', async () => {
+    db = campaignDb(row(), () => ({ data: [{ id: CAMPAIGN_ID, status: 'draft' }], error: null }))
+    const res = await put({ ...CONTENT, postmark_stream: 'outbound', resend_enabled: true, resend_wait_hours: 48 })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/marketing/)
+    expect(writesOf(db)).toEqual([])
+  })
+
+  it('saves a marketing resend with its wait and subject', async () => {
+    db = campaignDb(row(), () => ({ data: [{ id: CAMPAIGN_ID, status: 'draft' }], error: null }))
+    const res = await put({ ...CONTENT, resend_enabled: true, resend_wait_hours: 48, resend_subject: 'In case you missed it' })
+    expect(res.status).toBe(200)
+    expect(writesOf(db)[0].payload).toMatchObject({ resend_enabled: true, resend_wait_hours: 48, resend_subject: 'In case you missed it' })
+  })
+
+  it('moving a campaign with a stored resend to the utility stream switches the resend off', async () => {
+    db = campaignDb(row({ resend_enabled: true, resend_wait_hours: 48 }), () => ({ data: [{ id: CAMPAIGN_ID, status: 'draft' }], error: null }))
+    const res = await put({ ...CONTENT, postmark_stream: 'outbound' })
+    expect(res.status).toBe(200)
+    expect(writesOf(db)[0].payload).toMatchObject({ postmark_stream: 'outbound', resend_enabled: false })
+  })
+})
+

@@ -22,7 +22,7 @@ import {
   EDITABLE_CAMPAIGN_STATUSES, isCampaignContentEditable, campaignLockedReason,
 } from '@/lib/campaign-editability'
 import {
-  loadCampaignForUser, CampaignContentSchema, contentPatch, audienceFilterRefusal,
+  loadCampaignForUser, CampaignContentSchema, contentPatch, audienceFilterRefusal, resendRefusal,
   conflict, serverError, STATUS_CHANGED, CHECK_VIOLATION, currentStatus, undeletableMessage,
 } from '@/lib/campaign-session-access'
 import { fromAddressReport } from '@/lib/from-address'
@@ -52,7 +52,8 @@ export async function PUT(request, props) {
   const { id } = await props.params
   const user = await getCurrentUser()
   const db = createServerClient()
-  const { campaign, response } = await loadCampaignForUser(db, user, id, 'id, location_id, status')
+  const { campaign, response } = await loadCampaignForUser(db, user, id,
+    'id, location_id, status, postmark_stream, resend_enabled, resend_wait_hours')
   if (response) return response
 
   if (!isCampaignContentEditable(campaign.status)) {
@@ -64,8 +65,12 @@ export async function PUT(request, props) {
   const refusal = audienceFilterRefusal(validation.data.audience_filter)
   if (refusal) return refusal
 
+  // EDITORRESEND.1 — resend is marketing only and needs a wait.
+  const resend = resendRefusal(validation.data, campaign)
+  if (resend.error) return NextResponse.json({ success: false, error: resend.error }, { status: 400 })
+
   const { data, error } = await db.from('campaigns')
-    .update(contentPatch(validation.data))
+    .update({ ...contentPatch(validation.data), ...resend.patch })
     .eq('id', campaign.id)
     .in('status', [...EDITABLE_CAMPAIGN_STATUSES])
     .select('id, status, updated_at')
