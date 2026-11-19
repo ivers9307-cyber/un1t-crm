@@ -61,12 +61,14 @@ import { createServerClient } from '@/lib/supabase'
 // We dispatch on the table name in `from()` and return per-table
 // chain stubs that resolve to whatever the test passes in.
 
+const lastSource = {}
 function mockDb({
   order,
   retryChain = [],
   events = [],
   racePayment = null,
   car = null,
+  sourceRows = {},
   orderError = null,
 } = {}) {
   function tableChain(table) {
@@ -111,6 +113,15 @@ function mockDb({
       const eq = vi.fn(() => ({ maybeSingle: maybe }))
       const select = vi.fn(() => ({ eq }))
       return { select }
+    }
+    if (table === 'trial_purchases' || table === 'offer_purchases') {
+      // ORDERSTRIALS.1 — .select().eq('id').eq('location_id').maybeSingle()
+      const filters = []
+      const maybe = vi.fn(() => Promise.resolve({ data: sourceRows[table] ?? null, error: null }))
+      const b = { maybeSingle: maybe, filters }
+      b.eq = vi.fn((col, val) => { filters.push([col, val]); return b })
+      lastSource[table] = b
+      return { select: vi.fn(() => b) }
     }
     throw new Error(`unexpected table: ${table}`)
   }
@@ -204,5 +215,27 @@ describe('GET /api/orders/[id]', () => {
     const body = await res.json()
     expect(body.data.source.kind).toBe('car_deposit')
     expect(body.data.source.car.irish_reg).toBe('23-D-12345')
+  })
+
+  // ORDERSTRIALS.1
+  const manager = { id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'manager' }, assignmentsByLocation: { 'loc-A': { role: 'manager', permissions: {} } } }
+  const baseOrder = { id: 'order-1', location_id: 'loc-A', source_id: 'src-1', contact_email: 'b@x.ie', amount_cents: 3900, currency: 'EUR', status: 'completed', created_at: '2026-11-01T00:00:00Z' }
+
+  it('returns the trial summary for a trial_purchase source, read at the order\'s studio', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    const trial = { id: 'src-1', product_name: '14 Day Reset', status: 'granted', duration_days: 14 }
+    createServerClient.mockReturnValue(mockDb({ order: { ...baseOrder, source_type: 'trial_purchase' }, sourceRows: { trial_purchases: trial } }))
+    const body = await (await GET(FAKE_REQUEST, { params: { id: 'order-1' } })).json()
+    expect(body.data.source).toEqual({ kind: 'trial_purchase', trial })
+    expect(lastSource.trial_purchases.filters).toEqual([['id', 'src-1'], ['location_id', 'loc-A']])
+  })
+
+  it('returns the offer summary for an offer_purchase source', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    const purchase = { id: 'src-1', state: 'paid', offer: { id: 'of1', name: '30 + 10 pack', category: 'pack' } }
+    createServerClient.mockReturnValue(mockDb({ order: { ...baseOrder, source_type: 'offer_purchase' }, sourceRows: { offer_purchases: purchase } }))
+    const body = await (await GET(FAKE_REQUEST, { params: { id: 'order-1' } })).json()
+    expect(body.data.source).toEqual({ kind: 'offer_purchase', purchase })
+    expect(lastSource.offer_purchases.filters).toEqual([['id', 'src-1'], ['location_id', 'loc-A']])
   })
 })

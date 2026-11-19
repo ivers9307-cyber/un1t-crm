@@ -131,6 +131,25 @@ export async function GET(_request, props) {
       .eq('id', order.source_id)
       .maybeSingle()
     if (car) source = { kind: 'car_deposit', car }
+  } else if (order.source_type === 'trial_purchase') {
+    // ORDERSTRIALS.1 — what was bought and whether it was granted. A refund
+    // here changes nothing on the trial (Richard's decision, 19 Nov 2026):
+    // the page says what to undo by hand.
+    const { data: trial } = await db
+      .from('trial_purchases')
+      .select('id, product_name, status, paid_at, granted_at, duration_days, class_name, class_starts_at')
+      .eq('id', order.source_id)
+      .eq('location_id', order.location_id)
+      .maybeSingle()
+    if (trial) source = { kind: 'trial_purchase', trial }
+  } else if (order.source_type === 'offer_purchase') {
+    const { data: purchase } = await db
+      .from('offer_purchases')
+      .select('id, state, paid_at, fulfilled_at, origin, offer:sale_offers!offer_id ( id, name, category )')
+      .eq('id', order.source_id)
+      .eq('location_id', order.location_id)
+      .maybeSingle()
+    if (purchase) source = { kind: 'offer_purchase', purchase }
   }
 
   // TZ.16 — the order's studio zone, so the page shows every stamp on that

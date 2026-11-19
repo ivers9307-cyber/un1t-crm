@@ -84,6 +84,9 @@ export const ORDER_STATUS_VALUES = Object.values(ORDER_STATUS)
 export const ORDER_SOURCE_TYPE = Object.freeze({
   RACE_REGISTRATION: 'race_registration',
   CAR_DEPOSIT: 'car_deposit',
+  // ORDERSTRIALS.1 (mig 855) — projected by trigger when the row is paid.
+  TRIAL_PURCHASE: 'trial_purchase',
+  OFFER_PURCHASE: 'offer_purchase',
 })
 export const ORDER_SOURCE_TYPE_VALUES = Object.values(ORDER_SOURCE_TYPE)
 

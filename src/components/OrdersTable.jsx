@@ -27,7 +27,23 @@ const STATUS_TABS = [
 const SOURCE_LABELS = {
   race_registration: 'Race signup',
   car_deposit: 'Car deposit',
+  trial_purchase: 'Paid trial',
+  offer_purchase: 'Offer',
 }
+
+// What the second line of the Source cell says, from the order's metadata.
+export function orderSourceDetail(row) {
+  const meta = row.metadata || {}
+  if (row.source_type === 'race_registration') return '' // race name lookup would require extra join
+  if (row.source_type === 'trial_purchase') return meta.product_name || ''
+  if (row.source_type === 'offer_purchase') return meta.offer_name || ''
+  return [meta.car_make, meta.car_model, meta.irish_reg].filter(Boolean).join(' ')
+}
+
+// ORDERSTRIALS.1 — Revolut and Stripe refunds go back through the provider;
+// a un1t.online sale is refunded by hand in un1t.online, and the CRM files a
+// refund card for it instead of moving money.
+export const REFUNDABLE_PROVIDERS = Object.freeze(['revolut', 'stripe_connect', 'un1t_online'])
 
 export default function OrdersTable() {
   const [status, setStatus] = useState('completed')
@@ -134,6 +150,8 @@ export default function OrdersTable() {
           <option value="">All sources</option>
           <option value="race_registration">Race signups</option>
           <option value="car_deposit">Car deposits</option>
+          <option value="trial_purchase">Paid trials</option>
+          <option value="offer_purchase">Offers</option>
         </select>
         <input
           type="date"
@@ -258,14 +276,14 @@ function OrderRow({ row, onChanged }) {
   const dateLabel = orderRowDate(row.created_at, row.timezone, viewerZone)
   const amount = formatMoney(row.amount_cents, row.currency)
   const sourceLabel = SOURCE_LABELS[row.source_type] || row.source_type
-  const meta = row.metadata || {}
-  const sourceDetail = row.source_type === 'race_registration'
-    ? '' // race name lookup would require extra join; future enhancement
-    : [meta.car_make, meta.car_model, meta.irish_reg].filter(Boolean).join(' ')
+  const sourceDetail = orderSourceDetail(row)
 
   // Refunds go back through Revolut or the host's Stripe account; the server
-  // also allows only owners and masters (REFUNDLEDGER.1).
-  const canRefund = row.status === 'completed' && ['revolut', 'stripe_connect'].includes(row.payment_provider)
+  // also allows only owners and masters (REFUNDLEDGER.1). A un1t.online sale
+  // files a refund card instead (ORDERSTRIALS.1).
+  const canRefund = row.status === 'completed' && REFUNDABLE_PROVIDERS.includes(row.payment_provider)
+  const isUn1t = row.payment_provider === 'un1t_online'
+  const [refundNotice, setRefundNotice] = useState(null)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [refundError, setRefundError] = useState(null)
@@ -351,6 +369,10 @@ function OrderRow({ row, onChanged }) {
       }
       setConfirming(false)
       setBusy(false)
+      if (j.data?.refund_card_id) {
+        setRefundNotice('Refund card filed. Refund it in un1t.online, then approve the card.')
+        return
+      }
       onChanged?.()
     } catch (e) {
       setRefundError(e.message || 'Network error')
@@ -389,9 +411,9 @@ function OrderRow({ row, onChanged }) {
             type="button"
             onClick={() => setConfirming(true)}
             className="text-[11px] text-un1t-subtle hover:text-purple-700 inline-flex items-center gap-1"
-            title="Refund this order"
+            title={isUn1t ? 'File a refund card: the refund itself is done in un1t.online' : 'Refund this order'}
           >
-            <Undo2 size={11} /> Refund
+            <Undo2 size={11} /> {isUn1t ? 'Refund in un1t.online' : 'Refund'}
           </button>
         )}
         {canRefund && confirming && (
@@ -423,7 +445,7 @@ function OrderRow({ row, onChanged }) {
               className="text-[11px] bg-purple-600 hover:bg-purple-700 text-white px-2 py-0.5 rounded inline-flex items-center gap-1 disabled:opacity-40"
             >
               {busy ? <Loader2 size={10} className="animate-spin" /> : <CheckIcon size={10} />}
-              {busy ? 'Refunding…' : 'Confirm'}
+              {busy ? (isUn1t ? 'Filing…' : 'Refunding…') : (isUn1t ? 'File card' : 'Confirm')}
             </button>
             <button
               type="button"
@@ -434,6 +456,9 @@ function OrderRow({ row, onChanged }) {
               Cancel
             </button>
           </div>
+        )}
+        {refundNotice && (
+          <div className="text-[11px] text-emerald-700 mt-1 max-w-[220px]">{refundNotice}</div>
         )}
         {refundError && (
           <div className="text-[11px] text-red-700 mt-1 max-w-[200px] truncate" title={refundError}>
@@ -494,10 +519,7 @@ function OrderCard({ row }) {
   const dateLabel = orderCardDate(row.created_at, row.timezone, viewerZone)
   const amount = formatMoney(row.amount_cents, row.currency)
   const sourceLabel = SOURCE_LABELS[row.source_type] || row.source_type
-  const meta = row.metadata || {}
-  const sourceDetail = row.source_type === 'race_registration'
-    ? ''
-    : [meta.car_make, meta.car_model, meta.irish_reg].filter(Boolean).join(' ')
+  const sourceDetail = orderSourceDetail(row)
 
   return (
     <button
