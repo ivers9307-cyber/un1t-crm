@@ -7,30 +7,14 @@
 // Returns: { success, taxRates: [{ tax_type, name, effective_rate, can_apply_to_expenses }], lastSyncedAt, stale }
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const STALE_AFTER_DAYS = 30
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const locationId = params?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'location id required' }, { status: 400 })
-  }
-
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  const isMaster = user.role === 'master'
-  const userLocationIds = (user.locations || []).map((l) => l.id)
-  if (!isMaster && !userLocationIds.includes(locationId)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ db, locationId }) => {
   const { data: taxRates, error } = await db
     .from('xero_tax_rates')
     .select('tax_type, name, effective_rate, can_apply_to_expenses')
@@ -55,4 +39,4 @@ export async function GET(_request, props) {
     lastSyncedAt: conn?.tax_rates_last_synced_at || null,
     stale,
   })
-}
+})

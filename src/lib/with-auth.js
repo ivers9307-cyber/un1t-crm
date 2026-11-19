@@ -34,12 +34,25 @@
 //   location           true → require user.activeLocation, return 400
 //                      otherwise. Most routes need this; set false
 //                      for global / cross-org admin routes.
-//   roles              optional whitelist that must include
-//                      user.role (e.g. ['master','owner']). Master
-//                      shortcut is also gated by hasPermission, so
-//                      this is rarely needed — used for routes
-//                      where role-based gating is stricter than
-//                      what the permissions matrix expresses.
+//                      'param' → the studio named in the URL (ROUTEWRAP.1):
+//                      `params[locationParam]` (default 'id') must be one of
+//                      the caller's studios, else 404 (a detail route never
+//                      confirms an id). The handler's `user` is re-resolved AT
+//                      that studio (userAtLocation), so `permission`, `user.role`
+//                      and `roles` are all judged there, never at the active one.
+//   locationParam      the route param holding the studio id (default 'id').
+//   roles              optional whitelist. With location: 'param' it is the
+//                      role AT the URL's studio (hasRoleAtLocation; masters
+//                      pass). Otherwise it must include user.role (e.g.
+//                      ['master','owner']), as before.
+//   master             true → masters only (profiles.role, never a studio role).
+//   allow              optional (user, locationId) => boolean, checked last,
+//                      for a rule the options above cannot say. 403 when false.
+//   forbiddenMessage   optional text for a roles / master / allow refusal.
+//
+// Errors
+//   A handler that throws is logged and answered with a fixed 500, so database
+//   or provider text never reaches a browser (ROUTEWRAP.1).
 //   schema             optional Zod schema. When set, the request
 //                      body is parsed and validated before the
 //                      handler is called; the parsed data is
@@ -53,7 +66,9 @@
 //   through the migration will pass the same tests as before.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, userAtLocation } from '@/lib/auth'
+import { hasRoleAtLocation } from '@/lib/role-at-location'
+import { logError } from '@/lib/log'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { WEB_PERMISSION_KEYS } from '@shared/permissions'
@@ -78,6 +93,14 @@ export const AUTH_ERRORS = Object.freeze({
     ),
   noActiveLocation: () =>
     NextResponse.json({ success: false, error: 'No active location.' }, { status: 400 }),
+  notFound: () =>
+    NextResponse.json({ success: false, error: 'Not found' }, { status: 404 }),
+  forbiddenMessage: (message) =>
+    NextResponse.json({ success: false, error: message }, { status: 403 }),
+  masterOnly: () =>
+    NextResponse.json({ success: false, error: 'Master role required.' }, { status: 403 }),
+  failed: () =>
+    NextResponse.json({ success: false, error: 'Something went wrong. Try again.' }, { status: 500 }),
 })
 
 function humanise(key) {
@@ -90,7 +113,12 @@ function humanise(key) {
 /**
  * @param {object} options
  * @param {string} options.permission   one of WEB_PERMISSION_KEYS
- * @param {boolean} [options.location]  default true; require active location
+ * @param {boolean | 'param'} [options.location]  default true; require active
+ *   location. 'param' = the studio in the URL (see the header)
+ * @param {string} [options.locationParam]  default 'id'
+ * @param {boolean} [options.master]  masters only
+ * @param {(user: object, locationId: string | null) => boolean} [options.allow]
+ * @param {string} [options.forbiddenMessage]
  * @param {string[]} [options.roles]    optional role whitelist
  * @param {import('zod').ZodType} [options.schema]  optional Zod schema; when set,
  *   the request body is validated and the parsed result is passed to the handler
@@ -118,7 +146,18 @@ export function withAuth(options, handler) {
     roles = null,
     schema = null,
     allowWidgetToken = false,
+    locationParam = 'id',
+    master = false,
+    allow = null,
+    forbiddenMessage = null,
   } = options
+  if (requireLocation !== true && requireLocation !== false && requireLocation !== 'param') {
+    throw new TypeError("withAuth: location must be true, false or 'param'")
+  }
+  if (allow != null && typeof allow !== 'function') {
+    throw new TypeError('withAuth: allow must be a function if provided')
+  }
+  const fromParam = requireLocation === 'param'
   // Fail-fast at module load: a typo in the permission key here
   // means nobody could ever pass the gate. Better to error loudly
   // at import time than to silently 403 every request. Accepts
@@ -136,48 +175,65 @@ export function withAuth(options, handler) {
   // A widget token carries exactly one location. A route that does not
   // require a location is estate-wide by definition, so pairing the two
   // would silently widen what a lost phone can reach.
-  if (allowWidgetToken && !requireLocation) {
+  if (allowWidgetToken && requireLocation !== true) {
     throw new Error('withAuth: allowWidgetToken requires location: true')
   }
+  const refuse = (fallback) => (forbiddenMessage ? AUTH_ERRORS.forbiddenMessage(forbiddenMessage) : fallback())
 
   return async function authedHandler(request, ctx) {
-    // A real session always wins. The widget path is consulted only when
-    // there is no session AND the route explicitly opted in — which is what
-    // makes denial the default for every route that did not.
-    let user = await getCurrentUser()
-    if (!user && allowWidgetToken) {
-      user = await getWidgetUser(createServerClient(), request)
-    }
-    if (!user) return AUTH_ERRORS.unauthorized()
+    try {
+      // A real session always wins. The widget path is consulted only when
+      // there is no session AND the route explicitly opted in — which is what
+      // makes denial the default for every route that did not.
+      let user = await getCurrentUser()
+      if (!user && allowWidgetToken) {
+        user = await getWidgetUser(createServerClient(), request)
+      }
+      if (!user) return AUTH_ERRORS.unauthorized()
 
-    if (permission != null && !hasPermission(user, permission)) {
-      return AUTH_ERRORS.forbidden(permission)
-    }
-    if (roles && !roles.includes(user.role)) {
-      return AUTH_ERRORS.forbiddenRole(roles)
-    }
+      // Next.js 15+ delivers `params` to route handlers as a Promise
+      // that must be awaited before the values inside are readable.
+      // Resolve once here so every withAuth-wrapped handler sees a
+      // plain object (e.g. `{ id: '...' }`) — discovered after the
+      // STUDIO-AC-DEVICES.3 routes were the first withAuth handlers
+      // to actually use params, and the picker on StaffForm got a
+      // 'Location id required' from the route below.
+      const params = ctx?.params ? await ctx.params : undefined
 
-    let locationId = null
-    if (requireLocation) {
-      locationId = user.activeLocation?.id || null
-      if (!locationId) return AUTH_ERRORS.noActiveLocation()
-    }
+      let locationId = null
+      if (fromParam) {
+        locationId = typeof params?.[locationParam] === 'string' ? params[locationParam] : null
+        const atStudio = locationId ? userAtLocation(user, locationId) : null
+        if (!atStudio) return AUTH_ERRORS.notFound()
+        if (roles && !hasRoleAtLocation(user, locationId, roles)) return refuse(() => AUTH_ERRORS.forbiddenRole(roles))
+        user = atStudio
+      }
+      if (master && !user.isMaster) return refuse(AUTH_ERRORS.masterOnly)
+      if (permission != null && !hasPermission(user, permission)) {
+        return AUTH_ERRORS.forbidden(permission)
+      }
+      if (roles && !fromParam && !roles.includes(user.role)) {
+        return refuse(() => AUTH_ERRORS.forbiddenRole(roles))
+      }
+      if (requireLocation === true) {
+        locationId = user.activeLocation?.id || null
+        if (!locationId) return AUTH_ERRORS.noActiveLocation()
+      }
+      if (allow && !allow(user, locationId)) return refuse(() => AUTH_ERRORS.forbiddenMessage('Forbidden'))
 
-    const db = createServerClient()
-    // Next.js 15+ delivers `params` to route handlers as a Promise
-    // that must be awaited before the values inside are readable.
-    // Resolve once here so every withAuth-wrapped handler sees a
-    // plain object (e.g. `{ id: '...' }`) — discovered after the
-    // STUDIO-AC-DEVICES.3 routes were the first withAuth handlers
-    // to actually use params, and the picker on StaffForm got a
-    // 'Location id required' from the route below.
-    const params = ctx?.params ? await ctx.params : undefined
-    const handlerCtx = { user, db, locationId, request, params }
-    if (schema) {
-      const parsed = await validateBody(request, schema)
-      if (!parsed.ok) return parsed.response
-      handlerCtx.input = parsed.data
+      const db = createServerClient()
+      const handlerCtx = { user, db, locationId, request, params }
+      if (schema) {
+        const parsed = await validateBody(request, schema)
+        if (!parsed.ok) return parsed.response
+        handlerCtx.input = parsed.data
+      }
+      return await handler(handlerCtx)
+    } catch (err) {
+      let route = null
+      try { route = new URL(request.url).pathname } catch { /* no url */ }
+      logError('api', 'route failed', { route, method: request?.method, err })
+      return AUTH_ERRORS.failed()
     }
-    return handler(handlerCtx)
   }
 }

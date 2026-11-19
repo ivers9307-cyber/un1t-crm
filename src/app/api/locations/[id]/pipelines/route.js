@@ -9,9 +9,9 @@
 // AT this studio (the stage-coverage gate); creating needs owner or master at
 // this studio (an org admin carries a synthetic owner role there).
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, guardMasterOrOwner } from '@/lib/auth'
-import { MANAGER_ROLES, boardCreateSchema, uuidLike } from '@/lib/schemas'
+import { hasRoleAtLocation, guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { MANAGER_ROLES, boardCreateSchema } from '@/lib/schemas'
 import { canBuildSequencesAt } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { logError } from '@/lib/log'
@@ -21,24 +21,16 @@ import { listBoards, createBoard } from '@/lib/pipeline-boards'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 const failure = (r) => NextResponse.json(
   { success: false, error: r.error, ...(r.code ? { code: r.code } : {}), ...(r.issues ? { issues: r.issues } : {}) },
   { status: r.status },
 )
 
-export async function GET(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: locationId } = await params
-  if (!uuidLike.safeParse(locationId).success) return notFound()
-  const guard = assertLocationAccessOr404(user, locationId)
-  if (guard) return guard
-  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES) && !canBuildSequencesAt(user, locationId)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
+// Sequence builders or managers AT this studio.
+const canBuildOrManage = (user, locationId) =>
+  canBuildSequencesAt(user, locationId) || hasRoleAtLocation(user, locationId, MANAGER_ROLES)
 
-  const db = createServerClient()
+export const GET = withAuth({ permission: null, location: 'param', allow: canBuildOrManage }, async ({ user, db, locationId }) => {
   const result = await listBoards(db, locationId)
   if (!result.ok) return failure(result)
   const canEdit = guardMasterOrOwner(user, locationId) === null
@@ -50,25 +42,13 @@ export async function GET(request, { params }) {
     logError('pipelines', 'has_whatsapp read failed', { locationId, err: e?.message })
   }
   return NextResponse.json({ success: true, data: { boards: result.boards, can_edit: canEdit, has_whatsapp: hasWhatsapp } })
-}
+})
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: locationId } = await params
-  if (!uuidLike.safeParse(locationId).success) return notFound()
-  const guard = assertLocationAccessOr404(user, locationId)
-  if (guard) return guard
-  const roleGuard = guardMasterOrOwner(user, locationId)
-  if (roleGuard) {
-    return NextResponse.json({ success: false, error: 'Only owners and masters can build boards.' }, { status: 403 })
-  }
-
+export const POST = withAuth({ permission: null, location: 'param', roles: ['owner'], forbiddenMessage: 'Only owners and masters can build boards.' }, async ({ request, user, db, locationId }) => {
   const validation = await validateBody(request, boardCreateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const db = createServerClient()
   const result = await createBoard(db, {
     locationId,
     name: body.name,
@@ -79,4 +59,4 @@ export async function POST(request, { params }) {
   })
   if (!result.ok) return failure(result)
   return NextResponse.json({ success: true, data: { board: result.board } }, { status: 201 })
-}
+})
