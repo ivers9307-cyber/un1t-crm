@@ -86,9 +86,12 @@ const MASTER = {
 // the WRITE. Fail LOUD on any other table or any other chain.
 function makeDb({ custom = [], country = 'IE' } = {}) {
   const writes = []
+  const tables = []
   return {
     writes,
+    tables,
     from(table) {
+      tables.push(table)
       if (table === 'locations') {
         return {
           select(cols) {
@@ -204,17 +207,17 @@ describe('POST /api/locations/[id]/holidays — the gate is the role AT THE TARG
     expect(await res.json()).toEqual(successBody(LOC_B))
   })
 
-  it('(d) 403s a non-member on the MEMBERSHIP copy, not a role complaint', async () => {
+  it('(d) ROUTEWRAP.1: a non-member gets 404, not a role complaint', async () => {
     const res = await POST(post(LOC_B, VALID), props(LOC_B))
-    expect(res.status).toBe(403)
-    expect((await res.json()).error).toBe('Forbidden — location not in your assignments')
+    expect(res.status).toBe(404)
+    expect((await res.json()).error).toBe('Not found')
     expect(db.writes).toEqual([])
   })
 
-  it('(e) refuses an anonymous caller without writing, keeping this route\'s 403', async () => {
+  it('(e) refuses an anonymous caller without writing, with the standard 401', async () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await POST(post(LOC_A, VALID), props(LOC_A))
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(401)
     expect((await res.json()).error).toBe('Unauthorized')
     expect(db.writes).toEqual([])
   })
@@ -254,8 +257,8 @@ describe('GET /api/locations/[id]/holidays — unchanged: membership only', () =
     expect(body.data.some(h => h.name === 'Team day' && h.source === 'custom')).toBe(true)
   })
 
-  it('403s a non-member and 401s an anonymous caller', async () => {
-    expect((await GET(get(LOC_B), props(LOC_B))).status).toBe(403)
+  it('404s a non-member and 401s an anonymous caller', async () => {
+    expect((await GET(get(LOC_B), props(LOC_B))).status).toBe(404)
     getCurrentUser.mockResolvedValue(null)
     expect((await GET(get(LOC_A), props(LOC_A))).status).toBe(401)
   })
@@ -278,7 +281,8 @@ describe('holidays — dates the calendar does not have, and the range (RANGEVAL
       expect(res.status).toBe(400)
       expect(await res.json()).toEqual({ success: false, error })
     }
-    expect(createServerClient).not.toHaveBeenCalled()
+    // The wrapper hands every handler a client; the point is that nothing is READ.
+    expect(db.tables).toEqual([])
   })
 
   it('GET still serves the calendar\'s range and the settings list (no range)', async () => {

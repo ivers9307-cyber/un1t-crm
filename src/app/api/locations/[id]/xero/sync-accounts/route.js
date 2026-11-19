@@ -11,7 +11,7 @@
 // to press the button.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { pullAccounts } from '@/lib/xero/accounts-sync'
 import { pullTaxRates } from '@/lib/xero/tax-rates-sync'
 import { XeroError } from '@/lib/xero/client'
@@ -19,23 +19,7 @@ import { XeroError } from '@/lib/xero/client'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
-  const params = await props.params
-  const locationId = params?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'location id required' }, { status: 400 })
-  }
-
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
-  // Location membership — master + locations array both checked.
-  const isMaster = user.role === 'master'
-  const userLocationIds = (user.locations || []).map((l) => l.id)
-  if (!isMaster && !userLocationIds.includes(locationId)) {
-    return NextResponse.json({ success: false, error: 'Not a member of that location' }, { status: 403 })
-  }
-
+export const POST = withAuth({ permission: null, location: 'param' }, async ({ locationId }) => {
   try {
     const result = await pullAccounts(locationId)
     // Tax rates refresh alongside accounts — same tenant, same cadence.
@@ -62,4 +46,4 @@ export async function POST(_request, props) {
       { status },
     )
   }
-}
+})

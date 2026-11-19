@@ -19,8 +19,7 @@
 // Returns: { success, contacts: [{ id, xero_contact_id, name, email, is_supplier }], stale }
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { serverErrorResponse } from '@/lib/error-events'
 
 export const runtime = 'nodejs'
@@ -29,27 +28,12 @@ export const dynamic = 'force-dynamic'
 const STALE_AFTER_DAYS = 30
 const MIN_QUERY_LENGTH = 2
 
-export async function GET(request, props) {
-  const params = await props.params
-  const locationId = params?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'location id required' }, { status: 400 })
-  }
-
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  const isMaster = user.role === 'master'
-  const userLocationIds = (user.locations || []).map((l) => l.id)
-  if (!isMaster && !userLocationIds.includes(locationId)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ request, db, locationId }) => {
   const url = new URL(request.url)
   const q = (url.searchParams.get('q') || '').trim()
   const suppliersOnly = url.searchParams.get('suppliers') === '1'
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '25', 10) || 25, 1), 100)
 
-  const db = createServerClient()
 
   // Connection freshness — same posture as accounts endpoint.
   const { data: conn } = await db
@@ -101,4 +85,4 @@ export async function GET(request, props) {
     lastSyncedAt: conn?.contacts_last_synced_at || null,
     stale,
   })
-}
+})

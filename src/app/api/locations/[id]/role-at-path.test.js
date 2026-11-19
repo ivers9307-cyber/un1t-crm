@@ -111,12 +111,23 @@ const PATH_ID_READS = [
   /\{\s*id\b[^}]*\}\s*=\s*(?:await\s+)?(?:props\.|ctx\.|context\.)?params\b/, // const { id: x } = await props.params
   /\bparams\s*\)\s*\??\.id\b/, //                                      (await props.params).id
 ]
-const ACTIVE_STUDIO_READS = [/\buser\??\.activeLocation\b/g, /\bwithAuth\(/g]
+const ACTIVE_STUDIO_READS = [/\buser\??\.activeLocation\b/g]
+// ROUTEWRAP.1 — withAuth with location: 'param' (and the default 'id' param)
+// reads the path's studio itself; any other withAuth hands the handler the
+// ACTIVE studio.
+const PATH_WRAPPER = /\bwithAuth\(\{[^{}]*\blocation:\s*'param'(?![^{}]*\blocationParam)[^{}]*\}/g
 
-const readsPathId = (src) => { const s = stripComments(src); return PATH_ID_READS.some((re) => re.test(s)) }
+const readsPathId = (src) => {
+  const s = stripComments(src)
+  return PATH_ID_READS.some((re) => re.test(s)) || [...s.matchAll(PATH_WRAPPER)].length > 0
+}
 const activeStudioReads = (src) => {
   const s = stripComments(src)
-  return ACTIVE_STUDIO_READS.flatMap((re) => [...s.matchAll(re)].map((m) => m[0]))
+  const wrappers = [...s.matchAll(/\bwithAuth\(/g)].length - [...s.matchAll(PATH_WRAPPER)].length
+  return [
+    ...ACTIVE_STUDIO_READS.flatMap((re) => [...s.matchAll(re)].map((m) => m[0])),
+    ...Array(wrappers).fill('withAuth('),
+  ]
 }
 
 describe('/api/locations/[id] routes act on the path location (ACDEVLOC.1)', { timeout: 120_000 }, () => {
@@ -136,6 +147,15 @@ describe('/api/locations/[id] routes act on the path location (ACDEVLOC.1)', { t
     expect(activeStudioReads('const loc = user?.activeLocation.id')).toEqual(['user?.activeLocation'])
     expect(activeStudioReads("export const GET = withAuth({ permission: 'x' }, h)")).toEqual(['withAuth('])
     expect(activeStudioReads('// user.activeLocation')).toEqual([])
+  })
+
+  it('withAuth on the path studio reads the [id]; any other withAuth is the active studio', () => {
+    const onPath = "export const GET = withAuth({ permission: null, location: 'param', roles: ['owner'] }, h)"
+    expect(readsPathId(onPath)).toBe(true)
+    expect(activeStudioReads(onPath)).toEqual([])
+    const otherParam = "export const GET = withAuth({ permission: null, location: 'param', locationParam: 'connId' }, h)"
+    expect(readsPathId(otherParam)).toBe(false)
+    expect(activeStudioReads(otherParam)).toEqual(['withAuth('])
   })
 
   it('every route in this folder reads its [id] and never the active studio', () => {
