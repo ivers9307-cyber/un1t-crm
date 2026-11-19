@@ -18,6 +18,8 @@ import { TimetableReadBack } from '@/components/landing-pages/timetable-read-bac
 
 const NUMBER_KEYS = new Set(['price_cents', 'duration_days', 'min_notice_hours'])
 const RAW_TEXT_KEYS = new Set(['timetable', 'class_keywords'])
+// SALEPAGE.1 — a list held as comma-joined ids while it is edited.
+const LIST_KEYS = new Set(['offer_ids'])
 const selectCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
 
 /** A row's stored offer as editable strings (price shown in euros). */
@@ -26,7 +28,7 @@ export function fieldsFromOffer(blockType, offer) {
   for (const key of STUDIO_OFFER_KEYS[blockType] || []) {
     const v = offer?.[key]
     if (v === undefined || v === null) continue
-    out[key] = key === 'price_cents' ? centsToEuros(v) || String(v) : String(v)
+    out[key] = LIST_KEYS.has(key) ? (Array.isArray(v) ? v.join(',') : '') : key === 'price_cents' ? centsToEuros(v) || String(v) : String(v)
   }
   return out
 }
@@ -41,6 +43,10 @@ export function offerFromFields(blockType, fields) {
   for (const key of STUDIO_OFFER_KEYS[blockType] || []) {
     const raw = fields?.[key]
     if (typeof raw !== 'string' || raw.trim() === '') continue
+    if (LIST_KEYS.has(key)) {
+      out[key] = raw.split(',').map((x) => x.trim()).filter(Boolean)
+      continue
+    }
     if (NUMBER_KEYS.has(key)) {
       const n = Number(raw.trim())
       out[key] = !Number.isFinite(n) ? raw : key === 'price_cents' ? eurosToCents(raw) : n
@@ -226,11 +232,48 @@ function CorpPromoFields({ row, load, fields, set, corpPromos }) {
   )
 }
 
+// SALEPAGE.1 — which of the studio's offers (Settings > Offers) the sale page
+// lists, in the studio's own order. An offer that could not be sold (switched
+// off, or not set up for its payment) cannot be picked.
+const pickOffers = (j) => (Array.isArray(j.data?.offers) ? j.data.offers : [])
+function SaleOffersFields({ row, load, fields, set }) {
+  const url = load ? `/api/locations/${row.location_id}/offers` : null
+  const { items, loading } = useCatalogue(url, pickOffers)
+  const chosen = (fields.offer_ids || '').split(',').filter(Boolean)
+  const toggle = (id, on) => {
+    const next = on ? [...chosen, id] : chosen.filter((x) => x !== id)
+    // Keep the studio's own order (Settings > Offers), whatever order they were ticked in.
+    const order = new Map(items.map((o, i) => [o.id, i]))
+    next.sort((a, b) => (order.get(a) ?? 1e9) - (order.get(b) ?? 1e9))
+    set({ offer_ids: next.join(',') })
+  }
+  const hint = loading ? 'Loading…' : items.length === 0 ? 'No offers at this studio yet: add them in Settings → Offers.' : 'Edit the offers themselves in Settings → Offers.'
+  return (
+    <Field label="Offers to show" hint={hint}>
+      <div className="space-y-1">
+        {items.map((o) => {
+          const sellable = o.active && !(o.problems || []).length
+          const on = chosen.includes(o.id)
+          return (
+            <label key={o.id} className={`flex items-center gap-2 text-sm ${sellable || on ? 'text-un1t-text' : 'text-un1t-subtle'}`}>
+              <input type="checkbox" checked={on} disabled={!sellable && !on} onChange={(e) => toggle(o.id, e.target.checked)} />
+              <span>{o.name}</span>
+              {!o.active && <span className="text-xs text-un1t-subtle">(off)</span>}
+              {o.active && (o.problems || []).length > 0 && <span className="text-xs text-amber-700">(cannot be sold yet)</span>}
+            </label>
+          )
+        })}
+      </div>
+    </Field>
+  )
+}
+
 const FIELD_GROUPS = {
   paid_trial: PaidTrialFields,
   class_funnel: ClassFunnelFields,
   campaign_funnel: CampaignFunnelFields,
   corp_promo: CorpPromoFields,
+  sale_offers: SaleOffersFields,
 }
 
 /** The block type's studio field group; `load` false fetches no catalogue. */

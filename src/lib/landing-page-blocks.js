@@ -362,6 +362,20 @@ const VIDEO_TESTIMONIALS_DEFAULT = () => ({
   items: [],
 })
 
+// SALEPAGE.1 — the page half of a sale: its words. Which offers it shows is
+// each studio's (landing_page_studios.offer.offer_ids); the offers themselves
+// are the studio's sale_offers rows, edited in Settings > Offers, and each is
+// bought on its own /offers page.
+const SALE_OFFERS_DEFAULT = () => ({
+  id:          newBlockId(),
+  type:        'sale_offers',
+  eyebrow:     'Limited time',
+  heading:     'This season\'s offers',
+  subhead:     'Pick an offer to see the details and buy it.',
+  cta_label:   'See the offers',
+  empty_text:  'No offers are on right now. Check back soon.',
+})
+
 // Registry — single source of truth for "what types exist". Used by:
 //   - Form's "+ Add section" picker
 //   - Renderer's type-dispatch
@@ -374,6 +388,7 @@ export const BLOCK_TYPES = [
   { type: 'class_funnel', label: 'Glofox Class Booking Funnel', description: 'Pick a class, enter details, book. Live Glofox classes, or a timetable you type in for a studio without Glofox (staff then book by hand). Optional free-consult upsell.', factory: CLASS_FUNNEL_DEFAULT , offer: true },
   { type: 'paid_trial',  label: 'Paid trial product', description: 'A paid trial (e.g. 2 weeks for €39) sold from its own page: price panel, buyer form, embedded checkout, then the Glofox plan, or the un1t.online product, is put on their account.', factory: PAID_TRIAL_DEFAULT , offer: true },
   { type: 'corp_promo',  label: 'Corporate promo (/corp)', description: 'The words of a free corporate offer at /corp (e.g. 3 free classes). The credits and their expiry are fixed per promo; this edits what visitors read.', factory: CORP_PROMO_DEFAULT , offer: true },
+  { type: 'sale_offers', label: 'Sale offers', description: 'The studio\'s chosen packs, memberships and gift cards from Settings > Offers. Each studio picks which of its offers to show; each is bought on its own page.', factory: SALE_OFFERS_DEFAULT, offer: true },
   { type: 'campaign_funnel', label: 'Campaign funnel (own page)', description: 'A booking page for one class and one trial plan at /<campaign>: coach video, date tiles, details, booked. Edited here, never shown on this landing page.', factory: CAMPAIGN_FUNNEL_DEFAULT , offer: true },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },

@@ -823,6 +823,7 @@ function OfferPageHalf({ block, ...props }) {
     case 'class_funnel': return <ClassFunnelEdit block={block} {...props} />
     case 'campaign_funnel': return <CampaignFunnelEdit block={block} {...props} />
     case 'corp_promo': return <CorpPromoEdit block={block} {...props} />
+    case 'sale_offers': return <SaleOffersEdit block={block} {...props} />
     default: return null
   }
 }
@@ -871,7 +872,8 @@ function BlockEditPanel(props) {
     case 'class_funnel':
     case 'paid_trial':
     case 'campaign_funnel':
-    case 'corp_promo':  return <OfferPageHalf   {...props} />
+    case 'corp_promo':
+    case 'sale_offers': return <OfferPageHalf   {...props} />
     case 'pillars':     return <PillarsEdit     {...props} />
     case 'gallery':     return <GalleryEdit     {...props} />
     case 'embed':       return <EmbedEdit       {...props} />
@@ -1201,6 +1203,31 @@ const CORP_PROMO_TEXTS = [
 
 // PAGES.1 — the page half only; the promo key is the studio row's
 // (StudioOfferRow).
+// SALEPAGE.1 — the sale card's words. Which offers it lists is each studio's
+// choice (its row below the page); the offers themselves are edited in
+// Settings > Offers.
+const SALE_OFFERS_TEXTS = [
+  ['eyebrow', 'Eyebrow', 60, 1],
+  ['heading', 'Heading', 120, 1],
+  ['subhead', 'Sub-heading', 300, 2],
+  ['cta_label', 'Header button', 40, 1],
+  ['empty_text', 'When no offer is on', 200, 2],
+]
+export function SaleOffersEdit({ block, onUpdate }) {
+  return (
+    <>
+      {SALE_OFFERS_TEXTS.map(([key, label, max, rows]) => (
+        <Field key={key} label={label}>
+          {rows > 1
+            ? <Textarea value={block[key] || ''} onChange={(v) => onUpdate({ [key]: v })} maxLength={max} rows={rows} />
+            : <Input value={block[key] || ''} onChange={(v) => onUpdate({ [key]: v })} maxLength={max} />}
+        </Field>
+      ))}
+      <p className="text-xs text-un1t-subtle">Each studio picks which of its offers to show in its row below. The offers are edited in Settings &gt; Offers.</p>
+    </>
+  )
+}
+
 export function CorpPromoEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress }) {
   const ticks = Array.isArray(block.ticks) ? block.ticks : []
   const setTick = (i, v) => {
