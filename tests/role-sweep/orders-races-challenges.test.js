@@ -18,7 +18,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { describeGate, gateProbe, runProbed } from '../helpers/role-gate-probe.js'
-import { roleCases, permissionCases, keyOffAtB, masterFeatureOffAtB, MANAGER_A_STAFF_B, LOC_A } from '../helpers/role-sweep-callers.js'
+import { roleCases, permissionCases, keyOffAtB, masterFeatureOffAtB, MANAGER_A_STAFF_B, LOC_A, LOC_B, person, MASTER, OUTSIDER } from '../helpers/role-sweep-callers.js'
 import * as orderDetail from '@/app/api/orders/[id]/route.js'
 import * as orderCancel from '@/app/api/orders/[id]/cancel/route.js'
 import * as orderRefund from '@/app/api/orders/[id]/refund/route.js'
@@ -51,7 +51,6 @@ const ORDER_ROW = row({ id: 'ord-1', status: 'pending', amount_cents: 1000, curr
 for (const [name, call] of [
   ['GET /api/orders/[id]', () => orderDetail.GET(bare('GET'), params({ id: 'ord-1' }))],
   ['POST /api/orders/[id]/cancel', () => orderCancel.POST(json('POST', {}), params({ id: 'ord-1' }))],
-  ['POST /api/orders/[id]/refund', () => orderRefund.POST(json('POST', {}), params({ id: 'ord-1' }))],
 ]) {
   gate(`${name} — Manager+ at the order`, {
     call, gateReads: ORDER_ROW, forbidden: MANAGER_REQUIRED, hidden: NOT_FOUND, cases: roleCases(MANAGER_ROLES, 'orders'),
@@ -60,6 +59,24 @@ for (const [name, call] of [
     call, gateReads: ORDER_ROW, forbidden: ORDERS_OFF, hidden: NOT_FOUND, cases: permissionCases('orders'),
   })
 }
+
+// REFUNDLEDGER.1 — a refund is owners and masters only (Richard's decision,
+// 19 Nov 2026), judged at the order's studio, and needs a reason.
+const REFUND_ROLE = { status: 403, body: { success: false, error: 'Only owners and masters can refund an order.' } }
+const callRefund = () => orderRefund.POST(json('POST', { reason: 'Customer asked' }), params({ id: 'ord-1' }))
+const at = (roleA, roleB) => person({ [LOC_A]: { role: roleA, permissions: { orders: true } }, [LOC_B]: { role: roleB, permissions: { orders: true } } }, LOC_A)
+gate('POST /api/orders/[id]/refund — owner at the order', {
+  call: callRefund, gateReads: ORDER_ROW, forbidden: REFUND_ROLE, hidden: NOT_FOUND, cases: [
+    ['manager at B, A active', at('staff', 'manager'), LOC_B, 'forbidden'],
+    ['owner at A, manager at B, A active', at('owner', 'manager'), LOC_B, 'forbidden'],
+    ['owner at B, staff at A, A active', at('staff', 'owner'), LOC_B, 'pass'],
+    ['a master', MASTER, LOC_B, 'pass'],
+    ['an owner who does not belong to B', OUTSIDER, LOC_B, 'hidden'],
+  ],
+})
+gate('POST /api/orders/[id]/refund — orders at the order', {
+  call: callRefund, gateReads: ORDER_ROW, forbidden: ORDERS_OFF, hidden: NOT_FOUND, cases: permissionCases('orders'),
+})
 
 // ── races ─────────────────────────────────────────────────────────────────
 for (const [name, call, hidden] of [

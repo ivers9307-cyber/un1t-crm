@@ -114,3 +114,13 @@ describe('finish_order_refund', () => {
     expect((await order()).refunded_amount_cents).toBe(300)
   })
 })
+
+describe('a refund held past the idempotency window', () => {
+  it('is never resumed: it asks for a check by hand', async () => {
+    const a = await claim(500)
+    await finish(a.refund_id, 'unknown')
+    await q("UPDATE public.order_refunds SET created_at = now() - interval '21 hours' WHERE id = $1", [a.refund_id])
+    expect(await claim(500)).toMatchObject({ ok: false, code: 'refund_needs_check', refund_id: a.refund_id })
+  })
+})
+

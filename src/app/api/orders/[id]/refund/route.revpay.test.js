@@ -23,7 +23,7 @@ const { createServerClient } = await import('@/lib/supabase')
 const { RevolutError } = await import('@/lib/revolut')
 const { emitEvent } = await import('@/lib/contact-events')
 const { logError } = await import('@/lib/log')
-const { POST } = await import('./route.js')
+const { POST, refundOutcomeUnknown } = await import('./route.js')
 
 const L1 = 'a0000000-0000-0000-0000-000000000001'
 const owner = {
@@ -165,3 +165,37 @@ describe('POST /api/orders/[id]/refund — REVPAY.1 / REFUNDLEDGER.1', () => {
     expect(emitEvent).toHaveBeenCalled()
   })
 })
+
+// REFUNDLEDGER.1 (security review) — only a definite refusal frees a claim.
+describe('refundOutcomeUnknown', () => {
+  it.each([
+    ['a Revolut timeout', new RevolutError('timed out', 504, 'timeout'), true],
+    ['a Revolut 5xx', new RevolutError('boom', 502), true],
+    ['a Revolut 4xx', new RevolutError('too high', 422), false],
+    ['a Stripe connection error', Object.assign(new Error('socket'), { type: 'StripeConnectionError' }), true],
+    ['a Stripe API error', Object.assign(new Error('api'), { type: 'StripeAPIError', statusCode: 500 }), true],
+    ['a Stripe 400', Object.assign(new Error('invalid'), { type: 'StripeInvalidRequestError', statusCode: 400 }), false],
+    ['a 429', Object.assign(new Error('slow down'), { statusCode: 429 }), true],
+    ['an error with no status', new Error('?'), true],
+  ])('%s → unknown is %s', (_label, err, want) => {
+    expect(refundOutcomeUnknown(err)).toBe(want)
+  })
+
+  it('a Stripe timeout keeps the claim held, never failed', async () => {
+    const db = fakeDb()
+    createServerClient.mockReturnValue(db)
+    refundPayment.mockRejectedValue(Object.assign(new Error('socket hang up'), { type: 'StripeConnectionError' }))
+    const res = await post()
+    expect((await res.json()).code).toBe('provider_outcome_unknown')
+    expect(db.rpcs[1]).toEqual(['finish_order_refund', expect.objectContaining({ p_status: 'unknown' })])
+  })
+
+  it('a refund held too long asks staff to check the provider and sends nothing', async () => {
+    createServerClient.mockReturnValue(fakeDb({ claimResult: { ok: false, code: 'refund_needs_check', amount_cents: 1000 } }))
+    const res = await post()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/Check the payment provider/)
+    expect(refundPayment).not.toHaveBeenCalled()
+  })
+})
+

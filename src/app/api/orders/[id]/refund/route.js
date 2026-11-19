@@ -49,6 +49,20 @@ const Body = z.object({
 const REFUND_ROLES = Object.freeze(['owner'])
 const REFUND_ROLE_ERROR = 'Only owners and masters can refund an order.'
 
+/**
+ * REFUNDLEDGER.1 — did the provider definitely refuse, or might the refund
+ * have gone through? Fails closed: only a 4xx answer (not 408 or 429) is a
+ * definite refusal, from Revolut or Stripe. A timeout, a network error, a 5xx,
+ * a Stripe connection or API error, or anything unrecognised might have paid
+ * out, so the claim stays held and a retry reuses its idempotency key.
+ */
+export function refundOutcomeUnknown(e) {
+  if (e instanceof RevolutError && (e.code === 'timeout' || e.code === 'network')) return true
+  if (e?.type === 'StripeConnectionError' || e?.type === 'StripeAPIError') return true
+  const status = Number(e?.status ?? e?.statusCode) || 0
+  return !(status >= 400 && status < 500 && status !== 408 && status !== 429)
+}
+
 // claim_order_refund's refusals, in this route's words.
 const CLAIM_REFUSALS = {
   not_found: () => ({ status: 404, error: 'Order not found' }),
@@ -56,6 +70,7 @@ const CLAIM_REFUSALS = {
   already_refunded: () => ({ status: 409, error: 'This order has already been fully refunded.' }),
   refund_exceeds_order: (r) => ({ status: 400, error: `That is more than the ${r.remaining_cents} cents left to refund on this order.` }),
   refund_in_progress: (r) => ({ status: 409, error: `Another refund of ${r.amount_cents} cents on this order has not finished. Retry that same amount to finish it before refunding a different amount.` }),
+  refund_needs_check: (r) => ({ status: 409, error: `A refund of ${r.amount_cents} cents on this order was started over 20 hours ago and never confirmed. Check the payment provider to see whether it went through before refunding again; it cannot be retried from here.` }),
 }
 
 /**
@@ -223,8 +238,9 @@ export async function POST(request, props) {
     const status = e instanceof RevolutError ? Math.min(Math.max(e.status || 502, 400), 599) : 502
     // REVPAY.1 — no answer (timeout / network) or a 5xx means the provider may
     // have refunded anyway. The claim stays held ('unknown'), so no other
-    // amount can be refunded until this one is retried and answered.
-    const outcomeUnknown = e instanceof RevolutError && (e.code === 'timeout' || e.code === 'network' || (e.status || 0) >= 500)
+    // amount can be refunded until this one is retried and answered. Only a
+    // definite refusal releases it (refundOutcomeUnknown, for every provider).
+    const outcomeUnknown = refundOutcomeUnknown(e)
     const { error: finishErr } = await finish(outcomeUnknown ? 'unknown' : 'failed', null, String(e?.message || 'provider error').slice(0, 500))
     if (finishErr) logError('orders-refund', 'refund outcome not recorded on the claim', { err: finishErr, orderId: order.id, refundId: claim.refund_id })
     if (outcomeUnknown) {

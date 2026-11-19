@@ -14,7 +14,9 @@
 --     is 'requested' or 'unknown', no other amount can be claimed on it, so
 --     two refunds can never be in flight together. Asking again for the same
 --     amount resumes that refund with the same idempotency key, so a retry
---     after a lost answer cannot pay out twice.
+--     after a lost answer cannot pay out twice. A refund held longer than 20
+--     hours is never resent (a provider's key may have expired): it answers
+--     refund_needs_check, for staff to check the provider by hand.
 --   * finish_order_refund() records the outcome: 'completed' adds to the
 --     order's refunded total (never lowers it, so the Stripe refund webhook's
 --     own write of the total still agrees), 'failed' releases the order,
@@ -81,6 +83,13 @@ BEGIN
     WHERE order_id = p_order_id AND status IN ('requested', 'unknown')
     LIMIT 1;
   IF FOUND THEN
+    -- A refund held longer than the providers keep an idempotency key (Stripe
+    -- 24 hours) is never sent again: the key may have expired, so a resend
+    -- could pay out a second time. Staff check the provider and settle it.
+    IF open_row.created_at < now() - interval '20 hours' THEN
+      RETURN jsonb_build_object('ok', false, 'code', 'refund_needs_check',
+        'amount_cents', open_row.amount_cents, 'refund_id', open_row.id);
+    END IF;
     IF p_amount_cents IS NULL OR p_amount_cents = open_row.amount_cents THEN
       RETURN jsonb_build_object('ok', true, 'resumed', true, 'refund_id', open_row.id,
         'amount_cents', open_row.amount_cents, 'idempotency_key', open_row.idempotency_key,
