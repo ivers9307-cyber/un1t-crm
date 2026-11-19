@@ -24,9 +24,13 @@ vi.mock('@/lib/permissions', () => ({
 // un1tdublin.com by default (the server token must never reach the response).
 const LIVE_UN1T = { serverToken: 'srv-tok', fromEmail: 'hello@un1tdublin.com', fromName: 'UN1T', replyTo: null, sendingDomain: 'un1tdublin.com' }
 vi.mock('@/lib/tenant-email', async (importOriginal) => ({ ...(await importOriginal()), resolveEmailSender: vi.fn() }))
+// NEWEMAIL.1 — the studio's marketing template a new draft starts from.
+vi.mock('@/lib/email-templates-for-agents', () => ({ loadMarketingTemplate: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { POST } from './route.js'
 import { resolveEmailSender } from '@/lib/tenant-email'
+import { loadMarketingTemplate } from '@/lib/email-templates-for-agents'
 
 const NEW_ID = 'c0000000-0000-4000-8000-0000000000ff'
 const BODY = {
@@ -144,3 +148,50 @@ describe('POST /api/communications/campaigns', () => {
     expect(resolveEmailSender).not.toHaveBeenCalled()
   })
 })
+
+// NEWEMAIL.1 — a new draft can start from one of the studio's marketing templates.
+describe('POST /api/communications/campaigns — from a template', () => {
+  const TEMPLATE_ID = 'c0000000-0000-4000-8000-0000000000aa'
+  const TEMPLATE = { id: TEMPLATE_ID, name: 'Monthly news', subject: 'News from {{location_name}}', html_content: '<p>Template</p>', design_json: { body: { rows: [1] } } }
+  const start = { location_id: LOC_A, name: 'Monthly news', template_id: TEMPLATE_ID }
+
+  it('copies the template\'s subject and design, records the template, and reads it at the body\'s studio', async () => {
+    loadMarketingTemplate.mockResolvedValue(TEMPLATE)
+    const res = await post(start)
+    expect(res.status).toBe(200)
+    expect(loadMarketingTemplate).toHaveBeenCalledWith(db, LOC_A, TEMPLATE_ID)
+    const [insert] = writesOf(db)
+    expect(insert.payload).toMatchObject({
+      template_id: TEMPLATE_ID, subject: 'News from {{location_name}}', html_content: '<p>Template</p>',
+      design_json: { body: { rows: [1] } }, status: 'draft', location_id: LOC_A,
+    })
+  })
+
+  it('the body\'s own subject wins over the template\'s', async () => {
+    loadMarketingTemplate.mockResolvedValue(TEMPLATE)
+    await post({ ...start, subject: 'Mine' })
+    expect(writesOf(db)[0].payload.subject).toBe('Mine')
+  })
+
+  it('404 for a template that is not one of this studio\'s marketing templates, and nothing is written', async () => {
+    loadMarketingTemplate.mockResolvedValue(null)
+    const res = await post(start)
+    expect(res.status).toBe(404)
+    expect(writesOf(db)).toEqual([])
+  })
+
+  it('503 when the template cannot be read, never a blank draft', async () => {
+    loadMarketingTemplate.mockRejectedValue(new Error('down'))
+    const res = await post(start)
+    expect(res.status).toBe(503)
+    expect(writesOf(db)).toEqual([])
+  })
+
+  it('a blank start never reads a template', async () => {
+    const res = await post({ location_id: LOC_A, name: 'Untitled email' })
+    expect(res.status).toBe(200)
+    expect(loadMarketingTemplate).not.toHaveBeenCalled()
+    expect(writesOf(db)[0].payload).not.toHaveProperty('template_id')
+  })
+})
+

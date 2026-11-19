@@ -34,6 +34,9 @@ export const CampaignContentSchema = z.object({
 export const CampaignCreateSchema = CampaignContentSchema.extend({
   location_id: uuidLike,
   name: z.string().trim().min(1).max(200),
+  // NEWEMAIL.1 — start from one of the studio's marketing templates: the
+  // route copies its subject and design unless the body gives its own.
+  template_id: uuidLike.optional(),
 })
 
 export const CampaignScheduleSchema = z.object({
