@@ -55,7 +55,8 @@ import { zoneOfLocation } from '@/lib/location-time'
 import { loadCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
 import { stageShowsSignals } from '@/lib/pipeline-card-signal-slugs'
 import { logWarn } from '@/lib/log'
-import { parseBoardFilter, applyBoardFilter, boardFilterActive, boardFilterParams } from '@/lib/pipeline-board-filter'
+import { parseBoardFilter, applyBoardFilter, boardFilterActive, boardFilterParams, keepNotContacted } from '@/lib/pipeline-board-filter'
+import { loadRecentlyContacted } from '@/lib/contact-log'
 import PipelineBoardFilter from '@/components/PipelineBoardFilter'
 
 export const dynamic = 'force-dynamic'
@@ -167,6 +168,7 @@ export default async function PipelinePage(props) {
   // make a column vanish on a board that has no second view to find it in.
   // BOARDFILTER.1 — ?q= (name) and ?stuck=1 (Funnel view only) narrow every
   // column's read and count in the database; the tab badges stay the whole board's.
+  // CONTACTLOG.1 — ?nocontact=1 (Funnel view only) is applied to the cards read, below.
   const filter = parseBoardFilter(sp, { view })
   const filtering = boardFilterActive(filter)
   const visibleStages = manual
@@ -224,6 +226,21 @@ export default async function PipelinePage(props) {
         return { stage, rows: whole.rows, count: whole.rows.length }
       }))
     : []
+
+  // CONTACTLOG.1 — "Not contacted" keeps the cards whose contact has no call,
+  // WhatsApp or email logged at this studio lately. It runs on the cards read, so only where a column
+  // shipped whole (pageSize null: the Funnel view, a manual board), where the
+  // count is the rows too. A failed read throws like the reads above: a board
+  // claiming nobody was called would send staff to chase people twice.
+  if (filter.nocontact && pageSize == null && perStage.length > 0) {
+    const contactIds = perStage.flatMap((sg) => sg.rows.map((d) => d.contacts?.id).filter(Boolean))
+    const logged = await loadRecentlyContacted(db, { locationId, contactIds, nowMs })
+    if (!logged.ok) throw new Error(`pipeline contact log read (location ${locationId})`)
+    for (const sg of perStage) {
+      sg.rows = keepNotContacted(sg.rows, logged.contacted)
+      sg.count = sg.rows.length
+    }
+  }
 
   // HATCHCARD.1 — a board's live funnel columns carry each card's signals
   // (classes done, credits left, next and last class, last WhatsApp), read
@@ -310,7 +327,7 @@ export default async function PipelinePage(props) {
         dormantCount={dormantCount || 0}
       />
 
-      <PipelineBoardFilter q={filter.q} stuck={filter.stuck} showStuck={view !== 'dormant'} />
+      <PipelineBoardFilter q={filter.q} stuck={filter.stuck} nocontact={filter.nocontact} showStuck={view !== 'dormant'} />
 
       <KanbanBoard
         // BOARDKEY.1 — the board tabs and the Active/Dormant toggle navigate

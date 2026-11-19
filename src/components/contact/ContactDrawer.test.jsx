@@ -64,13 +64,13 @@ describe('ContactDrawer — Cold on a derived board', () => {
   it('offers Cold when manual is not passed at all', async () => {
     // Stillorgan's acquisition board — and any caller that cannot resolve a
     // board — renders through this default. Nothing about it changes.
-    expect(await actionsFor({})).toEqual(['task', 'sequence', 'cancel_form', 'cold'])
+    expect(await actionsFor({})).toEqual(['log_contact', 'task', 'sequence', 'cancel_form', 'cold'])
   })
 })
 
 describe('ContactDrawer — Cold is hidden on a manual board', () => {
   it('drops Cold when manual is true', async () => {
-    expect(await actionsFor({ manual: true })).toEqual(['task', 'sequence', 'cancel_form'])
+    expect(await actionsFor({ manual: true })).toEqual(['log_contact', 'task', 'sequence', 'cancel_form'])
   })
 
   it('keeps every other action', async () => {

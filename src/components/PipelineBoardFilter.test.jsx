@@ -50,9 +50,23 @@ describe('PipelineBoardFilter', () => {
     fireEvent.click(screen.getByRole('button', { name: /stuck/i }))
     expect(replace).toHaveBeenLastCalledWith('/pipeline?pipeline=acquisition', { scroll: false })
   })
+  it('CONTACTLOG.1 — Not contacted sets and clears ?nocontact=1 and keeps stuck', () => {
+    params = new URLSearchParams('pipeline=acquisition&stuck=1')
+    const { rerender } = render(<PipelineBoardFilter stuck />)
+    const btn = screen.getByRole('button', { name: /not contacted/i })
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    expect(btn.getAttribute('type')).toBe('button')
+    fireEvent.click(btn)
+    expect(replace).toHaveBeenLastCalledWith('/pipeline?pipeline=acquisition&stuck=1&nocontact=1', { scroll: false })
+    params = new URLSearchParams('pipeline=acquisition&stuck=1&nocontact=1')
+    rerender(<PipelineBoardFilter stuck nocontact />)
+    fireEvent.click(screen.getByRole('button', { name: /not contacted/i }))
+    expect(replace).toHaveBeenLastCalledWith('/pipeline?pipeline=acquisition&stuck=1', { scroll: false })
+  })
   it('no stuck toggle on the Off funnel view', () => {
     render(<PipelineBoardFilter showStuck={false} />)
     expect(screen.queryByRole('button', { name: /stuck/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /not contacted/i })).toBeNull()
     expect(screen.getByRole('searchbox')).toBeTruthy()
   })
   it('clear empties the box and the URL; an unchanged filter does not navigate', () => {

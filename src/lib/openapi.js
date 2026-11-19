@@ -4878,6 +4878,37 @@ registry.registerPath({
   },
 })
 
+// CONTACTLOG.1 — log a call, WhatsApp or email on the contact's timeline (the task form's rule).
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/contact-log',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Log a contact (call, WhatsApp, email) on a contact (Tasks and Contacts at the studio)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            location_id: uuidLike,
+            channel: z.enum(['call', 'whatsapp', 'email']),
+            outcome: z.enum(['reached', 'no_reply']),
+            note: z.string().max(2_000).nullable().optional(),
+          }).openapi('ContactLogBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Contact logged', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, subject: z.string() }) }) } } },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No Tasks permission at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'get',
   path: '/api/contacts/{id}/messaging',
