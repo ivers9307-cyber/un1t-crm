@@ -59,7 +59,9 @@ export async function readReachableContacts(db, contactIds, module) {
 // (a chain handed to a wrapping helper would be invisible to the rule).
 const rejected = (err) => ({ message: err?.message || String(err) })
 
-async function insertClaim(db, contactId, type, dedupKey) {
+// OPENWEEK.7 — exported so a non-push sender (the open week WhatsApp reminder)
+// claims and releases through this one writer of the ledger.
+export async function insertClaim(db, contactId, type, dedupKey) {
   try {
     const { data, error } = await db
       .from('customer_engagement_nudges')
@@ -71,7 +73,7 @@ async function insertClaim(db, contactId, type, dedupKey) {
   }
 }
 
-async function releaseClaim(db, claimId) {
+export async function releaseClaim(db, claimId) {
   try {
     const { error } = await db.from('customer_engagement_nudges').delete().eq('id', claimId)
     return error
