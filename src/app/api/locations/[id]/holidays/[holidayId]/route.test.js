@@ -136,17 +136,17 @@ describe('DELETE /api/locations/[id]/holidays/[holidayId] — the gate is the ro
     expect(db.writes).toHaveLength(1)
   })
 
-  it('(d) 403s a non-member on the MEMBERSHIP copy, not a role complaint', async () => {
+  it('(d) ROUTEWRAP.1: a non-member gets 404, not a role complaint', async () => {
     const res = await DELETE(del(LOC_B, HOL), props(LOC_B, HOL))
-    expect(res.status).toBe(403)
-    expect((await res.json()).error).toBe('Forbidden — location not in your assignments')
+    expect(res.status).toBe(404)
+    expect((await res.json()).error).toBe('Not found')
     expect(db.writes).toEqual([])
   })
 
-  it('(e) refuses an anonymous caller without deleting, keeping this route\'s 403', async () => {
+  it('(e) refuses an anonymous caller without deleting, with the standard 401', async () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await DELETE(del(LOC_A, HOL), props(LOC_A, HOL))
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(401)
     expect((await res.json()).error).toBe('Unauthorized')
     expect(db.writes).toEqual([])
   })

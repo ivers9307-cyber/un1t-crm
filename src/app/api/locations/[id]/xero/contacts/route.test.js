@@ -8,9 +8,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-}))
+vi.mock('@/lib/auth', async () => {
+  const actual = await vi.importActual('@/lib/auth')
+  return { ...actual, getCurrentUser: vi.fn() }
+})
 
 const mockDb = { from: vi.fn() }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => mockDb }))
@@ -49,16 +50,16 @@ const fakeReq = (url) => new Request(url)
 const fakeProps = { params: Promise.resolve({ id: 'loc1' }) }
 
 describe('GET /api/locations/[id]/xero/contacts', () => {
-  it('returns 403 when non-master lacks the location', async () => {
+  it('ROUTEWRAP.1: a non-member gets 404, never confirming the studio', async () => {
     const getCurrentUser = await getMock()
     getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'owner', locations: [{ id: 'OTHER' }] })
     const res = await GET(fakeReq('http://localhost/?q=acme'), fakeProps)
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
   })
 
   it('short-circuits with [] + hint when q < 2 chars', async () => {
     const getCurrentUser = await getMock()
-    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', locations: [] })
+    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', profileRole: 'master', isMaster: true, locations: [{ id: 'loc1' }] })
     const connChain = makeChain({ data: { contacts_last_synced_at: new Date().toISOString() }, error: null })
     mockDb.from.mockImplementation(() => connChain)
 
@@ -71,7 +72,7 @@ describe('GET /api/locations/[id]/xero/contacts', () => {
 
   it('applies suppliers=1 filter when requested', async () => {
     const getCurrentUser = await getMock()
-    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', locations: [] })
+    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', profileRole: 'master', isMaster: true, locations: [{ id: 'loc1' }] })
     const contactsChain = makeChain({
       data: [{ id: 'c1', xero_contact_id: 'X1', name: 'Acme', email: null, is_supplier: true }],
       error: null,
@@ -88,7 +89,7 @@ describe('GET /api/locations/[id]/xero/contacts', () => {
 
   it('a DB read failure 500s through serverErrorResponse (OBS-HANDLED.1)', async () => {
     const getCurrentUser = await getMock()
-    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', locations: [] })
+    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', profileRole: 'master', isMaster: true, locations: [{ id: 'loc1' }] })
     const contactsChain = makeChain({ data: null, error: { message: 'pg exploded' } })
     const connChain = makeChain({ data: { contacts_last_synced_at: new Date().toISOString() }, error: null })
     mockDb.from.mockImplementation((t) => t === 'xero_contacts' ? contactsChain : connChain)
@@ -102,7 +103,7 @@ describe('GET /api/locations/[id]/xero/contacts', () => {
 
   it('escapes special characters in the search query', async () => {
     const getCurrentUser = await getMock()
-    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', locations: [] })
+    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', profileRole: 'master', isMaster: true, locations: [{ id: 'loc1' }] })
     const contactsChain = makeChain({ data: [], error: null })
     const connChain = makeChain({ data: { contacts_last_synced_at: new Date().toISOString() }, error: null })
     mockDb.from.mockImplementation((t) => t === 'xero_contacts' ? contactsChain : connChain)

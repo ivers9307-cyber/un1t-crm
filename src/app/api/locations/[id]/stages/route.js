@@ -5,25 +5,17 @@
 // Service-role read, so access is enforced here: another studio is a 404, and
 // any member may read — this mirrors the pipeline_stages_select RLS policy.
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const PAGE = 1000
 
-export async function GET(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: locationId } = await params
-  const guard = assertLocationAccessOr404(user, locationId)
-  if (guard) return guard
-
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ db, locationId }) => {
   const unreadable = () =>
     NextResponse.json({ success: false, error: 'Could not read stages' }, { status: 503 })
 
-  const db = createServerClient()
   const { data: boards, error: boardsError } = await db
     .from('pipelines')
     .select('id, key, name, display_order')
@@ -62,4 +54,4 @@ export async function GET(request, { params }) {
     }
   }
   return NextResponse.json({ success: true, data: { stages: out } })
-}
+})

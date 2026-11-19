@@ -15,8 +15,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
+import { guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
 import {
@@ -43,14 +43,7 @@ function shape(settings, canEdit) {
   }
 }
 
-export async function GET(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: locationId } = await params
-  const guard = assertLocationAccess(user, locationId)
-  if (guard) return guard
-
-  const db = createServerClient()
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ user, db, locationId }) => {
   const { data: location, error } = await db
     .from('locations')
     .select('id, settings')
@@ -61,26 +54,15 @@ export async function GET(request, { params }) {
 
   const canEdit = guardMasterOrOwner(user, locationId) === null
   return NextResponse.json({ success: true, data: shape(location.settings, canEdit) })
-}
+})
 
-export async function PUT(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: locationId } = await params
-  const guard = assertLocationAccess(user, locationId)
-  if (guard) return guard
-  const roleGuard = guardMasterOrOwner(user, locationId)
-  if (roleGuard) {
-    return NextResponse.json({ success: false, error: 'Only owners and masters can change the Sunday lieu multiplier.' }, { status: 403 })
-  }
-
+export const PUT = withAuth({ permission: null, location: 'param', roles: ['owner'], forbiddenMessage: 'Only owners and masters can change the Sunday lieu multiplier.' }, async ({ request, db, locationId }) => {
   const validation = await validateBody(request, PayrollSettingsSchema)
   if (!validation.ok) return validation.response
   const { sunday_multiplier } = validation.data
 
   // SETTINGSWIPE.1 — the one way a route changes locations.settings: the read
   // is judged (a failed read writes nothing) and sibling keys are kept.
-  const db = createServerClient()
   const result = await mergeLocationSettings(db, locationId, (current) => {
     const payroll = { ...(current.payroll || {}) }
     if (sunday_multiplier === null) delete payroll.sunday_multiplier
@@ -89,4 +71,4 @@ export async function PUT(request, { params }) {
   }, { scope: 'payroll-settings' })
   if (!result.ok) return settingsSaveFailure(result)
   return NextResponse.json({ success: true, data: shape(result.settings, true) })
-}
+})

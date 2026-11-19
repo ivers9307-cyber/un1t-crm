@@ -33,7 +33,7 @@ Guidance for Claude Code working in **un1t-crm**: the staff and admin CRM (Next.
 - A select returns at most 1,000 rows: paginate with `.range()` and an `.order()`. A backfill cursor advances on every attempt.
 - Disambiguate `contacts!contact_id(...)` on tables with two FKs to contacts; embedded filters and late `.select()` options break count queries.
 - `.ilike()` is a pattern match: wrap an equality value in `escapeLikePattern()`.
-- Destructure `error` from every `.single()` and every write; a zero-row update is not an error.
+- Destructure `error` from every `.single()` and every write, or run the write through `checkedWrite()` (`src/lib/checked-write.js`); a zero-row update is not an error.
 - **Never trade a rare wrong value for a certain lost customer message**: log loudly, accept a duplicate or retry, and fail closed only when proceeding is harmful and irreversible.
 - A column in a `.select()` and a name in `.rpc()` are claims about the schema: `check:select-columns` and `check:rpc-names` verify them.
 
@@ -129,7 +129,7 @@ gh pr create --base main --fill
 **Key patterns** (detail in [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md)):
 - Multi-tenant by `location_id`, with `organizations` above locations. Roles are per location on `profile_locations`.
 - Two Supabase clients (`src/lib/supabase.js`): the browser's (RLS-bound) and the server's (service role).
-- Auth in `src/proxy.js`; routes use `getCurrentUser()` + `assertLocationAccess()` or the `withAuth` wrapper (`src/lib/with-auth.js`).
+- Auth in `src/proxy.js`. **A new route uses `withAuth`** (`src/lib/with-auth.js`; `location: 'param'` for a studio in the URL, judged at that studio); `tests/route-wrapper-guard.test.js` requires it.
 - Roles `owner`/`manager`/`head_coach`/`staff` (`MANAGER_ROLES`, `ADMIN_ROLES` in `src/lib/schemas.js`); per-location permissions via `hasPermission()`.
 - Input validation with `validateBody()` and the Zod schemas in `src/lib/schemas.js`; use `uuidLike`, never `z.string().uuid()`.
 - Every send goes through `applyAudienceFilter()`.

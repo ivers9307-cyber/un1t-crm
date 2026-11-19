@@ -25,8 +25,7 @@
 // routes, because this mints a payment account. Do not widen it to
 // MANAGER_ROLES for consistency; the difference is the point.
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { getAppUrl } from '@/lib/app-url'
 import { createConnectedAccount, createOnboardingLink } from '@/lib/payments/stripe-connect'
 import { hubManageHref } from '@/lib/integrations-hub-links'
@@ -38,17 +37,7 @@ export const dynamic = 'force-dynamic'
 // (see the header): this handler mints a Stripe connected account.
 const STRIPE_CONNECT_ROLES = Object.freeze(['master', 'owner', 'manager'])
 
-export async function POST(_request, props) {
-  const { id: locationId } = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const denied = assertLocationAccessOr404(user, locationId)
-  if (denied) return denied
-  if (!hasRoleAtLocation(user, locationId, STRIPE_CONNECT_ROLES)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+export const POST = withAuth({ permission: null, location: 'param', roles: STRIPE_CONNECT_ROLES, forbiddenMessage: 'Manager+ required' }, async ({ db, locationId }) => {
   const { data: loc, error: readErr } = await db.from('locations').select('id, name, settings').eq('id', locationId).maybeSingle()
   if (readErr || !loc) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
@@ -73,4 +62,4 @@ export async function POST(_request, props) {
   } catch (e) {
     return NextResponse.json({ success: false, error: `Stripe onboarding failed: ${e.message || 'unknown'}` }, { status: 502 })
   }
-}
+})

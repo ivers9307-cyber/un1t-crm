@@ -26,8 +26,7 @@
 //   days old, so the UI can prompt for a refresh.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,26 +42,11 @@ const STALE_AFTER_DAYS = 30
 // a supplier bill.
 const BILL_ACCOUNT_TYPES = ['EXPENSE', 'OVERHEADS', 'DIRECTCOSTS', 'FIXED', 'CURRENT', 'CURRLIAB']
 
-export async function GET(request, props) {
-  const params = await props.params
-  const locationId = params?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'location id required' }, { status: 400 })
-  }
-
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  const isMaster = user.role === 'master'
-  const userLocationIds = (user.locations || []).map((l) => l.id)
-  if (!isMaster && !userLocationIds.includes(locationId)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ request, db, locationId }) => {
   const url = new URL(request.url)
   // Default (no param) = SPEND: the full bill-codeable set.
   const typeRaw = (url.searchParams.get('type') || 'SPEND').toUpperCase()
 
-  const db = createServerClient()
 
   let q = db
     .from('xero_accounts')
@@ -99,4 +83,4 @@ export async function GET(request, props) {
     lastSyncedAt: conn?.accounts_last_synced_at || null,
     stale,
   })
-}
+})
