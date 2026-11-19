@@ -76,6 +76,9 @@ import PaidTrialFunnel from '@/components/landing-page/PaidTrialFunnel'
 import CampaignFunnel from '@/components/landing-page/CampaignFunnel'
 import CorpPromoFunnel from '@/components/landing-page/CorpPromoFunnel'
 import PromoStudioChoice from '@/components/landing-page/PromoStudioChoice'
+import SaleOffersCard, { saleOffersCopy } from '@/components/landing-page/SaleOffersCard'
+import { sellableSaleOffers, chosenSaleOffers, saleOfferView } from '@/lib/sale-offers-block'
+import { formatEuro } from '@/lib/sale-offers'
 import { isOpenWeek } from '@/lib/open-week'
 import ClassFunnel from '@/components/ClassFunnel'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
@@ -413,6 +416,32 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     }
   }
 
+  if (page.offer_type === 'sale') {
+    // SALEPAGE.1 — the studio's chosen offers, each bought on its own /offers
+    // page. Only offers the storefront could sell today are listed; a failed
+    // read shows the card's try-again words, never an empty sale.
+    const copy = saleOffersCopy(mergedOffer)
+    const cta = { href: '#sale', label: copy.cta_label || 'See the offers' }
+    if (!preview && page.scope === 'all' && !studio && studioChoices.length > 0) {
+      return { kind, cta, anchor: 'sale', heroImageUrl, scrollCueLabel: null, offer: <PromoStudioChoice heading="Choose your studio" choices={studioChoices} /> }
+    }
+    let offers = []
+    let readFailed = false
+    if (contextLocationId) {
+      const sale = await sellableSaleOffers(db, contextLocationId)
+      if (!sale.ok) readFailed = true
+      else if (sale.studioKey) {
+        offers = chosenSaleOffers(mergedOffer?.offer_ids, sale.offers).map((o) => saleOfferView(o, sale.studioKey, { formatEuro }))
+      }
+    }
+    const offerProps = { copy, offers, readFailed }
+    return {
+      kind, cta, anchor: 'sale', heroImageUrl, scrollCueLabel: null,
+      offer: <SaleOffersCard {...offerProps} />,
+      ...(preview ? { offerProps } : {}),
+    }
+  }
+
   if (page.offer_type === 'class_funnel') {
     const funnel = mergedOffer || {}
     const offerProps = {
@@ -664,7 +693,16 @@ export default async function PublicPage(props) {
   const heroImageUrl = str(heroBlock?.image_url) || HERO_IMAGE
   // OPENWEEK.1 — the studios an all-studios promo page may be claimed at,
   // when the visitor has not chosen one: each a link to ?studio=<path>.
-  const studioChoices = page.offer_type === 'promo_credits' && page.scope === 'all' && !studio && offerRows.length > 1
+  const studioChoices = page.offer_type === 'sale' && page.scope === 'all' && !studio && offerRows.length > 1
+    // SALEPAGE.1 — a studio is offered when it has at least one chosen offer it can sell.
+    ? (await Promise.all(offerRows.map(async (r) => {
+      const ids = mergedBlocksFor({ page, studio: r }).find((b) => isObj(b) && b.type === 'sale_offers')?.offer_ids
+      const sale = await sellableSaleOffers(db, r.location_id)
+      if (!sale.ok || !sale.studioKey || chosenSaleOffers(ids, sale.offers).length === 0) return null
+      const path = await safePublicPath(db, r.location_id)
+      return path ? { path, label: embeddedOne(r.locations)?.name || path } : null
+    }))).filter(Boolean)
+    : page.offer_type === 'promo_credits' && page.scope === 'all' && !studio && offerRows.length > 1
     ? (await Promise.all(offerRows.map(async (r) => {
       // Only a studio whose own promo row is live is offered (a studio whose
       // row is not made yet would answer "not available").

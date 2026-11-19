@@ -17,8 +17,12 @@ describe('mig 792 landing_pages', () => {
     }
     expect(SQL).not.toMatch(/create policy/i)
   })
+  // The SQL split ran once, in 792/795, to copy the old settings into pages.
+  // Block types added after it (SALEPAGE.1's sale_offers, mig 860) never had
+  // stored blocks to split, so the SQL does not name them.
+  const SPLIT_TYPES = Object.entries(STUDIO_OFFER_KEYS).filter(([type]) => type !== 'sale_offers')
   it('strips exactly the studio half the JS module names, per block type', () => {
-    for (const [type, keys] of Object.entries(STUDIO_OFFER_KEYS)) {
+    for (const [type, keys] of SPLIT_TYPES) {
       for (const k of [...keys, ...ATTRIBUTION_KEYS, ...(DROPPED_BLOCK_KEYS[type] || [])]) {
         expect(SQL, `${type}.${k}`).toMatch(new RegExp(`'${type}'[\\s\\S]{0,1200}- '${k}'`))
       }
@@ -27,7 +31,7 @@ describe('mig 792 landing_pages', () => {
   it('collects the same studio keys into the studio half', () => {
     const fn = SQL.match(/function private\.landing_page_block_studio_half[\s\S]*?\$\$;/i)?.[0] || ''
     expect(fn).not.toBe('')
-    for (const [type, keys] of Object.entries(STUDIO_OFFER_KEYS)) {
+    for (const [type, keys] of SPLIT_TYPES) {
       for (const k of keys) expect(fn, `${type}.${k}`).toContain(`'${k}'`)
     }
     for (const k of ATTRIBUTION_KEYS) expect(fn, k).toContain(`'${k}'`)

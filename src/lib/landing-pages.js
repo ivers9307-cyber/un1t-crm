@@ -31,6 +31,7 @@ import { UUID_SHAPE } from '@/lib/uuid-shape'
 import { un1tFunnelCopyFromTerms } from '@/lib/un1t-online-funnel-copy'
 import { listCorpPromos } from '@/lib/corp-promos-db'
 import { logWarn, logError } from '@/lib/log'
+import { sellableSaleOffers } from '@/lib/sale-offers-block'
 
 // The edge-safe half lives in its own module so the proxy can import it.
 export { publicOrgIdForHost } from '@/lib/public-pages-edge'
@@ -275,12 +276,12 @@ export function mergedBlocksFor({ page, studio }) {
  * Is the offer ready to take a customer at this studio? `promos` is the
  * studio's live corp promos (listCorpPromos), needed only for a corp_promo offer.
  */
-export function offerReady({ page, studio, landingPath, product = null, promos = [] }) {
+export function offerReady({ page, studio, landingPath, product = null, promos = [], saleOffers = [] }) {
   const blockType = OFFER_BLOCK_TYPE[page.offer_type]
   if (!blockType) return false
   const merged = mergedBlocksFor({ page, studio }).find((b) => b?.type === blockType)
   if (!merged) return false
-  return offerConfigured(blockType, merged, { landingPath, product, promos })
+  return offerConfigured(blockType, merged, { landingPath, product, promos, saleOffers })
 }
 
 const isMaster = (user) => Boolean(user && (user.isMaster || user.role === 'master'))
@@ -545,6 +546,14 @@ export async function studioRowReadiness(db, { page, row, publicPath }) {
       return entry.sellable ? READY : NEEDS_PLAN
     }
     if (source !== 'glofox') return NO_PLATFORM
+  }
+  if (blockType === 'sale_offers') {
+    // SALEPAGE.1 — the studio's offers that can be sold today; each is bought
+    // on its /offers page, so a studio without one cannot run a sale yet.
+    const sale = await sellableSaleOffers(db, row.location_id)
+    if (!sale.ok) throw new PageReadError('Could not read the studio\'s offers')
+    if (!sale.studioKey) return NO_PLATFORM
+    return offerReady({ page, studio: row, landingPath: path, saleOffers: sale.offers }) ? READY : NEEDS_PLAN
   }
   let promos = []
   if (blockType === 'corp_promo') {

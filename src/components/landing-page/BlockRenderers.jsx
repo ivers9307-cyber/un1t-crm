@@ -95,6 +95,8 @@ export default function BlockRenderer({ block, onEdit, locationId, pageId = null
     case 'paid_trial':  return localOnEdit ? <PaidTrialBlock block={block} onEdit={localOnEdit} /> : null
     // CORPPROMO.1 — the /corp promo's words; shown on /corp, a stub in the editor.
     case 'corp_promo':  return localOnEdit ? <CorpPromoStubBlock block={block} /> : null
+    // SALEPAGE.1 — a sale's card is the page's offer region, never a body block.
+    case 'sale_offers': return null
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
