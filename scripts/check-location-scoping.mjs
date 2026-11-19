@@ -109,6 +109,12 @@ export const TABLE_EXCLUDE = {
 // counts as file-level evidence.
 // ---------------------------------------------------------------------------
 const SCOPING_HELPERS = [
+  // src/lib/contact-studio-link.js (CONTACTEXPORT.1) — contactIdsLinkedToStudio
+  // reads the studio's organisation by id, then returns ONLY the ids whose
+  // contact's location_id is the studio, or a same-organisation contact with a
+  // contact_studios row there (contactsAtStudio). A route that then reads
+  // contacts .in('id', linked.ids) reads nothing outside the studio.
+  'contactIdsLinkedToStudio(',
   // src/lib/landing-pages.js (PAGES.1) — resolvePublicPageRequest reads the
   // page by organization_id (the host's, publicOrgIdForHost) + slug, then its
   // studio rows by page_id, and answers only a location_id that is one of
