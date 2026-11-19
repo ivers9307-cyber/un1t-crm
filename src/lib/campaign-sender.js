@@ -551,7 +551,14 @@ export async function tickCampaignSend(db, campaign) {
         .eq('campaign_id', campaignId)
         .eq('status', 'queued')
       if (abPhase === 'slice') remainingQuery = remainingQuery.not('ab_variant', 'is', null)
-      const { count: capHeld } = await remainingQuery
+      const { count: capHeld, error: capHeldErr } = await remainingQuery
+      // EMAILCOUNT.1 — a failed count is not "nothing held back": read as 0 it
+      // finalised the campaign with people still queued behind the cap. A
+      // warning (never an error, which can mark the campaign failed) leaves it
+      // open, and the next tick counts again.
+      if (capHeldErr) {
+        return { phase: 'cap_deferred', sent: 0, warning: `cap-held count failed (campaign stays open and the next tick retries): ${capHeldErr.message}` }
+      }
       if ((capHeld || 0) > 0) {
         // Safety valve: a contact re-touched by other channels every day
         // could hold this campaign at 'sending' forever. Rows still cap-

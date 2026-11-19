@@ -118,6 +118,14 @@ export async function loadNonOpenerContactIds(db, parentCampaignId) {
  * @param {Date} [opts.now]
  * @returns {Promise<{ scanned: number, spawned: number, errors: Array }>}
  */
+// A flag that could not be cleared stays set; the next tick finds the child
+// already there (the unique key answers 23505) and clears it then, so a lost
+// write here costs a retry, never a second resend.
+async function consumeFlag(db, parentId, summary) {
+  const { error } = await db.from('campaigns').update({ resend_enabled: false }).eq('id', parentId)
+  if (error) summary.errors.push({ parent_id: parentId, error: `resend flag not cleared: ${error.message}` })
+}
+
 export async function spawnDueResends(db, { getCapStatus = getEmailCapStatus, now = new Date() } = {}) {
   const summary = { scanned: 0, spawned: 0, errors: [] }
 
@@ -158,14 +166,21 @@ export async function spawnDueResends(db, { getCapStatus = getEmailCapStatus, no
       }
 
       // Nobody left to chase → consume the flag without a child.
-      const { count } = await db
+      // EMAILCOUNT.1 — a failed count is not "nobody left": it used to read as
+      // 0 and consume the flag, so the resend was silently dropped. The flag
+      // stays set and the next tick retries.
+      const { count, error: countErr } = await db
         .from('campaign_recipients')
         .select('id', { count: 'exact', head: true })
         .eq('campaign_id', parent.id)
         .is('opened_at', null)
         .in('status', NON_OPENER_STATUSES)
+      if (countErr) {
+        summary.errors.push({ parent_id: parent.id, error: `non-opener count failed: ${countErr.message}` })
+        continue
+      }
       if ((count || 0) === 0) {
-        await db.from('campaigns').update({ resend_enabled: false }).eq('id', parent.id)
+        await consumeFlag(db, parent.id, summary)
         continue
       }
 
@@ -176,7 +191,7 @@ export async function spawnDueResends(db, { getCapStatus = getEmailCapStatus, no
       if (insertErr) {
         if (insertErr.code === '23505') {
           // Another tick already spawned the child — just consume the flag.
-          await db.from('campaigns').update({ resend_enabled: false }).eq('id', parent.id)
+          await consumeFlag(db, parent.id, summary)
         } else {
           // Leave the flag set so the next tick retries.
           summary.errors.push({ parent_id: parent.id, error: insertErr.message })
@@ -184,7 +199,7 @@ export async function spawnDueResends(db, { getCapStatus = getEmailCapStatus, no
         continue
       }
 
-      await db.from('campaigns').update({ resend_enabled: false }).eq('id', parent.id)
+      await consumeFlag(db, parent.id, summary)
       summary.spawned++
     } catch (err) {
       summary.errors.push({ parent_id: parent.id, error: err?.message || String(err) })
