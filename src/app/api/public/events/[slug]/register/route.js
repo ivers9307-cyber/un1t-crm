@@ -49,6 +49,7 @@ import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { writeContactTags } from '@/lib/contact-tags'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
+import { checkedWrite } from '@/lib/checked-write'
 import { wouldFit } from '@/lib/event-signups'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { eventIsPublic, resolveMasterLocationId } from '@/lib/host-events'
@@ -361,13 +362,18 @@ export async function POST(request, props) {
       return NextResponse.json({ success: false, error: 'Please answer the required questions.', code: 'invalid_answers', issues: leadAnswers.issues }, { status: 400 })
     }
 
-    // Roster = just the lead.
-    await db.from('team_members').delete().eq('team_id', teamId)
-    await db.from('team_members').insert({
+    // Roster = just the lead. CHECKEDWRITE.1 — a roster that did not save stops
+    // here, before the registration, so the person can simply try again.
+    const leadRosterCleared = await checkedWrite('race-register', () => db.from('team_members').delete().eq('team_id', teamId),
+      { message: 'lead roster not cleared', meta: { race_id: race.id, team_id: teamId } })
+    const leadRosterSaved = leadRosterCleared.ok && await checkedWrite('race-register', () => db.from('team_members').insert({
       team_id: teamId, contact_id: contactId, name: leadName, email: leadEmail,
       role: 'captain', is_member: false, member_validation_status: 'not_applicable',
       answers: leadAnswers.people[0] ?? null,
-    })
+    }), { message: 'lead roster not saved', meta: { race_id: race.id, team_id: teamId } }).then((r) => r.ok)
+    if (!leadRosterSaved) {
+      return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
+    }
 
     const { data: reg, error: regErr } = await db.from('race_registrations').insert({
       race_event_id: race.id, team_id: teamId, contact_id: contactId,
@@ -863,7 +869,15 @@ export async function POST(request, props) {
   // member_contact_id set; we still call findOrCreateRaceContact
   // because the contact_id column on team_members is the canonical
   // "who is this person" pointer.
-  await db.from('team_members').delete().eq('team_id', teamId)
+  // CHECKEDWRITE.1 — a roster that did not save stops here, before the
+  // registration and before any payment, so the person can simply try again.
+  const rosterFailed = async () => {
+    if (findTeam) await discardSoloTeam(db, teamId) // FINDTEAM.9
+    return NextResponse.json({ success: false, error: 'Could not save your team. Please try again.' }, { status: 500 })
+  }
+  const rosterCleared = await checkedWrite('race-register', () => db.from('team_members').delete().eq('team_id', teamId),
+    { message: 'roster not cleared', meta: { race_id: race.id, team_id: teamId } })
+  if (!rosterCleared.ok) return rosterFailed()
   const memberRows = []
   for (let idx = 0; idx < validatedRoster.length; idx++) {
     const m = validatedRoster[idx]
@@ -891,7 +905,9 @@ export async function POST(request, props) {
       answers: answered.people[idx] ?? null,
     })
   }
-  await db.from('team_members').insert(memberRows)
+  const rosterSaved = await checkedWrite('race-register', () => db.from('team_members').insert(memberRows),
+    { message: 'roster not saved', meta: { race_id: race.id, team_id: teamId, members: memberRows.length } })
+  if (!rosterSaved.ok) return rosterFailed()
 
   // Create the race_registration. Paid races start as pending_payment;
   // free races (total_cents=0) jump straight to confirmed via the
@@ -941,13 +957,10 @@ export async function POST(request, props) {
   // redeemed_count counts applications; the cap pre-check above keeps it near
   // the limit under normal (low-concurrency) load.
   if (appliedPromo) {
-    try {
-      await db.from('promo_codes')
-        .update({ redeemed_count: (appliedPromo.redeemed_count || 0) + 1 })
-        .eq('id', appliedPromo.id)
-    } catch (e) {
-      logWarn('race-register', 'promo redeemed_count increment failed', { err: e })
-    }
+    await checkedWrite('race-register', () => db.from('promo_codes')
+      .update({ redeemed_count: (appliedPromo.redeemed_count || 0) + 1 })
+      .eq('id', appliedPromo.id)
+      .select('id'), { message: 'promo redeemed_count increment failed', expectRows: 1, meta: { promo_code_id: appliedPromo.id } })
   }
 
   // Fire the race_registered sequence trigger (Tier 1A). Best-effort —
