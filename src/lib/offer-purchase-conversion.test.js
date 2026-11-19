@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 import { sendOfferCheckoutConversions, sendOfferPurchaseConversion, offerPurchaseEventId } from './offer-purchase-conversion.js'
+import { createFakeDb } from '../../tests/helpers/fake-db.js'
 
 const LOC = '00000000-0000-4000-8000-0000000000aa'
 const OFFER = '00000000-0000-4000-8000-0000000000bb'
@@ -34,33 +35,16 @@ describe('sendOfferCheckoutConversions', () => {
   })
 })
 
-// A small hand fake, not createFakeDb: the checked-in schema snapshot runs to
-// migration 852, and offer_purchases.attribution arrives in 854 (applied
-// 19 Nov 2026). Move this onto createFakeDb when the snapshot is refreshed.
+// The shared fake database, checked against the schema snapshot (which has
+// offer_purchases.attribution since the refresh through migration 859).
 function fakeDb({ rows = [], readError = null } = {}) {
-  const tables = { offer_purchases: rows.map((r) => ({ ...r })) }
-  return {
-    tables,
-    from() {
-      const filters = {}
-      let patch = null
-      const b = {
-        select: () => b,
-        update: (p) => { patch = p; return b },
-        eq: (c, v) => { filters[c] = v; return b },
-        maybeSingle: async () => {
-          if (readError) return { data: null, error: readError }
-          const r = tables.offer_purchases.find((x) => x.id === filters.id)
-          return { data: r ? { ...r, offer: { name: '20 Class Pack' } } : null, error: null }
-        },
-        then: (res, rej) => {
-          if (patch) for (const r of tables.offer_purchases) if (r.id === filters.id) Object.assign(r, patch)
-          return Promise.resolve({ data: null, error: null }).then(res, rej)
-        },
-      }
-      return b
+  return createFakeDb({
+    tables: {
+      sale_offers: [{ id: OFFER, location_id: LOC, slug: 'pack', category: 'class_pack', name: '20 Class Pack', bonus_headline: 'x', price_cents: 4900 }],
+      offer_purchases: rows,
     },
-  }
+    errors: readError ? { offer_purchases: { select: readError } } : {},
+  })
 }
 
 describe('sendOfferPurchaseConversion', () => {
@@ -85,7 +69,7 @@ describe('sendOfferPurchaseConversion', () => {
   })
 
   it('an unreadable row sends nothing and never throws', async () => {
-    const db = fakeDb({ readError: { message: 'down' } })
+    const db = fakeDb({ rows: [row()], readError: { message: 'down' } })
     await expect(sendOfferPurchaseConversion(db, PID, { send })).resolves.toMatchObject({ sent: false })
     expect(send).not.toHaveBeenCalled()
   })

@@ -1,7 +1,8 @@
 // ORDERSVIEW.1 — totals by kind and studio, and the read behind them.
-// A hand fake: order_refunds (mig 853) is newer than the schema snapshot.
+// On the shared fake database, checked against the schema snapshot.
 import { describe, it, expect } from 'vitest'
 import { summariseOrders, loadOrdersSummary, SUMMARY_PAGE } from './orders-summary.js'
+import { createFakeDb } from '../../tests/helpers/fake-db.js'
 
 describe('summariseOrders', () => {
   const row = (o) => ({ location_id: 'L1', source_type: 'donation', status: 'completed', amount_cents: 1000, refunded_amount_cents: 0, currency: 'EUR', ...o })
@@ -29,56 +30,53 @@ describe('summariseOrders', () => {
   })
 })
 
-function fakeDb({ orders = [], refunds = [], fail = null } = {}) {
-  const calls = []
-  return {
-    calls,
-    from(table) {
-      const c = { table, filters: [], range: null }
-      calls.push(c)
-      const b = {
-        select: () => b, order: () => b, limit: () => b,
-        eq: (k, v) => { c.filters.push(['eq', k, v]); return b },
-        in: (k, v) => { c.filters.push(['in', k, v]); return b },
-        gte: (k, v) => { c.filters.push(['gte', k, v]); return b },
-        lte: (k, v) => { c.filters.push(['lte', k, v]); return b },
-        range: (a, z) => { c.range = [a, z]; return b },
-        then(res, rej) {
-          if (fail === table) return Promise.resolve({ data: null, error: { message: 'down' } }).then(res, rej)
-          let data = []
-          if (table === 'orders') data = orders.slice(c.range[0], c.range[1] + 1)
-          if (table === 'order_refunds') data = refunds
-          if (table === 'locations') data = [{ id: 'L1', name: 'Hatch' }]
-          return Promise.resolve({ data, error: null }).then(res, rej)
-        },
-      }
-      return b
-    },
-  }
-}
+const L1 = '00000000-0000-4000-8000-0000000000a1'
+const L2 = '00000000-0000-4000-8000-0000000000a2'
+const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+const ord = (n, over = {}) => ({
+  id: uuid(n), location_id: L1, source_type: 'donation', source_id: uuid(90000 + n), contact_email: 'a@x.ie',
+  amount_cents: 100, currency: 'EUR', status: 'completed', created_at: '2026-11-10T00:00:00Z', ...over,
+})
+const fakeDb = ({ orders = [], refunds = [], errors = {} } = {}) => createFakeDb({
+  tables: { locations: [{ id: L1, name: 'Hatch' }, { id: L2, name: 'Stillorgan' }], orders, order_refunds: refunds },
+  errors,
+})
 
 describe('loadOrdersSummary', () => {
-  it('reads every page past the 1,000-row cap and scopes each read to the studio', async () => {
-    const orders = Array.from({ length: SUMMARY_PAGE + 5 }, () => ({ location_id: 'L1', source_type: 'donation', status: 'completed', amount_cents: 100, currency: 'EUR' }))
-    const db = fakeDb({ orders })
-    const r = await loadOrdersSummary(db, { locationId: 'L1', from: '2026-11-01T00:00:00Z' })
-    expect(r.totals[0].orders).toBe(SUMMARY_PAGE + 5)
-    const orderCalls = db.calls.filter((c) => c.table === 'orders')
-    expect(orderCalls).toHaveLength(2)
-    for (const c of [...orderCalls, db.calls.find((c) => c.table === 'order_refunds')]) {
-      expect(c.filters).toContainEqual(['eq', 'location_id', 'L1'])
-      expect(c.filters).toContainEqual(['gte', 'created_at', '2026-11-01T00:00:00Z'])
-    }
-    expect(r.studios).toEqual([{ id: 'L1', name: 'Hatch' }])
+  it('reads every page past the 1,000-row cap, and only this studio and period', async () => {
+    const orders = [
+      ...Array.from({ length: SUMMARY_PAGE + 5 }, (_, i) => ord(i + 1)),
+      ord(5001, { location_id: L2 }),
+      ord(5002, { created_at: '2026-10-01T00:00:00Z' }),
+      ord(5003, { status: 'pending' }),
+    ]
+    const r = await loadOrdersSummary(fakeDb({ orders }), { locationId: L1, from: '2026-11-01T00:00:00Z' })
+    expect(r.totals).toHaveLength(1)
+    expect(r.totals[0]).toMatchObject({ location_id: L1, orders: SUMMARY_PAGE + 5, gross_cents: (SUMMARY_PAGE + 5) * 100 })
+    expect(r.studios).toEqual([{ id: L1, name: 'Hatch' }])
+    expect(r.truncated).toBe(false)
   })
 
-  it('flags a refund Revolut declined after it was recorded', async () => {
-    const r = await loadOrdersSummary(fakeDb({ refunds: [{ id: 'r1', error: 'revolut_declined: Revolut failed this refund' }, { id: 'r2', error: null }] }), { locationId: 'L1' })
-    expect(r.refunds.map((x) => x.declined)).toEqual([true, false])
+  it('every studio for a master, named', async () => {
+    const r = await loadOrdersSummary(fakeDb({ orders: [ord(1), ord(2, { location_id: L2 })] }), { locationId: null })
+    expect(r.totals.map((t) => t.location_id).sort()).toEqual([L1, L2].sort())
+    expect(r.studios).toHaveLength(2)
+  })
+
+  it('lists this studio\'s refunds with their order, and flags one Revolut declined', async () => {
+    const orders = [ord(1, { contact_name: 'Ann' })]
+    const refunds = [
+      { id: uuid(11), order_id: uuid(1), location_id: L1, amount_cents: 100, currency: 'EUR', reason: 'x', status: 'completed', idempotency_key: 'k1', error: 'revolut_declined: Revolut failed this refund', created_at: '2026-11-11T00:00:00Z' },
+      { id: uuid(12), order_id: uuid(1), location_id: L1, amount_cents: 50, currency: 'EUR', reason: 'y', status: 'completed', idempotency_key: 'k2', error: null, created_at: '2026-11-12T00:00:00Z' },
+      { id: uuid(13), order_id: uuid(1), location_id: L2, amount_cents: 50, currency: 'EUR', reason: 'z', status: 'completed', idempotency_key: 'k3', error: null, created_at: '2026-11-12T00:00:00Z' },
+    ]
+    const r = await loadOrdersSummary(fakeDb({ orders, refunds }), { locationId: L1 })
+    expect(r.refunds.map((x) => [x.id, x.declined])).toEqual([[uuid(12), false], [uuid(11), true]])
+    expect(r.refunds[0].order).toMatchObject({ contact_name: 'Ann', source_type: 'donation' })
   })
 
   it('a failed read throws rather than showing zero', async () => {
-    await expect(loadOrdersSummary(fakeDb({ fail: 'orders' }), { locationId: 'L1' })).rejects.toBeTruthy()
-    await expect(loadOrdersSummary(fakeDb({ fail: 'order_refunds' }), { locationId: 'L1' })).rejects.toBeTruthy()
+    await expect(loadOrdersSummary(fakeDb({ errors: { orders: { select: { message: 'down' } } } }), { locationId: L1 })).rejects.toBeTruthy()
+    await expect(loadOrdersSummary(fakeDb({ errors: { order_refunds: { select: { message: 'down' } } } }), { locationId: L1 })).rejects.toBeTruthy()
   })
 })
