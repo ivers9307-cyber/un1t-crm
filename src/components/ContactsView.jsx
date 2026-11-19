@@ -42,6 +42,7 @@ export default function ContactsView({
   canMerge = false,
   canDelete = false,
   canTag = false,
+  canExport = false,
   // SEGMENTROUTE.1 (R1): saving and deleting a segment need Contacts AND
   // Email at this studio; the page passes the server's canWriteSegmentsAt.
   // Default false so a caller that forgets it offers nothing the API refuses.
@@ -474,7 +475,7 @@ export default function ContactsView({
         <div className="mb-3 text-xs text-un1t-subtle">Loading…</div>
       )}
 
-      <ContactsTable contacts={visibleContacts} locationId={locationId} crossoverContext={activeCrossoverContext} listFlags={activeListFlags} canMerge={canMerge} canDelete={canDelete} canTag={canTag} />
+      <ContactsTable contacts={visibleContacts} locationId={locationId} crossoverContext={activeCrossoverContext} listFlags={activeListFlags} canMerge={canMerge} canDelete={canDelete} canTag={canTag} canExport={canExport} />
 
       {hasMore && (
         <div className="mt-4 flex flex-col items-center gap-2">
