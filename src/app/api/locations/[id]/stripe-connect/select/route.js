@@ -28,8 +28,7 @@
 // narrower than the MANAGER_ROLES used by the holidays/channels routes,
 // because this switches the live payment provider. Do not widen it.
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { retrieveAccountStatus } from '@/lib/payments/stripe-connect'
 import { registerCheckoutDomainsForAccount } from '@/lib/payments/apple-pay-domains'
 
@@ -42,16 +41,7 @@ const STRIPE_SELECT_ROLES = Object.freeze(['master', 'owner', 'manager'])
 
 const PROVIDERS = new Set(['revolut', 'stripe_connect'])
 
-export async function POST(request, props) {
-  const { id: locationId } = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const denied = assertLocationAccessOr404(user, locationId)
-  if (denied) return denied
-  if (!hasRoleAtLocation(user, locationId, STRIPE_SELECT_ROLES)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
-  }
-
+export const POST = withAuth({ permission: null, location: 'param', roles: STRIPE_SELECT_ROLES, forbiddenMessage: 'Manager+ required' }, async ({ request, db, locationId }) => {
   let body = {}
   try { body = await request.json() } catch { /* empty */ }
   const provider = body?.provider
@@ -59,7 +49,6 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Invalid provider' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const { data: loc, error: readErr } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
   if (readErr || !loc) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const payments = loc.settings?.payments || {}
@@ -88,4 +77,4 @@ export async function POST(request, props) {
     await registerCheckoutDomainsForAccount(db, payments.stripe_connected_account_id)
   }
   return NextResponse.json({ success: true, data: { provider } })
-}
+})

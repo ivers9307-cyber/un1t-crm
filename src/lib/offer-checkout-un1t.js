@@ -45,10 +45,10 @@ export const UN1T_OFFER_ORIGIN = 'web_offer'
  *   purchaseId: string,
  *   terms: { terms_accepted_at: string, terms_source: string, terms_version: string|null },
  *   buyer: { name: string, email: string, phone: string },
- *   studioKey?: string }} args studioKey: the /offers/<studio> path segment (default hatch-street)
+ *   studioKey?: string, attribution?: object|null }} args studioKey: the /offers/<studio> path segment (default hatch-street); attribution: the checkout's ad attribution
  * @returns {Promise<{ kind: 'redirect', checkoutUrl: string } | { kind: 'help_filed' } | { kind: 'unavailable', code: string } | { kind: 'stock_refused', state: 'sold_out'|'all_reserved' }>}
  */
-export async function startUn1tOfferCheckout(db, { offer, location, contact, purchaseId, terms, buyer, studioKey = 'hatch-street' }) {
+export async function startUn1tOfferCheckout(db, { offer, location, contact, purchaseId, terms, buyer, studioKey = 'hatch-street', attribution = null }) {
   const locationId = location.id
 
   // ── 0. The purchase row ──
@@ -66,6 +66,8 @@ export async function startUn1tOfferCheckout(db, { offer, location, contact, pur
     origin: 'page',
     state: 'created',
     un1t_product_id: offer.un1t_product_id,
+    // OFFERTRACK.1 — the checkout's ad attribution (mig 854).
+    attribution,
     terms_accepted_at: terms.terms_accepted_at,
     terms_source: terms.terms_source,
     terms_version: terms.terms_version ?? null,

@@ -114,3 +114,38 @@ describe('useUnlayerEditor — mergeTags config', () => {
     expect(initConfig.mergeTags).toEqual(UNLAYER_MERGE_TAGS)
   })
 })
+
+// EDITORHOOK.1 — the full campaign editor's saved design goes into the canvas
+// on every (re)init: the design as it is when the canvas opens.
+describe('useUnlayerEditor — initialDesign', () => {
+  function Canvas({ active, design }) {
+    const { ref } = useUnlayerEditor({ mountId: 'unlayer-test', active, initialDesign: design })
+    return active ? <div id="unlayer-test" ref={ref} /> : null
+  }
+  const stub = () => {
+    window.unlayer = { init: vi.fn(), loadDesign: vi.fn(), exportHtml: vi.fn() }
+    return window.unlayer
+  }
+
+  it('loads the starting design after init, and nothing when there is none', () => {
+    const u = stub()
+    render(<Canvas active design={{ body: 'v1' }} />)
+    expect(u.init).toHaveBeenCalledTimes(1)
+    expect(u.loadDesign).toHaveBeenCalledWith({ body: 'v1' })
+    cleanup()
+    const u2 = stub()
+    render(<Canvas active design={null} />)
+    expect(u2.loadDesign).not.toHaveBeenCalled()
+  })
+
+  it('a changed design does not reload an open canvas; reopening it loads the latest', () => {
+    const u = stub()
+    const { rerender } = render(<Canvas active design={{ body: 'v1' }} />)
+    rerender(<Canvas active design={{ body: 'v2' }} />)
+    expect(u.loadDesign).toHaveBeenCalledTimes(1)
+    rerender(<Canvas active={false} design={{ body: 'v2' }} />)
+    rerender(<Canvas active design={{ body: 'v2' }} />)
+    expect(u.init).toHaveBeenCalledTimes(2)
+    expect(u.loadDesign).toHaveBeenLastCalledWith({ body: 'v2' })
+  })
+})

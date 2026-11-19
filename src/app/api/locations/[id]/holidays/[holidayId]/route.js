@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
@@ -19,21 +18,7 @@ export const runtime = 'nodejs'
 // path, then MEMBERSHIP, then the role AT THAT TARGET. Tier is MANAGER_ROLES
 // (head_coach INCLUDED) — deliberately wider than the stripe-connect routes'
 // list. The role-miss copy and the 403-for-anonymous are this route's own.
-export async function DELETE(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
-  }
-
-  const locationId = params.id
-  const guard = assertLocationAccess(user, locationId)
-  if (guard) return guard
-  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+export const DELETE = withAuth({ permission: null, location: 'param', roles: MANAGER_ROLES, forbiddenMessage: 'Unauthorized' }, async ({ db, locationId, params }) => {
   const { error } = await db.from('location_holidays')
     .delete()
     .eq('id', params.holidayId)
@@ -41,4 +26,4 @@ export async function DELETE(request, props) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   return NextResponse.json({ success: true })
-}
+})

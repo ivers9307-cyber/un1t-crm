@@ -11,36 +11,18 @@
 // Returns: { success, default: { account_code, xero_account_id, category } | null }
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { getSupplierDefault } from '@/lib/invoices-queue/supplier-defaults'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request, props) {
-  const params = await props.params
-  const locationId = params?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'location id required' }, { status: 400 })
-  }
-
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
-  // Location membership — same guard the sibling xero read routes use.
-  const isMaster = user.role === 'master'
-  const userLocationIds = (user.locations || []).map((l) => l.id)
-  if (!isMaster && !userLocationIds.includes(locationId)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ request, db, locationId }) => {
   const xeroContactId = new URL(request.url).searchParams.get('xero_contact_id')
   if (!xeroContactId) {
     return NextResponse.json({ success: false, error: 'xero_contact_id required' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const def = await getSupplierDefault(db, locationId, xeroContactId)
 
   return NextResponse.json({
@@ -53,4 +35,4 @@ export async function GET(request, props) {
         }
       : null,
   })
-}
+})

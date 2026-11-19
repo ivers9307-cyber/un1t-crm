@@ -263,16 +263,18 @@ function OrderRow({ row, onChanged }) {
     ? '' // race name lookup would require extra join; future enhancement
     : [meta.car_make, meta.car_model, meta.irish_reg].filter(Boolean).join(' ')
 
-  // Refund button is only meaningful on completed Revolut orders.
-  const canRefund = row.status === 'completed' && row.payment_provider === 'revolut'
+  // Refunds go back through Revolut or the host's Stripe account; the server
+  // also allows only owners and masters (REFUNDLEDGER.1).
+  const canRefund = row.status === 'completed' && ['revolut', 'stripe_connect'].includes(row.payment_provider)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [refundError, setRefundError] = useState(null)
-  // Partial-refund amount in major units (€). Defaults to the full
-  // order amount; operator can override before confirming.
-  const [refundEuros, setRefundEuros] = useState(() =>
-    Number.isFinite(row.amount_cents) ? (row.amount_cents / 100).toFixed(2) : ''
-  )
+  // What is left to refund, after any earlier partial refunds.
+  const remainingCents = Math.max(0, (Number(row.amount_cents) || 0) - (Number(row.refunded_amount_cents) || 0))
+  // Partial-refund amount in major units (€). Defaults to what is left;
+  // operator can lower it before confirming.
+  const [refundEuros, setRefundEuros] = useState(() => (remainingCents / 100).toFixed(2))
+  const [refundReason, setRefundReason] = useState('')
 
   // Cancel is the housekeeping counterpart — only meaningful on a
   // PENDING order (ORDERS-CANCEL.1). Clears the pending clutter.
@@ -322,11 +324,15 @@ function OrderRow({ row, onChanged }) {
       return
     }
     const cents = Math.round(major * 100)
-    if (cents > row.amount_cents) {
-      setRefundError(`Cannot refund more than the order total (${formatMoney(row.amount_cents, row.currency)}).`)
+    if (cents > remainingCents) {
+      setRefundError(`Cannot refund more than what is left (${formatMoney(remainingCents, row.currency)}).`)
       return
     }
-    const isFull = cents === row.amount_cents
+    if (!refundReason.trim()) {
+      setRefundError('Give a reason for the refund.')
+      return
+    }
+    const isFull = cents === remainingCents
     setBusy(true)
     setRefundError(null)
     try {
@@ -335,7 +341,7 @@ function OrderRow({ row, onChanged }) {
         headers: { 'Content-Type': 'application/json' },
         // Omit amount_cents on full refund — server treats missing
         // as "full" which is the safest semantic.
-        body: JSON.stringify(isFull ? {} : { amount_cents: cents }),
+        body: JSON.stringify(isFull ? { reason: refundReason.trim() } : { amount_cents: cents, reason: refundReason.trim() }),
       })
       const j = await r.json()
       if (!r.ok || j.success === false) {
@@ -383,7 +389,7 @@ function OrderRow({ row, onChanged }) {
             type="button"
             onClick={() => setConfirming(true)}
             className="text-[11px] text-un1t-subtle hover:text-purple-700 inline-flex items-center gap-1"
-            title="Issue a full refund via Revolut"
+            title="Refund this order"
           >
             <Undo2 size={11} /> Refund
           </button>
@@ -395,11 +401,20 @@ function OrderRow({ row, onChanged }) {
               type="number"
               min="0.01"
               step="0.01"
-              max={row.amount_cents / 100}
+              max={remainingCents / 100}
               value={refundEuros}
               onChange={(e) => setRefundEuros(e.target.value)}
               className="text-[11px] bg-un1t-bg border border-un1t-border rounded px-1.5 py-0.5 text-un1t-text w-20 tabular-nums"
-              title={`Up to ${amount} (full refund). Lower for partial.`}
+              title={`Up to ${formatMoney(remainingCents, row.currency)}. Lower for a partial refund.`}
+            />
+            <input
+              type="text"
+              maxLength={500}
+              value={refundReason}
+              onChange={(e) => setRefundReason(e.target.value)}
+              placeholder="Reason"
+              aria-label="Refund reason"
+              className="text-[11px] bg-un1t-bg border border-un1t-border rounded px-1.5 py-0.5 text-un1t-text w-32"
             />
             <button
               type="button"

@@ -7,26 +7,16 @@
 //
 // Auth: CRON_SECRET.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
 import { runBathroomClimate } from '@/lib/bathroom-climate-runner'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logWarn } from '@/lib/log'
+import { defineCron } from '@/lib/define-cron'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'bathroom-climate' }, async ({ db }) => {
   const out = await runBathroomClimate(db, {})
-
-  await stampHeartbeat('bathroom-climate').catch((err) =>
-    logWarn('cron-bathroom-climate', 'heartbeat failed', { err }))
-  return NextResponse.json({ success: out.ok !== false, ...out })
-}
+  // CRONWRAP.2 — ok: false is a whole-run read failure. It used to stamp
+  // anyway, so a sustained outage never went stale (class-climate's fault).
+  return { ok: out.ok !== false, status: 200, body: out }
+})

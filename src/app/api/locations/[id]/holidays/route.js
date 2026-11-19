@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { rangeQueryError } from '@/lib/report-period'
@@ -25,14 +24,7 @@ const HolidayCreateSchema = z.object({
 // Each holiday in the response has:
 //   { date, name, source: 'national' | 'custom', id?, location_id? }
 // Static (national) holidays have no id; custom ones do.
-export async function GET(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const guard = assertLocationAccess(user, params.id)
-  if (guard) return guard
-
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ request, db, params }) => {
   const { searchParams } = new URL(request.url)
   const start = searchParams.get('start') || undefined
   const end = searchParams.get('end') || undefined
@@ -44,7 +36,6 @@ export async function GET(request, props) {
   const rangeError = rangeQueryError(start, end, { startName: 'start', endName: 'end' })
   if (rangeError) return NextResponse.json({ success: false, error: rangeError }, { status: 400 })
 
-  const db = createServerClient()
 
   // Look up the location's country — drives which static holiday list
   // we merge in. Default to 'IE' if the row is somehow missing the field.
@@ -66,7 +57,7 @@ export async function GET(request, props) {
 
   const merged = mergeHolidays(custom || [], { start, end, country })
   return NextResponse.json({ success: true, data: merged, country })
-}
+})
 
 // POST /api/locations/[id]/holidays — add a custom holiday (manager+).
 // Same-date entries override the static name when GET merges them.
@@ -85,25 +76,11 @@ export async function GET(request, props) {
 // wider than the ['master','owner','manager'] list the money-adjacent
 // stripe-connect routes use. The role-miss copy and the 403-for-anonymous are
 // this route's own, kept verbatim.
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
-  }
-
-  const locationId = params.id
-  const guard = assertLocationAccess(user, locationId)
-  if (guard) return guard
-  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
-  }
-
+export const POST = withAuth({ permission: null, location: 'param', roles: MANAGER_ROLES, forbiddenMessage: 'Unauthorized' }, async ({ request, user, db, locationId }) => {
   const validation = await validateBody(request, HolidayCreateSchema)
   if (!validation.ok) return validation.response
   const { date, name } = validation.data
 
-  const db = createServerClient()
   const { data, error } = await db.from('location_holidays')
     .upsert(
       { location_id: locationId, date, name, created_by: user.id },
@@ -114,4 +91,4 @@ export async function POST(request, props) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   return NextResponse.json({ success: true, data: { ...data, source: 'custom' } }, { status: 201 })
-}
+})

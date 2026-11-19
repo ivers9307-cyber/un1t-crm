@@ -13,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   logError: vi.fn(),
   logWarn: vi.fn(),
   sendOpsAlert: vi.fn(),
+  sendConversions: vi.fn(),
 }))
+vi.mock('@/lib/offer-purchase-conversion', () => ({ sendOfferCheckoutConversions: (...a) => mocks.sendConversions(...a) }))
 vi.mock('@/lib/ops-alerts', () => ({ sendOpsAlert: (...a) => mocks.sendOpsAlert(...a) }))
 vi.mock('@/lib/revolut', () => ({ createOrder: (...a) => mocks.createOrder(...a) }))
 vi.mock('@/lib/rate-limit', () => ({
@@ -359,3 +361,52 @@ describe('POST /api/public/offers/[slug]/checkout (legacy, pre-deploy pages)', (
     expect(mocks.createOrder.mock.calls[0][0].redirectUrl).toMatch(/\/offers\/stillorgan\/20-class-pack\?purchase=/)
   })
 })
+
+// OFFERTRACK.1 — the checkout keeps the ad attribution and tells Meta.
+describe('POST /api/public/offers/[studio]/[slug]/checkout — attribution and Meta', () => {
+  const tracked = {
+    ...goodBody,
+    attribution: { utm_campaign: 'bf-packs', utm_source: 'facebook', fbclid: 'IwAR123', fbp: 'fb.1.111.222' },
+    lead_event_id: 'lead_abc12345',
+  }
+
+  it('stores the attribution on the row (click id as fbc, never the raw fbclid) and sends Lead + InitiateCheckout', async () => {
+    const req = new Request('http://test/api/public/offers/x/y/checkout', {
+      method: 'POST', body: JSON.stringify(tracked),
+      headers: { 'content-type': 'application/json', 'user-agent': 'Mozilla/5.0 Instagram 300' },
+    })
+    const res = await POST(req, props)
+    expect(res.status).toBe(200)
+    const a = state.inserts[0].row.attribution
+    expect(a).toMatchObject({
+      utm_campaign: 'bf-packs', utm_source: 'facebook', fbp: 'fb.1.111.222', lead_event_id: 'lead_abc12345',
+      event_source_url: 'https://www.un1tdublin.com/offers/stillorgan/20-class-pack', client_ip: '1.2.3.4',
+    })
+    expect(a.fbc).toMatch(/^fb\.1\.\d+\.IwAR123$/)
+    expect('fbclid' in a).toBe(false)
+    expect(mocks.sendConversions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      offer: expect.objectContaining({ id: 'offer-1' }), attribution: a, purchaseId: (await res.clone().json()).data.purchaseId,
+    }))
+  })
+
+  it('a malformed lead event id is refused before anything is created', async () => {
+    const res = await POST(makeRequest({ ...goodBody, lead_event_id: 'bad id!' }), props)
+    expect(res.status).toBe(400)
+    expect(mocks.createOrder).not.toHaveBeenCalled()
+  })
+
+  it('a checkout that could not be recorded sends Meta nothing', async () => {
+    state.insertError = { code: 'XX000', message: 'down' }
+    const res = await POST(makeRequest(tracked), props)
+    expect(res.status).toBe(500)
+    expect(mocks.sendConversions).not.toHaveBeenCalled()
+  })
+
+  it('a un1t.online checkout passes the attribution to its own insert', async () => {
+    const res = await POST(makeRequest({ ...tracked, terms_accepted: true }), propsFor('hatch-street', '3-month-membership'))
+    expect(res.status).toBe(200)
+    expect(mocks.startUn1t.mock.calls[0][1].attribution).toMatchObject({ utm_campaign: 'bf-packs' })
+    expect(mocks.sendConversions).toHaveBeenCalledTimes(1)
+  })
+})
+

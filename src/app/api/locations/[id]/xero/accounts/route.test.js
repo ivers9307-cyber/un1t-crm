@@ -10,9 +10,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-}))
+vi.mock('@/lib/auth', async () => {
+  const actual = await vi.importActual('@/lib/auth')
+  return { ...actual, getCurrentUser: vi.fn() }
+})
 
 const mockDb = { from: vi.fn() }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => mockDb }))
@@ -53,13 +54,13 @@ describe('GET /api/locations/[id]/xero/accounts', () => {
     expect(res.status).toBe(401)
   })
 
-  it('returns 403 when non-master user lacks the location', async () => {
+  it('ROUTEWRAP.1: a non-member gets 404, never confirming the studio', async () => {
     const getCurrentUser = await getMock()
     getCurrentUser.mockResolvedValueOnce({
       id: 'u1', role: 'owner', locations: [{ id: 'OTHER' }],
     })
     const res = await GET(fakeReq(), fakeProps)
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
   })
 
   it('defaults to the bill-codeable account set (SPEND) + ACTIVE, and reports fresh cache', async () => {
@@ -101,7 +102,7 @@ describe('GET /api/locations/[id]/xero/accounts', () => {
 
   it('filters to a single AccountType when an explicit type is passed', async () => {
     const getCurrentUser = await getMock()
-    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', locations: [] })
+    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', profileRole: 'master', isMaster: true, locations: [{ id: 'loc1' }] })
     const accountsChain = makeChain({ data: [], error: null })
     const connChain = makeChain({ data: { accounts_last_synced_at: new Date().toISOString() }, error: null })
     mockDb.from.mockImplementation((t) => t === 'xero_accounts' ? accountsChain : connChain)
@@ -113,7 +114,7 @@ describe('GET /api/locations/[id]/xero/accounts', () => {
 
   it('reports stale=true when last_synced_at is null', async () => {
     const getCurrentUser = await getMock()
-    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', locations: [] })
+    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', profileRole: 'master', isMaster: true, locations: [{ id: 'loc1' }] })
 
     const accountsChain = makeChain({ data: [], error: null })
     const connChain = makeChain({ data: { accounts_last_synced_at: null }, error: null })
@@ -127,7 +128,7 @@ describe('GET /api/locations/[id]/xero/accounts', () => {
 
   it('reports stale=true when last_synced_at is > 30 days old', async () => {
     const getCurrentUser = await getMock()
-    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', locations: [] })
+    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', profileRole: 'master', isMaster: true, locations: [{ id: 'loc1' }] })
 
     const oldDate = new Date(Date.now() - 45 * 86400_000).toISOString()
     const accountsChain = makeChain({ data: [], error: null })
@@ -141,7 +142,7 @@ describe('GET /api/locations/[id]/xero/accounts', () => {
 
   it('bypasses account_type filter when type=ALL', async () => {
     const getCurrentUser = await getMock()
-    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', locations: [] })
+    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', profileRole: 'master', isMaster: true, locations: [{ id: 'loc1' }] })
 
     const accountsChain = makeChain({ data: [], error: null })
     const connChain = makeChain({ data: { accounts_last_synced_at: new Date().toISOString() }, error: null })
