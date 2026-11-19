@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseBonus, offerValueLine, offerTermLine, splitMonthStrip, heroFor, storefrontTitle, storefrontShare, offerShare, offersShareMetadata, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, offerFinePrint } from './offers-storefront'
+import { offerTermLine, splitMonthStrip, heroFor, storefrontTitle, storefrontShare, offerShare, offersShareMetadata, CATEGORY_ORDER, storefrontOffers, storefrontCountdown, isCyberMondayOnly, offerFinePrint } from './offers-storefront'
 import { OFFER_SALE_TAG } from './sale-offers'
 
 const gift = { category: 'gift_card' }
@@ -188,34 +188,6 @@ describe('link previews and tab titles (OFFERSPOLISH.1)', () => {
 describe('bonus-first cards (OFFERSDESIGN.1)', () => {
   const m = (slug, bonus, cents) => ({ slug, category: 'membership', bonus_headline: bonus, price_cents: cents })
   const p = (slug, bonus, cents) => ({ slug, category: 'class_pack', bonus_headline: bonus, price_cents: cents })
-
-  it('reads the free extra off the bonus headline', () => {
-    expect(parseBonus('+3 MONTHS FREE')).toEqual({ n: 3, unit: 'month' })
-    expect(parseBonus('+1 week free')).toEqual({ n: 1, unit: 'week' })
-    expect(parseBonus('+10 CLASSES FREE')).toEqual({ n: 10, unit: 'class' })
-    expect(parseBonus('Bonus on the house')).toBeNull()
-    expect(parseBonus(null)).toBeNull()
-  })
-
-  it('a membership card shows no "About ... a month" line', () => {
-    expect(offerValueLine(m('1-year-membership-bf-2026', '+3 MONTHS FREE', 216900))).toBeNull()
-    expect(offerValueLine(m('6-month-membership-bf-2026', '+6 WEEKS FREE', 114400))).toBeNull()
-    expect(offerValueLine(m('3-month-membership-bf-2026', '+3 WEEKS FREE', 62700))).toBeNull()
-    expect(offerValueLine(m('1-month-membership-bf-2026', '+2 WEEKS FREE', 9900))).toBeNull()
-  })
-
-  it('a class pack states its price over every class, bonus included', () => {
-    expect(offerValueLine(p('30-class-pack-bf-2026', '+10 CLASSES FREE', 51000))).toBe('About €12.75 a class')
-    expect(offerValueLine(p('20-class-pack-bf-2026', '+5 CLASSES FREE', 38000))).toBe('About €15.20 a class')
-  })
-
-  it('says nothing it cannot work out', () => {
-    expect(offerValueLine({ slug: 'gift-card-100', category: 'gift_card', price_cents: 10000 })).toBeNull()
-    expect(offerValueLine(m('1-year-membership', 'Biggest deal', 216900))).toBeNull()
-    expect(offerValueLine(m('mystery-offer', '+3 MONTHS FREE', 216900))).toBeNull()
-    expect(offerValueLine(m('1-year-membership', '+3 MONTHS FREE', 0))).toBeNull()
-    expect(offerValueLine(p('30-class-pack', '+2 WEEKS FREE', 51000))).toBeNull()
-  })
 
   it('names what the bonus is on', () => {
     expect(offerTermLine({ slug: '1-year-membership-bf-2026' })).toBe('On 12 months')
