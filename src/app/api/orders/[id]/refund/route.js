@@ -21,8 +21,15 @@
 //   5. Record the answer (finish_order_refund): completed adds to the order's
 //      total and flips it to 'refunded' when nothing is left; a refusal frees
 //      the order; no answer keeps it held for a retry.
-//   6. Cascade to source row (race_payments / cars.deposit_status)
+//   6. Cascade to source row (race_payments / cars.deposit_status). A paid
+//      trial or an offer (ORDERSTRIALS.1, mig 855) changes nothing on its
+//      source: the order page says what to undo by hand.
 //   7. Emit ORDER_REFUNDED event + apply tag rules
+//
+// A un1t.online order (a trial or offer the CRM sold through un1t.online)
+// never reaches steps 3-7: the CRM does not refund there. It files the
+// record-only refund card instead (fileUn1tRefundCard) and answers
+// { refund_card_id }.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -33,8 +40,52 @@ import { RevolutError } from '@/lib/revolut'
 import { paymentsFor } from '@/lib/payments'
 import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
 import { validateBody } from '@/lib/validate'
-import { logError } from '@/lib/log'
+import { logError, logInfo } from '@/lib/log'
 import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
+import { fileRefundCard } from '@/lib/un1t-online-approval'
+
+// ORDERSTRIALS.1 — the source rows a un1t.online order can come from, and
+// where the buyer's un1t.online user id lives on each.
+const UN1T_SOURCE_TABLES = Object.freeze({ trial_purchase: 'trial_purchases', offer_purchase: 'offer_purchases' })
+
+/**
+ * ORDERSTRIALS.1 — a un1t.online sale is refunded by hand in un1t.online's
+ * owner console: the CRM never refunds there. Refunding the order files the
+ * record-only refund card (fileRefundCard) that staff approve once it is done,
+ * and leaves the order, and the refund ledger, alone.
+ */
+async function fileUn1tRefundCard(db, order, { reason, amountCents, actorId }) {
+  if (order.status !== 'completed') {
+    return NextResponse.json({ success: false, error: `Only completed orders can be refunded (current status: ${order.status}).`, code: 'invalid_status' }, { status: 409 })
+  }
+  let un1tUserId = null
+  const table = UN1T_SOURCE_TABLES[order.source_type]
+  if (table) {
+    const { data, error } = await db.from(table).select('un1t_user_id').eq('id', order.source_id).maybeSingle()
+    if (error) logError('orders-refund', 'un1t.online source row unreadable for the refund card', { err: error, orderId: order.id })
+    un1tUserId = data?.un1t_user_id ?? null
+  }
+  const { approvalId } = await fileRefundCard(db, {
+    locationId: order.location_id,
+    contactId: order.contact_id || null,
+    un1tUserId,
+    reason: 'member_request',
+    transactionIds: order.payment_provider_ref ? [String(order.payment_provider_ref)] : [],
+    amountCents: amountCents ?? Math.max(0, Number(order.amount_cents) - (Number(order.refunded_amount_cents) || 0)),
+    currency: order.currency || 'EUR',
+    origin: 'staff',
+    originRef: order.id,
+    note: reason,
+  })
+  if (!approvalId) {
+    return NextResponse.json({ success: false, error: 'Could not file the refund card. Nothing was refunded. Try again.', code: 'refund_card_failed' }, { status: 503 })
+  }
+  logInfo('orders-refund', 'un1t.online refund card filed', { orderId: order.id, approvalId, actorId })
+  return NextResponse.json({
+    success: true,
+    data: { order_id: order.id, refund_card_id: approvalId, refund_in: 'un1t_online' },
+  })
+}
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -183,6 +234,10 @@ export async function POST(request, props) {
   }
   if (!hasRoleAtLocation(user, order.location_id, REFUND_ROLES)) {
     return NextResponse.json({ success: false, error: REFUND_ROLE_ERROR }, { status: 403 })
+  }
+
+  if (order.payment_provider === 'un1t_online') {
+    return fileUn1tRefundCard(db, order, { reason: body.reason, amountCents: body.amount_cents ?? null, actorId: user.id })
   }
 
   // Partial vs full — delegates all guards to the pure resolveRefund helper.

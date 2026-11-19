@@ -89,14 +89,16 @@ async function notifyApprovers(db, { approvalId, locationId, contactId, reason, 
  *   currency?: string|null,
  *   origin: 'staff'|'funnel'|'approval'|'mia'|'test_account', originRef?: string|null,
  *   conversationId?: string|null, channel?: 'whatsapp'|'instagram'|null,
+ *   note?: string|null,
  * }} args
+ * `note` (ORDERSTRIALS.1) is the staff member's own words, kept on the card.
  * @returns {Promise<{ approvalId: string|null }>} null = nothing was filed (logged)
  */
 export async function fileRefundCard(db, args = {}) {
   const {
     locationId, contactId = null, un1tUserId = null, reason, bookingId = null,
     transactionIds = [], amountCents = null, currency = null, origin,
-    originRef = null, conversationId = null, channel = null,
+    originRef = null, conversationId = null, channel = null, note = null,
   } = args || {}
   const ids = { locationId, contactId, un1tUserId, reason, origin, originRef }
   try {
@@ -125,6 +127,7 @@ export async function fileRefundCard(db, args = {}) {
         currency,
         origin,
         origin_ref: originRef,
+        ...(note ? { note: String(note).slice(0, 500) } : {}),
         record_only: true,
       },
     }).select('id').maybeSingle()

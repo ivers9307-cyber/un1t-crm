@@ -29,6 +29,10 @@ import { sqlCode, ident, splitTop } from './sql-code.js'
  * and does not tell overloads apart).
  */
 export const CLOSED_FUNCTIONS = [
+  { fn: 'private.project_trial_purchase_order', args: '()', closedBy: 855,
+    why: 'ORDERSTRIALS.1: trigger function that writes orders; fired by trial_purchases writes, never called by a client' },
+  { fn: 'private.project_offer_purchase_order', args: '()', closedBy: 855,
+    why: 'ORDERSTRIALS.1: trigger function that writes orders; fired by offer_purchases writes, never called by a client' },
   { fn: 'public.claim_order_refund', args: '(uuid, integer, text, uuid)', closedBy: 853,
     why: 'REFUNDLEDGER.1: claims a refund on any order; only the refund route calls it, as service_role' },
   { fn: 'public.finish_order_refund', args: '(uuid, text, text, text)', closedBy: 853,

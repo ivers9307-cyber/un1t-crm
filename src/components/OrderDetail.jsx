@@ -87,7 +87,7 @@ export default function OrderDetail({ orderId }) {
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
             <div className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-1">
-              {order.source_type === 'race_registration' ? 'Race signup' : 'Car deposit'}
+              {ORDER_SOURCE_LABELS[order.source_type] || order.source_type}
             </div>
             <div className="text-3xl font-bold text-un1t-text tabular-nums">
               {formatMoney(order.amount_cents, order.currency)}
@@ -287,8 +287,62 @@ function ChainRow({ c, isCurrent, onCancelled, when }) {
   )
 }
 
+// ORDERSTRIALS.1 — the header's name for each kind of order.
+const ORDER_SOURCE_LABELS = {
+  race_registration: 'Race signup',
+  car_deposit: 'Car deposit',
+  trial_purchase: 'Paid trial',
+  offer_purchase: 'Offer',
+}
+
+// A refund of a trial or an offer moves money only (Richard's decision,
+// 19 Nov 2026): what was bought stays, and staff undo it by hand.
+function RefundUndoNote({ children }) {
+  return (
+    <p className="text-[11px] text-amber-700 pt-2 border-t border-un1t-border">
+      A refund does not undo this purchase. {children}
+    </p>
+  )
+}
+
 function SourceSummary({ source, when }) {
   if (!source?.kind) return null
+  if (source.kind === 'trial_purchase') {
+    const t = source.trial
+    return (
+      <section className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-2">
+        <h3 className="text-sm font-semibold text-un1t-text inline-flex items-center gap-2">
+          <Receipt size={14} /> Trial details
+        </h3>
+        <div className="text-sm text-un1t-text">{t?.product_name || '(unknown trial)'}</div>
+        <div className="grid grid-cols-2 gap-2 text-[12px] text-un1t-subtle">
+          {t?.status && <div>Status: <span className="text-un1t-text">{t.status.replaceAll('_', ' ')}</span></div>}
+          {t?.duration_days != null && <div>Length: <span className="text-un1t-text">{t.duration_days} days</span></div>}
+          {t?.paid_at && <div>Paid: <span className="text-un1t-text">{when(t.paid_at)}</span></div>}
+          {t?.granted_at && <div>Granted: <span className="text-un1t-text">{when(t.granted_at)}</span></div>}
+          {t?.class_name && <div>First class: <span className="text-un1t-text">{t.class_name}{t.class_starts_at ? `, ${when(t.class_starts_at)}` : ''}</span></div>}
+        </div>
+        <RefundUndoNote>If the trial should end, remove its credits or membership in the booking system.</RefundUndoNote>
+      </section>
+    )
+  }
+  if (source.kind === 'offer_purchase') {
+    const p = source.purchase
+    return (
+      <section className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-2">
+        <h3 className="text-sm font-semibold text-un1t-text inline-flex items-center gap-2">
+          <Tag size={14} /> Offer details
+        </h3>
+        <div className="text-sm text-un1t-text">{p?.offer?.name || '(unknown offer)'}</div>
+        <div className="grid grid-cols-2 gap-2 text-[12px] text-un1t-subtle">
+          {p?.offer?.category && <div>Type: <span className="text-un1t-text">{p.offer.category}</span></div>}
+          {p?.paid_at && <div>Paid: <span className="text-un1t-text">{when(p.paid_at)}</span></div>}
+          <div>Set up: <span className="text-un1t-text">{p?.fulfilled_at ? when(p.fulfilled_at) : 'not yet'}</span></div>
+        </div>
+        <RefundUndoNote>If the pack or membership should stop, cancel it in the booking system.</RefundUndoNote>
+      </section>
+    )
+  }
   if (source.kind === 'race_registration') {
     const r = source.race_event
     const w = source.wave
