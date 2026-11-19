@@ -16,7 +16,7 @@ import { buildBusinessBriefing } from '@shared/business-briefing'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
 import { providesCapability } from '@/lib/membership/state-for-page'
-import { cachedChurnRadar } from '@/lib/dashboard/churn-count'
+import { arrearsOf, cachedChurnRadar } from '@/lib/dashboard/churn-count'
 import { displayZoneFor } from '@/lib/display-zone'
 
 // UN1TREAD.3 — the numbers come through the membership read seam, not from
@@ -72,10 +72,8 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
       .then(({ data }) => data?.[0] ?? null, () => null)
     // TZ.11a — Revenue MTD is the studio's calendar month.
     const zone = await displayZoneFor(db, user, locationId, 'business-kpis')
-    const [revenue, arrears, membershipLive, radar, approvalsCount, churnPrev] = await Promise.all([
+    const [revenue, membershipLive, radar, approvalsCount, churnPrev] = await Promise.all([
       m.reads.revenueMtd(db, locationId, new Date(nowMs), zone),
-      // un1t reads arrears from spec A's past-due rows since UN1TRADAR.2; a source with no arrears read is null, not a Glofox zero.
-      supportsRead(m, 'arrears') ? m.reads.arrears(db, locationId) : Promise.resolve(null),
       // Guarded like radar/approvals — any of its internal count
       // queries throwing must not reject the whole Promise.all and
       // discard four healthy data points.
@@ -86,9 +84,10 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
       churnSnapshot,
     ])
     if (!revenue.success) throw new Error(revenue.error)
-    // null (not a fake {0,0}) when arrears failed — the card shows '—',
-    // not a dishonest "€0 · 0 members" (DASH-REBUILD.6c pattern).
-    const arrearsData = arrears?.success ? arrears.data : null
+    // ARREARSONE.1 — the radar's Overdue count (overdue memberships minus the
+    // dismissed), the number the Studio page and the Churn Radar show. null
+    // (not a fake {0,0}) when the radar failed: the card shows '—'.
+    const arrearsData = arrearsOf(radar)
     // null (not 0) when membership failed — the card shows '—', not a
     // fake zero; the briefing's own `|| 0` handles its degradation.
     const memberCount = membershipLive
