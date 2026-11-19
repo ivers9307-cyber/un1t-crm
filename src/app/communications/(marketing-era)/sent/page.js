@@ -92,10 +92,19 @@ export default async function SendsHistoryPage() {
           <h1 className="text-xl font-semibold text-un1t-text mt-1">Sent</h1>
           <p className="text-sm text-un1t-subtle">One-off WhatsApp and email sends at this location.</p>
         </div>
-        <Link href="/communications/send"
-          className="inline-flex items-center gap-1.5 rounded-lg bg-un1t-text text-un1t-bg px-3 py-2 text-sm font-medium hover:bg-un1t-accent shrink-0">
-          <Send size={15} /> Send a message
-        </Link>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* NEWEMAIL.1 — the full editor's own way in, blank or from a template. */}
+          {canEmail && (
+            <Link href="/communications/new-email"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-un1t-border px-3 py-2 text-sm font-medium text-un1t-text hover:border-un1t-text/30">
+              <Mail size={15} /> New email
+            </Link>
+          )}
+          <Link href="/communications/send"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-un1t-text text-un1t-bg px-3 py-2 text-sm font-medium hover:bg-un1t-accent">
+            <Send size={15} /> Send a message
+          </Link>
+        </div>
       </div>
 
       {rows.length === 0 ? (

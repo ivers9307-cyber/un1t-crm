@@ -13,6 +13,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
+import { loadMarketingTemplate } from '@/lib/email-templates-for-agents'
+import { logError } from '@/lib/log'
 import {
   CampaignCreateSchema, contentPatch, audienceFilterRefusal, resendRefusal, NO_EMAIL, serverError,
 } from '@/lib/campaign-session-access'
@@ -38,16 +40,37 @@ export async function POST(request) {
   const resend = resendRefusal(body)
   if (resend.error) return NextResponse.json({ success: false, error: resend.error }, { status: 400 })
 
+  const db = createServerClient()
+
+  // NEWEMAIL.1 — a template is one of THIS studio's marketing templates
+  // (loadMarketingTemplate refuses another studio's, a confirmation or
+  // reminder, and one an event or race points at). A failed read is a 503,
+  // never a blank draft passed off as the template.
+  let template = null
+  if (body.template_id) {
+    try {
+      template = await loadMarketingTemplate(db, body.location_id, body.template_id)
+    } catch (err) {
+      logError('communications', 'template read failed on create', { err, templateId: body.template_id })
+      return NextResponse.json({ success: false, error: 'Could not read that template. Try again.' }, { status: 503 })
+    }
+    if (!template) return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
+  }
+
   const row = {
     ...contentPatch(body),
     ...resend.patch,
-    subject: body.subject ?? '',
+    ...(template ? {
+      template_id: template.id,
+      html_content: body.html_content ?? template.html_content,
+      design_json: body.design_json ?? template.design_json,
+    } : {}),
+    subject: body.subject ?? template?.subject ?? '',
     location_id: body.location_id,
     status: 'draft',
     created_by: user.id,
   }
 
-  const db = createServerClient()
   const { data, error } = await db.from('campaigns')
     .insert(row)
     .select('id, status, location_id')
