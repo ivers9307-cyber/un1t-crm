@@ -1,5 +1,6 @@
 // PILLAR2 Phase 1 — the unified "send a message off the cuff" surface.
-// Audience-first, channel-aware (WhatsApp + email; SMS retired in TWILIO-RETIRE.1).
+// Audience-first. WhatsApp only since QUICKEMAIL-RETIRE.1 (email: /communications/new-email;
+// SMS retired in TWILIO-RETIRE.1).
 // A facade over the existing broadcast records + send routes — see
 // UnifiedSendComposer + docs/PILLAR2_UNIFIED_SEND_2026-06.md.
 import { getCurrentUser } from '@/lib/auth'
@@ -17,25 +18,30 @@ export default async function SendPage(props) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const channels = []
-  if (hasPermission(user, 'whatsapp')) channels.push('whatsapp')
-  if (hasPermission(user, 'email')) channels.push('email')
-  if (channels.length === 0) redirect('/communications')
+  // QUICKEMAIL-RETIRE.1 — WhatsApp only. Email is written in the full editor,
+  // so an email-only holder is sent to /communications/new-email, carrying a
+  // Segments deep link with them.
+  const canEmail = hasPermission(user, 'email')
+  if (!hasPermission(user, 'whatsapp')) {
+    if (!canEmail) redirect('/communications')
+    const qs = new URLSearchParams()
+    if (typeof searchParams?.segment === 'string') qs.set('segment', searchParams.segment)
+    if (typeof searchParams?.segment_id === 'string') qs.set('segment_id', searchParams.segment_id)
+    const q = qs.toString()
+    redirect(`/communications/new-email${q ? `?${q}` : ''}`)
+  }
 
   const locationId = user.activeLocation?.id
   if (!locationId) redirect('/communications')
 
   // Approved WhatsApp templates for the picker (server-side — no client fetch).
-  let templates = []
-  if (channels.includes('whatsapp')) {
-    const db = createServerClient()
-    const { data } = await db.from('whatsapp_templates')
-      .select('id, name, language, category, components, status, quality_rating, display_group')
-      .eq('location_id', locationId)
-      .eq('status', 'APPROVED')
-      .order('name')
-    templates = data || []
-  }
+  const db = createServerClient()
+  const { data } = await db.from('whatsapp_templates')
+    .select('id, name, language, category, components, status, quality_rating, display_group')
+    .eq('location_id', locationId)
+    .eq('status', 'APPROVED')
+    .order('name')
+  const templates = data || []
 
   // ?segment=<tag> deep-link (from SegmentsGrid) — pre-seed the audience with
   // that tag clause (same shape /email/campaigns/new uses).
@@ -56,10 +62,10 @@ export default async function SendPage(props) {
     <div>
       <div className="mb-5">
         <Link href="/communications" className="text-xs text-un1t-subtle hover:text-un1t-text">← Communications</Link>
-        <h1 className="text-xl font-semibold text-un1t-text mt-1">Send a message</h1>
+        <h1 className="text-xl font-semibold text-un1t-text mt-1">Send a WhatsApp</h1>
         <p className="text-sm text-un1t-subtle">Pick who, write once, send now or schedule.</p>
       </div>
-      <UnifiedSendComposer locationId={locationId} locationTimeZone={zoneOfLocation(user.activeLocation)} channels={channels} templates={templates} initialAudienceFilter={initialAudienceFilter} initialSegmentId={initialSegmentId} />
+      <UnifiedSendComposer locationId={locationId} locationTimeZone={zoneOfLocation(user.activeLocation)} canEmail={canEmail} templates={templates} initialAudienceFilter={initialAudienceFilter} initialSegmentId={initialSegmentId} />
     </div>
   )
 }

@@ -5,8 +5,8 @@
 // beside the hardcoded machine tag cards in SegmentsGrid.
 //
 // Two deliberately different things share the word "segment" here:
-//   · tag cards (SegmentsGrid) → /communications/send?segment=<tag>
-//   · these saved filters      → /communications/send?segment_id=<uuid>
+//   · tag cards (SegmentsGrid) → /communications/new-email?segment=<tag> (email) or /communications/send?segment=<tag> (WhatsApp)
+//   · these saved filters      → /communications/new-email?segment_id=<uuid> (email) or /communications/send?segment_id=<uuid> (WhatsApp)
 // The composer applies a saved filter wholesale; the tag link seeds one
 // clause. Keeping the groups visually separate is the point — see the
 // 2026-08-09 comms audit, where operators could not tell which was which.
@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, AlertCircle, Bookmark, Send } from 'lucide-react'
+import { Loader2, AlertCircle, Bookmark, Mail, MessageCircle } from 'lucide-react'
 
 export default function SavedSegmentsList({ locationId }) {
   const [segments, setSegments] = useState(null)
@@ -80,13 +80,22 @@ export default function SavedSegmentsList({ locationId }) {
               {s.description || 'Saved filter — no description.'}
             </p>
             <div className="mt-3 pt-3 border-t border-un1t-border">
-              <Link
-                href={`/communications/send?segment_id=${encodeURIComponent(s.id)}`}
-                className="text-xs text-un1t-text hover:text-un1t-accent inline-flex items-center gap-1"
-                title={`Send to ${s.name} — pick SMS, WhatsApp or email`}
-              >
-                <Send size={11} /> Send to these
-              </Link>
+              <span className="inline-flex items-center gap-3">
+                <Link
+                  href={`/communications/new-email?segment_id=${encodeURIComponent(s.id)}`}
+                  className="text-xs text-un1t-text hover:text-un1t-accent inline-flex items-center gap-1"
+                  title={`Email ${s.name} in the full editor`}
+                >
+                  <Mail size={11} /> Email these
+                </Link>
+                <Link
+                  href={`/communications/send?segment_id=${encodeURIComponent(s.id)}`}
+                  className="text-xs text-un1t-text hover:text-un1t-accent inline-flex items-center gap-1"
+                  title={`WhatsApp ${s.name}`}
+                >
+                  <MessageCircle size={11} /> WhatsApp these
+                </Link>
+              </span>
             </div>
           </div>
         ))}

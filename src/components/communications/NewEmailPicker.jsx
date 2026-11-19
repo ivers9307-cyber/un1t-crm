@@ -10,7 +10,10 @@ import { useRouter } from 'next/navigation'
 import { FilePlus2, LayoutTemplate, Loader2 } from 'lucide-react'
 import { campaignPath, campaignRequest } from '@/lib/campaign-route-client'
 
-export default function NewEmailPicker({ locationId, studioName = '', templates = [], readFailed = false }) {
+// `audience` (QUICKEMAIL-RETIRE.1): { label, filter } from a Segments link,
+// sent as the draft's audience_filter; { missing: true } when the link's
+// segment could not be read; null for a plain start.
+export default function NewEmailPicker({ locationId, studioName = '', templates = [], readFailed = false, audience = null }) {
   const router = useRouter()
   const [busy, setBusy] = useState(null) // 'blank' | template id
   const [error, setError] = useState(null)
@@ -25,6 +28,7 @@ export default function NewEmailPicker({ locationId, studioName = '', templates 
         location_id: locationId,
         name: template ? template.name : 'Untitled email',
         ...(template ? { template_id: template.id } : {}),
+        ...(audience?.filter ? { audience_filter: audience.filter } : {}),
       },
     })
     if (!result.ok || !result.data?.id) {
@@ -44,6 +48,13 @@ export default function NewEmailPicker({ locationId, studioName = '', templates 
       <p className="text-sm text-un1t-subtle mb-5">
         Start blank or from one of {studioName ? `${studioName}'s` : 'the studio’s'} templates. It opens in the full editor as a draft; nothing is sent.
       </p>
+
+      {audience?.filter && (
+        <p className="mb-4 text-sm text-un1t-text">Audience: <span className="font-medium">{audience.label}</span>. You can change it in the editor.</p>
+      )}
+      {audience?.missing && (
+        <p className="mb-4 text-sm text-amber-700">That segment could not be found at this studio, so the email starts with no audience. Pick one in the editor.</p>
+      )}
 
       {error && <p role="alert" className="mb-4 text-sm text-rose-700">{error}</p>}
 

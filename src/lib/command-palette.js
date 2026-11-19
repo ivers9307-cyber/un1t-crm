@@ -98,6 +98,8 @@ export const CREATE_COMMANDS = [
   // there.) If /communications/send ever takes a channel preselect, this is
   // the entry that should pass it.
   { id: 'new-broadcast', label: 'New WhatsApp broadcast', href: '/communications/send', permission: 'whatsapp' },
+  // QUICKEMAIL-RETIRE.1 — email moved out of /communications/send to the full editor.
+  { id: 'new-email', label: 'New email', href: '/communications/new-email', permission: 'email' },
   { id: 'new-event', label: 'New event', href: '/events/new', permission: 'races' },
   // PALETTE.1 — the /settings index's Add Location button. The page gates on
   // `user.role === 'master'` (the active role, not profileRole), so roles.

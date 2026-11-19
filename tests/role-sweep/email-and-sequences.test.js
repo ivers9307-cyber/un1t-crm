@@ -19,7 +19,6 @@ import { ADMIN_ROLES, MANAGER_ROLES } from '@/lib/schemas'
 import { describeGate, gateProbe } from '../helpers/role-gate-probe.js'
 import { roleCases, permissionCases, OUTSIDER, LOC_B } from '../helpers/role-sweep-callers.js'
 import * as sendTest from '@/app/api/campaigns/[id]/send-test/route.js'
-import * as emailDraft from '@/app/api/communications/email-draft/route.js'
 import * as release from '@/app/api/communications/list-health/[id]/release/route.js'
 import * as suppress from '@/app/api/communications/list-health/[id]/suppress/route.js'
 import * as seed from '@/app/api/sequences/[id]/audience/seed/route.js'
@@ -44,7 +43,6 @@ const ENROL_ID = '5e000000-0000-4000-8000-000000000002'
 const ESC_ID = '5e000000-0000-4000-8000-000000000003'
 const NOT_FOUND = { status: 404, body: { success: false, error: 'Not found' } }
 const FORBIDDEN_PLAIN = { status: 403, body: { success: false, error: 'Forbidden' } }
-const NOT_MEMBER = { status: 403, body: { success: false, error: 'Forbidden — location not in your assignments' } }
 const MANAGER_REQUIRED = { status: 403, body: { success: false, error: 'Manager+ required' } }
 const EMAIL_REQUIRED = { status: 403, body: { success: false, error: 'Email permission required' } }
 
@@ -55,12 +53,6 @@ describeGate('POST /api/campaigns/[id]/send-test (ADMIN_ROLES at the campaign)',
   gateReads: row({ id: 'cam-1', subject: 'Hello', html_content: '<p>Hi</p>', locations: { name: 'Studio' } }),
   forbidden: { status: 403, body: { success: false, error: 'Admin only' } },
   hidden: NOT_FOUND, cases: roleCases(ADMIN_ROLES),
-}, T)
-
-describeGate('POST /api/communications/email-draft (email at body.location_id)', {
-  call: (loc) => emailDraft.POST(json('POST', { location_id: loc, name: 'Autumn' })),
-  forbidden: { status: 403, body: { success: false, error: 'No email permission at this location' } },
-  hidden: NOT_MEMBER, cases: permissionCases('email'),
 }, T)
 
 for (const [name, mod] of [['release', release], ['suppress', suppress]]) {

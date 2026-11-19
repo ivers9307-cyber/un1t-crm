@@ -62,21 +62,21 @@ describe('UnifiedSendComposer — presets are mounted here', () => {
   // deliberate filter. The composer was one of the last two hosts still
   // passing it.
   it('seeds no guessed filter row — the operator starts from nothing', async () => {
-    render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} templates={[]} />)
+    render(<UnifiedSendComposer locationId="loc-1"  templates={[]} />)
     await waitFor(() => expect(builderProps).toBeTruthy())
     expect(builderProps.defaultFilterRow ?? null).toBeNull()
     expect(builderProps.filter?.filters ?? []).toHaveLength(0)
   })
 
   it('hands the verified preset registry to the builder', async () => {
-    render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} templates={[]} />)
+    render(<UnifiedSendComposer locationId="loc-1"  templates={[]} />)
     await waitFor(() => expect(builderProps).toBeTruthy())
     expect(builderProps.presets).toBe(AUDIENCE_PRESETS)
     expect(screen.getByTestId('preset-count').textContent).toBe(String(AUDIENCE_PRESETS.length))
   })
 
   it('a preset click routes through the existing count path — no second counting mechanism', async () => {
-    render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} templates={[]} />)
+    render(<UnifiedSendComposer locationId="loc-1"  templates={[]} />)
     await waitFor(() => expect(builderProps).toBeTruthy())
 
     const arrears = AUDIENCE_PRESETS.find(p => p.id === 'in_arrears')

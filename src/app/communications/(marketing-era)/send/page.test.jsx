@@ -10,7 +10,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: () => true }))
+let perms = new Set(['whatsapp', 'email'])
+vi.mock('@/lib/permissions', () => ({ hasPermission: (_u, key) => perms.has(key) }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((url) => { throw new Error(`NEXT_REDIRECT:${url}`) }),
@@ -28,6 +29,7 @@ import { createServerClient } from '@/lib/supabase'
 afterEach(cleanup)
 
 beforeEach(() => {
+  perms = new Set(['whatsapp', 'email'])
   getCurrentUser.mockResolvedValue({ id: 'u1', activeLocation: { id: 'loc-1' } })
   // WhatsApp templates query — chainable stub ending in an awaited order().
   createServerClient.mockReturnValue({
@@ -61,5 +63,30 @@ describe('/communications/send deep links', () => {
     const props = await renderWith({})
     expect(props.initialAudienceFilter).toBeNull()
     expect(props.initialSegmentId).toBeNull()
+  })
+})
+
+// QUICKEMAIL-RETIRE.1 — the composer is WhatsApp only.
+describe('/communications/send is WhatsApp only', () => {
+  it('tells the composer whether to offer the New email link', async () => {
+    expect((await renderWith({})).canEmail).toBe(true)
+    cleanup()
+    perms = new Set(['whatsapp'])
+    expect((await renderWith({})).canEmail).toBe(false)
+  })
+
+  it('sends an email-only holder to New email, keeping a segment link', async () => {
+    perms = new Set(['email'])
+    await expect(SendPage({ searchParams: Promise.resolve({ segment_id: 'seg-9' }) }))
+      .rejects.toThrow('NEXT_REDIRECT:/communications/new-email?segment_id=seg-9')
+    await expect(SendPage({ searchParams: Promise.resolve({ segment: 'race 2026' }) }))
+      .rejects.toThrow('NEXT_REDIRECT:/communications/new-email?segment=race+2026')
+    await expect(SendPage({ searchParams: Promise.resolve({}) }))
+      .rejects.toThrow(/NEXT_REDIRECT:\/communications\/new-email$/)
+  })
+
+  it('sends someone with neither permission back to Communications', async () => {
+    perms = new Set()
+    await expect(SendPage({ searchParams: Promise.resolve({}) })).rejects.toThrow('NEXT_REDIRECT:/communications')
   })
 })

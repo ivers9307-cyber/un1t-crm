@@ -4,11 +4,11 @@
 // surface. One screen: pick audience → pick channel → compose → send now (or
 // schedule). It's a FACADE: on send it creates the existing per-channel
 // broadcast record and fires the existing send route — the send libs + crons
-// are untouched. Channels: WhatsApp + email (SMS was retired with Twilio,
-// TWILIO-RETIRE.1).
+// are untouched. WhatsApp only since QUICKEMAIL-RETIRE.1: email is written in
+// the full editor (/communications/new-email), which has every email feature
+// this composer had and more (SMS was retired with Twilio, TWILIO-RETIRE.1).
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Filter } from 'lucide-react'
 import { Button } from '@/components/ui'
 import AudienceBuilder from '@/components/AudienceBuilder'
@@ -20,11 +20,8 @@ import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import { AUDIENCE_PRESETS } from '@/lib/audience-presets'
 import ContactMultiSelect from './ContactMultiSelect'
 import SavedSegmentChips from './SavedSegmentChips'
-import ResendSettings from './ResendSettings'
 import SendQuietHoursNotice from './SendQuietHoursNotice'
-import CopyAssist from './CopyAssist'
 import { isoToLocalDatetime } from '@/lib/datetime-local'
-import { useUnlayerEditor } from './useUnlayerEditor'
 import { waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 import { resolveZone } from '@shared/zoned-time'
@@ -38,26 +35,18 @@ const fieldCls =
 // TZ.4 — `locationTimeZone` is the studio's IANA zone (the page passes the
 // active location's `timezone`; omitted, Europe/Dublin). A drip's window and
 // the audience builder's "today" are that studio's wall clock.
-export default function UnifiedSendComposer({ locationId, locationTimeZone = null, channels = [], templates = [], initialAudienceFilter = null, initialSegmentId = null }) {
-  const router = useRouter()
+export default function UnifiedSendComposer({ locationId, locationTimeZone = null, canEmail = false, templates = [], initialAudienceFilter = null, initialSegmentId = null }) {
   const zone = resolveZone(locationTimeZone)
-  const [channel, setChannel] = useState(channels[0] || 'email')
+  const channel = 'whatsapp'
   const [label, setLabel] = useState('')
   const [filter, setFilter] = useState(initialAudienceFilter || EMPTY_FILTER)
-  // Explicit "pick people" mode (WhatsApp only)
+  // Explicit "pick people" mode
   const [audienceMode, setAudienceMode] = useState('filter') // 'filter' | 'people'
   // SEGPICK.1 — saved segments (contact_segments) for this location. null while
   // loading so the empty state doesn't flash before the fetch resolves.
   const [savedSegments, setSavedSegments] = useState(null)
   const [appliedSegmentId, setAppliedSegmentId] = useState(null)
   const [people, setPeople] = useState([]) // [{ id, name, email, phone }]
-  // Email
-  const [subject, setSubject] = useState('')
-  const [emailType, setEmailType] = useState('marketing') // 'marketing' | 'utility'
-  // CAMPAIGN-RESEND — auto-resend to non-openers (marketing email only)
-  const [resendEnabled, setResendEnabled] = useState(false)
-  const [resendWaitHours, setResendWaitHours] = useState(48)
-  const [resendSubject, setResendSubject] = useState('')
   // WhatsApp
   const [templateId, setTemplateId] = useState('')
   const [variables, setVariables] = useState({})
@@ -71,7 +60,7 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
   // Mia stays off the recipients' threads. (A single-recipient send does this
   // automatically; the toggle is for bulk sends.)
   const [handleReplies, setHandleReplies] = useState(false)
-  // Schedule (all three channels; WhatsApp joined with WA-SCHEDULE)
+  // Schedule (WA-SCHEDULE)
   const [scheduleMode, setScheduleMode] = useState('now') // 'now' | 'later'
   const [scheduledAtLocal, setScheduledAtLocal] = useState('')
   // Audience count (debounced). COMMSFIX.B.6 — `count` is the will-receive
@@ -80,7 +69,6 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
   // invalid filter (e.g. OR + tag) is VISIBLE instead of being swallowed
   // into the add-a-condition placeholder while Send stayed enabled.
   const [count, setCount] = useState(null)
-  const [matched, setMatched] = useState(null)
   const [countError, setCountError] = useState(null)
   const [reachable, setReachable] = useState(null)   // WhatsApp only
   // Submit
@@ -151,9 +139,7 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
     return idx < 0 ? null : selectedTemplate.components.find(c => c.type === 'BUTTONS').buttons[idx]
   }, [selectedTemplate])
 
-  // Explicit "pick people" mode is WhatsApp only — email hands off to the
-  // campaign editor, whose AudienceBuilder can't represent an id-in filter yet.
-  const useExplicit = audienceMode === 'people' && channel !== 'email'
+  const useExplicit = audienceMode === 'people'
   // FILTER-P1.1 — strip half-built rows here, at the single point the filter
   // leaves the builder for the count endpoint AND for every persist path
   // below, so an unset row can neither be counted nor saved.
@@ -163,30 +149,12 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
       : stripUnsetFilterRows(filter)
   ), [useExplicit, people, filter])
 
-  // Inline Unlayer editor for the email channel (the full editor stays at
-  // /communications/sent/email/[id] for advanced options: from-name, preview text, test send).
-  const { ref: unlayerRef, loaded: unlayerLoaded, dirty: unlayerDirty, exportHtml: exportEmailHtml } = useUnlayerEditor({ mountId: 'unlayer-editor-composer', active: channel === 'email' })
-
-  // COMMSFIX.D.4a — the Unlayer mount div renders only while channel ===
-  // 'email' and the hook re-inits fresh on re-mount, so leaving the email
-  // channel destroys the design outright. Clicking the WhatsApp pill to
-  // double-check a template name and clicking back used to wipe half an hour
-  // of work with no warning. Ask first, and only when there IS work to lose.
-  function switchChannel(next) {
-    if (next === channel) return
-    if (channel === 'email' && unlayerDirty) {
-      if (!confirm('Switching channel discards the email design you have started — it cannot be recovered. Switch anyway?')) return
-    }
-    setChannel(next)
-  }
-
   // FILTER-B.3 — the count block moved to the shared <AudienceCount> (mounted
   // below), which owns the debounced fetch for all four builder hosts. The
   // composer keeps the numbers in state only because `canSend` gates on them:
   // one request, one number, no second source of truth.
   const handleCountResult = useCallback((r) => {
     setCount(r.count)
-    setMatched(r.matched)
     setReachable(r.reachable)
     setCountError(r.error)
   }, [])
@@ -196,45 +164,31 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
   const countFilter = useExplicit ? effectiveFilter : filter
 
   const defaultLabel = () => {
-    const ch = channel === 'whatsapp' ? 'WhatsApp' : 'Email'
-    return label.trim() || `${ch} — ${new Date().toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}`
+    return label.trim() || `WhatsApp — ${new Date().toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}`
   }
 
   // ── validation ──────────────────────────────────────────────────
   const scheduledIso = scheduledAtLocal ? new Date(scheduledAtLocal).toISOString() : null
   const scheduleValid = scheduleMode === 'now' || (scheduledIso && new Date(scheduledIso).getTime() > Date.now())
-  const composeValid = channel === 'whatsapp'
-    ? !!templateId
-    : subject.trim().length > 0 // email — needs a subject (design is inline)
+  const composeValid = !!templateId
   const audienceValid = !useExplicit || people.length > 0
-  const useResend = channel === 'email' && emailType === 'marketing' && resendEnabled
-  const resendValid = !useResend || (Number(resendWaitHours) >= 1 && Number(resendWaitHours) <= 168)
   const isSchedule = scheduleMode === 'later'
-  const isDrip = channel === 'whatsapp' && waMode === 'drip'
+  const isDrip = waMode === 'drip'
   // For WhatsApp the meaningful gate is the reachable count, not raw matches —
   // an audience of 1 with 0 reachable has nobody to send to.
-  const sendableCount = channel === 'whatsapp' ? reachable : count
-  // FILTER-P1.6c — the MATCH count, as opposed to the sendable one. For email
-  // the route reports raw matches as `matched` and eligibles as
-  // `count`; for WhatsApp `count` IS the match count and `reachable` is the
-  // sendable one. Keeping the two apart is the whole point: "nobody matched"
-  // and "matched, none reachable" are different problems with different fixes.
-  const matchedCount = channel === 'whatsapp' ? count : (matched ?? count)
-  const channelNoun = channel === 'whatsapp' ? 'on WhatsApp' : 'by email'
+  const sendableCount = reachable
+  // FILTER-P1.6c — the MATCH count, as opposed to the sendable one: for
+  // WhatsApp `count` IS the match count and `reachable` is the sendable one.
+  // Keeping the two apart is the whole point: "nobody matched" and "matched,
+  // none reachable" are different problems with different fixes.
+  const matchedCount = count
+  const channelNoun = 'on WhatsApp'
   // COMMSFIX.B.6 — Send requires a REAL positive count: null (still loading /
   // failed) and an errored count both disable it. The old `== null` escape
   // let an operator queue a campaign whose audience could never resolve.
   const countReady = typeof sendableCount === 'number' && !countError
-  // COMMSFIX.D.2c — the email design lives in the Unlayer iframe, so a send
-  // fired before the designer has loaded can only ever export an empty body.
-  // Send stayed enabled while the UI said "Loading the email designer…".
-  const designerReady = channel !== 'email' || unlayerLoaded
-  // Both gates apply: B.6 answers "is there anyone to send to", D.2c answers
-  // "is there anything to send". Either one missing produced a real incident
-  // class — an unsendable audience queued forever, or a blank body that marked
-  // the entire audience bounced.
-  const canSend = !busy && composeValid && scheduleValid && audienceValid && resendValid
-    && countReady && sendableCount > 0 && designerReady
+  const canSend = !busy && composeValid && scheduleValid && audienceValid
+    && countReady && sendableCount > 0
 
   // ── submit ──────────────────────────────────────────────────────
   async function postJson(url, payload) {
@@ -298,27 +252,6 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
         } else {
           await startOrSignoff(broadcast.id, (data) => setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}`, ...data }))
         }
-      } else {
-        // Email — design inline with Unlayer, create the campaign, then queue
-        // (send-now) or schedule it. The run-campaigns cron does the actual send
-        // (the send path is untouched).
-        const { html, design } = await exportEmailHtml()
-        const action = scheduleMode === 'later' ? 'schedule' : 'send'
-        const data = await postJson('/api/communications/email-draft', {
-          name: defaultLabel(), subject, audience_filter: effectiveFilter, location_id: locationId,
-          html_content: html, design_json: design, action, email_type: emailType,
-          ...(useResend ? {
-            resend_enabled: true,
-            resend_wait_hours: Number(resendWaitHours),
-            ...(resendSubject.trim() ? { resend_subject: resendSubject.trim() } : {}),
-          } : {}),
-          ...(action === 'schedule' ? { scheduled_at: scheduledIso } : {}),
-        })
-        setResult({
-          channel, id: data.id, detail: `/communications/sent/email/${data.id}`,
-          mode: action === 'schedule' ? 'scheduled' : 'sent', when: scheduledIso, queued: action === 'send',
-          resendWait: useResend ? Number(resendWaitHours) : null,
-        })
       }
     } catch (e) {
       setError(e?.message || 'Something went wrong')
@@ -327,26 +260,11 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
     }
   }
 
-  // Email power-user escape hatch: save the inline design as a draft and open the
-  // full campaign editor (from-name, preview text, code mode, test send).
-  async function openFullEditor() {
-    setBusy(true); setError(null)
-    try {
-      const { html, design } = await exportEmailHtml()
-      const data = await postJson('/api/communications/email-draft', {
-        name: defaultLabel(), subject, audience_filter: effectiveFilter, location_id: locationId,
-        html_content: html, design_json: design, action: 'draft', email_type: emailType,
-      })
-      router.push(`/communications/sent/email/${data.id}?edit=1`)
-    } catch (e) { setError(e?.message || 'Could not open the editor'); setBusy(false) }
-  }
-
   function reset() {
     setResult(null); setError(null); setTemplateId(''); setVariables({})
     setLabel(''); setFilter(EMPTY_FILTER); setAppliedSegmentId(null); setScheduleMode('now'); setScheduledAtLocal('')
-    setResendEnabled(false); setResendWaitHours(48); setResendSubject('')
     setWaMode('blast'); setDailyCap(500); setPerTickCap(''); setWindowStart('09:00'); setWindowEnd('20:00')
-    setReachable(null); setMatched(null); setCountError(null)
+    setReachable(null); setCountError(null)
   }
 
   // ── result screen ───────────────────────────────────────────────
@@ -376,7 +294,7 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
           <>
             <h2 className="text-lg font-semibold text-un1t-text">Scheduled</h2>
             <p className="text-sm text-un1t-subtle mt-1">
-              Your {result.channel === 'email' ? 'email' : result.drip ? 'WhatsApp drip' : 'WhatsApp'} will {result.drip ? 'start' : 'go out'} at{' '}
+              Your {result.drip ? 'WhatsApp drip' : 'WhatsApp'} will {result.drip ? 'start' : 'go out'} at{' '}
               {new Date(result.when).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}.
               {' '}You can cancel it from the details page any time before then.
             </p>
@@ -384,16 +302,12 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
         ) : (
           <>
             <h2 className="text-lg font-semibold text-un1t-text">
-              {result.queued
-                ? 'Queued'
-                : result.channel === 'whatsapp' && (result.sent ?? 0) === 0 && result.remaining ? 'Sending…'
-                : result.channel === 'whatsapp' && (result.sent ?? 0) === 0 ? 'Nobody was reachable'
+              {(result.sent ?? 0) === 0 && result.remaining ? 'Sending…'
+                : (result.sent ?? 0) === 0 ? 'Nobody was reachable'
                 : (result.remaining > 0 ? 'Sending…' : 'Sent')}
             </h2>
             <p className="text-sm text-un1t-subtle mt-1">
-              {result.queued
-                ? 'Your email is queued — it goes out within the next minute.'
-                : (() => {
+              {(() => {
                     const ds = result.delivery_summary
                     const k = ds ? (ds.matched - ds.reachable) : null
                     const reasons = ds && ds.excluded ? [
@@ -402,7 +316,7 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
                       ds.excluded.opted_out ? `${ds.excluded.opted_out} opted out` : null,
                       ds.excluded.undeliverable ? `${ds.excluded.undeliverable} not on WhatsApp` : null,
                     ].filter(Boolean).join(', ') : ''
-                    if (result.channel === 'whatsapp' && (result.sent ?? 0) === 0 && !result.remaining) {
+                    if ((result.sent ?? 0) === 0 && !result.remaining) {
                       return reasons
                         ? `None of the ${ds.matched} matched contacts could be messaged — ${reasons}.`
                         : 'None of the matched contacts could be messaged on WhatsApp.'
@@ -416,11 +330,6 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
                     </>
                   })()}
             </p>
-            {result.resendWait != null && (
-              <p className="text-xs text-un1t-subtle mt-2">
-                Anyone who doesn&apos;t open it gets the resend about {result.resendWait}h after this send completes.
-              </p>
-            )}
           </>
         )}
         <div className="flex items-center justify-center gap-2 mt-5">
@@ -435,27 +344,23 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
 
   // ── composer ────────────────────────────────────────────────────
   return (
-    <div className={`${channel === 'email' ? 'max-w-5xl' : 'max-w-2xl'} mx-auto space-y-5`}>
-      {/* Channel */}
-      {channels.length > 1 && (
-        <div className="flex gap-2">
-          {channels.includes('whatsapp') && (
-            <ChannelPill active={channel === 'whatsapp'} onClick={() => switchChannel('whatsapp')} icon={MessageCircle} label="WhatsApp" />
-          )}
-          {channels.includes('email') && (
-            <ChannelPill active={channel === 'email'} onClick={() => switchChannel('email')} icon={Mail} label="Email" />
-          )}
-        </div>
-      )}
+    <div className="max-w-2xl mx-auto space-y-5">
+      {/* QUICKEMAIL-RETIRE.1 — email moved to the full editor. */}
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex items-center gap-1.5 text-sm font-medium text-un1t-text"><MessageCircle size={15} />WhatsApp</span>
+        {canEmail && (
+          <Link href="/communications/new-email" className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text underline">
+            <Mail size={14} />Writing an email? Start a new email
+          </Link>
+        )}
+      </div>
 
       {/* Audience */}
       <Section title="Who" sub="Build a filter / pick a saved segment, or choose specific people. Consent + reachability are applied automatically when you send.">
-        {channel !== 'email' && (
-          <div className="flex gap-2 mb-3">
-            <ChannelPill active={audienceMode === 'filter'} onClick={() => setAudienceMode('filter')} icon={Filter} label="Filter / segment" small />
-            <ChannelPill active={audienceMode === 'people'} onClick={() => setAudienceMode('people')} icon={Users} label="Pick people" small />
-          </div>
-        )}
+        <div className="flex gap-2 mb-3">
+          <ChannelPill active={audienceMode === 'filter'} onClick={() => setAudienceMode('filter')} icon={Filter} label="Filter / segment" small />
+          <ChannelPill active={audienceMode === 'people'} onClick={() => setAudienceMode('people')} icon={Users} label="Pick people" small />
+        </div>
         {/* SEGPICK.1 — saved segments from /contacts. Filter mode only: an
             explicit people list can't be represented as a stored filter. */}
         {!useExplicit && (
@@ -488,8 +393,7 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
           <input className={fieldCls} value={label} onChange={e => setLabel(e.target.value)} placeholder={defaultLabel()} />
         </label>
 
-        {channel === 'whatsapp' ? (
-          <>
+        <>
             <label className="block">
               <span className="block text-xs font-medium text-un1t-subtle mb-1">Approved template</span>
               <select className={fieldCls} value={templateId} onChange={e => { setTemplateId(e.target.value); setVariables({}) }}>
@@ -551,64 +455,7 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
               </div>
             )}
           </>
-        ) : (
-          <>
-            <div className="mb-3">
-              <span className="block text-xs font-medium text-un1t-subtle mb-1">Email type</span>
-              <div className="inline-flex rounded-md border border-un1t-border overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setEmailType('marketing')}
-                  className={`px-3 py-1.5 text-sm ${emailType === 'marketing' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
-                >Marketing</button>
-                <button
-                  type="button"
-                  onClick={() => setEmailType('utility')}
-                  className={`px-3 py-1.5 text-sm border-l border-un1t-border ${emailType === 'utility' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
-                >Utility</button>
-              </div>
-              {emailType === 'utility' && (
-                <p className="mt-1 text-xs text-amber-700">
-                  Booking/transactional only — ignores marketing opt-out. Using this for marketing breaches consent.
-                </p>
-              )}
-            </div>
-            <label className="block mb-3">
-              <span className="block text-xs font-medium text-un1t-subtle mb-1">Subject</span>
-              <input className={fieldCls} value={subject} onChange={e => setSubject(e.target.value)} placeholder="Email subject" />
-            </label>
-            {/* GAPS-P8 — suggestions only. Nothing is applied until the operator
-                clicks Use; body variants copy to the clipboard rather than
-                overwrite the design in the Unlayer iframe. */}
-            <CopyAssist
-              className="mb-3"
-              locationId={locationId}
-              subject={subject}
-              getBody={async () => (await exportEmailHtml()).html || ''}
-              onUseSubject={setSubject}
-            />
-            <div id="unlayer-editor-composer" ref={unlayerRef} className="h-[560px] rounded-lg overflow-hidden border border-un1t-border bg-un1t-bg" />
-            {!unlayerLoaded && <p className="text-[11px] text-un1t-subtle mt-1">Loading the email designer…</p>}
-            <div className="mt-2 text-right">
-              <button type="button" onClick={openFullEditor} disabled={busy}
-                className="text-[11px] text-un1t-subtle hover:text-un1t-text underline disabled:opacity-40">
-                Need from-name, preview text or a test send? Open the full editor →
-              </button>
-            </div>
-          </>
-        )}
       </Section>
-
-      {/* Follow-up — marketing email only (CAMPAIGN-RESEND) */}
-      {channel === 'email' && emailType === 'marketing' && (
-        <Section title="Follow-up" sub="Automatically resend this email to anyone who doesn't open it — same design, optionally a fresh subject.">
-          <ResendSettings
-            value={{ enabled: resendEnabled, waitHours: resendWaitHours, subject: resendSubject }}
-            onChange={(v) => { setResendEnabled(v.enabled); setResendWaitHours(v.waitHours); setResendSubject(v.subject) }}
-            originalSubject={subject}
-          />
-        </Section>
-      )}
 
       {/* Pacing — WhatsApp only (WA-DRIP) */}
       {channel === 'whatsapp' && (
@@ -659,7 +506,7 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
         </Section>
       )}
 
-      {/* When — both channels schedule via their broadcast cron. */}
+      {/* When — scheduled via the broadcast cron. */}
       <Section title="When">
         <div className="flex gap-2 mb-2">
           <ChannelPill active={scheduleMode === 'now'} onClick={() => setScheduleMode('now')} icon={Send} label={isDrip ? 'Start now' : 'Send now'} small />
@@ -671,7 +518,7 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
         {scheduleMode === 'later' && scheduledAtLocal && !scheduleValid && (
           <p className="text-[11px] text-rose-700 mt-1">Pick a time in the future.</p>
         )}
-        {scheduleMode === 'later' && channel === 'whatsapp' && isDrip && (
+        {scheduleMode === 'later' && isDrip && (
           <p className="text-[11px] text-un1t-subtle mt-1">The drip starts at this time, then paces itself inside the daily window above.</p>
         )}
         {/* GAPS-P4 — quiet-hours advisory. Both modes: a "Send now" pressed at

@@ -190,7 +190,6 @@
  "communications/campaigns/[id]/stop/route.js",
  "communications/campaigns/approve/[token]/route.js",
  "communications/campaigns/route.js",
- "communications/email-draft/route.js",
  "communications/events/route.js",
  "communications/list-health/[id]/release/route.js",
  "communications/list-health/[id]/suppress/route.js",

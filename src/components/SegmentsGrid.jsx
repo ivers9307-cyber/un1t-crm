@@ -3,14 +3,14 @@
 // SegmentsGrid — card grid of every known tag with active count
 // + per-channel deep-link broadcast hooks. Mig 085 / Phase 3.
 //
-// Each card has a "Send to these" link → /communications/send?segment=<tag>.
+// Each card has "Email these" and "WhatsApp these" links → /communications/new-email?segment=<tag> (email) or /communications/send?segment=<tag> (WhatsApp).
 // The unified composer reads ?segment and pre-populates the AudienceBuilder with
 // `{ field: 'tag', op: 'eq', value: <tag> }`, then the operator picks the channel
 // (SMS / WhatsApp / email) there — no need to re-pick the audience.
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, AlertCircle, Tag, Send, Users } from 'lucide-react'
+import { Loader2, AlertCircle, Tag, Mail, MessageCircle, Users } from 'lucide-react'
 
 export default function SegmentsGrid() {
   const [data, setData] = useState(null)
@@ -62,13 +62,22 @@ export default function SegmentsGrid() {
           </div>
           <p className="text-xs text-un1t-subtle flex-1">{s.description}</p>
           <div className="mt-3 pt-3 border-t border-un1t-border flex items-center justify-between gap-2">
-            <Link
-              href={`/communications/send?segment=${encodeURIComponent(s.tag)}`}
-              className="text-xs text-un1t-text hover:text-un1t-accent inline-flex items-center gap-1"
-              title={`Send to ${s.tag} — pick SMS, WhatsApp or email`}
-            >
-              <Send size={11} /> Send to these
-            </Link>
+            <span className="inline-flex items-center gap-3">
+              <Link
+                href={`/communications/new-email?segment=${encodeURIComponent(s.tag)}`}
+                className="text-xs text-un1t-text hover:text-un1t-accent inline-flex items-center gap-1"
+                title={`Email ${s.tag} in the full editor`}
+              >
+                <Mail size={11} /> Email these
+              </Link>
+              <Link
+                href={`/communications/send?segment=${encodeURIComponent(s.tag)}`}
+                className="text-xs text-un1t-text hover:text-un1t-accent inline-flex items-center gap-1"
+                title={`WhatsApp ${s.tag}`}
+              >
+                <MessageCircle size={11} /> WhatsApp these
+              </Link>
+            </span>
             <Link
               href={`/contacts?tag=${encodeURIComponent(s.tag)}`}
               className="text-xs text-un1t-subtle hover:text-un1t-text"

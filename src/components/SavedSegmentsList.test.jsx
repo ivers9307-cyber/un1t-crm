@@ -3,7 +3,7 @@
 // SEGPICK.1 — the Segments tab listed ONLY the 6 hardcoded machine tag cards,
 // so a segment saved on /contacts appeared nowhere in Communications and an
 // operator reasonably concluded the save had failed. This is the second group:
-// the location's own saved filters, each with a "Send to these" deep link
+// the location's own saved filters, each with "Email these" and "WhatsApp these" deep links
 // mirroring the tag cards' — but on ?segment_id, not ?segment.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -38,11 +38,16 @@ describe('SavedSegmentsList', () => {
     expect(calls[0]).toContain('location_id=loc-1')
   })
 
-  it('links each one to the composer on ?segment_id (not ?segment)', async () => {
+  it('links each one to the email editor and the WhatsApp composer on ?segment_id (not ?segment)', async () => {
     render(<SavedSegmentsList locationId="loc-1" />)
-    await waitFor(() => expect(screen.getAllByRole('link', { name: /send to these/i })).toHaveLength(2))
-    const hrefs = screen.getAllByRole('link', { name: /send to these/i }).map(a => a.getAttribute('href'))
-    expect(hrefs).toEqual([
+    await waitFor(() => expect(screen.getAllByRole('link', { name: /email these/i })).toHaveLength(2))
+    const email = screen.getAllByRole('link', { name: /email these/i }).map(a => a.getAttribute('href'))
+    const wa = screen.getAllByRole('link', { name: /whatsapp these/i }).map(a => a.getAttribute('href'))
+    expect(email).toEqual([
+      '/communications/new-email?segment_id=seg-1',
+      '/communications/new-email?segment_id=seg-2',
+    ])
+    expect(wa).toEqual([
       '/communications/send?segment_id=seg-1',
       '/communications/send?segment_id=seg-2',
     ])
