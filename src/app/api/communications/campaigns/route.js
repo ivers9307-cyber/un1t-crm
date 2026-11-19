@@ -14,7 +14,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import {
-  CampaignCreateSchema, contentPatch, audienceFilterRefusal, NO_EMAIL, serverError,
+  CampaignCreateSchema, contentPatch, audienceFilterRefusal, resendRefusal, NO_EMAIL, serverError,
 } from '@/lib/campaign-session-access'
 import { fromAddressReport } from '@/lib/from-address'
 
@@ -34,9 +34,13 @@ export async function POST(request) {
 
   const refusal = audienceFilterRefusal(body.audience_filter)
   if (refusal) return refusal
+  // EDITORRESEND.1 — resend is marketing only and needs a wait.
+  const resend = resendRefusal(body)
+  if (resend.error) return NextResponse.json({ success: false, error: resend.error }, { status: 400 })
 
   const row = {
     ...contentPatch(body),
+    ...resend.patch,
     subject: body.subject ?? '',
     location_id: body.location_id,
     status: 'draft',

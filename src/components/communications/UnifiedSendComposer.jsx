@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Filter, Bookmark } from 'lucide-react'
+import { MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Filter } from 'lucide-react'
 import { Button } from '@/components/ui'
 import AudienceBuilder from '@/components/AudienceBuilder'
 import AudienceCount from './AudienceCount'
@@ -19,6 +19,8 @@ import { stripUnsetFilterRows } from '@/lib/audience-filter'
 // continuing condition, so a preset would carry a meaning it does not have).
 import { AUDIENCE_PRESETS } from '@/lib/audience-presets'
 import ContactMultiSelect from './ContactMultiSelect'
+import SavedSegmentChips from './SavedSegmentChips'
+import ResendSettings from './ResendSettings'
 import SendQuietHoursNotice from './SendQuietHoursNotice'
 import CopyAssist from './CopyAssist'
 import { isoToLocalDatetime } from '@/lib/datetime-local'
@@ -115,11 +117,6 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
     })()
     return () => { alive = false }
   }, [locationId, initialSegmentId])
-
-  const appliedSegment = useMemo(
-    () => (savedSegments || []).find(s => s.id === appliedSegmentId) || null,
-    [savedSegments, appliedSegmentId],
-  )
 
   // Applying is an assignment: contact_segments.filter is the same JSON as
   // campaigns.audience_filter, so it drops straight in and the existing
@@ -463,45 +460,7 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
             explicit people list can't be represented as a stored filter. */}
         {!useExplicit && (
           <div className="mb-3">
-            {savedSegments === null ? null : savedSegments.length === 0 ? (
-              <p className="text-xs text-un1t-subtle">
-                No saved segments yet. Build a filter on{' '}
-                <Link href="/contacts" className="underline hover:text-un1t-text">Contacts</Link>{' '}
-                and save it there — it shows up here for every send.
-              </p>
-            ) : (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] uppercase tracking-wider text-un1t-subtle flex items-center gap-1">
-                  <Bookmark size={11} /> Saved segments
-                </span>
-                {savedSegments.map(s => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => applySegment(s)}
-                    title={s.description || 'Apply this saved segment'}
-                    className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-                      appliedSegmentId === s.id
-                        ? 'border-un1t-text/30 bg-un1t-text/[0.06] text-un1t-text font-medium'
-                        : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
-                    }`}
-                  >
-                    {s.name}
-                  </button>
-                ))}
-              </div>
-            )}
-            {appliedSegment && (
-              <p className="mt-2 text-xs text-un1t-subtle flex flex-wrap items-center gap-1.5">
-                <span>
-                  Using saved segment <b className="text-un1t-text">{appliedSegment.name}</b>. Editing the
-                  conditions below drops this — the segment itself is unchanged.
-                </span>
-                <button type="button" onClick={clearSegment} className="underline hover:text-un1t-text">
-                  Clear segment
-                </button>
-              </p>
-            )}
+            <SavedSegmentChips segments={savedSegments} appliedSegmentId={appliedSegmentId} onApply={applySegment} onClear={clearSegment} />
           </div>
         )}
         {useExplicit
@@ -643,45 +602,11 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
       {/* Follow-up — marketing email only (CAMPAIGN-RESEND) */}
       {channel === 'email' && emailType === 'marketing' && (
         <Section title="Follow-up" sub="Automatically resend this email to anyone who doesn't open it — same design, optionally a fresh subject.">
-          <label className="flex items-start gap-2 cursor-pointer select-none">
-            <input type="checkbox" className="mt-0.5 accent-un1t-text"
-              checked={resendEnabled} onChange={e => setResendEnabled(e.target.checked)} />
-            <span className="text-sm text-un1t-text">
-              Resend to people who don&apos;t open
-              <span className="block text-[11px] text-un1t-subtle mt-0.5">Unsubscribes, bounces and suppressions between the two sends are respected automatically.</span>
-            </span>
-          </label>
-          {resendEnabled && (
-            <div className="mt-3 space-y-3">
-              <div>
-                <span className="block text-xs font-medium text-un1t-subtle mb-1">Wait before resending</span>
-                <div className="flex items-center gap-2">
-                  {[24, 48, 72].map(h => (
-                    <ChannelPill key={h} active={Number(resendWaitHours) === h} onClick={() => setResendWaitHours(h)} icon={Clock} label={`${h}h`} small />
-                  ))}
-                  <input type="number" min={1} max={168} className={`${fieldCls} w-24`}
-                    value={resendWaitHours} onChange={e => setResendWaitHours(e.target.value)} />
-                  <span className="text-xs text-un1t-subtle">hours</span>
-                </div>
-                {Number(resendWaitHours) >= 1 && Number(resendWaitHours) < 24 && (
-                  <p className="mt-1 text-xs text-amber-700 flex items-start gap-1.5">
-                    <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-                    Opens are still arriving — resending this early reaches people who just haven&apos;t got to it yet.
-                  </p>
-                )}
-                {!resendValid && (
-                  <p className="mt-1 text-[11px] text-rose-700">Pick a wait between 1 and 168 hours.</p>
-                )}
-              </div>
-              <label className="block">
-                <span className="block text-xs font-medium text-un1t-subtle mb-1">New subject <span className="text-un1t-subtle/60">(optional)</span></span>
-                <input className={fieldCls} value={resendSubject} maxLength={500}
-                  onChange={e => setResendSubject(e.target.value)} placeholder={subject || 'Reuses the original subject if left blank'} />
-                <span className="block text-[11px] text-un1t-subtle mt-1">The subject the resend goes out with. Leave blank to reuse the original.</span>
-              </label>
-              <p className="text-[11px] text-un1t-subtle">Open counts undercount slightly — some inboxes preload images, so a few real openers still look unopened and the odd non-opener looks opened.</p>
-            </div>
-          )}
+          <ResendSettings
+            value={{ enabled: resendEnabled, waitHours: resendWaitHours, subject: resendSubject }}
+            onChange={(v) => { setResendEnabled(v.enabled); setResendWaitHours(v.waitHours); setResendSubject(v.subject) }}
+            originalSubject={subject}
+          />
         </Section>
       )}
 

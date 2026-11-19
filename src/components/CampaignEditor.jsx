@@ -14,6 +14,9 @@ import { isCampaignContentEditable, campaignLockedReason } from '@/lib/campaign-
 import { MERGE_TAG_REFERENCE } from '@/lib/merge-tags'
 import { useLocationBrand } from './use-location-brand'
 import { useUnlayerEditor } from './communications/useUnlayerEditor'
+import SavedSegmentChips from './communications/SavedSegmentChips'
+import ResendSettings, { resendWaitValid } from './communications/ResendSettings'
+import { AUDIENCE_PRESETS } from '@/lib/audience-presets'
 
 // FILTER-P1.6 — what the send path ACTUALLY gates on, per
 // buildAudienceQueryAsync (src/lib/postmark.js): the campaign's location, the
@@ -53,6 +56,13 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
   }, [brand])
   const [fromEmail, setFromEmail] = useState(campaign?.from_email || '')
   const [emailType, setEmailType] = useState(campaign?.postmark_stream === 'outbound' ? 'utility' : 'marketing')
+  // EDITORRESEND.1 — resend to non-openers (marketing only), as the quick
+  // composer offers it; saved with the campaign.
+  const [resend, setResend] = useState({
+    enabled: campaign?.resend_enabled === true,
+    waitHours: campaign?.resend_wait_hours ?? 48,
+    subject: campaign?.resend_subject ?? '',
+  })
   const [replyTo, setReplyTo] = useState(campaign?.reply_to || '')
   // CAMPAIGN-AB — optional subject-line A/B test (mig 398). Enabled ⇔
   // ab_subject_b is saved non-null; pct/wait are clamped client-side,
@@ -66,6 +76,29 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
     // from /communications/segments) > empty.
     campaign?.audience_filter || initialAudienceFilter || { filters: [], logic: 'and' }
   )
+  // EDITORRESEND.1 — saved segments to start the audience from (as in the
+  // quick composer). null while loading; [] when there are none or the read
+  // failed (an enhancement, never the critical path).
+  const [savedSegments, setSavedSegments] = useState(null)
+  const [appliedSegmentId, setAppliedSegmentId] = useState(null)
+  useEffect(() => {
+    if (!locationId) return undefined
+    let alive = true
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/contacts/segments?location_id=${encodeURIComponent(locationId)}`)
+        const data = await res.json()
+        if (alive) setSavedSegments(data?.success ? (data.segments || []) : [])
+      } catch {
+        if (alive) setSavedSegments([])
+      }
+    })()
+    return () => { alive = false }
+  }, [locationId])
+  // Applying a segment seeds the filter; editing a row by hand drops the label.
+  const applySegment = (segment) => { setAudienceFilter(segment.filter || { logic: 'and', filters: [] }); setAppliedSegmentId(segment.id) }
+  const clearSegment = () => { setAppliedSegmentId(null); setAudienceFilter({ logic: 'and', filters: [] }) }
+  const editAudienceFilter = (next) => { setAppliedSegmentId(null); setAudienceFilter(next) }
   const [htmlContent, setHtmlContent] = useState(campaign?.html_content || '')
   const [designJson, setDesignJson] = useState(campaign?.design_json || null)
   const [saving, setSaving] = useState(false)
@@ -222,6 +255,10 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
       setError(lockedReason)
       return null
     }
+    if (emailType === 'marketing' && !resendWaitValid(resend)) {
+      setError('Pick a wait between 1 and 168 hours before resending, or switch the resend off.')
+      return null
+    }
     setSaving(true)
     setError(null)
 
@@ -249,6 +286,10 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
         ab_subject_b: abEnabled && abSubjectB.trim() ? abSubjectB.trim() : null,
         ab_test_pct: Math.min(50, Math.max(5, Math.round(Number(abTestPct) || 10))),
         ab_wait_hours: Math.min(24, Math.max(1, Math.round(Number(abWaitHours) || 4))),
+        // EDITORRESEND.1 — marketing only; the route refuses it on a utility email.
+        resend_enabled: emailType === 'marketing' && resend.enabled,
+        resend_wait_hours: emailType === 'marketing' && resend.enabled ? Number(resend.waitHours) : null,
+        resend_subject: emailType === 'marketing' && resend.enabled && resend.subject.trim() ? resend.subject.trim() : null,
       }
 
       const result = campaignId
@@ -950,11 +991,16 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
                 </div>
               )
             })()}
+            {/* EDITORRESEND.1 — saved segments and presets, as in the quick composer. */}
+            <div className="mb-4">
+              <SavedSegmentChips segments={savedSegments} appliedSegmentId={appliedSegmentId} onApply={applySegment} onClear={clearSegment} />
+            </div>
             <AudienceBuilder
               filter={audienceFilter}
               // FILTER-P1.6 — setState only. The debounced effect above owns
               // the count; calling it here too is what made it fire twice.
-              onChange={setAudienceFilter}
+              onChange={editAudienceFilter}
+              presets={AUDIENCE_PRESETS}
               audienceCount={audienceCount}
               locationId={locationId}
               timeZone={locationTimeZone}
@@ -1082,6 +1128,13 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
                   </p>
                 )}
               </div>
+
+              {/* EDITORRESEND.1 — resend to non-openers, marketing only. */}
+              {emailType === 'marketing' && (
+                <div className="border border-un1t-border rounded-md p-4">
+                  <ResendSettings value={resend} onChange={setResend} originalSubject={subject} />
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm mb-1.5">Preview Text</label>

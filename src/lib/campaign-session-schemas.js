@@ -24,6 +24,11 @@ export const CampaignContentSchema = z.object({
   ab_subject_b: z.string().min(1).max(500).nullable().optional(),
   ab_test_pct: z.number().int().min(5).max(50).optional(),
   ab_wait_hours: z.number().int().min(1).max(24).optional(),
+  // EDITORRESEND.1 — resend to non-openers (mig 506: wait 1-168 h). The rules
+  // that need the stored row too are resendRefusal() below.
+  resend_enabled: z.boolean().optional(),
+  resend_wait_hours: z.number().int().min(1).max(168).nullable().optional(),
+  resend_subject: z.string().trim().max(500).nullable().optional(),
 })
 
 export const CampaignCreateSchema = CampaignContentSchema.extend({
@@ -43,3 +48,26 @@ export function contentPatch(data) {
   for (const k of CONTENT_FIELDS) if (data[k] !== undefined) out[k] = data[k]
   return out
 }
+
+/**
+ * EDITORRESEND.1 — the quick composer's resend rules, for the editor's saves.
+ * Resend is marketing only: the outbound (utility) stream has open tracking
+ * off, so "did not open" is everyone there and a resend would go to the whole
+ * audience again. A resend needs a wait. `current` is the stored row's
+ * { postmark_stream, resend_enabled, resend_wait_hours } (absent on a create).
+ * Answers { error } or { patch }: fields to add to the save, which switch a
+ * stored resend OFF when the save moves the campaign to the outbound stream.
+ */
+export function resendRefusal(data, current = {}) {
+  const stream = data.postmark_stream ?? current.postmark_stream ?? 'broadcast'
+  const enabled = data.resend_enabled ?? current.resend_enabled ?? false
+  if (data.resend_enabled === true && stream === 'outbound') {
+    return { error: 'Resend to non-openers is only available for marketing emails.' }
+  }
+  if (enabled && stream !== 'outbound' && !(data.resend_wait_hours ?? current.resend_wait_hours)) {
+    return { error: 'Pick how long to wait before resending (1 to 168 hours).' }
+  }
+  if (enabled && stream === 'outbound') return { patch: { resend_enabled: false } }
+  return { patch: {} }
+}
+

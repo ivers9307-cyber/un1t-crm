@@ -425,3 +425,53 @@ describe('CampaignEditor — sender fields after W1.E2', () => {
     await screen.findByDisplayValue('Garrett at the gym')
   })
 })
+
+// EDITORRESEND.1 — saved segments, presets and resend, as in the quick composer.
+describe('CampaignEditor — saved segments, presets and resend', () => {
+  const SEGMENT = { id: 'seg-1', name: 'Lapsed members', filter: { logic: 'and', filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'lapsed' }] } }
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => ({
+      ok: true,
+      json: async () => (String(url).startsWith('/api/contacts/segments')
+        ? { success: true, segments: [SEGMENT] }
+        : { success: true, audience_count: 10, data: { id: 'camp-1', status: 'draft' } }),
+    })))
+  })
+
+  it('offers the presets and the saved segments, and applying one sets the filter', async () => {
+    renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: /audience/i }))
+    await screen.findByTestId('audience-builder')
+    expect(builderProps.presets?.length).toBeGreaterThan(0)
+    fireEvent.click(await screen.findByRole('button', { name: 'Lapsed members' }))
+    await waitFor(() => expect(builderProps.filter).toEqual(SEGMENT.filter))
+    expect(screen.getByText(/Using saved segment/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'mock edit filter' }))
+    await waitFor(() => expect(screen.queryByText(/Using saved segment/)).toBeNull())
+  })
+
+  it('shows the resend for a marketing email and saves it with the campaign', async () => {
+    renderEditor({ resend_enabled: true, resend_wait_hours: 72, resend_subject: 'Did you see this?' })
+    fireEvent.click(screen.getByRole('button', { name: /settings/i }))
+    expect((await screen.findByRole('checkbox', { name: /Resend to people who don/ })).checked).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: /^save/i }))
+    await waitFor(() => {
+      const put = fetch.mock.calls.find(([u, o]) => String(u).includes('/api/communications/campaigns/camp-1') && o?.method === 'PUT')
+      expect(put).toBeTruthy()
+      expect(JSON.parse(put[1].body)).toMatchObject({ resend_enabled: true, resend_wait_hours: 72, resend_subject: 'Did you see this?' })
+    })
+  })
+
+  it('hides the resend for a utility email and never saves it switched on', async () => {
+    renderEditor({ postmark_stream: 'outbound', resend_enabled: true, resend_wait_hours: 72 })
+    fireEvent.click(screen.getByRole('button', { name: /settings/i }))
+    await screen.findByText('Email Settings')
+    expect(screen.queryByRole('checkbox', { name: /Resend to people who don/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^save/i }))
+    await waitFor(() => {
+      const put = fetch.mock.calls.find(([u, o]) => String(u).includes('/api/communications/campaigns/camp-1') && o?.method === 'PUT')
+      expect(JSON.parse(put[1].body)).toMatchObject({ resend_enabled: false, resend_wait_hours: null })
+    })
+  })
+})
+

@@ -25,7 +25,7 @@ import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audien
 import { campaignUndeletableReason } from '@/lib/campaign-editability'
 
 export {
-  CampaignContentSchema, CampaignCreateSchema, CampaignScheduleSchema, CONTENT_FIELDS, contentPatch,
+  CampaignContentSchema, CampaignCreateSchema, CampaignScheduleSchema, CONTENT_FIELDS, contentPatch, resendRefusal,
 } from '@/lib/campaign-session-schemas'
 
 export const NOT_FOUND = () => NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
