@@ -35,9 +35,10 @@ const RACE = { id: 'e1', location_id: 'L1', name: 'Hatch Relay', slug: 'hatch-oc
 
 // The studio already holds a team called "Rockets" captained by someone else
 // (c-other), confirmed at this event. The caller (c1) types the same name.
-function registerDb({ captain = 'c-other', elsewhere = false } = {}) {
+function registerDb({ captain = 'c-other', elsewhere = false, rosterFails = null } = {}) {
   return fakeDb((q) => {
     if (q.table === 'race_events') return { data: RACE, error: null }
+    if (q.table === 'team_members' && q.action === rosterFails) return { data: null, error: { message: 'down' } }
     if (q.table === 'teams') {
       if (q.action === 'select') {
         const name = eqOf(q, 'name')
@@ -95,3 +96,18 @@ describe('register route: a typed team name never takes over a team (EVENTTEAM.1
     expect(touched('t1')).toHaveLength(0)
   })
 })
+
+// CHECKEDWRITE.1 — a roster that did not save stops the signup before the
+// registration and before any payment, so the person can try again.
+describe('register route: a roster write that fails', () => {
+  it.each(['delete', 'insert'])('stops at the %s with a 500 and creates no registration or payment', async (action) => {
+    db = registerDb({ rosterFails: action })
+    const res = await post(BODY)
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('Could not save your team. Please try again.')
+    expect(db.queries.some((q) => q.table === 'race_registrations' && q.action === 'insert')).toBe(false)
+    const { createRacePayment } = await import('@/lib/race-payments')
+    expect(createRacePayment).not.toHaveBeenCalled()
+  })
+})
+

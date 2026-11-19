@@ -190,6 +190,10 @@ const config = [
     //    the same one, with the same default: never trade a possible duplicate
     //    for a certain silent loss.
     files: [
+      // CHECKEDWRITE.1 — the BCA submission pack (a lost marker re-sends a pack)
+      // and the public event register route (the money path for race entries).
+      'src/app/api/cars/[[]id]/bca/submit/route.js',
+      'src/app/api/public/events/[[]slug]/register/route.js',
       // MCP.1 — the staff MCP server and its agent tools: born clean, and a
       // tool that writes must never answer an agent "done" on a failed write.
       'src/lib/mcp/**', 'src/lib/agent-tools/**',

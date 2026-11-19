@@ -31,6 +31,7 @@ import {
 import { mergeAndCompressBcaPack } from '@/lib/bca-merge'
 import { getBcaBaseUrl } from '@/lib/app-url'
 import { overlayConnections } from '@/lib/connection-registry'
+import { checkedWrite } from '@/lib/checked-write'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -255,10 +256,10 @@ export async function POST(_request, props) {
   // 11. Call Postmark
   const postmarkToken = process.env.POSTMARK_API_KEY
   if (!postmarkToken) {
-    await db.from('car_bca_submissions').update({
+    await checkedWrite('bca-submit', () => db.from('car_bca_submissions').update({
       postmark_error_code: 500,
       postmark_error_msg: 'POSTMARK_API_KEY env var not configured',
-    }).eq('id', submissionId)
+    }).eq('id', submissionId), { message: 'error marker not saved', meta: { submission_id: submissionId } })
     return NextResponse.json({
       success: false,
       error: 'Email service is not configured (POSTMARK_API_KEY missing). Submission was saved but no email was sent.',
@@ -305,10 +306,10 @@ export async function POST(_request, props) {
     })
     const json = await res.json().catch(() => ({}))
     if (!res.ok) {
-      await db.from('car_bca_submissions').update({
+      await checkedWrite('bca-submit', () => db.from('car_bca_submissions').update({
         postmark_error_code: json?.ErrorCode || res.status,
         postmark_error_msg: json?.Message || `HTTP ${res.status}`,
-      }).eq('id', submissionId)
+      }).eq('id', submissionId), { message: 'error marker not saved', meta: { submission_id: submissionId } })
       return NextResponse.json({
         success: false,
         error: `Postmark rejected the email: ${json?.Message || `HTTP ${res.status}`}`,
@@ -318,10 +319,10 @@ export async function POST(_request, props) {
     }
     postmarkResult = json
   } catch (e) {
-    await db.from('car_bca_submissions').update({
+    await checkedWrite('bca-submit', () => db.from('car_bca_submissions').update({
       postmark_error_code: 599,
       postmark_error_msg: e.message || 'Network error',
-    }).eq('id', submissionId)
+    }).eq('id', submissionId), { message: 'error marker not saved', meta: { submission_id: submissionId } })
     return NextResponse.json({
       success: false,
       error: `Network error sending email: ${e.message || 'unknown'}`,
@@ -331,19 +332,25 @@ export async function POST(_request, props) {
 
   // 12. Mark success on this row + supersede any previous active row
   const nowIso = new Date().toISOString()
-  await db.from('car_bca_submissions').update({
+  // CHECKEDWRITE.1 — this marker is what says the pack went. Lost, the pack
+  // looks unsent and gets sent to BCA again, so it is tried twice, logged if
+  // both fail, and the response says so. The email has gone either way.
+  const sentMarker = await checkedWrite('bca-submit', () => db.from('car_bca_submissions').update({
     postmark_message_id: postmarkResult.MessageID,
-  }).eq('id', submissionId)
+  }).eq('id', submissionId).select('id'), {
+    message: 'pack sent but its message id was not saved', expectRows: 1, retries: 1,
+    meta: { submission_id: submissionId, car_id: car.id },
+  })
 
   // Supersede any previous active (non-superseded, non-error) row for
   // this car. There should be at most one; we update by car_id +
   // active filter and skip the row we just inserted.
-  await db.from('car_bca_submissions')
+  await checkedWrite('bca-submit', () => db.from('car_bca_submissions')
     .update({ superseded_by: submissionId, superseded_at: nowIso })
     .eq('car_id', car.id)
     .neq('id', submissionId)
     .is('superseded_at', null)
-    .not('postmark_message_id', 'is', null)
+    .not('postmark_message_id', 'is', null), { message: 'older submissions not superseded', meta: { submission_id: submissionId, car_id: car.id } })
 
   // 13. Return the final submission row (re-fetched to pick up the
   // message_id update + any column defaults).
@@ -360,6 +367,8 @@ export async function POST(_request, props) {
       postmark_message_id: postmarkResult.MessageID,
       attachment_name: attachmentName,
       attachment_size_bytes: mergedPdf.length,
+      // false when the pack went but the record of it did not save: do not resend.
+      sent_recorded: sentMarker.ok,
     },
   })
 }
