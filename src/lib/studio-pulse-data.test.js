@@ -70,7 +70,7 @@ describe('fetchStudioPulse', () => {
     const out = await fetchStudioPulse(db, L, NOW)
     expect(membershipCounts).toHaveBeenCalledWith(db, L)
     expect(out.counts).toEqual({ monthly_recurring: 26, total_members: 30 })
-    expect(out.radar).toEqual({ paused: 0, overdue: 2, overdueValueCents: 16500, overdueValueEstimated: true, arrearsUnavailable: true })
+    expect(out.radar).toEqual({ paused: 0, overdue: 2, overdueValueCents: 16500, overdueValueEstimated: true, highRisk: null, arrearsUnavailable: true })
     expect(out.prevMembership).toBeNull()
   })
 
@@ -78,7 +78,7 @@ describe('fetchStudioPulse', () => {
     radarReadsFor.mockResolvedValue({ source: 'glofox', reads: { membershipCounts: async () => ({ total_members: 1 }) }, providesMemberships: true })
     loadRadar.mockResolvedValue({ summary: { paused: 1, overdue: 1, overdueValueCents: 100, unpaidCharges: 2 } })
     const out = await fetchStudioPulse(tableDb({}), L, NOW)
-    expect(out.radar).toEqual({ paused: 1, overdue: 1, overdueValueCents: 100, overdueValueEstimated: false, arrearsUnavailable: false })
+    expect(out.radar).toEqual({ paused: 1, overdue: 1, overdueValueCents: 100, overdueValueEstimated: false, highRisk: null, arrearsUnavailable: false })
   })
 
   it('returns null when the seam throws', async () => {

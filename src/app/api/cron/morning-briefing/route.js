@@ -1,8 +1,11 @@
 // BRIEFING.1 — /api/cron/morning-briefing
 //
-// Mondays 06:00 UTC (07:00 Dublin in summer, 06:00 in winter). TZ.6: the
-// schedule is hourly and each location acts at its Monday slot: Mon 06:00 UTC
-// for a Europe/Dublin studio (as before), Mon 06:00 local for any other zone,
+// OWNERDAILY.1 (19 Nov 2026): the owner's DAILY briefing (it was Mondays). It
+// carries revenue month to date, yesterday's new leads and trials
+// (owner-daily-headline.js), the members and churn/arrears pulse strip, and
+// the triage list, and it replaces the Monday radar digest, which no longer
+// sends. TZ.6: the schedule is hourly and each location acts at its daily
+// slot: 06:00 UTC for a Europe/Dublin studio, 06:00 local for any other zone,
 // once per local day (src/lib/cron-daily-slot.js); the date line is in the
 // studio's zone. Per active location: builds the
 // same "Needs attention" feed the Today dashboard shows (location
@@ -30,6 +33,7 @@ import { sendEmail } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
 import { fetchLocationTodayFeed } from '@/lib/today-feed-data'
 import { fetchStudioPulse } from '@/lib/studio-pulse-data'
+import { fetchDailyHeadline } from '@/lib/owner-daily-headline'
 import { buildMorningBriefingEmail, shapePulseMetrics } from '@/lib/morning-briefing'
 import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 import { formatInZone } from '@/lib/location-time'
@@ -93,16 +97,19 @@ export async function GET(request) {
     try {
       // BRIEFING.2 — the pulse strip is best-effort (fetchStudioPulse
       // returns null on failure); the triage list is the core payload.
-      const [rows, pulseBundle] = await Promise.all([
+      const [rows, pulseBundle, headline] = await Promise.all([
         // TZ.17 — the feed's "today" is this studio's day (the slot's zone).
         fetchLocationTodayFeed(db, loc.id, nowMs, { zone: slot.zone }),
         pulseAllowed(loc.id) ? fetchStudioPulse(db, loc.id) : null,
+        // OWNERDAILY.1 — best-effort: a figure that cannot be read is left out.
+        fetchDailyHeadline(db, loc.id, { nowMs, zone: slot.zone }).catch(() => null),
       ])
       const { subject, html } = buildMorningBriefingEmail(rows, {
         locationName: loc.name,
         dateLabel: formatInZone(nowMs, slot.zone, { weekday: 'long', day: 'numeric', month: 'long' }),
         appUrl,
         pulse: pulseBundle ? shapePulseMetrics(pulseBundle) : [],
+        headline,
       })
       for (const to of recipients) {
         await sendEmail({ to, subject, htmlBody: html, stream: 'outbound', tag: 'morning-briefing' })
