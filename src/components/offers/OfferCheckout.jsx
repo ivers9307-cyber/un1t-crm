@@ -13,11 +13,36 @@
 //     a 202 help_filed answer (staff have the buyer's details) ends the form.
 //   * cancelled (BLACKFRIDAY.9): the buyer came back from un1t.online's cancel
 //     URL; the form shows with "Checkout cancelled. Nothing was charged.".
+//   * Meta (OFFERTRACK.1): the checkout fires Lead and InitiateCheckout with
+//     the ids the server sends its own copies under, and a Revolut payment
+//     fires Purchase (`offerpurchase-<id>`, the server's id too). The ad
+//     attribution from the landing URL (first touch) goes with the checkout.
 // Every prop is serialisable: a function prop from the server page crashes
 // the page in production.
 import { useEffect, useRef, useState } from 'react'
+import { firstTouchAttribution } from '@/lib/visit-origin'
+import { readAttributionFromUrl, buildAttribution } from '@/lib/campaign-funnel-attribution'
+import { newLeadEventId, pixelUserData, fireBrowserLead, fireBrowserInitiateCheckout } from '@/lib/meta-pixel-lead'
+import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import { loadRevolutSdk, revolutMode, revolutPublicKey } from '@/lib/revolut-embed'
 import { termsLabelSegments } from '@/lib/un1t-online-funnel-copy'
+
+function readFbpCookie() {
+  try {
+    if (typeof document === 'undefined') return null
+    const m = document.cookie.match(/(?:^|;\s*)_fbp=([^;]+)/)
+    return m ? decodeURIComponent(m[1]) : null
+  } catch { return null }
+}
+
+// OFFERTRACK.1 — the browser Purchase for a Revolut payment, under the id the
+// server's copy uses, so Meta counts one. Never throws.
+function fireOfferPurchase({ purchaseId, priceCents, currency, offerName }) {
+  try {
+    if (typeof window === 'undefined' || typeof window.fbq !== 'function' || !purchaseId) return
+    window.fbq('track', 'Purchase', { value: (priceCents || 0) / 100, currency: currency || 'EUR', content_name: offerName }, { eventID: `offerpurchase-${purchaseId}` })
+  } catch { /* pixel not loaded or blocked */ }
+}
 
 // OFFERSPOLISH.1 — the error line's id: the tick points at it while it is the
 // thing in error, so a screen reader reads the reason with the control.
@@ -39,7 +64,7 @@ function TermsTick({ terms, checked, onChange, invalid = false, inputRef = null 
   )
 }
 
-export default function OfferCheckout({ studio, slug, priceLabel, provider = 'revolut', terms = null, resumePurchaseId = null, cancelled = false, soldOutLabel = 'Sold out' }) {
+export default function OfferCheckout({ studio, slug, priceLabel, provider = 'revolut', terms = null, resumePurchaseId = null, cancelled = false, soldOutLabel = 'Sold out', offerName = null, priceCents = null, currency = 'EUR' }) {
   const isUn1t = provider === 'un1t_online'
   // resumePurchaseId: set when Revolut redirected the buyer back after an
   // app-handoff payment (Revolut Pay on mobile) — start by confirming that
@@ -68,7 +93,20 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
   useEffect(() => { if (termsInvalid) termsRef.current?.focus() }, [termsInvalid])
   const acceptTerms = (v) => { setTermsAccepted(v); if (v) setTermsInvalid(false) }
 
-  const markPaid = () => { if (!paidRef.current) { paidRef.current = true; setStep('paid') } }
+  // OFFERTRACK.1 — first-touch ad attribution and the Lead's event id.
+  const attributionRef = useRef(null)
+  const leadEventIdRef = useRef(null)
+  useEffect(() => {
+    try { attributionRef.current = firstTouchAttribution(readAttributionFromUrl(window.location.search)) } catch { /* no attribution */ }
+  }, [])
+  const purchaseIdRef = useRef(resumePurchaseId)
+
+  const markPaid = () => {
+    if (paidRef.current) return
+    paidRef.current = true
+    fireOfferPurchase({ purchaseId: purchaseIdRef.current, priceCents, currency, offerName })
+    setStep('paid')
+  }
 
   const submit = async (e) => {
     e.preventDefault()
@@ -83,7 +121,12 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
       const r = await fetch(`/api/public/offers/${encodeURIComponent(studio)}/${encodeURIComponent(slug)}/checkout`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...fields, ...(activeTerms ? { terms_accepted: true } : {}) }),
+        body: JSON.stringify({
+          ...fields,
+          ...(activeTerms ? { terms_accepted: true } : {}),
+          attribution: buildAttribution(attributionRef.current, readFbpCookie()),
+          lead_event_id: (leadEventIdRef.current ||= newLeadEventId()),
+        }),
       })
       const j = await r.json().catch(() => ({}))
       if (r.status === 400 && j.code === 'terms_required' && j.terms?.required === true) {
@@ -109,6 +152,17 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
       }
       if (r.status === 410) throw new Error('The sale has ended.')
       if (!r.ok || !j.success) throw new Error(j.error || 'Could not start checkout. Please try again.')
+      // OFFERTRACK.1 — the checkout opened: Lead and InitiateCheckout, under
+      // the ids the server's copies use.
+      const leadId = leadEventIdRef.current
+      fireBrowserLead({
+        pixelIds: metaPixelIdsForPath(window.location.pathname),
+        eventId: leadId,
+        userData: pixelUserData({ email: fields.email, phone: fields.phone, firstName: fields.name.split(/\s+/)[0], lastName: fields.name.split(/\s+/).slice(1).join(' ') }),
+        contentName: offerName || undefined,
+      })
+      fireBrowserInitiateCheckout({ eventId: `offercheckout-${leadId}`, value: (priceCents || 0) / 100, currency, contentName: offerName || undefined })
+      purchaseIdRef.current = j.data?.purchaseId || purchaseIdRef.current
       if (j.data?.checkout?.provider === 'un1t_online') {
         if (!j.data.checkout.url) throw new Error('Could not start checkout. Please try again.')
         leaving = true

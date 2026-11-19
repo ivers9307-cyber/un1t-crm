@@ -37,6 +37,10 @@ import { logError, logWarn } from '@/lib/log'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { escapeHtml } from '@/lib/html-escape'
 import { offerIsOpen, offerIsUpcoming } from '@/lib/sale-offers'
+import { fbcFromFbclid } from '@/lib/meta-capi'
+import { inAppBrowserFromUserAgent } from '@/lib/trial-checkout-window'
+import { clientDataForAttribution } from '@/lib/trial-purchase-conversion'
+import { sendOfferCheckoutConversions } from '@/lib/offer-purchase-conversion'
 
 const LOG = 'offers'
 
@@ -48,6 +52,19 @@ export const offerCheckoutSchema = z.object({
   phone: z.string().trim().min(6).max(30),
   // un1t.online offers only: the terms and waiver tick (judged below).
   terms_accepted: z.boolean().optional(),
+  // OFFERTRACK.1 — the ad attribution /trial already takes (measurement only).
+  attribution: z.object({
+    utm_campaign: z.string().max(200).optional(),
+    utm_content: z.string().max(200).optional(),
+    utm_term: z.string().max(200).optional(),
+    utm_source: z.string().max(200).optional(),
+    utm_medium: z.string().max(200).optional(),
+    ad_provider: z.string().max(50).optional(),
+    ad_external_id: z.string().max(200).optional(),
+    fbclid: z.string().max(500).optional(),
+    fbp: z.string().max(100).optional(),
+  }).optional(),
+  lead_event_id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).optional(),
 })
 
 // Cents shown, so a mismatch of a few cents is visible in the alert.
@@ -76,6 +93,24 @@ function brandOrigin(request) {
     }
   } catch { /* fall through to default */ }
   return 'https://www.un1tdublin.com'
+}
+
+// OFFERTRACK.1 — what the purchase row keeps about where the buyer came from:
+// the /trial shape (trial_purchases.attribution). The click id is kept as fbc;
+// the IP address and user agent stay only until the Purchase is sent.
+function checkoutAttribution(request, body, { studioKey, slug }) {
+  const userAgent = request.headers.get('user-agent')
+  const out = {
+    ...(body.attribution || {}),
+    fbc: fbcFromFbclid(body.attribution?.fbclid) || undefined,
+    lead_event_id: body.lead_event_id || undefined,
+    event_source_url: `${brandOrigin(request)}/offers/${studioKey}/${encodeURIComponent(slug)}`,
+    in_app_browser: inAppBrowserFromUserAgent(userAgent),
+    ...clientDataForAttribution({ ip: getClientIp(request), userAgent }),
+  }
+  delete out.fbclid
+  for (const k of Object.keys(out)) if (out[k] === undefined) delete out[k]
+  return out
 }
 
 // OFFERSTOCK.1 — the refusal a buyer sees when the limit stops the checkout.
@@ -159,13 +194,14 @@ export async function handleOfferCheckout(request, { studio: studioKey, slug }) 
   }
   const stockRefusal = await stockGate(db, offer, body.email, location)
   if (stockRefusal) return stockRefusal
+  const attribution = checkoutAttribution(request, body, { studioKey: studio.key, slug: offer.slug })
   if (rail === 'un1t_online') {
-    return un1tCheckout(db, { body, studio, location, offer, purchaseId })
+    return un1tCheckout(db, { body, studio, location, offer, purchaseId, attribution })
   }
-  return revolutCheckout(db, { request, body, studio, location, offer, purchaseId })
+  return revolutCheckout(db, { request, body, studio, location, offer, purchaseId, attribution })
 }
 
-async function un1tCheckout(db, { body, studio, location, offer, purchaseId }) {
+async function un1tCheckout(db, { body, studio, location, offer, purchaseId, attribution }) {
 
   // The price the buyer sees is the offer's; un1t.online charges its product's.
   // The two must agree or the page would quote the wrong amount.
@@ -252,11 +288,12 @@ async function un1tCheckout(db, { body, studio, location, offer, purchaseId }) {
   const terms = { terms_accepted_at: new Date().toISOString(), terms_source: 'website', terms_version: version }
 
   const outcome = await startUn1tOfferCheckout(db, {
-    offer, location, contact, purchaseId, terms, studioKey: studio.key,
+    offer, location, contact, purchaseId, terms, studioKey: studio.key, attribution,
     buyer: { name: body.name, email, phone: body.phone },
   })
   if (outcome.kind === 'redirect') {
     // The URL goes to the browser once; it is never stored or logged.
+    await sendOfferCheckoutConversions(db, { offer, buyer: { name: body.name, email: body.email, phone: body.phone }, attribution, purchaseId, contactId: contact.id })
     return NextResponse.json({ success: true, data: { purchaseId, checkout: { provider: 'un1t_online', url: outcome.checkoutUrl } } })
   }
   if (outcome.kind === 'stock_refused') return stockRefused(outcome.state, location)
@@ -268,7 +305,7 @@ async function un1tCheckout(db, { body, studio, location, offer, purchaseId }) {
   return BUSY()
 }
 
-async function revolutCheckout(db, { request, body, studio, location, offer, purchaseId }) {
+async function revolutCheckout(db, { request, body, studio, location, offer, purchaseId, attribution }) {
   let order
   try {
     order = await createOrder({
@@ -305,6 +342,7 @@ async function revolutCheckout(db, { request, body, studio, location, offer, pur
     currency: offer.currency,
     payment_provider: 'revolut',
     origin: 'page',
+    attribution,
   })
   // OFFERSTOCK.1 — someone took the last one between the early look and here.
   // The order's token never leaves the server, so nobody can pay it and it expires.
@@ -317,6 +355,7 @@ async function revolutCheckout(db, { request, body, studio, location, offer, pur
     return NextResponse.json({ success: false, error: 'Could not start checkout. Please try again.' }, { status: 500 })
   }
 
+  await sendOfferCheckoutConversions(db, { offer, buyer: { name: body.name, email: body.email, phone: body.phone }, attribution, purchaseId })
   return NextResponse.json({
     success: true,
     data: { purchaseId, checkout: { provider: 'revolut', token: order.token } },
