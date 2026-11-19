@@ -60,12 +60,20 @@ const SCAN_DIRS = ['src', 'shared', 'mobile', 'supabase/functions']
 const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'web-build'])
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
 
-const KINDS = ['display', 'data-writing', 'customer-messaging', 'reward', 'conversational-read', 'staff-messaging', 'device', 'suppression']
+const KINDS = ['display', 'data-writing', 'customer-messaging', 'reward', 'conversational-read', 'staff-messaging', 'device', 'suppression', 'open-week-messaging']
+// OPENWEEK.7 — Richard lifted Decision 1 for open week classes only (19 Nov
+// 2026): exactly ONE reader may remind a un1t.online booking, and only an open
+// week claimant's booking inside the promo's window.
+const OPEN_WEEK_MESSAGING = Object.freeze(['src/lib/open-week-reminder-send.js'])
 /** The kinds whose every class_bookings chain must be scoped to the CRM-actionable rows. */
 const SCOPED_KINDS = ['customer-messaging', 'reward']
 
 /** kind: one of KINDS */
 const MANIFEST = Object.freeze({
+  'src/lib/open-week-reminder-send.js': {
+    kind: 'open-week-messaging',
+    reason: 'OPENWEEK.7: the WhatsApp class reminder for open week signups, at BOTH studios (Richard, 19 Nov 2026, the one exception to Decision 1). Reads only BOOKED rows of granted open week claimants at the promo studio inside the promo window.',
+  },
   'src/app/api/cron/send-class-booking-reminders/route.js': {
     kind: 'customer-messaging',
     reason: 'Audit row 1: the pre-class reminder push. Filters source_platform glofox and drops rows at un1t_online studios (skipped_un1t_online).',
@@ -397,6 +405,11 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
       expect(e.reason?.length, p).toBeGreaterThan(20)
     }
     for (const p of HARD_OFF) expect(SCOPED_KINDS, p).toContain(MANIFEST[p]?.kind)
+  })
+
+  it('OPENWEEK.7: the open week reminder is the only open-week-messaging reader', () => {
+    const holders = Object.entries(MANIFEST).filter(([, e]) => e.kind === 'open-week-messaging').map(([p]) => p)
+    expect(holders).toEqual([...OPEN_WEEK_MESSAGING])
   })
 
   it('credit-attendance, which credits sessions and fires the reward cascade, is a reward reader', () => {

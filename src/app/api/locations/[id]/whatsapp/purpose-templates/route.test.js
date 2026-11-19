@@ -118,7 +118,7 @@ describe('PUT /api/locations/[id]/whatsapp/purpose-templates', () => {
       glofox: { branch: 'x' },
       whatsapp_purpose_templates: { event_waitlist_offer: T_UTIL, class_confirmed: T_UTIL },
     })
-    expect(body.data.selected).toEqual({ class_confirmed: T_UTIL, consult_confirmed: null, event_waitlist_offer: T_UTIL, meta_ad_welcome: null })
+    expect(body.data.selected).toEqual({ class_confirmed: T_UTIL, consult_confirmed: null, event_waitlist_offer: T_UTIL, meta_ad_welcome: null, class_reminder: null })
   })
 
   it('null clears the pick without checking a template', async () => {
@@ -140,7 +140,7 @@ describe('GET /api/locations/[id]/whatsapp/purpose-templates', () => {
     const res = await GET(new Request('http://x'), ctx(HATCH))
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({
-      selected: { class_confirmed: null, consult_confirmed: null, event_waitlist_offer: T_UTIL, meta_ad_welcome: null },
+      selected: { class_confirmed: null, consult_confirmed: null, event_waitlist_offer: T_UTIL, meta_ad_welcome: null, class_reminder: null },
       can_edit: true,
     })
   })

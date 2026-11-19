@@ -22,6 +22,8 @@ export const PURPOSES = {
   consult_confirmed: { fallbackName: 'booking_consult_confirmed', categories: ['UTILITY'] },
   event_waitlist_offer: { fallbackName: 'event_waitlist_offer', categories: ['UTILITY'] },
   meta_ad_welcome: { fallbackName: 'meta_ad_whatsapp_lead', categories: ['MARKETING', 'UTILITY'] },
+  // OPENWEEK.7 — the open week class reminder (src/lib/open-week-reminder-send.js).
+  class_reminder: { fallbackName: 'open_week_class_reminder', categories: ['UTILITY'] },
 }
 
 export const PURPOSE_KEYS = Object.keys(PURPOSES)
@@ -32,6 +34,7 @@ export const PURPOSE_LABELS = {
   consult_confirmed: { label: 'Consultation booking confirmed', hint: 'Sent after a free consultation is booked on the campaign booking page.' },
   event_waitlist_offer: { label: 'Event waitlist offer', hint: 'Sent when a place opens up for someone on an event waitlist.' },
   meta_ad_welcome: { label: 'Welcome for new ad leads', hint: 'Sent the moment someone signs up from a paid campaign page.' },
+  class_reminder: { label: 'Open week class reminder', hint: 'Sent to open week signups the evening before a morning class, or the morning of a lunch or afternoon class. Five values: first name, tomorrow/today, time, class, studio.' },
 }
 
 const TEMPLATE_COLUMNS = 'id, location_id, name, language, category, components, status, business_account_id, header_media_url'
