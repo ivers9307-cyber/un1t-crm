@@ -38,12 +38,13 @@ const loc = (id, whatsapp_purpose_templates) => ({ id, settings: whatsapp_purpos
 beforeEach(() => vi.clearAllMocks())
 
 describe('PURPOSES', () => {
-  it('names the four fixed purposes with today\'s template names', () => {
+  it('names the fixed purposes with today\'s template names', () => {
     expect(PURPOSES).toEqual({
       class_confirmed: { fallbackName: 'booking_class_confirmed_', categories: ['UTILITY'] },
       consult_confirmed: { fallbackName: 'booking_consult_confirmed', categories: ['UTILITY'] },
       event_waitlist_offer: { fallbackName: 'event_waitlist_offer', categories: ['UTILITY'] },
       meta_ad_welcome: { fallbackName: 'meta_ad_whatsapp_lead', categories: ['MARKETING', 'UTILITY'] },
+      class_reminder: { fallbackName: 'open_week_class_reminder', categories: ['UTILITY'] },
     })
   })
 })
