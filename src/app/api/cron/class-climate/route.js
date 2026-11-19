@@ -3,34 +3,17 @@
 // the class_climate automation enabled. The OFF is handled by the
 // existing ac-auto-off cron (we write a session with a class-aligned
 // auto_off_at). Idempotent via automation_fire_log.
-//
-// Auth: CRON_SECRET.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { runClassClimate } from '@/lib/class-climate-runner'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'class-climate' }, async ({ db }) => {
   const out = await runClassClimate(db, {})
-
-  // CRONSTAMP.1 (audit 2026-11-15, item 12): stamp only a run that did not
-  // fail (ok: false is a whole-run read failure). It used to stamp every
-  // tick, so a sustained outage never went stale and nothing paged.
-  if (out.ok !== false) {
-    await stampHeartbeat('class-climate').catch((err) =>
-      logWarn('cron-class-climate', 'heartbeat failed', { err }))
-  }
-  return NextResponse.json({ success: out.ok !== false, ...out })
-}
+  // ok: false is a whole-run read failure, so it does not stamp and a
+  // sustained outage goes stale.
+  return { ok: out.ok !== false, status: 200, body: out }
+})

@@ -13,7 +13,7 @@
 //   /api/public/**    exempt by path — public by design (rate limits are
 //                     reviewed per-route, not enforced here).
 //   /api/webhooks/**  must call a verify*() signature/secret check.
-//   /api/cron/**      must reference CRON_SECRET (Vercel cron bearer).
+//   /api/cron/**      must use defineCron or reference CRON_SECRET (Vercel cron bearer).
 //   everything else   must call one of SESSION_GUARDS — either a direct
 //                     resolver (getCurrentUser/withAuth) or one of the
 //                     VERIFIED delegated-auth helpers listed below.
@@ -291,7 +291,8 @@ function classify(file) {
     return { ok: WEBHOOK_GUARD.test(src), kind: 'webhook' }
   }
   if (rel.includes('/api/cron/')) {
-    return { ok: src.includes(CRON_GUARD), kind: 'cron' }
+    const wrapped = src.includes("from '@/lib/define-cron'") && src.includes('defineCron(')
+    return { ok: wrapped || src.includes(CRON_GUARD), kind: 'cron' }
   }
   return { ok: SESSION_GUARDS.some((t) => src.includes(t)), kind: 'session' }
 }
@@ -330,7 +331,7 @@ if (failures.length) {
 ${failures.length} route(s) have no detectable auth guard. Fix by either:
   1. Adding a guard — getCurrentUser() + role/location checks (the standard
      route skeleton in CLAUDE.md), withAuth(), or authenticateApiKey() for
-     the external API surface; verify*() for webhooks; CRON_SECRET for cron.
+     the external API surface; verify*() for webhooks; defineCron or CRON_SECRET for cron.
   2. Delegating to a shared auth helper — then ADD ITS NAME to
      SESSION_GUARDS in scripts/check-route-guards.mjs with a comment naming
      the file you verified it in. Only list helpers that BOTH authenticate

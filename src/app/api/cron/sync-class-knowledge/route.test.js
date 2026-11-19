@@ -4,11 +4,12 @@
 // location". The real importClassKnowledge runs; only Glofox is stubbed.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+let locationsResult = { data: [{ id: 'loc-1', name: 'Studio 1' }], error: null }
 const fakeDb = {
   from: () => {
     const b = {}
     for (const m of ['select', 'eq']) b[m] = () => b
-    b.then = (resolve) => Promise.resolve({ data: [{ id: 'loc-1', name: 'Studio 1' }], error: null }).then(resolve)
+    b.then = (resolve) => Promise.resolve(locationsResult).then(resolve)
     return b
   },
 }
@@ -27,6 +28,7 @@ const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization'
 
 beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
+  locationsResult = { data: [{ id: 'loc-1', name: 'Studio 1' }], error: null }
   vi.clearAllMocks()
 })
 
@@ -43,5 +45,13 @@ describe('GET /api/cron/sync-class-knowledge — REGISTRYREAD.1b', () => {
     const body = await (await GET(req())).json()
     expect(body).toEqual({ success: true, results: [] })
     expect(stampHeartbeat).toHaveBeenCalledWith('sync-class-knowledge')
+  })
+
+  it('CRONWRAP.1: a failed locations read is a failed run, not an empty one', async () => {
+    locationsResult = { data: null, error: { message: 'db down' } }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not read locations' })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })
