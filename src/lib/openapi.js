@@ -2105,6 +2105,43 @@ registry.registerPath({
   },
 })
 
+// OFFERSEDIT.1 — the studio's sale offers, edited at /settings/offers.
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/offers',
+  tags: ['Offers'],
+  summary: "A studio's sale offers, with what stops each from selling",
+  description: 'Session auth; Offer sales permission at the studio (another studio is a 404). Returns { offers: [{ ...offer, problems }], products, platform, can_edit }.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: { 200: { description: 'Offers' }, 404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/offers',
+  tags: ['Offers'],
+  summary: 'Create a sale offer',
+  description: 'Owners and masters at the studio. An active offer the storefront could not sell (no un1t.online product, a product not in the mirror, a price that differs) is refused with 422; an inactive one is saved as a draft.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    201: { description: 'Created' },
+    403: { description: 'Not an owner or master', content: { 'application/json': { schema: ErrorResponse } } },
+    422: { description: 'Could not be sold', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'patch',
+  path: '/api/locations/{id}/offers/{offerId}',
+  tags: ['Offers'],
+  summary: 'Edit a sale offer',
+  description: 'Owners and masters at the studio. The web address never changes. Switching an offer off is always allowed; one left active must still be sellable (422 otherwise).',
+  request: { params: z.object({ id: uuidLike, offerId: uuidLike }) },
+  responses: {
+    200: { description: 'Saved' },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+    422: { description: 'Could not be sold', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/events/{id}/donations/{donationId}/refunded',

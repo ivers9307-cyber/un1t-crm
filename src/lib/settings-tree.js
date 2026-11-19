@@ -92,6 +92,15 @@ export const SETTINGS_TREE = [
         gate: { roles: MANAGER_ROLES },
       },
       {
+        id: 'offers',
+        label: 'Offers',
+        href: '/settings/offers',
+        description: 'Packs, memberships and gift cards on the offers page: price, dates and stock.',
+        icon: Gift,
+        // Mirrors the page's own gate: whoever sees Offer sales reads; owners and masters edit.
+        gate: { permission: 'approvals_offer_purchases' },
+      },
+      {
         id: 'promos',
         label: 'Promos',
         href: '/settings/promos',
