@@ -5,7 +5,7 @@
 // under nothing but the mig 014 membership policy: any studio member could
 // create a campaign, created_by was whatever the browser sent, and the
 // audience filter was never validated. /api/campaigns POST is Bearer-only
-// (per-org API key); /api/communications/email-draft is the composer's path. Gate (D7):
+// (per-org API key); since QUICKEMAIL-RETIRE.1 this is the only session create. Gate (D7):
 // email at the body's studio, as the page that renders the editor.
 
 import { NextResponse } from 'next/server'

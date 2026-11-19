@@ -50,7 +50,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 async function startDrip(props = {}) {
-  render(<UnifiedSendComposer locationId="loc-1" channels={['whatsapp']} templates={TEMPLATES} {...props} />)
+  render(<UnifiedSendComposer locationId="loc-1"  templates={TEMPLATES} {...props} />)
   fireEvent.change(screen.getByDisplayValue('Choose a template…'), { target: { value: 't1' } })
   fireEvent.click(screen.getByRole('button', { name: /^Drip$/ }))
   const start = await waitFor(() => {

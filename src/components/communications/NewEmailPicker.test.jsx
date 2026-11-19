@@ -53,4 +53,22 @@ describe('NewEmailPicker', () => {
     rerender(<NewEmailPicker locationId="loc-1" templates={[]} />)
     expect(screen.getByText(/No marketing templates yet/)).toBeTruthy()
   })
+
+  // QUICKEMAIL-RETIRE.1 — a Segments "Email these" link starts the draft with that audience.
+  it('sends a Segments link audience as the draft audience_filter and names it', async () => {
+    const filter = { logic: 'and', filters: [{ field: 'tag', op: 'eq', value: 'race-2026' }] }
+    render(<NewEmailPicker locationId="loc-1" templates={TEMPLATES} audience={{ label: 'Tag: race-2026', filter }} />)
+    expect(screen.getByText('Tag: race-2026')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Monthly news/ }))
+    await waitFor(() => expect(push).toHaveBeenCalled())
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ location_id: 'loc-1', name: 'Monthly news', template_id: 't1', audience_filter: filter })
+  })
+
+  it('says when the linked segment could not be found, and sends no audience', async () => {
+    render(<NewEmailPicker locationId="loc-1" templates={TEMPLATES} audience={{ missing: true }} />)
+    expect(screen.getByText(/could not be found at this studio/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /^Blank/ }))
+    await waitFor(() => expect(push).toHaveBeenCalled())
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ location_id: 'loc-1', name: 'Untitled email' })
+  })
 })

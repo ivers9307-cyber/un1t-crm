@@ -76,7 +76,7 @@ const currentFilter = () => JSON.parse(screen.getByTestId('filter-json').textCon
 const appliedLabel = () => screen.queryByText(/using saved segment/i)
 
 function renderComposer(props = {}) {
-  return render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} templates={[]} {...props} />)
+  return render(<UnifiedSendComposer locationId="loc-1"  templates={[]} {...props} />)
 }
 
 describe('UnifiedSendComposer — saved segment picker', () => {

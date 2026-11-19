@@ -2,8 +2,7 @@
 // Both PRs added a composer test file independently and their harnesses are
 // deliberately different: this one renders the REAL AudienceBuilder (that is
 // how the dangling "contacts match" footer is caught), while the sibling file
-// mocks it out so it can drive the Unlayer loaded / export-failure states.
-// Fusing them would have weakened both.
+// mocks it out. Fusing them would have weakened both.
 
 // @vitest-environment jsdom
 //
@@ -16,12 +15,11 @@
 //   - canSend treated a null count as sendable;
 //   - AudienceBuilder rendered a dangling "<undefined> contacts match" footer
 //     because the audienceCount prop was omitted;
-//   - the email panel now shows "N will receive it" with the B5 excluded
-//     breakdown instead of a raw filter-only number.
 //
-// TWILIO-RETIRE.1 — these used to drive the SMS channel (a bare textarea);
-// SMS is gone, so they drive email, whose only compose field is the subject
-// once the (mocked, loaded) Unlayer designer is up.
+// TWILIO-RETIRE.1 moved these from SMS to email; QUICKEMAIL-RETIRE.1 left the
+// composer WhatsApp only, so they drive WhatsApp: the message is valid once a
+// template is chosen, and the sendable number is `reachable`. (The email
+// will-receive breakdown, B6d, lives with AudienceCount and the full editor.)
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -31,9 +29,6 @@ vi.mock('next/navigation', () => ({
 }))
 vi.mock('next/link', () => ({
   default: ({ href, children, ...rest }) => <a href={typeof href === 'string' ? href : '#'} {...rest}>{children}</a>,
-}))
-vi.mock('./useUnlayerEditor', () => ({
-  useUnlayerEditor: () => ({ ref: { current: null }, loaded: true, exportHtml: vi.fn(async () => ({ html: '<p>x</p>', design: {} })) }),
 }))
 vi.mock('./ContactMultiSelect', () => ({
   default: () => <div data-testid="contact-multi-select" />,
@@ -69,6 +64,12 @@ function stubCount(handler) {
 function ok(body) { return { ok: true, status: 200, json: async () => ({ success: true, ...body }) } }
 function bad(error, status = 400) { return { ok: false, status, json: async () => ({ success: false, error }) } }
 
+const TEMPLATES = [{ id: 't1', name: 'promo', language: 'en', status: 'APPROVED', components: [{ type: 'BODY', text: 'Hello' }] }]
+function chooseTemplate() {
+  const select = screen.getAllByRole('combobox').find(el => el.querySelector('option[value="t1"]'))
+  fireEvent.change(select, { target: { value: 't1' } })
+}
+
 const FILTER = { logic: 'and', filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'member' }] }
 
 function sendButton() {
@@ -80,56 +81,39 @@ function sendButton() {
 describe('UnifiedSendComposer — count errors surface and gate Send (B6)', () => {
   it('renders the server error message from a 400 count, not the placeholder', async () => {
     stubCount(() => bad('OR logic is not supported together with tag, event or studio-list filters. Use AND, or send these as separate audiences.'))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
+    render(<UnifiedSendComposer locationId="loc-1" templates={TEMPLATES} initialAudienceFilter={FILTER} />)
     await screen.findByText(/OR logic is not supported together with tag, event or studio-list filters/, {}, COUNTED)
     expect(screen.queryByText(/Add a condition to see how many contacts match/)).toBeNull()
   })
 
   it('keeps Send disabled while the count is in error, even with a valid message', async () => {
     stubCount(() => bad('tag filter requires a non-empty string value'))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
-    fireEvent.change(screen.getByPlaceholderText('Email subject'), { target: { value: 'Hello there' } })
+    render(<UnifiedSendComposer locationId="loc-1" templates={TEMPLATES} initialAudienceFilter={FILTER} />)
+    chooseTemplate()
     await screen.findByText(/tag filter requires a non-empty string value/, {}, COUNTED)
     expect(sendButton().disabled).toBe(true)
   })
 
   it('keeps Send disabled while the count has not arrived yet', () => {
     stubCount(() => new Promise(() => {})) // never resolves
-    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
-    fireEvent.change(screen.getByPlaceholderText('Email subject'), { target: { value: 'Hello there' } })
+    render(<UnifiedSendComposer locationId="loc-1" templates={TEMPLATES} initialAudienceFilter={FILTER} />)
+    chooseTemplate()
     expect(sendButton().disabled).toBe(true)
   })
 
   it('enables Send once a positive count arrives and the message is valid', async () => {
-    stubCount(() => ok({ count: 5, matched: 9, excluded: { not_opted_in: 2, bounced_or_complained: 1, suppressed: 1 } }))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
-    fireEvent.change(screen.getByPlaceholderText('Email subject'), { target: { value: 'Hello there' } })
+    stubCount(() => ok({ count: 9, reachable: 5 }))
+    render(<UnifiedSendComposer locationId="loc-1" templates={TEMPLATES} initialAudienceFilter={FILTER} />)
+    chooseTemplate()
     await waitFor(() => expect(sendButton().disabled).toBe(false), COUNTED)
   })
 
   it('does not render the dangling AudienceBuilder "contacts match" footer', () => {
     stubCount(() => new Promise(() => {}))
-    const { container } = render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
+    const { container } = render(<UnifiedSendComposer locationId="loc-1" templates={TEMPLATES} initialAudienceFilter={FILTER} />)
     const dangling = Array.from(container.querySelectorAll('span'))
       .some(s => s.textContent.trim() === 'contacts match')
     expect(dangling).toBe(false)
-  })
-})
-
-describe('UnifiedSendComposer — email will-receive breakdown (B6d)', () => {
-  it('shows matched vs will-receive and the excluded reasons', async () => {
-    stubCount(() => ok({
-      count: 2300, matched: 4900, suppressed: 300,
-      excluded: { not_opted_in: 1200, bounced_or_complained: 24, suppressed: 300 },
-    }))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
-    await screen.findByText(/will receive it/, {}, COUNTED)
-    expect(screen.getByText('4,900')).toBeTruthy()
-    expect(screen.getByText('2,300')).toBeTruthy()
-    // Breakdown line carries the reasons from the B5 response.
-    await screen.findByText(/1,200 no marketing opt-in/, {}, COUNTED)
-    screen.getByText(/24 bounced or complained/)
-    screen.getByText(/300 suppressed for repeat bounces/)
   })
 })
 
@@ -143,28 +127,28 @@ describe('UnifiedSendComposer — email will-receive breakdown (B6d)', () => {
 // consent/bounces/suppression).
 describe('UnifiedSendComposer — zero-count message tells the truth (P1.6c)', () => {
   it('says nobody MATCHED when the filter itself returns nothing', async () => {
-    stubCount(() => ok({ count: 0, matched: 0, excluded: {} }))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
+    stubCount(() => ok({ count: 0, reachable: 0 }))
+    render(<UnifiedSendComposer locationId="loc-1" templates={TEMPLATES} initialAudienceFilter={FILTER} />)
     await screen.findByText(/No contacts match this filter/i, {}, COUNTED)
   })
 
   it('does NOT say "no contacts match" when contacts matched but none are reachable', async () => {
-    stubCount(() => ok({ count: 0, matched: 240, excluded: { not_opted_in: 240 } }))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
-    await waitFor(() => expect(screen.queryByText(/0 will receive it|will receive it/i)).not.toBeNull(), COUNTED)
+    stubCount(() => ok({ count: 240, reachable: 0 }))
+    render(<UnifiedSendComposer locationId="loc-1" templates={TEMPLATES} initialAudienceFilter={FILTER} />)
+    await screen.findByText(/but none/i, {}, COUNTED)
     expect(screen.queryByText(/^No contacts match this filter\.$/i)).toBeNull()
   })
 
   it('names the matched count and points at reachability instead', async () => {
-    stubCount(() => ok({ count: 0, matched: 240, excluded: { not_opted_in: 240 } }))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
+    stubCount(() => ok({ count: 240, reachable: 0 }))
+    render(<UnifiedSendComposer locationId="loc-1" templates={TEMPLATES} initialAudienceFilter={FILTER} />)
     const msg = await screen.findByText(/none (of them )?can be reached|but none/i, {}, COUNTED)
     expect(msg.textContent).toMatch(/240/)
   })
 
   it('keeps the WhatsApp warning keyed on REACHABLE, not raw matches', async () => {
     stubCount(() => ok({ count: 300, matched: 300, reachable: 0 }))
-    render(<UnifiedSendComposer locationId="loc-1" channels={['whatsapp']} initialAudienceFilter={FILTER} />)
+    render(<UnifiedSendComposer locationId="loc-1" templates={TEMPLATES} initialAudienceFilter={FILTER} />)
     const msg = await screen.findByText(/but none/i, {}, COUNTED)
     expect(msg.textContent).toMatch(/300/)
   })
