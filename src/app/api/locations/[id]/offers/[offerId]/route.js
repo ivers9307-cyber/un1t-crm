@@ -16,9 +16,7 @@ export const dynamic = 'force-dynamic'
 const fail = (status, error, extra = {}) => NextResponse.json({ success: false, error, ...extra }, { status })
 const NOT_FOUND = () => fail(404, 'Not found')
 
-export const PATCH = withAuth(
-  { permission: 'approvals_offer_purchases', location: 'param', roles: ['owner'], schema: offerUpdateSchema, forbiddenMessage: 'Only owners and masters can edit offers.' },
-  async ({ db, locationId, input, params }) => {
+export const PATCH = withAuth({ permission: 'approvals_offer_purchases', location: 'param', roles: ['owner'], schema: offerUpdateSchema, forbiddenMessage: 'Only owners and masters can edit offers.' }, async ({ db, locationId, input, params }) => {
     const offerId = params?.offerId
     if (!uuidLike.safeParse(offerId).success) return NOT_FOUND()
     const { data: current, error: readErr } = await db.from('sale_offers')

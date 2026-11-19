@@ -22,9 +22,7 @@ export const dynamic = 'force-dynamic'
 const EDIT_ROLES = ['owner']
 const fail = (status, error, extra = {}) => NextResponse.json({ success: false, error, ...extra }, { status })
 
-export const GET = withAuth(
-  { permission: 'approvals_offer_purchases', location: 'param' },
-  async ({ user, db, locationId }) => {
+export const GET = withAuth({ permission: 'approvals_offer_purchases', location: 'param' }, async ({ user, db, locationId }) => {
     const studio = await readStudioForOffers(db, locationId)
     if (studio.error) return fail(503, 'Could not read the offers. Try again.')
     const { data: offers, error } = await db.from('sale_offers')
@@ -50,9 +48,7 @@ export const GET = withAuth(
   },
 )
 
-export const POST = withAuth(
-  { permission: 'approvals_offer_purchases', location: 'param', roles: EDIT_ROLES, schema: offerCreateSchema, forbiddenMessage: 'Only owners and masters can create offers.' },
-  async ({ db, locationId, input }) => {
+export const POST = withAuth({ permission: 'approvals_offer_purchases', location: 'param', roles: EDIT_ROLES, schema: offerCreateSchema, forbiddenMessage: 'Only owners and masters can create offers.' }, async ({ db, locationId, input }) => {
     const studio = await readStudioForOffers(db, locationId)
     if (studio.error) return fail(503, 'Could not save the offer. Try again.')
     const products = await readUn1tProducts(db, studio.location)
