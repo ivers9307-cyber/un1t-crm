@@ -6,7 +6,8 @@
 //
 // Query params:
 //   status        — completed | pending | failed | abandoned | recovered | refunded
-//   source_type   — race_registration | car_deposit | trial_purchase | offer_purchase
+//   source_type   — race_registration | car_deposit | trial_purchase | offer_purchase |
+//                   class_booking | donation | staff_payment_link | class_fee
 //   from / to     — ISO date strings, filters created_at
 //   q             — substring match on contact_email or contact_name
 //   page / limit  — pagination (default 1 / 50, max 200)
@@ -29,7 +30,7 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const ALLOWED_STATUSES = ['completed', 'pending', 'failed', 'abandoned', 'recovered', 'refunded', 'cancelled']
-const ALLOWED_SOURCES = ['race_registration', 'car_deposit', 'trial_purchase', 'offer_purchase']
+const ALLOWED_SOURCES = ['race_registration', 'car_deposit', 'trial_purchase', 'offer_purchase', 'class_booking', 'donation', 'staff_payment_link', 'class_fee']
 
 export async function GET(request) {
   const user = await getCurrentUser()

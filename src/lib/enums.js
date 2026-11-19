@@ -87,6 +87,11 @@ export const ORDER_SOURCE_TYPE = Object.freeze({
   // ORDERSTRIALS.1 (mig 855) — projected by trigger when the row is paid.
   TRIAL_PURCHASE: 'trial_purchase',
   OFFER_PURCHASE: 'offer_purchase',
+  // ORDERSMORE.1 (mig 856) — projected by trigger when the row is paid.
+  CLASS_BOOKING: 'class_booking',
+  DONATION: 'donation',
+  STAFF_PAYMENT_LINK: 'staff_payment_link',
+  CLASS_FEE: 'class_fee',
 })
 export const ORDER_SOURCE_TYPE_VALUES = Object.values(ORDER_SOURCE_TYPE)
 

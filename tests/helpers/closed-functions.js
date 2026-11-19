@@ -29,6 +29,18 @@ import { sqlCode, ident, splitTop } from './sql-code.js'
  * and does not tell overloads apart).
  */
 export const CLOSED_FUNCTIONS = [
+  { fn: 'private.upsert_projected_order', args: '(text, uuid, uuid, uuid, text, text, text, integer, text, text, text, text, timestamptz, jsonb)', closedBy: 856,
+    why: 'ORDERSMORE.1: writes orders for the projection triggers, never called by a client' },
+  { fn: 'private.record_order_projection_failure', args: '(text, text, uuid, text, text)', closedBy: 856,
+    why: 'ORDERSMORE.1: writes error_events for the projection triggers, never called by a client' },
+  { fn: 'private.project_class_booking_order', args: '()', closedBy: 856,
+    why: 'ORDERSMORE.1: trigger function that writes orders; fired by class_booking_requests writes, never called by a client' },
+  { fn: 'private.project_donation_order', args: '()', closedBy: 856,
+    why: 'ORDERSMORE.1: trigger function that writes orders; fired by donations writes, never called by a client' },
+  { fn: 'private.project_staff_payment_link_order', args: '()', closedBy: 856,
+    why: 'ORDERSMORE.1: trigger function that writes orders; fired by staff_payment_links writes, never called by a client' },
+  { fn: 'private.project_class_fee_order', args: '()', closedBy: 856,
+    why: 'ORDERSMORE.1: trigger function that writes orders; fired by class_fees writes, never called by a client' },
   { fn: 'private.project_trial_purchase_order', args: '()', closedBy: 855,
     why: 'ORDERSTRIALS.1: trigger function that writes orders; fired by trial_purchases writes, never called by a client' },
   { fn: 'private.project_offer_purchase_order', args: '()', closedBy: 855,

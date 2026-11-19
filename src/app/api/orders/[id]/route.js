@@ -150,6 +150,39 @@ export async function GET(_request, props) {
       .eq('location_id', order.location_id)
       .maybeSingle()
     if (purchase) source = { kind: 'offer_purchase', purchase }
+  } else if (order.source_type === 'class_booking') {
+    // ORDERSMORE.1 — each read is pinned to the order's studio as well as its id.
+    const { data: booking } = await db
+      .from('class_booking_requests')
+      .select('id, class_name, starts_at, status, payment_status')
+      .eq('id', order.source_id)
+      .eq('location_id', order.location_id)
+      .maybeSingle()
+    if (booking) source = { kind: 'class_booking', booking }
+  } else if (order.source_type === 'donation') {
+    const { data: donation } = await db
+      .from('donations')
+      .select('id, status, paid_at, refunded_at, race:race_events!race_event_id ( id, name )')
+      .eq('id', order.source_id)
+      .eq('location_id', order.location_id)
+      .maybeSingle()
+    if (donation) source = { kind: 'donation', donation }
+  } else if (order.source_type === 'staff_payment_link') {
+    const { data: link } = await db
+      .from('staff_payment_links')
+      .select('id, product_title, status, created_at, paid_at')
+      .eq('id', order.source_id)
+      .eq('location_id', order.location_id)
+      .maybeSingle()
+    if (link) source = { kind: 'staff_payment_link', link }
+  } else if (order.source_type === 'class_fee') {
+    const { data: fee } = await db
+      .from('class_fees')
+      .select('id, class_title, starts_at, kind, status, charged_at')
+      .eq('id', order.source_id)
+      .eq('location_id', order.location_id)
+      .maybeSingle()
+    if (fee) source = { kind: 'class_fee', fee }
   }
 
   // TZ.16 — the order's studio zone, so the page shows every stamp on that

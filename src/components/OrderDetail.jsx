@@ -293,6 +293,10 @@ const ORDER_SOURCE_LABELS = {
   car_deposit: 'Car deposit',
   trial_purchase: 'Paid trial',
   offer_purchase: 'Offer',
+  class_booking: 'Class booking',
+  donation: 'Donation',
+  staff_payment_link: 'Payment link',
+  class_fee: 'Class fee',
 }
 
 // A refund of a trial or an offer moves money only (Richard's decision,
@@ -323,6 +327,76 @@ function SourceSummary({ source, when }) {
           {t?.class_name && <div>First class: <span className="text-un1t-text">{t.class_name}{t.class_starts_at ? `, ${when(t.class_starts_at)}` : ''}</span></div>}
         </div>
         <RefundUndoNote>If the trial should end, remove its credits or membership in the booking system.</RefundUndoNote>
+      </section>
+    )
+  }
+  if (source.kind === 'class_booking') {
+    const b = source.booking
+    return (
+      <section className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-2">
+        <h3 className="text-sm font-semibold text-un1t-text inline-flex items-center gap-2">
+          <Calendar size={14} /> Class booking
+        </h3>
+        <div className="text-sm text-un1t-text">{b?.class_name || '(unknown class)'}</div>
+        <div className="grid grid-cols-2 gap-2 text-[12px] text-un1t-subtle">
+          {b?.starts_at && <div>Class: <span className="text-un1t-text">{when(b.starts_at)}</span></div>}
+          {b?.status && <div>Booking: <span className="text-un1t-text">{b.status.replaceAll('_', ' ')}</span></div>}
+        </div>
+        <RefundUndoNote>If the place should be released, cancel the booking in the booking system.</RefundUndoNote>
+      </section>
+    )
+  }
+  if (source.kind === 'donation') {
+    const d = source.donation
+    return (
+      <section className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-2">
+        <h3 className="text-sm font-semibold text-un1t-text inline-flex items-center gap-2">
+          <Receipt size={14} /> Donation
+        </h3>
+        <div className="text-sm text-un1t-text">{d?.race?.name || '(unknown event)'}</div>
+        <div className="grid grid-cols-2 gap-2 text-[12px] text-un1t-subtle">
+          {d?.status && <div>Status: <span className="text-un1t-text">{d.status.replaceAll('_', ' ')}</span></div>}
+          {d?.paid_at && <div>Paid: <span className="text-un1t-text">{when(d.paid_at)}</span></div>}
+          {d?.refunded_at && <div>Refunded: <span className="text-un1t-text">{when(d.refunded_at)}</span></div>}
+        </div>
+        <p className="text-[11px] text-un1t-subtle pt-2 border-t border-un1t-border">
+          A full refund marks the donation refunded, so it leaves the event&apos;s total.
+        </p>
+      </section>
+    )
+  }
+  if (source.kind === 'staff_payment_link') {
+    const l = source.link
+    return (
+      <section className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-2">
+        <h3 className="text-sm font-semibold text-un1t-text inline-flex items-center gap-2">
+          <Tag size={14} /> Payment link
+        </h3>
+        <div className="text-sm text-un1t-text">{l?.product_title || '(unknown product)'}</div>
+        <div className="grid grid-cols-2 gap-2 text-[12px] text-un1t-subtle">
+          {l?.created_at && <div>Sent: <span className="text-un1t-text">{when(l.created_at)}</span></div>}
+          {l?.paid_at && <div>Paid: <span className="text-un1t-text">{when(l.paid_at)}</span></div>}
+        </div>
+        <RefundUndoNote>If what was bought should stop, cancel it in un1t.online.</RefundUndoNote>
+      </section>
+    )
+  }
+  if (source.kind === 'class_fee') {
+    const f = source.fee
+    return (
+      <section className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-2">
+        <h3 className="text-sm font-semibold text-un1t-text inline-flex items-center gap-2">
+          <Clock size={14} /> Class fee
+        </h3>
+        <div className="text-sm text-un1t-text">{f?.class_title || '(unknown class)'}</div>
+        <div className="grid grid-cols-2 gap-2 text-[12px] text-un1t-subtle">
+          {f?.kind && <div>For: <span className="text-un1t-text">{f.kind.replaceAll('_', ' ')}</span></div>}
+          {f?.starts_at && <div>Class: <span className="text-un1t-text">{when(f.starts_at)}</span></div>}
+          {f?.charged_at && <div>Charged: <span className="text-un1t-text">{when(f.charged_at)}</span></div>}
+        </div>
+        <p className="text-[11px] text-un1t-subtle pt-2 border-t border-un1t-border">
+          A fee taken in error can also be waived from Class fees.
+        </p>
       </section>
     )
   }
