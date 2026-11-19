@@ -1,6 +1,5 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
+import { logError } from '@/lib/log'
 import { importClassKnowledge } from '@/lib/agent/knowledge-import'
 
 // KNOWLEDGE-IMPORT.2 — weekly (Monday 06:00 UTC, vercel.json) refresh
@@ -9,17 +8,17 @@ import { importClassKnowledge } from '@/lib/agent/knowledge-import'
 // (operator-curated or previously imported) are never touched, so the
 // cron can only ADD. Locations without working Glofox creds are
 // skipped — same posture as every other per-location Glofox cron.
-export async function GET(request) {
-  const auth = request.headers.get('authorization')
-  // CRONSTAMP.1: fail closed when the secret is unset ("Bearer undefined" used to pass).
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+export const maxDuration = 300
 
-  const db = createServerClient()
-  const { data: locations } = await db.from('locations')
+export const GET = defineCron({ heartbeat: 'sync-class-knowledge' }, async ({ db }) => {
+  const { data: locations, error: locationsError } = await db.from('locations')
     .select('id, name')
     .eq('active', true)
+  // A failed read is not "no studios": the run did not happen.
+  if (locationsError) {
+    logError('cron.sync-class-knowledge', 'locations read failed', { err: locationsError })
+    return { ok: false, body: { error: 'Could not read locations' } }
+  }
 
   const results = []
   for (const loc of locations || []) {
@@ -38,6 +37,5 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('sync-class-knowledge')
-  return NextResponse.json({ success: true, results })
-}
+  return { body: { results } }
+})

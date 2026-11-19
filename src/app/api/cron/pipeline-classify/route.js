@@ -12,12 +12,8 @@
 //   3. Compare against current open deal stage
 //   4. Move (or create) deals as needed
 //   5. Audit to pipeline_classification_runs
-//
-// Auth: same CRON_SECRET pattern as the other Vercel crons.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logError } from '@/lib/log'
 import { reclassifyAllContacts } from '@/lib/pipeline-reclassify'
 
@@ -28,13 +24,7 @@ export const dynamic = 'force-dynamic'
 // 120s for headroom on busy nights.
 export const maxDuration = 120
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'pipeline-classify' }, async ({ db }) => {
 
   // Run for every active location. Most of the codebase runs single-
   // tenant in practice but we want this to grow with Hatch Street etc.
@@ -43,8 +33,8 @@ export async function GET(request) {
     .select('id, name')
     .eq('active', true)
   if (locErr) {
-    console.warn(`[cron][pipeline-classify] failed to list locations: ${locErr.message}`)
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    logError('cron.pipeline-classify', 'failed to list locations', { err: locErr })
+    return { ok: false, body: { error: 'Could not list locations' } }
   }
 
   const perLocation = []
@@ -67,29 +57,27 @@ export async function GET(request) {
     })
   }
 
-  // CRONSTAMP.1 (audit 2026-11-15, item 12): the heartbeat used to be
-  // stamped whatever happened, so a night where every studio failed (claims
-  // unreadable, a stage load error) read as a clean run and nothing paged.
-  // It is stamped only when no studio failed; the failures are logged.
+  // A night where any studio failed does not stamp, so it cannot read as clean.
   const failed = perLocation.filter((r) => r.ok === false)
   for (const r of failed) {
     logError('cron.pipeline-classify', 'studio reclassify failed', { location_id: r.location_id, error: r.error || r.reason || null })
   }
-  if (failed.length === 0) await stampHeartbeat('pipeline-classify')
 
-  return NextResponse.json({
-    success: failed.length === 0,
-    locations: perLocation.length,
-    failed: failed.length,
-    summary: perLocation.map((r) => ({
-      location_name: r.location_name,
-      ok: r.ok !== false,
-      ...(r.ok === false ? { error: r.error || r.reason || 'failed' } : {}),
-      contacts_seen: r.contacts_seen,
-      deals_moved: r.deals_moved,
-      deals_unchanged: r.deals_unchanged,
-      deals_created: r.deals_created,
-      errors: r.errors,
-    })),
-  }, { status: failed.length === 0 ? 200 : 500 })
-}
+  return {
+    ok: failed.length === 0,
+    body: {
+      locations: perLocation.length,
+      failed: failed.length,
+      summary: perLocation.map((r) => ({
+        location_name: r.location_name,
+        ok: r.ok !== false,
+        ...(r.ok === false ? { error: r.error || r.reason || 'failed' } : {}),
+        contacts_seen: r.contacts_seen,
+        deals_moved: r.deals_moved,
+        deals_unchanged: r.deals_unchanged,
+        deals_created: r.deals_created,
+        errors: r.errors,
+      })),
+    },
+  }
+})
