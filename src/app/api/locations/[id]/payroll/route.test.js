@@ -58,10 +58,10 @@ describe('GET', () => {
     const json = await (await GET(getReq(), props)).json()
     expect(json.data).toMatchObject({ sunday_multiplier: 1.5, is_default: false, can_edit: true })
   })
-  it('a non-member is 403, a missing studio 404', async () => {
+  it('a non-member and a missing studio are both 404', async () => {
     getCurrentUser.mockResolvedValue({ ...owner, locations: [{ id: 'other' }], rolesByLocation: { other: 'owner' } })
     mockDb()
-    expect((await GET(getReq(), props)).status).toBe(403)
+    expect((await GET(getReq(), props)).status).toBe(404)
     getCurrentUser.mockResolvedValue(owner)
     mockDb({}, { missing: true })
     expect((await GET(getReq(), props)).status).toBe(404)

@@ -7,11 +7,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { z } from 'zod'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+vi.mock('@/lib/auth', () => ({
+  getCurrentUser: vi.fn(),
+  // The real one re-resolves every field at the studio; this keeps the parts
+  // the wrapper relies on: null for a studio the caller is not at, and the
+  // role and assignment AT that studio.
+  userAtLocation: vi.fn((u, locationId) => {
+    const loc = (u.locations || []).find((l) => l.id === locationId)
+    if (!loc) return null
+    return { ...u, activeLocation: loc, role: u.rolesByLocation?.[locationId] || 'staff', activeAssignment: u.assignmentsByLocation?.[locationId] }
+  }),
+}))
+vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({ __client: true })) }))
 vi.mock('@/lib/widget-auth', () => ({ getWidgetUser: vi.fn() }))
 
 const { getCurrentUser } = await import('@/lib/auth')
+const { logError } = await import('@/lib/log')
 const { getWidgetUser } = await import('@/lib/widget-auth')
 const { withAuth, AUTH_ERRORS } = await import('./with-auth.js')
 
@@ -320,5 +332,91 @@ describe('allowWidgetToken', () => {
       { permission: null, roles: ['master'], location: false, allowWidgetToken: true },
       async () => new Response('ok')
     )).toThrow(/allowWidgetToken requires location/)
+  })
+})
+
+// ROUTEWRAP.1 — the studio in the URL, judged there; and one error boundary.
+describe('withAuth — location: param', () => {
+  const A = 'loc-a'
+  const B = 'loc-b'
+  const staff = (over = {}) => ({
+    id: 'u1', profileRole: 'staff', isMaster: false, role: 'manager',
+    activeLocation: { id: A }, locations: [{ id: A }, { id: B }],
+    rolesByLocation: { [A]: 'manager', [B]: 'staff' },
+    assignmentsByLocation: { [A]: { permissions: { schedule: true } }, [B]: { permissions: { schedule: false } } },
+    ...over,
+  })
+  const call = async (options, id, handler = async (ctx) => Response.json({ success: true, locationId: ctx.locationId, role: ctx.user.role })) => {
+    const res = await withAuth(options, handler)(new Request(`https://crm.test/api/locations/${id}`), { params: Promise.resolve({ id }) })
+    return { status: res.status, body: await res.json() }
+  }
+
+  it('a studio the caller is not at is a 404, before any role check', async () => {
+    getCurrentUser.mockResolvedValue(staff())
+    expect(await call({ permission: null, location: 'param', roles: ['owner'] }, 'loc-other')).toEqual({ status: 404, body: { success: false, error: 'Not found' } })
+  })
+
+  it('hands the handler the URL studio and the user AT that studio', async () => {
+    getCurrentUser.mockResolvedValue(staff())
+    expect((await call({ permission: null, location: 'param' }, B)).body).toEqual({ success: true, locationId: B, role: 'staff' })
+  })
+
+  it('judges roles at the URL studio, not the active one', async () => {
+    getCurrentUser.mockResolvedValue(staff())
+    expect((await call({ permission: null, location: 'param', roles: ['manager'] }, A)).status).toBe(200)
+    expect((await call({ permission: null, location: 'param', roles: ['manager'] }, B)).status).toBe(403)
+  })
+
+  it('judges the permission at the URL studio', async () => {
+    getCurrentUser.mockResolvedValue(staff())
+    expect((await call({ permission: 'schedule', location: 'param' }, A)).status).toBe(200)
+    expect((await call({ permission: 'schedule', location: 'param' }, B)).status).toBe(403)
+  })
+
+  it('a master passes a role gate at any studio they can see', async () => {
+    getCurrentUser.mockResolvedValue(staff({ profileRole: 'master', isMaster: true, rolesByLocation: {} }))
+    expect((await call({ permission: null, location: 'param', roles: ['owner'] }, B)).status).toBe(200)
+  })
+
+  it('uses the route\'s own refusal text when given', async () => {
+    getCurrentUser.mockResolvedValue(staff())
+    expect(await call({ permission: null, location: 'param', roles: ['owner'], forbiddenMessage: 'Only owners.' }, A))
+      .toEqual({ status: 403, body: { success: false, error: 'Only owners.' } })
+  })
+
+  it('reads another param name when told to', async () => {
+    getCurrentUser.mockResolvedValue(staff())
+    const res = await withAuth({ permission: null, location: 'param', locationParam: 'locationId' }, async (ctx) => Response.json({ id: ctx.locationId }))(
+      new Request('https://crm.test/x'), { params: Promise.resolve({ locationId: B }) })
+    expect(await res.json()).toEqual({ id: B })
+  })
+
+  it('allow() refuses with 403 and receives the studio', async () => {
+    getCurrentUser.mockResolvedValue(staff())
+    const allow = vi.fn(() => false)
+    expect((await call({ permission: null, location: 'param', allow }, B)).status).toBe(403)
+    expect(allow).toHaveBeenCalledWith(expect.objectContaining({ role: 'staff' }), B)
+  })
+
+  it('master: true admits masters only', async () => {
+    getCurrentUser.mockResolvedValue(staff())
+    expect((await call({ permission: null, location: 'param', master: true }, A)).body).toEqual({ success: false, error: 'Master role required.' })
+    getCurrentUser.mockResolvedValue(staff({ profileRole: 'master', isMaster: true }))
+    expect((await call({ permission: null, location: 'param', master: true }, A)).status).toBe(200)
+  })
+
+  it('refuses an unknown location option when the file loads', () => {
+    expect(() => withAuth({ permission: null, location: 'path' }, async () => null)).toThrow(/location must be/)
+  })
+})
+
+describe('withAuth — one error boundary', () => {
+  it('a throw is logged and answered with a fixed 500', async () => {
+    getCurrentUser.mockResolvedValue(user())
+    const err = new Error('relation "x" does not exist')
+    const res = await withAuth({ permission: 'schedule' }, async () => { throw err })(new Request('https://crm.test/api/thing', { method: 'POST' }))
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Something went wrong. Try again.' })
+    expect(logError).toHaveBeenCalledWith('api', 'route failed', { route: '/api/thing', method: 'POST', err })
   })
 })
