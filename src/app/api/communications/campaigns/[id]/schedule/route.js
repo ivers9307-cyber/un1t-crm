@@ -8,20 +8,25 @@
 // /api/campaigns/[id]/send's rules: the same statuses may be sent
 // (draft | scheduled | failed) and the same subject/body guard (verbatim
 // messages), under the same gate, email at the campaign's studio (D7).
-// Both rules and the write are src/lib/campaign-release.js (MCPEMAIL.1). The
-// send route's org email cap and wallet checks are NOT applied here (they
-// never were): scheduling stays exactly as it was.
+// Both rules and the write are src/lib/campaign-release.js (MCPEMAIL.1).
+// SCHEDPREFLIGHT.1 — scheduling now also runs the send route's org email cap
+// and prepaid-wallet checks (releasePreflight), answered the same way (422
+// with the code). They were skipped here, so a scheduled campaign could pass
+// a wallet that sending now would have refused; the run-campaigns cron's own
+// cap check at send time stays as the second net.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { loadCampaignForUser, CampaignScheduleSchema, conflict, serverError } from '@/lib/campaign-session-access'
-import { releaseContentCheck, releaseCampaign } from '@/lib/campaign-release'
+import { releasePreflight, releaseCampaign } from '@/lib/campaign-release'
 
 export const dynamic = 'force-dynamic'
 
 const badRequest = (error) => NextResponse.json({ success: false, error }, { status: 400 })
+// The send route's two refusals that are not about the campaign itself.
+const PREFLIGHT_422 = ['email_hard_cap', 'wallet_empty']
 
 export async function POST(request, props) {
   const { id } = await props.params
@@ -37,14 +42,17 @@ export async function POST(request, props) {
   if (Number.isNaN(at.getTime())) return badRequest('That date and time could not be read. Pick it again.')
   if (at.getTime() <= Date.now()) return badRequest('Scheduled time must be in the future.')
 
-  // The status rule, then the send route's subject/body guard, verbatim
-  // (COMMSFIX.D.2e: a campaign with no subject or no body must never reach a
-  // send state). One copy in src/lib/campaign-release.js; only the status
-  // refusal is worded for scheduling here.
-  const check = releaseContentCheck(campaign)
+  // The status rule, the send route's subject/body guard (COMMSFIX.D.2e: a
+  // campaign with no subject or no body must never reach a send state), then
+  // the org email cap and the wallet. One copy in src/lib/campaign-release.js;
+  // only the status refusal is worded for scheduling here.
+  const check = await releasePreflight(db, campaign)
   if (!check.ok) {
     if (check.code === 'status') {
       return conflict(`Campaign is '${campaign.status}', cannot be scheduled`, campaign.status)
+    }
+    if (PREFLIGHT_422.includes(check.code)) {
+      return NextResponse.json({ success: false, error: check.message, code: check.code }, { status: 422 })
     }
     return badRequest(check.message)
   }

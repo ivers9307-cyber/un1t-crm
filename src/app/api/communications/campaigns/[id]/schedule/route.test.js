@@ -21,8 +21,13 @@ vi.mock('@/lib/auth', async () => {
 vi.mock('@/lib/permissions', () => ({
   hasPermissionForLocation: vi.fn((...a) => hasPermissionForLocationImpl(...a)),
 }))
+// SCHEDPREFLIGHT.1 — the org email cap and the prepaid wallet.
+vi.mock('@/lib/usage-caps', () => ({ getEmailCapStatus: vi.fn(async () => ({ capped: false })) }))
+vi.mock('@/lib/wallet-enforcement', () => ({ checkSpend: vi.fn(async () => ({ allow: true })) }))
 
 import { POST } from './route.js'
+import { getEmailCapStatus } from '@/lib/usage-caps'
+import { checkSpend } from '@/lib/wallet-enforcement'
 
 const NOW = new Date('2026-10-01T09:00:00.000Z')
 const LATER = '2026-10-02T09:00:00.000Z'
@@ -118,5 +123,22 @@ describe('POST /api/communications/campaigns/[id]/schedule', () => {
     expect((await res.json()).error).toMatch(/status changed/i)
     db = campaignDb(row(), () => ({ data: null, error: { message: 'boom' } }))
     expect((await schedule({ scheduled_at: LATER })).status).toBe(500)
+  })
+
+  // SCHEDPREFLIGHT.1 — the same two checks sending now runs.
+  it('422 with the code when the org email cap is reached, and nothing is written', async () => {
+    getEmailCapStatus.mockResolvedValueOnce({ capped: true, monthSends: 1000, capSends: 1000 })
+    const res = await schedule({ scheduled_at: LATER })
+    expect(res.status).toBe(422)
+    expect((await res.json()).code).toBe('email_hard_cap')
+    expect(writesOf(db)).toEqual([])
+  })
+
+  it('422 with the code when the wallet is empty, and nothing is written', async () => {
+    checkSpend.mockResolvedValueOnce({ allow: false })
+    const res = await schedule({ scheduled_at: LATER })
+    expect(res.status).toBe(422)
+    expect((await res.json()).code).toBe('wallet_empty')
+    expect(writesOf(db)).toEqual([])
   })
 })
