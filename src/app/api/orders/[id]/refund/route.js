@@ -43,10 +43,16 @@ import { validateBody } from '@/lib/validate'
 import { logError, logInfo } from '@/lib/log'
 import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 import { fileRefundCard } from '@/lib/un1t-online-approval'
+import { markDonationRefunded } from '@/lib/donation-payments'
 
 // ORDERSTRIALS.1 — the source rows a un1t.online order can come from, and
 // where the buyer's un1t.online user id lives on each.
-const UN1T_SOURCE_TABLES = Object.freeze({ trial_purchase: 'trial_purchases', offer_purchase: 'offer_purchases' })
+const UN1T_SOURCE_TABLES = Object.freeze({
+  trial_purchase: 'trial_purchases',
+  offer_purchase: 'offer_purchases',
+  staff_payment_link: 'staff_payment_links', // ORDERSMORE.1
+  class_fee: 'class_fees',
+})
 
 /**
  * ORDERSTRIALS.1 — a un1t.online sale is refunded by hand in un1t.online's
@@ -353,6 +359,14 @@ export async function POST(request, props) {
       logError('orders-refund', 'refund issued but race_payments was NOT updated', { err: srcErr, orderId: order.id, paymentId: order.source_id })
     } else {
       sourceKind = srcRows?.[0]?.kind || null
+    }
+  } else if (order.source_type === 'donation' && isFull) {
+    // ORDERSMORE.1 — a fully refunded donation leaves the event's total. The
+    // order already says refunded; a failed write is logged to be put right.
+    try {
+      await markDonationRefunded({ db, donationId: order.source_id, byProfileId: user.id })
+    } catch (donErr) {
+      logError('orders-refund', 'refund issued but the donation was NOT marked refunded', { err: donErr, orderId: order.id, donationId: order.source_id })
     }
   } else if (order.source_type === 'car_deposit' && isFull) {
     // Car deposits are fixed-amount; only a full refund clears the deposit.

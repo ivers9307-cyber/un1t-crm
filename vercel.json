@@ -197,6 +197,7 @@
       "schedule": "*/5 * * * *"
     },
     { "path": "/api/cron/process-class-bookings", "schedule": "*/2 * * * *" },
+    { "path": "/api/cron/open-week-reminders", "schedule": "*/15 * * * *" },
     { "path": "/api/cron/process-trial-purchases", "schedule": "*/2 * * * *" },
     { "path": "/api/cron/prune-hr-samples", "schedule": "0 2 * * 0" },
     { "path": "/api/cron/prune-hr-detections", "schedule": "30 2 * * 0" },
