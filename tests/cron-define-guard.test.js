@@ -13,11 +13,9 @@ const ROOT = path.resolve(import.meta.dirname, '../src/app/api/cron')
 const LEGACY = new Set([
   'agent-followups', 'auto-end-stale-hr-sessions',
   'contract-reminders', 'credit-attendance',
-  'glofox-attendance-history', 'glofox-attendance-refresh',
-  'glofox-detail-backfill', 'glofox-sync', 'health-check',
+  'glofox-sync', 'health-check',
   'membership-snapshot', 'mia-purchase-intents', 'morning-briefing',
   'notify-onboarding-pace', 'notify-streak-at-risk', 'notify-winback',
-  'process-postmark-webhooks',
   'process-trial-purchases', 'race-timing-events',
   'run-campaigns',
   'run-challenge-events', 'run-scheduled-reports', 'run-sequences',
