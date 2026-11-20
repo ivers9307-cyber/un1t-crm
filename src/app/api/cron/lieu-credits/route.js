@@ -1,7 +1,8 @@
 // LIEU.1 — nightly Vercel cron (03:40 UTC). Credits time in lieu for every
 // completed FTE shift on a Sunday or a public holiday in the last 14 days
 // (src/lib/lieu-credits.js runLieuCreditSweep), once per shift assignment.
-// Auth: CRON_SECRET.
+// defineCron owns the CRON_SECRET check, the service-role client and the
+// heartbeat stamp.
 //
 // `?days=N` (1..400) widens the window for a hand-run backfill; the sweep is
 // idempotent, so a wider window only adds what is missing.
@@ -10,10 +11,9 @@
 // locations read failed or every studio failed (a green heartbeat over a sweep
 // that credited nothing is the failure the row exists to catch, the
 // extend-roster-horizon rule). A partial failure stamps and rides in
-// last_outcome.failures.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+// last_outcome.failures as { location_id, step }: the database's error text
+// goes to the log only, never into the response or the heartbeat row.
+import { defineCron } from '@/lib/define-cron'
 import { runLieuCreditSweep, LIEU_SWEEP_LOOKBACK_DAYS, LIEU_SWEEP_MAX_LOOKBACK_DAYS } from '@/lib/lieu-credits'
 import { logWarn } from '@/lib/log'
 
@@ -21,38 +21,48 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
+const SWEEP_FAILED = 'Lieu credit sweep failed'
+const EVERY_STUDIO_FAILED = 'Every studio failed'
 
+/** The sweep's stats with its error text reduced to fixed strings and names. */
+function publicStats(stats) {
+  const { error, failures, ...rest } = stats
+  return {
+    ...rest,
+    ...(error === undefined ? {} : { error: error === EVERY_STUDIO_FAILED ? EVERY_STUDIO_FAILED : SWEEP_FAILED }),
+    failures: (failures || []).map(({ location_id, step }) => ({ location_id, step })),
+  }
+}
+
+export const GET = defineCron({ heartbeat: 'lieu-credits' }, async ({ db, request }) => {
   const url = new URL(request.url)
   const daysRaw = url.searchParams.get('days')
   let lookbackDays = LIEU_SWEEP_LOOKBACK_DAYS
   if (daysRaw !== null) {
     const n = Number(daysRaw)
     if (!Number.isInteger(n) || n < 1 || n > LIEU_SWEEP_MAX_LOOKBACK_DAYS) {
-      return NextResponse.json({ success: false, error: `days must be an integer from 1 to ${LIEU_SWEEP_MAX_LOOKBACK_DAYS}` }, { status: 400 })
+      return { ok: false, status: 400, body: { error: `days must be an integer from 1 to ${LIEU_SWEEP_MAX_LOOKBACK_DAYS}` } }
     }
     lookbackDays = n
   }
 
-  const db = createServerClient()
   let stats
   try {
     stats = await runLieuCreditSweep(db, { lookbackDays })
   } catch (err) {
     logWarn('lieu-credits', 'sweep threw', { err })
-    return NextResponse.json({ success: false, error: err?.message || 'Lieu credit sweep failed' }, { status: 500 })
+    return { ok: false, body: { error: SWEEP_FAILED } }
   }
 
   if (!stats.ok) {
     logWarn('lieu-credits', 'sweep failed — heartbeat not stamped', { stats })
-    return NextResponse.json({ success: false, error: stats.error || 'Lieu credit sweep failed', stats }, { status: 500 })
+    const out = publicStats(stats)
+    return { ok: false, body: { error: out.error || SWEEP_FAILED, stats: out } }
   }
 
-  await stampHeartbeat('lieu-credits', stats).catch((err) =>
-    logWarn('lieu-credits', 'heartbeat stamp failed', { err: err?.message }))
-  return NextResponse.json({ success: true, stats })
-}
+  if (stats.failures?.length) {
+    logWarn('lieu-credits', 'sweep finished with studio failures', { failures: stats.failures })
+  }
+  const out = publicStats(stats)
+  return { body: { stats: out }, outcome: out }
+})
