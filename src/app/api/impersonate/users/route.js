@@ -7,17 +7,16 @@
 // was active).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { excludeTombstones } from '@/lib/staff-tombstone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
+// withAuth only signs the caller in; the master-or-viewing-as check stays here,
+// first, as before (a master viewing as someone keeps the picker).
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   // Use the REAL master id — if a session is currently impersonating,
   // we still want to show the picker for the underlying master.
   const realMasterId = user.impersonatingFrom?.masterId || user.id
@@ -25,12 +24,12 @@ export async function GET() {
     return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data, error } = await excludeTombstones(db.from('profiles')
     .select('id, full_name, email, role, active, profile_locations(locations(id, name))'))
     .order('full_name')
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('impersonate', 'user list failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the people list.' }, { status: 500 })
   }
 
   // Exclude the master themselves from the picker.
@@ -48,4 +47,4 @@ export async function GET() {
         .filter(Boolean),
     })),
   })
-}
+})

@@ -24,7 +24,16 @@
 //   stamp    false: a clean run that must NOT stamp the job's own row. For an
 //            hourly tick where no studio was at its daily slot (the row keeps
 //            its daily clock), or a job whose row another job stamps. The
-//            answer is still success; ignored when ok is false.
+//            answer is still success.
+//            true with ok: false: the run FAILED, answer failure, and stamp the
+//            job's own row anyway (with `outcome`). Only for a job whose
+//            failure is itself an outcome worth recording: a tripped deletion
+//            guard, one studio of several that threw, an arm's gate that
+//            faulted while the rest of the tick ran. The row then says what
+//            went wrong. Never use it to keep a dead run looking fresh: a run
+//            that could not read its inputs or did nothing returns ok: false
+//            without it, so its row goes stale and pages. Without stamp: true,
+//            ok: false never stamps.
 //   arms     [{ heartbeat, outcome? }]: the ARM rows to stamp for this run
 //            (src/lib/cron-arm-health.js). The job lists only the arms whose
 //            run was clean by that arm's own rule; the wrapper stamps each one,
@@ -44,7 +53,8 @@ import { logError, logWarn } from '@/lib/log'
  * @property {Record<string, unknown>} [body]
  * @property {unknown} [outcome]
  * @property {number} [status]
- * @property {boolean} [stamp]  false: clean, but leave the job's own row alone
+ * @property {boolean} [stamp]  false: clean, but leave the job's own row alone;
+ *   true with ok false: failed, but stamp the job's own row with the outcome
  * @property {Array<{ heartbeat: string, outcome?: unknown }>} [arms]  arm rows to stamp
  */
 
@@ -76,7 +86,10 @@ export function defineCron(options, run) {
     }
 
     const ok = result.ok !== false
-    if (ok && result.stamp !== false) {
+    // A clean run stamps unless it says stamp: false; a failed run stamps only
+    // when it says stamp: true (its failure is an outcome worth recording).
+    const stampOwn = ok ? result.stamp !== false : result.stamp === true
+    if (stampOwn) {
       try {
         if (result.outcome === undefined) await stampHeartbeat(heartbeat)
         else await stampHeartbeat(heartbeat, result.outcome)

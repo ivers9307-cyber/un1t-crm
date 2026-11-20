@@ -11,6 +11,10 @@ vi.mock('@/lib/agent/handoff-sla', () => ({
 }))
 vi.mock('@/lib/agent/approvals-sla', () => ({ runApprovalsSlaSweep: vi.fn(async () => ({})) }))
 vi.mock('@/lib/agent/trial-done-runner', () => ({ runTrialDoneOutreach: vi.fn() }))
+vi.mock('@/lib/agent/checkin-day-rollup', async (importOriginal) => {
+  const real = await importOriginal()
+  return { ...real, rollupCheckinDay: vi.fn(real.rollupCheckinDay) }
+})
 
 import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
@@ -18,8 +22,9 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { runAgentFollowups, runFirstClassCheckins } from '@/lib/agent/followups'
 import { runTrialDoneOutreach } from '@/lib/agent/trial-done-runner'
 import { runHandoffSlaSweep } from '@/lib/agent/handoff-sla'
+import { rollupCheckinDay } from '@/lib/agent/checkin-day-rollup'
 
-const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer s' : null) } })
+const req = (auth = 'Bearer s') => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? auth : null) } })
 function hbDb(result) {
   const b = { select: () => b, eq: () => b, maybeSingle: () => (result instanceof Error ? Promise.reject(result) : Promise.resolve(result)) }
   return { from: vi.fn(() => b) }
@@ -158,12 +163,20 @@ describe('GET /api/cron/agent-followups — the trial-done arm heartbeat', () =>
     expect(outcome().trial_done).toBeNull()
   })
 
-  it('stamps right after the arm, before the later arms run', async () => {
+  it('ROUTEWRAP.C9 — the arm is stamped after the run, beside the parent (defineCron stamps both)', async () => {
     const order = []
     stampHeartbeat.mockImplementation(async (name) => { order.push(`stamp:${name}`) })
     runHandoffSlaSweep.mockImplementation(async () => { order.push('handoff-sla'); return {} })
     await GET(req())
-    expect(order).toEqual(['stamp:trial-done-outreach', 'handoff-sla', 'stamp:agent-followups'])
+    expect(order).toEqual(['handoff-sla', 'stamp:agent-followups', 'stamp:trial-done-outreach'])
+  })
+
+  it('a later step that throws answers a fixed 500 and no parent stamp, but the clean arm keeps its stamp', async () => {
+    rollupCheckinDay.mockImplementationOnce(() => { throw new Error('rollup exploded: secret detail') })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Follow-ups tick failed' })
+    expect(stampHeartbeat.mock.calls.map(([n]) => n)).toEqual(['trial-done-outreach'])
   })
 
   it('a stamp that rejects costs neither the tick nor the parent stamp', async () => {
@@ -171,5 +184,47 @@ describe('GET /api/cron/agent-followups — the trial-done arm heartbeat', () =>
     const res = await GET(req())
     expect(res.status).toBe(200)
     expect(stampHeartbeat).toHaveBeenCalledWith('agent-followups', expect.any(Object))
+  })
+})
+
+// ROUTEWRAP.C9 — on defineCron with the same stamps as before.
+describe('GET /api/cron/agent-followups — defineCron stamp paths', () => {
+  beforeEach(() => { createServerClient.mockReturnValue(hbDb({ data: null, error: null })) })
+  afterEach(() => { runHandoffSlaSweep.mockImplementation(async () => ({})) })
+
+  it('401: nothing read, nothing run, nothing stamped', async () => {
+    const res = await GET(req('Bearer wrong'))
+    expect(res.status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(runAgentFollowups).not.toHaveBeenCalled()
+    expect(runTrialDoneOutreach).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a clean tick answers 200 success and stamps exactly its own row and the trial-done arm', async () => {
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect((await res.json()).success).toBe(true)
+    expect(stampHeartbeat.mock.calls.map(([n]) => n)).toEqual(['agent-followups', 'trial-done-outreach'])
+  })
+
+  it('an arm that failed answers success:false with 200 and still stamps its own row, naming the arm', async () => {
+    runHandoffSlaSweep.mockRejectedValue(new Error('handoffs: relation secret down'))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, arm_errors: ['handoff_sla'] })
+    expect(JSON.stringify(body)).not.toContain('secret down')
+    expect(outcome()).toMatchObject({ arm_errors: ['handoff_sla'], handoffSla: null })
+    expect(stampHeartbeat.mock.calls.map(([n]) => n)).toEqual(['agent-followups', 'trial-done-outreach'])
+  })
+
+  it('a follow-ups tick that throws answers a fixed 500 and stamps nothing', async () => {
+    runAgentFollowups.mockRejectedValue(new Error('conversations: secret detail'))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Follow-ups tick failed' })
+    expect(runTrialDoneOutreach).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })

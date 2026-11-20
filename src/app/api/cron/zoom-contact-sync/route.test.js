@@ -7,6 +7,7 @@ vi.mock('@/lib/zoom/reconcile', () => ({ runZoomContactSync: vi.fn() }))
 
 import { runZoomContactSync } from '@/lib/zoom/reconcile'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { createServerClient } from '@/lib/supabase'
 import { GET } from './route'
 
 const req = (url = 'https://x.test/api/cron/zoom-contact-sync', secret = 'shh') =>
@@ -20,6 +21,7 @@ beforeEach(() => {
   vi.mocked(runZoomContactSync).mockClear()
   vi.mocked(runZoomContactSync).mockResolvedValue({ ok: true, counts: { creates: 1, updates: 0, deletes: 0 }, enqueued: 1 })
   vi.mocked(stampHeartbeat).mockClear()
+  vi.mocked(createServerClient).mockClear()
 })
 
 describe('GET /api/cron/zoom-contact-sync', () => {
@@ -27,15 +29,25 @@ describe('GET /api/cron/zoom-contact-sync', () => {
     const res = await GET(new Request('https://x.test/', { headers: { authorization: 'Bearer wrong' } }))
     expect(res.status).toBe(401)
     expect(runZoomContactSync).not.toHaveBeenCalled()
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
-  it('runs the sync and stamps the heartbeat', async () => {
+  it('runs the sync and stamps exactly its own row', async () => {
     const res = await GET(req())
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ success: true, enqueued: 1 })
-    expect(stampHeartbeat).toHaveBeenCalledWith('zoom-contact-sync', expect.objectContaining({
+    expect(vi.mocked(stampHeartbeat).mock.calls).toEqual([['zoom-contact-sync', {
       counts: { creates: 1, updates: 0, deletes: 0 }, enqueued: 1, guardTripped: false,
-    }))
+    }]])
+  })
+
+  it('ROUTEWRAP.C9 — a runner that throws answers a fixed 500 and stamps nothing', async () => {
+    vi.mocked(runZoomContactSync).mockRejectedValue(new Error('zoom token 401: secret detail'))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Cron run failed' })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('passes ?limit through as a number', async () => {
@@ -63,12 +75,14 @@ describe('GET /api/cron/zoom-contact-sync', () => {
       ok: false, guardTripped: true, counts: { creates: 0, updates: 0, deletes: 0 }, enqueued: 0,
     })
     const res = await GET(req())
+    // Answered 200 as before: success:false is the signal, the status is not.
+    expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ success: false, guardTripped: true })
     // The trip must be durable, not only present in an HTTP response nobody
     // reads at 04:30.
-    expect(stampHeartbeat).toHaveBeenCalledWith('zoom-contact-sync', expect.objectContaining({
-      guardTripped: true,
-    }))
+    expect(vi.mocked(stampHeartbeat).mock.calls).toEqual([['zoom-contact-sync', {
+      counts: { creates: 0, updates: 0, deletes: 0 }, enqueued: 0, guardTripped: true,
+    }]])
   })
 
   it('ZOOMSYNC.5 — a run that could not read its inputs answers a fixed line and does not stamp', async () => {
@@ -99,6 +113,8 @@ describe('GET /api/cron/zoom-contact-sync', () => {
     vi.mocked(runZoomContactSync).mockResolvedValue(full)
     const body = await (await GET(req('https://x.test/api/cron/zoom-contact-sync?dry=1'))).json()
     expect(body.guard.deletes).toEqual([{ e164: '+353870000001' }])
+    // A dry run stamps its row as it always has (its outcome carries counts only).
+    expect(stampHeartbeat).toHaveBeenCalledWith('zoom-contact-sync', expect.objectContaining({ guardTripped: true }))
   })
 
   it('reports success for a clean unconfigured skip', async () => {
