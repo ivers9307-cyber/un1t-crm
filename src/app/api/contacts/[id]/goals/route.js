@@ -7,8 +7,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { isoDate } from '@/lib/schemas'
@@ -25,19 +26,12 @@ const CreateGoalSchema = z.object({
 // ============================================================
 // POST /api/contacts/[id]/goals — create a goal
 // ============================================================
-export async function POST(request, props) {
-  const params = await props.params
-  const { id } = params
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const id = params?.id
 
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
   if (!hasPermissionAtAnyLocation(user, 'consultations')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
-
-  const db = createServerClient()
 
   const { data: contact, error: contactErr } = await db
     .from('contacts')
@@ -75,8 +69,9 @@ export async function POST(request, props) {
     .single()
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('coaching-goals', 'goal insert failed', { contactId: id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the goal.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data })
-}
+})

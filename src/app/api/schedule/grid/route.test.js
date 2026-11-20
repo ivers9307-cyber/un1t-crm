@@ -58,9 +58,10 @@ beforeEach(() => {
 })
 
 describe('GET /api/schedule/grid', () => {
-  it('403 with no session, and reads nothing', async () => {
+  // ROUTEWRAP.R11 — signed out is withAuth's 401 (it was a 403 before).
+  it('401 with no session, and reads nothing', async () => {
     getCurrentUser.mockResolvedValue(null)
-    expect((await GET(req(ok))).status).toBe(403)
+    expect((await GET(req(ok))).status).toBe(401)
     expect(loadRosterGrid).not.toHaveBeenCalled()
   })
 

@@ -9,8 +9,8 @@
 // email at the body's studio, as the page that renders the editor.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { loadMarketingTemplate } from '@/lib/email-templates-for-agents'
@@ -22,9 +22,9 @@ import { fromAddressReport } from '@/lib/from-address'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the body's studio and email there are
+// checked below as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   const validation = await validateBody(request, CampaignCreateSchema)
   if (!validation.ok) return validation.response
@@ -39,8 +39,6 @@ export async function POST(request) {
   // EDITORRESEND.1 — resend is marketing only and needs a wait.
   const resend = resendRefusal(body)
   if (resend.error) return NextResponse.json({ success: false, error: resend.error }, { status: 400 })
-
-  const db = createServerClient()
 
   // NEWEMAIL.1 — a template is one of THIS studio's marketing templates
   // (loadMarketingTemplate refuses another studio's, a confirmation or
@@ -75,10 +73,13 @@ export async function POST(request) {
     .insert(row)
     .select('id, status, location_id')
     .single()
-  if (error || !data) return serverError(error?.message || 'Could not create the campaign')
+  if (error || !data) {
+    logError('communications', 'campaign insert failed', { locationId: body.location_id, err: error })
+    return serverError('Could not create the campaign')
+  }
 
   // FROMDOMAIN — from_email is stored as given but SENT only when it is on the
   // org's verified sending domain; the editor reads `from_address` to say so.
   const from_address = await fromAddressReport(db, body.location_id, body)
   return NextResponse.json({ success: true, data, ...(from_address ? { from_address } : {}) })
-}
+})

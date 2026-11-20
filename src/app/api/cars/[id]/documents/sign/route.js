@@ -22,8 +22,8 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { ALL_DOCUMENT_TYPES } from '@/lib/cars'
 import { carDocumentsGate } from '@/lib/car-documents-gate'
@@ -47,11 +47,10 @@ const CarDocumentSignSchema = z.object({
   head: z.string().max(Math.ceil(CAR_DOCUMENT_HEAD_BYTES / 3) * 4).optional(),
 })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
-  const gate = await carDocumentsGate(user, db, params.id)
+// withAuth only signs the caller in; carDocumentsGate keeps every other check
+// in its order (car_processing anywhere, the car, its studio, the key there).
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const gate = await carDocumentsGate(user, db, params?.id)
   if (gate.response) return gate.response
   const { car } = gate
 
@@ -73,11 +72,9 @@ export async function POST(request, props) {
   const path = buildCarDocumentUploadPath({ carId: car.id, docType: body.doc_type, contentType, id: randomUUID() })
   const { data, error } = await db.storage.from('car-documents').createSignedUploadUrl(path)
   if (error || !data?.token) {
-    return NextResponse.json(
-      { success: false, error: `Could not start the upload: ${error?.message || 'no token returned'}` },
-      { status: 500 },
-    )
+    logError('car-documents-sign', 'signed upload url failed', { carId: car.id, err: error, noToken: !data?.token })
+    return NextResponse.json({ success: false, error: 'Could not start the upload.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, path, token: data.token, content_type: contentType })
-}
+})

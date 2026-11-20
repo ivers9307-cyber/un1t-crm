@@ -5,9 +5,10 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 
@@ -20,10 +21,8 @@ const Schema = z.object({
   role: z.enum(['captain', 'member']).optional(),
 })
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; the races checks run below as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
   }
@@ -32,11 +31,10 @@ export async function POST(request, props) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const db = createServerClient()
   const { data: team, error: lookupErr } = await db
     .from('teams')
     .select('id, location_id')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (lookupErr || !team) {
     return NextResponse.json({ success: false, error: 'Team not found' }, { status: 404 })
@@ -76,7 +74,8 @@ export async function POST(request, props) {
     .select('id, name, email, role, contact_id')
     .single()
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    logError('team-members', 'member insert failed', { teamId: params.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not add the member.' }, { status: 400 })
   }
   return NextResponse.json({ success: true, data })
-}
+})

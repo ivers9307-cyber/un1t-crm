@@ -6,8 +6,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
@@ -44,9 +44,9 @@ export const ClassFeeSettingsSchema = z.object({
   appeal_line: z.string().trim().max(500).optional(),
 })
 
-export async function PUT(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in. Every check after it runs by hand, in the
+// order it always has: body 400, studio membership 403, master or owner 403.
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const validation = await validateBody(request, ClassFeeSettingsSchema)
   if (!validation.ok) return validation.response
   const { location_id: locationId, forgiveness, notice_enabled, appeals_enabled, notice_subject, notice_body, appeal_line, ...fees } = validation.data
@@ -58,7 +58,6 @@ export async function PUT(request) {
   const roleGuard = guardMasterOrOwner(user, locationId)
   if (roleGuard) return roleGuard
 
-  const db = createServerClient()
   const result = await mergeLocationSettings(db, locationId, (current) => {
     const un1t = current.un1t_online && typeof current.un1t_online === 'object' ? current.un1t_online : {}
     return {
@@ -80,4 +79,4 @@ export async function PUT(request) {
   }, { scope: 'class-fees-settings' })
   if (!result.ok) return settingsSaveFailure(result)
   return NextResponse.json({ success: true, data: classFeeSettingsFrom(result.settings) })
-}
+})
