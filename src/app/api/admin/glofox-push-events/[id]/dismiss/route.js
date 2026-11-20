@@ -8,28 +8,27 @@
 // Master only. Just stamps reviewed_at + reviewed_by; nothing else.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (user.role !== 'master') {
-    return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
-  }
+export const POST = withAuth(
+  { permission: null, location: false, allow: (user) => user.role === 'master', forbiddenMessage: 'Master only' },
+  async ({ user, db, params }) => {
+    const id = params?.id
+    if (!id) return NextResponse.json({ success: false, error: 'missing event id' }, { status: 400 })
 
-  const { id } = await params
-  if (!id) return NextResponse.json({ success: false, error: 'missing event id' }, { status: 400 })
+    const { error } = await db
+      .from('glofox_push_events')
+      .update({ reviewed_at: new Date().toISOString(), reviewed_by: user.id })
+      .eq('id', id)
+    if (error) {
+      logError('glofox-push-events', 'dismiss failed', { err: error, eventId: id })
+      return NextResponse.json({ success: false, error: 'Could not dismiss the event. Try again.' }, { status: 500 })
+    }
 
-  const db = createServerClient()
-  const { error } = await db
-    .from('glofox_push_events')
-    .update({ reviewed_at: new Date().toISOString(), reviewed_by: user.id })
-    .eq('id', id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-
-  return NextResponse.json({ success: true })
-}
+    return NextResponse.json({ success: true })
+  },
+)

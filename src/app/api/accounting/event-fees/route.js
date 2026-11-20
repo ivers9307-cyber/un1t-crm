@@ -8,26 +8,22 @@
 // the `accounting_hub` permission at the active studio, which a studio owner
 // or a granted manager holds without being an organisation admin.
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { activeOrganizationId, isOrgAdmin } from '@/lib/org-admin'
-import { createServerClient } from '@/lib/supabase'
 import { getOrgEventFees } from '@/lib/org-event-fees'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const orgId = activeOrganizationId(user)
-  if (!isOrgAdmin(user, orgId)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-  if (!orgId) {
-    return NextResponse.json({ success: false, error: 'No active organization' }, { status: 400 })
-  }
-
-  const db = createServerClient()
-  const data = await getOrgEventFees(db, orgId)
-  return NextResponse.json({ success: true, data })
-}
+// The admin check runs before the "no active organisation" 400, as before.
+export const GET = withAuth(
+  { permission: null, location: false, allow: (user) => isOrgAdmin(user, activeOrganizationId(user)), forbiddenMessage: 'Forbidden' },
+  async ({ user, db }) => {
+    const orgId = activeOrganizationId(user)
+    if (!orgId) {
+      return NextResponse.json({ success: false, error: 'No active organization' }, { status: 400 })
+    }
+    const data = await getOrgEventFees(db, orgId)
+    return NextResponse.json({ success: true, data })
+  },
+)
