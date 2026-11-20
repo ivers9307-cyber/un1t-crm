@@ -23,7 +23,10 @@
 //   page?               1-indexed (default 1).
 //   page_size?          Default 50, max 200.
 //   format?             'json' (default) or 'csv'. csv triggers a
-//                       file download with Content-Disposition.
+//                       file download with Content-Disposition: every
+//                       matching event up to CSV_MAX_ROWS, read in
+//                       1,000-row pages; beyond that the file's first line
+//                       and X-Export-Truncated say it is incomplete.
 //
 // Joins actor + target full_name/email so the UI doesn't need a
 // secondary lookup. Locations joined for name display.
@@ -36,11 +39,17 @@ import { z } from 'zod'
 import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const CATEGORIES = ['auth', 'business', 'mutation', 'assignment']
+
+/** Rows per CSV read: PostgREST's 1,000-row cap. */
+export const CSV_PAGE = 1000
+/** The most rows one CSV export carries; more matching rows are flagged, never silently dropped. */
+export const CSV_MAX_ROWS = 20000
 
 const QuerySchema = z.object({
   actor_id: uuidLike.optional(),
@@ -108,44 +117,65 @@ export async function GET(request) {
   // explicit FK aliases avoid ambiguity. target_label /
   // actor_label are persisted on the row at write-time so we still
   // have something to show after a profile is deleted (FK is ON
-  // DELETE SET NULL).
-  let query = db
-    .from('audit_events')
-    .select(`
-      id, occurred_at, category, action,
-      actor_label, target_label, target_resource,
-      details, ip_address, user_agent,
-      actor:actor_id ( id, full_name, email ),
-      target:target_profile_id ( id, full_name, email ),
-      location:location_id ( id, name )
-    `, { count: 'exact' })
-    .order('occurred_at', { ascending: false })
+  // DELETE SET NULL). A fresh builder per read: the CSV pages through.
+  const buildQuery = () => {
+    let query = db
+      .from('audit_events')
+      .select(`
+        id, occurred_at, category, action,
+        actor_label, target_label, target_resource,
+        details, ip_address, user_agent,
+        actor:actor_id ( id, full_name, email ),
+        target:target_profile_id ( id, full_name, email ),
+        location:location_id ( id, name )
+      `, { count: 'exact' })
+      .order('occurred_at', { ascending: false })
+      // occurred_at is not unique; id breaks ties so CSV pages never
+      // overlap or skip a row.
+      .order('id', { ascending: true })
 
-  // Non-master: hard-scope to the caller's locations (service-role has no RLS).
-  if (scopeLocationIds) query = query.in('location_id', scopeLocationIds)
+    // Non-master: hard-scope to the caller's locations (service-role has no RLS).
+    if (scopeLocationIds) query = query.in('location_id', scopeLocationIds)
 
-  if (q.actor_id) query = query.eq('actor_id', q.actor_id)
-  if (q.target_profile_id) query = query.eq('target_profile_id', q.target_profile_id)
-  if (q.location_id) query = query.eq('location_id', q.location_id)
-  if (q.category) query = query.eq('category', q.category)
-  if (q.action) query = query.eq('action', q.action)
-  if (q.from) query = query.gte('occurred_at', q.from)
-  if (q.to) query = query.lte('occurred_at', q.to)
-
-  // CSV export bypasses pagination — returns the full filtered set
-  // up to a hard cap to avoid OOM. 5000 is plenty for any reasonable
-  // human-driven export; cron-driven exports can paginate themselves.
-  const isCsv = q.format === 'csv'
-  if (isCsv) {
-    query = query.range(0, 4999)
-  } else {
-    const from = (q.page - 1) * q.page_size
-    query = query.range(from, from + q.page_size - 1)
+    if (q.actor_id) query = query.eq('actor_id', q.actor_id)
+    if (q.target_profile_id) query = query.eq('target_profile_id', q.target_profile_id)
+    if (q.location_id) query = query.eq('location_id', q.location_id)
+    if (q.category) query = query.eq('category', q.category)
+    if (q.action) query = query.eq('action', q.action)
+    if (q.from) query = query.gte('occurred_at', q.from)
+    if (q.to) query = query.lte('occurred_at', q.to)
+    return query
   }
 
-  const { data, count, error } = await query
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  // AUDITCSV.1 (October audit A21) — the CSV used to ask for one range of
+  // 5,000, which PostgREST silently cut to its 1,000-row cap, and called the
+  // result the full filtered set. It now pages through in CSV_PAGE-row
+  // ordered pages up to CSV_MAX_ROWS, and says so when more rows matched
+  // than the ceiling (first line of the file + X-Export-* headers).
+  const isCsv = q.format === 'csv'
+  let data = []
+  let count = 0
+  if (isCsv) {
+    for (let from = 0; from < CSV_MAX_ROWS; from += CSV_PAGE) {
+      const to = Math.min(from + CSV_PAGE, CSV_MAX_ROWS) - 1
+      const { data: page, count: total, error } = await buildQuery().range(from, to)
+      if (error) {
+        logError('audit-log', 'csv page read failed', { from, err: error })
+        return NextResponse.json({ success: false, error: 'Could not read the audit log' }, { status: 500 })
+      }
+      if (typeof total === 'number') count = total
+      data.push(...(page || []))
+      if (!page || page.length < to - from + 1 || data.length >= count) break
+    }
+  } else {
+    const from = (q.page - 1) * q.page_size
+    const res = await buildQuery().range(from, from + q.page_size - 1)
+    if (res.error) {
+      logError('audit-log', 'page read failed', { err: res.error })
+      return NextResponse.json({ success: false, error: 'Could not read the audit log' }, { status: 500 })
+    }
+    data = res.data || []
+    count = res.count || 0
   }
 
   // For the UI's category/action picker dropdowns we surface the
@@ -157,10 +187,17 @@ export async function GET(request) {
   }
 
   if (isCsv) {
-    const csv = toCsv(data || [])
+    const truncated = count > data.length
+    const body = toCsv(data)
+    const csv = truncated
+      ? `# Export incomplete: ${data.length} of ${count} matching events (the export limit is ${CSV_MAX_ROWS}). Narrow the dates or filters to export the rest.\n${body}`
+      : body
     return new Response(csv, {
       status: 200,
       headers: {
+        'X-Export-Rows': String(data.length),
+        'X-Export-Total': String(count),
+        'X-Export-Truncated': truncated ? 'true' : 'false',
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': `attachment; filename="audit-log-${new Date().toISOString().slice(0, 10)}.csv"`, // eslint-disable-line guardrails/no-utc-today -- CSV export filename suffix; a UTC date key, not a business date
         'Cache-Control': 'no-store',
