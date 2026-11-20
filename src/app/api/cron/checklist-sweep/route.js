@@ -45,8 +45,8 @@
 // cron_health.is_stale, never last_outcome. So the arm has a heartbeat row of
 // its own, 'swap-cover-sweep' (mig 623), stamped ONLY when the arm ran and
 // swap_sweep_failed is 0. An arm that fails on every tick now goes STALE and
-// 503s the health-check. It is stamped before the checklist arm's 500 is
-// answered, so a checklist outage never reads as a swap outage too. A
+// 503s the health-check. It is stamped on the checklist arm's 500 too, so a
+// checklist outage never reads as a swap outage as well. A
 // quiet-hours tick returns normally with errors: 0 and therefore stamps: the
 // row does not go stale overnight.
 //
@@ -59,13 +59,15 @@
 // (mig 630), stamped ONLY when the arm ran and reported errors: 0. A quiet
 // tick reports errors: 0 and stamps.
 //
-// Auth: CRON_SECRET header, same pattern as the other crons.
+// defineCron owns the CRON_SECRET check, the error boundary and every stamp:
+// the job returns the 'checklist-sweep' row's outcome, and lists in `arms`
+// only the arm rows whose run was clean by the rules above (the wrapper stamps
+// those even when the checklist arm failed). A failed checklist arm answers
+// 500 with a fixed error and no 'checklist-sweep' stamp; the detail is logged.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { logAuditEvent } from '@/lib/audit'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logWarn, logError } from '@/lib/log'
 import { pushOutcome } from '@/lib/push-outcome'
 import {
@@ -84,13 +86,7 @@ export const maxDuration = 60
 
 const BATCH_LIMIT = 200
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'checklist-sweep' }, async ({ db }) => {
   const stats = {
     found: 0,
     swept: 0,
@@ -103,11 +99,12 @@ export async function GET(request) {
 
   // Arm 1 — checklists. A throw is caught here ONLY so that arm 2 still runs;
   // it is still answered as a 500 below, with no heartbeat, as it always was.
-  let checklistError = null
+  // sweepChecklists logs an unreadable table itself.
+  let checklistFailed = false
   try {
-    checklistError = await sweepChecklists(db, stats)
+    checklistFailed = await sweepChecklists(db, stats)
   } catch (e) {
-    checklistError = e?.message || 'checklist sweep threw'
+    checklistFailed = true
     logError('cron-checklist-sweep', 'checklist sweep threw', { err: e?.message })
   }
 
@@ -124,16 +121,14 @@ export async function GET(request) {
     logError('cron-checklist-sweep', 'swap cover sweep threw', { err: e?.message })
   }
 
-  // SWAPHB.1 — the swap arm's own heartbeat (see the header). Before the
-  // checklist 500 below, and with its own catch: neither arm's stamp can cost
-  // the other arm anything.
-  if (swapSweepFailed === 0 && swapCover) {
-    await stampHeartbeat('swap-cover-sweep', swapCover).catch((err) =>
-      logWarn('cron-checklist-sweep', 'swap heartbeat failed', { err }))
-  }
+  // SWAPHB.1 — the swap arm's own heartbeat (see the header), stamped by the
+  // wrapper whatever the checklist arm did; a failed arm stamp is logged there,
+  // never fatal, so neither arm's stamp can cost the other arm anything.
+  const arms = []
+  if (swapSweepFailed === 0 && swapCover) arms.push({ heartbeat: 'swap-cover-sweep', outcome: swapCover })
 
   // Arm 3 — AVAIL.1 availability notices. Same isolation as arm 2, and its
-  // own heartbeat stamped before the checklist 500 for the same reason.
+  // own heartbeat stamped on the checklist 500 too, for the same reason.
   let availabilityNotices = null
   let availabilitySweepFailed = 0
   try {
@@ -145,29 +140,30 @@ export async function GET(request) {
     logError('cron-checklist-sweep', 'availability notice sweep threw', { err: e?.message })
   }
   if (availabilitySweepFailed === 0 && availabilityNotices) {
-    await stampHeartbeat('availability-notice-sweep', availabilityNotices).catch((err) =>
-      logWarn('cron-checklist-sweep', 'availability heartbeat failed', { err }))
+    arms.push({ heartbeat: 'availability-notice-sweep', outcome: availabilityNotices })
   }
   const availabilityFields = { availability_notices: availabilityNotices, availability_sweep_failed: availabilitySweepFailed }
 
-  if (checklistError) {
-    return NextResponse.json(
-      { success: false, error: checklistError, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed, ...availabilityFields },
-      { status: 500 },
-    )
+  if (checklistFailed) {
+    return {
+      ok: false,
+      arms,
+      body: { error: 'Checklist sweep failed', swap_cover: swapCover, swap_sweep_failed: swapSweepFailed, ...availabilityFields },
+    }
   }
 
   // The swap arm's outcome still rides in this row's last_outcome as well, the
   // way other crons report theirs, so "stamped but the swap arm is failing" is
   // readable from cron_heartbeats and not only from a response nobody keeps.
-  await stampHeartbeat('checklist-sweep', { ...stats, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed, ...availabilityFields }).catch((err) =>
-    logWarn('cron-checklist-sweep', 'heartbeat failed', { err }))
+  return {
+    outcome: { ...stats, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed, ...availabilityFields },
+    arms,
+    body: { stats, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed, ...availabilityFields },
+  }
+})
 
-  return NextResponse.json({ success: true, stats, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed, ...availabilityFields })
-}
-
-// The checklist arm. Returns null on success, or the error message of an
-// unreadable checklist_instances read (the route answers that as a 500).
+// The checklist arm. Returns false on success, or true (logged) when the
+// checklist_instances read failed (the route answers that as a 500).
 async function sweepChecklists(db, stats) {
   const nowIso = new Date().toISOString()
 
@@ -187,7 +183,10 @@ async function sweepChecklists(db, stats) {
     .order('deadline_at', { ascending: true })
     .limit(BATCH_LIMIT)
 
-  if (error) return error.message
+  if (error) {
+    logError('cron-checklist-sweep', 'checklist_instances read failed', { err: error.message })
+    return true
+  }
   stats.found = expired?.length || 0
 
   for (const row of expired || []) {
@@ -301,5 +300,5 @@ async function sweepChecklists(db, stats) {
     })
   }
 
-  return null
+  return false
 }
