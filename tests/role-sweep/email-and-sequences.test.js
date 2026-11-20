@@ -28,7 +28,6 @@ import * as exit from '@/app/api/sequences/[id]/enrollments/[enrollmentId]/exit/
 import * as resume from '@/app/api/sequences/[id]/enrollments/[enrollmentId]/resume/route.js'
 import * as runs from '@/app/api/sequences/[id]/runs/route.js'
 import * as stats from '@/app/api/sequences/[id]/stats/route.js'
-import * as seqTest from '@/app/api/sequences/[id]/test/route.js'
 
 const T = { getCurrentUser, createServerClient, describe, it, expect }
 const json = (method, body) => new Request('http://localhost/api/x', {
@@ -138,8 +137,7 @@ describe('enrol / exit / resume: missing and foreign sequences are indistinguish
 })
 
 for (const [name, handler] of [['runs', () => runs.GET(bare('GET'), params({ id: SEQ_ID }))],
-                               ['stats', () => stats.GET(bare('GET'), params({ id: SEQ_ID }))],
-                               ['test', () => seqTest.POST(bare('POST'), params({ id: SEQ_ID }))]]) {
+                               ['stats', () => stats.GET(bare('GET'), params({ id: SEQ_ID }))]]) {
   describeGate(`/api/sequences/[id]/${name} (MANAGER_ROLES at the sequence)`, {
     call: handler, gateReads: SEQ_ROW, forbidden: MANAGER_REQUIRED, hidden: NOT_FOUND, cases: roleCases(MANAGER_ROLES),
   }, T)

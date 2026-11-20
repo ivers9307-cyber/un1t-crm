@@ -1,7 +1,6 @@
 // BRIEFING.1 — renders the daily morning-briefing email from the
 // "Needs attention" feed rows (shared/today-feed.js shapes). Pure:
-// (rows, opts) → { subject, html } — no IO, mirroring the
-// churn-radar-digest.js convention (the cron fetches + sends).
+// (rows, opts) → { subject, html } — no IO (the cron fetches + sends).
 //
 // Recipients see the same triage list the Today page shows, minus the
 // approvals row (the approvals registry is per-user scoped; the

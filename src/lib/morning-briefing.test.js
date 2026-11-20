@@ -1,7 +1,6 @@
 // BRIEFING.1 — tests for the morning-briefing email renderer. Pure:
 // (feed rows from shared/today-feed.js, opts) → { subject, html }.
-// The cron fetches + assembles; this just renders, mirroring the
-// churn-radar-digest.js convention.
+// The cron fetches + assembles; this just renders.
 
 import { describe, it, expect } from 'vitest'
 import { buildMorningBriefingEmail } from './morning-briefing'
