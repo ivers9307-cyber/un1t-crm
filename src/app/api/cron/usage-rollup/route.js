@@ -13,30 +13,26 @@
 // lines. The HARD-cap checks read live month sums instead
 // (org_ai_spend_month_cents / org_email_sends_month) so caps never
 // drift behind the rollup.
+//
+// defineCron owns the CRON_SECRET check and the heartbeat stamp: a failed
+// day rollup answers 500 (detail in the log only) and does not stamp.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { todayStrIn, PLATFORM_TZ } from '@/lib/location-time'
 import { capNoticeDecision, platformMonthStartStr } from '@/lib/usage-caps'
 import { sendOpsAlert } from '@/lib/ops-alerts'
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 function dublinYesterdayStr(todayStr) {
   const [y, m, d] = todayStr.split('-').map(Number)
   return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10)
 }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'usage-rollup' }, async ({ db }) => {
   const today = todayStrIn(PLATFORM_TZ) // D5: the platform billing calendar (PLATFORM_TZ)
   const days = [dublinYesterdayStr(today), today]
 
@@ -44,10 +40,12 @@ export async function GET(request) {
     try {
       const { error } = await db.rpc('rollup_usage_for_day', { p_day: day })
       if (error) {
-        return NextResponse.json({ success: false, error: `${day}: ${error.message}` }, { status: 500 })
+        logError('usage-rollup', 'day rollup failed — not stamping', { day, err: error.message })
+        return { ok: false, body: { error: 'Usage rollup failed', day } }
       }
     } catch (e) {
-      return NextResponse.json({ success: false, error: `${day}: ${e?.message || e}` }, { status: 500 })
+      logError('usage-rollup', 'day rollup threw — not stamping', { day, err: e?.message || String(e) })
+      return { ok: false, body: { error: 'Usage rollup failed', day } }
     }
   }
 
@@ -60,9 +58,8 @@ export async function GET(request) {
     logWarn('usage-rollup', 'cap-notice pass threw', { err: e?.message || e })
   }
 
-  await stampHeartbeat('usage-rollup', { days, notices })
-  return NextResponse.json({ success: true, days, notices })
-}
+  return { body: { days, notices }, outcome: { days, notices } }
+})
 
 async function sendCapNotices(db, todayStr) {
   const month = todayStr.slice(0, 7)

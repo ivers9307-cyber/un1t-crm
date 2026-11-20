@@ -36,6 +36,8 @@ describe('fleet-health cron — screen pass', () => {
     const res = await GET(new Request('http://t/api/cron/fleet-health'))
     expect(res.status).toBe(401)
     expect(runScreenHealth).not.toHaveBeenCalled()
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('runs the screen pass even when Tailscale is unconfigured and reports its counts', async () => {
@@ -70,8 +72,10 @@ describe('fleet-health cron — screen pass', () => {
     tailscaleConfigured.mockReturnValue(true)
     listTailnetDevices.mockRejectedValue(new Error('tailscale 503'))
     const res = await GET(authed())
+    expect(res.status).toBe(200)
     const body = await res.json()
     expect(body).toMatchObject({ success: false, error: 'tailscale_unreachable', screens_checked: 6, screens_alerted: 1 })
+    expect(JSON.stringify(body)).not.toContain('tailscale 503')
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })

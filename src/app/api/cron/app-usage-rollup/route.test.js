@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn() }))
 vi.mock('@/lib/location-time', () => ({ getLocationZones: vi.fn(async () => new Map([['loc1', 'Europe/Dublin']])) }))
 
@@ -32,7 +32,7 @@ function makeDb({ tables = {}, failOn = null } = {}) {
         delete() { op = 'delete'; return b },
         then(resolve) {
           if (op === 'delete') calls.push({ table, op, filters })
-          const error = failOn && failOn.table === table && failOn.op === op ? { code: 'X' } : null
+          const error = failOn && failOn.table === table && failOn.op === op ? { code: 'PGRST_RAW_DB_TEXT' } : null
           const data = op === 'select' && !filters.some((f) => f[0] === 'lt') ? (tables[table] || []) : []
           return Promise.resolve({ data: error ? null : data, error }).then(resolve)
         },
@@ -82,13 +82,19 @@ describe('GET /api/cron/app-usage-rollup', () => {
       failOn: { table: 'app_usage_daily', op: 'upsert' },
     })
     createServerClient.mockReturnValue(db)
-    expect((await GET(req())).status).toBe(500)
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, ok: false, error: 'Rollup failed' })
+    expect(JSON.stringify(body)).not.toContain('PGRST_RAW_DB_TEXT')
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('500s without stamping when the read fails', async () => {
     createServerClient.mockReturnValue(makeDb({ failOn: { table: 'app_usage_sessions', op: 'select' } }))
-    expect((await GET(req())).status).toBe(500)
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('PGRST_RAW_DB_TEXT')
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
