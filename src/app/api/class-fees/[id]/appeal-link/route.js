@@ -5,8 +5,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { canUseClassFees } from '@/lib/class-fees-access'
@@ -22,10 +22,11 @@ const REFUSED = {
   not_appealable: 'This fee can no longer be appealed (it is charged, waived, being charged or already appealed).',
 }
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id } = await params
+// withAuth only signs the caller in. Every check after it runs by hand, in the
+// order it always has: id 404, body 400, studio membership 403, class_fees at
+// the body's studio 403.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const id = params?.id
   if (!uuidLike.safeParse(id).success) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const validation = await validateBody(request, AppealLinkSchema)
   if (!validation.ok) return validation.response
@@ -34,7 +35,7 @@ export async function POST(request, { params }) {
   if (guard) return guard
   if (!canUseClassFees(user, locationId)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   try {
-    const r = await issueAppealLink(createServerClient(), { locationId, feeId: id })
+    const r = await issueAppealLink(db, { locationId, feeId: id })
     if (!r.ok && r.reason === 'not_found') return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     if (!r.ok) return NextResponse.json({ success: false, code: r.reason, error: REFUSED[r.reason] }, { status: 409 })
     return NextResponse.json({ success: true, data: { url: r.url } })
@@ -42,4 +43,4 @@ export async function POST(request, { params }) {
     logError('class-fees', 'appeal link failed', { locationId, feeId: id, code: err?.code ?? null })
     return NextResponse.json({ success: false, error: 'Could not make an appeal link just now.' }, { status: 500 })
   }
-}
+})
