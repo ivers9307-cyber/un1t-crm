@@ -59,7 +59,7 @@ export default function ImportRollbackButton({ importId }) {
               <AlertTriangle size={20} className="text-amber-600 mt-0.5 shrink-0" />
               <div className="flex-1">
                 <h3 className="text-base font-semibold text-un1t-text">
-                  {result ? 'Rollback complete' : 'Roll back this import?'}
+                  {!result ? 'Roll back this import?' : result.partial ? 'Rollback not finished' : 'Rollback complete'}
                 </h3>
                 {!result && (
                   <p className="text-xs text-un1t-subtle mt-1">
@@ -110,7 +110,10 @@ export default function ImportRollbackButton({ importId }) {
                   <li><strong className="text-un1t-text">{result.deleted}</strong> created contact{result.deleted === 1 ? '' : 's'} deleted</li>
                   <li><strong className="text-un1t-text">{result.restored}</strong> updated contact{result.restored === 1 ? '' : 's'} restored to pre-import values</li>
                   {result.failed > 0 && (
-                    <li className="text-amber-700">{result.failed} row{result.failed === 1 ? '' : 's'} could not be reversed (already deleted or modified by hand — see server logs)</li>
+                    <li className="text-amber-700">{result.failed} row{result.failed === 1 ? '' : 's'} could not be reversed (see server logs)</li>
+                  )}
+                  {result.unrestorable > 0 && (
+                    <li className="text-amber-700">{result.unrestorable} updated contact{result.unrestorable === 1 ? '' : 's'} had no saved pre-import values, so {result.unrestorable === 1 ? 'it was' : 'they were'} left as they are</li>
                   )}
                   {result.unrestorable_keys > 0 && (
                     // ROLLBACK-ALLOW.1 — expected to be 0 forever. A non-zero
@@ -122,18 +125,30 @@ export default function ImportRollbackButton({ importId }) {
                     </li>
                   )}
                 </ul>
-                {Array.isArray(result.stamp_failed) && result.stamp_failed.length > 0 && (
+                {result.partial && (
+                  // IMPORTROLLBACK.1 — some rows were not reversed. They keep
+                  // their created/updated outcome and the import is back to
+                  // Completed, so running the rollback again retries only them.
+                  <div className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-xs rounded-md p-2 space-y-1">
+                    <p className="font-medium">This import is not fully rolled back yet.</p>
+                    <p>The rows that could not be reversed still show as created or updated. Run the rollback again to retry just those rows; nothing already reversed is done twice.</p>
+                  </div>
+                )}
+                {result.ledger_incomplete && (
+                  // IMPORTLEDGER.1 — part of this import's rollback history was
+                  // never saved, so some updated contacts cannot be restored.
+                  <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 space-y-1">
+                    <p className="font-medium">Some updated contacts could not be restored.</p>
+                    <p>Part of this import&rsquo;s rollback history was not saved when it ran, so their pre-import values are unknown. They may still carry the imported values.</p>
+                  </div>
+                )}
+                {Array.isArray(result.stamp_failed) && result.stamp_failed.includes('batch') && (
                   // C9 — the reversal happened but a closing stamp did not
                   // land. Without this the batch just sits at "Rolling back"
                   // with nothing to retry it and nothing saying it is stuck.
                   <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 space-y-1">
                     <p className="font-medium">The reversal finished, but the record of it did not save.</p>
-                    {result.stamp_failed.includes('batch') && (
-                      <p>This import will keep showing as &ldquo;Rolling back&rdquo; until it saves.</p>
-                    )}
-                    {result.stamp_failed.includes('rows') && (
-                      <p>The row list will keep showing the original created and updated outcomes.</p>
-                    )}
+                    <p>This import will keep showing as &ldquo;Rolling back&rdquo; until it saves.</p>
                     <p>Run the rollback again to finish it. Nothing is reversed twice.</p>
                   </div>
                 )}

@@ -19,7 +19,8 @@
 // deliberately CRON-ONLY — resets it to 'pending' after
 // STUCK_AFTER_MINUTES.
 
-import { runImportCommit } from './contact-import-runner.js'
+import { runImportCommit, ledgerIncompleteMessage } from './contact-import-runner.js'
+import { logError } from './log.js'
 
 // 'processing' older than this = crashed consumer; the cron's
 // stuck-recovery pass resets it to 'pending'.
@@ -31,7 +32,7 @@ export const STUCK_AFTER_MINUTES = 5
  * @param {SupabaseClient} db — service-role client
  * @param {{id: string, location_id: string, payload: object|null}} job —
  *   a full contact_imports row (the payload carries the stored CSV)
- * @returns {Promise<{status: 'processed'|'skipped'|'failed', error?: string, missingPayload?: true}>}
+ * @returns {Promise<{status: 'processed'|'skipped'|'failed', error?: string, missingPayload?: true, ledgerIncomplete?: true}>}
  */
 export async function claimAndProcessImportJob(db, job) {
   const { data: claimed } = await db
@@ -58,22 +59,41 @@ export async function claimAndProcessImportJob(db, job) {
   const { mapping, rows, batchTag, resolutions } = job.payload
 
   try {
-    const { counts } = await runImportCommit(db, {
+    const { counts, ledgerFailed = 0 } = await runImportCommit(db, {
       importId: job.id,
       locationId: job.location_id,
       mapping, rows, batchTag, resolutions,
     })
-    await db.from('contact_imports').update({
+    const stamp = {
       status: 'completed',
       created_count: counts.created,
       updated_count: counts.updated,
       skipped_count: counts.skipped,
       errored_count: counts.errored,
+    }
+    if (ledgerFailed > 0) {
+      // IMPORTLEDGER.1 (audit A08) — some row outcomes, possibly with the
+      // before_snapshots rollback restores from, were never saved. The
+      // contacts were written, so the batch is 'completed', but it must not
+      // look fully recoverable: the marker in error_message makes the detail
+      // page and the rollback route say so, and the payload (the only record
+      // left of which rows were in the lost chunks) is KEPT.
+      stamp.error_message = ledgerIncompleteMessage(ledgerFailed)
+      logError('contact-import-queue', 'import completed with incomplete rollback history — payload kept', {
+        importId: job.id, ledgerFailed,
+      })
+    } else {
       // Drop the payload — it's served its purpose, no point
       // hanging onto a copy of every imported CSV forever.
-      payload: null,
-    }).eq('id', job.id)
-    return { status: 'processed' }
+      stamp.payload = null
+    }
+    const { error: stampError } = await db.from('contact_imports').update(stamp).eq('id', job.id)
+    if (stampError) {
+      logError('contact-import-queue', 'completed stamp failed — batch left at processing', {
+        importId: job.id, code: stampError.code ?? null,
+      })
+    }
+    return ledgerFailed > 0 ? { status: 'processed', ledgerIncomplete: true } : { status: 'processed' }
   } catch (e) {
     const error = (e?.message || String(e)).slice(0, 2000)
     await db.from('contact_imports').update({

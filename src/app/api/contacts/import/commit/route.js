@@ -25,7 +25,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
-import { runImportCommit } from '@/lib/contact-import-runner'
+import { runImportCommit, ledgerIncompleteMessage } from '@/lib/contact-import-runner'
+import { logError } from '@/lib/log'
 import { publishQueuePush, CONTACT_IMPORTS_WORKER_PATH } from '@/lib/qstash'
 
 export const runtime = 'nodejs'
@@ -137,12 +138,27 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 })
   }
 
-  await db.from('contact_imports').update({
+  // IMPORTLEDGER.1 (audit A08) — same rule as the async queue: a lost ledger
+  // chunk marks the batch so neither the detail page nor a rollback treats it
+  // as fully recoverable, and the rows are kept as the payload for the record.
+  const ledgerFailed = result.ledgerFailed || 0
+  const stamp = {
     created_count: result.counts.created,
     updated_count: result.counts.updated,
     skipped_count: result.counts.skipped,
     errored_count: result.counts.errored,
-  }).eq('id', batch.id)
+  }
+  if (ledgerFailed > 0) {
+    stamp.error_message = ledgerIncompleteMessage(ledgerFailed)
+    stamp.payload = { mapping, rows, batchTag: batch_tag || null, resolutions: resolutions || {} }
+    logError('contact-import-commit', 'import completed with incomplete rollback history', {
+      importId: batch.id, ledgerFailed,
+    })
+  }
+  const { error: stampError } = await db.from('contact_imports').update(stamp).eq('id', batch.id)
+  if (stampError) {
+    logError('contact-import-commit', 'count stamp failed', { importId: batch.id, code: stampError.code ?? null })
+  }
 
   return NextResponse.json({
     success: true,
@@ -153,6 +169,7 @@ export async function POST(request) {
         total: rows.length,
         ...result.counts,
       },
+      ...(ledgerFailed > 0 ? { ledger_incomplete: true } : {}),
     },
   })
 }

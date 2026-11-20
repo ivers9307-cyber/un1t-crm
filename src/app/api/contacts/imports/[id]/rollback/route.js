@@ -13,17 +13,36 @@
 //     only columns an import can legitimately own are written back.
 //     Anything outside that allowlist is left alone, logged, and
 //     counted into `unrestorable_keys` on the response.
-//   - Stamps the batch as status='rolled_back' + records actor +
-//     timestamp.
-//   - Marks the per-row outcomes as action='rolled_back' so the
-//     drill-in page reflects reality.
+//   - IMPORTROLLBACK.1 (audit A09) — stamps each per-row outcome
+//     action='rolled_back' ONLY when that row's delete / restore
+//     succeeded; a row that failed keeps its created/updated action.
+//   - Only when every row succeeded (failed === 0) stamps the batch
+//     status='rolled_back' + actor + timestamp.
 //
-// Best-effort per-row: a single contact that was already deleted /
-// edited by hand won't fail the whole rollback.
+// State machine:
+//   completed --claim--> rolling_back --all rows done--> rolled_back
+//                                     --some failed-----> completed
+//   A partial rollback returns the batch to 'completed' (with its finished
+//   rows already stamped rolled_back), so the Rollback button shows again
+//   and a second POST claims it normally. That second run redoes only the
+//   unfinished work: created contacts already deleted are no longer found,
+//   and 'updated' rows already stamped rolled_back are not selected.
+//   The answer is 200 with success:true, data.partial:true and the counts —
+//   the same "the reversal that happened is real" contract as C9 below.
+//   A batch stranded at 'rolling_back' (crash, or a failed closing stamp)
+//   stays re-runnable, but only once its claim is STALE: while a batch is
+//   'rolling_back', rolled_back_at holds the claim time, and one conditional
+//   UPDATE claims either a completed batch or a rolling_back batch claimed
+//   more than CLAIM_STALE_MINUTES ago. Postgres re-checks that WHERE under
+//   the row lock, so two simultaneous requests can never both claim it.
 //
-// C9 — the two closing stamps report failure as `data.stamp_failed`
-// (a list of 'rows' / 'batch') rather than being discarded. A batch
-// whose stamp failed stays at status='rolling_back'; re-running the
+// IMPORTLEDGER.1 (audit A08) — a batch whose rollback history was not fully
+// saved (isLedgerIncomplete) is still rolled back as far as it can be, but
+// the answer carries data.ledger_incomplete:true so the UI says plainly that
+// some updated contacts could not be restored.
+//
+// C9 — the closing stamps report failure as `data.stamp_failed`
+// (a list of 'rows' / 'batch') rather than being discarded. Re-running the
 // rollback is the recovery, and it is safe to do.
 
 import { NextResponse } from 'next/server'
@@ -33,9 +52,16 @@ import { redactWhatsAppForContact } from '@/lib/contact-merge'
 import { pickRestorableSnapshot } from '@/lib/contact-import'
 import { logWarn, logError } from '@/lib/log'
 import { selectAll } from '@/lib/select-all'
+import { isLedgerIncomplete } from '@/lib/contact-import-runner'
+
+// Ids per `.in()` stamp — keeps the PostgREST URL short (see selectAllByKeys).
+const STAMP_CHUNK = 300
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+/** A rolling_back claim older than this is treated as stranded and may be re-claimed. */
+export const CLAIM_STALE_MINUTES = 10
 
 export async function POST(_request, props) {
   const params = await props.params;
@@ -62,11 +88,29 @@ export async function POST(_request, props) {
   const guard = assertLocationAccessOr404(user, batch.location_id)
   if (guard) return guard
 
-  // Mark in-progress so concurrent rollback attempts noop.
-  await db.from('contact_imports')
-    .update({ status: 'rolling_back' })
+  // Claim the batch. IMPORTROLLBACK.1 — the claim must actually claim
+  // something, and it is decided by this one conditional UPDATE, never by the
+  // status read above: a completed batch, or a rolling_back batch whose claim
+  // (rolled_back_at, the claim time while rolling_back) is stale or missing.
+  // A live concurrent rollback, or a pending / processing / failed batch,
+  // matches nothing and is refused.
+  const nowIso = new Date().toISOString()
+  const staleIso = new Date(Date.now() - CLAIM_STALE_MINUTES * 60_000).toISOString()
+  const { data: claimed, error: claimError } = await db.from('contact_imports')
+    .update({ status: 'rolling_back', rolled_back_at: nowIso })
     .eq('id', params.id)
-    .eq('status', 'completed')
+    .or(`status.eq.completed,and(status.eq.rolling_back,rolled_back_at.lt.${staleIso}),and(status.eq.rolling_back,rolled_back_at.is.null)`)
+    .select('id')
+  if (claimError) {
+    logError('contact-import', 'rollback claim failed', { importId: params.id, code: claimError.code ?? null })
+    return NextResponse.json({ success: false, error: 'Could not start the rollback. Try again.' }, { status: 500 })
+  }
+  if (!claimed || claimed.length === 0) {
+    return NextResponse.json({
+      success: false,
+      error: 'This import cannot be rolled back right now: it is not a completed import, or another rollback is still running. Try again in a few minutes.',
+    }, { status: 409 })
+  }
 
   let deleted = 0
   let restored = 0
@@ -76,43 +120,91 @@ export async function POST(_request, props) {
   // count means a snapshot writer and the allowlist have drifted apart,
   // and someone should look. Expected to be 0 forever.
   let unrestorableKeys = 0
+  // A row with nothing to restore (no snapshot, or nothing writable in it):
+  // permanent, so it is finished and counted, never retried for ever.
+  let unrestorable = 0
 
-  // 1. Delete created contacts (with the existing GDPR scrub).
-  //    PAGED: an un-paginated select caps at 1000, so a rollback of a
-  //    >1000-row import would delete only the first 1000 created contacts yet
-  //    still report success — leaving the rest orphaned. Page the full set.
-  const createdContacts = await selectAll((from, to) => db
-    .from('contacts')
-    .select('id')
-    .eq('created_via_import_id', params.id)
-    .order('id', { ascending: true })
-    .range(from, to))
+  // Reads first, all PAGED: an un-paginated select caps at 1000, so a
+  // rollback of a >1000-row import would reverse only the first 1000 rows yet
+  // still report success. The 'created' ledger rows are read before any
+  // delete: contact_import_rows.contact_id is ON DELETE SET NULL, so after
+  // the delete they no longer name the contact they belonged to.
+  let createdLedger, createdContacts, updatedRows
+  try {
+    createdLedger = await selectAll((from, to) => db
+      .from('contact_import_rows')
+      .select('id, contact_id')
+      .eq('import_id', params.id)
+      .eq('action', 'created')
+      .order('id', { ascending: true })
+      .range(from, to))
+    createdContacts = await selectAll((from, to) => db
+      .from('contacts')
+      .select('id')
+      .eq('created_via_import_id', params.id)
+      .order('id', { ascending: true })
+      .range(from, to))
+    updatedRows = await selectAll((from, to) => db
+      .from('contact_import_rows')
+      .select('id, contact_id, before_snapshot')
+      .eq('import_id', params.id)
+      .eq('action', 'updated')
+      .order('id', { ascending: true })
+      .range(from, to))
+  } catch (e) {
+    // Nothing has been reversed yet: hand the batch back so the button shows
+    // again, and answer with a fixed string (the detail goes to the log).
+    logError('contact-import', 'rollback read failed — nothing reversed', { importId: params.id, err: e })
+    const { error: releaseError } = await db.from('contact_imports')
+      .update({ status: 'completed', rolled_back_at: null }).eq('id', params.id).eq('status', 'rolling_back')
+    if (releaseError) {
+      logError('contact-import', 'rollback release failed — batch is stranded at rolling_back', {
+        importId: params.id, code: releaseError.code ?? null,
+      })
+    }
+    return NextResponse.json({ success: false, error: 'Could not read this import to roll it back. Nothing was changed. Try again.' }, { status: 500 })
+  }
+  // 1. Delete created contacts (with the existing GDPR scrub). Driven by
+  //    contacts.created_via_import_id, not the ledger, so it still finds
+  //    contacts whose ledger rows were lost (IMPORTLEDGER.1).
+  const stillPresent = new Set(createdContacts.map(c => c.id))
+  const deletedIds = new Set()
   for (const c of createdContacts) {
     try {
       await redactWhatsAppForContact(db, c.id)
       const { error } = await db.from('contacts').delete().eq('id', c.id)
       if (error) throw new Error(error.message)
       deleted += 1
+      deletedIds.add(c.id)
     } catch (e) {
       failed += 1
       logWarn(`rollback ${params.id}`, `delete ${c.id} failed`, { err: e })
     }
   }
+  // A 'created' row is finished when its contact is gone: deleted just now,
+  // or already gone (contact_id nulled, or no longer present) from an earlier
+  // run or by hand. Its contact failing to delete keeps it 'created'.
+  const doneRowIds = []
+  for (const r of createdLedger) {
+    if (!r.contact_id || deletedIds.has(r.contact_id) || !stillPresent.has(r.contact_id)) {
+      doneRowIds.push(r.id)
+    }
+  }
 
-  // 2. Restore updated contacts from before_snapshot.
-  //    PAGED: same 1000-row cap — a large import's updated rows past 1000 would
-  //    never be restored to their pre-import values yet the rollback returns
-  //    success:true. Page the full set; the per-row restore loop is unchanged.
-  const updatedRows = await selectAll((from, to) => db
-    .from('contact_import_rows')
-    .select('id, contact_id, before_snapshot')
-    .eq('import_id', params.id)
-    .eq('action', 'updated')
-    .not('before_snapshot', 'is', null)
-    .order('id', { ascending: true })
-    .range(from, to))
+  // 2. Restore updated contacts from before_snapshot (read, paged, above:
+  //    same 1000-row cap — a large import's updated rows past 1000 would
+  //    never be restored). Only rows still 'updated' are read, so a re-run
+  //    skips rows an earlier run already finished.
   for (const r of updatedRows) {
-    if (!r.contact_id || !r.before_snapshot) continue
+    // The contact has since been deleted: there is nothing left to restore,
+    // so the row is finished.
+    if (!r.contact_id) { doneRowIds.push(r.id); continue }
+    if (!r.before_snapshot) {
+      unrestorable += 1
+      doneRowIds.push(r.id)
+      logWarn(`rollback ${params.id}`, `restore ${r.contact_id} skipped — no snapshot`, { rowId: r.id })
+      continue
+    }
 
     // ROLLBACK-ALLOW.1 — never write the snapshot verbatim. The allowlist
     // is derived from IMPORT_FIELD_KEYS (see pickRestorableSnapshot), i.e.
@@ -131,8 +223,10 @@ export async function POST(_request, props) {
     }
     if (Object.keys(patch).length === 0) {
       // Nothing writable at all — the operator asked for a restore that
-      // did not happen, so say so rather than counting it as restored.
-      failed += 1
+      // did not happen, so say so (unrestorable) rather than counting it as
+      // restored. A retry could not do better, so the row is finished.
+      unrestorable += 1
+      doneRowIds.push(r.id)
       logWarn(`rollback ${params.id}`, `restore ${r.contact_id} skipped — nothing restorable in the snapshot`, {
         rowId: r.id, keys: unknownKeys,
       })
@@ -146,6 +240,7 @@ export async function POST(_request, props) {
         .eq('id', r.contact_id)
       if (error) throw new Error(error.message)
       restored += 1
+      doneRowIds.push(r.id)
     } catch (e) {
       failed += 1
       logWarn(`rollback ${params.id}`, `restore ${r.contact_id} failed`, { err: e })
@@ -162,46 +257,66 @@ export async function POST(_request, props) {
   // batch stamp, or one fault strands the batch for two reasons.
   const stampFailed = []
 
-  // 3. Mark per-row outcomes as rolled_back so the drill-in page
-  // reflects the new state.
-  const { error: rowStampError } = await db.from('contact_import_rows')
-    .update({ action: 'rolled_back' })
-    .eq('import_id', params.id)
-    .in('action', ['created', 'updated'])
-  if (rowStampError) {
-    stampFailed.push('rows')
-    logError('contact-import', 'rollback row stamp failed — drill-in rows still read created/updated', {
-      importId: params.id, err: rowStampError,
-    })
+  // 3. Stamp ONLY the finished rows rolled_back, in id chunks. A failed row
+  // keeps its created/updated action, which is what lets a second run find
+  // exactly the unfinished work.
+  for (let i = 0; i < doneRowIds.length; i += STAMP_CHUNK) {
+    const ids = doneRowIds.slice(i, i + STAMP_CHUNK)
+    const { error: rowStampError } = await db.from('contact_import_rows')
+      .update({ action: 'rolled_back' })
+      .eq('import_id', params.id)
+      .in('id', ids)
+    if (rowStampError) {
+      if (!stampFailed.includes('rows')) stampFailed.push('rows')
+      logError('contact-import', 'rollback row stamp failed — drill-in rows still read created/updated', {
+        importId: params.id, chunkStart: i, rows: ids.length, code: rowStampError.code ?? null,
+      })
+    }
   }
 
-  // 4. Stamp the batch.
+  // 4. Stamp the batch. Complete only when every row was reversed AND every
+  // row stamp landed; otherwise hand it back to 'completed' so the operator
+  // can run the rollback again (a row whose stamp failed is simply redone:
+  // its contact is already gone, or its snapshot is restored a second time).
+  const partial = failed > 0 || stampFailed.includes('rows')
+  const batchStamp = partial
+    ? { status: 'completed', rolled_back_at: null }
+    : { status: 'rolled_back', rolled_back_at: new Date().toISOString(), rolled_back_by: user.id }
   const { error: batchStampError } = await db.from('contact_imports')
-    .update({
-      status: 'rolled_back',
-      rolled_back_at: new Date().toISOString(),
-      rolled_back_by: user.id,
-    })
+    .update(batchStamp)
     .eq('id', params.id)
   if (batchStampError) {
     stampFailed.push('batch')
     logError('contact-import', 'rollback batch stamp failed — batch is stranded at rolling_back', {
-      importId: params.id, err: batchStampError,
+      importId: params.id, partial, code: batchStampError.code ?? null,
     })
   }
+  if (partial) {
+    logError('contact-import', 'rollback incomplete — failed rows left for a retry', {
+      importId: params.id, deleted, restored, failed,
+    })
+  }
+
+  const ledgerIncomplete = isLedgerIncomplete(batch)
 
   // Deliberately still a 200 with `success: true`. By this point the deletes
   // and restores have genuinely happened, so a 500 would tell the operator
   // nothing was reversed — the opposite of the truth, and it would hide the
-  // counts that say what WAS. The honest answer is the real counts plus a
-  // named list of which stamps did not land; the UI turns that into "run it
-  // again". Re-running is safe: the deletes/restores find nothing left to do
-  // (created contacts are gone, rows are either already stamped or still
-  // 'updated' with the same snapshot) and both stamps are re-attempted. The
-  // in-progress guard at the top only 400s on status='rolled_back', so a
-  // batch stuck at 'rolling_back' can always be re-run.
+  // counts that say what WAS. The honest answer is the real counts, `partial`
+  // when some rows are still to do, and a named list of which stamps did not
+  // land; the UI turns those into "run it again". Re-running redoes only the
+  // unfinished rows (see the state machine at the top).
   return NextResponse.json({
     success: true,
-    data: { deleted, restored, failed, unrestorable_keys: unrestorableKeys, stamp_failed: stampFailed },
+    data: {
+      deleted,
+      restored,
+      failed,
+      partial,
+      ledger_incomplete: ledgerIncomplete,
+      unrestorable,
+      unrestorable_keys: unrestorableKeys,
+      stamp_failed: stampFailed,
+    },
   })
 }
