@@ -17,48 +17,46 @@
 // studio keeps the Glofox lane. An unreadable source is a 500, never a guess.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { loadJourneyLane } from '@/lib/onboarding-journey-data'
 import { loadUn1tOnlineJourneyLane } from '@/lib/onboarding-journey-un1t'
 import { membershipSourceState } from '@/lib/membership/source'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  if (!hasPermissionAtAnyLocation(user, 'pulse_admin')) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-
-  const requested = new URL(request.url).searchParams.get('location_id')
-  const locationId = requested || user.activeLocation?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
-  }
-  const guard = assertLocationAccess(user, locationId)
-  if (guard) return guard
-  // ROLESWEEP.1a — the permission is judged at the lane's location.
-  if (!hasPermissionForLocation(user, locationId, 'pulse_admin')) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-
-  const db = createServerClient()
-  try {
-    const source = await membershipSourceState(db, locationId)
-    if (!source.source) {
-      return NextResponse.json({ success: false, error: 'Could not read this studio\'s membership source' }, { status: 500 })
+// pulse_admin somewhere ('Forbidden' 403), the studio (400 / 403), then
+// pulse_admin there (403), in that order and with these texts, as before.
+export const GET = withAuth(
+  { permission: null, location: false, allow: (user) => hasPermissionAtAnyLocation(user, 'pulse_admin'), forbiddenMessage: 'Forbidden' },
+  async ({ user, db, request }) => {
+    const requested = new URL(request.url).searchParams.get('location_id')
+    const locationId = requested || user.activeLocation?.id
+    if (!locationId) {
+      return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
     }
-    const data = source.source === 'un1t_online'
-      ? await loadUn1tOnlineJourneyLane(db, locationId)
-      : await loadJourneyLane(db, locationId)
-    return NextResponse.json({ success: true, data })
-  } catch (e) {
-    return NextResponse.json({ success: false, error: e.message || 'fetch_failed' }, { status: 500 })
-  }
-}
+    const guard = assertLocationAccess(user, locationId)
+    if (guard) return guard
+    // ROLESWEEP.1a — the permission is judged at the lane's location.
+    if (!hasPermissionForLocation(user, locationId, 'pulse_admin')) {
+      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+    }
+
+    try {
+      const source = await membershipSourceState(db, locationId)
+      if (!source.source) {
+        return NextResponse.json({ success: false, error: 'Could not read this studio\'s membership source' }, { status: 500 })
+      }
+      const data = source.source === 'un1t_online'
+        ? await loadUn1tOnlineJourneyLane(db, locationId)
+        : await loadJourneyLane(db, locationId)
+      return NextResponse.json({ success: true, data })
+    } catch (e) {
+      logError('pulse-journey', 'journey lane read failed', { locationId, err: e })
+      return NextResponse.json({ success: false, error: 'fetch_failed' }, { status: 500 })
+    }
+  },
+)

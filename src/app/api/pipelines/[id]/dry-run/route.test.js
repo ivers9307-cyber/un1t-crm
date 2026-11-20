@@ -60,7 +60,15 @@ describe('POST /api/pipelines/[id]/dry-run', () => {
     reclassifyAllContacts.mockResolvedValue({ ok: false, error: 'boom' })
     const res = await POST(req(), props)
     expect(res.status).toBe(503)
-    expect((await res.json()).error).toBe('boom')
+    expect((await res.json()).error).toBe('The dry run could not be completed.')
+  })
+
+  it('401 signed out, nothing read', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await POST(req(), props)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(boardLocationId).not.toHaveBeenCalled()
   })
 
   it('otherStudioIs404AndManagerIs403', async () => {

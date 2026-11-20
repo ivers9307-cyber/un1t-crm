@@ -5,11 +5,11 @@
 // did it. Manager+ at the event's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { createServerClient } from '@/lib/supabase'
 import { markDonationRefunded } from '@/lib/donation-payments'
 import { logError } from '@/lib/log'
 
@@ -18,19 +18,19 @@ export const dynamic = 'force-dynamic'
 
 const NOT_PAID = { success: false, error: 'Only a paid donation can be marked as refunded', code: 'not_paid' }
 
-export async function POST(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// Sign-in only: every check below keeps its old order and answers (`races`
+// somewhere, the event and its studio as a 404, `races` and Manager+ there,
+// then the donation). A signed-out call answers withAuth's 401 'Unauthorized'
+// (was 'Unauthorised').
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: race, error: raceErr } = await db
     .from('race_events')
     .select('id, location_id')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (raceErr || !race) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, race.location_id)
@@ -46,10 +46,13 @@ export async function POST(_request, props) {
   const { data: donation, error: readErr } = await db
     .from('donations')
     .select('id, status')
-    .eq('id', params.donationId)
+    .eq('id', params?.donationId)
     .eq('race_event_id', race.id)
     .maybeSingle()
-  if (readErr) return NextResponse.json({ success: false, error: readErr.message }, { status: 500 })
+  if (readErr) {
+    logError('event-donations', 'donation read failed', { donationId: params?.donationId, err: readErr })
+    return NextResponse.json({ success: false, error: 'Could not read the donation. Try again.' }, { status: 500 })
+  }
   if (!donation) return NextResponse.json({ success: false, error: 'Donation not found' }, { status: 404 })
   if (donation.status !== 'paid') return NextResponse.json(NOT_PAID, { status: 409 })
 
@@ -62,4 +65,4 @@ export async function POST(_request, props) {
     logError('event-donations', 'mark as refunded failed', { donationId: donation.id, error: err?.message })
     return NextResponse.json({ success: false, error: 'Could not mark the donation as refunded' }, { status: 500 })
   }
-}
+})

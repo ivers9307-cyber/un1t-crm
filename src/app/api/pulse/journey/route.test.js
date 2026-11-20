@@ -4,11 +4,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const LOC = '11111111-1111-4111-8111-111111111111'
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: vi.fn(),
   assertLocationAccess: vi.fn(() => null),
 }))
-vi.mock('@/lib/permissions', () => ({
+vi.mock('@/lib/permissions', async (importOriginal) => ({
+  ...(await importOriginal()),
   hasPermissionAtAnyLocation: vi.fn(() => true),
   hasPermissionForLocation: vi.fn(() => true),
 }))
@@ -16,8 +18,10 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('@/lib/onboarding-journey-data', () => ({ loadJourneyLane: vi.fn() }))
 vi.mock('@/lib/onboarding-journey-un1t', () => ({ loadUn1tOnlineJourneyLane: vi.fn() }))
 vi.mock('@/lib/membership/source', () => ({ membershipSourceState: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 
-const { getCurrentUser } = await import('@/lib/auth')
+const { getCurrentUser, assertLocationAccess } = await import('@/lib/auth')
+const { hasPermissionAtAnyLocation, hasPermissionForLocation } = await import('@/lib/permissions')
 const { loadJourneyLane } = await import('@/lib/onboarding-journey-data')
 const { loadUn1tOnlineJourneyLane } = await import('@/lib/onboarding-journey-un1t')
 const { membershipSourceState } = await import('@/lib/membership/source')
@@ -61,5 +65,43 @@ describe('GET /api/pulse/journey', () => {
     expect(res.status).toBe(500)
     expect(loadJourneyLane).not.toHaveBeenCalled()
     expect(loadUn1tOnlineJourneyLane).not.toHaveBeenCalled()
+  })
+
+  it('401 signed out, nothing read', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await call()
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(membershipSourceState).not.toHaveBeenCalled()
+  })
+
+  it("403 'Forbidden' without pulse_admin anywhere", async () => {
+    hasPermissionAtAnyLocation.mockReturnValueOnce(false)
+    const res = await call()
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ success: false, error: 'Forbidden' })
+    expect(membershipSourceState).not.toHaveBeenCalled()
+  })
+
+  it("403 'Forbidden' without pulse_admin at the studio asked for", async () => {
+    hasPermissionForLocation.mockReturnValueOnce(false)
+    const res = await call()
+    expect(res.status).toBe(403)
+    expect(membershipSourceState).not.toHaveBeenCalled()
+  })
+
+  it('another studio is refused by assertLocationAccess, nothing read', async () => {
+    assertLocationAccess.mockReturnValueOnce(new Response(JSON.stringify({ success: false, error: 'Forbidden' }), { status: 403 }))
+    const res = await call()
+    expect(res.status).toBe(403)
+    expect(membershipSourceState).not.toHaveBeenCalled()
+  })
+
+  it('a failed lane read is a 500 without the error text', async () => {
+    membershipSourceState.mockResolvedValue({ source: 'glofox', state: 'configured' })
+    loadJourneyLane.mockRejectedValue(new Error('secret detail'))
+    const res = await call()
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('secret detail')
   })
 })
