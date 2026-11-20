@@ -5,17 +5,18 @@
 // `races` at the event's studio; 404 for an event the caller cannot see.
 // Staff data: the count and the list are never public.
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { resolveStaffWaitlistEvent, listEventWaitlist } from '@/lib/event-waitlist-access'
 import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  const ctx = await resolveStaffWaitlistEvent(user, params.id)
+// The gate is judged at the EVENT's studio, so withAuth only signs the caller
+// in; resolveStaffWaitlistEvent keeps the races-somewhere 403, the 404 and the
+// races + manager-at-the-event's-studio 403, shared with the sibling routes.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, params }) => {
+  const ctx = await resolveStaffWaitlistEvent(user, params?.id)
   if (ctx.response) return ctx.response
 
   const list = await listEventWaitlist(ctx.db, ctx.race)
@@ -24,4 +25,4 @@ export async function GET(_request, props) {
     return NextResponse.json({ success: false, error: 'load_failed', message: 'The waitlist could not be read. Try again.' }, { status: 500 })
   }
   return NextResponse.json({ success: true, data: { rows: list.rows, waiting: list.waiting } })
-}
+})
