@@ -10,8 +10,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { logError } from '@/lib/log'
 import { normaliseDevicePatch } from '@/lib/ac-device-admin'
@@ -34,18 +33,11 @@ const PatchBody = z.object({
 
 const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
-export async function PATCH(request, props) {
-  const params = await props.params
-  const locationId = params?.id || null
+// withAuth: signed in, a member of the path's studio (else its 404, as
+// assertLocationAccessOr404 answered), then master only with the old 403 words.
+export const PATCH = withAuth({ permission: null, location: 'param', master: true, forbiddenMessage: 'Only master can edit AC devices.' }, async ({ db, request, params }) => {
+  const locationId = params.id
   const deviceId = params?.deviceId || null
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!locationId) return NextResponse.json({ success: false, error: 'Location id required.' }, { status: 400 })
-  const notMember = assertLocationAccessOr404(user, locationId)
-  if (notMember) return notMember
-  if (!user.isMaster) {
-    return NextResponse.json({ success: false, error: 'Only master can edit AC devices.' }, { status: 403 })
-  }
   if (!uuidLike.safeParse(deviceId).success) return notFound()
 
   const parsed = await validateBody(request, PatchBody)
@@ -53,7 +45,6 @@ export async function PATCH(request, props) {
   const norm = normaliseDevicePatch(parsed.data)
   if (norm.error) return NextResponse.json({ success: false, error: norm.error }, { status: 400 })
 
-  const db = createServerClient()
   const { data: existing, error: readErr } = await db
     .from('ac_devices')
     .select('id, location_id')
@@ -77,4 +68,4 @@ export async function PATCH(request, props) {
     return NextResponse.json({ success: false, error: 'Could not save the device.' }, { status: 500 })
   }
   return NextResponse.json({ success: true, device })
-}
+})

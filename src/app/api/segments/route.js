@@ -27,17 +27,18 @@
 // Manager+ only.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { logError } from '@/lib/log'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { buildTagVocabulary, studioTagCounts } from '@/lib/studio-tag-vocabulary'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; Manager+ somewhere, the studio check and
+// Manager+ at the counted studio run here in their old order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
@@ -62,7 +63,6 @@ export async function GET(request) {
   // tenant's tags into one dropdown (mirrors /api/communications/events).
   if (!locationId) return NextResponse.json({ success: true, data: build(new Map()) })
 
-  const db = createServerClient()
   // ONE scan, paginated (studioTagCounts): contact_tags at a busy location is
   // well over the PostgREST 1000-row cap and a truncated scan would UNDERCOUNT
   // silently.
@@ -70,8 +70,9 @@ export async function GET(request) {
   try {
     counts = await studioTagCounts(db, locationId)
   } catch (e) {
-    return NextResponse.json({ success: false, error: e?.message || 'Could not read tags' }, { status: 500 })
+    logError('segments', 'tag count read failed', { locationId, message: e?.message ?? String(e) })
+    return NextResponse.json({ success: false, error: 'Could not read tags' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: build(counts) })
-}
+})

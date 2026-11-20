@@ -1,7 +1,9 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { setWhatsAppUserBlockState } from '@/lib/whatsapp'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
@@ -12,11 +14,7 @@ const BlockSchema = z.object({ action: z.enum(['block', 'unblock']) })
 // Meta (Block API) and mirror the state locally (conversation.is_blocked +
 // contacts.wa_status). Blocking is the inbox spam/abuse action and protects
 // the number's quality rating. Registered in src/lib/openapi.js.
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   // INBOXLOC.1 — coarse pre-check (WhatsApp at any studio); the decision is
   // requireWhatsAppInboxAt at the conversation's studio, once the row is read.
   const perm = requireWhatsAppInboxAnywhere(user)
@@ -45,7 +43,11 @@ export async function POST(request, props) {
     // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
     // 409: the Block API on the env number blocked the sender on ANOTHER
     // studio's number. Nothing is mirrored locally.
-    return NextResponse.json({ success: false, error: e?.message || 'Meta block call failed' }, { status: whatsappErrorStatus(e, 502) })
+    // A no-number refusal (409) is our own setup message; Meta's error text is
+    // logged, never answered.
+    const status = whatsappErrorStatus(e, 502)
+    if (status !== 409) logError('wa-block', 'Meta block call failed', { conversationId: conversation.id, err: e?.message })
+    return NextResponse.json({ success: false, error: status === 409 ? e.message : 'Meta block call failed' }, { status })
   }
 
   await db.from('whatsapp_conversations').update({ is_blocked: blocked }).eq('id', conversation.id)
@@ -59,4 +61,4 @@ export async function POST(request, props) {
   }
 
   return NextResponse.json({ success: true, data: { is_blocked: blocked } })
-}
+})

@@ -2,7 +2,9 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { deleteTemplate as deleteMetaTemplate } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
 import { templateNumberOrRefusal } from '@/lib/whatsapp-own-number'
@@ -40,18 +42,19 @@ async function loadTemplateState(db, id) {
 }
 
 // GET /api/whatsapp/templates/[id]
-export async function GET(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// ROUTEWRAP.R9 — withAuth only signs the caller in on every handler here;
+// the gates in each body are unchanged.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, params }) => {
   const db = createServerClient()
   const { data, error } = await db.from('whatsapp_templates')
     .select('*')
     .eq('id', params.id)
     .single()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
+  if (error) {
+    if (error.code !== 'PGRST116') logError('wa-templates', 'template read failed', { err: error, templateId: params.id })
+    return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
+  }
 
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
@@ -63,17 +66,13 @@ export async function GET(request, props) {
     .limit(50)
 
   return NextResponse.json({ success: true, template: data, events: events || [] })
-}
+})
 
 // PUT /api/whatsapp/templates/[id] — update local record. A display_group-only
 // edit is open to members; any other field needs MANAGER_ROLES at the
 // template's location (WATPLROLE.1). Meta's fields are refused in every state
 // and a submitted template's content is locked (WATPLPUT.1): 400 → 403 → 409.
-export async function PUT(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   const db = createServerClient()
   const row = await loadTemplateState(db, params.id)
   const loc = row?.location_id
@@ -113,18 +112,17 @@ export async function PUT(request, props) {
     .select()
     .single()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('wa-templates', 'template update failed', { err: error, templateId: params.id })
+    return NextResponse.json({ success: false, error: 'Could not save the template. Try again.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, template: data })
-}
+})
 
 // DELETE /api/whatsapp/templates/[id] — deletes AT META by name, then the row.
 // MANAGER_ROLES and `whatsapp` at the template's location, the resubmit rule
 // (WATPLROLE.1, GATES-3).
-export async function DELETE(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, params }) => {
   const db = createServerClient()
 
   // Get template name + location to delete from Meta and verify access
@@ -177,6 +175,9 @@ export async function DELETE(request, props) {
   }
 
   const { error } = await db.from('whatsapp_templates').delete().eq('id', params.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('wa-templates', 'template delete failed', { err: error, templateId: params.id })
+    return NextResponse.json({ success: false, error: 'Could not delete the template. Try again.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
-}
+})

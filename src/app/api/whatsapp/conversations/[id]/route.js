@@ -1,8 +1,9 @@
 import { createServerClient } from '@/lib/supabase'
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { NextResponse } from 'next/server'
+import { withAuth } from '@/lib/with-auth'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt, requireWebWhatsAppInboxAt } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { resolveRearmPatch } from '@/lib/agent/core'
 import { validateBody } from '@/lib/validate'
 
@@ -11,11 +12,7 @@ const ConversationPatchSchema = z.object({
 })
 
 // GET /api/whatsapp/conversations/[id] — get conversation with messages
-export async function GET(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+export const GET = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   // INBOXLOC.1 — coarse pre-check (WhatsApp at any studio); the decision is
   // requireWhatsAppInboxAt at the conversation's studio, once the row is read.
   const perm = requireWhatsAppInboxAnywhere(user)
@@ -32,7 +29,12 @@ export async function GET(request, props) {
     .eq('id', params.id)
     .single()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
+  // A missing row and a failed read both answer 404, as before; the database
+  // text is logged, never answered.
+  if (error) {
+    if (error.code !== 'PGRST116') logWarn('whatsapp.conversation', 'conversation read failed', { conversationId: params.id, error: error.message })
+    return NextResponse.json({ success: false, error: 'Conversation not found' }, { status: 404 })
+  }
 
   // Caller must belong to the conversation's location (mirrors the
   // /send and /add-contact siblings — this GET previously had no
@@ -97,7 +99,7 @@ export async function GET(request, props) {
     flow_available: flowAvailable,
     canUseWebControls,
   })
-}
+})
 
 
 // PATCH /api/whatsapp/conversations/[id] — operator workflow state.
@@ -105,11 +107,7 @@ export async function GET(request, props) {
 // mig 255). Resolve drops the thread out of the unified inbox's
 // "Needs reply" queue; a new inbound message auto-clears it in the
 // webhook so replied-to threads come back.
-export async function PATCH(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   // INBOXLOC.1 — coarse pre-check (WhatsApp at any studio); the decision is
   // requireWhatsAppInboxAt at the conversation's studio, once the row is read.
   const perm = requireWhatsAppInboxAnywhere(user)
@@ -142,7 +140,10 @@ export async function PATCH(request, props) {
       ...resolveRearmPatch({ resolved: body.resolved, agent_handed_off_at: conversation.agent_handed_off_at }),
     })
     .eq('id', params.id)
-  if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
+  if (upErr) {
+    logError('whatsapp.conversation', 'resolve update failed', { conversationId: params.id, err: upErr.message })
+    return NextResponse.json({ success: false, error: 'Could not update the conversation.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, resolved: body.resolved })
-}
+})

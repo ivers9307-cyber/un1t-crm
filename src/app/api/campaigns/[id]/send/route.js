@@ -6,8 +6,8 @@
 //   - Throttle is enforced by cron cadence, not request thread.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { releasePreflight, releaseCampaign } from '@/lib/campaign-release'
 import { conflict } from '@/lib/campaign-session-access'
@@ -16,16 +16,14 @@ export const dynamic = 'force-dynamic'
 
 const PREFLIGHT_422 = ['email_hard_cap', 'wallet_empty']
 
-export async function POST(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
+// A send: withAuth only signs the caller in. The campaign read (404), its
+// studio (404), email there (403), the preflight and the release run here in
+// their old order, with their old words.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   const { data: campaign, error } = await db
     .from('campaigns')
     .select('id, location_id, status, name, subject, html_content')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (error || !campaign) {
     return NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
@@ -71,4 +69,4 @@ export async function POST(_request, props) {
     queued: true,
     message: 'Campaign queued — sending will start within 60 seconds.',
   })
-}
+})

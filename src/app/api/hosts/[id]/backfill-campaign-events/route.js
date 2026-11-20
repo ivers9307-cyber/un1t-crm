@@ -15,8 +15,7 @@
 // whole retained tail without an operator having to pick dates.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { activeOrganizationId, isOrgAdmin } from '@/lib/org-admin'
 import { loadHostForOrg } from '@/lib/hosts'
 import { backfillHostCampaignEvents } from '@/lib/host-campaign-backfill'
@@ -30,9 +29,8 @@ export const maxDuration = 300
 
 const RETENTION_DAYS = 45
 
-async function gate() {
-  const user = await getCurrentUser()
-  if (!user) return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
+// withAuth signs the caller in; the organisation-admin check runs here.
+function gate(user) {
   const orgId = activeOrganizationId(user)
   if (!isOrgAdmin(user, orgId)) {
     return { error: NextResponse.json({ success: false, error: 'Organisation admin required' }, { status: 403 }) }
@@ -45,13 +43,11 @@ function ymd(date) {
   return date.toISOString().slice(0, 10)
 }
 
-export async function POST(request, props) {
-  const params = await props.params
-  const g = await gate()
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const g = gate(user)
   if (g.error) return g.error
 
-  const db = createServerClient()
-  const host = await loadHostForOrg(db, params.id, g.orgId)
+  const host = await loadHostForOrg(db, params?.id, g.orgId)
   if (!host) return NextResponse.json({ success: false, error: 'Host not found' }, { status: 404 })
 
   // A plain Request works here too — only the origin+searchParams are read.
@@ -71,4 +67,4 @@ export async function POST(request, props) {
     updated: summary.updated, skipped: summary.skipped, clicks_seen: summary.clicks_seen, clicks_written: summary.clicks_written, errors: summary.errors.length,
   })
   return NextResponse.json({ success: true, data: summary })
-}
+})

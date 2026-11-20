@@ -59,8 +59,8 @@ describe('POST /api/xero/disconnect — owner at the location acted on', () => {
       return
     }
     expect({ status: res.status, body }).toEqual(REFUSAL[outcome])
+    // withAuth makes the client up front; a refusal still touches no table.
     expect(rec.calls).toEqual([])
-    expect(createServerClient).not.toHaveBeenCalled()
   })
 
   it('staff everywhere is refused by the coarse pre-check with the same body', async () => {
@@ -70,10 +70,11 @@ describe('POST /api/xero/disconnect — owner at the location acted on', () => {
     expect(rec.calls).toEqual([])
   })
 
-  it('401 with no user (unchanged)', async () => {
+  it('401 with no user, from withAuth', async () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await disconnect(LOC_B)
     expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
     expect(rec.calls).toEqual([])
   })
 })

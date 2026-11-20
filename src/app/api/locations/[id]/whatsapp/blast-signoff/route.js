@@ -15,7 +15,9 @@
 //   Only `until` and `can_edit` ever leave the route: settings hold credentials.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess, assertOrganizationAdmin } from '@/lib/auth'
+import { assertLocationAccess, assertOrganizationAdmin } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { studioBlastSignoffSchema } from '@/lib/schemas'
@@ -37,15 +39,17 @@ function untilOf(settings) {
 
 async function readStudio(db, locationId) {
   const { data, error } = await db.from('locations').select('id, organization_id, settings').eq('id', locationId).maybeSingle()
-  if (error) return { response: fail(error.message) }
+  if (error) {
+    logError('wa-blast-signoff', 'studio read failed', { err: error, locationId })
+    return { response: fail('Could not load the studio.') }
+  }
   if (!data) return { response: fail('Studio not found', 404) }
   return { location: data }
 }
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return fail('Unauthorised', 401)
+// withAuth signs the caller in and (location: 'param') 404s a studio they are
+// not at; the hand-written checks below still decide, in their old order.
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ user, params }) => {
   const guard = assertLocationAccess(user, params.id)
   if (guard) return guard
 
@@ -56,12 +60,9 @@ export async function GET(_request, props) {
     success: true,
     data: { until: untilOf(location.settings), can_edit: isOrgAdmin(user, location.organization_id) },
   })
-}
+})
 
-export async function PUT(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return fail('Unauthorised', 401)
+export const PUT = withAuth({ permission: null, location: 'param' }, async ({ user, request, params }) => {
   const locationId = params.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
@@ -93,4 +94,4 @@ export async function PUT(request, props) {
   if (!saved.ok) return settingsSaveFailure(saved)
 
   return NextResponse.json({ success: true, data: { until: untilOf(saved.settings), can_edit: true } })
-}
+})

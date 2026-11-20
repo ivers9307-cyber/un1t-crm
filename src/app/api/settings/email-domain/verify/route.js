@@ -11,8 +11,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { isOrgAdminSomewhere } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { isPostmarkAccountConfigured } from '@/lib/postmark-account'
@@ -26,9 +25,8 @@ const VerifySchema = z.object({
   organization_id: uuidLike.optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the organisation-admin checks run here.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!isOrgAdminSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Organisation admin role required.' }, { status: 403 })
   }
@@ -45,7 +43,6 @@ export async function POST(request) {
   if (!resolved.orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
   const orgId = resolved.orgId
 
-  const db = createServerClient()
   const result = await verifyEmailDomain(db, orgId)
 
   // CHANNELREAD.1 — our own read of the stored state failed: nothing was
@@ -72,4 +69,4 @@ export async function POST(request) {
     success: true,
     data: tenantEmailStatePayload(result.row, { addonActive, accountConfigured: true }),
   })
-}
+})

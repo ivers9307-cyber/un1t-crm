@@ -7,8 +7,9 @@
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { logError } from '@/lib/log'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -22,9 +23,10 @@ const StartSchema = z.object({
   template_id: uuidLike,
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user || !hasPermissionAtAnyLocation(user, 'class_timer')) {
+// withAuth only signs the caller in (signed out: its 401, it was this 403);
+// class_timer somewhere, then at the body's studio, runs here as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
+  if (!hasPermissionAtAnyLocation(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const validation = await validateBody(request, StartSchema)
@@ -37,7 +39,6 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: template } = await db
     .from('class_timer_templates')
     .select('id, location_id, name, structure')
@@ -69,7 +70,10 @@ export async function POST(request) {
     })
     .select('*')
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('class-timer', 'run start failed', { locationId: body.location_id, code: error.code ?? null, message: error.message })
+    return NextResponse.json({ success: false, error: 'Could not start the timer just now.' }, { status: 500 })
+  }
   await broadcastTimerPing(body.location_id)
   return NextResponse.json({ success: true, run: data })
-}
+})

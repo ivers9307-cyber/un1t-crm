@@ -18,7 +18,9 @@
 //   the other purposes are left as they are. Responds with the GET shape.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES, studioPurposeTemplateSchema } from '@/lib/schemas'
@@ -41,27 +43,26 @@ function selectedFrom(settings) {
   return out
 }
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return fail('Unauthorised', 401)
+// withAuth signs the caller in and (location: 'param') 404s a studio they are
+// not at; the hand-written checks below still decide, in their old order.
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ user, params }) => {
   const guard = assertLocationAccess(user, params.id)
   if (guard) return guard
 
   const db = createServerClient()
   const { data: location, error } = await db.from('locations').select('id, settings').eq('id', params.id).maybeSingle()
-  if (error) return fail(error.message)
+  if (error) {
+    logError('wa-purpose-templates', 'studio read failed', { err: error, locationId: params.id })
+    return fail('Could not load the studio.')
+  }
   if (!location) return fail('Studio not found', 404)
   return NextResponse.json({
     success: true,
     data: { selected: selectedFrom(location.settings), can_edit: hasRoleAtLocation(user, params.id, ADMIN_ROLES) },
   })
-}
+})
 
-export async function PUT(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return fail('Unauthorised', 401)
+export const PUT = withAuth({ permission: null, location: 'param' }, async ({ user, request, params }) => {
   const locationId = params.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
@@ -81,7 +82,10 @@ export async function PUT(request, props) {
       .select('id, location_id, status, category')
       .eq('id', templateId)
       .maybeSingle()
-    if (tplErr) return fail(tplErr.message)
+    if (tplErr) {
+      logError('wa-purpose-templates', 'template read failed', { err: tplErr, locationId, templateId })
+      return fail('Could not check that template.')
+    }
     if (!template || template.location_id !== locationId) {
       return fail('That template does not belong to this studio.', 400)
     }
@@ -103,4 +107,4 @@ export async function PUT(request, props) {
   if (!saved.ok) return settingsSaveFailure(saved)
 
   return NextResponse.json({ success: true, data: { selected: selectedFrom(saved.settings), can_edit: true } })
-}
+})

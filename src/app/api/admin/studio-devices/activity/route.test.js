@@ -5,7 +5,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
@@ -36,19 +37,30 @@ beforeEach(() => {
 describe('GET /api/admin/studio-devices/activity', () => {
   it('403s a non-master', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u1', profileRole: 'manager' })
+    const from = vi.fn()
+    createServerClient.mockReturnValue({ from })
     const res = await GET()
     expect(res.status).toBe(403)
+    expect(from).not.toHaveBeenCalled()
+  })
+
+  it('a non-master gets the same 403 "Forbidden" body as before', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', profileRole: 'owner', isMaster: false })
+    const res = await GET()
+    expect(await res.json()).toEqual({ success: false, error: 'Forbidden' })
+  })
+
+  // ROUTEWRAP.R11 — signed out is withAuth's 401 (it was a 403 before).
+  it('401s when there is no user, and reads nothing', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await GET()
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
     expect(createServerClient).not.toHaveBeenCalled()
   })
 
-  it('403s when there is no user', async () => {
-    getCurrentUser.mockResolvedValue(null)
-    const res = await GET()
-    expect(res.status).toBe(403)
-  })
-
   it('returns recent attempts with device + matched name resolved', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'm1', profileRole: 'master' })
+    getCurrentUser.mockResolvedValue({ id: 'm1', profileRole: 'master', isMaster: true })
     createServerClient.mockReturnValue(
       makeDb({
         pin_login_attempts: [
@@ -104,7 +116,7 @@ describe('GET /api/admin/studio-devices/activity', () => {
   })
 
   it('500s when the attempts query errors', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'm1', profileRole: 'master' })
+    getCurrentUser.mockResolvedValue({ id: 'm1', profileRole: 'master', isMaster: true })
     createServerClient.mockReturnValue({
       from: () => ({
         select: function () { return this },
@@ -115,5 +127,6 @@ describe('GET /api/admin/studio-devices/activity', () => {
     })
     const res = await GET()
     expect(res.status).toBe(500)
+    expect((await res.json()).error).not.toContain('boom')
   })
 })

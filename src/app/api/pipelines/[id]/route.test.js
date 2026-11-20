@@ -113,3 +113,15 @@ describe('PATCH /api/pipelines/[id]', () => {
     expect((await res.json()).code).toBe('switch_off_first')
   })
 })
+
+describe('/api/pipelines/[id] — signed out (ROUTEWRAP.R10)', () => {
+  it('GET and PATCH answer withAuth’s 401 and read nothing', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    for (const res of [await GET(getReq(), props), await PATCH(patchReq({ name: 'x' }), props)]) {
+      expect(res.status).toBe(401)
+      expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    }
+    expect(boardLocationId).not.toHaveBeenCalled()
+    expect(updateBoard).not.toHaveBeenCalled()
+  })
+})

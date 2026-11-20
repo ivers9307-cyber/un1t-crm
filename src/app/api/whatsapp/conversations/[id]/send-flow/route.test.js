@@ -188,3 +188,25 @@ describe('POST /api/whatsapp/conversations/[id]/send-flow — failures are not s
     expect(sendFlowMessage).not.toHaveBeenCalled()
   })
 })
+
+// ROUTEWRAP.R9 — on withAuth: signed out is its 401, and Meta's own error
+// text is logged, never answered.
+describe('POST /api/whatsapp/conversations/[id]/send-flow — wrapper and Meta errors', () => {
+  it('signed out: 401 Unauthorized, nothing read or sent', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await post()
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(sendFlowMessage).not.toHaveBeenCalled()
+  })
+
+  it('a Meta failure: 502 with a fixed line; Meta\'s text is logged', async () => {
+    createServerClient.mockReturnValue(stubDb())
+    sendFlowMessage.mockRejectedValueOnce(new Error('(#131009) Parameter value is not valid for 15555550100'))
+    const res = await post()
+    expect(res.status).toBe(502)
+    expect(await res.json()).toEqual({ success: false, error: 'Meta flow send failed' })
+    expect(logError).toHaveBeenCalledWith('wa-flow-send', 'Meta flow send failed', expect.objectContaining({ conversationId: CONV_ID }))
+  })
+})

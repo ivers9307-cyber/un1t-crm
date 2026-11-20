@@ -5,8 +5,8 @@
 // operator can fix the rows and re-upload only the failures.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
@@ -19,20 +19,17 @@ function csvEscape(v) {
   return s
 }
 
-export async function GET(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the manager checks run below as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   // ROLESWEEP.1c — coarse pre-check; the role is judged at the batch's location below.
   if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: batch } = await db
     .from('contact_imports')
     .select('id, location_id, source_filename, created_at')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (!batch) return NextResponse.json({ success: false, error: 'Import not found' }, { status: 404 })
 
@@ -79,4 +76,4 @@ export async function GET(_request, props) {
       'Content-Disposition': `attachment; filename="${filename}"`,
     },
   })
-}
+})

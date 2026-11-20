@@ -16,25 +16,22 @@
 // Master-only, like the rest of the registry.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { issueDeviceToken } from '@/lib/fleet-device-auth'
 import { logInfo, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
-  }
+// Sign-in only; the master check keeps its old { ok: false, 'Master only' }
+// 403. A signed-out call answers withAuth's 401 { success: false,
+// error: 'Unauthorized' } (was { ok: false, error: 'Unauthorised' }).
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!user.isMaster) {
     return NextResponse.json({ ok: false, error: 'Master only' }, { status: 403 })
   }
 
-  const db = createServerClient()
+  const name = params?.name
   const { raw, hash } = issueDeviceToken()
 
   const { data, error } = await db
@@ -44,12 +41,12 @@ export async function POST(request, props) {
       token_issued_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
-    .eq('device_name', params.name)
+    .eq('device_name', name)
     .select('device_name')
     .maybeSingle()
 
   if (error) {
-    logWarn('fleet-cmd', 'failed to rotate device token', { device: params.name, err: error })
+    logWarn('fleet-cmd', 'failed to rotate device token', { device: name, err: error })
     return NextResponse.json({ ok: false, error: 'Could not issue token' }, { status: 500 })
   }
   if (!data) {
@@ -57,7 +54,7 @@ export async function POST(request, props) {
   }
 
   // Logged as an event, never with the value.
-  logInfo('fleet-cmd', 'device token rotated', { device: params.name, by: user.id })
+  logInfo('fleet-cmd', 'device token rotated', { device: name, by: user.id })
 
   return NextResponse.json({ ok: true, token: raw })
-}
+})

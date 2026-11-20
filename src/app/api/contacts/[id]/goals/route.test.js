@@ -232,3 +232,25 @@ describe('POST /api/contacts/[id]/goals', () => {
     }))
   })
 })
+
+// ROUTEWRAP.R11 — withAuth signs the caller in first; a failed insert answers a
+// fixed line, never the database text.
+describe('POST /api/contacts/[id]/goals — through withAuth', () => {
+  it('401 signed out, nothing read', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await POST(postReq(), props)
+    expect(res.status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('a failed insert is a 500 without the database text', async () => {
+    createServerClient.mockReturnValue({
+      from: vi.fn((table) => (table === 'contacts'
+        ? { select: () => ({ eq: () => ({ single: async () => ({ data: CONTACT, error: null }) }) }) }
+        : { insert: () => ({ select: () => ({ single: async () => ({ data: null, error: { message: 'secret detail' } }) }) }) })),
+    })
+    const res = await POST(postReq(), props)
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('secret detail')
+  })
+})

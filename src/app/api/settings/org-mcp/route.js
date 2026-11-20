@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { isOrgAdminSomewhere, resolveAdminOrgId } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { logError } from '@/lib/log'
@@ -20,17 +19,16 @@ const OrgMcpSchema = z.object({
 
 const resolveOrgId = (user, requested) => resolveAdminOrgId(user, requested).orgId || null
 
-// GET /api/settings/org-mcp?organization_id=xxx
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the organisation checks run here.
 
+// GET /api/settings/org-mcp?organization_id=xxx
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const { searchParams } = new URL(request.url)
   const orgId = resolveOrgId(user, searchParams.get('organization_id'))
   if (!orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
 
   try {
-    const state = await loadOrgMcpState(createServerClient(), orgId)
+    const state = await loadOrgMcpState(db, orgId)
     return NextResponse.json({
       success: true,
       data: { organization_id: orgId, mcp_enabled: state.mcp_enabled, connector_url: connectorUrl(), people_30d: state.people_30d },
@@ -39,12 +37,10 @@ export async function GET(request) {
     logError('org-mcp', 'GET failed', { error, organizationId: orgId })
     return NextResponse.json({ success: false, error: 'Could not load the agent access settings just now.' }, { status: 500 })
   }
-}
+})
 
 // PUT /api/settings/org-mcp — switch the organisation's MCP access on or off
-export async function PUT(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!isOrgAdminSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Only organisation admins can change agent access' }, { status: 403 })
   }
@@ -56,7 +52,6 @@ export async function PUT(request) {
   const orgId = resolveOrgId(user, body.organization_id)
   if (!orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
 
-  const db = createServerClient()
   // updated_by: mig 733's audit trigger reads it for a service-role write.
   const { data, error } = await db.from('org_settings')
     .upsert({
@@ -73,4 +68,4 @@ export async function PUT(request) {
     return NextResponse.json({ success: false, error: 'Could not save the agent access switch just now.' }, { status: 500 })
   }
   return NextResponse.json({ success: true, data: { mcp_enabled: data.mcp_enabled === true } })
-}
+})

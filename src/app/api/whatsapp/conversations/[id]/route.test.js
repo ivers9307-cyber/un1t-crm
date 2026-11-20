@@ -109,13 +109,15 @@ describe('GET /api/whatsapp/conversations/[id] — authz gate', () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await GET(req(), props)
     expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
   })
 
-  it('404 when the conversation does not exist', async () => {
+  it('404 when the conversation does not exist, with a fixed line (ROUTEWRAP.R9: the database text is not answered)', async () => {
     getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
     createServerClient.mockReturnValue(mockDb({}))
     const res = await GET(req(), props)
     expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Conversation not found' })
   })
 
   it('404 when the conversation is at another location — thread read blocked, unread count untouched', async () => {

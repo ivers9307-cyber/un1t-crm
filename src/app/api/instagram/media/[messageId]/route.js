@@ -1,6 +1,6 @@
-import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
 import { mediaRenderKind } from '@shared/whatsapp-media'
 import { ensureInstagramMediaRehosted } from '@/lib/instagram-media-server'
 import { signedMediaUrl } from '@/lib/whatsapp-media-server'
@@ -19,19 +19,16 @@ import { signedMediaUrl } from '@/lib/whatsapp-media-server'
 
 export const runtime = 'nodejs'
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// withAuth only signs the caller in; the channel permission and the
+// message's studio (404) run here, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
   const perm = requireInboxPermission(user, 'ig')
   if (perm) return perm
 
-  const db = createServerClient()
   const { data: message, error } = await db.from('instagram_messages')
     .select('id, location_id, message_type, media_mime_type, media_url, media_storage_path')
-    .eq('id', params.messageId)
+    .eq('id', params?.messageId)
     .maybeSingle()
   if (error || !message) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -73,4 +70,4 @@ export async function GET(request, props) {
   }
 
   return NextResponse.json({ success: true, url, kind, mime_type: message.media_mime_type || null })
-}
+})

@@ -3,8 +3,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { validateRulePayload } from '../route'
@@ -15,16 +14,13 @@ const AchievementPatchSchema = z.record(z.unknown())
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-async function requireMaster() {
-  const user = await getCurrentUser()
-  if (!user || user.profileRole !== 'master') return null
-  return user
-}
+// withAuth only signs the caller in (signed out: its 401). The master check
+// stays here, judged on profiles.role, with its old 403 body.
+const notMaster = (user) => user.profileRole !== 'master'
+const forbidden = () => NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
 
-export async function PATCH(request, props) {
-  const params = await props.params;
-  const user = await requireMaster()
-  if (!user) return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  if (notMaster(user)) return forbidden()
 
   const id = params?.id
   if (!id) return NextResponse.json({ ok: false, error: 'Missing id' }, { status: 400 })
@@ -41,7 +37,6 @@ export async function PATCH(request, props) {
     return NextResponse.json({ ok: false, error: 'No valid fields to update' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('achievement_rules')
     .update(validation.normalised)
@@ -50,26 +45,23 @@ export async function PATCH(request, props) {
     .single()
   if (error) {
     logWarn('admin-achievements', 'update failed', { id, err: error })
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return NextResponse.json({ ok: false, error: 'Could not save the rule just now.' }, { status: 500 })
   }
 
   return NextResponse.json({ ok: true, rule: data })
-}
+})
 
-export async function DELETE(request, props) {
-  const params = await props.params;
-  const user = await requireMaster()
-  if (!user) return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  if (notMaster(user)) return forbidden()
 
   const id = params?.id
   if (!id) return NextResponse.json({ ok: false, error: 'Missing id' }, { status: 400 })
 
-  const db = createServerClient()
   const { error } = await db.from('achievement_rules').delete().eq('id', id)
   if (error) {
     logWarn('admin-achievements', 'delete failed', { id, err: error })
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return NextResponse.json({ ok: false, error: 'Could not delete the rule just now.' }, { status: 500 })
   }
 
   return NextResponse.json({ ok: true })
-}
+})

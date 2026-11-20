@@ -14,9 +14,9 @@ vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => (limitAllowed ? { allowed: true } : { allowed: false, retryAfterSec: 60 })),
   rateLimitResponse: vi.fn((_l, message) => new Response(JSON.stringify({ success: false, error: message }), { status: 429 })),
 }))
-vi.mock('@/lib/event-waitlist', async (importOriginal) => ({ ...(await importOriginal()), runWaitlistOffers: vi.fn() }))
+vi.mock('@/lib/event-waitlist', async (importOriginal) => ({ ...(await importOriginal()), runWaitlistOffers: vi.fn(), offerWaitlistRow: vi.fn() }))
 
-const { runWaitlistOffers } = await import('@/lib/event-waitlist')
+const { runWaitlistOffers, offerWaitlistRow } = await import('@/lib/event-waitlist')
 const { GET } = await import('./route.js')
 const { POST: OFFER } = await import('./offer/route.js')
 
@@ -67,5 +67,30 @@ describe('Offer now throttle', () => {
     expect(res.status).toBe(429)
     expect((await res.json()).error).toBe('Offer now can run 3 times an hour for an event. Try again later.')
     expect(runWaitlistOffers).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/host/events/[id]/waitlist/offer with { row_id } (WAITLISTONE.1)', () => {
+  const ROW_ID = 'a0000000-0000-4000-8000-0000000000a1'
+  const call = (rowId = ROW_ID) => OFFER(new Request('https://crm.test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ row_id: rowId }) }), props())
+
+  it('offers one row of the host\'s own event', async () => {
+    offerWaitlistRow.mockResolvedValue({ result: 'offered', email: 'sent', whatsapp: 'sent' })
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect(offerWaitlistRow).toHaveBeenCalledWith(db, { eventId: E1, rowId: ROW_ID })
+    expect(runWaitlistOffers).not.toHaveBeenCalled()
+  })
+
+  it('404 for another host\'s event or a bad row id; 401 signed out; 409 when full', async () => {
+    session = { host: { id: 'h2' } }
+    expect((await call()).status).toBe(404)
+    session = null
+    expect((await call()).status).toBe(401)
+    session = { host: { id: 'h1' } }
+    expect((await call('nope')).status).toBe(404)
+    expect(offerWaitlistRow).not.toHaveBeenCalled()
+    offerWaitlistRow.mockResolvedValue({ result: 'no_room' })
+    expect((await call()).status).toBe(409)
   })
 })

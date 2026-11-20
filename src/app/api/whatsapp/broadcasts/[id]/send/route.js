@@ -1,16 +1,15 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { sendBroadcast } from '@/lib/whatsapp'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { routeSignoffFor, writeSignoffStamp, isBlastSignoffRequired } from '@/lib/whatsapp-blast-signoff'
 
 // POST /api/whatsapp/broadcasts/[id]/send
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// ROUTEWRAP.R9 — withAuth only signs the caller in; the gates below are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled' }, { status: 403 })
   }
@@ -65,9 +64,14 @@ export async function POST(request, props) {
     // WACONFIGFALLBACK.1 — no WhatsApp number at the broadcast's location is a
     // 409 (the blast used to go out on the env number); nothing was flipped.
     // WAORGNUMBER.4 — so is the engine's sign-off refusal.
+    // ROUTEWRAP.R9 — the engine's refusals are operator copy and pass through;
+    // a failed status flip carries database text, so it answers a fixed line.
+    const message = String(error?.message || '').startsWith('Could not start the broadcast:')
+      ? 'Could not start the broadcast. Try again.'
+      : error.message
     return NextResponse.json(
-      { success: false, error: error.message },
+      { success: false, error: message },
       { status: isBlastSignoffRequired(error) ? 409 : whatsappErrorStatus(error, 400) }
     )
   }
-}
+})

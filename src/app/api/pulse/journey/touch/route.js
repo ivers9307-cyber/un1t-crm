@@ -15,9 +15,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { logWarn } from '@/lib/log'
@@ -30,11 +29,9 @@ const JourneyTouchSchema = z.object({
   note: z.string().max(500).optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// withAuth only signs the caller in; pulse_admin (403 'Forbidden') and the
+// active studio (400) keep their old words here.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!hasPermission(user, 'pulse_admin')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
@@ -47,8 +44,6 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const contactId = validation.data.contact_id
   const note = validation.data.note?.trim() || 'Pulse journey touch'
-
-  const db = createServerClient()
 
   // Scope the contact to the caller's active location (404, never 403).
   const { data: contact } = await db
@@ -70,8 +65,8 @@ export async function POST(request) {
   })
   if (logErr) {
     logWarn('pulse-journey', 'touch insert failed', { err: logErr, contactId })
-    return NextResponse.json({ success: false, error: logErr.message }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Could not log the touch just now.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: { action: 'contacted', at } })
-}
+})

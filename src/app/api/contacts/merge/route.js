@@ -14,8 +14,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { mergeContacts } from '@/lib/contact-merge'
@@ -28,9 +29,9 @@ const Body = z.object({
   loser_id: uuidLike,
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in. Every check after it runs by hand, in the
+// order it always has, before mergeContacts writes anything.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   // ROLESWEEP.1c — coarse pre-check; owner is judged at the contacts' location below.
   if (user.role !== 'master' && !hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({ success: false, error: 'Owner or master required' }, { status: 403 })
@@ -44,7 +45,6 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'survivor_id and loser_id must be different' }, { status: 400 })
   }
 
-  const db = createServerClient()
   // Check both contacts exist + are at the caller's location
   // (master bypasses). Done up front so we can return a clean 404
   // / 403 instead of a half-merged failure mid-operation.
@@ -77,9 +77,8 @@ export async function POST(request) {
     const result = await mergeContacts(db, { survivorId: survivor_id, loserId: loser_id })
     return NextResponse.json({ success: true, data: result })
   } catch (e) {
-    return NextResponse.json({
-      success: false,
-      error: e?.message || 'Merge failed',
-    }, { status: 500 })
+    // The thrown text carries database detail and contact ids: logged, never sent.
+    logError('contact-merge', 'merge failed', { survivorId: survivor_id, loserId: loser_id, err: e })
+    return NextResponse.json({ success: false, error: 'Merge failed' }, { status: 500 })
   }
-}
+})

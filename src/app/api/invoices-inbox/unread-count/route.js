@@ -22,19 +22,18 @@
 // per-user grantable/revocable).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const PENDING_STATUSES = ['received', 'extracted']
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// Sign-in only: the quiet zero for no active studio or no invoices_inbox there
+// stays in the handler, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   // ORG-ISOLATION — the badge reflects the user's active studio
   // only, regardless of role. master switches active to see
   // another studio's badge. No active location set → 0 (badge has
@@ -50,7 +49,6 @@ export async function GET() {
     return NextResponse.json({ success: true, data: { count: 0 } })
   }
 
-  const db = createServerClient()
   const query = db
     .from('invoices_queue')
     .select('*', { count: 'exact', head: true })
@@ -58,6 +56,9 @@ export async function GET() {
     .eq('location_id', activeId)
 
   const { count, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('invoices-inbox', 'unread count failed', { locationId: activeId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not count the invoices. Try again.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, data: { count: count || 0 } })
-}
+})

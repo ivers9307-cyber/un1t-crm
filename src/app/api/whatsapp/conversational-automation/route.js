@@ -1,7 +1,9 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { setConversationalAutomation } from '@/lib/whatsapp'
@@ -25,10 +27,7 @@ const ConversationalAutomationSchema = z.object({
 // re-hydrate it. Master or owner at the location (WAROLE.1), and the
 // location must be the number's home studio unless the caller is an
 // organisation admin (WAORGNUMBER.4). Registered in src/lib/openapi.js.
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request }) => {
   const validation = await validateBody(request, ConversationalAutomationSchema)
   if (!validation.ok) return validation.response
   const locationId = validation.data.location_id
@@ -60,17 +59,19 @@ export async function POST(request) {
   // organisation admin (master passes), or an owner at the number's HOME
   // studio, may change them. Decided BEFORE the Meta call.
   if (own.config.homeLocationId !== locationId && !isOrganizationAdminFor(user, own.config.organizationId)) {
-    const phone = own.config.displayPhone || 'this number'
+    // ROUTEWRAP.R9 — a fixed line: no phone number in a response.
     return NextResponse.json({
       success: false,
-      error: `Chat openers apply to ${phone} at every studio that uses it. Change them at its home studio, or ask an organisation admin.`,
+      error: 'Chat openers apply to this number at every studio that uses it. Change them at its home studio, or ask an organisation admin.',
     }, { status: 403 })
   }
 
   try {
     await setConversationalAutomation({ enableWelcome, prompts }, { config: own.config })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e?.message || 'Meta conversational_automation call failed' }, { status: 502 })
+    // ROUTEWRAP.R9 — Meta's text is logged, never answered.
+    logError('wa-conv-automation', 'meta call failed', { locationId, err: e })
+    return NextResponse.json({ success: false, error: 'WhatsApp did not accept the chat openers just now. Try again.' }, { status: 502 })
   }
 
   // Mirror the applied config onto the location so the UI shows what's live
@@ -107,4 +108,4 @@ export async function POST(request) {
   }
 
   return NextResponse.json({ success: true, data: { enable_welcome: enableWelcome, prompts } })
-}
+})

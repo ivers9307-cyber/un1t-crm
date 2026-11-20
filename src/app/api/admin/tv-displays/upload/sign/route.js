@@ -16,8 +16,8 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { buildTvUploadPath, checkTvImage, TV_UPLOAD_KINDS } from '@/lib/tv-upload'
@@ -34,8 +34,9 @@ const TvUploadSignSchema = z.object({
   size: z.number().int().positive(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
+// Sign-in only (the same 401 'Unauthorized' tvUploadAnywhereGate gave); the
+// coarse gate, the body, then the TV's studio keep their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const coarse = tvUploadAnywhereGate(user)
   if (coarse) return coarse
 
@@ -52,14 +53,14 @@ export async function POST(request) {
   if (!check.ok) return NextResponse.json({ success: false, error: check.error }, { status: 400 })
 
   const path = buildTvUploadPath({ locationId, kind: body.kind, fileName: body.file_name, id: randomUUID() })
-  const db = createServerClient()
   const { data, error } = await db.storage.from('tv-content').createSignedUploadUrl(path)
   if (error || !data?.token) {
+    logError('tv-upload', 'signed upload url failed', { locationId, err: error || 'no token returned' })
     return NextResponse.json(
-      { success: false, error: `Could not start the upload: ${error?.message || 'no token returned'}` },
+      { success: false, error: 'Could not start the upload. Try again.' },
       { status: 500 }
     )
   }
 
   return NextResponse.json({ success: true, path, token: data.token })
-}
+})

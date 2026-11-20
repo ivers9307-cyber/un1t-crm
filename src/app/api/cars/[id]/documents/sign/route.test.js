@@ -8,7 +8,7 @@ vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccessOr40
 vi.mock('@/lib/permissions', () => ({
   hasPermissionAtAnyLocation: vi.fn(() => true), hasPermissionForLocation: vi.fn(() => true),
 }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logError: vi.fn() }))
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
@@ -69,11 +69,17 @@ describe('POST /api/cars/[id]/documents/sign — the slot', () => {
     expect(b.path).toMatch(new RegExp(`^${CAR.id}/other/${UUID}\\.pdf$`))
   })
 
+  it('401 signed out (withAuth), no slot minted', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await sign(good)).status).toBe(401)
+    expect(createSignedUploadUrl).not.toHaveBeenCalled()
+  })
+
   it('answers 500 when Storage will not sign', async () => {
     createServerClient.mockReturnValue(fakeDb({ signError: { message: 'bucket gone' } }))
     const res = await sign(good)
     expect(res.status).toBe(500)
-    expect((await res.json()).error).toContain('bucket gone')
+    expect((await res.json()).error).toBe('Could not start the upload.')
   })
 })
 

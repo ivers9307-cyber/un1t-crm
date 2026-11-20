@@ -11,9 +11,8 @@
 // privacy, not about what can break the device.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -22,18 +21,15 @@ export const dynamic = 'force-dynamic'
 // Long enough to look at it, short enough that a copied link is not a leak.
 const SIGNED_URL_SECONDS = 300
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+// Sign-in only; every other answer keeps its old { ok } shape. A signed-out
+// call answers withAuth's 401 { success: false, error: 'Unauthorized' } (was
+// { ok: false, error: 'Unauthorised' }).
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const id = params?.id
   const { data: command } = await db
     .from('fleet_commands')
     .select('id, device_name, screenshot_path, fleet_devices(location_id)')
-    .eq('id', params.id)
+    .eq('id', id)
     .maybeSingle()
 
   if (!command?.screenshot_path) {
@@ -56,9 +52,9 @@ export async function GET(request, props) {
   if (error || !data?.signedUrl) {
     // A pruned capture (>24h) lands here, which is the expected end state
     // rather than a fault.
-    logWarn('fleet-cmd', 'could not sign screenshot', { id: params.id, err: error })
+    logWarn('fleet-cmd', 'could not sign screenshot', { id, err: error })
     return NextResponse.json({ ok: false, error: 'Not available' }, { status: 404 })
   }
 
   return NextResponse.json({ ok: true, url: data.signedUrl })
-}
+})

@@ -10,8 +10,8 @@
 // rule, the stages, the day counts and the priority change only while the
 // board is off (src/lib/pipeline-boards.js answers 409 switch_off_first).
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404, hasRoleAtLocation, guardMasterOrOwner } from '@/lib/auth'
 import { MANAGER_ROLES, boardPatchSchema, uuidLike } from '@/lib/schemas'
 import { canBuildSequencesAt } from '@/lib/sequence-access'
 import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
@@ -37,11 +37,10 @@ async function resolveBoard(user, boardId, db) {
   return { locationId: where.locationId }
 }
 
-export async function GET(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: boardId } = await params
-  const db = createServerClient()
+// withAuth only signs the caller in; the board's studio (404) and the role
+// there run here, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const boardId = params?.id
   const resolved = await resolveBoard(user, boardId, db)
   if (resolved.response) return resolved.response
   const { locationId } = resolved
@@ -54,13 +53,10 @@ export async function GET(request, { params }) {
   const canEdit = guardMasterOrOwner(user, locationId) === null
   const canEditWording = canEdit || (canBuildSequencesAt(user, locationId) && canManageWaTemplatesAt(user, locationId))
   return NextResponse.json({ success: true, data: { board: result.board, can_edit: canEdit, can_edit_wording: canEditWording } })
-}
+})
 
-export async function PATCH(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: boardId } = await params
-  const db = createServerClient()
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const boardId = params?.id
   const resolved = await resolveBoard(user, boardId, db)
   if (resolved.response) return resolved.response
   const { locationId } = resolved
@@ -75,4 +71,4 @@ export async function PATCH(request, { params }) {
   const result = await updateBoard(db, { locationId, boardId, patch: validation.data })
   if (!result.ok) return failure(result)
   return NextResponse.json({ success: true, data: { board: result.board } })
-}
+})
