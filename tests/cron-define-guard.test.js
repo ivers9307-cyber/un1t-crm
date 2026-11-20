@@ -13,8 +13,6 @@ const ROOT = path.resolve(import.meta.dirname, '../src/app/api/cron')
 const LEGACY = new Set([
   'glofox-sync',
   'process-trial-purchases',
-  'run-campaigns',
-  'run-whatsapp-broadcasts', 'send-host-campaigns',
   'send-push-reminders',
   'un1t-online-sync',
 ])
