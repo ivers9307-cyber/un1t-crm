@@ -11,7 +11,7 @@ import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../src/app/api/cron')
 const LEGACY = new Set([
-  'ac-auto-off', 'ac-external-rule', 'ad-insights-backfill', 'ad-insights-sync', 'ad-report-email',
+  'ad-insights-backfill', 'ad-insights-sync', 'ad-report-email',
   'agent-followups', 'auto-end-stale-hr-sessions',
   'checklist-sweep', 'churn-radar-digest', 'churn-radar-snapshot',
   'class-fees',
@@ -19,8 +19,8 @@ const LEGACY = new Set([
   'equipment-inspection-reminder', 'equipment-inspection-sweep', 'event-reminders',
   'glofox-arrears-reconcile', 'glofox-attendance-history', 'glofox-attendance-refresh',
   'glofox-data-quality', 'glofox-detail-backfill', 'glofox-sync', 'health-check',
-  'instagram-feed-sync', 'instagram-token-refresh',
-  'lieu-credits', 'membership-snapshot', 'mia-purchase-intents', 'morning-briefing',
+  'instagram-feed-sync',
+  'membership-snapshot', 'mia-purchase-intents', 'morning-briefing',
   'notify-onboarding-pace', 'notify-streak-at-risk', 'notify-winback', 'person-detect-scan',
   'poll-imap-mailboxes', 'process-class-bookings', 'process-contact-imports',
   'process-invoice-analysis', 'process-postmark-webhooks', 'process-receipt-hunts',

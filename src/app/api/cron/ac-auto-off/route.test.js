@@ -17,21 +17,26 @@ import { FAILED_RETRY_BACKOFF_MS, FAST_RETRY_BACKOFF_MS } from '@/lib/ac-auto-of
 // method is recorded on builder.ops so tests can assert the exact filters.
 let queues = {}
 let builders = []
-function makeBuilder(table, rows) {
+// Per-table queue of errors: the Nth select on a table resolves with the Nth
+// entry as its `error` (null = fine).
+let errorQueues = {}
+function makeBuilder(table, rows, error = null) {
   const b = { table, ops: [] }
   for (const m of ['select', 'eq', 'not', 'order', 'limit', 'in', 'lte', 'lt', 'gt', 'update']) {
     b[m] = (...args) => { b.ops.push([m, ...args]); return b }
   }
   b.maybeSingle = () => Promise.resolve({ data: rows[0] ?? null, error: null })
-  b.then = (resolve) => Promise.resolve({ data: rows, error: null }).then(resolve)
+  b.then = (resolve) => Promise.resolve({ data: error ? null : rows, error }).then(resolve)
   builders.push(b)
   return b
 }
-const fakeDb = { from: (t) => makeBuilder(t, (queues[t] && queues[t].shift()) || []) }
+const fakeDb = {
+  from: (t) => makeBuilder(t, (queues[t] && queues[t].shift()) || [], (errorQueues[t] && errorQueues[t].shift()) || null),
+}
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/ops-alerts', () => ({ sendOpsAlert: vi.fn(async () => ({ channel: 'email', recipients: 1 })) }))
 vi.mock('@/lib/ac-devices', () => ({
   loadDeviceWithLocation: vi.fn(),
@@ -61,6 +66,7 @@ const sessionUpdates = () =>
 beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   queues = {}
+  errorQueues = {}
   builders = []
   vi.clearAllMocks()
   loadDeviceWithLocation.mockResolvedValue({ ok: true, device: DEVICE, location: LOCATION })
@@ -71,6 +77,22 @@ describe('GET /api/cron/ac-auto-off', () => {
   it('rejects a missing/wrong bearer', async () => {
     const res = await GET(req('Bearer nope'))
     expect(res.status).toBe(401)
+    expect(builders).toHaveLength(0)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['live', [{ message: 'relation ac_sessions does not exist' }]],
+    ['failed', [null, { message: 'relation ac_sessions does not exist' }]],
+  ])('a failed %s-session read answers 500 with a fixed line, does not stamp, and leaks no DB text', async (_label, errs) => {
+    errorQueues = { ac_sessions: errs }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Could not read AC sessions' })
+    expect(JSON.stringify(body)).not.toContain('does not exist')
+    expect(vendorTurnOff).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('turns off an expired live session and stamps the heartbeat, no alert', async () => {
