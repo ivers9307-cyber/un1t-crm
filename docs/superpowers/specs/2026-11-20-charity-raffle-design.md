@@ -222,3 +222,32 @@ afterwards; a failed email never fails the sale.
 - Test plan; at minimum: numbering under concurrent sales, draw never picks a
   voided or drawn ticket, a sale never writes to `contacts`, the access gate
   (another studio's event is a 404), and the email consent gate.
+
+## RAFFLE.3 — online sales on the event page (Richard, 20 Nov)
+
+For people who can't come on the day. The charity day raffle is drawn **Mon
+23 Nov 2026 at 2pm**; online sales close **1:30pm Monday** (30 minutes before),
+so there is the weekend to sell.
+
+- **Event page:** a Raffle card beside the donate card when the raffle's
+  "Online sales" switch is on: the same option buttons as the till (online
+  purchases capped at 50 tickets), name and email, then the card checkout
+  the donations use (ClassFunnelCheckout). After the closing time the card
+  says sales have closed.
+- **Payment:** Revolut only (UN1T events; a third-party host event shows no
+  card). A new `raffle_orders` row per checkout (awaiting_payment → paid |
+  failed | expired). Tickets are numbered only once the payment is confirmed,
+  by `issue_raffle_order_tickets(order)` (idempotent, ignores the sales
+  switch: the money was taken), at the amount actually paid. The confirmation
+  comes from the status poll, the existing Revolut donations webhook (which
+  already receives every order event; unknown donation refs fall through to
+  raffle orders) and a new `raffle_order` reconcile domain.
+- **Email:** the same ticket email, sent once (a compare-and-set claim on the
+  order), listing every number.
+- **No contacts.** Unlike donations, a paid raffle order never links or creates
+  a contact, tag, consent or timeline event.
+- **Staff:** online sales show in Sales as "Online · card"; online winners show
+  their email in the winners list. Refunds are done in Revolut and the sale is
+  voided in the CRM (Phase 2 may join these up).
+- **Settings:** an Online sales switch and a closing date + time (the studio's
+  clock, `@/lib/location-time`).

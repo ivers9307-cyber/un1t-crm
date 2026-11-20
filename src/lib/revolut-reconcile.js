@@ -23,6 +23,8 @@
 //                   → markOfferPurchaseState (compare-and-set) +
 //                     runOfferPaidSideEffects
 //   donation        donations 'awaiting_payment', provider 'revolut'
+//   raffle_order    raffle_orders 'awaiting_payment', provider 'revolut' (RAFFLE.3)
+//                   → markRaffleOrderPaymentStatus + runPaidRaffleOrderEffects
 //                   → markDonationPaymentStatus (compare-and-set) +
 //                     runPaidDonationSideEffects
 //
@@ -84,6 +86,7 @@ import {
   DONATION_COLS, DONATION_EVENT_COLS, resolveDonationByRef, markDonationPaymentStatus, runPaidDonationSideEffects,
 } from './donation-payments'
 import { resolveCharitySettings } from './charity-donations'
+import { RAFFLE_ORDER_COLS, resolveRaffleOrderByRef, markRaffleOrderPaymentStatus, runPaidRaffleOrderEffects } from './raffle-online'
 import { logError, logWarn } from './log'
 import { sweepRevolutRefunds, REFUND_CONFIRM_BUDGET } from './revolut-refund-confirm'
 
@@ -108,7 +111,7 @@ const SIX_HOURLY_FROM_MS = 24 * 60 * 60_000
 /** Rows per page of a candidate list (under the 1,000-row select cap). */
 const PAGE = 500
 
-export const DOMAINS = ['car_deposit', 'car_deposit_superseded', 'race_payment', 'class_booking', 'trial_purchase', 'offer_purchase', 'donation']
+export const DOMAINS = ['car_deposit', 'car_deposit_superseded', 'race_payment', 'class_booking', 'trial_purchase', 'offer_purchase', 'donation', 'raffle_order']
 
 /** Revolut order states that end a payment; anything else is still in flight. */
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
@@ -246,6 +249,17 @@ const LISTS = {
     .map((r) => ({ id: r.id, ref: r.revolut_order_id, createdAt: r.created_at })),
 
   donation: async (db, fromIso, toIso) => (await paginate((a, b) => db.from('donations')
+    .select('id, payment_provider_ref, created_at')
+    .eq('status', 'awaiting_payment')
+    .eq('payment_provider', 'revolut')
+    .not('payment_provider_ref', 'is', null)
+    .gte('created_at', fromIso)
+    .lte('created_at', toIso)
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
+    .range(a, b)))
+    .map((r) => ({ id: r.id, ref: r.payment_provider_ref, createdAt: r.created_at })),
+  raffle_order: async (db, fromIso, toIso) => (await paginate((a, b) => db.from('raffle_orders')
     .select('id, payment_provider_ref, created_at')
     .eq('status', 'awaiting_payment')
     .eq('payment_provider', 'revolut')
@@ -413,6 +427,27 @@ const APPLY = {
       } catch (e) {
         logError(LOG_MODULE, 'donation paid side effects failed', { err: e, donationId: donation.id })
       }
+    }
+    return { outcome: 'settled', state }
+  },
+
+  // RAFFLE.3 — an online raffle order whose webhook never landed: the same
+  // mark (compare-and-set) and the same stamp-keyed effects (tickets once,
+  // email once) as the webhook and the status poll.
+  async raffle_order({ db, row, getOrder }) {
+    const order = await resolveRaffleOrderByRef(db, row.ref)
+    if (!order || order.id !== row.id || order.status !== 'awaiting_payment' || order.payment_provider !== 'revolut') return ALREADY_SETTLED
+    const revolutOrder = await fetchOrder(getOrder, 'raffle_order', row.ref)
+    if (!revolutOrder) return PROVIDER_FAILED
+    const state = lower(revolutOrder.state)
+    if (!TERMINAL.has(state)) return { outcome: 'still_pending', state }
+    const marked = await markRaffleOrderPaymentStatus({ db, order, providerState: state, providerAmount: minorAmount(revolutOrder) })
+    if (!marked?.changed) return { outcome: 'not_applied', state }
+    const { data: fresh, error: readErr } = await db.from('raffle_orders').select(RAFFLE_ORDER_COLS).eq('id', order.id).maybeSingle()
+    if (readErr || !fresh) {
+      logError(LOG_MODULE, 'raffle order re-read after mark failed; the status poll issues the tickets', { err: readErr, orderId: order.id })
+    } else if (fresh.status === 'paid') {
+      await runPaidRaffleOrderEffects({ db, order: fresh })
     }
     return { outcome: 'settled', state }
   },

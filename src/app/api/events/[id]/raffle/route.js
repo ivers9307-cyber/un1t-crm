@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
 import { resolveStaffRaffleEvent, loadRaffle, loadRaffleState, RAFFLE_COLS } from '@/lib/raffle'
+import { getLocationZone, zonedWallClockToInstant, instantToZonedParts } from '@/lib/location-time'
 import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -29,7 +30,19 @@ const RaffleBody = z.object({
     .refine((opts) => !opts || new Set(opts.map((o) => o.tickets)).size === opts.length, {
       message: 'Each option needs a different number of tickets.',
     }),
+  // RAFFLE.3 — online sales on the event page, and when they stop: a date and
+  // a wall-clock time at the event's studio (its locations.timezone).
+  online_enabled: z.boolean().optional(),
+  online_closes_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  online_closes_time: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
 })
+
+// The closing moment as the date + time inputs show it, in the studio's zone.
+function closesLocal(iso, zone) {
+  if (!iso) return null
+  const p = instantToZonedParts(iso, zone)
+  return { date: p.dateKey, time: `${String(p.h).padStart(2, '0')}:${String(p.mi).padStart(2, '0')}` }
+}
 
 export const GET = withAuth({ permission: null, location: false }, async ({ user, params }) => {
   const ctx = await resolveStaffRaffleEvent(user, params?.id)
@@ -39,9 +52,18 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
     logError('raffle', 'state read failed', { err: state.error, eventId: ctx.race.id })
     return NextResponse.json({ success: false, error: 'The raffle could not be read. Try again.' }, { status: 500 })
   }
+  const zone = state.raffle?.online_closes_at ? await getLocationZone(ctx.db, ctx.race.location_id) : null
+  const raffle = state.raffle
+    ? { ...state.raffle, online_closes_local: closesLocal(state.raffle.online_closes_at, zone) }
+    : null
   return NextResponse.json({
     success: true,
-    data: { ...state, event: { id: ctx.race.id, name: ctx.race.name }, can_manage: ctx.isManager },
+    data: {
+      ...state, raffle,
+      event: { id: ctx.race.id, name: ctx.race.name },
+      can_manage: ctx.isManager,
+      online_available: !ctx.race.host_id,
+    },
   })
 })
 
@@ -59,10 +81,25 @@ export const POST = withAuth({ permission: null, location: false, schema: Raffle
   const options = input.ticket_options
     ? [...input.ticket_options].sort((a, b) => a.tickets - b.tickets)
     : undefined
+  let onlineFields = {}
+  if (input.online_enabled !== undefined) {
+    let closesAt = null
+    if (input.online_closes_date && input.online_closes_time) {
+      const zone = await getLocationZone(db, race.location_id)
+      const ms = zonedWallClockToInstant(input.online_closes_date, input.online_closes_time, zone)
+      if (ms == null) return NextResponse.json({ success: false, error: 'That closing date or time is not valid.' }, { status: 400 })
+      closesAt = new Date(ms).toISOString()
+    }
+    if (input.online_enabled && race.host_id) {
+      return NextResponse.json({ success: false, error: 'Online raffle sales are only available on UN1T events.' }, { status: 400 })
+    }
+    onlineFields = { online_enabled: input.online_enabled, online_closes_at: closesAt }
+  }
   const fields = {
     name: input.name,
     ticket_price_cents: input.ticket_price_cents,
     ...(options ? { ticket_options: options } : {}),
+    ...onlineFields,
   }
   const write = existing
     ? db.from('raffles').update(fields)

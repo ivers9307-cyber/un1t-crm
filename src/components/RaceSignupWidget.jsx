@@ -40,6 +40,7 @@ import { rememberEventAttribution, readEventAttribution } from '@/lib/event-attr
 import { eurosToCents, validateEntryAmount } from '@/lib/charity-entry-amount'
 import EventWaitlistForm from './EventWaitlistForm.jsx'
 import DonateCard, { CharityRaisedStrip, DonateJumpLink, OrDivider } from './DonateCard.jsx'
+import RaffleBuyCard from './RaffleBuyCard.jsx'
 
 // Kind-keyed copy. Adding a new kind = one entry. The 'race' entry
 // holds the original strings so the operator-visible UX for races
@@ -193,6 +194,13 @@ function DonateCardFromUrl(props) {
       resumeCancelled={params?.get('cancelled') === '1'}
     />
   )
+}
+
+// RAFFLE.3 — the online raffle card, resumed from ?raffle_order=<id> after a
+// redirect checkout (read under the widget's <Suspense>, like the donate card).
+function RaffleBuyCardFromUrl(props) {
+  const params = useSearchParams()
+  return <RaffleBuyCard {...props} resumeOrderId={params?.get('raffle_order') || null} />
 }
 
 // QUESTIONS.1 — one registration question: text, a select of options, or a
@@ -1381,6 +1389,14 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
             <OrDivider />
             {signupCard}
           </div>
+          {/* RAFFLE.3 — online raffle tickets, only when the raffle sells online. */}
+          {race.raffle ? (
+            <div className="mt-6 md:max-w-xl">
+              <Suspense fallback={null}>
+                <RaffleBuyCardFromUrl slug={slug} raffle={race.raffle} />
+              </Suspense>
+            </div>
+          ) : null}
           {/* CHARITY.13 — the operator's video beside the summary when set. */}
           {race.charity?.video?.provider ? (
             <div className="mt-12 grid gap-8 md:grid-cols-2 md:items-start">

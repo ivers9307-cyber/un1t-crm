@@ -29,6 +29,7 @@ import {
   runPaidDonationSideEffects,
 } from '@/lib/donation-payments'
 import { resolveCharitySettings } from '@/lib/charity-donations'
+import { RAFFLE_ORDER_COLS, resolveRaffleOrderByRef, markRaffleOrderPaymentStatus, runPaidRaffleOrderEffects } from '@/lib/raffle-online'
 import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { logWarn, logError } from '@/lib/log'
 
@@ -94,6 +95,10 @@ export async function POST(request) {
   try {
     const donation = await resolveDonationByRef(db, orderId)
     if (!donation) {
+      // RAFFLE.3 — an online raffle order on the event page is paid through
+      // the same Revolut merchant, so its events arrive here too.
+      const raffleOrder = await resolveRaffleOrderByRef(db, orderId)
+      if (raffleOrder) return await handleRaffleOrder({ db, order: raffleOrder, orderId, defer })
       // Misrouted webhook from another Revolut flow, or a stale id — 200 so
       // Revolut moves on.
       logWarn('donation-webhook', `no donations row for order ${orderId}`, { event })
@@ -147,6 +152,38 @@ export async function POST(request) {
   }
 
   return NextResponse.json({ success: true, state: fresh.status })
+}
+
+// RAFFLE.3 — the raffle order's path: refresh the state from Revolut, mark it,
+// re-read, and on paid issue the tickets and send the email (both stamp-keyed,
+// so a second delivery is harmless). Same deferral rule as donations.
+async function handleRaffleOrder({ db, order, orderId, defer }) {
+  let fresh
+  try {
+    let revolutOrder
+    try {
+      revolutOrder = await getOrder(orderId)
+    } catch (e) {
+      logWarn('donation-webhook', `getOrder failed for raffle order ${orderId}`, { err: e })
+      return await defer()
+    }
+    if (!revolutOrder) return NextResponse.json({ success: true, skipped: 'order_missing' })
+    await markRaffleOrderPaymentStatus({
+      db, order, providerState: String(revolutOrder.state || '').toLowerCase(),
+      providerAmount: Number.isFinite(revolutOrder.amount) ? revolutOrder.amount : null,
+    })
+    const { data, error } = await db.from('raffle_orders').select(RAFFLE_ORDER_COLS).eq('id', order.id).maybeSingle()
+    if (error || !data) {
+      logWarn('donation-webhook', 'raffle order re-read after mark failed', { orderId: order.id, err: error })
+      return await defer()
+    }
+    fresh = data
+  } catch (e) {
+    logError('donation-webhook', `raffle order handler failed for ${orderId}`, { err: e })
+    return await defer()
+  }
+  if (fresh.status === 'paid') await runPaidRaffleOrderEffects({ db, order: fresh })
+  return NextResponse.json({ success: true, state: fresh.status, kind: 'raffle_order' })
 }
 
 // Revolut hits GET when configuring the webhook URL — return 200 so they
