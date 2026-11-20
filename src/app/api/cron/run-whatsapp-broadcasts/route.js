@@ -49,15 +49,15 @@
 // NOTHING (fail closed: a 500, like the broadcast reads below), and a
 // broadcast with no studio or at a studio missing from the read is skipped.
 //
-// Auth via Authorization: Bearer ${CRON_SECRET}.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+// Auth, the error boundary and the 'run-whatsapp-broadcasts' stamp belong to
+// defineCron (ROUTEWRAP.C12). `stats.errors` carries broadcast ids and fixed
+// lines only: Meta or database text stays in the logs.
+import { defineCron } from '@/lib/define-cron'
 import { sendDripChunk, sendBroadcast } from '@/lib/whatsapp'
 import { isWithinSendWindow } from '@/lib/whatsapp-drip'
 import { promotionPlan, SCHEDULED_BLAST_MAX_PER_TICK, scheduledStartFailureNotification, LATE_SCHEDULED_BLAST_REASON, LATE_RESUME_REASON, resumeIsStale } from '@/lib/whatsapp-schedule'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logError, logInfo, logWarn } from '@/lib/log'
 import { whatsappEnabledLocationIds, notEnabledLocationFilter } from '@/lib/whatsapp-broadcast-feature-gate'
 
@@ -82,13 +82,7 @@ async function notifyScheduledStartFailure(row, reason, opts) {
   }
 }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'run-whatsapp-broadcasts' }, async ({ db }) => {
   const now = new Date()
   const nowIso = now.toISOString()
 
@@ -98,7 +92,7 @@ export async function GET(request) {
   const locQ = await db.from('locations').select('id, features').order('id', { ascending: true })
   if (locQ.error) {
     logError('cron:run-whatsapp-broadcasts', 'locations read failed; no broadcast sent this tick (the WhatsApp feature flag is unreadable)', { code: locQ.error.code || null })
-    return NextResponse.json({ success: false, error: 'Could not read the studios\' WhatsApp setting' }, { status: 500 })
+    return { ok: false, body: { error: 'Could not read the studios\' WhatsApp setting' } }
   }
   const enabledIds = whatsappEnabledLocationIds(locQ.data)
   const skippedFilter = notEnabledLocationFilter(enabledIds)
@@ -134,7 +128,10 @@ export async function GET(request) {
     skippedCount(arms.drip),
   ])
   for (const q of [scheduledQ, resumeQ, dripQ]) {
-    if (q.error) return NextResponse.json({ success: false, error: q.error.message }, { status: 500 })
+    if (q.error) {
+      logError('cron:run-whatsapp-broadcasts', 'broadcast read failed; no broadcast sent this tick', { err: q.error })
+      return { ok: false, body: { error: 'Could not read the broadcasts' } }
+    }
   }
   // The skipped count is reporting only: a failed count is logged and reads
   // null, it never stops the sends.
@@ -176,8 +173,8 @@ export async function GET(request) {
       // A failed flip is not a claim: the row stays 'scheduled' and the next
       // tick tries again (it was read as "someone else claimed it", silently).
       if (claimErr) {
-        logWarn('cron:run-whatsapp-broadcasts', 'scheduled flip failed; retried next tick', { broadcastId: row.id, code: claimErr.code || null })
-        stats.errors.push({ broadcast_id: row.id, error: `status flip failed: ${claimErr.message}` })
+        logWarn('cron:run-whatsapp-broadcasts', 'scheduled flip failed; retried next tick', { broadcastId: row.id, code: claimErr.code || null, err: claimErr })
+        stats.errors.push({ broadcast_id: row.id, error: 'status flip failed' })
         continue
       }
       if (!claimed?.length) continue
@@ -219,7 +216,7 @@ export async function GET(request) {
     } catch (e) {
       const msg = e?.message || String(e)
       stats.refused++
-      stats.errors.push({ broadcast_id: row.id, error: msg })
+      stats.errors.push({ broadcast_id: row.id, error: 'scheduled start failed' })
       console.warn(`[cron run-whatsapp-broadcasts] scheduled ${row.id} (${row.name}) refused: ${msg}`)
       // A refused START (quality gate / tier budget / wallet / template /
       // own number) threw out of sendBroadcast and left the row at 'draft'
@@ -244,8 +241,8 @@ export async function GET(request) {
       .order('created_at', { ascending: false })
       .limit(1)
     if (lastQ.error) {
-      logWarn('cron:run-whatsapp-broadcasts', 'last-send read failed; resume skipped this tick', { broadcastId: row.id, code: lastQ.error.code || null })
-      stats.errors.push({ broadcast_id: row.id, error: `last-send read failed: ${lastQ.error.message}` })
+      logWarn('cron:run-whatsapp-broadcasts', 'last-send read failed; resume skipped this tick', { broadcastId: row.id, code: lastQ.error.code || null, err: lastQ.error })
+      stats.errors.push({ broadcast_id: row.id, error: 'last-send read failed' })
       continue
     }
     const lastSendAt = lastQ.data?.[0]?.created_at ?? row.scheduled_at
@@ -257,8 +254,8 @@ export async function GET(request) {
         .is('paused_at', null)
         .select('id')
       if (parkErr) {
-        logWarn('cron:run-whatsapp-broadcasts', 'stale resume park failed; retried next tick', { broadcastId: row.id, code: parkErr.code || null })
-        stats.errors.push({ broadcast_id: row.id, error: `pause failed: ${parkErr.message}` })
+        logWarn('cron:run-whatsapp-broadcasts', 'stale resume park failed; retried next tick', { broadcastId: row.id, code: parkErr.code || null, err: parkErr })
+        stats.errors.push({ broadcast_id: row.id, error: 'pause failed' })
         continue
       }
       if (!parked?.length) continue // someone else moved it (a Cancel, a pause)
@@ -279,7 +276,7 @@ export async function GET(request) {
       // retries — log only, no push spam every 15 min.
       const msg = e?.message || String(e)
       console.warn(`[cron run-whatsapp-broadcasts] resume ${row.id} (${row.name}) failed: ${msg}`)
-      stats.errors.push({ broadcast_id: row.id, error: msg })
+      stats.errors.push({ broadcast_id: row.id, error: 'resume failed' })
     }
   }
 
@@ -299,10 +296,9 @@ export async function GET(request) {
     } catch (e) {
       const msg = e?.message || String(e)
       console.warn(`[cron run-whatsapp-broadcasts] drip ${row.id} (${row.name}) failed: ${msg}`)
-      stats.errors.push({ broadcast_id: row.id, error: msg })
+      stats.errors.push({ broadcast_id: row.id, error: 'drip chunk failed' })
     }
   }
 
-  await stampHeartbeat('run-whatsapp-broadcasts')
-  return NextResponse.json({ success: true, stats })
-}
+  return { body: { stats } }
+})
