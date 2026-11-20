@@ -11,21 +11,24 @@
 //      we can't tell from the bridge alone, so the auto-close is
 //      our backstop.
 //
-// Auth: CRON_SECRET bearer, same as every other cron.
+// ROUTEWRAP.C10 — defineCron owns the secret check, the error boundary and the
+// stamp. Each read used to drop its error, so a failed read looked like
+// "nothing stale, nothing to email" and the run stamped as clean. The work
+// still runs on whatever was read, but a run with any failed read now answers
+// 500 with a count (`reads_failed`) and no heartbeat.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { endSession } from '@/lib/live-class'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { sendCustomerPush } from '@/lib/customer-push'
 import { buildSessionPush } from '@/lib/customer-notifications'
 import { getLocationBranding } from '@/lib/location-branding'
-import { logInfo, logWarn } from '@/lib/log'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logInfo, logWarn, logError } from '@/lib/log'
 import { shouldCloseStaleSession, STALE_AFTER_MS, MAX_SESSION_LENGTH_MS } from '@/lib/hr-session-lifecycle'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 // 5 minutes without samples → close. The buffer/flush cycle on the
 // bridge is 3s; if we haven't heard for 5 min the strap is genuinely
@@ -39,14 +42,15 @@ export async function POST(request) {
   return GET(request)
 }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'auto-end-stale-hr-sessions' }, async ({ db }) => {
   const nowMs = Date.now()
+  // A failed read is never an empty answer: counted, logged, and the run is
+  // not clean (no heartbeat), whatever else it managed to do.
+  let readsFailed = 0
+  const readFailed = (what, err) => {
+    readsFailed++
+    logError('cron-auto-end-hr', `${what} read failed; the run is not clean`, { err })
+  }
 
   // Phase 1: auto-close sessions where the strap is silent OR the
   // session has been open too long.
@@ -61,7 +65,11 @@ export async function GET(request) {
   //      crashed right after create) has last_sample_at IS NULL, so query (1)
   //      skips it and it sits on the board for the full 4h. Close it once it's
   //      been open longer than STALE_AFTER_MS with still no sample.
-  const [{ data: silentRows }, { data: longRows }, { data: neverSampledRows }] = await Promise.all([
+  const [
+    { data: silentRows, error: silentErr },
+    { data: longRows, error: longErr },
+    { data: neverSampledRows, error: neverSampledErr },
+  ] = await Promise.all([
     db.from('heart_rate_sessions')
       .select('id, last_sample_at, started_at, glofox_event_id')
       .is('ended_at', null)
@@ -77,6 +85,9 @@ export async function GET(request) {
       .is('last_sample_at', null)
       .lt('started_at', staleCutoff),
   ])
+  if (silentErr) readFailed('silent sessions', silentErr)
+  if (longErr) readFailed('long sessions', longErr)
+  if (neverSampledErr) readFailed('never-sampled sessions', neverSampledErr)
 
   const candidates = new Map()
   for (const r of silentRows || [])       candidates.set(r.id, r)
@@ -88,8 +99,9 @@ export async function GET(request) {
   const eventIds = [...new Set([...candidates.values()].map((r) => r.glofox_event_id).filter(Boolean))]
   let occByEvent = new Map()
   if (eventIds.length) {
-    const { data: occs } = await db
+    const { data: occs, error: occsErr } = await db
       .from('class_occurrences').select('glofox_event_id, ends_at').in('glofox_event_id', eventIds).is('cancelled_at', null)
+    if (occsErr) readFailed('class occurrences', occsErr)
     occByEvent = new Map((occs || []).map((o) => [o.glofox_event_id, o]))
   }
 
@@ -131,7 +143,7 @@ export async function GET(request) {
   // bare `source NOT IN (…)` is UNKNOWN for a null source and silently EXCLUDES
   // it, so a null-source class session would never get its email. Use an
   // explicit OR so null passes.
-  const { data: pendingEmails } = await db
+  const { data: pendingEmails, error: pendingErr } = await db
     .from('heart_rate_sessions')
     .select('id, contact_id, location_id, effort_points, class_name')
     .not('ended_at', 'is', null)
@@ -140,11 +152,12 @@ export async function GET(request) {
     .or('source.is.null,source.not.in.(participation,apple_health)')
     .order('ended_at', { ascending: true })
     .limit(50)
+  if (pendingErr) readFailed('pending post-class emails', pendingErr)
 
   // Item 4c — retire stale un-emailed rows without sending: stamp email_sent_at
   // so they leave this sweep permanently. Same source filter as the send sweep
   // (participation/apple_health already self-retire; NULL source must be caught).
-  const { data: staleUnEmailed } = await db
+  const { data: staleUnEmailed, error: staleErr } = await db
     .from('heart_rate_sessions')
     .select('id')
     .not('ended_at', 'is', null)
@@ -152,6 +165,7 @@ export async function GET(request) {
     .lt('ended_at', recencyCutoff)
     .or('source.is.null,source.not.in.(participation,apple_health)')
     .limit(200)
+  if (staleErr) readFailed('stale un-emailed sessions', staleErr)
   let staleRetired = 0
   for (const row of staleUnEmailed || []) {
     const { error } = await db
@@ -212,16 +226,15 @@ export async function GET(request) {
     })
   }
 
-  await stampHeartbeat('auto-end-stale-hr-sessions').catch((err) =>
-    logWarn('cron-auto-end-hr', 'heartbeat failed', { err }))
-
-  return NextResponse.json({
-    ok: true,
+  const body = {
+    ok: readsFailed === 0,
     ended: endedCount,
     end_failed: endFailed,
     emails_sent: emailsSent,
     emails_skipped: emailsSkipped,
     emails_failed: emailsFailed,
     stale_retired: staleRetired,
-  })
-}
+  }
+  if (readsFailed > 0) return { ok: false, body: { ...body, reads_failed: readsFailed } }
+  return { body }
+})

@@ -11,17 +11,12 @@ import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../src/app/api/cron')
 const LEGACY = new Set([
-  'auto-end-stale-hr-sessions',
-  'credit-attendance',
   'glofox-sync',
-  'notify-streak-at-risk',
   'process-trial-purchases',
   'run-campaigns',
-  'run-challenge-events', 'run-scheduled-reports',
-  'run-whatsapp-broadcasts', 'send-class-booking-reminders', 'send-host-campaigns',
+  'run-whatsapp-broadcasts', 'send-host-campaigns',
   'send-push-reminders',
   'un1t-online-sync',
-  'wallet-overage-draws',
 ])
 
 const jobs = readdirSync(ROOT, { recursive: true })
