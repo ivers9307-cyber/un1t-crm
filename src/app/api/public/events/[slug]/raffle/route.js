@@ -3,8 +3,8 @@
 //
 // Body: { quantity, name, email }. The event comes from the slug (published +
 // active only); the raffle must have online sales on and not past its closing
-// time. The price is the server's (priceForQuantity: an option for exactly
-// that many tickets, else the one-ticket price), never a client value. Inserts
+// time. The price is the server's (priceForQuantity: the cheapest mix of
+// ticket options and singles), never a client value. Inserts
 // an `awaiting_payment` raffle_orders row and opens the Revolut order. NO
 // contact is created or linked, now or when the payment lands. No auth;
 // rate-limited per event slug and IP.

@@ -64,9 +64,9 @@ describe('POST /api/public/events/[slug]/raffle', () => {
     expect(db.calls).not.toContain('contacts')
     expect((await res.json()).data.order.checkout.token).toBe('tok')
   })
-  it('prices any other number at the one-ticket price', async () => {
+  it('prices any other number as the cheapest mix of deals and singles', async () => {
     await POST(req({ quantity: 4, name: 'Ann', email: 'ann@example.test' }), params)
-    expect(inserted).toMatchObject({ amount_cents: 2000, option_label: null })
+    expect(inserted).toMatchObject({ amount_cents: 1500, option_label: '3 for €10 + 1 single' })
   })
   it('refuses after the closing time', async () => {
     raffle = { ...RAFFLE, online_closes_at: new Date(Date.now() - 1000).toISOString() }

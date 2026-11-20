@@ -72,7 +72,7 @@ describe('RafflePanel till', () => {
     expect(screen.getByLabelText('Number of tickets').value).toBe('3')
     expect(screen.getByText(/Sell 3 tickets · €10.00/)).toBeTruthy()
     fireEvent.click(screen.getByLabelText('One more'))
-    expect(screen.getByText(/Sell 4 tickets · €20.00/)).toBeTruthy()
+    expect(screen.getByText(/Sell 4 tickets · €15.00/)).toBeTruthy()
   })
 
   it('managers edit the price and options in Settings', async () => {

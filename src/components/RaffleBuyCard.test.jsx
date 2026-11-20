@@ -34,10 +34,10 @@ describe('RaffleBuyCard', () => {
     expect(JSON.parse(calls[0].opts.body)).toEqual({ quantity: 3, name: 'Ann Kelly', email: 'ann@example.test' })
   })
 
-  it('a custom number is priced per ticket', () => {
+  it('a custom number is priced as the cheapest mix', () => {
     render(<RaffleBuyCard slug="day" raffle={RAFFLE} />)
     fireEvent.click(screen.getByLabelText('One more'))
-    expect(screen.getByText(/Buy 4 tickets · €20.00/)).toBeTruthy()
+    expect(screen.getByText(/Buy 4 tickets · €15.00/)).toBeTruthy()
   })
 
   it('needs a name and a valid email', async () => {

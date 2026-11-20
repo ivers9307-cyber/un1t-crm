@@ -185,7 +185,7 @@ function RaffleSetup({ raceId, eventName, raffle = null, onlineAvailable = false
           ))}
           <Button variant="secondary" size="sm" icon={Plus} onClick={() => setOptions((list) => [...list, { tickets: '', price: '' }])}>Add an option</Button>
         </div>
-        <p className="text-xs text-un1t-subtle mt-2">Any other number of tickets is sold at the one-ticket price. Changes apply to new sales only.</p>
+        <p className="text-xs text-un1t-subtle mt-2">Any number of tickets is charged at the cheapest mix of these deals and single tickets (20 tickets with “10 for €20” is €40). Changes apply to new sales only.</p>
       </div>
       {raffle && onlineAvailable && (
         <div className="rounded-lg border border-un1t-border p-3 space-y-3">
