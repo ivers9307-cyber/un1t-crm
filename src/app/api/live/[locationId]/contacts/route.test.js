@@ -132,4 +132,15 @@ describe('GET /api/live/[locationId]/contacts', () => {
       { id: 'c2', name: 'Bob', on_roster: false },
     ])
   })
+
+  it('a failed search is a 500 with a fixed message (ROUTEWRAP.R6)', async () => {
+    getCurrentUser.mockResolvedValue(userAt('staff'))
+    const terminal = Promise.resolve({ data: null, error: { code: '42703', message: 'column contacts.nme does not exist' } })
+    createServerClient.mockReturnValue({
+      from: () => ({ select: () => ({ eq: () => ({ order: () => ({ limit: () => terminal }) }) }) }),
+    })
+    const res = await GET(makeReq(), props)
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).not.toMatch(/column/)
+  })
 })

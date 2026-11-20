@@ -5,9 +5,9 @@
 // caller distinguish "wrong tenant" from "doesn't exist").
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 
@@ -20,12 +20,10 @@ const UpdateSchema = z.object({
   status: z.enum(['draft', 'approved']).optional(),
 })
 
-export async function PUT(request, { params }) {
-  const { id } = await params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
+// withAuth only signs the caller in; the row's studio and the hyrox approval
+// permission there (404), the published check and the body follow in order.
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const id = params?.id
   const { data: row } = await db.from('hyrox_sessions').select('id, location_id, status').eq('id', id).maybeSingle()
   if (!row) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
@@ -56,6 +54,9 @@ export async function PUT(request, { params }) {
   }
 
   const { data, error } = await db.from('hyrox_sessions').update(patch).eq('id', id).select('*').single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('hyrox', 'session not saved', { sessionId: row.id, code: error.code ?? null })
+    return NextResponse.json({ success: false, error: 'Could not save the session. Try again.' }, { status: 400 })
+  }
   return NextResponse.json({ success: true, data })
-}
+})

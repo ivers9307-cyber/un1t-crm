@@ -15,8 +15,7 @@
 // location_id).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { isOrgAdminSomewhere, resolveAdminOrgId } from '@/lib/org-admin'
 import { getBillingPageData } from '@/lib/billing-page'
 
@@ -31,11 +30,9 @@ export function resolveBillingOrgId(user, requested) {
 }
 
 // GET /api/settings/billing?organization_id=xxx
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// withAuth only signs the caller in; the org-admin gate (403) and the
+// organisation resolve (404 for a foreign one) stay below, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!isOrgAdminSomewhere(user)) {
     return NextResponse.json(
       { success: false, error: 'Billing is visible to organisation admins only' },
@@ -52,7 +49,6 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const data = await getBillingPageData(db, resolved.orgId)
   return NextResponse.json({ success: true, data })
-}
+})

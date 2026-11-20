@@ -28,16 +28,17 @@
 // failed un1t_online locations read is logged and the tick goes on with an
 // empty set (the row guard alone, backed by mig 737's namespace CHECK, already
 // excludes every un1t row): failing closed would cost Stillorgan its reminders.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+//
+// ROUTEWRAP.C10 — defineCron owns the secret check, the error boundary and the
+// stamp; every path stamps or withholds exactly as before.
+import { defineCron } from '@/lib/define-cron'
 import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/customer-nudge-claim'
 import { buildClassReminderPush } from '@/lib/customer-notifications'
 import {
   resolveClassReminderLeadTimes, selectDueClassReminders, classTimeLabel,
 } from '@/lib/class-reminders'
-import { logInfo, logWarn, logError } from '@/lib/log'
+import { logInfo, logError } from '@/lib/log'
 import { zoneOfLocation } from '@/lib/location-time'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import {
   CRM_CLASS_MESSAGING_PLATFORM, crmMayActOnClassBooking, scopeToCrmActionable, readUn1tOnlineLocationIds,
 } from '@/lib/class-booking-platform'
@@ -58,12 +59,7 @@ const LATE_WINDOW_MIN = 15
 
 export async function POST(request) { return GET(request) }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'send-class-booking-reminders' }, async ({ db }) => {
   const nowMs = Date.now()
 
   // Locations + their reminder config (timezone for the label, lead times).
@@ -74,7 +70,7 @@ export async function GET(request) {
   // lead times, so the run answered "nothing due" and stamped healthy.
   if (locsErr) {
     logError('cron-class-reminders', 'locations unreadable; no reminders sent, no heartbeat', { err: locsErr })
-    return NextResponse.json({ ok: false, error: 'locations unreadable' }, { status: 500 })
+    return { ok: false, body: { ok: false, error: 'locations unreadable' } }
   }
   const locById = new Map((locs || []).map((l) => [l.id, l]))
 
@@ -85,10 +81,7 @@ export async function GET(request) {
       if (lt > maxLead) maxLead = lt
     }
   }
-  if (maxLead === 0) {
-    await stampHeartbeat('send-class-booking-reminders').catch(() => {})
-    return NextResponse.json({ ok: true, due: 0, sent: 0, skipped_un1t_online: 0 })
-  }
+  if (maxLead === 0) return { body: { ok: true, due: 0, sent: 0, skipped_un1t_online: 0 } }
 
   // Decision 1: the un1t.online studios, read once per tick. Unreadable: log
   // and carry on with the row guard alone (an empty Set), never skip the tick.
@@ -125,9 +118,8 @@ export async function GET(request) {
     if (!data || data.length < PAGE) break
   }
   if (bookings.length === 0) {
-    if (bookingsReadFailed) return NextResponse.json({ ok: false, error: 'bookings unreadable' }, { status: 500 })
-    await stampHeartbeat('send-class-booking-reminders').catch(() => {})
-    return NextResponse.json({ ok: true, due: 0, sent: 0, skipped_un1t_online: 0 })
+    if (bookingsReadFailed) return { ok: false, body: { ok: false, error: 'bookings unreadable' } }
+    return { body: { ok: true, due: 0, sent: 0, skipped_un1t_online: 0 } }
   }
 
   // Decision 1: the predicate judges every row, whatever the query returned.
@@ -149,9 +141,8 @@ export async function GET(request) {
     due.push(...selectDueClassReminders([b], nowMs, leadTimes, WINDOW_MIN, LATE_WINDOW_MIN))
   }
   if (due.length === 0) {
-    if (bookingsReadFailed) return NextResponse.json({ ok: false, partial: true, due: 0, sent: 0 }, { status: 500 })
-    await stampHeartbeat('send-class-booking-reminders').catch(() => {})
-    return NextResponse.json({ ok: true, due: 0, sent: 0, skipped_un1t_online: skippedUn1tOnline })
+    if (bookingsReadFailed) return { ok: false, body: { ok: false, partial: true, due: 0, sent: 0 } }
+    return { body: { ok: true, due: 0, sent: 0, skipped_un1t_online: skippedUn1tOnline } }
   }
 
   // Keep only reachable members (have a push token). Filter BEFORE dedup —
@@ -191,8 +182,6 @@ export async function GET(request) {
   const summary = { bookings: bookings.length, due: due.length, sent, send_failed: sendFailed, reachability_failed: reachabilityFailed, skipped_un1t_online: skippedUn1tOnline }
   logInfo('cron-class-reminders', 'tick', summary)
   // A partial bookings read sent what it could; the run is not clean.
-  if (bookingsReadFailed) return NextResponse.json({ ok: false, partial: true, ...summary }, { status: 500 })
-  await stampHeartbeat('send-class-booking-reminders').catch((err) =>
-    logWarn('cron-class-reminders', 'heartbeat failed', { err }))
-  return NextResponse.json({ ok: true, ...summary })
-}
+  if (bookingsReadFailed) return { ok: false, body: { ok: false, partial: true, ...summary } }
+  return { body: { ok: true, ...summary } }
+})

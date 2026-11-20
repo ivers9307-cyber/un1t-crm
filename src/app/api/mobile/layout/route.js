@@ -5,8 +5,9 @@
 // render time by the resolver, so we only enforce the allowed pool here.
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { resolveMobileLayout, BAR_ELIGIBLE } from '@shared/mobile-nav'
@@ -18,10 +19,9 @@ const Schema = z.object({
   bar: z.array(z.string()).max(8), // clamped to ≤3 after the allowed filter
 })
 
-export async function PUT(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// withAuth only signs the caller in (a phone's bearer session included); the
+// body, then membership of the named studio, are judged below as before.
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
   const { location_id, bar } = validation.data
@@ -44,14 +44,16 @@ export async function PUT(request) {
 
   const cleanBar = [...new Set(bar)].filter(k => allowedSet.has(k)).slice(0, 3)
 
-  const db = createServerClient()
   const { error } = await db
     .from('mobile_bar_prefs')
     .upsert(
       { profile_id: user.id, location_id, bar: cleanBar, updated_at: new Date().toISOString() },
       { onConflict: 'profile_id,location_id' }
     )
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('mobile-layout', 'bar not saved', { locationId: location_id, code: error.code ?? null })
+    return NextResponse.json({ success: false, error: 'Could not save your bar. Try again.' }, { status: 400 })
+  }
 
   return NextResponse.json({ success: true, bar: cleanBar })
-}
+})

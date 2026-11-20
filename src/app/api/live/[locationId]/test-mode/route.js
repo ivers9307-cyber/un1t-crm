@@ -8,11 +8,10 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { guardLiveLocation, LIVE_MUTATION_ROLES } from '@/lib/live-access'
-import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { logInfo } from '@/lib/log'
+import { logError, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -26,9 +25,15 @@ function guard(user, locationId) {
   return guardLiveLocation(user, locationId, { roles: LIVE_MUTATION_ROLES })
 }
 
-export async function POST(request, props) {
-  const { locationId } = await props.params
-  const user = await getCurrentUser()
+const notSaved = (locationId, error) => {
+  logError('live-test-mode', 'bridge update failed', { locationId, code: error?.code ?? null })
+  return NextResponse.json({ ok: false, error: 'Could not change test mode. Try again.' }, { status: 500 })
+}
+
+// withAuth only signs the caller in; guard() judges the studio, the role and
+// studio_management AT the URL's studio, as before (its 403s unchanged).
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const locationId = params?.locationId
   const denied = guard(user, locationId)
   if (denied) return denied
 
@@ -37,21 +42,18 @@ export async function POST(request, props) {
   const minutes = Math.min(MAX_MINUTES, Math.max(1, v.data?.minutes || DEFAULT_MINUTES))
   const until = new Date(Date.now() + minutes * 60_000).toISOString()
 
-  const db = createServerClient()
   const { error } = await db.from('ble_bridges').update({ test_mode_until: until }).eq('location_id', locationId)
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+  if (error) return notSaved(locationId, error)
   logInfo('live-test-mode', 'enabled', { locationId, minutes, by: user.id })
   return NextResponse.json({ ok: true, test_mode_until: until })
-}
+})
 
-export async function DELETE(_request, props) {
-  const { locationId } = await props.params
-  const user = await getCurrentUser()
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const locationId = params?.locationId
   const denied = guard(user, locationId)
   if (denied) return denied
 
-  const db = createServerClient()
   const { error } = await db.from('ble_bridges').update({ test_mode_until: null }).eq('location_id', locationId)
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+  if (error) return notSaved(locationId, error)
   return NextResponse.json({ ok: true, test_mode_until: null })
-}
+})
