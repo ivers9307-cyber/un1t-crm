@@ -11,32 +11,35 @@
 // mirroring GET /api/live/[locationId] and the /live page.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { guardLiveLocation } from '@/lib/live-access'
-import { createServerClient } from '@/lib/supabase'
 import { resolveDetectionLinks } from '@/lib/hr-detections'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const MAX_ROWS = 500
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  const locationId = params.locationId
+// withAuth only signs the caller in. The studio and the permission are judged
+// AT the URL's studio by guardLiveLocation, as before (its 403s and master
+// bypass unchanged).
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const locationId = params?.locationId
   const denied = guardLiveLocation(user, locationId)
   if (denied) return denied
 
-  const db = createServerClient()
   const { data: rows, error } = await db
     .from('hr_detections')
     .select('id, device_key, protocol, first_seen_at, last_seen_at, visit_count, last_bpm, last_name, last_rssi, last_bridge_id')
     .eq('location_id', locationId)
     .order('last_seen_at', { ascending: false })
     .limit(MAX_ROWS)
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('hr-detections', 'detections read failed', { err: error, locationId })
+    return NextResponse.json({ ok: false, error: 'Could not load the detections.' }, { status: 500 })
+  }
 
   const detections = await resolveDetectionLinks(db, { locationId, detections: rows || [] })
   return NextResponse.json({ ok: true, detections, capped: (rows || []).length >= MAX_ROWS })
-}
+})

@@ -6,22 +6,20 @@
 // id), 403 for a member who is not a manager there.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { readOffer, withdrawOffer } from '@/lib/shift-offer-server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function DELETE(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// The studio is the OFFER's, known only after the read, so withAuth only signs
+// the caller in; the 404 and the manager-there 403 stay here, in this order.
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!uuidLike.safeParse(params?.id).success) {
     return NextResponse.json({ success: false, error: 'Offer not found' }, { status: 404 })
   }
-  const db = createServerClient()
   const { offer, error } = await readOffer(db, params.id)
   if (error) return NextResponse.json({ success: false, error: 'Could not read the offer' }, { status: 500 })
   if (!offer) return NextResponse.json({ success: false, error: 'Offer not found' }, { status: 404 })
@@ -35,4 +33,4 @@ export async function DELETE(_request, props) {
   if (res.error) return NextResponse.json({ success: false, error: 'Could not withdraw the offer' }, { status: 500 })
   if (!res.closed) return NextResponse.json({ success: false, error: 'This offer has just changed. Refresh and try again.' }, { status: 409 })
   return NextResponse.json({ success: true })
-}
+})

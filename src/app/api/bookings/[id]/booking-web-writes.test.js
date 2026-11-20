@@ -94,6 +94,22 @@ describe('POST /api/bookings/[id]/skip-reminder', () => {
     expect(booking().skip_reminder).toBe(v)
   })
 
+  it('401 signed out, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await setSkip(req({ skip_reminder: true }), props)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(booking().skip_reminder).toBe(false)
+  })
+
+  it('403 without the web bookings key anywhere, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { bookings: false } } }, LOC_A))
+    const res = await setSkip(req({ skip_reminder: true }), props)
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ success: false, error: 'No bookings permission at this location' })
+    expect(booking().skip_reminder).toBe(false)
+  })
+
   it('a non-boolean is a 400', async () => {
     expect((await setSkip(req({ skip_reminder: 'yes' }), props)).status).toBe(400)
   })

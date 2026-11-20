@@ -117,6 +117,14 @@ describe('DELETE /api/events/[id]/waitlist/[rowId]', () => {
     expect((await DELETE(new Request('https://crm.test', { method: 'DELETE' }), props({ rowId: ROW_ID }))).status).toBe(404)
   })
 
+  it('401 signed out, nothing written', async () => {
+    user = null
+    const res = await DELETE(new Request('https://crm.test', { method: 'DELETE' }), props({ rowId: ROW_ID }))
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(db.queries.some((x) => x.action === 'update')).toBe(false)
+  })
+
   it('a manager role is required', async () => {
     isManager = false
     expect((await DELETE(new Request('https://crm.test', { method: 'DELETE' }), props({ rowId: ROW_ID }))).status).toBe(403)

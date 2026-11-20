@@ -18,24 +18,27 @@
 // stopCampaign in src/lib/campaign-release.js (MCPEMAIL.1).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { loadCampaignForUser, conflict, serverError } from '@/lib/campaign-session-access'
 import { stopCampaign } from '@/lib/campaign-release'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
+// The studio is the CAMPAIGN's, so withAuth only signs the caller in;
+// loadCampaignForUser keeps the 404s and the email-there 403.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const id = params?.id
   const { campaign, response } = await loadCampaignForUser(db, user, id, 'id, location_id, status')
   if (response) return response
 
   const stop = await stopCampaign(db, campaign)
   if (!stop.ok) {
-    if (stop.code === 'error') return serverError(stop.message)
+    if (stop.code === 'error') {
+      logError('campaigns', 'stop failed', { campaignId: campaign.id, message: stop.message })
+      return serverError('Could not stop the campaign. Try again.')
+    }
     return conflict(stop.message, stop.current_status)
   }
   return NextResponse.json({ success: true, data: { status: stop.status, cancel_requested_at: stop.cancel_requested_at } })
-}
+})

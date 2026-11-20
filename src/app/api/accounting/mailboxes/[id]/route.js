@@ -5,38 +5,36 @@
 // inbox. 404 — not 403 — on a missing id or an id owned by a different
 // location, per the repo's IDOR posture.
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermission } from '@/lib/permissions'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function DELETE(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'accounting_hub')) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-  const locationId = user.activeLocation?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
-  }
+// accounting_hub at the active studio ('Forbidden' 403), then the active
+// studio (400), in that order and with these texts, as before.
+export const DELETE = withAuth(
+  { permission: null, location: false, allow: (user) => hasPermission(user, 'accounting_hub'), forbiddenMessage: 'Forbidden' },
+  async ({ user, db, params }) => {
+    const locationId = user.activeLocation?.id
+    if (!locationId) {
+      return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
+    }
 
-  const db = createServerClient()
-  const { data: deleted, error } = await db
-    .from('recon_mailboxes')
-    .delete()
-    .eq('id', params.id)
-    .eq('location_id', locationId)
-    .select('id')
-    .maybeSingle()
-  if (error) {
-    console.error('[accounting/mailboxes] delete failed:', error)
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  }
-  if (!deleted) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+    const { data: deleted, error } = await db
+      .from('recon_mailboxes')
+      .delete()
+      .eq('id', params?.id)
+      .eq('location_id', locationId)
+      .select('id')
+      .maybeSingle()
+    if (error) {
+      logError('accounting-mailboxes', 'delete failed', { err: error, locationId })
+      return NextResponse.json({ success: false, error: 'Could not remove the inbox. Try again.' }, { status: 500 })
+    }
+    if (!deleted) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
-  return NextResponse.json({ success: true })
-}
+    return NextResponse.json({ success: true })
+  },
+)
