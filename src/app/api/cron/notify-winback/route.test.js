@@ -21,12 +21,13 @@ import { withSlotTables } from '@/lib/cron-daily-slot.test-helpers'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { sendNudgeOnce } from '@/lib/customer-nudge-claim'
+import { logError } from '@/lib/log'
 
 const DUBLIN = { id: 'loc-dub', timezone: 'Europe/Dublin' }
 const NYC = { id: 'loc-ny', timezone: 'America/New_York' }
 const HOMES = { 'c-dub': DUBLIN.id, 'c-ny': NYC.id }
 
-function fakeDb({ claims, claimError, homesError } = {}) {
+function fakeDb({ claims, claimError, homesError, candidatesError, sessionsError } = {}) {
   const sessions = { from: 0 }
   return withSlotTables({
     from(table) {
@@ -38,6 +39,8 @@ function fakeDb({ claims, claimError, homesError } = {}) {
         then(res, rej) {
           let data
           if (table === 'contacts' && homesError) return Promise.resolve({ data: null, error: homesError }).then(res, rej)
+          const fail = table === 'heart_rate_sessions' && (b.cols === 'contact_id' ? candidatesError : sessionsError)
+          if (fail) return Promise.resolve({ data: null, error: fail }).then(res, rej)
           if (table === 'contacts') data = b.ids.map((id) => ({ id, location_id: HOMES[id] }))
           else if (table === 'heart_rate_sessions' && b.cols === 'contact_id') data = sessions.from++ ? [] : Object.keys(HOMES).map((contact_id) => ({ contact_id }))
           else if (table === 'heart_rate_sessions') data = []
@@ -120,5 +123,62 @@ describe('TZ.6 notify-winback', () => {
       await GET(req())
     }
     expect(nudged()).toEqual(['c-dub@2026-07'])
+  })
+})
+
+describe('notify-winback on defineCron (ROUTEWRAP.C8)', () => {
+  const DB_TEXT = { code: 'XX000', message: 'connection to db.internal refused' }
+
+  it('401 without the secret: nothing read, nothing sent, nothing stamped', async () => {
+    vi.setSystemTime(Date.parse('2026-07-01T10:00:00Z'))
+    createServerClient.mockReturnValue(fakeDb())
+    expect((await GET(new Request('https://x.test/api/cron/notify-winback'))).status).toBe(401)
+    expect((await GET(new Request('https://x.test/', { headers: { authorization: 'Bearer wrong' } }))).status).toBe(401)
+    delete process.env.CRON_SECRET
+    expect((await GET(new Request('https://x.test/', { headers: { authorization: 'Bearer undefined' } }))).status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(sendNudgeOnce).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a clean slot tick stamps exactly notify-winback, with ok and success both true', async () => {
+    vi.setSystemTime(Date.parse('2026-07-01T10:00:00Z'))
+    createServerClient.mockReturnValue(fakeDb())
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, ok: true, candidates: 2, dropping: 2, due: 1, nudged: 1, failed: 0 })
+    expect(stampHeartbeat.mock.calls).toEqual([['notify-winback']])
+  })
+
+  it('POST runs the same job behind the same secret', async () => {
+    vi.setSystemTime(Date.parse('2026-07-01T10:00:00Z'))
+    createServerClient.mockReturnValue(fakeDb())
+    const { POST } = await import('./route')
+    expect((await POST(new Request('https://x.test/', { method: 'POST' }))).status).toBe(401)
+    expect((await POST(new Request('https://x.test/', { method: 'POST', headers: { authorization: 'Bearer shh' } }))).status).toBe(200)
+    expect(stampHeartbeat.mock.calls).toEqual([['notify-winback']])
+  })
+
+  it('an unreadable candidate list is a 500 with a fixed line (no DB text): nothing sent, no stamp', async () => {
+    vi.setSystemTime(Date.parse('2026-07-01T10:00:00Z'))
+    createServerClient.mockReturnValue(fakeDb({ candidatesError: DB_TEXT }))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, ok: false, error: 'Could not read sessions', candidates: 0, nudged: 0 })
+    expect(JSON.stringify(body)).not.toContain('db.internal')
+    expect(logError).toHaveBeenCalledWith('cron-winback', 'candidate query failed', expect.objectContaining({ err: DB_TEXT }))
+    expect(sendNudgeOnce).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('an unreadable session chunk is logged and the tick is not stamped', async () => {
+    vi.setSystemTime(Date.parse('2026-07-01T10:00:00Z'))
+    createServerClient.mockReturnValue(fakeDb({ sessionsError: DB_TEXT }))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toMatchObject({ success: false, ok: false, error: 'Could not read sessions' })
+    expect(logError).toHaveBeenCalledWith('cron-winback', 'session query failed', expect.objectContaining({ err: DB_TEXT }))
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })

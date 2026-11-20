@@ -7,8 +7,8 @@
 // switching back on resets it (src/lib/pipeline-boards.js setBoardEnabled).
 // Already off answers { board, unchanged: true }.
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { uuidLike } from '@/lib/schemas'
 import { boardLocationId, setBoardEnabled } from '@/lib/pipeline-boards'
 
@@ -21,13 +21,12 @@ const failure = (r) => NextResponse.json(
   { status: r.status },
 )
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: boardId } = await params
+// withAuth only signs the caller in: the board's studio is read from the row,
+// then membership (404) and owner-or-master there (403), as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const boardId = params?.id
   if (!uuidLike.safeParse(boardId).success) return notFound()
 
-  const db = createServerClient()
   const where = await boardLocationId(db, boardId)
   if (!where.ok) return where.status === 404 ? notFound() : failure(where)
   const locationId = where.locationId
@@ -41,4 +40,4 @@ export async function POST(request, { params }) {
   const result = await setBoardEnabled(db, { locationId, boardId, enabled: false })
   if (!result.ok) return failure(result)
   return NextResponse.json({ success: true, data: { board: result.board, ...(result.unchanged ? { unchanged: true } : {}) } })
-}
+})
