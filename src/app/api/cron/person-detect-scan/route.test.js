@@ -156,7 +156,9 @@ describe('GET /api/cron/person-detect-scan', () => {
     expect(body.data.locations).toBe(3)
 
     const failedEntry = body.data.perLocation.find((l) => l.location_id === 'loc-2')
-    expect(failedEntry).toMatchObject({ location_id: 'loc-2', error: expect.stringContaining('boom') })
+    // ROUTEWRAP.C7 — the error text stays in the log; the response names the location only.
+    expect(failedEntry).toMatchObject({ location_id: 'loc-2', error: 'detection failed' })
+    expect(JSON.stringify(body)).not.toContain('person_link_suggestions')
 
     // The other two locations still report their normal outcome.
     expect(body.data.perLocation.find((l) => l.location_id === 'loc-1')).toMatchObject({ autoLinked: 1 })
@@ -192,12 +194,16 @@ describe('GET /api/cron/person-detect-scan', () => {
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
-  it('WITHHOLDS the heartbeat when every location failed', async () => {
+  it('every location failing is a failed run: 500, fixed line, no error text, nothing stamped', async () => {
     locationsTable = [LOC('loc-1', 'Stillorgan')]
     runDetectionMock.mockRejectedValue(new Error('total failure'))
 
-    const body = await (await GET(req())).json()
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, error: 'Detection failed at every location' })
     expect(body.data.failed).toBe(1)
+    expect(JSON.stringify(body)).not.toContain('total failure')
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
@@ -207,7 +213,7 @@ describe('GET /api/cron/person-detect-scan', () => {
     const res = await GET(req())
     expect(res.status).toBe(500)
     const body = await res.json()
-    expect(body.success).toBe(false)
+    expect(body).toEqual({ success: false, error: 'Could not read locations' })
     expect(runDetectionMock).not.toHaveBeenCalled()
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })

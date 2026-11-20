@@ -27,13 +27,13 @@
 // — NOT merely "not every location failed". A run where 2 of 3 locations
 // linked fine but 1 silently dropped its linking should not read as
 // healthy on the cron-health dashboard; withholding the stamp on ANY
-// failure is what actually surfaces that to an operator.
+// failure is what actually surfaces that to an operator. A run where EVERY
+// location failed is a failed run: 500. A location's error text stays in the
+// log; the response names the location with a fixed 'detection failed'.
 //
-// Auth: same CRON_SECRET Bearer pattern as every other Vercel cron.
+// Auth, the error boundary and the stamp: defineCron.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logInfo, logError } from '@/lib/log'
 import { runDetection } from '@/lib/person-detect'
 
@@ -45,14 +45,7 @@ export const dynamic = 'force-dynamic'
 // multi-location scan crons (pipeline-classify, wallet-overage-draws).
 export const maxDuration = 300
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
-
+export const GET = defineCron({ heartbeat: 'person-detect-scan' }, async ({ db }) => {
   // Every active location — mirrors pipeline-classify / glofox-data-quality.
   const { data: locations, error: locErr } = await db
     .from('locations')
@@ -60,7 +53,7 @@ export async function GET(request) {
     .eq('active', true)
   if (locErr) {
     logError('cron.person-detect-scan', 'failed to list active locations', { err: locErr })
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    return { ok: false, body: { error: 'Could not read locations' } }
   }
 
   const perLocation = []
@@ -92,7 +85,7 @@ export async function GET(request) {
       perLocation.push({
         location_id: loc.id,
         location_name: loc.name,
-        error: e?.message || String(e),
+        error: 'detection failed',
       })
     }
   }
@@ -108,10 +101,9 @@ export async function GET(request) {
     failed: outcome.failed,
   })
 
-  // Withhold the heartbeat on ANY location failure — see header note.
-  if (failed === 0) {
-    await stampHeartbeat('person-detect-scan', outcome)
+  if (failed > 0 && failed === perLocation.length) {
+    return { ok: false, body: { error: 'Detection failed at every location', data: outcome } }
   }
-
-  return NextResponse.json({ success: true, data: outcome })
-}
+  // Withhold the heartbeat on ANY location failure — see header note.
+  return { body: { data: outcome }, outcome, stamp: failed === 0 }
+})

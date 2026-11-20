@@ -12,28 +12,21 @@
 // because the glofox-attendance-refresh cron can be "alive" (its own
 // heartbeat green) while the data it writes quietly rots.
 //
-// Auth: same CRON_SECRET pattern as the other Vercel crons.
+// Auth, the error boundary and the global stamp: defineCron. A failed read
+// answers 500 with a fixed line (detail in the log) and stamps nothing global.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
 import { listLocationsByMembershipSource } from '@/lib/membership/source'
 import { sendOpsAlert } from '@/lib/ops-alerts'
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { isPackCreditDataStale, PACK_CREDIT_MAX_AGE_DAYS } from '@/lib/glofox-data-quality'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
-
+export const GET = defineCron({ heartbeat: 'glofox-data-quality' }, async ({ db }) => {
   // SAAS4-O1 — per-LOCATION freshness. The pre-412 version computed ONE
   // global most-recent sync, so one healthy tenant's sync masked another
   // tenant's rot. Now: evaluate each active location's own pack base.
@@ -44,7 +37,8 @@ export async function GET(request) {
     .select('id, name, organization_id')
     .eq('active', true)
   if (locErr) {
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    logError('glofox-data-quality', 'failed to list active locations', { err: locErr })
+    return { ok: false, body: { error: 'Could not read locations' } }
   }
 
   // W1.M3b — a location with NO membership source has no Glofox-shaped data
@@ -55,8 +49,8 @@ export async function GET(request) {
   // capability (un1t.online). Every other active location is a counted skip.
   const { ids: glofoxIds, error: srcErr } = await listLocationsByMembershipSource(db, 'glofox')
   if (srcErr) {
-    console.warn(`[cron][glofox-data-quality] failed to read membership sources: ${srcErr.message}`)
-    return NextResponse.json({ success: false, error: srcErr.message }, { status: 500 })
+    logError('glofox-data-quality', 'failed to read membership sources', { err: srcErr })
+    return { ok: false, body: { error: 'Could not read membership sources' } }
   }
   const glofoxSet = new Set(glofoxIds || [])
   const noSource = { has: (id) => !glofoxSet.has(id) }
@@ -76,7 +70,8 @@ export async function GET(request) {
       .limit(1)
       .maybeSingle()
     if (error) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+      logError('glofox-data-quality', 'pack-sync read failed', { locationId: loc.id, err: error })
+      return { ok: false, body: { error: 'Could not read pack-sync freshness' } }
     }
     if (!row) continue // no pack base here — nothing to go stale
 
@@ -106,9 +101,8 @@ export async function GET(request) {
   // evaluated location is fresh (and at least one was evaluated —
   // an empty pack base everywhere reads as stale, exactly like the
   // old global query returning no row). The cron-health endpoint
-  // flagging 'glofox-data-quality' as stale IS the alert.
+  // flagging 'glofox-data-quality' as stale IS the alert. An unhealthy run
+  // still answers success (stamp: false withholds the row only).
   const healthy = perLocation.length > 0 && perLocation.every((l) => l.healthy)
-  if (healthy) await stampHeartbeat('glofox-data-quality').catch(() => {})
-
-  return NextResponse.json({ success: true, healthy, locations: perLocation, skipped_no_source: skippedNoSource })
-}
+  return { body: { healthy, locations: perLocation, skipped_no_source: skippedNoSource }, stamp: healthy }
+})
