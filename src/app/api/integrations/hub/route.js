@@ -26,8 +26,9 @@
 // contract-templates / billing routes).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { getOwnerOrganizationIds } from '@/lib/auth'
+import { logError } from '@/lib/log'
 import { assembleIntegrationsHub } from '@/lib/integrations-hub'
 import { isOrgAdmin } from '@/lib/org-admin'
 
@@ -41,10 +42,8 @@ const HUB_LOCATION_COLUMNS =
   'id, name, organization_id, active, settings, features, sensibo_api_key, sensibo_pod_id, ' +
   'thinq_pat, thinq_client_id, thinq_country_code, bca_config, timezone, membership_source'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
+// withAuth only signs the caller in; the owner/org-admin scope runs here.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   // Owner+/master gate. Non-masters must own/administer at least one org
   // (getOwnerOrganizationIds includes SAAS-4 org admins); everyone else
   // — managers, head coaches, staff — gets 403.
@@ -53,7 +52,6 @@ export async function GET() {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const db = createServerClient()
   let query = db
     .from('locations')
     .select(HUB_LOCATION_COLUMNS)
@@ -67,7 +65,10 @@ export async function GET() {
   if (!user.isMaster) query = query.in('organization_id', ownerOrgIds)
 
   const { data: locations, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('integrations-hub', 'locations read failed', { code: error.code ?? null, message: error.message })
+    return NextResponse.json({ success: false, error: 'Could not load integrations just now.' }, { status: 500 })
+  }
 
   // C141 ORGROLE.2 — the plan & wallet strip is organisation-level billing
   // data: only the locations of an organisation the caller administers (a
@@ -76,4 +77,4 @@ export async function GET() {
     billingFor: (loc) => isOrgAdmin(user, loc.organization_id),
   })
   return NextResponse.json({ success: true, data })
-}
+})

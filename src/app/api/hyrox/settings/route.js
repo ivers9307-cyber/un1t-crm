@@ -14,9 +14,8 @@
 // field (a page loaded before this shipped) the array replaces as before.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
@@ -53,16 +52,15 @@ export function mergeStyleExamples(stored, sent, knownIds) {
   return [...unseen, ...sent].slice(0, MAX_STORED_EXAMPLES)
 }
 
-export async function PUT(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the body and hyrox_sessions at its
+// studio (403) run here, as before.
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const v = await validateBody(request, SettingsSchema)
   if (!v.ok) return v.response
   const body = v.data
   if (!hasPermissionForLocation(user, body.location_id, APPROVAL_CATEGORY_PERMISSION.hyrox_sessions)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  const db = createServerClient()
   // SETTINGSWIPE.1 — one key (settings.hyrox) through mergeLocationSettings;
   // this used to discard its read error and rewrite the whole column.
   const saved = await mergeLocationSettings(db, body.location_id, (settings) => {
@@ -77,4 +75,4 @@ export async function PUT(request) {
   }, { scope: 'hyrox-settings' })
   if (!saved.ok) return settingsSaveFailure(saved)
   return NextResponse.json({ success: true, data: { hyrox: saved.settings.hyrox } })
-}
+})

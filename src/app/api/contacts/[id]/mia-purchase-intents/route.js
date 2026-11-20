@@ -16,8 +16,7 @@
 // so they cannot reach a browser.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { canViewContact, contactStudioIds } from '@/lib/contact-crossovers'
 import { logError } from '@/lib/log'
 
@@ -27,18 +26,13 @@ export const dynamic = 'force-dynamic'
 const MAX_INTENTS = 20
 const NOT_FOUND = () => NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+// withAuth only signs the caller in; canViewContact (404) and the studio
+// filter run here, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   const { data: contact, error: contactErr } = await db
     .from('contacts')
     .select('id, location_id')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .maybeSingle()
   if (contactErr) {
     logError('mia-un1t', 'contact read failed for payment-link chip')
@@ -78,4 +72,4 @@ export async function GET(_request, props) {
     expires_at: r.expires_at,
   }))
   return NextResponse.json({ success: true, data })
-}
+})

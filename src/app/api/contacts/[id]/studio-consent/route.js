@@ -8,8 +8,8 @@
 // studio row only, never contact_preferences (whose trigger fans an opt-out to
 // every studio). Email marketing only.
 import { NextResponse } from 'next/server'
-import { getCurrentUser, hasRoleAtLocation } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { getClientIp } from '@/lib/rate-limit'
@@ -21,12 +21,10 @@ export const dynamic = 'force-dynamic'
 
 const notFound = () => NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
+// A consent change: withAuth only signs the caller in. The body, the role at
+// the body's studio (404), the contact (404) and the shared consent write run
+// here in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   const validation = await validateBody(request, StudioConsentSchema)
   if (!validation.ok) return validation.response
@@ -34,14 +32,13 @@ export async function POST(request, props) {
 
   if (!user.isMaster && !hasRoleAtLocation(user, body.location_id, ADMIN_ROLES)) return notFound()
 
-  const db = createServerClient()
   const { data: contact, error: contactErr } = await db
     .from('contacts')
     .select('id, email, wa_phone, email_status, location_id')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .maybeSingle()
   if (contactErr) {
-    console.error('[studio-consent] contact read failed:', { contactId: params.id, message: contactErr.message })
+    console.error('[studio-consent] contact read failed:', { contactId: params?.id, message: contactErr.message })
     return NextResponse.json({ success: false, error: 'Could not read the contact' }, { status: 500 })
   }
   if (!contact) return notFound()
@@ -76,4 +73,4 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: result.error }, { status: 500 })
   }
   return NextResponse.json({ success: true, data: { changed: result.changed } })
-}
+})

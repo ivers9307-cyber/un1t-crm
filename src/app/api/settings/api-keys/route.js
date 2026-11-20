@@ -11,8 +11,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { activeOrganizationId, isOrgAdmin } from '@/lib/org-admin'
 import { validateBody } from '@/lib/validate'
 import { generateApiKey } from '@/lib/api-keys'
@@ -24,11 +24,9 @@ const CreateSchema = z.object({
   name: z.string().trim().min(1).max(100),
 })
 
-// Resolve the caller + the org they're managing keys for. Returns either
-// { user, orgId } or a NextResponse to return immediately.
-async function gate() {
-  const user = await getCurrentUser()
-  if (!user) return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
+// Resolve the org the signed-in caller (withAuth) is managing keys for.
+// Returns either { user, orgId } or a NextResponse to return immediately.
+function gate(user) {
   const orgId = activeOrganizationId(user)
   if (!isOrgAdmin(user, orgId)) {
     return { error: NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 }) }
@@ -39,27 +37,28 @@ async function gate() {
   return { user, orgId }
 }
 
-export async function GET() {
-  const g = await gate()
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
+  const g = gate(user)
   if (g.error) return g.error
-  const db = createServerClient()
   const { data, error } = await db
     .from('api_keys')
     .select('id, name, key_prefix, created_at, last_used_at, revoked_at')
     .eq('organization_id', g.orgId)
     .order('created_at', { ascending: false })
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('api-keys', 'key list read failed', { organizationId: g.orgId, code: error.code ?? null, message: error.message })
+    return NextResponse.json({ success: false, error: 'Could not load API keys just now.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, keys: data || [] })
-}
+})
 
-export async function POST(request) {
-  const g = await gate()
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
+  const g = gate(user)
   if (g.error) return g.error
   const validation = await validateBody(request, CreateSchema)
   if (!validation.ok) return validation.response
 
   const { full, prefix, hash } = generateApiKey()
-  const db = createServerClient()
   const { data, error } = await db
     .from('api_keys')
     .insert({
@@ -71,8 +70,11 @@ export async function POST(request) {
     })
     .select('id, name, key_prefix, created_at')
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('api-keys', 'key create failed', { organizationId: g.orgId, code: error.code ?? null, message: error.message })
+    return NextResponse.json({ success: false, error: 'Could not create the key just now.' }, { status: 500 })
+  }
 
   // `secret` is the full raw key — returned exactly once, never stored.
   return NextResponse.json({ success: true, key: data, secret: full })
-}
+})

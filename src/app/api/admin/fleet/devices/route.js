@@ -16,8 +16,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { assertDisplayAtLocation } from '@/lib/screen-plan'
@@ -34,11 +33,9 @@ const CreateSchema = z.object({
   tv_display_id: uuidLike.nullable().optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
-  }
+// withAuth only signs the caller in (signed out: its 401); the master check
+// keeps its own 403 body here.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!user.isMaster) {
     return NextResponse.json({ ok: false, error: 'Master only' }, { status: 403 })
   }
@@ -46,8 +43,6 @@ export async function POST(request) {
   const validation = await validateBody(request, CreateSchema)
   if (!validation.ok) return validation.response
   const { device_name, location_id, role, label, tv_display_id } = validation.data
-
-  const db = createServerClient()
 
   if (tv_display_id) {
     const check = await assertDisplayAtLocation(db, tv_display_id, location_id)
@@ -72,4 +67,4 @@ export async function POST(request) {
 
   logInfo('fleet-cmd', 'screen registered', { device: device_name, by: user.id })
   return NextResponse.json({ ok: true, device: data }, { status: 201 })
-}
+})

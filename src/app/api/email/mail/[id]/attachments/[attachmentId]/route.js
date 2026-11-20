@@ -20,8 +20,7 @@
 // 404, never a 403.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { signedAttachmentUrl } from '@/lib/email-attachments-server'
 import { loadAttachmentForConversation } from '../_helpers'
 
@@ -33,14 +32,10 @@ export const dynamic = 'force-dynamic'
 // anyone reads it.
 const SIGNED_URL_TTL_SECONDS = 300
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
-
-  const loaded = await loadAttachmentForConversation(db, user, params.id, params.attachmentId)
+// withAuth only signs the caller in; the ticket's access (every refusal a 404)
+// is loadAttachmentForConversation's, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const loaded = await loadAttachmentForConversation(db, user, params?.id, params?.attachmentId)
   if (loaded.response) return loaded.response
   const { attachment } = loaded
 
@@ -73,4 +68,4 @@ export async function GET(request, props) {
       expires_in: SIGNED_URL_TTL_SECONDS,
     },
   })
-}
+})

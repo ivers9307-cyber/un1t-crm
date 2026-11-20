@@ -16,9 +16,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { guardLiveLocation, LIVE_MUTATION_ROLES } from '@/lib/live-access'
-import { createServerClient } from '@/lib/supabase'
 import { pairOverride } from '@/lib/live-class'
 import { canonicaliseDeviceKey } from '@/lib/bridge-samples'
 import { logInfo } from '@/lib/log'
@@ -37,10 +36,10 @@ const PairSchema = z.object({
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  const locationId = params.locationId
+// withAuth only signs the caller in; guardLiveLocation judges the studio, the
+// coach roles and studio_management AT the URL's studio, as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const locationId = params?.locationId
   const denied = guardLiveLocation(user, locationId, { roles: LIVE_MUTATION_ROLES })
   if (denied) return denied
 
@@ -61,7 +60,6 @@ export async function POST(request, props) {
   }
 
   const persist = body?.persist !== false // default: persist the registration
-  const db = createServerClient()
   const out = await pairOverride(db, { locationId, bridgeId, contactId, deviceKey, bookingId, persist, actorUserId: user.id })
   if (!out.ok) {
     return NextResponse.json({ ok: false, error: out.error }, { status: 400 })
@@ -78,4 +76,4 @@ export async function POST(request, props) {
       ? { ok: true, session_id: out.sessionId, warning: out.warning }
       : { ok: true, session_id: out.sessionId },
   )
-}
+})
