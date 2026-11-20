@@ -15,18 +15,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // One thenable builder per from() call: chain methods no-op, awaiting
 // resolves the table's rows, maybeSingle resolves the first row or null.
 let tables = {}
-function makeBuilder(rows) {
+let tableErrors = {}
+function makeBuilder(rows, error = null) {
   const b = {}
   for (const m of ['select', 'eq', 'not', 'order', 'limit', 'in']) b[m] = () => b
   b.maybeSingle = () => Promise.resolve({ data: rows[0] ?? null, error: null })
-  b.then = (resolve) => Promise.resolve({ data: rows, error: null }).then(resolve)
+  b.then = (resolve) => Promise.resolve({ data: error ? null : rows, error }).then(resolve)
   return b
 }
-const fakeDb = { from: (t) => makeBuilder(tables[t] ?? []) }
+const fakeDb = { from: (t) => makeBuilder(tables[t] ?? [], tableErrors[t] ?? null) }
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
 vi.mock('@/lib/ac-devices', () => ({
   loadDeviceWithLocation: vi.fn(),
@@ -50,6 +51,7 @@ import { GET } from './route.js'
 import { logAuditEvent } from '@/lib/audit'
 import { loadDeviceWithLocation, vendorGetState, vendorTurnOff } from '@/lib/ac-devices'
 import { clearExternalStart } from '@/lib/ac-external-rule'
+import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 const DEVICE = {
   id: 'dev-1', location_id: 'loc-1', label: 'Studio AC',
@@ -64,6 +66,7 @@ function req(auth = 'Bearer test-secret') {
 beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   tables = {}
+  tableErrors = {}
   vi.clearAllMocks()
   loadDeviceWithLocation.mockResolvedValue({ ok: true, device: DEVICE, location: { id: 'loc-1' } })
   vendorGetState.mockResolvedValue({ ok: true, state: { on: true } })
@@ -74,6 +77,25 @@ describe('GET /api/cron/ac-external-rule', () => {
   it('rejects a missing/wrong bearer', async () => {
     const res = await GET(req('Bearer nope'))
     expect(res.status).toBe(401)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a clean run with nothing to do stamps the heartbeat', async () => {
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect((await res.json()).stats).toMatchObject({ devices_checked: 0 })
+    expect(stampHeartbeat).toHaveBeenCalledWith('ac-external-rule')
+  })
+
+  it('a failed device read answers 500 with a fixed line, does not stamp, and leaks no DB text', async () => {
+    tableErrors = { ac_devices: { message: 'permission denied for table ac_devices' } }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Could not read AC devices' })
+    expect(JSON.stringify(body)).not.toContain('permission denied')
+    expect(vendorGetState).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('fire path: audits ac.external_auto_off with a device resource target and no target.id', async () => {
@@ -101,5 +123,6 @@ describe('GET /api/cron/ac-external-rule', () => {
     // Device ids are NOT profiles ids — a target.id here lands in
     // audit_events.target_profile_id and violates its FK to profiles.
     expect(logAuditEvent.mock.calls.at(-1)[0].target.id).toBeUndefined()
+    expect(stampHeartbeat).toHaveBeenCalledWith('ac-external-rule')
   })
 })
