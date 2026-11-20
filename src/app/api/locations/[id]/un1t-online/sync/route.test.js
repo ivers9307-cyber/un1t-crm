@@ -66,7 +66,9 @@ describe('POST sync', () => {
 
   it('a manager at A who is staff at B, asking for B -> 403', async () => {
     getCurrentUser.mockResolvedValue(MANAGER_A_STAFF_B)
-    expect((await POST(req(), params(LOC_B))).status).toBe(403)
+    const res = await POST(req(), params(LOC_B))
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ success: false, error: 'Only owners and masters can sync un1t.online.' })
     expect(runUn1tSync).not.toHaveBeenCalled()
   })
 

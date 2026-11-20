@@ -169,7 +169,7 @@ describe('GET /api/cron/mia-purchase-intents', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body).toEqual({ success: true, data: ZERO })
-    expect(stampHeartbeat).toHaveBeenCalledWith('mia-purchase-intents', ZERO)
+    expect(stampHeartbeat.mock.calls).toEqual([['mia-purchase-intents', ZERO]])
     // live list, stuck list, recent-settled list, expiry read: nothing else.
     expect(calls).toEqual([
       { table: 'mia_purchase_intents', op: 'select' },
@@ -362,6 +362,8 @@ describe('GET /api/cron/mia-purchase-intents', () => {
     expect(res.status).toBe(500)
     const body = await res.json()
     expect(body.success).toBe(false)
+    expect(body.error).toBe('Watcher run incomplete')
+    expect(JSON.stringify(body)).not.toContain('fictional failure')
     expect(body.data.errors).toBeGreaterThanOrEqual(3)
     expect(settle.expireStaleIntents).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).not.toHaveBeenCalled()

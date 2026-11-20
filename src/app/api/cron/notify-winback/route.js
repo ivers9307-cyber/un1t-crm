@@ -10,12 +10,18 @@
 // that reached nobody because something broke gives its claim back, so the
 // next daily run (same month key) tries again while the member still
 // qualifies. It used to keep the claim, and the month's nudge was gone.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+//
+// defineCron owns the CRON_SECRET check, the error boundary and the stamp. The
+// answer keeps its own `ok` field beside the wrapper's `success`. A quiet tick
+// answers ok with `stamp: false`; a slot tick stamps unless the gate faulted,
+// a home location was unreadable, or a heart_rate_sessions read failed (those
+// answer 500 unstamped, with counts; the detail is logged). A failed candidate
+// read with nothing read sends nothing; after a partial read the members it
+// did read are still nudged, as before, but the tick is not stamped.
 import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/customer-nudge-claim'
 import { attendanceDrop, buildWinbackPush } from '@/lib/customer-notifications'
-import { logInfo, logWarn } from '@/lib/log'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError, logInfo } from '@/lib/log'
+import { defineCron } from '@/lib/define-cron'
 import { gateDailySlot, slotFor, readContactHomes, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
@@ -26,31 +32,25 @@ const PAGE = 1000
 
 export async function POST(request) { return GET(request) }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'notify-winback' }, async ({ db }) => {
   const nowMs = Date.now()
 
   // TZ.6 — which home studios are at their daily slot this tick (claimed, so
   // never twice in one local day). An unreadable zone acts for nobody.
   const gate = await gateDailySlot(db, 'notify-winback', { nowMs, module: 'cron-winback' })
-  if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
+  if (!gate.ok) return { ok: false, body: { ok: false, slot: gate.summary } }
   if (gate.slots.size === 0) {
     // A quiet tick (no slot taken) never stamps; the row keeps the legacy clock.
     // A faulted one (claim write failed) answers 500: the slot is skipped and pages.
-    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, candidates: 0, dropping: 0, nudged: 0 }, { status: gate.faulted ? 500 : 200 })
+    return { ok: !gate.faulted, stamp: false, body: { ok: !gate.faulted, slot: gate.summary, candidates: 0, dropping: 0, nudged: 0 } }
   }
   // Stamp only a slot tick with no fault of the gate's or the body's own.
-  const stamp = async (outcome, status = 200) => {
-    if (status === 200 && slotTickStampable(gate)) {
-      await stampHeartbeat('notify-winback').catch((err) => logWarn('cron-winback', 'heartbeat failed', { err }))
-      return NextResponse.json({ ok: true, ...outcome })
-    }
-    return NextResponse.json({ ok: false, ...outcome, slot: gate.summary }, { status: 500 })
-  }
+  let readFailed = false
+  const finish = (outcome, failed = false) => (
+    !failed && !readFailed && slotTickStampable(gate)
+      ? { body: { ok: true, ...outcome } }
+      : { ok: false, body: { ok: false, ...(readFailed ? { error: 'Could not read sessions' } : {}), ...outcome, slot: gate.summary } }
+  )
 
   const DAY = 24 * 3600 * 1000
   // The read floor is attendanceDrop's own: its windows are rolling multiples
@@ -70,12 +70,12 @@ export async function GET(request) {
       .gte('started_at', since84Iso)
       .order('contact_id', { ascending: true })
       .range(from, from + PAGE - 1)
-    if (error) { logWarn('cron-winback', 'candidate query failed', { err: error }); break }
+    if (error) { logError('cron-winback', 'candidate query failed', { err: error, read: candidateIds.size }); readFailed = true; break }
     for (const r of rows || []) candidateIds.add(r.contact_id)
     if (!rows || rows.length < PAGE) break
   }
   if (candidateIds.size === 0) {
-    return stamp({ candidates: 0, dropping: 0, nudged: 0 })
+    return finish({ candidates: 0, dropping: 0, nudged: 0 })
   }
 
   const ids = [...candidateIds]
@@ -84,12 +84,15 @@ export async function GET(request) {
   const byContact = new Map()
   for (let i = 0; i < ids.length; i += 200) {
     const chunk = ids.slice(i, i + 200)
-    const { data: rows } = await db
+    const { data: rows, error } = await db
       .from('heart_rate_sessions')
       .select('contact_id, started_at')
       .in('contact_id', chunk)
       .not('ended_at', 'is', null)
       .gte('started_at', since84Iso)
+    // A failed chunk leaves its members with no sessions (so never dropping):
+    // logged, and the tick is not stamped.
+    if (error) { logError('cron-winback', 'session query failed', { err: error, chunk: chunk.length }); readFailed = true }
     for (const r of rows || []) {
       if (!byContact.has(r.contact_id)) byContact.set(r.contact_id, [])
       byContact.get(r.contact_id).push({ started_at: r.started_at })
@@ -103,7 +106,7 @@ export async function GET(request) {
     if (isDrop) dropping.push(cid)
   }
   if (dropping.length === 0) {
-    return stamp({ candidates: ids.length, dropping: 0, nudged: 0 })
+    return finish({ candidates: ids.length, dropping: 0, nudged: 0 })
   }
 
   // 4. TZ.6 — only members whose home studio is at its slot this tick. The
@@ -140,5 +143,5 @@ export async function GET(request) {
   logInfo('cron-winback', 'tick', summary)
   // An unreadable home is a member not seen this slot (they were skipped, not
   // guessed): no stamp, so the run reads as failed.
-  return stamp(summary, homesUnread > 0 ? 500 : 200)
-}
+  return finish(summary, homesUnread > 0)
+})
