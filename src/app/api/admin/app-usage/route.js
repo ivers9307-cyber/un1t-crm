@@ -9,8 +9,7 @@
 // it, and a studio outside the chosen tenant is a 400.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
 import { UsageScopeError } from '@/lib/app-usage/scope'
 import { isUsageReportViewer, readLastActive, parseFilters, loadReportData } from '@/lib/app-usage/queries'
@@ -19,15 +18,12 @@ import { peopleRows, featureRows, reportTotals } from '@/lib/app-usage/report'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!isUsageReportViewer(user)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-
+// isUsageReportViewer (master on their own session) is the gate, through
+// withAuth's `allow`: the same 403 'Forbidden', before any database client.
+export const GET = withAuth({ permission: null, location: false, allow: (user) => isUsageReportViewer(user) }, async ({ db, request }) => {
   const url = new URL(request.url)
   const filters = parseFilters(url)
   const view = url.searchParams.get('view') === 'features' ? 'features' : 'people'
-  const db = createServerClient()
 
   try {
     const { range, scope, staff, summary } = await loadReportData(db, filters)
@@ -55,4 +51,4 @@ export async function GET(request) {
     logError('app-usage', 'report read failed', { message: err?.message || String(err) })
     return NextResponse.json({ success: false, error: 'Could not load app usage' }, { status: 500 })
   }
-}
+})

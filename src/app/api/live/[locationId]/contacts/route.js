@@ -14,23 +14,22 @@
 // member names, so it was the widest read in the family.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { guardLiveLocation } from '@/lib/live-access'
-import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 import { getClassRoster } from '@/lib/class-bookings'
 import { rankClaimCandidates } from '@/lib/hr-claim'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  const locationId = params.locationId
+// withAuth only signs the caller in; guardLiveLocation judges the studio and
+// studio_management AT the URL's studio, as before (its 403s unchanged).
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const locationId = params?.locationId
   const denied = guardLiveLocation(user, locationId)
   if (denied) return denied
 
-  const db = createServerClient()
   const rawQ = new URL(request.url).searchParams.get('q') ?? ''
   // Strip percent signs and commas to keep the PostgREST `or` filter safe.
   const q = rawQ.trim().replace(/[%,]/g, '')
@@ -46,7 +45,10 @@ export async function GET(request, props) {
     query.order('name', { ascending: true }).limit(30),
   ])
 
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('live', 'contact search failed', { locationId, code: error.code ?? null })
+    return NextResponse.json({ ok: false, error: 'Could not search contacts.' }, { status: 500 })
+  }
 
   const ranked = rankClaimCandidates({ roster: rosterData.roster, contacts: contacts || [], query: q })
   return NextResponse.json({
@@ -54,4 +56,4 @@ export async function GET(request, props) {
     contacts: ranked,
     class_name: rosterData.occurrence?.class_name ?? null,
   })
-}
+})

@@ -14,7 +14,9 @@
 // though the file was sitting fine in its own bucket.
 
 import { NextResponse } from 'next/server'
-import { loadInvoiceForUser } from '../../_helpers'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
+import { loadInvoiceForCaller } from '../../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -24,9 +26,11 @@ const SIGNED_URL_TTL_SECONDS = 300 // 5 minutes
 // attachment_bucket column. New rows always have it populated.
 const FALLBACK_BUCKET = 'inbound-invoices'
 
-export async function GET(_request, { params }) {
-  const { id } = await params
-  const ctx = await loadInvoiceForUser(id)
+// withAuth only signs the caller in; loadInvoiceForCaller keeps the
+// invoices_inbox permission and the master / owner-at-the-row's-studio check
+// (404 on no access), as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, params }) => {
+  const ctx = await loadInvoiceForCaller(user, params?.id)
   if (ctx.response) return ctx.response
   const { db, row } = ctx
 
@@ -39,10 +43,8 @@ export async function GET(_request, { params }) {
     .from(bucket)
     .createSignedUrl(row.attachment_path, SIGNED_URL_TTL_SECONDS)
   if (error || !data?.signedUrl) {
-    return NextResponse.json({
-      success: false,
-      error: `Could not sign attachment URL: ${error?.message || 'unknown error'}`,
-    }, { status: 500 })
+    logError('invoices-inbox', 'attachment url not signed', { invoiceId: row.id, bucket, err: error || null })
+    return NextResponse.json({ success: false, error: 'Could not open the attachment. Try again.' }, { status: 500 })
   }
 
   return NextResponse.json({
@@ -55,4 +57,4 @@ export async function GET(_request, { params }) {
       expires_in_seconds: SIGNED_URL_TTL_SECONDS,
     },
   })
-}
+})
