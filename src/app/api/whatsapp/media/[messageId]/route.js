@@ -1,6 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { mediaRenderKind } from '@shared/whatsapp-media'
 import { ensureMediaRehosted, signedMediaUrl } from '@/lib/whatsapp-media-server'
 
@@ -19,11 +20,7 @@ import { ensureMediaRehosted, signedMediaUrl } from '@/lib/whatsapp-media-server
 
 export const runtime = 'nodejs'
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+export const GET = withAuth({ permission: null, location: false }, async ({ user, params }) => {
   const db = createServerClient()
   const { data: message, error } = await db.from('whatsapp_messages')
     .select('id, location_id, conversation_id, message_type, media_mime_type, media_url, media_external_id, media_storage_path')
@@ -54,4 +51,4 @@ export async function GET(request, props) {
   }
 
   return NextResponse.json({ success: true, url, kind, mime_type: message.media_mime_type || null })
-}
+})

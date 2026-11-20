@@ -12,7 +12,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 
-vi.mock('@/lib/auth', () => ({
+// ROUTEWRAP.R9 — the real module under the mocks (withAuth imports from it).
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: vi.fn(),
   assertOrganizationAdmin: vi.fn((user, orgId) => {
     if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -224,6 +226,18 @@ describe('DELETE', () => {
 
   it('a database error is a 500', async () => {
     setup({ faults: { 'whatsapp_numbers:delete': { message: 'boom' } } })
-    expect((await del()).status).toBe(500)
+    const res = await del()
+    expect(res.status).toBe(500)
+    // ROUTEWRAP.R9 — a fixed line, the database text logged only.
+    expect(await res.json()).toEqual({ success: false, error: 'Could not remove the number.' })
+  })
+
+  it('signed out is withAuth\'s 401 on PATCH and DELETE', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    setup()
+    expect((await patch({ label: 'x' })).status).toBe(401)
+    const res = await del()
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
   })
 })

@@ -3,7 +3,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const state = {}
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null) }))
+// ROUTEWRAP.R9 — the real module under the two mocks: withAuth needs userAtLocation.
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null) }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from(table) {
@@ -43,7 +44,7 @@ const put = (loc, body) => PUT(
   new Request(`http://x/api/locations/${loc}/whatsapp/purpose-templates`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   ctx(loc),
 )
-const user = (role, loc = HATCH) => ({ id: 'u1', role, profileRole: role === 'master' ? 'master' : 'staff', rolesByLocation: { [loc]: role } })
+const user = (role, loc = HATCH) => ({ id: 'u1', role, profileRole: role === 'master' ? 'master' : 'staff', rolesByLocation: { [loc]: role }, locations: [{ id: loc }] })
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -71,9 +72,17 @@ describe('PUT /api/locations/[id]/whatsapp/purpose-templates', () => {
     expect(state.writes).toEqual([])
   })
 
-  it('an owner at another studio is 403 here (role judged at the path id)', async () => {
-    getCurrentUser.mockResolvedValue(user('owner', STILL))
+  it('an owner at another studio who is staff here is 403 (role judged at the path id)', async () => {
+    getCurrentUser.mockResolvedValue({ ...user('owner', STILL), rolesByLocation: { [STILL]: 'owner', [HATCH]: 'staff' }, locations: [{ id: STILL }, { id: HATCH }] })
     expect((await put(HATCH, { purpose: 'class_confirmed', templateId: T_UTIL })).status).toBe(403)
+  })
+
+  // ROUTEWRAP.R9 — withAuth (location: 'param') answers before the body.
+  it('an owner of another studio only is 404 here', async () => {
+    getCurrentUser.mockResolvedValue(user('owner', STILL))
+    const res = await put(HATCH, { purpose: 'class_confirmed', templateId: T_UTIL })
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Not found' })
   })
 
   it('a caller without access to the studio gets the access guard', async () => {
@@ -127,6 +136,14 @@ describe('PUT /api/locations/[id]/whatsapp/purpose-templates', () => {
     expect(state.locations[0].settings.whatsapp_purpose_templates).toEqual({ event_waitlist_offer: null })
     expect(state.locations[0].settings.glofox).toEqual({ branch: 'x' })
     expect((await res.json()).data.selected.event_waitlist_offer).toBeNull()
+  })
+
+  it('a failed template read is a fixed 500 with no database text, nothing written', async () => {
+    state.fail = 'whatsapp_templates'
+    const res = await put(HATCH, { purpose: 'class_confirmed', templateId: T_UTIL })
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not check that template.' })
+    expect(state.writes).toEqual([])
   })
 
   it('a failed settings write is reported, not hidden', async () => {

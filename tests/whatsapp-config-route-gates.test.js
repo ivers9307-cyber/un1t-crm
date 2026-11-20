@@ -24,15 +24,37 @@
 // code inside a template's ${…} is still code. Every non-GET handler is then
 // classified by the strongest gate CALL in that text. The table below is
 // EXACT: a new handler, a removed one, or a handler whose gate changed fails
-// until the table says so, with a reason. A handler exported in any other
-// shape (`export const POST = withAuth(h)`, `export { h as POST }`) fails
-// its own test, since its body cannot be judged here.
+// until the table says so, with a reason.
+//
+// ROUTEWRAP.R9 — a handler on the shared wrapper,
+// `export const POST = withAuth({ …options… }, async (ctx) => { … })`, is
+// judged too: its text is the inline function's own body, and each withAuth
+// option adds the class of the call it stands for (withAuthGates below):
+// every wrapper signs the caller in ('session-only'); location: 'param' is
+// the path-studio membership check ('membership', withAuth answers 404);
+// permission: 'whatsapp' is 'whatsapp-permission'; roles: MANAGER_ROLES /
+// ADMIN_ROLES (the constants from @/lib/schemas) are 'manager' /
+// 'studio-admin', and MANAGER_ROLES with permission 'whatsapp' is
+// 'manager-whatsapp' (canManageWaTemplatesAt's pair); master: true is
+// 'master'. permission: null, location: true / false, locationParam, schema,
+// forbiddenMessage and allowWidgetToken: false add nothing, so for the
+// `{ permission: null, location: false }` shape the body's own gate decides,
+// exactly as before the move. The handler's class is the strongest of the
+// body and the options. Anything else FAILS as unjudgeable, as before: a
+// spread, shorthand or computed option, an option whose value is not a
+// literal (or one of the two role constants), any other permission key, an
+// `allow` callback, allowWidgetToken other than false, an unknown option, a
+// handler that is not an inline arrow or function expression, a withAuth not
+// imported from @/lib/with-auth under its own name, and any other shape
+// (`export const POST = withAuth(h)`, `export { h as POST }`).
 //
 // A FLOOR, NOT A PROOF. Not detected: a gate whose result is ignored
 // (`guardMasterOrOwner(user, loc)` with no `if (g) return g`), a gate called
 // with the wrong location, a gate reached only on some paths or inside a
 // callback, and a gate inside a helper the handler calls (it reads as the
-// next gate down, usually 'membership'). The route tests are the proof for
+// next gate down, usually 'membership'). For a wrapped handler the options
+// are read as written, not run: what withAuth does with them is
+// src/lib/with-auth.js's own tests' job. The route tests are the proof for
 // the rows this PR changed.
 //
 // Why a parser and not a regex (C74 GUARDSTRIP.1): a regex that removes
@@ -155,7 +177,87 @@ function restoreGateArgs(code, text, sf) {
   return chars.join('')
 }
 
-// Each exported HTTP handler with its OWN text (comments/literals blanked).
+// Strongest first: the order classify() tests in, with 'master' (withAuth's
+// master: true, masters only) above everything.
+export const GATE_ORDER = [
+  'master', 'org-admin', 'owner', 'manager-whatsapp', 'manager', 'studio-admin', 'whatsapp-permission',
+  'inbox-at-location', 'web-inbox-at-location', 'inbox', 'membership', 'session-only', 'no-session',
+]
+export const strongest = (classes) => GATE_ORDER.find((c) => classes.includes(c)) ?? 'no-session'
+
+// The names a file imports from a module, local name → imported name.
+function importsFrom(sf, moduleName) {
+  const out = new Map()
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || st.moduleSpecifier.text !== moduleName) continue
+    const named = st.importClause?.namedBindings
+    if (named && ts.isNamedImports(named)) for (const el of named.elements) out.set(el.name.text, (el.propertyName ?? el.name).text)
+  }
+  return out
+}
+
+const ROLE_CONSTANTS = { MANAGER_ROLES: 'manager', ADMIN_ROLES: 'studio-admin' }
+const isStringish = (n) => ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)
+const isBool = (n) => n.kind === ts.SyntaxKind.TrueKeyword || n.kind === ts.SyntaxKind.FalseKeyword
+const isNull = (n) => n.kind === ts.SyntaxKind.NullKeyword
+
+// `withAuth({ …literal options… }, inline fn)` → { fn, gates }, or
+// { error } saying why it cannot be judged, or null when the initializer is
+// not a withAuth call at all. Only a withAuth imported from @/lib/with-auth
+// under its own name counts.
+export function withAuthGates(init, sf) {
+  if (!init || !ts.isCallExpression(init) || !ts.isIdentifier(init.expression) || init.expression.text !== 'withAuth') return null
+  if (importsFrom(sf, '@/lib/with-auth').get('withAuth') !== 'withAuth') return { error: 'withAuth is not imported from @/lib/with-auth' }
+  if (init.arguments.length !== 2) return { error: 'withAuth takes (options, handler)' }
+  const [opts, fn] = init.arguments
+  if (!ts.isObjectLiteralExpression(opts)) return { error: 'options are not an object literal' }
+  if (!isFunctionInit(fn)) return { error: 'the handler is not an inline function' }
+  const roleImports = importsFrom(sf, '@/lib/schemas')
+  const gates = ['session-only']
+  let permission = null
+  let roleClass = null
+  for (const prop of opts.properties) {
+    if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) return { error: 'an option is a spread, shorthand, method or computed key' }
+    const key = prop.name.text
+    const v = prop.initializer
+    if (key === 'permission') {
+      if (isNull(v)) continue
+      if (ts.isStringLiteral(v) && v.text === 'whatsapp') { permission = 'whatsapp'; gates.push('whatsapp-permission'); continue }
+      return { error: 'permission is not null or \'whatsapp\'' }
+    }
+    if (key === 'location') {
+      if (isBool(v)) continue
+      if (ts.isStringLiteral(v) && v.text === 'param') { gates.push('membership'); continue }
+      return { error: 'location is not true, false or \'param\'' }
+    }
+    if (key === 'roles') {
+      const name = ts.isIdentifier(v) ? v.text : null
+      if (name && ROLE_CONSTANTS[name] && roleImports.get(name) === name) { roleClass = ROLE_CONSTANTS[name]; gates.push(roleClass); continue }
+      return { error: 'roles is not MANAGER_ROLES or ADMIN_ROLES from @/lib/schemas' }
+    }
+    if (key === 'master') {
+      if (v.kind === ts.SyntaxKind.TrueKeyword) { gates.push('master'); continue }
+      if (v.kind === ts.SyntaxKind.FalseKeyword) continue
+      return { error: 'master is not true or false' }
+    }
+    if (key === 'allowWidgetToken') {
+      if (v.kind === ts.SyntaxKind.FalseKeyword) continue
+      return { error: 'allowWidgetToken is not false (a widget token is not a staff session)' }
+    }
+    if (key === 'locationParam' || key === 'forbiddenMessage') {
+      if (isStringish(v)) continue
+      return { error: `${key} is not a string literal` }
+    }
+    if (key === 'schema') continue // validates the body; not a gate
+    if (key === 'allow' && isNull(v)) continue
+    return { error: `option '${key}' cannot be judged here` }
+  }
+  if (roleClass === 'manager' && permission === 'whatsapp') gates.push('manager-whatsapp')
+  return { fn, gates }
+}
+
+// Each exported HTTP handler with its OWN text (comments/literals blanked),
+// and for a withAuth-wrapped one the classes its options add.
 export function handlers(src) {
   const sf = parse(src)
   const code = restoreGateArgs(blankNonCode(src, sf), src, sf)
@@ -163,17 +265,24 @@ export function handlers(src) {
   for (const st of sf.statements) {
     if (!isExported(st)) continue
     if (ts.isFunctionDeclaration(st) && st.name && METHODS.has(st.name.text)) {
-      out.push({ method: st.name.text, body: code.slice(st.getStart(sf), st.end) })
+      out.push({ method: st.name.text, body: code.slice(st.getStart(sf), st.end), gates: [] })
     } else if (ts.isVariableStatement(st)) {
       for (const d of st.declarationList.declarations) {
-        if (ts.isIdentifier(d.name) && METHODS.has(d.name.text) && isFunctionInit(d.initializer)) {
-          out.push({ method: d.name.text, body: code.slice(d.getStart(sf), d.end) })
+        if (!ts.isIdentifier(d.name) || !METHODS.has(d.name.text)) continue
+        if (isFunctionInit(d.initializer)) {
+          out.push({ method: d.name.text, body: code.slice(d.getStart(sf), d.end), gates: [] })
+          continue
         }
+        const wrapped = withAuthGates(d.initializer, sf)
+        if (wrapped?.fn) out.push({ method: d.name.text, body: code.slice(wrapped.fn.getStart(sf), wrapped.fn.end), gates: wrapped.gates })
       }
     }
   }
   return out
 }
+
+// A handler's class: the strongest of its body's gate and its wrapper's options.
+export const judge = (h) => strongest([classify(h.body), ...(h.gates || [])])
 
 // HTTP handlers exported in a shape handlers() cannot judge.
 export function unjudgedExports(src) {
@@ -182,7 +291,7 @@ export function unjudgedExports(src) {
   for (const st of sf.statements) {
     if (ts.isVariableStatement(st) && isExported(st)) {
       for (const d of st.declarationList.declarations) {
-        if (ts.isIdentifier(d.name) && METHODS.has(d.name.text) && !isFunctionInit(d.initializer)) out.push(d.name.text)
+        if (ts.isIdentifier(d.name) && METHODS.has(d.name.text) && !isFunctionInit(d.initializer) && !withAuthGates(d.initializer, sf)?.fn) out.push(d.name.text)
       }
     } else if (ts.isExportDeclaration(st) && st.exportClause && ts.isNamedExports(st.exportClause)) {
       for (const el of st.exportClause.elements) if (METHODS.has(el.name.text)) out.push(el.name.text)
@@ -196,7 +305,7 @@ function actual() {
   for (const file of FILES()) {
     for (const h of handlers(fs.readFileSync(file, 'utf8'))) {
       if (h.method === 'GET') continue
-      out[`${h.method} ${rel(file)}`] = classify(h.body)
+      out[`${h.method} ${rel(file)}`] = judge(h)
     }
   }
   return out
@@ -360,6 +469,87 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
     expect(unjudgedExports('async function POST() {}\nexport { POST }')).toEqual(['POST'])
     expect(unjudgedExports('async function h() {}\nexport { h as DELETE }')).toEqual(['DELETE'])
     expect(unjudgedExports("export async function POST() {}\nexport const PUT = async () => {}\nexport const runtime = 'nodejs'")).toEqual([])
+  })
+
+  // ROUTEWRAP.R9 — the wrapper shape.
+  const WRAP_IMPORTS = "import { withAuth } from '@/lib/with-auth'\nimport { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'\n"
+  const wrapped = (opts, body) => `${WRAP_IMPORTS}export const POST = withAuth(${opts}, async ({ user, params }) => {\n  ${body}\n})\n`
+  const judged = (src) => handlers(src).map((h) => [h.method, judge(h)])
+
+  it('a withAuth-wrapped handler is judged from its inline body (permission: null, location: false adds only the session)', () => {
+    expect(judged(wrapped('{ permission: null, location: false }', 'const g = guardMasterOrOwner(user, loc)\n  if (g) return g'))).toEqual([['POST', 'owner']])
+    expect(judged(wrapped('{ permission: null, location: false }', "if (!hasPermissionForLocation(user, row.location_id, 'whatsapp')) return no"))).toEqual([['POST', 'whatsapp-permission']])
+    expect(judged(wrapped('{ permission: null, location: false }', 'const g = assertLocationAccessOr404(user, loc)'))).toEqual([['POST', 'membership']])
+    // No gate in the body: withAuth still signed the caller in.
+    expect(judged(wrapped('{ permission: null, location: false }', 'return ok()'))).toEqual([['POST', 'session-only']])
+    // A function expression handler, and a comment naming a guard is still not one.
+    const fnExpr = `${WRAP_IMPORTS}export const PUT = withAuth({ permission: null, location: false }, async function ({ user }) {\n  // guardMasterOrOwner(user, loc)\n  const g = assertLocationAccess(user, loc)\n})\n`
+    expect(judged(fnExpr)).toEqual([['PUT', 'membership']])
+  })
+
+  it('the same handler classifies the same before and after the move onto withAuth', () => {
+    const bodies = [
+      'const g = guardMasterOrOwner(user, loc)',
+      'if (!canManageWaTemplatesAt(user, t.location_id)) {}',
+      "const p = requireWhatsAppInboxAt(user, c.location_id)",
+      'const p = requireWebWhatsAppInboxAt(user, c.location_id)',
+      'const g = assertOrganizationAdmin(user, org)',
+      'if (!hasRoleAtLocation(user, params.id, ADMIN_ROLES)) {}',
+      'return ok()',
+    ]
+    for (const b of bodies) {
+      const legacy = `export async function POST(request) {\n  const user = await getCurrentUser()\n  if (!user) return no\n  ${b}\n}\n`
+      expect([b, judged(wrapped('{ permission: null, location: false }', b))]).toEqual([b, judged(legacy)])
+    }
+  })
+
+  it('withAuth options count as the call they stand for, and the stronger of options and body wins', () => {
+    const none = 'return ok()'
+    expect(judged(wrapped("{ permission: null, location: 'param' }", none))).toEqual([['POST', 'membership']])
+    expect(judged(wrapped("{ permission: 'whatsapp', location: 'param' }", none))).toEqual([['POST', 'whatsapp-permission']])
+    expect(judged(wrapped("{ permission: null, location: 'param', roles: ADMIN_ROLES }", none))).toEqual([['POST', 'studio-admin']])
+    expect(judged(wrapped("{ permission: null, location: 'param', roles: MANAGER_ROLES }", none))).toEqual([['POST', 'manager']])
+    expect(judged(wrapped("{ permission: 'whatsapp', location: 'param', roles: MANAGER_ROLES }", none))).toEqual([['POST', 'manager-whatsapp']])
+    expect(judged(wrapped('{ permission: null, location: false, master: true }', none))).toEqual([['POST', 'master']])
+    expect(judged(wrapped("{ permission: null, location: true, master: false, allowWidgetToken: false, schema: s, locationParam: 'id', forbiddenMessage: 'No.' }", none))).toEqual([['POST', 'session-only']])
+    // Body stronger than options, and options stronger than body.
+    expect(judged(wrapped("{ permission: null, location: 'param' }", 'const g = guardMasterOrOwner(user, params.id)'))).toEqual([['POST', 'owner']])
+    expect(judged(wrapped("{ permission: null, location: 'param', roles: ADMIN_ROLES }", 'const g = assertLocationAccess(user, params.id)'))).toEqual([['POST', 'studio-admin']])
+    // The options are read as options, not as body text: a role constant there is no hasRoleAtLocation call.
+    expect(handlers(wrapped("{ permission: null, location: false, roles: MANAGER_ROLES }", none))[0].body).not.toMatch(/MANAGER_ROLES/)
+  })
+
+  it('a wrapper the scan cannot read with confidence still fails as unjudgeable', () => {
+    const bad = [
+      wrapped('{ ...opts }', 'return ok()'),
+      wrapped('OPTIONS', 'return ok()'),
+      wrapped('{ permission }', 'return ok()'),
+      wrapped("{ ['permission']: null }", 'return ok()'),
+      wrapped("{ permission: 'studio_management', location: false }", 'return ok()'),
+      wrapped('{ permission: KEY, location: false }', 'return ok()'),
+      wrapped('{ permission: null, location: WHERE }', 'return ok()'),
+      wrapped("{ permission: null, location: false, roles: ['owner'] }", 'return ok()'),
+      wrapped('{ permission: null, location: false, roles: OWNER_ROLES }', 'return ok()'),
+      wrapped('{ permission: null, location: false, allow: canEdit }', 'return ok()'),
+      wrapped('{ permission: null, location: true, allowWidgetToken: true }', 'return ok()'),
+      wrapped('{ permission: null, location: false, master: isMaster }', 'return ok()'),
+      wrapped('{ permission: null, location: false, extra: 1 }', 'return ok()'),
+      `${WRAP_IMPORTS}export const POST = withAuth({ permission: null, location: false }, handler)\n`,
+      `${WRAP_IMPORTS}export const POST = withAuth({ permission: null, location: false })\n`,
+      `${WRAP_IMPORTS}export const POST = withAuth({ permission: null, location: false }, async () => {}, extra)\n`,
+      // withAuth from somewhere else, renamed, or not imported at all.
+      "import { withAuth } from './my-wrapper'\nexport const POST = withAuth({ permission: null, location: false }, async () => {})\n",
+      "import { other as withAuth } from '@/lib/with-auth'\nexport const POST = withAuth({ permission: null, location: false }, async () => {})\n",
+      'export const POST = withAuth({ permission: null, location: false }, async () => {})\n',
+      // A role constant that is not the one from @/lib/schemas.
+      "import { withAuth } from '@/lib/with-auth'\nconst MANAGER_ROLES = ['staff']\nexport const POST = withAuth({ permission: null, location: false, roles: MANAGER_ROLES }, async () => {})\n",
+      `${WRAP_IMPORTS}export const POST = otherWrapper({ permission: null, location: false }, async () => {})\n`,
+    ]
+    for (const src of bad) {
+      expect([src, unjudgedExports(src)]).toEqual([src, ['POST']])
+      expect([src, handlers(src)]).toEqual([src, []])
+    }
+    expect(unjudgedExports(wrapped('{ permission: null, location: false }', 'return ok()'))).toEqual([])
   })
 
   it('handlers() splits a file per exported handler', () => {

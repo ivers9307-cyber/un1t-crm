@@ -20,7 +20,9 @@
 // studio is not an organisation admin.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertOrganizationAdmin } from '@/lib/auth'
+import { assertOrganizationAdmin } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { orgWhatsAppNumberCreateSchema } from '@/lib/schemas'
@@ -33,10 +35,8 @@ export const dynamic = 'force-dynamic'
 // Everything publicShape reads (the token and signup_meta stay server-side).
 const NUMBER_COLUMNS = 'id, organization_id, location_id, label, phone_number_id, business_account_id, app_id, display_phone, source, token_type, connected_via, is_active, access_token, signup_meta, created_at, updated_at'
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; assertOrganizationAdmin still decides.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, params }) => {
   const guard = assertOrganizationAdmin(user, params.id)
   if (guard) return guard
 
@@ -47,15 +47,15 @@ export async function GET(_request, props) {
     .eq('organization_id', params.id)
     .order('created_at', { ascending: true })
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('org-wa-numbers', 'list failed', { err: error, organizationId: params.id })
+    return NextResponse.json({ success: false, error: 'Could not load the numbers.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, numbers: (data || []).map(publicShape) })
-}
+})
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   const guard = assertOrganizationAdmin(user, params.id)
   if (guard) return guard
 
@@ -86,7 +86,8 @@ export async function POST(request, props) {
   if (error) {
     const dup = duplicateNumberMessage(error)
     if (dup) return NextResponse.json({ success: false, error: dup }, { status: 409 })
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('org-wa-numbers', 'insert failed', { err: error, organizationId: params.id })
+    return NextResponse.json({ success: false, error: 'Could not add the number.' }, { status: 500 })
   }
 
   // ORGCONTACTS.0: the route switches the number on at its home studio (mig
@@ -94,4 +95,4 @@ export async function POST(request, props) {
   const homeSwitchOn = await switchOnAtHome(db, { numberId: data.id, locationId: data.location_id, userId: user.id })
 
   return NextResponse.json({ success: true, number: publicShape(data), home_switch_on: homeSwitchOn })
-}
+})

@@ -11,7 +11,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 
-vi.mock('@/lib/auth', () => ({
+// ROUTEWRAP.R9 — the real module under the mocks (withAuth imports from it).
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: vi.fn(),
   // The real rule (src/lib/auth.js): master passes, an org_admin grant on that org passes.
   assertOrganizationAdmin: vi.fn((user, orgId) => {
@@ -221,6 +223,17 @@ describe('GET /api/organizations/[id]/whatsapp/numbers', () => {
 
   it('a database error is a 500, not an empty list', async () => {
     setup({ faults: { 'whatsapp_numbers:select': { message: 'boom' } } })
-    expect((await call(GET)).status).toBe(500)
+    const res = await call(GET)
+    expect(res.status).toBe(500)
+    // ROUTEWRAP.R9 — a fixed line, the database text logged only.
+    expect(await res.json()).toEqual({ success: false, error: 'Could not load the numbers.' })
+  })
+
+  it('signed out is withAuth\'s 401', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    setup()
+    const res = await call(GET)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
   })
 })

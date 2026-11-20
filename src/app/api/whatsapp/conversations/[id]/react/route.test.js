@@ -128,3 +128,26 @@ describe('POST /api/whatsapp/conversations/[id]/react — a failed thread-row in
     expect(sendReaction).not.toHaveBeenCalled()
   })
 })
+
+// ROUTEWRAP.R9 — on withAuth: signed out is its 401, and Meta's own error
+// text is logged, never answered.
+describe('POST /api/whatsapp/conversations/[id]/react — wrapper and Meta errors', () => {
+  it('signed out: 401 Unauthorized, nothing read or sent', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await post({ message_id: 'wamid.IN1', emoji: '👍' })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(sendReaction).not.toHaveBeenCalled()
+  })
+
+  it('a Meta failure: 502 with a fixed line, not Meta\'s text', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    createServerClient.mockReturnValue(stubDb())
+    sendReaction.mockRejectedValueOnce(new Error('(#131009) Parameter value is not valid for 15555550100'))
+    const res = await post({ message_id: 'wamid.IN1', emoji: '👍' })
+    expect(res.status).toBe(502)
+    expect(await res.json()).toEqual({ success: false, error: 'Meta reaction call failed' })
+    errSpy.mockRestore()
+  })
+})

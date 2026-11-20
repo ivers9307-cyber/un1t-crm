@@ -6,9 +6,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const state = {}
-vi.mock('@/lib/auth', async () => {
+// ROUTEWRAP.R9 — the real module under the mocks: withAuth needs userAtLocation.
+vi.mock('@/lib/auth', async (importOriginal) => {
   const { NextResponse } = await import('next/server')
   return {
+    ...(await importOriginal()),
     getCurrentUser: vi.fn(),
     assertLocationAccess: vi.fn(() => null),
     // The real rule (src/lib/auth.js): master passes, an org_admin grant on that org passes.
@@ -58,9 +60,9 @@ const put = (loc, body) => PUT(
   new Request(`http://x/api/locations/${loc}/whatsapp/blast-signoff`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   ctx(loc),
 )
-const manager = () => ({ id: 'u1', role: 'manager', profileRole: 'staff', rolesByLocation: { [HATCH]: 'manager' }, orgAdminOrgIds: [] })
-const orgAdmin = (orgId = ORG) => ({ id: 'u2', role: 'owner', profileRole: 'staff', rolesByLocation: { [HATCH]: 'owner' }, orgAdminOrgIds: [orgId] })
-const master = () => ({ id: 'u3', role: 'master', profileRole: 'master', isMaster: true, rolesByLocation: {}, orgAdminOrgIds: [] })
+const manager = () => ({ id: 'u1', role: 'manager', profileRole: 'staff', rolesByLocation: { [HATCH]: 'manager' }, orgAdminOrgIds: [], locations: [{ id: HATCH }] })
+const orgAdmin = (orgId = ORG) => ({ id: 'u2', role: 'owner', profileRole: 'staff', rolesByLocation: { [HATCH]: 'owner' }, orgAdminOrgIds: [orgId], locations: [{ id: HATCH }] })
+const master = () => ({ id: 'u3', role: 'master', profileRole: 'master', isMaster: true, rolesByLocation: {}, orgAdminOrgIds: [], locations: [{ id: HATCH }] })
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -127,6 +129,27 @@ describe('PUT /api/locations/[id]/whatsapp/blast-signoff', () => {
     getCurrentUser.mockResolvedValue(orgAdmin())
     expect((await put(HATCH, { until: '16/11/2026' })).status).toBe(400)
     expect((await put(HATCH, { until: '2026-02-30' })).status).toBe(400)
+    expect(state.writes).toEqual([])
+  })
+  // ROUTEWRAP.R9 — withAuth (location: 'param') answers before the body.
+  it('signed out is withAuth\'s 401; a caller not at the studio is 404; nothing written', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const out = await put(HATCH, { until: '2026-12-01' })
+    expect(out.status).toBe(401)
+    expect(await out.json()).toEqual({ success: false, error: 'Unauthorized' })
+    getCurrentUser.mockResolvedValue({ ...orgAdmin(), locations: [] })
+    const away = await put(HATCH, { until: '2026-12-01' })
+    expect(away.status).toBe(404)
+    expect(await away.json()).toEqual({ success: false, error: 'Not found' })
+    expect((await get(HATCH)).status).toBe(404)
+    expect(state.writes).toEqual([])
+  })
+  it('a failed studio read is a fixed 500 with no database text', async () => {
+    getCurrentUser.mockResolvedValue(orgAdmin())
+    state.fail = 'locations'
+    const res = await put(HATCH, { until: '2026-12-01' })
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not load the studio.' })
     expect(state.writes).toEqual([])
   })
   it('a studio that cannot be read is 404 for an org admin (never 500 with a hint)', async () => {

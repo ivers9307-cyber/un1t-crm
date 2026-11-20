@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
+import { withAuth } from '@/lib/with-auth'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { logError } from '@/lib/log'
@@ -27,10 +28,8 @@ const SAME_STUDIO = 'The conversation is already at this studio.'
 const WRONG_ORG = 'A conversation can only move to a studio in the same organisation.'
 const NO_NUMBER = (name) => `${name || 'That studio'} has no WhatsApp number switched on, so a conversation there could not be answered. Switch a number on at that studio first (Settings, WhatsApp).`
 
-async function load(props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return { res: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
+// withAuth has signed the caller in; the thread routes' gate runs here.
+async function load(user, params) {
   const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return { res: perm }
   const db = createServerClient()
@@ -51,8 +50,8 @@ async function load(props) {
   return { user, db, conversation, orgId: source?.organization_id || null }
 }
 
-export async function GET(request, props) {
-  const ctx = await load(props)
+export const GET = withAuth({ permission: null, location: false }, async ({ user: caller, params }) => {
+  const ctx = await load(caller, params)
   if (ctx.res) return ctx.res
   const { user, db, conversation, orgId } = ctx
   // The caller's studios: the field assertLocationAccessOr404 reads.
@@ -73,10 +72,10 @@ export async function GET(request, props) {
   }
   const targets = allowed.map((l) => ({ id: l.id, name: l.name, whatsapp: withNumber.has(l.id) }))
   return NextResponse.json({ success: true, data: { targets } })
-}
+})
 
-export async function POST(request, props) {
-  const ctx = await load(props)
+export const POST = withAuth({ permission: null, location: false }, async ({ user: caller, request, params }) => {
+  const ctx = await load(caller, params)
   if (ctx.res) return ctx.res
   const { user, db, conversation, orgId } = ctx
   const v = await validateBody(request, MoveSchema)
@@ -138,4 +137,4 @@ export async function POST(request, props) {
     logError('wa-move', 'studio_resolution write failed', { conversationId: movedId, err: e?.message })
   }
   return NextResponse.json({ success: true, data: { conversation_id: movedId, merged: !!data?.merged } })
-}
+})
