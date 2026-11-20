@@ -13,7 +13,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: () => null }))
 
 const { sendRaffleTicketsEmail } = await import('./raffle-email.js')
 
-function fakeDb() {
+function fakeDb(earlier = []) {
   const updates = []
   const db = {
     updates,
@@ -21,6 +21,10 @@ function fakeDb() {
       return {
         update(fields) {
           const q = { eq: () => q, then: (ok) => { updates.push({ table, fields }); return ok({ error: null }) } }
+          return q
+        },
+        select() {
+          const q = { eq: () => q, is: () => q, neq: () => q, limit: async () => ({ data: earlier, error: null }) }
           return q
         },
       }
@@ -47,9 +51,19 @@ describe('sendRaffleTicketsEmail', () => {
     expect(arg.to).toBe('sarah@example.test')
     expect(arg.tag).toBe('raffle-tickets')
     expect(arg.contactId).toBeNull()
-    expect(arg.htmlBody).toContain('#041–#043')
+    expect(arg.htmlBody).toContain('#041, #042, #043')
+    expect(arg.htmlBody).not.toContain('All your tickets')
     expect(arg.subject).toBe('Your raffle tickets for MS Ireland Charity Day')
     expect(db.updates).toEqual([{ table: 'raffle_sales', fields: { email_status: 'sent', email_sent_at: 'NOW' } }])
+  })
+
+  it('lists the buyer\'s earlier tickets in this raffle too, and the option used', async () => {
+    const db = fakeDb([{ id: 's0', first_ticket: 7, last_ticket: 8 }])
+    await sendRaffleTicketsEmail({ db, sale: { ...SALE, option_label: '3 for €10', total_cents: 1000 }, raffle: RAFFLE, race: RACE })
+    const html = sendTransactionalEmail.mock.calls[0][0].htmlBody
+    expect(html).toContain('All your tickets')
+    expect(html).toContain('#007, #008, #041, #042, #043 (5)')
+    expect(html).toContain('€10.00 (3 for €10)')
   })
 
   it('does not send when consent refuses, and stamps suppressed', async () => {
