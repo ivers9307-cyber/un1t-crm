@@ -40,8 +40,8 @@ afterEach(async () => { await db?.close() })
 
 describe('mig 755 seeds the watcher row', () => {
   it('under the name the route stamps, on the */5 cadence, born healthy', async () => {
-    expect(ROUTE).toMatch(/const HEARTBEAT = 'mia-purchase-intents'/)
-    expect(ROUTE).toMatch(/stampHeartbeat\(HEARTBEAT, counts\)/)
+    expect(ROUTE).toMatch(/defineCron\(\{ heartbeat: 'mia-purchase-intents' \}/)
+    expect(ROUTE).toMatch(/outcome: counts/)
     await runSql(MIG_755)
     expect(await row()).toMatchObject({
       expected_interval_seconds: 300, grace_seconds: 600,

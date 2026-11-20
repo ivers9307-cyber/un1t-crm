@@ -8,8 +8,8 @@
 // a member who is not a manager there).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { TemplateQualificationsPutSchema } from '@/lib/qualifications-schemas'
@@ -19,9 +19,9 @@ export const dynamic = 'force-dynamic'
 
 const FORBIDDEN = 'Only a manager at this studio can change what a shift template asks for.'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// GET: withAuth only signs the caller in; the query's studio is judged below
+// (400 malformed, 403 not a member, 403 not a manager there), as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const locationId = new URL(request.url).searchParams.get('location_id')
   if (!uuidLike.safeParse(locationId).success) {
     return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
@@ -31,18 +31,18 @@ export async function GET(request) {
   if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: FORBIDDEN }, { status: 403 })
   }
-  const out = await readTemplateRequirements(createServerClient(), { locationId })
+  const out = await readTemplateRequirements(db, { locationId })
   return NextResponse.json(out.body, { status: out.status })
-}
+})
 
-export async function PUT(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
-    return NextResponse.json({ success: false, error: FORBIDDEN }, { status: 403 })
-  }
-  const validation = await validateBody(request, TemplateQualificationsPutSchema)
-  if (!validation.ok) return validation.response
-  const out = await replaceTemplateRequirements(createServerClient(), { user, input: validation.data })
-  return NextResponse.json(out.body, { status: out.status })
-}
+// PUT: a manager somewhere (the same 403), then the body; the template's own
+// studio is judged on the row in qualifications-server, as before.
+export const PUT = withAuth(
+  { permission: null, location: false, allow: (user) => hasRoleAtAnyLocation(user, MANAGER_ROLES), forbiddenMessage: FORBIDDEN },
+  async ({ user, db, request }) => {
+    const validation = await validateBody(request, TemplateQualificationsPutSchema)
+    if (!validation.ok) return validation.response
+    const out = await replaceTemplateRequirements(db, { user, input: validation.data })
+    return NextResponse.json(out.body, { status: out.status })
+  },
+)

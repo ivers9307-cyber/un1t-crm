@@ -5,16 +5,17 @@
 // master can mutate (commit + rollback live elsewhere).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the listed studio (?location_id= or the
+// active one) is judged below, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   // ROLESWEEP.1c — coarse pre-check; the role is judged at the listed location below.
   if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
@@ -36,7 +37,6 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('contact_imports')
     .select('*, actor:profiles!contact_imports_actor_user_id_fkey(full_name, email)')
@@ -44,7 +44,8 @@ export async function GET(request) {
     .order('created_at', { ascending: false })
     .limit(100)
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('contact-imports', 'import list failed', { locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the imports.' }, { status: 500 })
   }
   return NextResponse.json({ success: true, data: data || [] })
-}
+})
