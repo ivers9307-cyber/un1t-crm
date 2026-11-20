@@ -12,8 +12,7 @@
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { isTvUploadPath, checkTvImage, TV_UPLOAD_KINDS } from '@/lib/tv-upload'
@@ -29,8 +28,9 @@ const TvUploadFinaliseSchema = z.object({
   path: z.string().min(1).max(500),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
+// withAuth only signs the caller in; the shared TV upload gate (coarse, then
+// at the TV's studio) runs here with its old statuses and words.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const coarse = tvUploadAnywhereGate(user)
   if (coarse) return coarse
 
@@ -46,7 +46,6 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'That is not an upload slot for this studio.' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const bucket = db.storage.from('tv-content')
   const slash = body.path.lastIndexOf('/')
   const folder = body.path.slice(0, slash)
@@ -54,7 +53,7 @@ export async function POST(request) {
   const { data: listed, error: listErr } = await bucket.list(folder, { search: name })
   if (listErr) {
     logWarn('tv-upload', 'stored image read failed', { error: listErr.message })
-    return NextResponse.json({ success: false, error: `Could not check the upload: ${listErr.message}` }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Could not check the upload. Try again.' }, { status: 500 })
   }
   const hit = (listed || []).find((o) => o?.name === name)
   if (!hit) {
@@ -73,4 +72,4 @@ export async function POST(request) {
   }
 
   return NextResponse.json({ success: true, path: body.path })
-}
+})

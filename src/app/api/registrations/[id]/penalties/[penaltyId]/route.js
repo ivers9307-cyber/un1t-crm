@@ -15,22 +15,22 @@
 // Manager+ at the race's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function DELETE(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; races somewhere, the registration's
+// studio (404), races there, the kind and the penalty's parent run here in
+// their old order.
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: reg, error: regErr } = await db
     .from('race_registrations')
     .select(`id, race_events ( id, location_id, kind )`)
@@ -73,8 +73,9 @@ export async function DELETE(_request, props) {
     .delete()
     .eq('id', params.penaltyId)
   if (delErr) {
-    return NextResponse.json({ success: false, error: delErr.message }, { status: 500 })
+    logError('races', 'penalty delete failed', { penaltyId: params.penaltyId, code: delErr.code ?? null, message: delErr.message })
+    return NextResponse.json({ success: false, error: 'Could not remove the penalty just now.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true })
-}
+})

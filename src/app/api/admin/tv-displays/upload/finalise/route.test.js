@@ -109,3 +109,23 @@ describe('POST /api/admin/tv-displays/upload/finalise', () => {
     expect(s.list).not.toHaveBeenCalled()
   })
 })
+
+describe('POST /api/admin/tv-displays/upload/finalise — ROUTEWRAP.R10', () => {
+  it('signed out: withAuth’s 401, Storage untouched', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const s = storageMock()
+    createServerClient.mockReturnValue(s.db)
+    const res = await POST(req(good))
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(s.list).not.toHaveBeenCalled()
+  })
+
+  it('a failed Storage read answers a fixed message, not the Storage text', async () => {
+    const s = storageMock({ listError: { message: 'bucket policy xyz' } })
+    createServerClient.mockReturnValue(s.db)
+    const res = await POST(req(good))
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('xyz')
+  })
+})

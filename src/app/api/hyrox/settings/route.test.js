@@ -93,3 +93,12 @@ describe('PUT /api/hyrox/settings', () => {
     })
   })
 })
+
+describe('PUT /api/hyrox/settings — signed out (ROUTEWRAP.R10)', () => {
+  it('answers withAuth’s 401', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await PUT(put({ house_style: 'Relays' }))
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+  })
+})

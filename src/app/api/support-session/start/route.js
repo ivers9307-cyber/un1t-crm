@@ -9,7 +9,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { headers } from 'next/headers'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { startSupportSession } from '@/lib/support-session'
 import { logAuditEvent } from '@/lib/audit'
 import { validateBody } from '@/lib/validate'
@@ -24,10 +25,9 @@ const Body = z.object({
   reason: z.string().max(500).nullable().optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
+// Impersonation: withAuth only signs the caller in. The real-master check,
+// the body and the session start run here in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request }) => {
   // The REAL underlying session must be a master. When already in a
   // support session (impersonating an owner) the visible `user` is the
   // owner — trust impersonatingFrom.masterId. This lets a master switch
@@ -75,6 +75,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, data: result })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e.message || 'Failed to start support session' }, { status: 500 })
+    logError('support-session', 'start failed', { organizationId: organization_id, mode, message: e?.message ?? String(e) })
+    return NextResponse.json({ success: false, error: 'Failed to start support session' }, { status: 500 })
   }
-}
+})

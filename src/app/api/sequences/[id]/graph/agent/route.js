@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { logError } from '@/lib/log'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { runFlowAgent } from '@/lib/sequences/agent/run'
 import { validateBody } from '@/lib/validate'
@@ -19,13 +20,11 @@ const AgentSchema = z.object({
 export const runtime = 'nodejs'
 export const maxDuration = 120 // up to a few opus calls in the self-correct loop
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the builder checks (somewhere, then at
+// the sequence's studio, 404 for another studio's) run here in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
-  const db = createServerClient()
   const { data: sequence } = await db.from('email_sequences')
     .select('location_id, name, trigger_type, trigger_config, status').eq('id', params.id).single()
   if (!sequence) return sequenceNotFound()
@@ -69,7 +68,10 @@ export async function POST(request, props) {
   if (result.name && isUntitled) update.name = result.name
 
   const { error } = await db.from('email_sequences').update(update).eq('id', params.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('sequences', 'flow agent draft save failed', { sequenceId: params.id, code: error.code ?? null, message: error.message })
+    return NextResponse.json({ success: false, error: 'Could not save the draft just now.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, graph: result.graph, validation: result.validation, name: update.name || sequence.name, exhausted: !!result.exhausted })
-}
+})

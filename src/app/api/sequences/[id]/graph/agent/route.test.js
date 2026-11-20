@@ -65,3 +65,13 @@ describe('POST /api/sequences/[id]/graph/agent', () => {
     expect(update).toHaveBeenCalled()
   })
 })
+
+describe('POST /api/sequences/[id]/graph/agent — signed out (ROUTEWRAP.R10)', () => {
+  it('answers withAuth’s 401 and runs nothing', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await POST(req(), { params: Promise.resolve({ id: ID }) })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(runFlowAgent).not.toHaveBeenCalled()
+  })
+})
