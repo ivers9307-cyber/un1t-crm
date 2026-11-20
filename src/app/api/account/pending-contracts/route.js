@@ -10,18 +10,15 @@
 // the caller's own pending contracts.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
+// Any signed-in person (permission: null, no studio): the read is their own.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   const { data, error } = await db
     .from('contracts')
     .select(`
@@ -33,7 +30,8 @@ export async function GET() {
     .order('issued_at', { ascending: false })
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('contracts', 'pending contracts read failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load your contracts.' }, { status: 500 })
   }
 
   return NextResponse.json({
@@ -48,4 +46,4 @@ export async function GET() {
       issuer: contractCountersignatureLabel(c),
     })),
   })
-}
+})

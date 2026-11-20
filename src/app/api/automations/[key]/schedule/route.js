@@ -6,21 +6,23 @@
 // the table fresh. class_climate, bathroom_climate and screen_mode use it.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request, { params }) {
-  const user = await getCurrentUser()
+// withAuth signs the caller in (a signed-out call now answers its 401); the
+// studio is the query's location_id, so the role checks stay here in order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   // ROLESWEEP.1a — coarse pre-check; the role is judged at the location below.
-  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const { key } = await params
+  const key = params?.key
   if (key !== 'class_climate' && key !== 'bathroom_climate' && key !== 'screen_mode') {
     return NextResponse.json({ success: false, error: 'not supported for this automation' }, { status: 400 })
   }
@@ -36,7 +38,6 @@ export async function GET(request, { params }) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const db = createServerClient()
   // From 30 min ago (so a class that just started still shows) forward.
   const sinceIso = new Date(Date.now() - 30 * 60_000).toISOString()
   const { data, error } = await db
@@ -47,11 +48,14 @@ export async function GET(request, { params }) {
     .is('cancelled_at', null)
     .order('starts_at', { ascending: true })
     .limit(50)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('automations', 'class schedule read failed', { locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the class schedule.' }, { status: 500 })
+  }
 
   return NextResponse.json({
     success: true,
     classes: data || [],
     last_synced: data?.[0]?.synced_at || null,
   })
-}
+})

@@ -4,27 +4,25 @@
 // don't need soft-delete semantics. Audit log records the removal.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function DELETE(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user || user.profileRole !== 'master') {
+// withAuth only signs the caller in (a signed-out call now answers its 401);
+// masters only (profiles.role), refused with the same 403 'Forbidden', here.
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  if (user.profileRole !== 'master') {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-
-  const db = createServerClient()
 
   // Read first so we can audit the removed row's CIDR / label.
   const { data: existing } = await db
     .from('location_trusted_ips')
     .select('id, location_id, ip_cidr, label')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (!existing) {
     return NextResponse.json({ success: false, error: 'Trusted IP not found' }, { status: 404 })
@@ -33,9 +31,10 @@ export async function DELETE(request, props) {
   const { error } = await db
     .from('location_trusted_ips')
     .delete()
-    .eq('id', params.id)
+    .eq('id', params?.id)
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('studio-pin', 'trusted IP delete failed', { err: error, id: existing.id })
+    return NextResponse.json({ success: false, error: 'Could not remove the trusted IP.' }, { status: 500 })
   }
 
   await logAuditEvent({
@@ -49,4 +48,4 @@ export async function DELETE(request, props) {
   })
 
   return NextResponse.json({ success: true })
-}
+})
