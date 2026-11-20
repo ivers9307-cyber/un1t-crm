@@ -3,20 +3,18 @@
 // publish cron does at class time, but on demand. Only approved/published
 // sessions can go on the wall. 404-not-403 detail-route posture.
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { resolveHyroxDisplayIds } from '@/lib/hyrox/publish'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, { params }) {
-  const { id } = await params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
+// withAuth only signs the caller in: the permission is judged at the
+// session's studio below, a refusal a 404, as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const id = params?.id
   const { data: session } = await db.from('hyrox_sessions')
     .select('id, location_id, status')
     .eq('id', id)
@@ -48,7 +46,10 @@ export async function POST(_request, { params }) {
     triggered_by: `manual:${user.id}`,
   }))
   const { error } = await db.from('tv_content').upsert(rows, { onConflict: 'tv_display_id' })
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('hyrox', 'tv push failed', { sessionId: session.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not push the board to the TV.' }, { status: 400 })
+  }
 
   return NextResponse.json({ success: true, data: { pushed: targetIds.length } })
-}
+})

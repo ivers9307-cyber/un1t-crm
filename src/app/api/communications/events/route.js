@@ -10,22 +10,18 @@
 // Returns: { success, data: [{ id, name, kind, race_date, registration_count }] }
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+// The role at the ACTIVE studio (withAuth's roles, the same includes(user.role)
+// check as before) with the same 403 text; no active studio answers the empty
+// list below rather than withAuth's 400, as before.
+export const GET = withAuth({ permission: null, location: false, roles: MANAGER_ROLES, forbiddenMessage: 'Manager+ required' }, async ({ user, db }) => {
   const activeLocationId = user.activeLocation?.id || null
   // A master with no active location can't scope the list — mirror
   // /api/segments and return empty rather than aggregate every tenant's
@@ -40,7 +36,10 @@ export async function GET() {
     .order('race_date', { ascending: false })
     .limit(200)
     .eq('location_id', activeLocationId)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('communications', 'events list failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the events.' }, { status: 400 })
+  }
 
   const data = await Promise.all((events || []).map(async (ev) => {
     const { count } = await db
@@ -52,4 +51,4 @@ export async function GET() {
   }))
 
   return NextResponse.json({ success: true, data })
-}
+})
