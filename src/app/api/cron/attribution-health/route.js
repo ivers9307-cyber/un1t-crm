@@ -8,32 +8,37 @@
 //
 // ?dry=1 decides everything and sends nothing; ?weekly=1 forces the weekly
 // section on a non-Sunday (manual probe after a fix).
+//
+// defineCron owns the CRON_SECRET check and the heartbeat stamp. Heartbeat
+// only on a clean, real run: a half-failed sweep should read as stale rather
+// than quietly healthy, and a dry run is a manual probe. Both still answer
+// 200, as they always did, through the wrapper's no-stamp path (ok: false,
+// so `success` is false).
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { runAttributionHealthSweep } from '@/lib/hr-attribution-sweep'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 export async function POST(request) { return GET(request) }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+/** The sweep's own error text stays in its log line (hr-attribution-sweep.js). */
+function redactSection(section, fixed) {
+  return section && section.error !== undefined ? { ...section, error: fixed } : section
+}
 
+export const GET = defineCron({ heartbeat: 'attribution-health' }, async ({ db, request }) => {
   const url = new URL(request.url)
   const dry = url.searchParams.get('dry') === '1'
   const forceWeekly = url.searchParams.get('weekly') === '1'
 
-  const result = await runAttributionHealthSweep({ db: createServerClient(), dry, forceWeekly })
+  const raw = await runAttributionHealthSweep({ db, dry, forceWeekly })
+  const result = { ...raw }
+  if ('daily' in raw) result.daily = redactSection(raw.daily, 'daily canary failed')
+  if ('weekly' in raw) result.weekly = redactSection(raw.weekly, 'weekly report failed')
 
-  // Heartbeat only on a clean, real run — a half-failed sweep should read as
-  // stale rather than quietly healthy, and a dry run is a manual probe.
-  if (result.ok && !dry) await stampHeartbeat('attribution-health')
-
-  return NextResponse.json({ success: result.ok, ...result })
-}
+  if (!result.ok || dry) return { ok: false, status: 200, body: result }
+  return { body: result }
+})

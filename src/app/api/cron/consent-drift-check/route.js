@@ -18,8 +18,10 @@
 // It reports rather than repairs: an automatic fix would paper over a live
 // write-path bug and make the next one just as invisible as this one was.
 //
-// Bearer CRON_SECRET. Heartbeat on a clean run only, so a query failure
-// surfaces as staleness rather than a silent green.
+// defineCron owns the CRON_SECRET check and the heartbeat stamp. Heartbeat on
+// a clean run only, so a query failure surfaces as staleness rather than a
+// silent green. Drift FOUND is a clean run (the check looked); only a check
+// that could not look answers 500, with fixed text (the detail is logged).
 
 // PMSUPP.1 — this cron now also reconciles our database against POSTMARK's
 // own suppression list for the marketing stream, in BOTH directions. Read
@@ -38,9 +40,7 @@
 // server (every org today) the plan is the global server alone, unscoped —
 // byte-for-byte the pre-W1.E4 queries.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { MARKETING_STREAM } from '@/lib/postmark'
 import { listPostmarkSuppressions, suppressAtPostmark } from '@/lib/postmark-suppressions'
 import { listLiveTenantServers } from '@/lib/postmark-server-for-location'
@@ -49,6 +49,7 @@ import { CONSENT_SOURCE_CATEGORIES, sourcesInCategory } from '@/lib/consent-sour
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 // CLAUDE.md — every .select() returns at most 1,000 rows regardless of
 // .limit(), so both reads below .range()-paginate under an explicit .order().
@@ -440,18 +441,16 @@ export async function reconcilePostmarkSuppressions(db, { stream = MARKETING_STR
   }
 }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+/** The fixed line a failed server pass carries out of the route; the detail is logged. */
+export const RECONCILE_FAILED = 'Postmark reconciliation failed'
 
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'consent-drift-check' }, async ({ db }) => {
   const { rows, error } = await findConsentDrift(db)
 
   if (error) {
     // No heartbeat — a failed check must go stale, not report success.
-    return NextResponse.json({ success: false, error }, { status: 500 })
+    // findConsentDrift has logged the detail.
+    return { ok: false, body: { error: 'Consent drift query failed' } }
   }
 
   if (rows.length > 0) {
@@ -471,35 +470,40 @@ export async function GET(request) {
   // loudly here costs nobody their opt-out.
   const { servers, error: planError } = await planPostmarkServers(db)
   if (planError) {
-    return NextResponse.json(
-      { success: false, error: planError, data: { drift: rows.length, contacts: rows } },
-      { status: 500 },
-    )
+    console.error(`[consent-drift-check] Postmark server plan failed: ${planError}`)
+    return {
+      ok: false,
+      body: { error: 'Could not plan the Postmark servers', data: { drift: rows.length, contacts: rows } },
+    }
   }
 
   const results = []
   for (const server of servers) {
     const result = await reconcilePostmarkSuppressions(db, { serverToken: server.serverToken, locationIds: server.locationIds })
-    // The token never leaves this handler: label + org id only.
-    results.push({ server: server.label, organization_id: server.organizationId, ...result })
     if (result.error) {
       console.error(`[consent-drift-check] Postmark reconciliation failed on ${server.label}: ${result.error}`)
     }
+    // The token never leaves this handler: label + org id only. Nor does the
+    // raw error text: a failed pass carries the fixed line.
+    results.push({
+      server: server.label,
+      organization_id: server.organizationId,
+      ...result,
+      error: result.error ? RECONCILE_FAILED : result.error,
+    })
   }
   const postmark = results[0]
   const tenants = results.slice(1)
   const failed = results.filter(r => r.error)
   if (failed.length > 0) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: failed.map(r => `${r.server}: ${r.error}`).join('; '),
+    return {
+      ok: false,
+      body: {
+        error: `${RECONCILE_FAILED}: ${failed.map(r => r.server).join(', ')}`,
         data: { drift: rows.length, contacts: rows, postmark, tenants },
       },
-      { status: 500 },
-    )
+    }
   }
 
-  await stampHeartbeat('consent-drift-check')
-  return NextResponse.json({ success: true, data: { drift: rows.length, contacts: rows, postmark, tenants } })
-}
+  return { body: { data: { drift: rows.length, contacts: rows, postmark, tenants } } }
+})

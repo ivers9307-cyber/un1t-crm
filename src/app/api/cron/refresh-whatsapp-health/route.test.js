@@ -6,12 +6,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const updates = []
 let numbers = []
 let updateError = null
+let selectError = null
 function makeBuilder(table) {
   const state = {}
   const b = {}
   for (const m of ['select', 'eq']) b[m] = () => b
   b.update = (patch) => { state.patch = patch; updates.push({ table, patch }); return b }
-  b.then = (res, rej) => Promise.resolve(state.patch ? { data: null, error: updateError } : { data: numbers, error: null }).then(res, rej)
+  b.then = (res, rej) => Promise.resolve(state.patch ? { data: null, error: updateError } : (selectError ? { data: null, error: selectError } : { data: numbers, error: null })).then(res, rej)
   return b
 }
 const fakeDb = { from: (t) => makeBuilder(t) }
@@ -36,6 +37,7 @@ const { sendPushToRolesAtLocation } = await import('@/lib/push')
 const { fetchNumberHealth } = await import('@/lib/whatsapp-number-health')
 const { pauseLocationDrips, studiosForNumbers } = await import('@/lib/whatsapp-number-events')
 const { logWarn, logError } = await import('@/lib/log')
+const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
 
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
 const NUMBER = { id: 'n1', location_id: 'loc-1', label: 'Studio line', access_token: 'tok', phone_number_id: 'pn1', quality_rating: 'GREEN', messaging_limit_tier: null, token_invalid_at: null }
@@ -45,8 +47,37 @@ beforeEach(() => {
   vi.clearAllMocks()
   updates.length = 0
   updateError = null
+  selectError = null
   numbers = [NUMBER]
   fetchNumberHealth.mockResolvedValue({ quality_rating: 'YELLOW', messaging_limit_tier: 'TIER_250', name_status: 'APPROVED', limit_error: null })
+})
+
+describe('refresh-whatsapp-health — on defineCron', () => {
+  it('refuses without the secret, reading nothing and stamping nothing', async () => {
+    const res = await GET({ headers: { get: () => 'Bearer wrong' } })
+    expect(res.status).toBe(401)
+    expect(fetchNumberHealth).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('stamps the heartbeat at the end of a run', async () => {
+    sendPushToRolesAtLocation.mockResolvedValue({ sent: 1, skipped: 0, invalidated: 0, failed: 0 })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, ok: true, checked: 1 })
+    expect(stampHeartbeat).toHaveBeenCalledWith('refresh-whatsapp-health')
+  })
+
+  it('an unread number list fails the run: 500, a fixed line, no stamp (ROUTEWRAP.C2)', async () => {
+    selectError = { message: 'relation secret_z does not exist' }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, error: 'Could not read the WhatsApp numbers' })
+    expect(JSON.stringify(body)).not.toContain('secret_z')
+    expect(fetchNumberHealth).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
 })
 
 // WA-LIMIT.1 — Meta deprecated the field the limit was read from. "Meta did

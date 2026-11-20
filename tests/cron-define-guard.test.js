@@ -12,12 +12,11 @@ import { stripComments } from './helpers/js-code.js'
 const ROOT = path.resolve(import.meta.dirname, '../src/app/api/cron')
 const LEGACY = new Set([
   'ac-auto-off', 'ac-external-rule', 'ad-insights-backfill', 'ad-insights-sync', 'ad-report-email',
-  'agent-followups', 'app-usage-rollup', 'attribution-health', 'auto-end-stale-hr-sessions',
+  'agent-followups', 'auto-end-stale-hr-sessions',
   'checklist-sweep', 'churn-radar-digest', 'churn-radar-snapshot',
-  'class-fees', 'connection-health', 'consent-drift-check',
+  'class-fees',
   'contact-studios-reconcile', 'contract-reminders', 'credit-attendance',
   'equipment-inspection-reminder', 'equipment-inspection-sweep', 'event-reminders',
-  'fleet-health',
   'glofox-arrears-reconcile', 'glofox-attendance-history', 'glofox-attendance-refresh',
   'glofox-data-quality', 'glofox-detail-backfill', 'glofox-sync', 'health-check',
   'instagram-feed-sync', 'instagram-token-refresh',
@@ -26,11 +25,11 @@ const LEGACY = new Set([
   'poll-imap-mailboxes', 'process-class-bookings', 'process-contact-imports',
   'process-invoice-analysis', 'process-postmark-webhooks', 'process-receipt-hunts',
   'process-trial-purchases', 'race-timing-events', 'receipt-coverage-weekly',
-  'refresh-whatsapp-health', 'repeat-bounce-sweep', 'revolut-reconcile', 'run-campaigns',
+  'repeat-bounce-sweep', 'revolut-reconcile', 'run-campaigns',
   'run-challenge-events', 'run-scheduled-reports', 'run-sequences', 'run-strava-exports',
   'run-whatsapp-broadcasts', 'send-class-booking-reminders', 'send-host-campaigns',
   'send-push-reminders', 'shelly-reconcile', 'stripe-connect-apple-pay-domains',
-  'sync-class-occurrences', 'un1t-online-sync', 'usage-rollup',
+  'sync-class-occurrences', 'un1t-online-sync',
   'wallet-monthly-reset', 'wallet-overage-draws', 'webhook-replay', 'zoom-contact-sync',
 ])
 

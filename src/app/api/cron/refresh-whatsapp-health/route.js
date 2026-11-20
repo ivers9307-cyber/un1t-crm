@@ -27,9 +27,10 @@
 // is logged at error level (logError 'wa-health') and counted in
 // `alert_failed`, and `alerted` now counts only alerts that reached someone.
 // The protective action (the drip auto-pause) never depended on the push.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+//
+// defineCron owns the CRON_SECRET check and the heartbeat stamp; every run
+// that reaches the end stamps (a per-number failure is counted in `errors`).
+import { defineCron } from '@/lib/define-cron'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { pushOutcome } from '@/lib/push-outcome'
 import { logWarn, logError } from '@/lib/log'
@@ -86,16 +87,16 @@ async function writeNumberState(db, id, patch) {
   if (error) logWarn('wa-health', 'health state write failed', { number_id: id, err: error.message })
 }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
-  const { data: numbers } = await db.from('whatsapp_numbers')
+export const GET = defineCron({ heartbeat: 'refresh-whatsapp-health' }, async ({ db }) => {
+  const { data: numbers, error: numbersErr } = await db.from('whatsapp_numbers')
     .select('id, location_id, label, access_token, phone_number_id, quality_rating, messaging_limit_tier, token_invalid_at')
     .eq('is_active', true)
+  // ROUTEWRAP.C2 — an unread number list is a run that checked nothing: do not
+  // stamp it as healthy (it used to loop over nothing and stamp).
+  if (numbersErr) {
+    logError('wa-health', 'whatsapp_numbers read failed', { err: numbersErr.message })
+    return { ok: false, body: { error: 'Could not read the WhatsApp numbers' } }
+  }
 
   let checked = 0, alerted = 0, alertFailed = 0, errors = 0, pausedDrips = 0, limitUnknown = 0
   const tally = (outcome) => {
@@ -215,6 +216,5 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('refresh-whatsapp-health').catch(() => {})
-  return NextResponse.json({ ok: true, checked, alerted, alert_failed: alertFailed, errors, pausedDrips, limit_unknown: limitUnknown })
-}
+  return { body: { ok: true, checked, alerted, alert_failed: alertFailed, errors, pausedDrips, limit_unknown: limitUnknown } }
+})

@@ -6,24 +6,18 @@
 // last_error); a renewed token (the weekly instagram-token-refresh cron
 // does the actual rolling) recovers rows this sweep flagged back to
 // 'connected'. Feeds the upcoming Integrations hub — no user-visible
-// surface reads these columns yet. Bearer CRON_SECRET. Heartbeat on a
-// clean run only (a persist failure must surface as staleness).
+// surface reads these columns yet. defineCron owns the CRON_SECRET check
+// and the heartbeat stamp. Heartbeat on a clean run only (a persist failure
+// must surface as staleness; that run still answers 200 with the counts).
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { decideConnectionHealth } from '@/lib/connection-health'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'connection-health' }, async ({ db }) => {
   const { data: conns, error } = await db
     .from('channel_connections')
     .select('id, status, last_error, token_expires_at')
@@ -33,7 +27,7 @@ export async function GET(request) {
     .neq('platform', 'un1t_online')
   if (error) {
     console.error('[connection-health] fetch failed:', error.message)
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    return { ok: false, body: { error: 'Could not read connections' } }
   }
 
   let updated = 0
@@ -50,6 +44,8 @@ export async function GET(request) {
     updated += 1
   }
 
-  if (failed === 0) await stampHeartbeat('connection-health', { checked: (conns || []).length, updated })
-  return NextResponse.json({ success: true, checked: (conns || []).length, updated, failed })
-}
+  const checked = (conns || []).length
+  // A persist failure skips the stamp but answers 200, as it always has.
+  if (failed > 0) return { ok: false, status: 200, body: { checked, updated, failed } }
+  return { body: { checked, updated, failed }, outcome: { checked, updated } }
+})

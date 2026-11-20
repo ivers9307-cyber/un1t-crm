@@ -8,39 +8,31 @@
 // when the whole run succeeded; a failed read or write answers 500 and
 // leaves the previous totals in place.
 //
-// CRON_SECRET bearer auth, same as every other cron.
+// defineCron owns the CRON_SECRET check and the heartbeat stamp.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { logError } from '@/lib/log'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { getLocationZones } from '@/lib/location-time'
 import { runUsageRollup } from '@/lib/app-usage/rollup'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 export const HEARTBEAT_NAME = 'app-usage-rollup'
 
 export async function POST(request) { return GET(request) }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: HEARTBEAT_NAME }, async ({ db }) => {
   const nowMs = Date.now()
   try {
     const result = await runUsageRollup(db, {
       nowMs,
       getZones: (ids) => getLocationZones(db, ids, { nowMs }),
     })
-    await stampHeartbeat(HEARTBEAT_NAME, result)
-    return NextResponse.json({ ok: true, ...result })
+    return { body: { ok: true, ...result }, outcome: result }
   } catch (err) {
     logError('cron-app-usage-rollup', 'rollup failed', { message: err?.message || String(err) })
-    return NextResponse.json({ ok: false, error: 'Rollup failed' }, { status: 500 })
+    return { ok: false, body: { ok: false, error: 'Rollup failed' } }
   }
-}
+})

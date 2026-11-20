@@ -47,11 +47,13 @@
 // SHIPS DARK. With TAILSCALE_OAUTH_* unset the route no-ops and still stamps
 // its heartbeat, so merging changes nothing until it is configured.
 //
+// defineCron owns the CRON_SECRET check and the heartbeat stamp. The three
+// skipped-tick paths (Tailscale unreachable, register failed, zones
+// unreadable) answer 200 with success: false and do not stamp, as before.
+//
 // Spec: docs/superpowers/specs/2026-08-02-fleet-health-alerting-design.md
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { sendEmail } from '@/lib/postmark'
 import { sendPush } from '@/lib/push'
@@ -75,16 +77,11 @@ import {
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 export async function POST(request) { return GET(request) }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization')
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'fleet-health' }, async ({ db }) => {
 
   // SCREENMODE.10 — the Android TV screens, graded on their plan-fetch
   // heartbeat. They are not on the tailnet, so this runs FIRST and
@@ -101,8 +98,10 @@ export async function GET(request) {
   // Dormant until configured. The heartbeat still stamps, so cron_health
   // does not report this as stale merely for being unconfigured.
   if (!tailscaleConfigured()) {
-    await stampHeartbeat('fleet-health', { configured: false, ...screenCounts })
-    return NextResponse.json({ success: true, data: { configured: false, checked: 0, ...screenCounts } })
+    return {
+      body: { data: { configured: false, checked: 0, ...screenCounts } },
+      outcome: { configured: false, ...screenCounts },
+    }
   }
 
   let devices
@@ -114,7 +113,7 @@ export async function GET(request) {
     // cry-wolf behaviour that gets alerting muted. Skip the heartbeat too, so
     // a persistently broken integration surfaces as a stale cron.
     logError('fleet-health', 'tailscale api unreachable', { err: String(err) })
-    return NextResponse.json({ success: false, error: 'tailscale_unreachable', ...screenCounts }, { status: 200 })
+    return { ok: false, status: 200, body: { error: 'tailscale_unreachable', ...screenCounts } }
   }
 
   const fleet = devices.filter(isFleetDevice)
@@ -123,8 +122,10 @@ export async function GET(request) {
     // wrong tailnet than six simultaneously destroyed Pis. Say so rather than
     // alerting.
     logWarn('fleet-health', 'no devices carry the fleet tag', { seen: devices.length })
-    await stampHeartbeat('fleet-health', { configured: true, checked: 0, tagged: 0, ...screenCounts })
-    return NextResponse.json({ success: true, data: { checked: 0, tagged: 0, ...screenCounts } })
+    return {
+      body: { data: { checked: 0, tagged: 0, ...screenCounts } },
+      outcome: { configured: true, checked: 0, tagged: 0, ...screenCounts },
+    }
   }
 
   // Bridges keyed by the Tailscale device they run on — see
@@ -175,7 +176,7 @@ export async function GET(request) {
       // Without the parent rows the health upsert would fail the FK for every
       // device, so stop rather than press on and lose the whole tick's state.
       logError('fleet-health', 'failed to register devices', { err: regError })
-      return NextResponse.json({ success: false, error: 'register_failed' }, { status: 200 })
+      return { ok: false, status: 200, body: { error: 'register_failed' } }
     }
   }
 
@@ -208,7 +209,7 @@ export async function GET(request) {
     zoneByLocation = await getLocationZones(db, names.map(deviceLocationId))
   } catch (err) {
     logError('fleet-health', 'location zones unreadable; tick skipped', { err })
-    return NextResponse.json({ success: false, error: 'zone_read_failed' }, { status: 200 })
+    return { ok: false, status: 200, body: { error: 'zone_read_failed' } }
   }
 
   // BRIDGE-BLIND.1 — what is happening in each bridge's room right now.
@@ -306,20 +307,18 @@ export async function GET(request) {
   // retention visible in the codebase, where a reviewer will see it.
   const pruned = await pruneScreenshots(db)
 
-  await stampHeartbeat('fleet-health', {
-    configured: true,
-    checked: rows.length,
-    alerted: alerts.length,
-    expired,
-    pruned,
-    ...screenCounts,
-  })
-
-  return NextResponse.json({
-    success: true,
-    data: { checked: rows.length, alerted: alerts.length, expired, pruned, ...screenCounts },
-  })
-}
+  return {
+    body: { data: { checked: rows.length, alerted: alerts.length, expired, pruned, ...screenCounts } },
+    outcome: {
+      configured: true,
+      checked: rows.length,
+      alerted: alerts.length,
+      expired,
+      pruned,
+      ...screenCounts,
+    },
+  }
+})
 
 /**
  * BRIDGE-BLIND.1 — is a class running at this location, and has any heart-rate
