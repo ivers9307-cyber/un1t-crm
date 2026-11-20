@@ -14,7 +14,7 @@ import { resolveEventEmail } from '@/lib/event-email'
 import { resolveEventCommsLocation } from '@/lib/event-comms-location'
 import { checkTransactionalConsent } from '@/lib/transactional-consent'
 import { sendTransactionalEmail } from '@/lib/postmark'
-import { formatTicketRange, formatEuros } from '@/lib/raffle'
+import { formatTicketRange, formatEuros } from '@/lib/raffle-format'
 import { logError } from '@/lib/log'
 
 function escapeHtml(s) {

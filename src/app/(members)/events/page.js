@@ -301,6 +301,15 @@ export default async function EventsIndexPage(props) {
                               Donations
                             </Link>
                           )}
+                          {r.charity_enabled && (
+                            <Link
+                              href={`/events/${r.id}/raffle`}
+                              className="text-[11px] text-un1t-subtle hover:text-un1t-text"
+                              title="Sell raffle tickets and run the draw"
+                            >
+                              Raffle
+                            </Link>
+                          )}
                           {/* Race-day control panel is race-only —
                               there's no equivalent for workshop /
                               seminar etc. (no live timing). E7 hides
@@ -420,6 +429,14 @@ export default async function EventsIndexPage(props) {
                         className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"
                       >
                         Donations
+                      </Link>
+                    )}
+                    {r.charity_enabled && (
+                      <Link
+                        href={`/events/${r.id}/raffle`}
+                        className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"
+                      >
+                        Raffle
                       </Link>
                     )}
                     <Link

@@ -29,27 +29,7 @@ const EVENT_COLS = 'id, name, location_id, host_id, sending_location_id, accent_
 const PAGE = 1000
 const MAX_ROWS = 10000
 
-/** `#007`; numbers past three digits are shown in full. */
-export function formatTicketNumber(n) {
-  return `#${String(Number(n)).padStart(3, '0')}`
-}
-
-/** `#041` for one ticket, `#041–#043` for a run. */
-export function formatTicketRange(first, last) {
-  return Number(first) === Number(last)
-    ? formatTicketNumber(first)
-    : `${formatTicketNumber(first)}–${formatTicketNumber(last)}`
-}
-
-/** €15.00 */
-export function formatEuros(cents, currency = 'EUR') {
-  const amount = (Number(cents) || 0) / 100
-  try {
-    return new Intl.NumberFormat('en-IE', { style: 'currency', currency }).format(amount)
-  } catch {
-    return `€${amount.toFixed(2)}`
-  }
-}
+export { formatTicketNumber, formatTicketRange, formatEuros } from './raffle-format'
 
 /**
  * The last nine digits of a phone search, so `+353 87 123 4567`,
