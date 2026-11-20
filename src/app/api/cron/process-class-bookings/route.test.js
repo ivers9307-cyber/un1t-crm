@@ -183,3 +183,43 @@ describe('GET /api/cron/process-class-bookings — a just-queued row is left to 
     expect(before - cutoff).toBeLessThanOrEqual(31_000)
   })
 })
+
+// ROUTEWRAP.C7 — the job runs inside defineCron: the wrapper owns the secret
+// check, the error boundary and the stamp.
+describe('GET /api/cron/process-class-bookings — defineCron', () => {
+  it('refuses a caller without the cron secret: nothing read, nothing stamped', async () => {
+    const from = vi.spyOn(fakeDb, 'from')
+    for (const auth of [null, 'Bearer nope']) expect((await GET(req(auth))).status).toBe(401)
+    expect(from).not.toHaveBeenCalled()
+    expect(claimAndProcessBookingJob).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+    from.mockRestore()
+  })
+
+  it('a clean tick stamps exactly its own row, once', async () => {
+    queueResult = { data: [ROW], error: null }
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, processed: 1, booked: 1 })
+    expect(stampHeartbeat.mock.calls.map(([n]) => n)).toEqual(['process-class-bookings'])
+  })
+
+  it('a failed queue read answers a fixed line with no database text', async () => {
+    queueResult = { data: null, error: { message: 'permission denied for table class_booking_requests' } }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, error: 'Could not read the booking queue' })
+    expect(JSON.stringify(body)).not.toContain('permission denied')
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a throw mid-run answers the wrapper fixed 500 and stamps nothing', async () => {
+    queueResult = { data: [ROW], error: null }
+    claimAndProcessBookingJob.mockRejectedValueOnce(new Error('socket hang up at db.internal'))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Cron run failed' })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+})

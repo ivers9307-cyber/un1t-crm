@@ -21,26 +21,18 @@
 // isn't auto-retried — operator picks it up via the import history
 // page where the status reads 'failed' with the error_message.
 //
-// Auth: same bearer-token pattern as other crons — pg_cron sets
-// the Authorization header to Bearer <CRON_SECRET>.
+// Auth, the error boundary and the heartbeat: defineCron (pg_cron sends the
+// bearer token). Stamped only on a tick with no fault of its own.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { claimAndProcessImportJob, STUCK_AFTER_MINUTES } from '@/lib/contact-import-queue'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300 // 5 min — biggest 50k batch fits
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'process-contact-imports' }, async ({ db }) => {
   const stats = { processed: 0, recovered: 0, failed: 0, skipped: 0, skipped_no_work: 0, recover_failed: 0 }
 
   // 1. Stuck-job recovery — reset anything in 'processing' for too
@@ -83,14 +75,13 @@ export async function GET(request) {
     // CRONREADERR.1 — a failed read is not "no work". Nothing is claimed; the
     // job stays pending for the next tick and for the QStash worker.
     logError('cron-process-contact-imports', 'pending-job read failed; nothing claimed, heartbeat not stamped', { err: pendingErr })
-    return NextResponse.json({ success: false, error: 'Could not read the import queue', data: stats }, { status: 500 })
+    return { ok: false, body: { error: 'Could not read the import queue', data: stats } }
   }
 
   const job = (pending || [])[0]
   if (!job) {
     stats.skipped_no_work = 1
-    await stampIfClean(stats)
-    return NextResponse.json({ success: true, data: stats })
+    return clean(stats)
   }
 
   const outcome = await claimAndProcessImportJob(db, job)
@@ -98,7 +89,7 @@ export async function GET(request) {
     // Shouldn't happen — fail loudly so we notice (row already
     // stamped 'failed' by the shared lib).
     stats.failed = 1
-    return NextResponse.json({ success: false, error: 'Job missing payload', data: stats }, { status: 500 })
+    return { ok: false, body: { error: 'Job missing payload', data: stats } }
   }
   if (outcome.status === 'processed') {
     stats.processed = 1
@@ -108,12 +99,11 @@ export async function GET(request) {
     stats.skipped = 1 // lost the claim race to the QStash worker
   }
 
-  await stampIfClean(stats)
-  return NextResponse.json({ success: true, data: stats })
-}
+  return clean(stats)
+})
 
-// Stamped only on a tick with no fault of its own (CLAUDE.md, cron heartbeats).
-async function stampIfClean(stats) {
-  if (stats.recover_failed) return
-  await stampHeartbeat('process-contact-imports', stats).catch(() => {})
+// Stamped only on a tick with no fault of its own (CLAUDE.md, cron heartbeats):
+// a failed stuck-job reset still answers success but leaves the row alone.
+function clean(stats) {
+  return { body: { data: stats }, outcome: stats, stamp: !stats.recover_failed }
 }

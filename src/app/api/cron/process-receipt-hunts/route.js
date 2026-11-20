@@ -34,18 +34,18 @@
 //      check-then-act (not race-proof) — this cron is its single
 //      caller. Worst case with QStash draining the queue between
 //      ticks, the weekly report waits ≤5 min for the next tick here.
-//   4. Stamp THIS cron's own liveness heartbeat every healthy tick —
+//   4. Stamp THIS cron's own liveness heartbeat every healthy tick (by
+//      defineCron; a failed batch claim answers 500 and stamps nothing) —
 //      distinct from the weekly heartbeat, which the finalizer owns
 //      (see receipt-coverage-weekly/route.js's file-header comment).
 //      The worker stamps neither.
 //
 // BATCH is small (hunts do IMAP round-trips + an LLM call per
 // candidate) so a worst-case tick stays well under the 300s function cap.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { huntLine } from '@/lib/recon/hunt'
 import { maybeFinalizeWeekly } from '@/lib/recon/finalize'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -53,18 +53,11 @@ export const maxDuration = 300
 
 const BATCH = 3
 
-export async function GET(request) {
-  // Fail-closed: no secret configured → reject (SEC-P0.3 pattern).
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
-
+export const GET = defineCron({ heartbeat: 'process-receipt-hunts' }, async ({ db }) => {
   const { data: claimed, error: claimErr } = await db.rpc('claim_recon_hunt_batch', { p_limit: BATCH })
   if (claimErr) {
-    return NextResponse.json({ success: false, error: `claim: ${claimErr.message}` }, { status: 500 })
+    logError('process-receipt-hunts', 'hunt batch claim failed; nothing hunted, heartbeat not stamped', { err: claimErr })
+    return { ok: false, body: { error: 'Could not claim the hunt batch' } }
   }
   const rows = claimed || []
 
@@ -79,22 +72,21 @@ export async function GET(request) {
     else failed++
   }
 
+  // The WEEKLY heartbeat belongs to the finalizer, which stamps it inside
+  // src/lib/recon/finalize.js (only when the source cron run was clean AND the
+  // report email sent). This cron's own liveness row is stamped by defineCron.
   const fin = await maybeFinalizeWeekly(db)
 
-  // This cron's own liveness — the WEEKLY heartbeat belongs to the
-  // finalizer (stamped only when the source cron run was clean AND the
-  // report email sent).
-  await stampHeartbeat('process-receipt-hunts').catch(() => {})
-
-  return NextResponse.json({
-    success: true,
-    data: {
-      claimed: rows.length,
-      found,
-      notFound,
-      failed,
-      finalized: fin.finalized,
-      finalizeReason: fin.reason || null,
+  return {
+    body: {
+      data: {
+        claimed: rows.length,
+        found,
+        notFound,
+        failed,
+        finalized: fin.finalized,
+        finalizeReason: fin.reason || null,
+      },
     },
-  })
-}
+  }
+})

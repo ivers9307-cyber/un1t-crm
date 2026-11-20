@@ -99,3 +99,46 @@ describe('GET /api/cron/process-contact-imports — read errors (CRONREADERR.1)'
     expect(stampHeartbeat).toHaveBeenCalledTimes(1)
   })
 })
+
+// ROUTEWRAP.C7 — the job runs inside defineCron: the wrapper owns the secret
+// check, the error boundary and the stamp.
+describe('GET /api/cron/process-contact-imports — defineCron', () => {
+  it('refuses a caller without the cron secret: nothing read, nothing stamped', async () => {
+    const from = vi.spyOn(fakeDb, 'from')
+    for (const auth of [null, 'Bearer nope']) expect((await GET(req(auth))).status).toBe(401)
+    expect(from).not.toHaveBeenCalled()
+    expect(claimAndProcessImportJob).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+    from.mockRestore()
+  })
+
+  it('a clean processed tick stamps exactly its own row, once, and answers the same fields', async () => {
+    pendingResult = { data: [JOB], error: null }
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      success: true,
+      data: { processed: 1, recovered: 0, failed: 0, skipped: 0, skipped_no_work: 0, recover_failed: 0 },
+    })
+    expect(stampHeartbeat.mock.calls.map(([n]) => n)).toEqual(['process-contact-imports'])
+  })
+
+  it('a failed pending-job read answers a fixed line with no database text', async () => {
+    pendingResult = { data: null, error: { message: 'permission denied for table contact_imports' } }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, error: 'Could not read the import queue' })
+    expect(JSON.stringify(body)).not.toContain('permission denied')
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a job with no payload is a failed run: 500, nothing stamped', async () => {
+    pendingResult = { data: [JOB], error: null }
+    claimAndProcessImportJob.mockResolvedValueOnce({ status: 'failed', missingPayload: true })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toMatchObject({ success: false, error: 'Job missing payload', data: { failed: 1 } })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+})

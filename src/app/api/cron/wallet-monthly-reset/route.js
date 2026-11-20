@@ -29,27 +29,23 @@
 //      stale period_start and just advances the period — no
 //      duplicate ledger entry (the RPC no-ops at balance 0).
 //
-// Bearer CRON_SECRET. Heartbeat on a clean run only (any failure
-// must surface as staleness — 31-day window + 3-day grace, mig 420).
+// defineCron owns the secret check. Heartbeat on a clean run only (any
+// failure must surface as staleness — 31-day window + 3-day grace, mig 420).
+// A run where every acted-on wallet failed answers 500; one where only some
+// failed answers success but leaves the heartbeat unstamped.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
+import { logError } from '@/lib/log'
 import { todayStrIn, PLATFORM_TZ } from '@/lib/location-time'
 import { applyWalletEntry, shouldReset, currentPeriodStart } from '@/lib/wallet'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
+export const GET = defineCron({ heartbeat: 'wallet-monthly-reset' }, async ({ db }) => {
   const today = todayStrIn(PLATFORM_TZ) // D5: the platform billing calendar (PLATFORM_TZ)
   const newPeriod = currentPeriodStart(today)
-  const db = createServerClient()
 
   // One wallet per location, so both selects are bounded by the
   // location count (dozens) — far under the 1,000-row cap; ordered
@@ -59,8 +55,8 @@ export async function GET(request) {
     .select('location_id, balance_cents, period_start')
     .order('location_id')
   if (walletsError) {
-    console.error('[wallet-monthly-reset] wallets fetch failed:', walletsError.message)
-    return NextResponse.json({ success: false, error: walletsError.message }, { status: 500 })
+    logError('wallet-monthly-reset', 'wallets fetch failed; nothing reset, heartbeat not stamped', { err: walletsError })
+    return { ok: false, body: { error: 'Could not read wallets' } }
   }
 
   const { data: pins, error: pinsError } = await db
@@ -68,8 +64,8 @@ export async function GET(request) {
     .select('location_id, version:plan_versions!plan_version_id(plan:plans!plan_id(kind))')
     .eq('active', true)
   if (pinsError) {
-    console.error('[wallet-monthly-reset] location_plans fetch failed:', pinsError.message)
-    return NextResponse.json({ success: false, error: pinsError.message }, { status: 500 })
+    logError('wallet-monthly-reset', 'location_plans fetch failed; nothing reset, heartbeat not stamped', { err: pinsError })
+    return { ok: false, body: { error: 'Could not read location plans' } }
   }
   const pinnedLocationIds = new Set(
     (pins || [])
@@ -111,6 +107,11 @@ export async function GET(request) {
     }
   }
 
-  if (failed === 0) await stampHeartbeat('wallet-monthly-reset', { today, reset, advanced, skipped })
-  return NextResponse.json({ success: true, today, newPeriod, reset, advanced, skipped, failed })
-}
+  const body = { today, newPeriod, reset, advanced, skipped, failed }
+  // Every wallet due a reset failed (a wallet whose expiry posted but whose
+  // period advance failed counts in both reset and failed).
+  if (failed > 0 && failed === (wallets || []).length - skipped) {
+    return { ok: false, body: { ...body, error: 'Every wallet due a reset failed' } }
+  }
+  return { body, outcome: { today, reset, advanced, skipped }, stamp: failed === 0 }
+})
