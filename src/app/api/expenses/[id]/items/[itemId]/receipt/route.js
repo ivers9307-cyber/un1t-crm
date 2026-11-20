@@ -6,8 +6,8 @@
 // at the claim's studio).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canSeeExpenseClaim } from '@/lib/fte-expense-access'
 
 export const runtime = 'nodejs'
@@ -16,12 +16,10 @@ export const dynamic = 'force-dynamic'
 const STORAGE_BUCKET = 'fte-expense-receipts'
 const SIGNED_URL_TTL_SECONDS = 300
 
-export async function GET(_request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: claimId, itemId } = await params
-
-  const db = createServerClient()
+// withAuth only signs the caller in; who may see the claim is judged on the
+// row (canSeeExpenseClaim), a refusal the missing-item 404, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const { id: claimId, itemId } = params || {}
   const { data: item } = await db
     .from('fte_expense_items')
     .select(`
@@ -44,7 +42,8 @@ export async function GET(_request, { params }) {
     .from(STORAGE_BUCKET)
     .createSignedUrl(item.receipt_path, SIGNED_URL_TTL_SECONDS)
   if (error || !signed?.signedUrl) {
-    return NextResponse.json({ success: false, error: error?.message || 'Could not sign URL.' }, { status: 500 })
+    if (error) logError('expenses', 'receipt sign failed', { itemId: item.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not sign URL.' }, { status: 500 })
   }
 
   return NextResponse.json({
@@ -53,4 +52,4 @@ export async function GET(_request, { params }) {
     expires_in: SIGNED_URL_TTL_SECONDS,
     mime_type: item.receipt_mime_type,
   })
-}
+})

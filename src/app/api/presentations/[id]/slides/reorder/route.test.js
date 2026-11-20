@@ -2,9 +2,9 @@
 // write is judged, and a partial failure never reports "saved".
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => ({ id: 'u1' })), assertLocationAccess: () => null }))
-vi.mock('@/lib/permissions', () => ({ hasPermissionAtAnyLocation: () => true, hasPermissionForLocation: () => true }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn(async () => ({ id: 'u1' })), assertLocationAccess: () => null }))
+vi.mock('@/lib/permissions', async (importOriginal) => ({ ...(await importOriginal()), hasPermissionAtAnyLocation: () => true, hasPermissionForLocation: () => true }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 const A = 'a0000000-0000-4000-8000-00000000000a'
 const B = 'a0000000-0000-4000-8000-00000000000b'
 const DECK = 'd0000000-0000-4000-8000-000000000001'

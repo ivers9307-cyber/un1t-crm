@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { AssignBodySchema, assignThread, assignPickerFor } from '@/lib/inbox-assignment'
 import { loadConversationForUser } from '../../_conversation'
@@ -24,29 +23,24 @@ function mergedAway() {
   }, { status: 409 })
 }
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const db = createServerClient()
-  const loaded = await loadConversationForUser(db, user, params.id)
+// withAuth only signs the caller in (permission: null, no studio): the gate is
+// loadConversationForUser at the conversation's studio, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const loaded = await loadConversationForUser(db, user, params?.id)
   if (loaded.response) return loaded.response
   const out = await assignPickerFor(db, { channel: 'mail', user, thread: loaded.conversation })
   return NextResponse.json(out.body, { status: out.status })
-}
+})
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// The body is read before the conversation, as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   const validation = await validateBody(request, AssignBodySchema)
   if (!validation.ok) return validation.response
-  const db = createServerClient()
-  const loaded = await loadConversationForUser(db, user, params.id)
+  const loaded = await loadConversationForUser(db, user, params?.id)
   if (loaded.response) return loaded.response
   if (loaded.conversation.merged_into_id) return mergedAway()
   const out = await assignThread(db, {
     channel: 'mail', user, thread: loaded.conversation, assignee: validation.data.assignee,
   })
   return NextResponse.json(out.body, { status: out.status })
-}
+})

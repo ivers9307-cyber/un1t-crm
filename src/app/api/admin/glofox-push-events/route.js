@@ -13,15 +13,15 @@
 // so this query stays fast even as the audit table grows.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the master check (user.role) stays here
+// with its own 403 text, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (user.role !== 'master') {
     return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
   }
@@ -30,7 +30,6 @@ export async function GET(request) {
   const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200)
   const includeReviewed = url.searchParams.get('include_reviewed') === 'true'
 
-  const db = createServerClient()
   let query = db
     .from('glofox_push_events')
     .select(`
@@ -45,11 +44,14 @@ export async function GET(request) {
   if (!includeReviewed) query = query.is('reviewed_at', null)
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('glofox-push', 'review list failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the push events.' }, { status: 500 })
+  }
 
   return NextResponse.json({
     success: true,
     events: data || [],
     count: (data || []).length,
   })
-}
+})

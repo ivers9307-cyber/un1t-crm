@@ -6,16 +6,14 @@
 // touch any cookies here.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
+// withAuth only signs the caller in (the phone's Bearer session, as before);
+// who the real master is, and whether anything is stamped, is decided here.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   // Real master id — when impersonating, the visible user is the
   // target, but impersonatingFrom carries the master id we audit
   // against. If neither is set this is a no-op.
@@ -25,7 +23,6 @@ export async function POST(request) {
   const targetIdAtStop = wasImpersonating ? user.id : null
 
   if (masterUserId) {
-    const db = createServerClient()
     await db
       .from('impersonation_log')
       .update({ ended_at: new Date().toISOString() })
@@ -49,4 +46,4 @@ export async function POST(request) {
   }
 
   return NextResponse.json({ success: true })
-}
+})
