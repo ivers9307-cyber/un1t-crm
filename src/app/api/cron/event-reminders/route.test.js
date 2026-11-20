@@ -3,6 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const claims = new Map()
+const h = { locationsError: null, reads: 0 }
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/event-attendee-reminders', () => ({ runEventReminders: vi.fn(async () => ({ events: 1, sent: 1, skipped: 0 })) }))
@@ -11,14 +12,20 @@ vi.mock('@/lib/event-rating-requests', () => ({ runRatingRequests: vi.fn(async (
 vi.mock('@/lib/supabase', async () => {
   const { withSlotTables } = await import('@/lib/cron-daily-slot.test-helpers')
   const locations = [{ id: 'loc-dub', timezone: 'Europe/Dublin' }, { id: 'loc-ny', timezone: 'America/New_York' }]
-  return { createServerClient: () => withSlotTables({ from: () => { throw new Error('unexpected read') } }, { locations, claims }) }
+  return {
+    createServerClient: () => {
+      h.reads++
+      return withSlotTables({ from: () => { throw new Error('unexpected read') } }, { locations, claims, locationsError: () => h.locationsError })
+    },
+  }
 })
 
 const { GET } = await import('./route')
 const { runEventReminders } = await import('@/lib/event-attendee-reminders')
 const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
 const { runRatingRequests } = await import('@/lib/event-rating-requests')
-const req = () => new Request('https://x.test/api/cron/event-reminders', { headers: { authorization: 'Bearer shh' } })
+const { logError } = await import('@/lib/log')
+const req = (authorization = 'Bearer shh') => new Request('https://x.test/api/cron/event-reminders', { headers: authorization ? { authorization } : {} })
 const at = async (iso) => { vi.setSystemTime(Date.parse(iso)); return (await GET(req())).json() }
 
 beforeEach(() => {
@@ -26,6 +33,51 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] })
   process.env.CRON_SECRET = 'shh'
   claims.clear()
+  h.locationsError = null
+  h.reads = 0
+})
+
+describe('defineCron wrapper', () => {
+  it('refuses a caller without the cron secret: no client, no run, nothing stamped', async () => {
+    for (const auth of [null, 'Bearer nope']) expect((await GET(req(auth))).status).toBe(401)
+    expect(h.reads).toBe(0)
+    expect(runEventReminders).not.toHaveBeenCalled()
+    expect(runRatingRequests).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a failed locations read answers 500 with a fixed error and stamps nothing', async () => {
+    vi.setSystemTime(Date.parse('2026-07-01T09:00:00Z'))
+    h.locationsError = { message: 'permission denied for table locations' }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toBe('locations unreadable')
+    expect(JSON.stringify(body)).not.toContain('permission denied')
+    expect(runEventReminders).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('the slot tick stamps exactly the parent (with its outcome) and the arm row', async () => {
+    vi.setSystemTime(Date.parse('2026-07-01T09:00:00Z'))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampHeartbeat).toHaveBeenCalledTimes(2)
+    expect(stampHeartbeat).toHaveBeenCalledWith('event-reminders', expect.objectContaining({ events: 1, sent: 1, skipped: 0, slot: expect.any(Object) }))
+    expect(stampHeartbeat).toHaveBeenCalledWith('event-rating-requests', expect.objectContaining({ sent: 0, slot: expect.any(Object) }))
+  })
+
+  it('a reminders run that throws answers a fixed 500, still stamps the clean arm, not the parent', async () => {
+    vi.setSystemTime(Date.parse('2026-07-01T09:00:00Z'))
+    runEventReminders.mockRejectedValueOnce(new Error('postmark said no'))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Event reminders failed' })
+    expect(stampHeartbeat.mock.calls.map(([n]) => n)).toEqual(['event-rating-requests'])
+    expect(logError).toHaveBeenCalledWith('event-reminders', 'reminders run threw', expect.any(Object))
+  })
 })
 
 describe('TZ.6 event-reminders', () => {
@@ -79,7 +131,8 @@ describe('rating-request arm (HOSTPAGE.2)', () => {
     body = await at('2026-07-02T09:00:00Z')
     expect(stampHeartbeat.mock.calls.map(([n]) => n)).toEqual(['event-reminders'])
     expect(body.success).toBe(true)
-    expect(body.data.rating_requests).toEqual({ ok: false, error: 'arm down' })
+    // A fixed line: the arm's error text stays in the log.
+    expect(body.data.rating_requests).toEqual({ ok: false, error: 'Rating requests failed' })
   })
 })
 

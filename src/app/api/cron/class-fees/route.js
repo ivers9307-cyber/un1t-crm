@@ -6,10 +6,13 @@
 //     7 days later, and any charge left in doubt, resumed with its own key),
 //     unless charging is paused or un1t.online writes are off.
 // Outcome counts only: no names, no amounts, no un1t.online words.
+//
+// defineCron owns the CRON_SECRET check, the error boundary and the stamp.
+// A failed locations read answers 500 unstamped; one studio failing is counted
+// in `failed` (the detail is logged) and the run still stamps. A run where every
+// studio failed did nothing: it answers 500 and does not stamp.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { locationsWithSource } from '@/lib/membership/locations-for-source'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { readClassFeeContext, detectClassFees, sendReviewEmail, chargeDueClassFees } from '@/lib/class-fees-run'
@@ -24,17 +27,12 @@ export const maxDuration = 300
 const CRON_NAME = 'class-fees'
 const BUDGET_MS = 240_000
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
+export const GET = defineCron({ heartbeat: 'class-fees' }, async ({ db }) => {
   const started = Date.now()
-  const db = createServerClient()
   const { eligible, error: locErr } = await locationsWithSource(db, 'un1t_online', { module: CRON_NAME })
   if (locErr) {
     logError(CRON_NAME, 'failed to list locations', { err: locErr })
-    return NextResponse.json({ success: false, error: 'Could not list locations' }, { status: 500 })
+    return { ok: false, body: { error: 'Could not list locations' } }
   }
 
   const outcome = { studios: 0, fees_off: 0, detected_runs: 0, inserted: 0, forgiven: 0, notices: 0, emails: 0, charge_runs: 0, charged: 0, retry_scheduled: 0, outstanding: 0, in_doubt: 0, failed: 0, deferred_budget: 0 }
@@ -81,6 +79,10 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat(CRON_NAME, outcome)
-  return NextResponse.json({ success: true, ...outcome })
-}
+  // Every studio that ran failed: the run did nothing, so it does not stamp
+  // (defineCron's rule). One studio failing is still a clean run.
+  if (outcome.studios > 0 && outcome.failed === outcome.studios) {
+    return { ok: false, body: { ...outcome, error: 'Class fee run failed at every studio' } }
+  }
+  return { outcome, body: outcome }
+})

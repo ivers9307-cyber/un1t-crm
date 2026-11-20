@@ -9,9 +9,9 @@
 //      response, and a run past SLOW_RUN_MS warns.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const h = vi.hoisted(() => ({ rpc: null, noPrimary: { count: 3, error: null } }))
+const h = vi.hoisted(() => ({ rpc: null, noPrimary: { count: 3, error: null }, clients: 0 }))
 vi.mock('@/lib/supabase', () => ({
-  createServerClient: () => ({
+  createServerClient: () => (h.clients++, {
     rpc: (...args) => h.rpc(...args),
     from: () => ({ select: () => ({ is: async () => h.noPrimary }) }),
   }),
@@ -41,13 +41,15 @@ beforeEach(() => {
   vi.restoreAllMocks()
   vi.clearAllMocks()
   h.noPrimary = { count: 3, error: null }
+  h.clients = 0
   batchesTaking(100)
 })
 
 describe('GET /api/cron/contact-studios-reconcile', () => {
   it('is 401 without the secret and calls nothing', async () => {
-    const res = await GET(req(null))
-    expect(res.status).toBe(401)
+    expect((await GET(req(null))).status).toBe(401)
+    expect((await GET(req('wrong'))).status).toBe(401)
+    expect(h.clients).toBe(0)
     expect(h.rpc).not.toHaveBeenCalled()
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
@@ -63,6 +65,7 @@ describe('GET /api/cron/contact-studios-reconcile', () => {
     ])
     expect(h.rpc.mock.calls.every((c) => c[0] === 'reconcile_contact_studios_batch')).toBe(true)
     const expected = { inserted: 6, updated: 12, ended: 0, unchanged: 300, skipped_no_primary: 3, batches: 3, duration_ms: 300 }
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('contact-studios-reconcile', expected)
     expect(await res.json()).toEqual({ success: true, ...expected })
     expect(logWarn).not.toHaveBeenCalled()
@@ -75,10 +78,11 @@ describe('GET /api/cron/contact-studios-reconcile', () => {
     expect(h.rpc).toHaveBeenCalledTimes(1)
   })
 
-  it('a failed batch is a 500 with no heartbeat', async () => {
+  it('a failed batch is a 500 with a fixed error and no heartbeat', async () => {
     h.rpc = vi.fn(async () => ({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }))
     const res = await GET(req())
     expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'reconcile failed' })
     expect(stampHeartbeat).not.toHaveBeenCalled()
     expect(logError).toHaveBeenCalledWith('contact-studios-reconcile', expect.stringMatching(/failed; no heartbeat/), expect.objectContaining({ code: '57014' }))
   })

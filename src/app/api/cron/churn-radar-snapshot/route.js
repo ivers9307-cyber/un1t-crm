@@ -5,13 +5,17 @@
 // row. The radar UI then compares the live summary against the most
 // recent snapshot to show week-over-week deltas on the summary cards.
 //
-// Auth: same CRON_SECRET pattern as the other Vercel crons.
+// defineCron owns the CRON_SECRET check, the error boundary and the stamp.
+// A failed locations read, membership-source read or snapshot insert answers
+// 500 with a fixed error (the detail is logged) and no stamp. One location's
+// radar failing is a fixed per-location error and the run still stamps.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { loadRadar } from '@/lib/churn-radar-data'
 import { locationIdsWithoutCapability } from '@/lib/membership/locations-for-source'
+import { logError, logWarn } from '@/lib/log'
+
+const MODULE = 'cron-churn-radar-snapshot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -19,21 +23,14 @@ export const dynamic = 'force-dynamic'
 // tenant in practice; 120s leaves headroom if more locations are added.
 export const maxDuration = 120
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
-
+export const GET = defineCron({ heartbeat: 'churn-radar-snapshot' }, async ({ db }) => {
   const { data: locations, error: locErr } = await db
     .from('locations')
     .select('id, name')
     .eq('active', true)
   if (locErr) {
-    console.warn(`[cron][churn-radar-snapshot] failed to list locations: ${locErr.message}`)
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    logError(MODULE, 'failed to list locations', { err: locErr.message })
+    return { ok: false, body: { error: 'Could not list locations' } }
   }
 
   // W1.M3b — a location with NO membership source has no Glofox-shaped data
@@ -41,8 +38,8 @@ export async function GET(request) {
   // 500 with no heartbeat, never "nobody to skip".
   const { ids: noSource, error: srcErr } = await locationIdsWithoutCapability(db, 'memberships') // UN1TCAP.1: a configured source can lack memberships (none; un1t.online provides them since UN1TRADAR.4)
   if (srcErr) {
-    console.warn(`[cron][churn-radar-snapshot] failed to read membership sources: ${srcErr.message}`)
-    return NextResponse.json({ success: false, error: srcErr.message }, { status: 500 })
+    logError(MODULE, 'failed to read membership sources', { err: srcErr?.message ?? srcErr })
+    return { ok: false, body: { error: 'Could not read membership sources' } }
   }
   let skippedNoSource = 0
 
@@ -65,8 +62,10 @@ export async function GET(request) {
       })
       perLocation.push({ location_id: loc.id, location_name: loc.name, ok: true })
     } catch (e) {
-      // One bad location can't stall the rest of the sweep.
-      perLocation.push({ location_id: loc.id, location_name: loc.name, ok: false, error: e.message })
+      // One bad location can't stall the rest of the sweep. A fixed line in
+      // the response; the detail is logged.
+      logWarn(MODULE, 'radar failed for location', { locationId: loc.id, err: e?.message })
+      perLocation.push({ location_id: loc.id, location_name: loc.name, ok: false, error: 'radar failed' })
     }
   }
 
@@ -74,18 +73,18 @@ export async function GET(request) {
   if (rows.length) {
     const { error: insErr } = await db.from('churn_radar_snapshots').insert(rows)
     if (insErr) {
-      return NextResponse.json({ success: false, error: insErr.message }, { status: 500 })
+      logError(MODULE, 'snapshot insert failed', { err: insErr.message, rows: rows.length })
+      return { ok: false, body: { error: 'Could not write the snapshots' } }
     }
     snapshotsWritten = rows.length
   }
 
-  await stampHeartbeat('churn-radar-snapshot').catch(() => {})
-
-  return NextResponse.json({
-    success: true,
-    locations: perLocation.length,
-    skipped_no_source: skippedNoSource,
-    snapshots_written: snapshotsWritten,
-    perLocation,
-  })
-}
+  return {
+    body: {
+      locations: perLocation.length,
+      skipped_no_source: skippedNoSource,
+      snapshots_written: snapshotsWritten,
+      perLocation,
+    },
+  }
+})

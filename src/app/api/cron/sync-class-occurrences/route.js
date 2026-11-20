@@ -2,7 +2,9 @@
 // class_occurrences "spine" from the Glofox timetable for every
 // Glofox-connected location. Service-role; service bypasses RLS.
 //
-// Auth: CRON_SECRET (same pattern as the other crons).
+// defineCron owns the CRON_SECRET check, the error boundary and the stamp.
+// A failed locations read answers 500 with a fixed error (the detail is
+// logged) and no stamp.
 //
 // Heartbeat: stamped after the loop on every run that read the locations
 // list, including runs where a location's sync failed, so a Glofox that
@@ -12,30 +14,25 @@
 // run's stats as last_outcome; trainer_api_calls is 0 on every tick but the
 // daily trainer-lookup tick (04:00 Dublin, src/lib/class-occurrences.js).
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
 import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
 import { syncOccurrencesForLocation } from '@/lib/class-occurrences'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'sync-class-occurrences' }, async ({ db }) => {
   // W1.M3b — discovery through the membership seam (active locations whose
   // membership_source is 'glofox' and whose provider is configured), never
   // the settings slice. A failed seam read is a 500 with no heartbeat.
   const { eligible: connected, skipped, error } = await locationsWithSource(db, 'glofox', { module: 'cron-sync-class-occurrences' })
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('cron-sync-class-occurrences', 'glofox locations unreadable', { err: error?.message ?? error })
+    return { ok: false, body: { error: 'Could not read the Glofox locations' } }
+  }
 
   // The skip split rides on the stamp's last_outcome: an `unknown` location
   // (its credentials read failed at discovery) is not a quiet unconfigured one.
@@ -65,7 +62,5 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('sync-class-occurrences', stats).catch((err) =>
-    logWarn('cron-sync-class-occurrences', 'heartbeat failed', { err }))
-  return NextResponse.json({ success: true, stats })
-}
+  return { outcome: stats, body: { stats } }
+})
