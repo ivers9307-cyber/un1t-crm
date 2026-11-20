@@ -239,6 +239,10 @@ const SCOPING_HELPERS = [
   // src/app/api/accounting/coverage/[id]/_line.js — permission check +
   // active-location scoping + 404-not-403 line lookup.
   'loadLineForUser(',
+  // Same file: loadLineForCaller is the body of loadLineForUser for a caller
+  // withAuth already signed in (ROUTEWRAP.R2) — the same line lookup scoped to
+  // the active location.
+  'loadLineForCaller(',
   // src/app/api/invoices-inbox/_bulk-helpers.js — bookkeeper permission +
   // per-row location checks on the bulk surface.
   'loadBookkeeper(',
