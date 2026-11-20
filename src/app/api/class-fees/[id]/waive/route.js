@@ -5,8 +5,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { canUseClassFees } from '@/lib/class-fees-access'
@@ -20,10 +20,11 @@ export const WaiveClassFeeSchema = z.object({
   reason: z.string().trim().min(1, 'Give a reason for the waiver').max(500),
 })
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id } = await params
+// withAuth only signs the caller in. Every check after it runs by hand, in the
+// order it always has: id 404, body 400, studio membership 403, class_fees at
+// the body's studio 403.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const id = params?.id
   if (!uuidLike.safeParse(id).success) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const validation = await validateBody(request, WaiveClassFeeSchema)
   if (!validation.ok) return validation.response
@@ -32,7 +33,6 @@ export async function POST(request, { params }) {
   if (guard) return guard
   if (!canUseClassFees(user, locationId)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
-  const db = createServerClient()
   try {
     const r = await waiveClassFee(db, { locationId, feeId: id, actorId: user.id, reason })
     if (!r.ok && r.reason === 'not_found') return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -44,4 +44,4 @@ export async function POST(request, { params }) {
     logError('class-fees', 'waive failed', { locationId, feeId: id, code: err?.code ?? null })
     return NextResponse.json({ success: false, error: 'Could not waive the fee just now.' }, { status: 500 })
   }
-}
+})

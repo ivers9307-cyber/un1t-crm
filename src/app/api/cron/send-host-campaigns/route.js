@@ -22,8 +22,9 @@
 //     recipient_count expose the gap to the host. Swept BEFORE the chunk
 //     call so an otherwise-drained campaign finalises in the same tick.
 //   - The ≤5-campaigns-per-tick outer loop and run summary.
-//   - The heartbeat — stamps at the end of every run; a failed campaign
-//     chunk lands in `errors` and never blocks the others.
+//   - The heartbeat — stamped by defineCron at the end of every run that
+//     did not fail; a failed campaign chunk lands in `errors` and never
+//     blocks the others. A failed due pick or sending pick fails the run.
 //
 // Safety posture (unchanged, now enforced inside the shared lib): the
 // host's sender_domain_verified is re-checked EVERY chunk — the UN1T
@@ -44,11 +45,9 @@
 // launchDueCampaigns's own comment below for the full, authoritative
 // refusal mapping.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { processHostCampaignChunk } from '@/lib/host-campaign-queue'
 import { launchHostCampaign, LAUNCH_GATE_REASONS } from '@/lib/host-campaign-launch'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logError, logWarn, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -74,23 +73,14 @@ const STALE_SCHEDULE_MS = 60 * 60_000  // 1h, ~30 ticks at the 2-minute cadence
 // call site rather than added here, since it isn't a lib-defined gate.
 const BACK_TO_DRAFT_REASONS = new Set(LAUNCH_GATE_REASONS)
 
-function unauthorized() {
-  return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
-}
-
-export async function GET(request) {
-  const expected = process.env.CRON_SECRET
-  if (!expected) {
-    console.error('[cron send-host-campaigns] CRON_SECRET is not set')
-    return NextResponse.json({ ok: false, error: 'cron_secret_missing' }, { status: 500 })
-  }
-  const got = request.headers.get('authorization') || ''
-  if (got !== `Bearer ${expected}`) return unauthorized()
-
-  const db = createServerClient()
+// ROUTEWRAP.C12 — defineCron owns the secret check (an unset secret is a 401
+// now, it was a 500), the error boundary and the 'send-host-campaigns' stamp.
+// `errors` carries campaign ids and fixed lines only: the detail (database or
+// Postmark text) is in logError.
+export const GET = defineCron({ heartbeat: 'send-host-campaigns' }, async ({ db }) => {
   const summary = { launched: 0, refused: [], campaigns: 0, sent: 0, failed: 0, finalised: 0, errors: [] }
 
-  await launchDueCampaigns(db, summary)
+  const dueReadOk = await launchDueCampaigns(db, summary)
 
   const { data: campaigns, error: pickErr } = await db
     .from('host_campaigns')
@@ -103,7 +93,7 @@ export async function GET(request) {
     // stamp, so a pick that failed every tick never went stale and sending
     // campaigns silently stopped moving.
     logError('host-campaigns', 'campaign pick failed; no heartbeat', { error: pickErr.message })
-    return NextResponse.json({ ok: false, ...summary, error: pickErr.message }, { status: 500 })
+    return { ok: false, body: { ...summary, error: 'Could not read the sending campaigns' } }
   }
 
   for (const campaign of campaigns || []) {
@@ -111,7 +101,7 @@ export async function GET(request) {
       await sweepStaleClaims(db, campaign.id)
       const result = await processHostCampaignChunk(db, campaign.id)
       if (result.status === 'failed') {
-        summary.errors.push({ campaign_id: campaign.id, error: result.error })
+        summary.errors.push({ campaign_id: campaign.id, error: 'Chunk failed' })
         logError('host-campaigns', 'campaign tick threw', { campaign_id: campaign.id, error: result.error })
         continue
       }
@@ -122,14 +112,17 @@ export async function GET(request) {
     } catch (err) {
       // Belt-and-braces — the lib returns 'failed' rather than throwing.
       const msg = err?.message || String(err)
-      summary.errors.push({ campaign_id: campaign.id, error: msg })
+      summary.errors.push({ campaign_id: campaign.id, error: 'Chunk failed' })
       logError('host-campaigns', 'campaign tick threw', { campaign_id: campaign.id, error: msg })
     }
   }
 
-  await stampHeartbeat('send-host-campaigns')
-  return NextResponse.json({ ok: true, ...summary })
-}
+  // ROUTEWRAP.C12 — an unreadable due list looked like "nothing scheduled" and
+  // stamped. The sending pass above still ran (nothing sent changes); the run
+  // now answers 500 without a stamp, so a due list that stays unreadable pages.
+  if (!dueReadOk) return { ok: false, body: { ...summary, error: 'Could not read the scheduled campaigns' } }
+  return { body: summary }
+})
 
 // Sweep stale claims (see header) so a crashed consumer — cron tick OR
 // QStash chain link — can't block finalisation. Runs regardless of the
@@ -153,7 +146,8 @@ async function sweepStaleClaims(db, campaignId) {
 
 // HOST-SCHEDULE.1 — fire due scheduled campaigns. Never throws: every
 // failure lands in summary.refused or summary.errors and the sending pass
-// + heartbeat still run.
+// still runs. Returns false only when the due list itself was unreadable
+// (the run then fails and is not stamped); true otherwise.
 //
 // Refusal mapping — THE authoritative version (the file header above and
 // this file's tests just point here, they don't restate it):
@@ -194,8 +188,8 @@ async function launchDueCampaigns(db, summary) {
     .limit(MAX_DUE_PER_TICK)
   if (dueErr) {
     logError('host-campaigns', 'due pick failed', { error: dueErr.message })
-    summary.errors.push({ stage: 'due_pick', error: dueErr.message })
-    return
+    summary.errors.push({ stage: 'due_pick', error: 'Could not read the scheduled campaigns' })
+    return false
   }
 
   for (const c of due || []) {
@@ -220,7 +214,7 @@ async function launchDueCampaigns(db, summary) {
     // the sending pass below drains whatever landed. Deferred, not retried
     // as a launch.
     if (result.reason === 'enqueue_failed') {
-      summary.errors.push({ campaign_id: c.id, error: result.error })
+      summary.errors.push({ campaign_id: c.id, error: 'Launch deferred', reason: result.reason })
       logError('host-campaigns', 'scheduled launch deferred', { campaign_id: c.id, reason: result.reason, error: result.error })
       continue
     }
@@ -233,7 +227,7 @@ async function launchDueCampaigns(db, summary) {
       const scheduledAtMs = c.scheduled_for ? new Date(c.scheduled_for).getTime() : NaN
       const isStale = Number.isFinite(scheduledAtMs) && (Date.now() - scheduledAtMs) > STALE_SCHEDULE_MS
       if (!isStale) {
-        summary.errors.push({ campaign_id: c.id, error: result.error })
+        summary.errors.push({ campaign_id: c.id, error: 'Launch deferred', reason: result.reason })
         logError('host-campaigns', 'scheduled launch deferred', { campaign_id: c.id, reason: result.reason, error: result.error })
         continue
       }
@@ -251,7 +245,7 @@ async function launchDueCampaigns(db, summary) {
       .eq('status', 'scheduled')
       .select('id')
     if (backErr) {
-      summary.errors.push({ campaign_id: c.id, error: backErr.message })
+      summary.errors.push({ campaign_id: c.id, error: 'Could not return the campaign to draft' })
       logError('host-campaigns', 'scheduled refusal write failed', { campaign_id: c.id, error: backErr.message })
       continue
     }
@@ -261,4 +255,5 @@ async function launchDueCampaigns(db, summary) {
     const log = code === 'daily_cap' || code === 'no_recipients' ? logWarn : logError
     log('host-campaigns', 'scheduled launch refused', { campaign_id: c.id, reason: code, error: result.error })
   }
+  return true
 }

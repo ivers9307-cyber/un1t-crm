@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const state = { user: null, row: null, updates: [], updateError: null }
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: async () => state.user,
   // Mirror the real Or404 contract: null when allowed, a 404 response otherwise.
   assertLocationAccessOr404: (user, locationId) => {
@@ -10,7 +11,8 @@ vi.mock('@/lib/auth', () => ({
     return allowed ? null : new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404 })
   },
 }))
-vi.mock('@/lib/permissions', () => ({
+vi.mock('@/lib/permissions', async (importOriginal) => ({
+  ...(await importOriginal()),
   hasPermission: (user, key) => Boolean(user?.perms?.[key]),
   // ROLESWEEP.1b — the route now pre-checks at any location and judges the
   // purchase's location; the fixture's one perms bag answers both.
@@ -48,7 +50,10 @@ beforeEach(() => {
 describe('POST /api/offer-purchases/[id]/fulfil', () => {
   it('401 with no session', async () => {
     state.user = null
-    expect((await POST(new Request('http://t'), props)).status).toBe(401)
+    const res = await POST(new Request('http://t'), props)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(state.updates).toEqual([])
   })
   it('403 without the per-category grant', async () => {
     state.user = { ...approver, perms: {} }

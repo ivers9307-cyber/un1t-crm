@@ -90,6 +90,38 @@ describe('defineCron', () => {
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
+  it('stamp: true with ok: false answers failure AND stamps the job\'s own row with its outcome', async () => {
+    expect(await call(async () => ({ ok: false, stamp: true, outcome: { guardTripped: true }, body: { guardTripped: true } })))
+      .toEqual({ status: 500, body: { guardTripped: true, success: false } })
+    expect(stampHeartbeat.mock.calls).toEqual([['job', { guardTripped: true }]])
+  })
+
+  it('stamp: true with ok: false keeps the job\'s status and stamps with no outcome when none is given', async () => {
+    expect(await call(async () => ({ ok: false, stamp: true, status: 200 }))).toEqual({ status: 200, body: { success: false } })
+    expect(stampHeartbeat.mock.calls).toEqual([['job']])
+  })
+
+  it('only stamp: true itself records a failed run (a truthy look-alike does not)', async () => {
+    await call(async () => ({ ok: false, stamp: 'yes' }))
+    await call(async () => ({ ok: false, stamp: 1 }))
+    await call(async () => ({ ok: false, stamp: false }))
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('stamp: true on a clean run is the default: one stamp', async () => {
+    expect((await call(async () => ({ stamp: true, outcome: { n: 1 } }))).status).toBe(200)
+    expect(stampHeartbeat.mock.calls).toEqual([['job', { n: 1 }]])
+  })
+
+  it('a failed run that stamps still stamps its arms after its own row; a failed own stamp is logged', async () => {
+    const err = new Error('stamp down')
+    stampHeartbeat.mockRejectedValueOnce(err)
+    const res = await call(async () => ({ ok: false, stamp: true, outcome: { n: 1 }, arms: [{ heartbeat: 'arm-a' }] }))
+    expect(res.status).toBe(500)
+    expect(stampHeartbeat.mock.calls).toEqual([['job', { n: 1 }], ['arm-a']])
+    expect(logWarn).toHaveBeenCalledWith('cron.job', 'heartbeat failed', { err })
+  })
+
   it('stamps each listed arm row, with or without an outcome, beside the job row', async () => {
     await call(async () => ({ outcome: { n: 1 }, arms: [{ heartbeat: 'arm-a', outcome: { sent: 2 } }, { heartbeat: 'arm-b' }] }))
     expect(stampHeartbeat.mock.calls).toEqual([['job', { n: 1 }], ['arm-a', { sent: 2 }], ['arm-b']])

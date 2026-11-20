@@ -6,8 +6,8 @@
 // the row (src/lib/qualifications-server.js), 404 if not.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { todayStrIn } from '@/lib/location-time'
@@ -19,9 +19,9 @@ export const dynamic = 'force-dynamic'
 
 const send = (out) => NextResponse.json(out.body, { status: out.status })
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in: the studio is the query's location_id, so
+// its 400 and the studio check run here, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   const locationId = new URL(request.url).searchParams.get('location_id')
   if (!uuidLike.safeParse(locationId).success) {
@@ -31,7 +31,6 @@ export async function GET(request) {
   if (guard) return guard
 
   // TZ.8b — expired / expiring is judged on the studio's own day.
-  const db = createServerClient()
   let today
   try {
     today = todayStrIn(await studioZoneFor(db, user, locationId))
@@ -39,11 +38,9 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Could not read the studio\'s timezone. Try again.' }, { status: 500 })
   }
   return send(await loadQualificationsPage(db, { user, locationId, today }))
-}
+})
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   // Coarse pre-check only (SCHEDROLES.1): the authority decision is the role
   // at a studio the PERSON belongs to, judged on the row.
   if (!hasRoleAtAnyLocation(user, QUAL_MANAGER_ROLES)) {
@@ -52,5 +49,5 @@ export async function POST(request) {
   const validation = await validateBody(request, QualificationRecordCreateSchema)
   if (!validation.ok) return validation.response
 
-  return send(await createQualificationRecord(createServerClient(), { user, input: validation.data }))
-}
+  return send(await createQualificationRecord(db, { user, input: validation.data }))
+})

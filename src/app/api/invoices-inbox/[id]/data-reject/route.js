@@ -9,6 +9,8 @@ import { z } from 'zod'
 import { validateBody } from '@/lib/validate'
 import { loadInvoiceForUser } from '../../_helpers'
 import { canTransitionInboundInvoice } from '@/lib/inbound-invoices'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -17,8 +19,11 @@ const Schema = z.object({
   reason: z.string().min(1).max(1000),
 })
 
-export async function POST(request, { params }) {
-  const { id } = await params
+// Sign-in here, then loadInvoiceForUser (which signs the caller in again) keeps
+// its 404s for another studio's row and its owner/master + invoices_inbox
+// rule; every later check is unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ request, params }) => {
+  const id = params?.id
   const ctx = await loadInvoiceForUser(id)
   if (ctx.response) return ctx.response
   const { user, db, row } = ctx
@@ -52,7 +57,10 @@ export async function POST(request, { params }) {
     .in('status', ['extracted', 'data_approved'])
     .select('id, status, rejected_stage, rejected_at, reject_reason')
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('invoices-inbox', 'data reject failed', { invoiceId: id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not reject the invoice. Try again.' }, { status: 500 })
+  }
   if (!updated) {
     return NextResponse.json({
       success: false,
@@ -60,4 +68,4 @@ export async function POST(request, { params }) {
     }, { status: 409 })
   }
   return NextResponse.json({ success: true, data: updated })
-}
+})

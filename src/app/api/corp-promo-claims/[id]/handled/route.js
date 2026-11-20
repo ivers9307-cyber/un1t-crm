@@ -7,20 +7,19 @@
 // trial help cards), judged at the claim's studio. Detail-route semantics: an
 // id outside the caller's studios answers 404, not 403.
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
 
-export async function POST(_request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in: approvals_offer_purchases is judged
+// anywhere first, then at the claim's own studio, as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const id = params?.id
   if (!hasPermissionAtAnyLocation(user, 'approvals_offer_purchases')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  const db = createServerClient()
   const { data: row, error: readErr } = await db
     .from('corp_promo_claims')
     .select('id, location_id, status')
@@ -45,4 +44,4 @@ export async function POST(_request, props) {
   if (error) return NextResponse.json({ success: false, error: 'write_failed' }, { status: 500 })
   if (!upd || upd.length === 0) return NextResponse.json({ success: false, error: 'not_open' }, { status: 409 })
   return NextResponse.json({ success: true, data: { status: 'handled' } })
-}
+})

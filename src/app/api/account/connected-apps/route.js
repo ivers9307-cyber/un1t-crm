@@ -13,8 +13,7 @@
 // no id parameter exists, so nobody can ask for another person's usage.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { selectAll } from '@/lib/select-all'
 import { logError } from '@/lib/log'
 
@@ -28,11 +27,9 @@ function json(body, status = 200) {
   return NextResponse.json(body, { status, headers: NO_STORE })
 }
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return json({ success: false, error: 'Unauthorized' }, 401)
-
-  const db = createServerClient()
+// withAuth only signs the caller in (its 401 carries no Cache-Control header;
+// it holds no data). The read is the caller's own rows, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   const cutoff = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
   let rows
   try {
@@ -58,4 +55,4 @@ export async function GET() {
     byClient.set(r.client_id, cur)
   }
   return json({ success: true, data: { clients: [...byClient.values()] } })
-}
+})

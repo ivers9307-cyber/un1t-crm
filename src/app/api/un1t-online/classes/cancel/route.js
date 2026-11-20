@@ -9,8 +9,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { gateUn1tStaffBooking, staffWriteAnswer, UN1T_STAFF_COPY } from '@/lib/un1t-staff-booking'
@@ -26,14 +25,15 @@ const Schema = z.object({
   booking_id: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'Must be a un1t.online booking id'),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// Sign-in only: every check stays below in its old order with its old
+// answers (body 400, then gateUn1tStaffBooking at the body's studio). What
+// is written to un1t.online is unchanged. A signed-out call answers
+// withAuth's 401 'Unauthorized' (was 'Unauthorised').
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
   const b = validation.data
 
-  const db = createServerClient()
   const gate = await gateUn1tStaffBooking(db, user, { locationId: b.location_id, contactId: b.contact_id })
   if (!gate.ok) return NextResponse.json({ success: false, error: gate.error }, { status: gate.status })
 
@@ -61,4 +61,4 @@ export async function POST(request) {
   }
   const { status, body } = staffWriteAnswer(r, { op: 'cancel' })
   return NextResponse.json(body, { status })
-}
+})

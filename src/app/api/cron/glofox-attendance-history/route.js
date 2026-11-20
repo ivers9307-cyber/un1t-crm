@@ -31,12 +31,14 @@
 //
 // A location whose candidate read or credentials failed did no work: it is
 // reported failed and the heartbeat is withheld, so a broken sweep pages
-// rather than looking like a finished one (GLOFOX414.1).
+// rather than looking like a finished one (GLOFOX414.1). A failed location
+// answers success:false at 200 as before; a run where no studio completed (each
+// one failed, or the only Glofox studio's credentials could not be read at
+// discovery, which used to stamp as an idle run) answers 500 (ROUTEWRAP.C11).
 //
-// Auth: same fail-closed CRON_SECRET pattern as the other crons.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+// Auth, the error boundary and the stamp: defineCron. Responses carry fixed
+// lines; database text and error detail go to the log and the run row.
+import { defineCron } from '@/lib/define-cron'
 import { glofoxCredentialsForLocation, fetchUserBookingHistoryResult, glofoxHttpStats, glofoxHttpStatsSince } from '@/lib/glofox'
 import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
@@ -57,20 +59,20 @@ const GLOFOX_CONCURRENCY = 3
 // next tick's page because every attempt stamps its contact.
 const TIME_BUDGET_MS = 250_000
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
+const MISSING_CREDS_MESSAGE = 'Glofox credentials missing on this location.'
+// The location errors the response may carry; anything else (database text)
+// is answered as a fixed line and kept on the run row and in the log.
+const PUBLIC_LOCATION_ERRORS = new Set([GLOFOX_SETTINGS_UNREADABLE_MESSAGE, MISSING_CREDS_MESSAGE])
+const publicLocationError = (msg) => (PUBLIC_LOCATION_ERRORS.has(msg) ? msg : 'Location run failed')
 
+export const GET = defineCron({ heartbeat: 'glofox-attendance-history' }, async ({ db }) => {
   const startedAt = Date.now()
   const httpBefore = glofoxHttpStats()
-  const db = createServerClient()
 
   const { eligible, skipped, error: locErr } = await locationsWithSource(db, 'glofox', { module: 'glofox-attendance-history' })
   if (locErr) {
     logError('glofox-attendance-history', 'list locations failed; heartbeat not stamped', { err: locErr.message })
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    return { ok: false, body: { error: 'Could not read the Glofox studios' } }
   }
 
   const perLocation = []
@@ -82,24 +84,28 @@ export async function GET(request) {
     if (res.budget_exhausted) budgetExhausted = true
   }
 
-  const failed = perLocation.filter((r) => r.status === 'failed')
-  if (failed.length > 0) {
-    logError('glofox-attendance-history', 'location run failed; heartbeat not stamped', {
-      failed: failed.map((r) => ({ locationId: r.location_id, error: r.error })),
-    })
-  } else {
-    await stampHeartbeat('glofox-attendance-history', historyOutcome(perLocation, budgetExhausted, glofoxHttpStatsSince(httpBefore), skippedSummary(skipped)))
-  }
-
-  return NextResponse.json({
-    success: failed.length === 0,
+  const body = {
     locations_processed: perLocation.length,
     locations_skipped: skipped.length,
     ...skippedSummary(skipped),
     budget_exhausted: budgetExhausted,
     per_location: perLocation,
-  })
-}
+  }
+  const failed = perLocation.filter((r) => r.status === 'failed')
+  const unknown = skipped.filter((s) => s.state === 'unknown')
+  const completed = perLocation.length - failed.length
+  if (failed.length > 0 || (completed === 0 && unknown.length > 0)) {
+    logError('glofox-attendance-history', 'location run failed; heartbeat not stamped', {
+      failed: [
+        ...failed.map((r) => ({ locationId: r.location_id, error: r.error })),
+        ...(completed === 0 ? unknown.map((s) => ({ locationId: s.id, error: 'membership source state unknown' })) : []),
+      ],
+    })
+    for (const r of failed) r.error = publicLocationError(r.error)
+    return { ok: false, status: completed === 0 ? 500 : 200, body }
+  }
+  return { body, outcome: historyOutcome(perLocation, budgetExhausted, glofoxHttpStatsSince(httpBefore), skippedSummary(skipped)) }
+})
 
 /** One studio's slice of the sweep, within the shared time budget. */
 async function readLocation(db, location, startedAt) {
@@ -130,7 +136,7 @@ async function readLocation(db, location, startedAt) {
     const creds = await glofoxCredentialsForLocation(db, location.id)
     if (creds.readError) throw new Error(GLOFOX_SETTINGS_UNREADABLE_MESSAGE)
     if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
-      throw new Error('Glofox credentials missing on this location.')
+      throw new Error(MISSING_CREDS_MESSAGE)
     }
 
     const crossover = await glofoxCrossoverContactIds(db, location.id)

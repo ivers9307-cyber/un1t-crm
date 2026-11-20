@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Modelled on ../route.test.js: the route judges MANAGER_ROLES at the location
 // with the real per-location helpers, so the fixtures carry rolesByLocation.
-vi.mock('@/lib/auth', async () => {
+vi.mock('@/lib/auth', async (importOriginal) => {
   const { hasRoleAtLocation, hasRoleAtAnyLocation } = await import('@/lib/role-at-location')
-  return { getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null), hasRoleAtLocation, hasRoleAtAnyLocation }
+  return { ...(await importOriginal()), getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null), hasRoleAtLocation, hasRoleAtAnyLocation }
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 
 import { GET } from './route.js'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
@@ -36,8 +37,13 @@ function fakeDb({ data = CLASSES, error = null } = {}) {
   return { calls, client: { from: (t) => { calls.table = t; return q } } }
 }
 
+// withAuth (ROUTEWRAP.R5) makes the client before the handler runs; "before
+// touching the database" means no query on it.
+let idle
 beforeEach(() => {
   vi.clearAllMocks()
+  idle = fakeDb()
+  createServerClient.mockReturnValue(idle.client)
   assertLocationAccess.mockReturnValue(null)
   getCurrentUser.mockResolvedValue({ role: 'manager', id: 'u1', rolesByLocation: { [LOC]: 'manager' } })
 })
@@ -60,20 +66,20 @@ describe('GET /api/automations/[key]/schedule', () => {
     const res = await get('glofox_lead_provisioning')
     expect(res.status).toBe(400)
     expect((await res.json()).success).toBe(false)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(idle.calls.table).toBeNull()
   })
 
   it('403 for screen_mode when the caller is not a manager at the location', async () => {
     getCurrentUser.mockResolvedValue({ role: 'staff', id: 'u2', rolesByLocation: { [LOC]: 'staff' } })
     const res = await get('screen_mode')
     expect(res.status).toBe(403)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(idle.calls.table).toBeNull()
   })
 
   it('400 when location_id is missing or not uuid-shaped', async () => {
     expect((await get('screen_mode', '')).status).toBe(400)
     expect((await get('screen_mode', '?location_id=nope')).status).toBe(400)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(idle.calls.table).toBeNull()
   })
 
   it('honours the location guard (assertLocationAccess)', async () => {
@@ -81,6 +87,27 @@ describe('GET /api/automations/[key]/schedule', () => {
     assertLocationAccess.mockReturnValue(NextResponse.json({ success: false }, { status: 403 }))
     const res = await get('screen_mode')
     expect(res.status).toBe(403)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(idle.calls.table).toBeNull()
+  })
+
+  it('401 signed out (withAuth; it said 403 before), nothing read', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await get('screen_mode')).status).toBe(401)
+    expect(idle.calls.table).toBeNull()
+  })
+
+  it('403 for a caller who is a manager nowhere', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'staff', id: 'u3', rolesByLocation: { [LOC]: 'staff' } })
+    const res = await get('class_climate')
+    expect(res.status).toBe(403)
+    expect(idle.calls.table).toBeNull()
+  })
+
+  it('a failed read is a 500 without the database text', async () => {
+    const { client } = fakeDb({ data: null, error: { message: 'secret detail' } })
+    createServerClient.mockReturnValue(client)
+    const res = await get('class_climate')
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('secret detail')
   })
 })

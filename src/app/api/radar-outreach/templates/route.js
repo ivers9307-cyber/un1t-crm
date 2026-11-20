@@ -13,49 +13,47 @@
 // Access: churn_radar (the Lead Radar that shared this picker is retired, CONTACTLOG.2).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  if (!hasPermission(user, 'churn_radar')) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-  const locationId = user.activeLocation?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
-  }
-
-  const db = createServerClient()
-  const { data, error } = await db
-    .from('whatsapp_templates')
-    .select('name, language, category, status, components')
-    .eq('location_id', locationId)
-    .eq('category', 'UTILITY')
-    .eq('status', 'APPROVED')
-    .order('name', { ascending: true })
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  }
-
-  const templates = (data || []).map((t) => {
-    const { bodyText, varCount } = extractTemplateBody(t.components)
-    return {
-      name: t.name,
-      language: t.language || 'en',
-      bodyText,
-      varCount,
-      sendable: isSendableUtilityTemplate(t),
+// churn_radar at the active studio ('Forbidden' 403), then the active studio
+// (400), in that order and with these texts, as before.
+export const GET = withAuth(
+  { permission: null, location: false, allow: (user) => hasPermission(user, 'churn_radar'), forbiddenMessage: 'Forbidden' },
+  async ({ user, db }) => {
+    const locationId = user.activeLocation?.id
+    if (!locationId) {
+      return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
     }
-  })
 
-  return NextResponse.json({ success: true, data: { templates } })
-}
+    const { data, error } = await db
+      .from('whatsapp_templates')
+      .select('name, language, category, status, components')
+      .eq('location_id', locationId)
+      .eq('category', 'UTILITY')
+      .eq('status', 'APPROVED')
+      .order('name', { ascending: true })
+    if (error) {
+      logError('radar-outreach', 'template read failed', { locationId, err: error })
+      return NextResponse.json({ success: false, error: 'Could not load the templates. Try again.' }, { status: 500 })
+    }
+
+    const templates = (data || []).map((t) => {
+      const { bodyText, varCount } = extractTemplateBody(t.components)
+      return {
+        name: t.name,
+        language: t.language || 'en',
+        bodyText,
+        varCount,
+        sendable: isSendableUtilityTemplate(t),
+      }
+    })
+
+    return NextResponse.json({ success: true, data: { templates } })
+  },
+)

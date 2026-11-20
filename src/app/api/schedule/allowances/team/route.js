@@ -18,8 +18,9 @@
 // at this studio; a head coach reads balances but records no lieu).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
+import { assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { parseAllowanceYear } from '@/lib/allowance-year'
 import { staffZoneOfUser } from '@/lib/staff-zone'
@@ -29,10 +30,9 @@ import { readTeamLeaveBalances } from '@/lib/team-leave-balances'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// withAuth only signs the caller in; the active studio (400), membership (403)
+// and the manager rule there (403) keep their order and texts here.
+export const GET = withAuth({ permission: null, location: false }, async ({ request, user, db }) => {
   const locationId = user.activeLocation?.id || null
   if (!locationId) return NextResponse.json({ success: false, error: 'Choose a studio first' }, { status: 400 })
   const guard = assertLocationAccess(user, locationId)
@@ -46,10 +46,9 @@ export async function GET(request) {
   const { year, error: yearError } = parseAllowanceYear(searchParams.get('year'), zone)
   if (yearError) return NextResponse.json({ success: false, error: yearError }, { status: 400 })
 
-  const db = createServerClient()
   const { rows, unreadable, error } = await readTeamLeaveBalances(db, locationId, year)
   if (error) {
-    console.error('[allowances/team] staff list unreadable', error.message)
+    logError('allowances-team', 'staff list unreadable', { locationId, err: error })
     return NextResponse.json({ success: false, error: 'Could not read the studio\'s staff list' }, { status: 500 })
   }
 
@@ -65,4 +64,4 @@ export async function GET(request) {
       rows,
     },
   })
-}
+})

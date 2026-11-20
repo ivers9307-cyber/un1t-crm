@@ -27,9 +27,9 @@ vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => (limitAllowed ? { allowed: true } : { allowed: false, retryAfterSec: 60 })),
   rateLimitResponse: vi.fn((_l, message) => new Response(JSON.stringify({ success: false, error: message }), { status: 429 })),
 }))
-vi.mock('@/lib/event-waitlist', async (importOriginal) => ({ ...(await importOriginal()), runWaitlistOffers: vi.fn() }))
+vi.mock('@/lib/event-waitlist', async (importOriginal) => ({ ...(await importOriginal()), runWaitlistOffers: vi.fn(), offerWaitlistRow: vi.fn() }))
 
-const { runWaitlistOffers } = await import('@/lib/event-waitlist')
+const { runWaitlistOffers, offerWaitlistRow } = await import('@/lib/event-waitlist')
 const { GET } = await import('./route.js')
 const { DELETE } = await import('./[rowId]/route.js')
 const { POST: OFFER } = await import('./offer/route.js')
@@ -165,5 +165,47 @@ describe('Offer now throttle', () => {
     expect(res.status).toBe(429)
     expect((await res.json()).error).toBe('Offer now can run 3 times an hour for an event. Try again later.')
     expect(runWaitlistOffers).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/events/[id]/waitlist/offer with { row_id } (WAITLISTONE.1)', () => {
+  const call = (rowId = ROW_ID) => OFFER(new Request('https://crm.test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ row_id: rowId }) }), props())
+
+  it('offers that one row of this event and answers what was sent', async () => {
+    offerWaitlistRow.mockResolvedValue({ result: 'offered', email: 'sent', whatsapp: 'skipped:no_phone' })
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.result).toBe('offered')
+    expect(offerWaitlistRow).toHaveBeenCalledWith(db, { eventId: E1, rowId: ROW_ID })
+    expect(runWaitlistOffers).not.toHaveBeenCalled()
+  })
+
+  it('409 with a message when every time is full; 404 for a row not on the list', async () => {
+    offerWaitlistRow.mockResolvedValue({ result: 'no_room' })
+    const full = await call()
+    expect(full.status).toBe(409)
+    expect((await full.json()).message).toMatch(/full/)
+    offerWaitlistRow.mockResolvedValue({ result: 'not_found' })
+    expect((await call()).status).toBe(404)
+  })
+
+  it('keeps the staff gate, 404s a bad row id, and is rate limited per row', async () => {
+    isManager = false
+    expect((await call()).status).toBe(403)
+    isManager = true
+    expect((await call('nope')).status).toBe(404)
+    const junk = await OFFER(new Request('https://crm.test', { method: 'POST', body: '{' }), props())
+    expect(junk.status).toBe(400)
+    limitAllowed = false
+    expect((await call()).status).toBe(429)
+    expect(offerWaitlistRow).not.toHaveBeenCalled()
+    const { checkRateLimit } = await import('@/lib/rate-limit')
+    expect(checkRateLimit).toHaveBeenLastCalledWith(db, `waitlist-offer-row:${ROW_ID}`, { max: 3, windowMs: 3_600_000 })
+  })
+
+  it('no body still runs the whole-list round', async () => {
+    await OFFER(new Request('https://crm.test', { method: 'POST' }), props())
+    expect(runWaitlistOffers).toHaveBeenCalled()
+    expect(offerWaitlistRow).not.toHaveBeenCalled()
   })
 })

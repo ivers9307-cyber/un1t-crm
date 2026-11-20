@@ -9,19 +9,14 @@
 // just sees the new status next time they refresh.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
-export async function POST(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+// withAuth only signs the caller in (the same 401); the row (404), the owner
+// check (404), the status (409) and the guarded write keep their order here.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   const { data: inv, error: loadErr } = await db
     .from('contractor_invoices')
     .select('id, contractor_id, status')
@@ -59,7 +54,8 @@ export async function POST(_request, props) {
     .select()
     .single()
   if (updErr) {
-    return NextResponse.json({ success: false, error: updErr.message }, { status: 400 })
+    logError('contractor-invoices', 'revoke failed', { invoiceId: params.id, err: updErr })
+    return NextResponse.json({ success: false, error: 'Could not revoke the invoice. Refresh and try again.' }, { status: 400 })
   }
   if (!revoked) {
     return NextResponse.json(
@@ -69,4 +65,4 @@ export async function POST(_request, props) {
   }
 
   return NextResponse.json({ success: true, data: revoked })
-}
+})

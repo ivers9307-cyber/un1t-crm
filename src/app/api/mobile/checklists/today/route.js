@@ -14,24 +14,16 @@
 // the same row.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { resolveTodayInstances } from '@/lib/checklist-instances'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// Signed in (the phone's Bearer token too) with an active studio; no
+// permission key, as before.
+export const GET = withAuth({ permission: null, location: true }, async ({ user, db }) => {
   const location = user.activeLocation
-  if (!location?.id) {
-    return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
-  }
-
-  const db = createServerClient()
   const instances = await resolveTodayInstances(db, {
     profile: { id: user.id, role: user.role, location_role: user.role },
     location,
@@ -41,4 +33,4 @@ export async function GET() {
     success: true,
     data: { instances },
   })
-}
+})

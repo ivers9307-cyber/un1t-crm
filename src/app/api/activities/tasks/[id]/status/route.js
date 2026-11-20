@@ -6,8 +6,7 @@
 // trigger (sync_activity_done_status) keeps `done` and `completed_at` in step.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { activitiesWriteForbiddenAnywhere, loadTaskForWebWrite } from '@/lib/activity-web-writes'
 
@@ -15,10 +14,9 @@ const StatusSchema = z.object({
   status: z.enum(['todo', 'in_progress', 'done', 'cancelled']),
 })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the coarse "can write activities
+// anywhere" check, the body and the task's own studio run below, as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   const coarse = activitiesWriteForbiddenAnywhere(user)
   if (coarse) return coarse
 
@@ -26,7 +24,6 @@ export async function POST(request, props) {
   if (!validation.ok) return validation.response
   const { status } = validation.data
 
-  const db = createServerClient()
   const { response, task } = await loadTaskForWebWrite(db, user, params.id)
   if (response) return response
 
@@ -45,4 +42,4 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'This task no longer exists. Reload the page.' }, { status: 404 })
   }
   return NextResponse.json({ success: true, data: data[0] })
-}
+})

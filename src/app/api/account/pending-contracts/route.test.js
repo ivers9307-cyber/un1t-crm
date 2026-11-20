@@ -6,7 +6,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
 import { GET } from './route.js'
@@ -14,12 +15,12 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { LEGACY_COUNTERSIGNATURE_ENTITY } from '@/lib/contracting-entity'
 
-function dbWith(rows) {
+function dbWith(rows, error = null) {
   const q = {
     select: vi.fn(() => q),
     eq: vi.fn(() => q),
     in: vi.fn(() => q),
-    order: vi.fn(async () => ({ data: rows, error: null })),
+    order: vi.fn(async () => ({ data: error ? null : rows, error })),
   }
   return { from: vi.fn(() => q), _q: q }
 }
@@ -54,5 +55,19 @@ describe('GET /api/account/pending-contracts — issuer', () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await GET()
     expect(res.status).toBe(401)
+  })
+
+  it('reads only the caller\'s own contracts (any signed-in person, no studio needed)', async () => {
+    const db = dbWith([])
+    createServerClient.mockReturnValue(db)
+    expect((await GET()).status).toBe(200)
+    expect(db._q.eq).toHaveBeenCalledWith('profile_id', 'u1')
+  })
+
+  it('a failed read is a 500 without the database text', async () => {
+    createServerClient.mockReturnValue(dbWith([], { message: 'secret detail' }))
+    const res = await GET()
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('secret detail')
   })
 })

@@ -4,22 +4,21 @@
 // want to clean up after testing.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function DELETE(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in: car_processing is judged anywhere first,
+// then at the note's own studio, as before.
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
-  const db = createServerClient()
   // Authz reads the note's own denormalised location_id. Every insert copies
   // it from the car (cars/[id]/notes POST, issue-deposit-link; the retired
   // deposit-receipts.js did too), and the car_id filter pins the note to
@@ -40,6 +39,9 @@ export async function DELETE(_request, props) {
   }
 
   const { error } = await db.from('car_notes').delete().eq('id', params.noteId)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('cars', 'note delete failed', { noteId: params.noteId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not delete the note.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
-}
+})

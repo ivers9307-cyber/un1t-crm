@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
+import { logError } from '@/lib/log'
 
 export const ROW_SELECT = `
   id, location_id, sender_email, subject, email_message_id,
@@ -36,7 +37,13 @@ export const ROW_SELECT = `
  * envelope" pattern.
  */
 export async function loadInvoiceForUser(id) {
-  const user = await getCurrentUser()
+  return loadInvoiceForCaller(await getCurrentUser(), id)
+}
+
+// The same gate for a caller withAuth already signed in (ROUTEWRAP.R5): the
+// row read, the 404s and the permission and owner checks at the row's studio
+// run here, in this order, for both entry points.
+export async function loadInvoiceForCaller(user, id) {
   if (!user) {
     return { response: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
   }
@@ -48,7 +55,8 @@ export async function loadInvoiceForUser(id) {
     .eq('id', id)
     .maybeSingle()
   if (error) {
-    return { response: NextResponse.json({ success: false, error: error.message }, { status: 500 }) }
+    logError('invoices-inbox', 'invoice read failed', { invoiceId: id, err: error })
+    return { response: NextResponse.json({ success: false, error: 'Could not load the invoice.' }, { status: 500 }) }
   }
   if (!row) {
     return { response: NextResponse.json({ success: false, error: 'Not found' }, { status: 404 }) }

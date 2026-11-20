@@ -43,9 +43,16 @@
 // arm's heartbeat row stamps only on a tick that took one of ITS slots with no
 // fault (slotTickStampable) and a clean arm outcome; the 'none' scope is due
 // at 08:00 UTC, so both rows keep their daily clock.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+//
+// ROUTEWRAP.C9 — on defineCron (src/lib/define-cron.js) with the same stamps as
+// before. Each arm's row goes in `arms` exactly when it was stamped before (a
+// clean arm on a slot tick), even when the contract half then crashes or its
+// gate is unreadable (the crash is caught here, answered 500, and stamps no
+// 'contract-reminders'). 'contract-reminders' is stamped on every slot tick,
+// a gate fault elsewhere included (ok: false + stamp: true, answered 500); a
+// quiet hourly tick is stamp: false. A thrown arm records a fixed line, never
+// the error text (that goes to the log).
+import { defineCron } from '@/lib/define-cron'
 import { reminderDue } from '@/lib/contracts'
 import { sendContractReminderEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
@@ -69,11 +76,12 @@ const MODULE = 'cron-contract-reminders'
 
 /**
  * One arm on its own daily slot. Gate (claim this tick's due studios under the
- * arm's OWN slot key), run the arm for those studios only, then stamp the
- * arm's OWN heartbeat row, under its own .catch, only when the tick took a
- * slot with no gate fault AND the arm returned a clean outcome. Never throws.
+ * arm's OWN slot key), run the arm for those studios only, then say whether the
+ * arm's OWN heartbeat row is stamped: only when the tick took a slot with no
+ * gate fault AND the arm returned a clean outcome. Never throws.
  *
- * @returns {Promise<{ outcome: object, failed: 0|1, faulted: boolean }>}
+ * @returns {Promise<{ outcome: object, failed: 0|1, faulted: boolean, arm: { heartbeat: string, outcome: object } | null }>}
+ *   arm: the row for defineCron's `arms` (null when it must not stamp).
  *   outcome: the arm's own, or { skipped } (no slot due: a quiet hourly tick),
  *   or { error } (the arm threw, or the gate could not read the zones).
  *   failed: 1 when the arm threw or its gate faulted (claim write or zone read).
@@ -82,12 +90,12 @@ const MODULE = 'cron-contract-reminders'
 async function runArmOnSlot(db, nowMs, { slotName, run, healthy, heartbeat, label, failMessage }) {
   const gate = await gateDailySlot(db, slotName, { nowMs, module: MODULE })
   if (!gate.ok) {
-    return { outcome: { error: `${label}: studio zones unreadable, no studio acts this tick`, slot: gate.summary }, failed: 1, faulted: true }
+    return { outcome: { error: `${label}: studio zones unreadable, no studio acts this tick`, slot: gate.summary }, failed: 1, faulted: true, arm: null }
   }
   if (gate.slots.size === 0) {
     // Nothing claimed: a quiet hourly tick (or a claim write that failed for
     // every due studio, which gate.faulted reports). Not a run: no stamp.
-    return { outcome: { skipped: 'no studio at its daily slot', slot: gate.summary }, failed: gate.faulted ? 1 : 0, faulted: gate.faulted }
+    return { outcome: { skipped: 'no studio at its daily slot', slot: gate.summary }, failed: gate.faulted ? 1 : 0, faulted: gate.faulted, arm: null }
   }
   let outcome
   let failed = gate.faulted ? 1 : 0
@@ -96,28 +104,21 @@ async function runArmOnSlot(db, nowMs, { slotName, run, healthy, heartbeat, labe
   } catch (err) {
     failed = 1
     logError(MODULE, `${label} arm threw`, { err })
-    outcome = { error: err?.message || failMessage }
+    // ROUTEWRAP.C9 — a fixed line: the thrown text stays in the log above.
+    outcome = { error: failMessage }
   }
-  // Stamped HERE, before the contract half, so a contract crash (which
-  // answers nothing and stamps nothing, as always) cannot cost a clean arm
-  // its stamp; its own catch, so the stamp can never cost the contract half
+  // Decided HERE, before the contract half, and handed to defineCron in
+  // `arms` on every path GET returns (a contract crash included), so a
+  // contract failure cannot cost a clean arm its stamp; defineCron stamps each
+  // arm under its own catch, so the stamp can never cost the contract half
   // anything. Only a tick that took one of this arm's slots with no gate
   // fault (slotTickStampable), and an outcome that is not a throw or an
   // { error } (src/lib/cron-arm-health.js): a day with nothing to say stamps.
-  if (slotTickStampable(gate) && failed === 0 && healthy(outcome)) {
-    await stampHeartbeat(heartbeat, outcome).catch((err) =>
-      logWarn(MODULE, `${heartbeat} heartbeat failed`, { err }))
-  }
-  return { outcome, failed, faulted: gate.faulted }
+  const stamp = slotTickStampable(gate) && failed === 0 && healthy(outcome)
+  return { outcome, failed, faulted: gate.faulted, arm: stamp ? { heartbeat, outcome } : null }
 }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'contract-reminders' }, async ({ db }) => {
   const now = new Date()
   const nowMs = now.getTime()
 
@@ -157,13 +158,27 @@ export async function GET(request) {
   const qualifications = qualificationArm.outcome
   const qualificationArmFailed = qualificationArm.failed
   const armsFaulted = runwayArm.faulted || qualificationArm.faulted
+  // The arm rows this tick stamps, whatever the contract half does next.
+  const arms = [runwayArm.arm, qualificationArm.arm].filter(Boolean)
 
+  try {
+    return { ...(await runContractHalf(db, now, nowMs, { runway, runwayArmFailed, qualifications, qualificationArmFailed, armsFaulted })), arms }
+  } catch (err) {
+    // A contract crash answers 500 and stamps no 'contract-reminders' (as
+    // before); the arms that ran clean keep their stamps.
+    logError(MODULE, 'contract half threw', { err })
+    return { ok: false, status: 500, body: { error: 'Contract reminders run failed' }, arms }
+  }
+})
+
+/** The contract half: gate, candidates, reminders, and the tick's own result. */
+async function runContractHalf(db, now, nowMs, { runway, runwayArmFailed, qualifications, qualificationArmFailed, armsFaulted }) {
   // TZ.6 — which locations are at their daily slot this tick (claimed, so
   // never twice in one local day). An unreadable zone acts for nobody; a tick
   // with no slot due reads no contracts.
   const gate = await gateDailySlot(db, 'contract-reminders', { nowMs, module: MODULE })
   if (!gate.ok) {
-    return NextResponse.json({ success: false, slot: gate.summary, runway, qualifications }, { status: 500 })
+    return { ok: false, status: 500, body: { slot: gate.summary, runway, qualifications } }
   }
 
   // Candidate contracts — status in ('issued','viewed') and not yet at the
@@ -283,13 +298,9 @@ export async function GET(request) {
   }
   // TZ.6: only a tick that took a slot, with no gate fault, stamps the row (it
   // keeps the legacy daily clock); a quiet hourly tick never does.
-  if (slotTickStampable(gate)) {
-    await stampHeartbeat('contract-reminders', outcome).catch((err) =>
-      logWarn('cron-contract-reminders', 'heartbeat failed', { err }))
-  }
-
   // A gate fault, the contract half's or an arm's, answers 500 (every gated
-  // cron does). It costs no other half its run or its stamp.
+  // cron does). It costs no other half its run or its stamp: a slot tick with
+  // an arm's gate fault still stamps (stamp: true with ok: false).
   const faulted = gate.faulted || armsFaulted
-  return NextResponse.json({ success: !faulted, ...outcome }, { status: faulted ? 500 : 200 })
+  return { ok: !faulted, stamp: slotTickStampable(gate), outcome, body: outcome }
 }
