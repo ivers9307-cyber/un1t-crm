@@ -4,8 +4,8 @@
 // touch, a missing one and a malformed id are all 404.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
+import { hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { QualificationRecordPatchSchema } from '@/lib/qualifications-schemas'
@@ -15,29 +15,26 @@ export const dynamic = 'force-dynamic'
 
 const send = (out) => NextResponse.json(out.body, { status: out.status })
 
-async function gate(props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return { response: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
-  if (!hasRoleAtAnyLocation(user, QUAL_MANAGER_ROLES)) {
-    return { response: NextResponse.json({ success: false, error: 'Only an owner or a manager can change qualifications.' }, { status: 403 }) }
-  }
-  if (!uuidLike.safeParse(params?.id).success) {
-    return { response: NextResponse.json({ success: false, error: 'Not found' }, { status: 404 }) }
-  }
-  return { user, id: params.id }
+// withAuth signs the caller in; the coarse role check (an owner or manager
+// somewhere) answers the same 403, then a malformed id is a 404 before the
+// body is read. The row's own studio is judged in qualifications-server.
+const GATE = {
+  permission: null,
+  location: false,
+  allow: (user) => hasRoleAtAnyLocation(user, QUAL_MANAGER_ROLES),
+  forbiddenMessage: 'Only an owner or a manager can change qualifications.',
 }
+const badId = (params) => !uuidLike.safeParse(params?.id).success
+const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
-export async function PATCH(request, props) {
-  const { user, id, response } = await gate(props)
-  if (response) return response
+export const PATCH = withAuth(GATE, async ({ user, db, request, params }) => {
+  if (badId(params)) return notFound()
   const validation = await validateBody(request, QualificationRecordPatchSchema)
   if (!validation.ok) return validation.response
-  return send(await updateQualificationRecord(createServerClient(), { user, id, input: validation.data }))
-}
+  return send(await updateQualificationRecord(db, { user, id: params.id, input: validation.data }))
+})
 
-export async function DELETE(request, props) {
-  const { user, id, response } = await gate(props)
-  if (response) return response
-  return send(await deleteQualificationRecord(createServerClient(), { user, id }))
-}
+export const DELETE = withAuth(GATE, async ({ user, db, params }) => {
+  if (badId(params)) return notFound()
+  return send(await deleteQualificationRecord(db, { user, id: params.id }))
+})

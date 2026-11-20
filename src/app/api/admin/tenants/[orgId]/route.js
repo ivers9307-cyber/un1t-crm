@@ -8,37 +8,29 @@
 // can't be enumerated. Master role only.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { uuidLike } from '@/lib/validate'
 import { getTenantDetail } from '@/lib/admin-tenants'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  if (user.profileRole !== 'master') {
-    return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
-  }
+const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
-  // Malformed id = not found (never a Postgres cast error).
-  if (!uuidLike.safeParse(params.orgId).success) {
-    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  }
-
-  const db = createServerClient()
-  try {
-    const data = await getTenantDetail(db, params.orgId)
-    if (!data) {
-      return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+// Master = profiles.role, as before (profileRole, not a studio role); no studio.
+export const GET = withAuth(
+  { permission: null, location: false, allow: (user) => user.profileRole === 'master', forbiddenMessage: 'Master only' },
+  async ({ db, params }) => {
+    // Malformed id = not found (never a Postgres cast error).
+    if (!uuidLike.safeParse(params?.orgId).success) return notFound()
+    try {
+      const data = await getTenantDetail(db, params.orgId)
+      if (!data) return notFound()
+      return NextResponse.json({ success: true, data })
+    } catch (err) {
+      logError('admin-tenants', 'tenant detail failed', { orgId: params.orgId, err })
+      return NextResponse.json({ success: false, error: 'Could not load the tenant.' }, { status: 500 })
     }
-    return NextResponse.json({ success: true, data })
-  } catch (e) {
-    return NextResponse.json({ success: false, error: e.message }, { status: 500 })
-  }
-}
+  },
+)
