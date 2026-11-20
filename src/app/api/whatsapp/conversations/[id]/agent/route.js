@@ -1,7 +1,8 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { withAuth } from '@/lib/with-auth'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 
 const ToggleSchema = z.object({ active: z.boolean() })
@@ -14,11 +15,7 @@ const ToggleSchema = z.object({ active: z.boolean() })
 // agent_paused_at timestamp instead (mig 435) — null = Mia active, set = Mia
 // paused (sticky). Deliberately does NOT stamp agent_handed_off_at; that's
 // IG rearm machinery this route intentionally does not reuse.
-export async function PATCH(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   // INBOXWEBONLY3.1 — web only (the phone never calls this), so the WEB
   // `whatsapp` key: coarse pre-check at any studio before the row is read; the
   // decision is requireWebWhatsAppInboxAt at the conversation's studio.
@@ -52,4 +49,4 @@ export async function PATCH(request, props) {
     .eq('id', params.id)
 
   return NextResponse.json({ success: true, agent_paused_at })
-}
+})

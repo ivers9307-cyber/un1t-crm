@@ -9,7 +9,8 @@
 // anyone else clears the stamp (PUT).
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, assertOrganizationAdmin } from '@/lib/auth'
+import { assertLocationAccessOr404, assertOrganizationAdmin } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { z } from 'zod'
 import { validateBody } from '@/lib/validate'
@@ -21,10 +22,8 @@ const SIGNABLE = ['draft', 'scheduled']
 const waForbidden = () => NextResponse.json(
   { success: false, error: 'Forbidden — WhatsApp not enabled' }, { status: 403 })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// ROUTEWRAP.R9 — withAuth only signs the caller in; the gates below are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
   const validation = await validateBody(request, SignOffSchema)
@@ -83,4 +82,4 @@ export async function POST(request, props) {
     }, { status: 409 })
   }
   return NextResponse.json({ success: true, broadcast: data[0] })
-}
+})

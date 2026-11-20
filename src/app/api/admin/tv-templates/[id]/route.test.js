@@ -95,7 +95,9 @@ describe('PUT /api/admin/tv-templates/[id]', () => {
     db = tplDb(template(), () => ({ data: [], error: null }))
     expect((await save(BODY)).status).toBe(404)
     db = tplDb(template(), () => ({ data: null, error: { message: 'boom' } }))
-    expect((await save(BODY)).status).toBe(500)
+    const res = await save(BODY)
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('boom')
   })
 
   it('400 with no name; another studio\'s template is 404 and untouched', async () => {
@@ -115,9 +117,23 @@ describe('DELETE /api/admin/tv-templates/[id]', () => {
   })
   it('a delete error is a 500; another studio\'s is 404 and untouched', async () => {
     db = tplDb(template(), () => ({ data: null, error: { message: 'boom' } }))
-    expect((await remove()).status).toBe(500)
+    const res = await remove()
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('boom')
     db = tplDb(template({ location_id: LOC_B }))
     expect((await remove()).status).toBe(404)
     expect(writesOf(db)).toEqual([])
+  })
+})
+
+// ROUTEWRAP.R11 — withAuth signs the caller in first: signed out is its 401 on
+// every method, and nothing is read or written.
+describe('signed out', () => {
+  it('401 on GET, PUT and DELETE', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await get()).status).toBe(401)
+    expect((await save(BODY)).status).toBe(401)
+    expect((await remove()).status).toBe(401)
+    expect(db.calls).toEqual([])
   })
 })

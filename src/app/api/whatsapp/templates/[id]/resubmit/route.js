@@ -6,7 +6,9 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { editTemplate } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
 import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
@@ -30,11 +32,8 @@ function headerFormatOf(components) {
   return String(header?.format || '').toUpperCase()
 }
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// ROUTEWRAP.R9 — withAuth only signs the caller in; the gates below are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   const db = createServerClient()
   const { data: tmpl, error: readError } = await db.from('whatsapp_templates')
     .select('id, location_id, business_account_id, status, meta_template_id, header_media_url, header_media_path')
@@ -117,6 +116,8 @@ export async function POST(request, props) {
 
     return NextResponse.json({ success: true, template: data })
   } catch (err) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 400 })
+    // ROUTEWRAP.R9 — Meta's or the database's text is logged, never returned.
+    logError('wa-templates-resubmit', 'resubmit failed', { err, templateId: params.id })
+    return NextResponse.json({ success: false, error: 'Could not resubmit the template. Check it and try again.' }, { status: 400 })
   }
-}
+})

@@ -1,7 +1,9 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
+import { assertLocationAccess, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { contactWhatsAppNumber } from '@/lib/phone-validate'
@@ -12,10 +14,8 @@ const StartConvoSchema = z.object({
 
 // POST /api/whatsapp/conversations/start
 // Get or create a conversation for an existing contact
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// ROUTEWRAP.R9 — withAuth only signs the caller in; the gates below are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request }) => {
   // INBOXWEBONLY3.1 — web only (the phone never starts a thread), so the WEB
   // `whatsapp` key: coarse pre-check at any studio before the contact is read;
   // the decision is requireWebWhatsAppInboxAt at the contact's studio (where
@@ -109,7 +109,8 @@ export async function POST(request) {
         return NextResponse.json({ success: true, conversation_id: byPhone.id })
       }
 
-      return NextResponse.json({ success: false, error: convErr.message }, { status: 500 })
+      logError('wa-start', 'conversation insert failed', { err: convErr, contactId: contact.id })
+      return NextResponse.json({ success: false, error: 'Could not start the conversation. Try again.' }, { status: 500 })
     }
 
     // Update contact's wa_phone if not set
@@ -125,6 +126,6 @@ export async function POST(request) {
     return NextResponse.json({ success: true, conversation_id: newConv.id })
   } catch (err) {
     console.error('Start conversation error:', err)
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Could not start the conversation. Try again.' }, { status: 500 })
   }
-}
+})

@@ -77,3 +77,13 @@ describe('POST /api/settings/email-domain/verify — a failed read (CHANNELREAD.
     expect(res.status).toBe(409)
   })
 })
+
+describe('POST /api/settings/email-domain/verify — signed out (ROUTEWRAP.R10)', () => {
+  it('answers withAuth’s 401 and checks nothing', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await POST(req())
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(verifyTenantDomainDkim).not.toHaveBeenCalled()
+  })
+})

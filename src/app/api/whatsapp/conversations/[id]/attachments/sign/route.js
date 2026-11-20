@@ -16,9 +16,10 @@
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
+import { withAuth } from '@/lib/with-auth'
 import { randomUUID } from 'node:crypto'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { isWindowOpen } from '@/lib/whatsapp'
 import { logError } from '@/lib/log'
@@ -34,10 +35,7 @@ const WaAttachmentSignSchema = z.object({
   size: z.number().int(),
 })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
@@ -87,4 +85,4 @@ export async function POST(request, props) {
     success: true,
     data: { path, token: signed.token, content_type: judged.contentType, kind: judged.kind },
   })
-}
+})

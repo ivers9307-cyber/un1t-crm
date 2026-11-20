@@ -12,17 +12,18 @@
 // rewrites, and POST here answers 405. Create events through /api/events.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getUserLocationIds, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { getUserLocationIds, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; Manager+ and races somewhere, then at
+// ?location_id when one is named, run here in their old order and words.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
@@ -33,7 +34,6 @@ export async function GET(request) {
   const url = new URL(request.url)
   const filterLocation = url.searchParams.get('location_id')
 
-  const db = createServerClient()
   // ROLESWEEP.1b — "every location I belong to" narrows to the ones where
   // the caller is Manager+ AND holds `races` THERE, not at the active studio.
   const locationIds = filterLocation
@@ -68,6 +68,9 @@ export async function GET(request) {
     .in('location_id', locationIds)
     .order('race_date', { ascending: false })
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('races', 'race events read failed', { code: error.code ?? null, message: error.message })
+    return NextResponse.json({ success: false, error: 'Could not load races just now.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, data: data || [] })
-}
+})

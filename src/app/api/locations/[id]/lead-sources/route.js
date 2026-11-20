@@ -21,8 +21,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { leadSourceSchema } from '@/lib/schemas'
@@ -39,17 +39,13 @@ export const LeadSourcesSchema = z.object({
   sources: z.array(leadSourceSchema).max(STUDIO_LEAD_SOURCES_MAX),
 })
 
-export async function GET(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: locationId } = await params
-  const guard = assertLocationAccessOr404(user, locationId)
-  if (guard) return guard
+// The URL's studio: not one of the caller's studios is a 404 (withAuth's
+// 'param' mode); Contacts and the can_edit role are judged AT that studio here.
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ user, db, locationId }) => {
   if (!hasPermissionForLocation(user, locationId, 'contacts')) {
     return NextResponse.json({ success: false, error: 'You need Contacts at this studio.' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const vocab = await leadSourceVocabulary(db, locationId)
   if (!vocab.ok) {
     logError('lead-sources', 'vocabulary read failed', { locationId, err: vocab.error })
@@ -57,25 +53,16 @@ export async function GET(request, { params }) {
   }
   const canEdit = guardMasterOrOwner(user, locationId) === null
   return NextResponse.json({ success: true, data: { sources: vocab.sources, studio_sources: vocab.studio, can_edit: canEdit } })
-}
+})
 
-export async function PUT(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: locationId } = await params
-  const guard = assertLocationAccessOr404(user, locationId)
-  if (guard) return guard
-  const roleGuard = guardMasterOrOwner(user, locationId)
-  if (roleGuard) {
-    return NextResponse.json({ success: false, error: 'Only owners and masters can change the lead sources.' }, { status: 403 })
-  }
-
+// roles ['owner'] AT the URL's studio (masters pass on profiles.role) is
+// guardMasterOrOwner, with the same 403 words; the body is read after it.
+export const PUT = withAuth({ permission: null, location: 'param', roles: ['owner'], forbiddenMessage: 'Only owners and masters can change the lead sources.' }, async ({ db, locationId, request }) => {
   const validation = await validateBody(request, LeadSourcesSchema)
   if (!validation.ok) return validation.response
   const next = [...new Set(validation.data.sources)]
 
-  const db = createServerClient()
   const result = await mergeLocationSettings(db, locationId, (current) => ({ ...current, lead_sources: next }), { scope: 'lead-sources' })
   if (!result.ok) return settingsSaveFailure(result)
   return NextResponse.json({ success: true, data: { studio_sources: studioLeadSourcesFromSettings(result.settings), can_edit: true } })
-}
+})

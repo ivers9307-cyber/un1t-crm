@@ -100,7 +100,7 @@ describe('PUT — WAROLE.1: master or owner AT the location written', () => {
       return
     }
     expect({ status: res.status, body }).toEqual(REFUSAL[outcome])
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(createServerClient).toHaveBeenCalledTimes(1) // withAuth's own client (ROUTEWRAP.R9); the route opened none
     expect(db.writes).toEqual([])
   })
 
@@ -121,5 +121,17 @@ describe('PUT — WAROLE.1: master or owner AT the location written', () => {
     const res = await GET(new Request(`http://localhost/api/whatsapp/card-sets?location_id=${LOC_B}`))
     expect(res.status).toBe(200)
     expect((await res.json()).sets).toEqual([SET])
+  })
+})
+
+// ROUTEWRAP.R9 — on withAuth: a signed-out call is its fixed 401, before anything runs.
+describe('signed out (withAuth)', () => {
+  it('answers 401 Unauthorized and touches nothing', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    for (const res of [await GET(get()), await PUT(put([]))]) {
+      expect(res.status).toBe(401)
+      expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    }
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 })

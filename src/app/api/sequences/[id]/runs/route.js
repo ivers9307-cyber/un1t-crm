@@ -2,19 +2,19 @@
 // for the automation Performance view's "Recent activity". Manager+ at the
 // sequence's location. Mirrors the /stats route's guards.
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { summariseEnrolmentRun } from '@/lib/sequences/run-history'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; every check below runs in its old order
+// with its old words.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   // ROLESWEEP.1a — coarse pre-check; judged at the sequence's location below.
   if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
@@ -23,11 +23,10 @@ export async function GET(_request, props) {
   // sequence below, after the role.
   if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
-  const db = createServerClient()
   const { data: seq, error: seqErr } = await db
     .from('email_sequences')
     .select('id, location_id')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (seqErr || !seq) {
     return sequenceNotFound()
@@ -58,7 +57,8 @@ export async function GET(_request, props) {
     .order('enrolled_at', { ascending: false })
     .limit(50)
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('sequence-runs', 'run log read failed', { sequenceId: params.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not read the recent activity.' }, { status: 500 })
   }
 
   const runs = (rows || []).map((r) => {
@@ -78,4 +78,4 @@ export async function GET(_request, props) {
   })
 
   return NextResponse.json({ success: true, data: { runs, step_count: stepCount || 0 } })
-}
+})
