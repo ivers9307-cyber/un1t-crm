@@ -1,7 +1,7 @@
 // Tests for the event check-in (attendance) helpers. Pure, Node env.
 
 import { describe, it, expect } from 'vitest'
-import { checkinCounts, registrationAttendance } from './event-checkins.js'
+import { checkinCounts, registrationAttendance, buildCheckinView, defaultOpenGroup } from './event-checkins.js'
 
 // A confirmed registration whose team has `members` people, of whom the
 // first `present` are checked in.
@@ -56,5 +56,54 @@ describe('registrationAttendance', () => {
   it('treats a memberless registration as one expected, none present', () => {
     expect(registrationAttendance(reg(0, 0)))
       .toEqual({ present: 0, expected: 1, allPresent: false, nonePresent: true })
+  })
+})
+
+describe('buildCheckinView (CHECKINLAYOUT.1)', () => {
+  const reg = (id, wave, order, time, people) => ({
+    id, wave_id: wave, wave_label: wave ? `Wave ${wave}` : null, wave_time: time, _order: order,
+    team: { name: `Team ${id}`, team_members: people.map(([name, inn, email], i) => ({ id: `${id}-${i}`, name, email: email || null, checked_in: !!inn })) },
+  })
+
+  it('one time: a single ungrouped list sorted by first name, counting everyone', () => {
+    const v = buildCheckinView([reg('r1', 'w', 0, '12:30', [['Zoe A', false]]), reg('r2', 'w', 0, '12:30', [['Amy B', true], ['Bo B', false]])], { tab: 'all' })
+    expect(v.grouped).toBe(false)
+    expect(v.groups).toHaveLength(1)
+    expect(v.groups[0].entries.map((e) => e.reg.id)).toEqual(['r2', 'r1'])
+    expect(v).toMatchObject({ present: 1, expected: 3, toArrive: 2 })
+  })
+
+  it('several times: grouped by time in wave order, each with its own count', () => {
+    const v = buildCheckinView([
+      reg('r1', 'w2', 1, '09:20', [['Cy', false]]),
+      reg('r2', 'w1', 0, '09:00', [['Ann', true]]),
+      reg('r3', 'w2', 1, '09:20', [['Ben', true], ['Bea', false]]),
+    ], { tab: 'all' })
+    expect(v.grouped).toBe(true)
+    expect(v.groups.map((g) => [g.key, g.time, g.present, g.expected])).toEqual([['w1', '09:00', 1, 1], ['w2', '09:20', 1, 3]])
+    expect(v.groups[1].entries.map((e) => e.reg.id)).toEqual(['r3', 'r1'])
+    expect(defaultOpenGroup(v.groups)).toBe('w2')
+  })
+
+  it('tabs filter people, not counts', () => {
+    const regs = [reg('r1', 'w', 0, null, [['Ann', true], ['Bo', false]])]
+    expect(buildCheckinView(regs, { tab: 'arrive' }).groups[0].entries[0].members.map((m) => m.name)).toEqual(['Bo'])
+    expect(buildCheckinView(regs, { tab: 'in' }).groups[0].entries[0].members.map((m) => m.name)).toEqual(['Ann'])
+    expect(buildCheckinView(regs, { tab: 'arrive' }).groups[0]).toMatchObject({ present: 1, expected: 2 })
+  })
+
+  it('search matches name, email (flagged) or team name', () => {
+    const regs = [reg('r1', 'w', 0, null, [['Ann', false, 'ann@example.test']]), reg('r2', 'w', 0, null, [['Bo', false, 'zed@example.test']])]
+    const byEmail = buildCheckinView(regs, { tab: 'all', query: 'zed@' })
+    expect(byEmail.groups[0].entries).toHaveLength(1)
+    expect(byEmail.groups[0].entries[0].members[0]).toMatchObject({ name: 'Bo', emailMatch: true })
+    expect(buildCheckinView(regs, { tab: 'all', query: 'ann' }).groups[0].entries[0].members[0].emailMatch).toBe(true)
+    expect(buildCheckinView(regs, { tab: 'all', query: 'team r2' }).groups[0].entries.map((e) => e.reg.id)).toEqual(['r2'])
+  })
+
+  it('opens the first time with anyone left to arrive, else the first', () => {
+    expect(defaultOpenGroup([{ key: 'a', present: 2, expected: 2 }, { key: 'b', present: 0, expected: 3 }])).toBe('b')
+    expect(defaultOpenGroup([{ key: 'a', present: 2, expected: 2 }])).toBe('a')
+    expect(defaultOpenGroup([])).toBeNull()
   })
 })

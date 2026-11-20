@@ -62,12 +62,18 @@ export default async function EventCheckinPage(props) {
     return w.label || (w.start_time ? String(w.start_time).slice(0, 5) : null)
   }
   const waveOrder = (id) => wavesById.get(id)?.display_order ?? 999
+  // CHECKINLAYOUT.1 — the start time shown beside the label in each header.
+  const waveTime = (id) => {
+    const t = wavesById.get(id)?.start_time
+    return t ? String(t).slice(0, 5) : null
+  }
 
   const registrations = confirmed
     .map((r) => ({
       id: r.id,
       wave_id: r.wave_id,
       wave_label: waveLabel(r.wave_id),
+      wave_time: waveTime(r.wave_id),
       _order: waveOrder(r.wave_id),
       team: {
         id: r.teams?.id || null,
