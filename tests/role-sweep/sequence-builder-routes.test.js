@@ -30,9 +30,6 @@ import * as detail from '@/app/api/sequences/[id]/route.js'
 import * as graph from '@/app/api/sequences/[id]/graph/route.js'
 import * as publish from '@/app/api/sequences/[id]/graph/publish/route.js'
 import * as agent from '@/app/api/sequences/[id]/graph/agent/route.js'
-import * as steps from '@/app/api/sequences/[id]/steps/route.js'
-import * as step from '@/app/api/sequences/[id]/steps/[stepId]/route.js'
-import * as seqTest from '@/app/api/sequences/[id]/test/route.js'
 import * as runs from '@/app/api/sequences/[id]/runs/route.js'
 import * as stats from '@/app/api/sequences/[id]/stats/route.js'
 import * as fromTemplate from '@/app/api/sequences/from-template/route.js'
@@ -47,7 +44,6 @@ const bare = (method, qs = '') => new Request(`http://localhost/api/x${qs ? `?${
 const params = (p) => ({ params: Promise.resolve(p) })
 
 const SEQ_ID = '5e000000-0000-4000-8000-0000000000a1'
-const STEP_ID = '5e000000-0000-4000-8000-0000000000a2'
 const SEQ_ROW = (loc) => [{
   data: { id: SEQ_ID, location_id: loc, name: 'Welcome', status: 'draft', trigger_type: 'manual', trigger_config: {}, graph: null, draft_graph: null, sequence_steps: [] },
   error: null,
@@ -106,11 +102,6 @@ const ROW_ROUTES = [
   ['DELETE /api/sequences/[id]/graph', () => graph.DELETE(bare('DELETE'), params(id))],
   ['POST /api/sequences/[id]/graph/publish', () => publish.POST(json('POST', {}), params(id))],
   ['POST /api/sequences/[id]/graph/agent', () => agent.POST(json('POST', { prompt: '' }), params(id))],
-  ['GET /api/sequences/[id]/steps', () => steps.GET(bare('GET'), params(id))],
-  ['POST /api/sequences/[id]/steps', () => steps.POST(json('POST', { step_type: 'email', subject: 'Hi' }), params(id))],
-  ['PUT /api/sequences/[id]/steps', () => steps.PUT(json('PUT', { steps: [{ id: STEP_ID, step_order: 1 }] }), params(id))],
-  ['PUT /api/sequences/[id]/steps/[stepId]', () => step.PUT(json('PUT', { subject: 'Hello' }), params({ id: SEQ_ID, stepId: STEP_ID }))],
-  ['DELETE /api/sequences/[id]/steps/[stepId]', () => step.DELETE(bare('DELETE'), params({ id: SEQ_ID, stepId: STEP_ID }))],
 ]
 for (const [title, call] of ROW_ROUTES) {
   describeGate(`${title} (email or whatsapp at the sequence)`, {
@@ -119,7 +110,6 @@ for (const [title, call] of ROW_ROUTES) {
 }
 
 for (const [title, call] of [
-  ['POST /api/sequences/[id]/test', () => seqTest.POST(bare('POST'), params(id))],
   ['GET /api/sequences/[id]/runs', () => runs.GET(bare('GET'), params(id))],
   ['GET /api/sequences/[id]/stats', () => stats.GET(bare('GET'), params(id))],
 ]) {
@@ -138,7 +128,6 @@ const NO_ROW_MAYBE = { data: null, error: null }
 describe('a missing sequence answers exactly like another studio\'s (404 Not found)', () => {
   const MISSING = [
     ...ROW_ROUTES,
-    ['POST /api/sequences/[id]/test', () => seqTest.POST(bare('POST'), params(id))],
     ['GET /api/sequences/[id]/runs', () => runs.GET(bare('GET'), params(id))],
     ['GET /api/sequences/[id]/stats', () => stats.GET(bare('GET'), params(id))],
     ['POST /api/sequences/[id]/clone', () => clone.POST(bare('POST'), params(id))],
