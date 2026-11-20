@@ -10,6 +10,7 @@ let tokenRows = []
 let claimError = null
 let claimMatches = true
 let releaseError = null
+let challengesError = null
 function makeBuilder(table) {
   const state = { eqs: {}, is: {} }
   const b = {}
@@ -35,7 +36,7 @@ function makeBuilder(table) {
         if (won && row) row[column] = value
         out = { data: won ? [{ id: state.eqs.id }] : [], error: null }
       }
-    } else if (table === 'challenges') out = { data: challengeRows.map((r) => ({ ...r })), error: null }
+    } else if (table === 'challenges') out = challengesError ? { data: null, error: challengesError } : { data: challengeRows.map((r) => ({ ...r })), error: null }
     else if (table === 'champ_push_tokens') out = { data: tokenRows, error: null }
     else if (table === 'locations') out = { data: { id: state.eqs.id, timezone: 'Europe/Dublin' }, error: null }
     else out = { data: [], error: null }
@@ -63,6 +64,7 @@ const { todayStrIn } = await import('@/lib/location-time')
 const { sendCustomerPush } = await import('@/lib/customer-push')
 const { logWarn, logError } = await import('@/lib/log')
 const { computeStandings } = await import('@/lib/challenges-io')
+const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
 
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
 // The route's "today" is the studio's calendar day (TZ.13), never the UTC
@@ -82,7 +84,54 @@ beforeEach(() => {
   claimError = null
   claimMatches = true
   releaseError = null
+  challengesError = null
   sendCustomerPush.mockResolvedValue({ sent: 2, invalidated: 0, failed: 0, skipped: 0 })
+})
+
+describe('ROUTEWRAP.C10 run-challenge-events on defineCron', () => {
+  const reqWith = (auth) => new Request('https://x.test/api/cron/run-challenge-events', { headers: auth ? { authorization: auth } : {} })
+
+  it('refuses a caller without the cron secret: nothing claimed, sent or stamped', async () => {
+    for (const auth of [null, 'Bearer nope']) {
+      const res = await GET(reqWith(auth))
+      expect(res.status).toBe(401)
+      expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    }
+    delete process.env.CRON_SECRET
+    expect((await GET(reqWith('Bearer test-secret'))).status).toBe(401)
+    expect(updates).toHaveLength(0)
+    expect(sendCustomerPush).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a clean slot tick announces and stamps exactly its own row', async () => {
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, ok: true, started: 1 })
+    expect(stampHeartbeat.mock.calls).toEqual([['run-challenge-events']])
+  })
+
+  it('a failed announcement is one bad row: still a clean run, stamped', async () => {
+    claimError = { message: 'deadlock detected' }
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: true, failed: 1 })
+    expect(JSON.stringify(body)).not.toContain('deadlock')
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed challenges read is not "no challenges": 500, a fixed line, nothing sent, no stamp', async () => {
+    challengesError = { message: 'permission denied for table challenges' }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, ok: false, error: 'challenges unreadable', started: 0 })
+    expect(JSON.stringify(body)).not.toContain('permission denied')
+    expect(sendCustomerPush).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledWith('cron-challenge-events', expect.stringMatching(/challenges unreadable/), expect.objectContaining({ err: expect.anything() }))
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
 })
 
 describe('run-challenge-events — claim, send, release on failure (C21 PUSHDONE.1b)', () => {

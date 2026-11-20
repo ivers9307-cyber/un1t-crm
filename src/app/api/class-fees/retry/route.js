@@ -6,8 +6,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { canUseClassFees } from '@/lib/class-fees-access'
@@ -23,9 +23,10 @@ export const RetryClassFeesSchema = z.object({
   contact_id: uuidLike,
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in. Every check after it runs by hand, in the
+// order it always has: body 400, studio membership 403, class_fees at the
+// body's studio 403, then the per-member rate limit 429.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const validation = await validateBody(request, RetryClassFeesSchema)
   if (!validation.ok) return validation.response
   const { location_id: locationId, contact_id: contactId } = validation.data
@@ -33,7 +34,6 @@ export async function POST(request) {
   if (guard) return guard
   if (!canUseClassFees(user, locationId)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
-  const db = createServerClient()
   const slot = await checkRateLimit(db, `class-fees-retry:${locationId}:${contactId}`, { max: 3, windowMs: 60_000 })
   if (!slot.allowed) return NextResponse.json({ success: false, error: 'A retry for this member just ran. Wait a minute and try again.' }, { status: 429 })
   try {
@@ -43,4 +43,4 @@ export async function POST(request) {
     logError('class-fees', 'retry failed', { locationId, code: err?.code ?? null })
     return NextResponse.json({ success: false, error: 'Could not retry the charge just now.' }, { status: 500 })
   }
-}
+})

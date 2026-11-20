@@ -37,11 +37,12 @@
 // and does NOT stamp its heartbeat, so a broken backfill pages rather than
 // looking like a quiet one. A tick with nothing due is healthy and stamps.
 //
-// Auth: same fail-closed CRON_SECRET pattern as the other crons.
+// Auth, the error boundary and the stamp: defineCron (ROUTEWRAP.C11). A failed
+// or unknown location answers success:false at 200 as before; a run where no
+// studio completed answers 500. Responses carry fixed lines; database text and
+// error detail go to the log and the run row.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { glofoxCredentialsForLocation, fetchMemberResult, glofoxHttpStats, glofoxHttpStatsSince } from '@/lib/glofox'
 import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { applyMemberSync } from '@/lib/glofox-sync'
@@ -70,23 +71,23 @@ const GLOFOX_CONCURRENCY = 5
 // rest are picked up next tick. (100 a tick takes ~10 s; this is a guard.)
 const TIME_BUDGET_MS = 270_000
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
+const MISSING_CREDS_MESSAGE = 'Glofox credentials missing on this location.'
+// The location errors the response may carry; anything else (database text)
+// is answered as a fixed line and kept on the run row and in the log.
+const PUBLIC_LOCATION_ERRORS = new Set([GLOFOX_SETTINGS_UNREADABLE_MESSAGE, MISSING_CREDS_MESSAGE])
+const publicLocationError = (msg) => (PUBLIC_LOCATION_ERRORS.has(msg) ? msg : 'Location run failed')
 
+export const GET = defineCron({ heartbeat: 'glofox-detail-backfill' }, async ({ db }) => {
   const startedAt = Date.now()
   // CREDITSREAD.1 — Glofox traffic for this invocation (instance-wide counters).
   const httpBefore = glofoxHttpStats()
-  const db = createServerClient()
 
   // W1.M3b — discovery through the membership seam (see glofox-sync). A
   // failed seam read is a 500 with no heartbeat.
   const { eligible, skipped, error: locErr } = await locationsWithSource(db, 'glofox', { module: 'glofox-detail-backfill' })
   if (locErr) {
-    console.warn(`[cron][glofox-detail-backfill] list locations failed: ${locErr.message}`)
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    logError('glofox-detail-backfill', 'list locations failed; heartbeat not stamped', { err: locErr.message })
+    return { ok: false, body: { error: 'Could not read the Glofox studios' } }
   }
 
   const perLocation = []
@@ -105,6 +106,13 @@ export async function GET(request) {
   // W1.M3b — a location the seam reported as 'unknown' (its credentials read
   // failed) did no work either, exactly like a failed credentials read inside
   // backfillLocation used to: it withholds the stamp the same way.
+  const body = {
+    locations_processed: perLocation.length,
+    locations_skipped: skipped.length,
+    ...skippedSummary(skipped),
+    budget_exhausted: budgetExhausted,
+    per_location: perLocation,
+  }
   const failed = perLocation.filter((r) => r.status === 'failed')
   const unknown = skipped.filter((s) => s.state === 'unknown')
   if (failed.length > 0 || unknown.length > 0) {
@@ -114,19 +122,12 @@ export async function GET(request) {
         ...unknown.map((s) => ({ locationId: s.id, error: s.readError || 'membership source state unknown' })),
       ],
     })
-  } else {
-    await stampHeartbeat('glofox-detail-backfill', heartbeatOutcome(perLocation, glofoxHttpStatsSince(httpBefore), skipped))
+    for (const r of failed) r.first_error = publicLocationError(r.first_error)
+    const completed = perLocation.length - failed.length
+    return { ok: false, status: completed === 0 ? 500 : 200, body }
   }
-
-  return NextResponse.json({
-    success: failed.length === 0 && unknown.length === 0,
-    locations_processed: perLocation.length,
-    locations_skipped: skipped.length,
-    ...skippedSummary(skipped),
-    budget_exhausted: budgetExhausted,
-    per_location: perLocation,
-  })
-}
+  return { body, outcome: heartbeatOutcome(perLocation, glofoxHttpStatsSince(httpBefore), skipped) }
+})
 
 // The heartbeat's last_outcome: enough to verify the cursor from SQL alone.
 // CREDITSREAD.1 — plus syncs that could not read credits, and Glofox traffic.
@@ -178,7 +179,7 @@ async function backfillLocation(db, location, startedAt) {
   // the result object, so discarding it left the run writing progress to
   // runId=null with nothing to say why.
   if (runErr) {
-    console.warn(`[cron][glofox-detail-backfill] audit run row insert failed for ${location.id}: ${runErr.message}`)
+    logWarn('glofox-detail-backfill', 'audit run row insert failed', { locationId: location.id, err: runErr.message })
   }
   const runId = runRow?.id
 
@@ -189,7 +190,7 @@ async function backfillLocation(db, location, startedAt) {
       throw new Error(GLOFOX_SETTINGS_UNREADABLE_MESSAGE)
     }
     if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
-      throw new Error('Glofox credentials missing on this location.')
+      throw new Error(MISSING_CREDS_MESSAGE)
     }
 
     // DETAILBACKFILL.1 — the cursor. Due = never attempted, or its due time

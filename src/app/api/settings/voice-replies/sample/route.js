@@ -4,8 +4,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { listVoices, synthesizeSpeech, ELEVENLABS_TTS_CENTS_PER_1K_CHARS, ELEVENLABS_TTS_MODEL } from '@/lib/elevenlabs'
 import { recordMeterUsage } from '@/lib/usage'
@@ -18,9 +18,9 @@ export const dynamic = 'force-dynamic'
 
 const SampleSchema = z.object({ voice_id: z.string().trim().min(1).max(64) }).strict()
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the active-studio 400, the studio check
+// and the owner-or-manager 403 run here, in their old order and words.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
   const guard = assertLocationAccessOr404(user, locationId)
@@ -40,11 +40,10 @@ export async function POST(request) {
   const speech = await synthesizeSpeech({ text: SAMPLE_SENTENCE, voiceId: v.data.voice_id, outputFormat: 'mp3_44100_64' })
   if (!speech.ok) return NextResponse.json({ success: false, error: 'ElevenLabs could not make the sample. Try again.' }, { status: 502 })
 
-  const db = createServerClient()
   const { data: loc } = await db.from('locations').select('organization_id').eq('id', locationId).maybeSingle()
   const meta = { model: ELEVENLABS_TTS_MODEL, sample: true }
   await recordMeterUsage({ organizationId: loc?.organization_id || null, locationId, meter: VOICE_CHARS_METER, source: 'voice_reply_sample', quantity: SAMPLE_SENTENCE.length, costCents: (SAMPLE_SENTENCE.length / 1000) * ELEVENLABS_TTS_CENTS_PER_1K_CHARS, meta }, { db })
   await recordMeterUsage({ organizationId: loc?.organization_id || null, locationId, meter: VOICE_REPLY_METER, source: 'voice_reply_sample', quantity: 1, costCents: 0, meta }, { db })
 
   return new Response(speech.bytes, { status: 200, headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } })
-}
+})

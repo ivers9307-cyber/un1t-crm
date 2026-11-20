@@ -1,8 +1,8 @@
 // PUT /api/presentations/[id]/slides/reorder  { order: [slideId, …] }
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -14,16 +14,17 @@ export const dynamic = 'force-dynamic'
 
 const Schema = z.object({ order: z.array(uuidLike).min(1) })
 
-export async function PUT(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user || !hasPermissionAtAnyLocation(user, 'presentations')) {
+// withAuth signs the caller in (a signed-out call now answers its 401, as the
+// sibling slide routes do); `presentations` somewhere, then at the deck's
+// studio, stay here in their old order.
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  if (!hasPermissionAtAnyLocation(user, 'presentations')) {
     return NextResponse.json({ success: false, error: 'Not authorised for presentations' }, { status: 403 })
   }
-  const { id } = await params
+  const id = params?.id
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
   const { order } = validation.data
-  const db = createServerClient()
   const { data: deck } = await db.from('presentations').select('id, location_id, version').eq('id', id).maybeSingle()
   if (!deck || assertLocationAccess(user, deck.location_id)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -51,4 +52,4 @@ export async function PUT(request, { params }) {
     return NextResponse.json({ success: false, error: 'The new order was not fully saved. Try again.' }, { status: 500 })
   }
   return NextResponse.json({ success: true })
-}
+})

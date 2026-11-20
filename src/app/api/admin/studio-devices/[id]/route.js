@@ -6,26 +6,24 @@
 // attempt using that device's token logs `revoked_device` and 403s.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function DELETE(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user || user.profileRole !== 'master') {
+// withAuth only signs the caller in (a signed-out call now answers its 401);
+// masters only (profiles.role), refused with the same 403 'Forbidden', here.
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  if (user.profileRole !== 'master') {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-
-  const db = createServerClient()
 
   const { data: existing } = await db
     .from('studio_devices')
     .select('id, location_id, label, device_kind, revoked_at')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (!existing) {
     return NextResponse.json({ success: false, error: 'Device not found' }, { status: 404 })
@@ -37,9 +35,10 @@ export async function DELETE(request, props) {
   const { error: updErr } = await db
     .from('studio_devices')
     .update({ revoked_at: new Date().toISOString() })
-    .eq('id', params.id)
+    .eq('id', params?.id)
   if (updErr) {
-    return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+    logError('studio-pin', 'device revoke failed', { err: updErr, id: existing.id })
+    return NextResponse.json({ success: false, error: 'Could not revoke the device.' }, { status: 500 })
   }
 
   await logAuditEvent({
@@ -53,4 +52,4 @@ export async function DELETE(request, props) {
   })
 
   return NextResponse.json({ success: true })
-}
+})

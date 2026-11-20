@@ -8,6 +8,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({ db: true }
 vi.mock('@/lib/auth', async (importOriginal) => {
   const real = await importOriginal()
   return {
+    ...real,
     getCurrentUser: vi.fn(),
     assertLocationAccess: vi.fn(() => null),
     hasRoleAtLocation: real.hasRoleAtLocation,

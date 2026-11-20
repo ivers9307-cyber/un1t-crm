@@ -23,6 +23,27 @@ beforeEach(() => {
   getCurrentUser.mockResolvedValue(MANAGER)
 })
 
+describe('POST /api/agent/knowledge/import-classes — the withAuth gate', () => {
+  it('401 signed out', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await POST()).status).toBe(401)
+    expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
+  })
+
+  it('403 "Forbidden" for staff at the active studio', async () => {
+    getCurrentUser.mockResolvedValue({ ...MANAGER, role: 'staff' })
+    const res = await POST()
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ success: false, error: 'Forbidden' })
+    expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
+  })
+
+  it('400 with no active studio', async () => {
+    getCurrentUser.mockResolvedValue({ ...MANAGER, activeLocation: null })
+    expect((await POST()).status).toBe(400)
+  })
+})
+
 describe('POST /api/agent/knowledge/import-classes — REGISTRYREAD.1b', () => {
   it('an unreadable settings row answers 503 with the one message', async () => {
     glofoxCredentialsForLocation.mockResolvedValue({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })

@@ -77,6 +77,47 @@ beforeEach(() => {
   process.env.CRON_SECRET = 'shh'
 })
 
+describe('ROUTEWRAP.C10 notify-streak-at-risk on defineCron', () => {
+  it('refuses a caller without the cron secret: no client, nothing sent or stamped', async () => {
+    for (const authorization of [null, 'Bearer nope']) {
+      const res = await GET(new Request('https://x.test/api/cron/notify-streak-at-risk', { headers: authorization ? { authorization } : {} }))
+      expect(res.status).toBe(401)
+      expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    }
+    delete process.env.CRON_SECRET
+    expect((await GET(req())).status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(sendNudgeOnce).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a slot tick with nobody at risk is a clean run: 200 and exactly its own row stamped', async () => {
+    createServerClient.mockReturnValue(fakeDb({ candidates: [], history: [] }))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, ok: true, candidates: 0, nudged: 0 })
+    expect(stampHeartbeat.mock.calls).toEqual([['notify-streak-at-risk']])
+  })
+
+  it('a quiet tick answers success but never stamps', async () => {
+    vi.setSystemTime(Date.parse('2026-09-16T10:00:00Z'))
+    createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY }))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, ok: true })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a failed run answers success: false beside ok: false', async () => {
+    createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY, candidateError: DOWN }))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, ok: false })
+    expect(JSON.stringify(body)).not.toContain('down')
+  })
+})
+
 describe('notify-streak-at-risk — a failed read is never an empty answer', () => {
   it('pin: a clean run nudges the at-risk member and stamps', async () => {
     createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY }))
