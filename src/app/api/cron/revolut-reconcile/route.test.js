@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/revolut-reconcile', () => ({ runRevolutReconcile: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
 import { GET } from './route'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
@@ -24,6 +25,7 @@ describe('GET /api/cron/revolut-reconcile', () => {
     const res = await GET(req('Bearer nope'))
     expect(res.status).toBe(401)
     expect(runRevolutReconcile).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('a healthy run stamps the heartbeat with its counts', async () => {
@@ -31,6 +33,8 @@ describe('GET /api/cron/revolut-reconcile', () => {
     runRevolutReconcile.mockResolvedValue({ healthy: true, counts })
     const res = await GET(req('Bearer s3cret'))
     expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, data: counts })
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('revolut-reconcile', counts)
   })
 
@@ -38,13 +42,17 @@ describe('GET /api/cron/revolut-reconcile', () => {
     runRevolutReconcile.mockResolvedValue({ healthy: false, counts: { list_failed: ['cars'] } })
     const res = await GET(req('Bearer s3cret'))
     expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Reconcile run incomplete', data: { list_failed: ['cars'] } })
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('a run that throws answers 500 without a stamp', async () => {
-    runRevolutReconcile.mockRejectedValue(new Error('boom'))
+    runRevolutReconcile.mockRejectedValue(new Error('relation secret_v does not exist'))
     const res = await GET(req('Bearer s3cret'))
     expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Reconcile run failed' })
+    expect(JSON.stringify(body)).not.toContain('secret_v')
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })
