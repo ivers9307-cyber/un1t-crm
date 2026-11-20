@@ -68,7 +68,7 @@ vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.res
 vi.mock('@/lib/live-class', () => ({ endSession: vi.fn(() => Promise.resolve({ ok: true })) }))
 vi.mock('@/lib/hr-post-class-email', () => ({ sendPostClassEmail: vi.fn(() => Promise.resolve({ ok: true, sent: false })) }))
 vi.mock('@/lib/customer-push', () => ({ sendCustomerPush: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 // W1.S1a — the session-ready push names the studio's product.
 vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async (_db, id) => ({ companyName: id === 'L1' ? 'UN1T Stillorgan' : '', shortName: id === 'L1' ? 'UN1T' : '', locationName: '' })) }))
 

@@ -4,13 +4,13 @@
 // viewer's active studio. Nothing wider, nothing narrower.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ user: null, updates: [] }))
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => mocks.user) }))
+const mocks = vi.hoisted(() => ({ user: null, updates: [], updateError: null }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn(async () => mocks.user) }))
 vi.mock('@/lib/hosts', () => ({
   loadHostForOrg: vi.fn(async (_db, id, orgId) => (orgId === 'org-1' ? { id, name: 'Host', organization_id: orgId } : null)),
 }))
 vi.mock('@/lib/host-notifications', () => ({ notifyHostEventReviewed: vi.fn(async () => {}) }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from: () => {
@@ -18,7 +18,7 @@ vi.mock('@/lib/supabase', () => ({
         select: () => chain, eq: () => chain,
         maybeSingle: async () => ({ data: { id: 'ev-1', host_id: 'h1', status: 'pending_review', name: 'Ev', slug: 'ev', location_id: 'loc-a' }, error: null }),
         update: (patch) => { mocks.updates.push(patch); return chain },
-        then: (resolve) => resolve({ data: [{ id: 'ev-1' }], error: null }),
+        then: (resolve) => resolve(mocks.updateError ? { data: null, error: mocks.updateError } : { data: [{ id: 'ev-1' }], error: null }),
       }
       return chain
     },
@@ -32,7 +32,7 @@ const ctx = { params: Promise.resolve({ id: 'ev-1' }) }
 const base = { id: 'u1', activeOrganization: { id: 'org-1' }, activeLocation: { id: 'loc-a', organization_id: 'org-1' } }
 const as = (over) => { mocks.user = { ...base, ...over } }
 
-beforeEach(() => { mocks.user = null; mocks.updates.length = 0 })
+beforeEach(() => { mocks.user = null; mocks.updates.length = 0; mocks.updateError = null })
 
 describe('POST /api/events/[id]/review: who may decide', () => {
   it('401 without a user', async () => {
@@ -74,5 +74,16 @@ describe('POST /api/events/[id]/review: who may decide', () => {
   it('still scopes to the caller organisation', async () => {
     as({ role: 'manager', activeOrganization: { id: 'org-2' }, activeLocation: { id: 'loc-a', organization_id: 'org-2' } })
     expect((await POST(req({ action: 'approve' }), ctx)).status).toBe(404)
+  })
+})
+
+// ROUTEWRAP.R8 — no database text in an answer.
+describe('POST /api/events/[id]/review: a failed write', () => {
+  it('answers a fixed 500', async () => {
+    as({ role: 'owner', rolesByLocation: {} })
+    mocks.updateError = { message: 'new row for relation "race_events" violates check constraint' }
+    const res = await POST(req({ action: 'approve' }), ctx)
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not save the review. Try again.' })
   })
 })

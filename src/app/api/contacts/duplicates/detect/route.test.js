@@ -17,7 +17,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: vi.fn(),
   assertLocationAccess: (user, locationId) => {
     if (!user) return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), { status: 401 })
@@ -33,11 +34,12 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 
-vi.mock('@/lib/permissions', () => {
+vi.mock('@/lib/permissions', async (importOriginal) => {
   // ROLESWEEP.1c — the route asks the any-location pre-check and the
   // at-the-target decision; both follow this file's switch below.
   const hasPermission = vi.fn(() => true)
   return {
+    ...(await importOriginal()),
     hasPermission,
     hasPermissionAtAnyLocation: (u, k) => hasPermission(u, k),
     hasPermissionForLocation: (u, _loc, k) => hasPermission(u, k),
@@ -236,14 +238,14 @@ describe('POST /api/contacts/duplicates/detect — empty body handling', () => {
 })
 
 describe('POST /api/contacts/duplicates/detect — runDetection error handling', () => {
-  it('runDetection throws → 500 JSON with success:false', async () => {
+  it('runDetection throws → 500 JSON with a fixed message (never the error text)', async () => {
     runDetection.mockRejectedValue(new Error('person_link_suggestions does not exist'))
 
     const res = await POST(postReq({ location_id: LOC_A }))
     expect(res.status).toBe(500)
     const json = await res.json()
     expect(json.success).toBe(false)
-    expect(json.error).toBe('person_link_suggestions does not exist')
+    expect(json.error).toBe('Detection failed')
   })
 
   it('runDetection throws without message → 500 with fallback message', async () => {

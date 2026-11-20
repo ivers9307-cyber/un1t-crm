@@ -16,8 +16,7 @@
 // cap check at send time stays as the second net.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { loadCampaignForUser, CampaignScheduleSchema, conflict, serverError } from '@/lib/campaign-session-access'
 import { releasePreflight, releaseCampaign } from '@/lib/campaign-release'
@@ -28,10 +27,11 @@ const badRequest = (error) => NextResponse.json({ success: false, error }, { sta
 // The send route's two refusals that are not about the campaign itself.
 const PREFLIGHT_422 = ['email_hard_cap', 'wallet_empty']
 
-export async function POST(request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
+// withAuth only signs the caller in (the same 401 loadCampaignForUser gave);
+// the campaign gate (404 / email at its studio 403), the body, the preflight
+// and the release keep their order here.
+export const POST = withAuth({ permission: null, location: false }, async ({ request, user, db, params }) => {
+  const { id } = params
   const { campaign, response } = await loadCampaignForUser(db, user, id,
     'id, location_id, status, subject, html_content')
   if (response) return response
@@ -64,4 +64,4 @@ export async function POST(request, props) {
   }
 
   return NextResponse.json({ success: true, data: { status: release.status, scheduled_at: release.scheduled_at } })
-}
+})

@@ -21,8 +21,8 @@
 // The service-role client bypasses RLS, so these two checks ARE the boundary.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
 import { loadHubLocationContext } from '@/lib/integrations-hub-location'
 
 export const runtime = 'nodejs'
@@ -30,17 +30,14 @@ export const dynamic = 'force-dynamic'
 
 const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// withAuth only signs the caller in (location: false): both gates above are
+// judged here at the URL's studio, each refusal a 404, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   const locationId = params?.id
   if (!locationId) return notFound()
   if (assertLocationAccess(user, locationId)) return notFound()
   if (guardMasterOrOwner(user, locationId)) return notFound()
 
-  const db = createServerClient()
   const { data, notFound: missing, error } = await loadHubLocationContext(db, user, locationId)
   if (error) {
     return NextResponse.json({ success: false, error: 'Could not load this location just now.' }, { status: 500 })
@@ -48,4 +45,4 @@ export async function GET(_request, props) {
   if (missing || !data) return notFound()
 
   return NextResponse.json({ success: true, data })
-}
+})

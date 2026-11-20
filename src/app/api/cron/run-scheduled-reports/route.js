@@ -1,9 +1,7 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { generateReport, calculatePeriodForSchedule, calculateNextRun, buildReportEmailHtml } from '@/lib/report-generator'
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logError, logWarn } from '@/lib/log'
 import { isRateReportType } from '@/lib/report-access'
 import { filterRateReportRecipients } from '@/lib/report-recipients'
@@ -12,11 +10,15 @@ import { getLocationZones, DEFAULT_TZ } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 /**
  * GET /api/cron/run-scheduled-reports
- * Called by Vercel Cron (or manually) to execute any scheduled reports that are due.
- * Secured by CRON_SECRET header check.
+ * Called by Vercel Cron (or manually, with the same secret) to execute any
+ * scheduled reports that are due. defineCron owns the CRON_SECRET check, the
+ * error boundary and the stamp (ROUTEWRAP.C10). A report that fails is one bad
+ * row: the run still stamps, as before. Errors are logged; the response carries
+ * fixed lines only.
  *
  * TZ.6 — the schedule is hourly. A schedule's location runs its due reports
  * (next_run_at <= now, unchanged) at its daily slot: 07:00 UTC for a
@@ -24,26 +26,18 @@ export const dynamic = 'force-dynamic'
  * local day (src/lib/cron-daily-slot.js). Computing next_run_at in the
  * studio's zone is TZ.11a's.
  */
-export async function GET(request) {
-  // Verify the request is from Vercel Cron or an authorized caller
-  const authHeader = request.headers.get('authorization')
-  const cronSecret = process.env.CRON_SECRET
-
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'run-scheduled-reports' }, async ({ db }) => {
   const now = new Date().toISOString()
 
   // TZ.6 — which locations are at their daily slot this tick (claimed, so
   // never twice in one local day). An unreadable zone acts for nobody.
   const gate = await gateDailySlot(db, 'run-scheduled-reports', { nowMs: Date.parse(now), module: 'run-scheduled-reports' })
-  if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
+  if (!gate.ok) return { ok: false, body: { error: 'locations unreadable', slot: gate.summary } }
   if (gate.slots.size === 0) {
     // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
     // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
-    return NextResponse.json({ success: !gate.faulted, message: 'No location at its daily slot', processed: 0, slot: gate.summary }, { status: gate.faulted ? 500 : 200 })
+    const body = { message: 'No location at its daily slot', processed: 0, slot: gate.summary }
+    return gate.faulted ? { ok: false, body } : { body, stamp: false }
   }
 
   // Find all active scheduled reports where next_run_at <= now
@@ -55,7 +49,8 @@ export async function GET(request) {
     .order('next_run_at')
 
   if (fetchError) {
-    return NextResponse.json({ success: false, error: fetchError.message }, { status: 500 })
+    logError('run-scheduled-reports', 'scheduled_reports unreadable; no schedule runs this tick', { err: fetchError })
+    return { ok: false, body: { error: 'Could not read scheduled reports' } }
   }
 
   // REPORTS.2 — a paused schedule is skipped. Filtered here rather than with
@@ -65,10 +60,8 @@ export async function GET(request) {
   const runnable = (dueReports || []).filter(r => r.paused !== true && slotFor(gate.slots, r.location_id))
 
   if (runnable.length === 0) {
-    if (slotTickStampable(gate)) {
-      await stampHeartbeat('run-scheduled-reports')
-    }
-    return NextResponse.json({ success: !gate.faulted, message: 'No reports due', processed: 0 }, { status: gate.faulted ? 500 : 200 })
+    // Slots held and not faulted: stampable (slotTickStampable). Faulted: 500.
+    return { ok: slotTickStampable(gate), body: { message: 'No reports due', processed: 0 } }
   }
 
   // TZ.11a — each schedule's period and next run are its studio's calendar.
@@ -79,7 +72,7 @@ export async function GET(request) {
     zones = await getLocationZones(db, runnable.map((r) => r.location_id))
   } catch (err) {
     logError('run-scheduled-reports', 'locations.timezone unreadable; no schedule runs this tick', { err })
-    return NextResponse.json({ success: false, error: 'locations unreadable' }, { status: 500 })
+    return { ok: false, body: { error: 'locations unreadable' } }
   }
 
   const results = []
@@ -183,7 +176,8 @@ export async function GET(request) {
             .update({ email_sent: emailSent })
             .eq('id', result.data.id)
 
-          resultEntry.email = emailSent ? 'sent' : `failed: ${emailError}`
+          // The provider's text stays in the log above, never in the body.
+          resultEntry.email = emailSent ? 'sent' : 'failed'
         } else if (resultEntry.recipients_withheld) {
           // Every address was withheld — say so rather than reading as "email off".
           resultEntry.email = 'withheld'
@@ -199,32 +193,27 @@ export async function GET(request) {
         // whatever the flag says. No schedule in prod had it on (17 Sep), and
         // the save routes now refuse it.
       } else {
+        logError('run-scheduled-reports', 'report generation failed', { scheduleId: schedule.id, reportType: schedule.report_type, err: result.error })
         results.push({
           id: schedule.id,
           report_type: schedule.report_type,
           status: 'error',
-          error: result.error,
+          error: 'Report generation failed',
         })
       }
     } catch (err) {
+      logError('run-scheduled-reports', 'scheduled report run threw', { scheduleId: schedule.id, reportType: schedule.report_type, err })
       results.push({
         id: schedule.id,
         report_type: schedule.report_type,
         status: 'error',
-        error: err.message,
+        error: 'Report run failed',
       })
     }
   }
 
   // Heartbeat after the loop — even if individual reports errored, the cron
   // tick itself ran end-to-end. Per-report errors are surfaced in `results`.
-  if (slotTickStampable(gate)) {
-    await stampHeartbeat('run-scheduled-reports')
-  }
-
-  return NextResponse.json({
-    success: !gate.faulted,
-    processed: results.length,
-    results,
-  }, { status: gate.faulted ? 500 : 200 })
-}
+  // Slots held here, so stampable exactly when the gate did not fault.
+  return { ok: slotTickStampable(gate), body: { processed: results.length, results } }
+})

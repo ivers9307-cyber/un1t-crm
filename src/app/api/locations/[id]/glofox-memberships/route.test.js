@@ -107,3 +107,25 @@ describe('GET glofox-memberships — learned private memberships', () => {
     expect(await res.json()).toEqual({ success: true, memberships: PUBLIC, count: 1, private_unread: true })
   })
 })
+
+// ROUTEWRAP.R8 — through withAuth: the signed-out body and no Glofox text in
+// an answer.
+describe('GET glofox-memberships — withAuth', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    glofoxCredentialsForLocation.mockResolvedValue({ branchId: 'branch-1', apiKey: 'key-1', apiToken: 'token-1' })
+  })
+
+  it('401 { Unauthorized } signed out', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect(await (await call(LOC_B)).json()).toEqual({ success: false, error: 'Unauthorized' })
+  })
+
+  it('a failed Glofox call answers 502 in fixed words', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    listGlofoxMemberships.mockResolvedValue({ ok: false, error: 'getaddrinfo ENOTFOUND api.glofox.example', memberships: [] })
+    const res = await call(LOC_B)
+    expect(res.status).toBe(502)
+    expect(await res.json()).toEqual({ success: false, error: 'glofox_request_failed', message: 'Could not load the memberships from Glofox. Try again.' })
+  })
+})

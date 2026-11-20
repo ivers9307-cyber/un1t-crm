@@ -18,16 +18,16 @@
 // independently, this stays under any Vercel concurrency limit
 // the "15 mins?" send tripped.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { tickCampaignSend } from '@/lib/campaign-sender'
 import { spawnDueResends } from '@/lib/campaign-resend'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError } from '@/lib/log'
 import { getEmailCapStatus } from '@/lib/usage-caps'
 import { pickFairCampaigns } from '@/lib/campaign-fairness'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 const MAX_CAMPAIGNS_PER_TICK = 3   // limit parallelism within one cron invocation
 const FAIR_PICK_WINDOW = 20        // SAAS4-O3 — candidates fetched for the fair pick
@@ -80,20 +80,11 @@ export function campaignFailurePatch(campaign, error, now = Date.now()) {
   return patch
 }
 
-function unauthorized() {
-  return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
-}
-
-export async function GET(request) {
-  const expected = process.env.CRON_SECRET
-  if (!expected) {
-    console.error('[cron run-campaigns] CRON_SECRET is not set')
-    return NextResponse.json({ ok: false, error: 'cron_secret_missing' }, { status: 500 })
-  }
-  const got = request.headers.get('authorization') || ''
-  if (got !== `Bearer ${expected}`) return unauthorized()
-
-  const db = createServerClient()
+// ROUTEWRAP.C12 — defineCron owns the secret check (an unset secret is a 401
+// now, it was a 500), the error boundary and the 'run-campaigns' stamp. The
+// response carries counts and campaign ids only: error text from a tick
+// (Postmark, the database) stays in the logs.
+export const GET = defineCron({ heartbeat: 'run-campaigns' }, async ({ db }) => {
   const nowIso = new Date().toISOString()
   const summary = { promoted: 0, ticks: 0, sent: 0, bounced: 0, errors: [] }
 
@@ -110,8 +101,11 @@ export async function GET(request) {
     .select('id, location_id, subject, html_content')
     .eq('status', 'scheduled')
     .lte('scheduled_at', nowIso)
+  // ROUTEWRAP.C12 — an unreadable due list looked like "nothing scheduled" and
+  // stamped. The send ticks below still run (nothing sent changes); the run
+  // then answers 500 and does not stamp, so a list that stays unreadable pages.
   if (dueErr) {
-    console.error('[cron run-campaigns] promote fetch failed:', dueErr.message)
+    logError('cron.run-campaigns', 'promote fetch failed; no scheduled campaign promoted, heartbeat not stamped', { err: dueErr })
   } else if (due && due.length > 0) {
     const capByLocation = new Map()
     const promotable = []
@@ -183,8 +177,8 @@ export async function GET(request) {
     .limit(FAIR_PICK_WINDOW)
 
   if (pickErr) {
-    console.error('[cron run-campaigns] pick failed:', pickErr.message)
-    return NextResponse.json({ ok: false, ...summary, error: pickErr.message }, { status: 500 })
+    logError('cron.run-campaigns', 'pick failed; no campaign ticked, heartbeat not stamped', { err: pickErr })
+    return { ok: false, body: { ...summary, error: 'Could not read the campaigns to send' } }
   }
 
   const campaigns = pickFairCampaigns(window, MAX_CAMPAIGNS_PER_TICK)
@@ -199,7 +193,7 @@ export async function GET(request) {
       summary.bounced += result.bounced || 0
       if (result.error) {
         tickError = result.error
-        summary.errors.push({ campaign_id: campaign.id, phase: result.phase, error: result.error })
+        summary.errors.push({ campaign_id: campaign.id, phase: result.phase, error: 'Tick failed' })
         console.warn(`[cron run-campaigns] campaign ${campaign.id} (${campaign.name}) phase=${result.phase} error: ${result.error}`)
       }
       // BAREWRITE.4 — a tick may report a problem that must be VISIBLE without
@@ -212,13 +206,13 @@ export async function GET(request) {
       // reach campaignFailurePatch.
       if (result.warning) {
         summary.warnings = summary.warnings || []
-        summary.warnings.push({ campaign_id: campaign.id, phase: result.phase, warning: result.warning })
+        summary.warnings.push({ campaign_id: campaign.id, phase: result.phase, warning: 'Tick warning' })
         console.error(`[cron run-campaigns] campaign ${campaign.id} (${campaign.name}) phase=${result.phase} WARNING: ${result.warning}`)
       }
     } catch (err) {
       const msg = err?.message || String(err)
       tickError = msg
-      summary.errors.push({ campaign_id: campaign.id, error: msg })
+      summary.errors.push({ campaign_id: campaign.id, error: 'Tick failed' })
       console.error(`[cron run-campaigns] campaign ${campaign.id} threw: ${msg}`)
     }
 
@@ -234,7 +228,8 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('run-campaigns')
-
-  return NextResponse.json({ ok: true, ...summary })
-}
+  if (dueErr) {
+    return { ok: false, body: { ...summary, error: 'Could not read the scheduled campaigns' } }
+  }
+  return { body: summary }
+})

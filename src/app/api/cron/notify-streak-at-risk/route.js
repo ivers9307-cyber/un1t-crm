@@ -21,12 +21,12 @@
 // retried once, then its members are skipped (never judged on a partial
 // history), counted in `history_unread` and logged; any failed read answers
 // 500 and withholds the heartbeat, so a run that could not see is not a quiet one.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+// ROUTEWRAP.C10 — defineCron owns the secret check, the error boundary and the
+// stamp; a quiet tick (no slot taken) answers success with stamp: false.
+import { defineCron } from '@/lib/define-cron'
 import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/customer-nudge-claim'
 import { streakAtRisk, buildStreakAtRiskPush } from '@/lib/customer-notifications'
-import { logError, logInfo, logWarn } from '@/lib/log'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError, logInfo } from '@/lib/log'
 import { gateDailySlot, scopeOf, readContactHomes, slotTickStampable } from '@/lib/cron-daily-slot'
 import { streakCandidateWindow } from '@/lib/nudge-windows'
 
@@ -39,23 +39,19 @@ const PAGE = 1000
 
 export async function POST(request) { return GET(request) }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'notify-streak-at-risk' }, async ({ db }) => {
   const nowMs = Date.now()
   const DAY = 24 * 3600 * 1000
 
   // TZ.6 — which home studios are at their daily slot this tick (claimed, so
   // never twice in one local day). An unreadable zone acts for nobody.
   const gate = await gateDailySlot(db, 'notify-streak-at-risk', { nowMs, module: 'cron-streak-risk' })
-  if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
+  if (!gate.ok) return { ok: false, body: { ok: false, slot: gate.summary } }
   if (gate.slots.size === 0) {
     // A quiet tick (no slot taken) never stamps; the row keeps the legacy clock.
     // A faulted one (claim write failed) answers 500: the slot is skipped and pages.
-    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, candidates: 0, nudged: 0 }, { status: gate.faulted ? 500 : 200 })
+    const body = { ok: !gate.faulted, slot: gate.summary, candidates: 0, nudged: 0 }
+    return gate.faulted ? { ok: false, body } : { body, stamp: false }
   }
 
   // One "yesterday" window per (zone, day) among the due studios: the studio's
@@ -107,11 +103,10 @@ export async function GET(request) {
   }
   if (candidateIds.size === 0) {
     if (candidatesUnread || homesUnread) {
-      return NextResponse.json({ ok: false, candidates: 0, nudged: 0, candidates_unread: candidatesUnread, homes_unread: homesUnread, slot: gate.summary }, { status: 500 })
+      return { ok: false, body: { ok: false, candidates: 0, nudged: 0, candidates_unread: candidatesUnread, homes_unread: homesUnread, slot: gate.summary } }
     }
-    if (!slotTickStampable(gate)) return NextResponse.json({ ok: false, candidates: 0, nudged: 0, slot: gate.summary }, { status: 500 })
-    await stampHeartbeat('notify-streak-at-risk').catch(() => {})
-    return NextResponse.json({ ok: true, candidates: 0, nudged: 0, slot: gate.summary })
+    if (!slotTickStampable(gate)) return { ok: false, body: { ok: false, candidates: 0, nudged: 0, slot: gate.summary } }
+    return { body: { ok: true, candidates: 0, nudged: 0, slot: gate.summary } }
   }
 
   const ids = [...candidateIds]
@@ -158,9 +153,8 @@ export async function GET(request) {
   const readFailed = candidatesUnread > 0 || unread.size > 0 || homesUnread > 0 || !slotTickStampable(gate)
   if (atRisk.length === 0) {
     const summary = { candidates: ids.length, at_risk: 0, nudged: 0, history_unread: unread.size, candidates_unread: candidatesUnread, homes_unread: homesUnread, slot: gate.summary }
-    if (readFailed) return NextResponse.json({ ok: false, ...summary }, { status: 500 })
-    await stampHeartbeat('notify-streak-at-risk').catch(() => {})
-    return NextResponse.json({ ok: true, ...summary })
+    if (readFailed) return { ok: false, body: { ok: false, ...summary } }
+    return { body: { ok: true, ...summary } }
   }
 
   // 4. Keep only reachable (has a push token). A failed token read skips
@@ -186,8 +180,6 @@ export async function GET(request) {
     history_unread: unread.size, candidates_unread: candidatesUnread, homes_unread: homesUnread, slot: gate.summary,
   }
   logInfo('cron-streak-risk', 'tick', summary)
-  if (readFailed) return NextResponse.json({ ok: false, ...summary }, { status: 500 })
-  await stampHeartbeat('notify-streak-at-risk').catch((err) =>
-    logWarn('cron-streak-risk', 'heartbeat failed', { err }))
-  return NextResponse.json({ ok: true, ...summary })
-}
+  if (readFailed) return { ok: false, body: { ok: false, ...summary } }
+  return { body: { ok: true, ...summary } }
+})

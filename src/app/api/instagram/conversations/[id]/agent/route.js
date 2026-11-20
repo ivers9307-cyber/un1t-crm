@@ -1,7 +1,8 @@
-import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 
 const ToggleSchema = z.object({ active: z.boolean() })
@@ -9,11 +10,9 @@ const ToggleSchema = z.object({ active: z.boolean() })
 // PATCH /api/instagram/conversations/[id]/agent — toggle the auto-responder
 // for this thread. Lets staff hand a conversation BACK to the agent after a
 // manual take-over (active:true), or proactively silence it (active:false).
-export async function PATCH(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// withAuth only signs the caller in; the channel permission, the body and the
+// thread's studio (404) are judged below in their old order.
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
   const perm = requireInboxPermission(user, 'ig')
   if (perm) return perm
@@ -22,10 +21,9 @@ export async function PATCH(request, props) {
   if (!validation.ok) return validation.response
   const { active } = validation.data
 
-  const db = createServerClient()
   const { data: conversation, error } = await db.from('instagram_conversations')
     .select('id, location_id, agent_handed_off_at')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (error || !conversation) {
     return NextResponse.json({ success: false, error: 'Conversation not found' }, { status: 404 })
@@ -49,13 +47,14 @@ export async function PATCH(request, props) {
   const { error: updateError, data: updated } = await db
     .from('instagram_conversations')
     .update(update)
-    .eq('id', params.id)
+    .eq('id', conversation.id)
     .select('id')
   if (updateError || !updated?.length) {
+    logError('instagram', 'agent state not changed', { conversationId: conversation.id, code: updateError?.code ?? null, rows: updated?.length ?? 0 })
     return NextResponse.json({
       success: false,
-      error: `Could not change the agent state on this conversation: ${updateError?.message || 'conversation not found'}`,
+      error: 'Could not change the agent state on this conversation. Try again.',
     }, { status: 500 })
   }
   return NextResponse.json({ success: true, agent_active: active })
-}
+})

@@ -22,18 +22,16 @@
 // users with no approver authority get all-zero buckets back.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { getPendingApprovals } from '@/lib/approvals/registry'
 import { getPendingApprovalsAllStudios, listEligibleStudios } from '@/lib/approvals/all-studios'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const db = createServerClient()
+// withAuth only signs the caller in (anyone signed in; each provider scopes).
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   try {
     if (new URL(request.url).searchParams.get('scope') === 'all') {
       const data = await getPendingApprovalsAllStudios(db, user)
@@ -49,6 +47,7 @@ export async function GET(request) {
     }
     return NextResponse.json({ success: true, data: { ...data, studios } })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e.message || 'fetch_failed' }, { status: 500 })
+    logError('approvals', 'pending list failed', { err: e })
+    return NextResponse.json({ success: false, error: 'fetch_failed' }, { status: 500 })
   }
-}
+})

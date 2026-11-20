@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
+import { logError } from '@/lib/log'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
 // RADAR-AGENT.0 — knowledge CRUD for the customer agent. List/create
@@ -25,10 +25,11 @@ const CreateSchema = z.object({
   sort_order: z.number().int().min(0).max(100000).optional().default(0),
 })
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const db = createServerClient()
+// GET: signed in, then the active studio (400). POST: signed in, a manager-tier
+// role (user.role, 'Forbidden' 403), then the active studio (400): the order
+// and texts as before. A failed read or write is logged and answered with a
+// fixed 500 (it used to return the error text).
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
 
@@ -37,17 +38,14 @@ export async function GET() {
     .eq('location_id', locationId)
     .order('sort_order', { ascending: true })
     .order('created_at', { ascending: true })
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, entries: data || [] })
-}
-
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  if (error) {
+    logError('agent-knowledge', 'list failed', { locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the knowledge entries.' }, { status: 500 })
   }
-  const db = createServerClient()
+  return NextResponse.json({ success: true, entries: data || [] })
+})
+
+export const POST = withAuth({ permission: null, location: false, roles: MANAGER_ROLES, forbiddenMessage: 'Forbidden' }, async ({ request, user, db }) => {
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
 
@@ -63,6 +61,9 @@ export async function POST(request) {
     sort_order: v.data.sort_order,
     updated_by: user.id,
   }).select('id, category, title, content, enabled, sort_order, updated_at').single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('agent-knowledge', 'create failed', { locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the entry.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, entry: data })
-}
+})

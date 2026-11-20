@@ -7,9 +7,9 @@
 // public. A failed read is a 500, never a 404.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, getUserLocationIds } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404, hasRoleAtLocation, getUserLocationIds } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { readRegistrationForMove, listMoveTargets, MOVE_ERRORS, MOVE_ERROR_MESSAGES } from '@/lib/registration-move'
 
@@ -26,38 +26,40 @@ function canMoveAt(user, locationId) {
     && hasRoleAtLocation(user, locationId, MANAGER_ROLES)
 }
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermissionAtAnyLocation(user, 'races')) return forbidden()
-  if (!uuidLike.safeParse(params.id).success) return notFound()
+// `races` somewhere (403), the id (404), the entry and its studio (404), then
+// canMoveAt there (403), as before. A signed-out call answers withAuth's 401
+// 'Unauthorized' (was 'Unauthorised').
+export const GET = withAuth(
+  { permission: null, location: false, allow: (user) => hasPermissionAtAnyLocation(user, 'races'), forbiddenMessage: 'Forbidden' },
+  async ({ user, db, params }) => {
+    const id = params?.id
+    if (!uuidLike.safeParse(id).success) return notFound()
 
-  const db = createServerClient()
-  const { registration: reg, error: readErr } = await readRegistrationForMove(db, params.id)
-  if (readErr) {
-    return NextResponse.json({
-      success: false, error: MOVE_ERRORS.LOAD_FAILED, message: MOVE_ERROR_MESSAGES[MOVE_ERRORS.LOAD_FAILED],
-    }, { status: 500 })
-  }
-  if (!reg) return notFound()
-  const sourceLocationId = reg.race?.location_id
-  if (!sourceLocationId) return notFound()
-  const guard = assertLocationAccessOr404(user, sourceLocationId)
-  if (guard) return guard
-  if (!canMoveAt(user, sourceLocationId)) return forbidden()
+    const { registration: reg, error: readErr } = await readRegistrationForMove(db, id)
+    if (readErr) {
+      return NextResponse.json({
+        success: false, error: MOVE_ERRORS.LOAD_FAILED, message: MOVE_ERROR_MESSAGES[MOVE_ERRORS.LOAD_FAILED],
+      }, { status: 500 })
+    }
+    if (!reg) return notFound()
+    const sourceLocationId = reg.race?.location_id
+    if (!sourceLocationId) return notFound()
+    const guard = assertLocationAccessOr404(user, sourceLocationId)
+    if (guard) return guard
+    if (!canMoveAt(user, sourceLocationId)) return forbidden()
 
-  // SAMETIME.1 — the entry's own event is offered too, for a change of time.
-  const result = await listMoveTargets(db, { registrationId: params.id, allowedLocationIds: getUserLocationIds(user), sameEventTimes: true })
-  if (!result.ok) {
-    return NextResponse.json({
-      success: false, error: result.error,
-      message: MOVE_ERROR_MESSAGES[result.error] || 'The events could not be loaded.',
-    }, { status: result.error === MOVE_ERRORS.NOT_FOUND ? 404 : 500 })
-  }
-  // Only studios where the caller may MOVE things (same gate as POST /move):
-  // membership alone (getUserLocationIds) would offer a target the move
-  // would then refuse with a 403.
-  const targets = result.targets.filter((t) => canMoveAt(user, t.location_id))
-  return NextResponse.json({ success: true, data: { entry: result.entry, source: result.source, targets } })
-}
+    // SAMETIME.1 — the entry's own event is offered too, for a change of time.
+    const result = await listMoveTargets(db, { registrationId: id, allowedLocationIds: getUserLocationIds(user), sameEventTimes: true })
+    if (!result.ok) {
+      return NextResponse.json({
+        success: false, error: result.error,
+        message: MOVE_ERROR_MESSAGES[result.error] || 'The events could not be loaded.',
+      }, { status: result.error === MOVE_ERRORS.NOT_FOUND ? 404 : 500 })
+    }
+    // Only studios where the caller may MOVE things (same gate as POST /move):
+    // membership alone (getUserLocationIds) would offer a target the move
+    // would then refuse with a 403.
+    const targets = result.targets.filter((t) => canMoveAt(user, t.location_id))
+    return NextResponse.json({ success: true, data: { entry: result.entry, source: result.source, targets } })
+  },
+)

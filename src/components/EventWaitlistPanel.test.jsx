@@ -4,7 +4,7 @@
 // Remove (staff only), Offer now (confirm, then the round's result).
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
-import EventWaitlistPanel, { offerResultMessage } from './EventWaitlistPanel.jsx'
+import EventWaitlistPanel, { offerResultMessage, offerOneMessage } from './EventWaitlistPanel.jsx'
 
 const ROWS = [
   { id: 'a', name: 'Ann Example', email: 'ann@example.test', phone: '0870000000', headcount: 2, status: 'waiting', created_at: '2026-10-09T10:00:00Z', last_offered_at: null, offer_count: 0 },
@@ -88,5 +88,53 @@ describe('offerResultMessage', () => {
     expect(offerResultMessage({ offered: 1, skipped: 0, failed: 0, no_room: 0 })).toBe('Offered to 1 person.')
     expect(offerResultMessage({ offered: 0, skipped: 3, failed: 0, no_room: 0 })).toBe('Nobody was offered. 3 skipped (offered in the last 24 hours, or opted out).')
     expect(offerResultMessage({ offered: 2, skipped: 0, failed: 1, no_room: 0 })).toBe('Offered to 2 people. 1 could not be sent (logged; tried again in 24 hours).')
+  })
+})
+
+describe('Offer space (WAITLISTONE.1)', () => {
+  const host = () => render(<EventWaitlistPanel dark listUrl="/api/host/events/e1/waitlist" offerUrl="/api/host/events/e1/waitlist/offer" />)
+
+  it('hosts get Offer space on each row still on the list (and still no Remove)', async () => {
+    host()
+    await screen.findByText('Ann Example')
+    expect(screen.getAllByRole('button', { name: 'Offer space' })).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull()
+  })
+
+  it('asks, offers that one row, says so', async () => {
+    fetchMock.mockImplementation(async (url, init) => {
+      if (init?.method === 'POST') return jsonRes({ success: true, data: { result: 'offered', email: 'sent', whatsapp: 'sent' } })
+      return jsonRes({ success: true, data: { rows: ROWS, waiting: 2 } })
+    })
+    host()
+    await screen.findByText('Ann Example')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Offer space' })[1])
+    await screen.findByText('Space offered to Bo Example.')
+    expect(fetchMock).toHaveBeenCalledWith('/api/host/events/e1/waitlist/offer', expect.objectContaining({ method: 'POST', body: JSON.stringify({ row_id: 'b' }) }))
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/Only they are emailed/))
+  })
+
+  it('shows the refusal when every time is full', async () => {
+    fetchMock.mockImplementation(async (url, init) => {
+      if (init?.method === 'POST') return jsonRes({ success: false, error: 'no_room', message: 'Every time is still full. Free a place first, then offer it.' }, 409)
+      return jsonRes({ success: true, data: { rows: ROWS, waiting: 2 } })
+    })
+    host()
+    await screen.findByText('Ann Example')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Offer space' })[0])
+    expect((await screen.findByRole('alert')).textContent).toMatch(/still full/)
+  })
+
+  it('staff get Offer space beside Remove', async () => {
+    staff()
+    await screen.findByText('Ann Example')
+    expect(screen.getAllByRole('button', { name: 'Offer space' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(2)
+  })
+
+  it('offerOneMessage reads the result', () => {
+    expect(offerOneMessage('Ann', { result: 'offered' })).toBe('Space offered to Ann.')
+    expect(offerOneMessage('Ann', { result: 'failed' })).toMatch(/could not be sent/)
+    expect(offerOneMessage('Ann', { result: 'not_sent' })).toMatch(/opted out/)
   })
 })

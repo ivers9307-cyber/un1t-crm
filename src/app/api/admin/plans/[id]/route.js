@@ -5,8 +5,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody, uuidLike } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -18,13 +18,13 @@ const PatchBody = z.object({
   sort: z.number().int().min(0).max(10000).optional(),
 }).refine((b) => Object.keys(b).length > 0, { message: 'Nothing to update' })
 
-export async function PATCH(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user || user.profileRole !== 'master') {
+// withAuth only signs the caller in (a signed-out call now answers its 401);
+// masters only (profiles.role), refused with the same 403 'Master only', here.
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  if (user.profileRole !== 'master') {
     return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
   }
-
-  const { id } = await params
+  const id = params?.id
   if (!uuidLike.safeParse(id).success) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
@@ -32,7 +32,6 @@ export async function PATCH(request, { params }) {
   const validation = await validateBody(request, PatchBody)
   if (!validation.ok) return validation.response
 
-  const db = createServerClient()
   const { data: updated, error } = await db
     .from('plans')
     .update(validation.data)
@@ -45,8 +44,9 @@ export async function PATCH(request, { params }) {
     if (!updated) {
       return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     }
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    logError('plans', 'plan update failed', { planId: id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the plan.' }, { status: 400 })
   }
 
   return NextResponse.json({ success: true, data: updated })
-}
+})

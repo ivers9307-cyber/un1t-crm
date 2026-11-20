@@ -4,28 +4,27 @@
 // per-row outcome. Manager+ at the batch's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the coarse role pre-check, the batch's
+// studio (404) and the role AT that studio follow in their old order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   // ROLESWEEP.1c — coarse pre-check; the role is judged at the batch's location below.
   if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
-  const db = createServerClient()
+  const importId = params?.id
   const { data: batch } = await db
     .from('contact_imports')
     .select('*, actor:profiles!contact_imports_actor_user_id_fkey(full_name, email)')
-    .eq('id', params.id)
+    .eq('id', importId)
     .single()
   if (!batch) return NextResponse.json({ success: false, error: 'Import not found' }, { status: 404 })
 
@@ -46,7 +45,7 @@ export async function GET(_request, props) {
     rows = await selectAll((from, to) => db
       .from('contact_import_rows')
       .select('id, row_number, action, contact_id, raw_row, error_message')
-      .eq('import_id', params.id)
+      .eq('import_id', importId)
       .order('row_number', { ascending: true })
       .order('id', { ascending: true })
       .range(from, to))
@@ -55,4 +54,4 @@ export async function GET(_request, props) {
   }
 
   return NextResponse.json({ success: true, data: { batch, rows: rows || [] } })
-}
+})

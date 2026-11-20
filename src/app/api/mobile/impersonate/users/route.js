@@ -10,17 +10,17 @@
 // + role chips. The detail row in the picker pulls email lazily.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { excludeTombstones } from '@/lib/staff-tombstone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
+// Sign-in only: the real-master check below keeps its old answer, and keeps
+// working while impersonating. A signed-out call answers withAuth's 401
+// 'Unauthorized' (was 'Unauthorised').
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   // Allow the route while impersonating — picker continues to operate
   // for the underlying master so they can re-target without stop.
   const realMasterId = user.impersonatingFrom?.masterId
@@ -32,7 +32,6 @@ export async function GET(request) {
   const url = new URL(request.url)
   const q = (url.searchParams.get('q') || '').trim().toLowerCase()
 
-  const db = createServerClient()
   let query = excludeTombstones(db.from('profiles')
     .select('id, full_name, email, role, active, profile_locations(locations(id, name))'))
     .order('full_name')
@@ -45,7 +44,8 @@ export async function GET(request) {
 
   const { data, error } = await query
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('impersonate', 'picker list failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the people list. Try again.' }, { status: 500 })
   }
 
   const filtered = (data || []).filter(p => p.id !== realMasterId)
@@ -62,4 +62,4 @@ export async function GET(request) {
         .filter(Boolean),
     })),
   })
-}
+})

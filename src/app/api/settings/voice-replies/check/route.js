@@ -7,8 +7,8 @@
 // only (not as voice replies, so it never uses up the monthly limit).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { listVoices, synthesizeSpeech, ELEVENLABS_TTS_MODEL, ELEVENLABS_TTS_CENTS_PER_1K_CHARS } from '@/lib/elevenlabs'
 import { recordMeterUsage } from '@/lib/usage'
 import { isOggOpus } from '@/lib/wa-voice/reply-rules'
@@ -21,9 +21,9 @@ export const dynamic = 'force-dynamic'
 
 const CHECK_MODELS = Object.freeze(['eleven_v4_turbo', 'eleven_flash_v2_5'])
 
-export async function POST() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the active studio (400), membership (404)
+// and the owner-or-manager rule (403) keep their order and texts here.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
   const guard = assertLocationAccessOr404(user, locationId)
@@ -41,7 +41,6 @@ export async function POST() {
   result.voices.count = available.voices.length
 
   // The studio's own saved voice when there is one, else the account's first.
-  const db = createServerClient()
   const { data: loc } = await db.from('locations').select('organization_id, settings').eq('id', locationId).maybeSingle()
   const saved = loc?.settings?.voice_replies?.voices || {}
   const savedVoice = [...VOICE_KINDS].reverse().map((k) => saved[k]).find((v) => v?.voice_id && available.voices.some((a) => a.voice_id === v.voice_id))
@@ -64,4 +63,4 @@ export async function POST() {
   const inUse = result.models.find((m) => m.model === ELEVENLABS_TTS_MODEL)
   result.ready = !!(inUse?.accepted && inUse.ogg)
   return NextResponse.json({ success: true, data: result })
-}
+})
