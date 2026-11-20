@@ -1,11 +1,14 @@
 // Vercel cron — every 5 minutes.
 // Picks up due sequence enrollments and fires the next step.
 //
-// Auth: Vercel cron jobs hit this URL with a CRON_SECRET bearer
-// (the same pattern the other crons use). Local invocation via
-// the dev server requires the same bearer.
+// defineCron owns the CRON_SECRET check (Vercel sends it as a bearer; a local
+// call through the dev server needs the same bearer), the error boundary and
+// the 'run-sequences' stamp. The stamp means runSequences() completed: a throw
+// from it answers 500 with a fixed error and no stamp (the detail is logged).
+// A trigger phase dying wholesale is reported in its *_error field (fixed
+// text; the detail is logged) and never costs the tick its stamp.
 
-import { NextResponse } from 'next/server'
+import { defineCron } from '@/lib/define-cron'
 import {
   runSequences,
   runEventReminderTriggers,
@@ -14,7 +17,7 @@ import {
   runAudienceMatchTriggers,
 } from '@/lib/sequences'
 import { runEventReminderSends } from '@/lib/event-reminders'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -26,12 +29,20 @@ export const dynamic = 'force-dynamic'
 // plenty of headroom.
 export const maxDuration = 300
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
+const LOG_MODULE = 'cron-run-sequences'
+const PHASE_FAILED = 'phase failed'
 
+/** Run one best-effort phase: its stats, or null and a fixed error (detail logged). */
+async function phase(name, run) {
+  try {
+    return { stats: await run(), error: null }
+  } catch (err) {
+    logWarn(LOG_MODULE, `${name} failed`, { err })
+    return { stats: null, error: PHASE_FAILED }
+  }
+}
+
+export const GET = defineCron({ heartbeat: 'run-sequences' }, async () => {
   // Three phases per tick — each independent so a failure in one
   // doesn't stop the others:
   //   1. event-level reminder sends (mig 044)
@@ -42,81 +53,56 @@ export async function GET(request) {
   //      Multi-step reminder flows configured as sequences.
   //   3. runSequences()
   //      Pick up due enrolments and send the next step.
-  let reminderSendStats = null, reminderSendErr = null
-  try { reminderSendStats = await runEventReminderSends() }
-  catch (e) {
-    reminderSendErr = e.message || String(e)
-    console.warn(`[cron] event-reminder sends failed: ${reminderSendErr}`)
-  }
-
-  let triggerStats = null, triggerErr = null
-  try { triggerStats = await runEventReminderTriggers() }
-  catch (e) {
-    triggerErr = e.message || String(e)
-    console.warn(`[cron] event_reminder triggers failed: ${triggerErr}`)
-  }
+  const reminderSends = await phase('event-reminder sends', runEventReminderSends)
+  const triggers = await phase('event_reminder triggers', runEventReminderTriggers)
 
   // Tier 2A — anniversary + inactivity triggers (mig 088 follow-up).
   // Run alongside the existing event_reminder scan. Both are
   // independent + best-effort.
-  let anniversaryStats = null, anniversaryErr = null
-  try { anniversaryStats = await runAnniversaryTriggers() }
-  catch (e) {
-    anniversaryErr = e.message || String(e)
-    console.warn(`[cron] anniversary triggers failed: ${anniversaryErr}`)
-  }
+  const anniversary = await phase('anniversary triggers', runAnniversaryTriggers)
   // AUDIENCEMATCH.1 — sweep audience_match sequences BEFORE runSequences, so a
   // contact enrolled this tick is picked up by the runner in the same tick
   // rather than waiting five minutes for the next one. Independent + best
   // effort like its siblings: a failure here must never stop due enrolments
   // from being processed below.
-  let audienceStats = null, audienceErr = null
-  try { audienceStats = await runAudienceMatchTriggers() }
-  catch (e) {
-    audienceErr = e.message || String(e)
-    console.warn(`[cron] audience_match triggers failed: ${audienceErr}`)
-  }
+  const audience = await phase('audience_match triggers', runAudienceMatchTriggers)
+  const inactivity = await phase('inactivity triggers', runInactivityTriggers)
 
-  let inactivityStats = null, inactivityErr = null
-  try { inactivityStats = await runInactivityTriggers() }
-  catch (e) {
-    inactivityErr = e.message || String(e)
-    console.warn(`[cron] inactivity triggers failed: ${inactivityErr}`)
-  }
-
+  let stats
   try {
-    const stats = await runSequences()
-    // Heartbeat AFTER all phases ran. If runSequences threw we
-    // skip the stamp — that's the signal a downstream alert needs.
-    await stampHeartbeat('run-sequences')
-    // CRONISO.1 — the three trigger runners no longer abort their whole
-    // sweep when one sequence fails; they contain it and count it. The
-    // *_error fields above only ever caught a runner dying wholesale, so
-    // a single broken sequence looked like a clean tick. Surface the
-    // per-runner counts as one number the cron response leads with.
-    const triggerErrors =
-      (triggerStats?.errored || 0) +
-      (anniversaryStats?.errored || 0) +
-      (inactivityStats?.errored || 0) +
-      (audienceStats?.errored || 0)
-    return NextResponse.json({
-      success: true,
+    stats = await runSequences()
+  } catch (err) {
+    // No stamp: that's the signal a downstream alert needs.
+    logError(LOG_MODULE, 'runSequences failed', { err })
+    return { ok: false, body: { error: 'Sequence run failed' } }
+  }
+
+  // CRONISO.1 — the trigger runners no longer abort their whole sweep when
+  // one sequence fails; they contain it and count it. The *_error fields only
+  // ever caught a runner dying wholesale, so a single broken sequence looked
+  // like a clean tick. Surface the per-runner counts as one number the cron
+  // response leads with.
+  const triggerErrors =
+    (triggers.stats?.errored || 0) +
+    (anniversary.stats?.errored || 0) +
+    (inactivity.stats?.errored || 0) +
+    (audience.stats?.errored || 0)
+  return {
+    body: {
       // Non-zero means N individual sequences did nothing this tick —
       // each one logged with its id via logError('sequences', …).
       trigger_errors: triggerErrors,
       stats,
-      triggers: triggerStats,
-      trigger_error: triggerErr,
-      anniversary: anniversaryStats,
-      anniversary_error: anniversaryErr,
-      inactivity: inactivityStats,
-      inactivity_error: inactivityErr,
-      audience_match: audienceStats,
-      audience_match_error: audienceErr,
-      reminder_sends: reminderSendStats,
-      reminder_sends_error: reminderSendErr,
-    })
-  } catch (e) {
-    return NextResponse.json({ success: false, error: e.message || String(e) }, { status: 500 })
+      triggers: triggers.stats,
+      trigger_error: triggers.error,
+      anniversary: anniversary.stats,
+      anniversary_error: anniversary.error,
+      inactivity: inactivity.stats,
+      inactivity_error: inactivity.error,
+      audience_match: audience.stats,
+      audience_match_error: audience.error,
+      reminder_sends: reminderSends.stats,
+      reminder_sends_error: reminderSends.error,
+    },
   }
-}
+})
