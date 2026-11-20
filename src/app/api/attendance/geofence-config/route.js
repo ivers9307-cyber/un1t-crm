@@ -6,23 +6,25 @@
 // Scoped to the caller's own assignments — no params, no IDOR surface.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { geofenceFromLocationSettings, geofenceIsConfigured, DEFAULT_GATE_COPY } from '@/lib/geofence-attendance'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
+// Signed in only: the caller's own assignments, any studio, no active-studio
+// rule (as before). A failed read is logged and answered with a fixed 400 (it
+// used to return the error text).
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   const { data: links, error: linkErr } = await db
     .from('profile_locations')
     .select('location_id, geofence_exempt')
     .eq('profile_id', user.id)
-  if (linkErr) return NextResponse.json({ success: false, error: linkErr.message }, { status: 400 })
+  if (linkErr) {
+    logError('geofence-config', 'assignments unreadable', { err: linkErr })
+    return NextResponse.json({ success: false, error: 'Could not read your studios.' }, { status: 400 })
+  }
 
   const allIds = (links || []).map(l => l.location_id)
   const eligible = new Set((links || []).filter(l => !l.geofence_exempt).map(l => l.location_id))
@@ -35,7 +37,10 @@ export async function GET() {
       .select('id, settings')
       .in('id', allIds)
       .order('id')
-    if (locErr) return NextResponse.json({ success: false, error: locErr.message }, { status: 400 })
+    if (locErr) {
+      logError('geofence-config', 'studio settings unreadable', { err: locErr })
+      return NextResponse.json({ success: false, error: 'Could not read your studios.' }, { status: 400 })
+    }
     for (const loc of locs || []) {
       const g = geofenceFromLocationSettings(loc.settings)
       if (!geofenceIsConfigured(g)) continue
@@ -64,4 +69,4 @@ export async function GET() {
       all_regions: allRegions,
     },
   })
-}
+})

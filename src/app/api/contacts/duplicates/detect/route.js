@@ -10,8 +10,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { runDetection } from '@/lib/person-detect'
 import { validateBody } from '@/lib/validate'
@@ -26,15 +27,12 @@ export const runtime = 'nodejs'
 // ============================================================
 // POST /api/contacts/duplicates/detect
 // ============================================================
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  // ROLESWEEP.1c — coarse pre-check; judged at the body's location below.
-  if (!hasPermissionAtAnyLocation(user, 'contact_linking')) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
+// Signed in (401), then ROLESWEEP.1c's coarse pre-check (`contact_linking`
+// somewhere, the same 'Forbidden' 403); judged at the body's location below.
+export const POST = withAuth({
+  permission: null, location: false,
+  allow: (user) => hasPermissionAtAnyLocation(user, 'contact_linking'), forbiddenMessage: 'Forbidden',
+}, async ({ request, user, db }) => {
 
   // Parse body (optional) + query string for commit flag
   const validation = await validateBody(request, DetectBody, { allowEmpty: true })
@@ -60,14 +58,13 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const db = createServerClient()
-
   let result
   try {
     result = await runDetection(db, { locationId, commit, actorId: user.id })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e?.message || 'Detection failed' }, { status: 500 })
+    logError('person-detect', 'detection failed', { locationId, commit, err: e })
+    return NextResponse.json({ success: false, error: 'Detection failed' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: result })
-}
+})

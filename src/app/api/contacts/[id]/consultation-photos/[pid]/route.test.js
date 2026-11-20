@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()),
   getCurrentUser: vi.fn(),
   assertLocationAccess: (user, locationId) => {
     if (!user) return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), { status: 401 })
@@ -189,5 +189,36 @@ describe('DELETE /api/contacts/[id]/consultation-photos/[pid]', () => {
     expect(json.success).toBe(true)
     // DB delete was still called
     expect(deleteSpy).toHaveBeenCalledOnce()
+  })
+})
+
+// ROUTEWRAP.R8 — through withAuth: the signed-out answer, the other-studio
+// photo, and no database text in an answer.
+describe('DELETE /api/contacts/[id]/consultation-photos/[pid] — gate and errors', () => {
+  it('401 signed out, nothing read', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const { db, selectSpy } = makeDb()
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE(req, props)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(selectSpy).not.toHaveBeenCalled()
+  })
+
+  it('404 for a photo at a studio outside the caller’s, nothing deleted', async () => {
+    getCurrentUser.mockResolvedValue({ ...OWNER, locations: [{ id: 'e0000000-0000-0000-0000-000000000009' }] })
+    const { db, deleteSpy } = makeDb()
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE(req, props)
+    expect(res.status).toBe(404)
+    expect(deleteSpy).not.toHaveBeenCalled()
+  })
+
+  it('a failed delete answers a fixed 500, never the database text', async () => {
+    const { db } = makeDb({ deleteErr: { message: 'update or delete on table "consultation_photos" violates foreign key constraint' } })
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE(req, props)
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not delete the photo. Try again.' })
   })
 })

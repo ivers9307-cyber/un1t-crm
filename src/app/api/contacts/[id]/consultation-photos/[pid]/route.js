@@ -7,8 +7,9 @@
 // The storage object is removed best-effort before the DB row is deleted.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
@@ -16,19 +17,13 @@ export const runtime = 'nodejs'
 // ============================================================
 // DELETE /api/contacts/[id]/consultation-photos/[pid]
 // ============================================================
-export async function DELETE(_request, props) {
-  const params = await props.params
+// Signed in (401), then `consultations` somewhere (the same 'Unauthorized'
+// 403), then the photo (404), its studio (404) and the key there (403).
+export const DELETE = withAuth({
+  permission: null, location: false,
+  allow: (user) => hasPermissionAtAnyLocation(user, 'consultations'), forbiddenMessage: 'Unauthorized',
+}, async ({ user, db, params }) => {
   const { id: contactId, pid } = params
-
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  if (!hasPermissionAtAnyLocation(user, 'consultations')) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
-  }
-
-  const db = createServerClient()
 
   // Load the photo row scoped to the contact (prevents IDOR)
   const { data: photo, error: photoErr } = await db
@@ -63,8 +58,9 @@ export async function DELETE(_request, props) {
     .eq('id', pid)
 
   if (delErr) {
-    return NextResponse.json({ success: false, error: delErr.message }, { status: 500 })
+    logError('consultation-photos', 'delete failed', { photoId: pid, err: delErr })
+    return NextResponse.json({ success: false, error: 'Could not delete the photo. Try again.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true })
-}
+})
