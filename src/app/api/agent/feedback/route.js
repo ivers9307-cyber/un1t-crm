@@ -1,7 +1,8 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getUserLocationIds } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -21,14 +22,12 @@ const Schema = z.object({
 
 const MESSAGE_TABLES = { whatsapp: 'whatsapp_messages', instagram: 'instagram_messages' }
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// withAuth only signs the caller in; the body, then the message's studio
+// (404), are judged below as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const v = await validateBody(request, Schema)
   if (!v.ok) return v.response
 
-  const db = createServerClient()
   const { data: msg } = await db.from(MESSAGE_TABLES[v.data.channel])
     .select('id, conversation_id, location_id, source')
     .eq('id', v.data.message_id)
@@ -53,6 +52,9 @@ export async function POST(request) {
     created_by: user.id,
     updated_at: new Date().toISOString(),
   }, { onConflict: 'message_id,created_by' })
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('agent-feedback', 'rating not saved', { messageId: msg.id, code: error.code ?? null })
+    return NextResponse.json({ success: false, error: 'Could not save your rating. Try again.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
-}
+})

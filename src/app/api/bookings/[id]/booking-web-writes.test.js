@@ -41,6 +41,13 @@ function dbWithWrite(writeAnswer) {
 }
 
 describe('POST /api/bookings/[id]/status', () => {
+  it('401 signed out, nothing written (ROUTEWRAP.R6)', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await setStatus(req({ status: 'completed' }), props)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(booking().status).toBe('confirmed')
+  })
   it.each(['completed', 'no_show', 'confirmed'])('confirmed → %s: 200, written', async (to) => {
     const res = await setStatus(req({ status: to }), props)
     expect(res.status).toBe(200)
