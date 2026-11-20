@@ -7,13 +7,17 @@
 // are paid or waived in Glofox — the INVOICE_UPDATED webhook only ever CREATES
 // fee rows as PAST_DUE; nothing flips them back when they're resolved.
 //
-// Auth: the same CRON_SECRET bearer pattern as the other Vercel crons.
+// defineCron owns the CRON_SECRET check, the error boundary and the stamp. A
+// failed locations read answers 500 with a fixed error (the detail is logged)
+// and no stamp; one location failing is a fixed per-location error and the
+// run still stamps; a dry-run answers success with `stamp: false`.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
 import { runArrearsReconcile } from '@/lib/glofox-reconcile'
+import { logError, logWarn } from '@/lib/log'
+
+const MODULE = 'cron-glofox-arrears-reconcile'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -21,12 +25,7 @@ export const dynamic = 'force-dynamic'
 // in practice (only Stillorgan is connected); 300s leaves ample headroom.
 export const maxDuration = 300
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
+export const GET = defineCron({ heartbeat: 'glofox-arrears-reconcile' }, async ({ db, request }) => {
   // AWAITING-AUTH.2 — manual controls (the scheduled cron passes neither):
   //   ?dry=1       — dry-run: report what WOULD change (clears + re-status), no writes.
   //   ?restatus=1  — also APPLY the PAST_DUE→PENDING awaiting-authorization
@@ -39,15 +38,13 @@ export async function GET(request) {
   const allowRestatus = isTruthy(params.get('restatus'))
   const commit = !dryRun
 
-  const db = createServerClient()
-
   const { data: locations, error: locErr } = await db
     .from('locations')
     .select('id, name')
     .eq('active', true)
   if (locErr) {
-    console.warn(`[cron][glofox-arrears-reconcile] failed to list locations: ${locErr.message}`)
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    logError(MODULE, 'failed to list locations', { err: locErr.message })
+    return { ok: false, body: { error: 'Could not list locations' } }
   }
 
   const perLocation = []
@@ -80,13 +77,16 @@ export async function GET(request) {
         ...(res.dryRun ? { sample: res.sample } : {}),
       })
     } catch (e) {
-      // One bad location can't stall the rest of the sweep.
-      perLocation.push({ location_id: loc.id, location_name: loc.name, ok: false, error: e.message })
+      // One bad location can't stall the rest of the sweep. A fixed line in
+      // the response; the detail (Glofox status, DB error) is logged.
+      logWarn(MODULE, 'reconcile failed for location', { locationId: loc.id, err: e?.message })
+      perLocation.push({ location_id: loc.id, location_name: loc.name, ok: false, error: 'reconcile failed' })
     }
   }
 
   // A dry-run isn't a real reconcile — don't reset the staleness clock.
-  if (!dryRun) await stampHeartbeat('glofox-arrears-reconcile').catch(() => {})
-
-  return NextResponse.json({ success: true, dry_run: dryRun, restatus_applied: allowRestatus && !dryRun, locations: perLocation.length, perLocation })
-}
+  return {
+    stamp: !dryRun,
+    body: { dry_run: dryRun, restatus_applied: allowRestatus && !dryRun, locations: perLocation.length, perLocation },
+  }
+})

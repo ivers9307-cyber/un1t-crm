@@ -40,7 +40,9 @@ describe('GET /api/cron/churn-radar-snapshot — skips locations with no members
   })
   it('a failed seam read answers 500 and does NOT stamp', async () => {
     h.db = dbFor(ESTATE_2026_10, { listError: { message: 'down' } })
-    expect((await GET(req())).status).toBe(500)
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not read membership sources' })
     expect(visited()).toEqual([])
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })

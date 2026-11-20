@@ -12,22 +12,19 @@ import { stripComments } from './helpers/js-code.js'
 const ROOT = path.resolve(import.meta.dirname, '../src/app/api/cron')
 const LEGACY = new Set([
   'agent-followups', 'auto-end-stale-hr-sessions',
-  'churn-radar-snapshot',
-  'class-fees',
-  'contact-studios-reconcile', 'contract-reminders', 'credit-attendance',
-  'event-reminders',
-  'glofox-arrears-reconcile', 'glofox-attendance-history', 'glofox-attendance-refresh',
+  'contract-reminders', 'credit-attendance',
+  'glofox-attendance-history', 'glofox-attendance-refresh',
   'glofox-data-quality', 'glofox-detail-backfill', 'glofox-sync', 'health-check',
   'membership-snapshot', 'mia-purchase-intents', 'morning-briefing',
   'notify-onboarding-pace', 'notify-streak-at-risk', 'notify-winback', 'person-detect-scan',
-  'poll-imap-mailboxes', 'process-class-bookings', 'process-contact-imports',
+  'process-class-bookings', 'process-contact-imports',
   'process-postmark-webhooks', 'process-receipt-hunts',
   'process-trial-purchases', 'race-timing-events',
   'run-campaigns',
   'run-challenge-events', 'run-scheduled-reports', 'run-sequences',
   'run-whatsapp-broadcasts', 'send-class-booking-reminders', 'send-host-campaigns',
-  'send-push-reminders', 'stripe-connect-apple-pay-domains',
-  'sync-class-occurrences', 'un1t-online-sync',
+  'send-push-reminders',
+  'un1t-online-sync',
   'wallet-monthly-reset', 'wallet-overage-draws', 'webhook-replay', 'zoom-contact-sync',
 ])
 

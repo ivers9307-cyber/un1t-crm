@@ -13,14 +13,14 @@ import path from 'node:path'
 
 let locationsResult = { data: [], error: null }
 const fakeDb = {
-  from: () => {
+  from: vi.fn(() => {
     const b = {}
     for (const m of ['select', 'filter', 'eq', 'in', 'order', 'range']) b[m] = () => b
     // W1.M3b — the seam's per-location state read (locations.membership_source by id).
     b.maybeSingle = async () => (locationsResult.error ? locationsResult : { data: locationsResult.data?.[0] ?? null, error: null })
     b.then = (resolve) => Promise.resolve(locationsResult).then(resolve)
     return b
-  },
+  }),
 }
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
@@ -81,17 +81,26 @@ describe('GET /api/cron/sync-class-occurrences', () => {
     expect(stampHeartbeat).toHaveBeenCalledTimes(1)
   })
 
-  it('a failed locations read answers 500 and does not stamp (unchanged)', async () => {
-    locationsResult = { data: null, error: { message: 'boom' } }
+  it('a failed locations read answers 500 with a fixed error, logs the detail and does not stamp', async () => {
+    const { logError } = await import('@/lib/log')
+    locationsResult = { data: null, error: { message: 'boom: relation locations' } }
     const res = await GET(req())
     expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Could not read the Glofox locations' })
+    expect(JSON.stringify(body)).not.toContain('boom')
+    expect(logError).toHaveBeenCalledWith('cron-sync-class-occurrences', 'glofox locations unreadable', { err: 'boom: relation locations' })
     expect(stampHeartbeat).not.toHaveBeenCalled()
     expect(syncOccurrencesForLocation).not.toHaveBeenCalled()
   })
 
-  it('refuses a caller without the cron secret (unchanged)', async () => {
-    const res = await GET(req('Bearer nope'))
-    expect(res.status).toBe(401)
+  it('refuses a caller without the cron secret: nothing read, nothing stamped', async () => {
+    for (const auth of ['Bearer nope', null]) {
+      const res = await GET(req(auth))
+      expect(res.status).toBe(401)
+    }
+    expect(fakeDb.from).not.toHaveBeenCalled()
+    expect(syncOccurrencesForLocation).not.toHaveBeenCalled()
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })

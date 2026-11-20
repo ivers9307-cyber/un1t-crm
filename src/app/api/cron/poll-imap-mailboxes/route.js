@@ -17,9 +17,9 @@
 //
 // A THIN WRAPPER, on purpose. Everything that decides anything lives in
 // src/lib/mail/imap-poll.js, where it is unit-tested against a fake IMAP
-// client and a fake fetch. What lives HERE is the CRON_SECRET gate, the
-// heartbeat, and the JSON summary — the same skeleton as run-sequences and
-// shelly-reconcile.
+// client and a fake fetch. What lives HERE is the JSON summary and which runs
+// stamp; defineCron (src/lib/define-cron.js) owns the CRON_SECRET gate, the
+// error boundary and the stamp itself.
 //
 // DORMANT BY CONSTRUCTION. Until an operator connects a login in Phase 6 there
 // are zero mailboxes with `ingress = 'imap'`, so a tick is one indexed SELECT
@@ -35,15 +35,11 @@
 // `paused_until`, `last_ok_at` on email_mailbox_ingress) is what surfaces a
 // broken mailbox, and Phase 9 alerts on an auth failure distinctly from a
 // transport failure. The ONE thing that does not stamp is a sweep that could
-// not read its own configuration.
-//
-// Auth: CRON_SECRET bearer, exactly as every other cron in this directory.
+// not read its own configuration; it still answers 200 with success: false and
+// a reason code, as it always has.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { pollAllMailboxes } from '@/lib/mail/imap-poll'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -57,28 +53,18 @@ export const dynamic = 'force-dynamic'
 // of headroom over.
 export const maxDuration = 300
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'poll-imap-mailboxes' }, async ({ db }) => {
   const out = await pollAllMailboxes(db)
 
   // STAMPED ONLY ON A COMPLETED SWEEP. `ok: false` means the mailbox list
   // itself could not be read — the poller cannot say whether any customer's
   // mail is arriving, which is exactly the tick the health check exists to
   // catch. Per-mailbox failures are counted, not fatal (see the header).
+  // That failure keeps its 200 status and reason code (no error text).
   //
   // The counters ride into cron_heartbeats.last_outcome so ops can tell "ran,
   // nothing connected" from "ran, three mailboxes failing" without opening the
   // logs. Every value is a number or a short reason code — no address, no
   // host, no error text, and certainly no credential.
-  if (out.ok !== false) {
-    await stampHeartbeat('poll-imap-mailboxes', out).catch((err) =>
-      logWarn('cron-poll-imap-mailboxes', 'heartbeat failed', { err }))
-  }
-
-  return NextResponse.json({ success: out.ok !== false, ...out })
-}
+  return { ok: out.ok !== false, outcome: out, body: out, status: 200 }
+})

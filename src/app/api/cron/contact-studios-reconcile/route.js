@@ -19,10 +19,11 @@
 // last night's reconcile took, and a run past SLOW_RUN_MS (half of
 // maxDuration) logs a warning while there is still headroom, before the table
 // grows into Vercel's limit and the function is killed with no stamp.
+//
+// defineCron owns the CRON_SECRET check, the error boundary and the stamp; a
+// failed batch answers 500 with a fixed error (the detail is logged).
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logError, logInfo, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -36,13 +37,7 @@ export const BATCH_CONTACTS = 500
 /** Stop starting batches with headroom before maxDuration kills the function. */
 export const RUN_DEADLINE_MS = (maxDuration - 30) * 1000
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'contact-studios-reconcile' }, async ({ db }) => {
   const startedAt = Date.now()
 
   // RECONCILEBATCH.1 (mig 846) — in batches of BATCH_CONTACTS contacts. One
@@ -56,14 +51,14 @@ export async function GET(request) {
   for (;;) {
     if (Date.now() - startedAt > RUN_DEADLINE_MS) {
       logError(CRON_NAME, 'reconcile ran out of time before the last batch; no heartbeat', { batches: counts.batches, after, duration_ms: Date.now() - startedAt })
-      return NextResponse.json({ success: false, error: 'reconcile did not finish in time', ...counts }, { status: 500 })
+      return { ok: false, body: { error: 'reconcile did not finish in time', ...counts } }
     }
     const { data, error } = await db.rpc('reconcile_contact_studios_batch', { p_after: after, p_limit: BATCH_CONTACTS })
     if (error) {
       logError(CRON_NAME, 'reconcile_contact_studios_batch failed; no heartbeat', {
         code: error.code ?? null, message: error.message, batches: counts.batches, duration_ms: Date.now() - startedAt,
       })
-      return NextResponse.json({ success: false, error: error.message || 'reconcile failed' }, { status: 500 })
+      return { ok: false, body: { error: 'reconcile failed' } }
     }
     const row = Array.isArray(data) ? data[0] : data
     counts.batches++
@@ -87,6 +82,5 @@ export async function GET(request) {
     logWarn(CRON_NAME, 'contact_studios reconcile is past half its time limit', { duration_ms: durationMs, limit_ms: maxDuration * 1000 })
   }
   logInfo(CRON_NAME, 'contact_studios reconciled', counts)
-  await stampHeartbeat(CRON_NAME, counts)
-  return NextResponse.json({ success: true, ...counts })
-}
+  return { outcome: counts, body: counts }
+})

@@ -12,6 +12,7 @@ vi.mock('@/lib/payments/apple-pay-domains', () => ({
 
 const { GET } = await import('./route.js')
 const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
+const { createServerClient } = await import('@/lib/supabase')
 const { listCheckoutDomains, listConnectedAccounts, ensureAccountDomains } = await import('@/lib/payments/apple-pay-domains')
 
 const env = { ...process.env }
@@ -37,9 +38,10 @@ afterEach(() => { process.env = { ...env } })
 
 describe('GET /api/cron/stripe-connect-apple-pay-domains', () => {
   it('401s without the cron secret and does nothing', async () => {
-    const res = await GET(req('Bearer nope'))
-    expect(res.status).toBe(401)
+    for (const auth of [null, 'Bearer nope']) expect((await GET(req(auth))).status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
     expect(listConnectedAccounts).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('registers every domain on every connected account and stamps', async () => {
@@ -48,7 +50,10 @@ describe('GET /api/cron/stripe-connect-apple-pay-domains', () => {
     expect(ensureAccountDomains).toHaveBeenCalledWith('acct_h', ['un1tdublin.com', 'crm.repset.ie'])
     const body = await res.json()
     expect(body.data).toEqual(expect.objectContaining({ accounts: 1, domains: 2, created: 1, failed_accounts: 0, apple_pay_inactive: 0 }))
-    expect(stampHeartbeat).toHaveBeenCalledWith('stripe-connect-apple-pay-domains', expect.objectContaining({ created: 1 }))
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat).toHaveBeenCalledWith('stripe-connect-apple-pay-domains', {
+      accounts: 1, domains: 2, created: 1, revalidated: 0, apple_pay_inactive: 0, failed_accounts: 0, tenant_read_failed: false,
+    })
   })
 
   it('an Apple Pay status Stripe left inactive is reported but still stamps', async () => {
@@ -75,7 +80,9 @@ describe('GET /api/cron/stripe-connect-apple-pay-domains', () => {
 
   it('a failed tenant domain read does not stamp', async () => {
     listCheckoutDomains.mockResolvedValue({ domains: ['crm.repset.ie'], tenantReadFailed: true })
-    await GET(req())
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect((await res.json()).success).toBe(true)
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
@@ -83,6 +90,9 @@ describe('GET /api/cron/stripe-connect-apple-pay-domains', () => {
     listConnectedAccounts.mockRejectedValue(new Error('db down'))
     const res = await GET(req())
     expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'accounts_read_failed' })
+    expect(JSON.stringify(body)).not.toContain('db down')
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
@@ -91,6 +101,8 @@ describe('GET /api/cron/stripe-connect-apple-pay-domains', () => {
     const res = await GET(req())
     expect(res.status).toBe(200)
     expect(listConnectedAccounts).not.toHaveBeenCalled()
+    expect(await res.json()).toEqual({ success: true, data: { skipped: 'stripe_not_configured' } })
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('stripe-connect-apple-pay-domains', { skipped: 'stripe_not_configured' })
   })
 })

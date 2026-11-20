@@ -12,13 +12,13 @@
 //
 // Stamps 'stripe-connect-apple-pay-domains' (mig 813) only when every Stripe
 // call answered; an Apple Pay status Stripe left 'inactive' is reported in the
-// outcome, not a failure. A failed accounts read is a 500 with no stamp.
+// outcome, not a failure. A failed accounts read is a 500 with no stamp. A run
+// where an account or the tenant domain read failed still answers success
+// (the failure is counted and logged) but returns `stamp: false`.
 //
-// Secured by CRON_SECRET (Vercel cron sends Authorization: Bearer <secret>).
+// defineCron owns the CRON_SECRET check, the error boundary and the stamp.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logError, logWarn } from '@/lib/log'
 import {
   listCheckoutDomains,
@@ -28,28 +28,22 @@ import {
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// One list call per connected account plus a create or revalidate per missing
+// domain; a handful of accounts in practice.
+export const maxDuration = 300
 
-const HEARTBEAT = 'stripe-connect-apple-pay-domains'
-
-export async function GET(request) {
-  const cronSecret = process.env.CRON_SECRET
-  const authHeader = request.headers.get('authorization')
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+export const GET = defineCron({ heartbeat: 'stripe-connect-apple-pay-domains' }, async ({ db }) => {
   if (!process.env.STRIPE_SECRET_KEY) {
     // No Stripe on this deployment (a preview): nothing to register.
-    await stampHeartbeat(HEARTBEAT, { skipped: 'stripe_not_configured' })
-    return NextResponse.json({ success: true, data: { skipped: 'stripe_not_configured' } })
+    return { outcome: { skipped: 'stripe_not_configured' }, body: { data: { skipped: 'stripe_not_configured' } } }
   }
 
-  const db = createServerClient()
   let accounts
   try {
     accounts = await listConnectedAccounts(db)
   } catch (err) {
     logError('apple-pay-domains', 'connected accounts read failed', { error: err?.message || String(err) })
-    return NextResponse.json({ success: false, error: 'accounts_read_failed' }, { status: 500 })
+    return { ok: false, body: { error: 'accounts_read_failed' } }
   }
 
   const { domains, tenantReadFailed } = await listCheckoutDomains(db)
@@ -87,6 +81,9 @@ export async function GET(request) {
     failed_accounts: failedAccounts,
     tenant_read_failed: tenantReadFailed,
   }
-  if (failedAccounts === 0 && !tenantReadFailed) await stampHeartbeat(HEARTBEAT, outcome)
-  return NextResponse.json({ success: true, data: { ...outcome, inactive, summary } })
-}
+  return {
+    stamp: failedAccounts === 0 && !tenantReadFailed,
+    outcome,
+    body: { data: { ...outcome, inactive, summary } },
+  }
+})

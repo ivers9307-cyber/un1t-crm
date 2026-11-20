@@ -21,12 +21,15 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const fakeDb = { __brand: 'db' }
+const { fakeDb, createServerClient } = vi.hoisted(() => {
+  const db = { __brand: 'db' }
+  return { fakeDb: db, createServerClient: vi.fn(() => db) }
+})
 
-vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
+vi.mock('@/lib/supabase', () => ({ createServerClient }))
 vi.mock('@/lib/mail/imap-poll', () => ({ pollAllMailboxes: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
 import { GET } from './route.js'
 import { pollAllMailboxes } from '@/lib/mail/imap-poll'
@@ -55,7 +58,9 @@ describe('GET /api/cron/poll-imap-mailboxes', () => {
     expect((await GET(req('Bearer nope'))).status).toBe(401)
     expect((await GET(req(''))).status).toBe(401)
     expect((await GET(req('test-secret'))).status).toBe(401) // no "Bearer " prefix
+    expect(createServerClient).not.toHaveBeenCalled()
     expect(pollAllMailboxes).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('rejects everything when CRON_SECRET is unset, rather than letting the tick through', async () => {
@@ -74,6 +79,7 @@ describe('GET /api/cron/poll-imap-mailboxes', () => {
     expect(pollAllMailboxes).toHaveBeenCalledWith(fakeDb)
     // The counters are the point of the second argument: a stamp without them
     // cannot tell "ran, nothing connected" from "ran, three mailboxes failing".
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('poll-imap-mailboxes', out)
     expect(body).toMatchObject({ success: true, ...out })
   })
@@ -108,6 +114,22 @@ describe('GET /api/cron/poll-imap-mailboxes', () => {
     const body = await (await GET(req())).json()
 
     expect(body).toMatchObject({ success: false, reason: 'mailbox_lookup_failed' })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('that failed sweep keeps its 200 status, as before the wrapper', async () => {
+    pollAllMailboxes.mockResolvedValue({ ok: false, reason: 'mailbox_lookup_failed', mailboxes: 0 })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a sweep that throws answers a fixed 500, stamps nothing and leaks no error text', async () => {
+    pollAllMailboxes.mockRejectedValue(new Error('relation email_mailboxes does not exist'))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Cron run failed' })
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
