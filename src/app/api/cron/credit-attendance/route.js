@@ -22,14 +22,18 @@
 // glofox, or sits at a un1t_online studio, is skipped and counted in
 // `skipped_un1t_online`). A failed un1t_online locations read is a 500 with
 // no heartbeat, like the seam read beside it.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+//
+// ROUTEWRAP.C10 — defineCron owns the secret check, the error boundary and the
+// stamp. A failed bookings page, or a failed read of the sessions that already
+// exist, used to be logged and the run stamped as clean; the bookings already
+// read are still credited exactly as before, but the run now answers 500 with
+// no heartbeat (`bookings_unread` / `sessions_unread`), so it pages.
+import { defineCron } from '@/lib/define-cron'
 import { createParticipationSession, finalizeSessionRewards } from '@/lib/live-class'
 import { resolveScoringConfig, resolveMaxHr } from '@/lib/heart-rate'
 import { dedupeKey, filterUncredited } from '@/lib/credit-attendance'
 import { DEFAULT_CLASS_MINUTES } from '@/lib/class-occurrences'
 import { logInfo, logWarn, logError } from '@/lib/log'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { locationIdsWithoutCapability } from '@/lib/membership/locations-for-source'
 import { crmMayActOnClassBooking, scopeToCrmActionable, readUn1tOnlineLocationIds } from '@/lib/class-booking-platform'
 
@@ -46,13 +50,7 @@ const LOOKBACK_DAYS = 3
 
 export async function POST(request) { return GET(request) }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'credit-attendance' }, async ({ db }) => {
   const nowMs = Date.now()
   const completedBeforeIso = new Date(nowMs - COMPLETED_GRACE_MS).toISOString()
 
@@ -62,7 +60,7 @@ export async function GET(request) {
     const { data: locations, error } = await db.from('locations').select('id, settings')
     if (error) {
       logWarn('cron-credit-attendance', 'locations load failed', { err: error })
-      return NextResponse.json({ success: false, error: 'locations load failed' }, { status: 500 })
+      return { ok: false, body: { error: 'locations load failed' } }
     }
     for (const l of locations || []) locationMap.set(l.id, l)
   }
@@ -72,19 +70,21 @@ export async function GET(request) {
   const { ids: noSource, error: srcErr } = await locationIdsWithoutCapability(db, 'bookings') // UN1TCAP.1: a configured source can lack bookings (un1t.online)
   if (srcErr) {
     logWarn('cron-credit-attendance', 'membership sources read failed', { err: srcErr })
-    return NextResponse.json({ success: false, error: 'membership sources read failed' }, { status: 500 })
+    return { ok: false, body: { error: 'membership sources read failed' } }
   }
   // Decision 1: the un1t.online studios, read once per tick.
   const { ids: un1tOnlineLocationIds, error: un1tErr } = await readUn1tOnlineLocationIds(db)
   if (un1tErr) {
     logError('cron-credit-attendance', 'un1t_online locations read failed', { err: un1tErr })
-    return NextResponse.json({ success: false, error: 'un1t_online locations read failed' }, { status: 500 })
+    return { ok: false, body: { error: 'un1t_online locations read failed' } }
   }
 
   let scanned = 0
   let credited = 0
   let skippedNoSource = 0
   let skippedUn1tOnline = 0
+  let bookingsUnread = 0
+  let sessionsUnread = 0
 
   // Paginate attended, contact-linked, completed bookings (oldest first).
   for (let from = 0; ; from += PAGE) {
@@ -99,6 +99,7 @@ export async function GET(request) {
       .range(from, from + PAGE - 1)
     if (error) {
       logWarn('cron-credit-attendance', 'bookings query failed', { err: error, from })
+      bookingsUnread = 1
       break
     }
     if (!bookings || bookings.length === 0) break
@@ -126,6 +127,7 @@ export async function GET(request) {
         .in('glofox_event_id', pageEventIds)
       if (sErr) {
         logWarn('cron-credit-attendance', 'existing sessions query failed', { err: sErr, from })
+        sessionsUnread++
       } else {
         for (const s of sessions || []) {
           const key = dedupeKey(s)
@@ -216,8 +218,13 @@ export async function GET(request) {
     if (pageSize < PAGE) break
   }
 
-  logInfo('cron-credit-attendance', 'tick', { scanned, credited, skipped_no_source: skippedNoSource, skipped_un1t_online: skippedUn1tOnline })
-  await stampHeartbeat('credit-attendance').catch((err) =>
-    logWarn('cron-credit-attendance', 'heartbeat failed', { err }))
-  return NextResponse.json({ success: true, credited, scanned, skipped_no_source: skippedNoSource, skipped_un1t_online: skippedUn1tOnline })
-}
+  logInfo('cron-credit-attendance', 'tick', {
+    scanned, credited, skipped_no_source: skippedNoSource, skipped_un1t_online: skippedUn1tOnline,
+    bookings_unread: bookingsUnread, sessions_unread: sessionsUnread,
+  })
+  const body = { credited, scanned, skipped_no_source: skippedNoSource, skipped_un1t_online: skippedUn1tOnline }
+  if (bookingsUnread || sessionsUnread) {
+    return { ok: false, body: { ...body, bookings_unread: bookingsUnread, sessions_unread: sessionsUnread, error: 'A read failed; the run is not clean' } }
+  }
+  return { body }
+})
