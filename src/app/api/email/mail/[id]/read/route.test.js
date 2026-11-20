@@ -132,3 +132,19 @@ describe('POST …/read — a failed mailbox lookup is not an empty one', () => 
     expect((await post(T_STUDIO.id)).status).toBe(500)
   })
 })
+
+// ROUTEWRAP.R2 — a failed unread reset answers a fixed 500, never the
+// database text.
+describe('POST …/read — a failed write', () => {
+  it('500s without the database message', async () => {
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table === 'email_tickets') b.update = () => ({ eq: async () => ({ data: null, error: { message: 'secret detail' } }) })
+      return b
+    }
+    const res = await post(T_STUDIO.id)
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('secret detail')
+  })
+})

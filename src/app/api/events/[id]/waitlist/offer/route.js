@@ -7,7 +7,7 @@
 // means every time is full and nobody was offered. Manager+ holding `races`
 // at the event's studio.
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { resolveStaffWaitlistEvent } from '@/lib/event-waitlist-access'
 import { runWaitlistOffers } from '@/lib/event-waitlist'
 import { logError } from '@/lib/log'
@@ -17,10 +17,11 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
 
-export async function POST(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  const ctx = await resolveStaffWaitlistEvent(user, params.id)
+// The gate is judged at the EVENT's studio, so withAuth only signs the caller
+// in; resolveStaffWaitlistEvent keeps the races-somewhere 403, the 404 and the
+// races + manager-at-the-event's-studio 403, shared with the sibling routes.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, params }) => {
+  const ctx = await resolveStaffWaitlistEvent(user, params?.id)
   if (ctx.response) return ctx.response
   // Each forced round emails everyone on the list again: 3 an hour per event,
   // shared by staff and the host (one key), checked after the gate.
@@ -33,4 +34,4 @@ export async function POST(_request, props) {
     logError('event-waitlist', 'staff offer round failed', { err: e, eventId: ctx.race.id })
     return NextResponse.json({ success: false, error: 'load_failed', message: 'The waitlist could not be read. Try again.' }, { status: 500 })
   }
-}
+})

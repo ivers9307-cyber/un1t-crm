@@ -83,11 +83,16 @@ describe('GET /api/admin/tenants — roster', () => {
     expect(body.data.orgs).toHaveLength(1)
   })
 
-  it('500s with the assembler message on failure', async () => {
+  it('500s with a fixed message on failure, never the assembler text', async () => {
     vi.mocked(getTenantsRoster).mockRejectedValue(new Error('boom'))
     const res = await GET(rosterReq())
     expect(res.status).toBe(500)
-    expect((await res.json()).error).toBe('boom')
+    expect((await res.json()).error).toBe('Could not load the tenants.')
+  })
+
+  it('403 body for a non-master is unchanged', async () => {
+    currentUser = OWNER
+    expect(await (await GET(rosterReq())).json()).toEqual({ success: false, error: 'Master only' })
   })
 })
 
