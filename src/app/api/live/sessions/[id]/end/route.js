@@ -12,21 +12,18 @@
 // because it fires BEFORE the lookup and so reveals nothing about the id.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
+import { hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { guardLiveSession, LIVE_MUTATION_ROLES } from '@/lib/live-access'
-import { createServerClient } from '@/lib/supabase'
 import { endSession } from '@/lib/live-class'
-import { logInfo } from '@/lib/log'
+import { logError, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
-  }
+// withAuth only signs the caller in (its 401); the coach pre-check, the lookup
+// and guardLiveSession stay below in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   // Pre-lookup role check: no id has been touched yet, so a 403 here is safe.
   // The session's location is unknown until the lookup below, so it asks only
   // "a coach role at ANY studio" (ROLESWEEP.1b; it read `user.role`, the
@@ -40,21 +37,22 @@ export async function POST(_request, props) {
   }
 
   // Look up the session's location to enforce scope before we end it.
-  const db = createServerClient()
   const { data: session } = await db
     .from('heart_rate_sessions')
     .select('id, location_id')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .maybeSingle()
   const denied = guardLiveSession(user, session, { roles: LIVE_MUTATION_ROLES })
   if (denied) return denied
 
-  const out = await endSession(db, params.id)
+  const out = await endSession(db, session.id)
   if (!out.ok) {
-    return NextResponse.json({ ok: false, error: out.error }, { status: 400 })
+    // endSession can carry database text; it stays in the log.
+    logError('live-class', 'session not ended', { sessionId: session.id, error: out.error })
+    return NextResponse.json({ ok: false, error: 'Could not end the session. Try again.' }, { status: 400 })
   }
   logInfo('live-class', 'session ended', {
-    sessionId: params.id, locationId: session.location_id, actor: user.id,
+    sessionId: session.id, locationId: session.location_id, actor: user.id,
   })
   return NextResponse.json({ ok: true, summary: out.summary, alreadyEnded: out.alreadyEnded || false })
-}
+})

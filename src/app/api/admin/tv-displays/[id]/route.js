@@ -11,20 +11,19 @@
 // is a 404. Writes are narrowed to that studio too.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
+import { logError } from '@/lib/log'
 import {
   loadTvDisplayForUser, TvRotationSchema, tvNotFound, tvServerError,
 } from '@/lib/tv-admin'
 
 export const dynamic = 'force-dynamic'
 
-export async function PATCH(request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
-  const { display, response } = await loadTvDisplayForUser(db, user, id, 'id, location_id')
+// withAuth only signs the caller in; loadTvDisplayForUser keeps the coarse
+// tv_displays check and the TV's studio (404), as before.
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const { display, response } = await loadTvDisplayForUser(db, user, params?.id, 'id, location_id')
   if (response) return response
 
   const validation = await validateBody(request, TvRotationSchema)
@@ -35,17 +34,17 @@ export async function PATCH(request, props) {
     .eq('id', display.id)
     .eq('location_id', display.location_id)
     .select('id, rotation')
-  if (error) return tvServerError(`Could not change the orientation: ${error.message}`)
+  if (error) {
+    logError('tv-admin', 'rotation not saved', { tvId: display.id, code: error.code ?? null })
+    return tvServerError('Could not change the orientation.')
+  }
   if (!data || data.length === 0) return tvNotFound('TV')
 
   return NextResponse.json({ success: true, data: data[0] })
-}
+})
 
-export async function DELETE(_request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
-  const { display, response } = await loadTvDisplayForUser(db, user, id, 'id, location_id')
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const { display, response } = await loadTvDisplayForUser(db, user, params?.id, 'id, location_id')
   if (response) return response
 
   // Zero rows = deleted by someone else since the read: the TV is gone, which
@@ -55,7 +54,10 @@ export async function DELETE(_request, props) {
     .eq('id', display.id)
     .eq('location_id', display.location_id)
     .select('id')
-  if (error) return tvServerError(`Could not delete the TV: ${error.message}`)
+  if (error) {
+    logError('tv-admin', 'tv not deleted', { tvId: display.id, code: error.code ?? null })
+    return tvServerError('Could not delete the TV.')
+  }
 
   return NextResponse.json({ success: true })
-}
+})

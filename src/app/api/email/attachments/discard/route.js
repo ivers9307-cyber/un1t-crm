@@ -31,8 +31,7 @@
 // residue.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { OutboundAttachmentSchema, discardOutboundDraft } from '@/lib/email-outbound-attachments-server'
 
@@ -43,16 +42,14 @@ export const dynamic = 'force-dynamic'
 // schema is shared so the client can hand back the same object it holds.
 const DiscardSchema = OutboundAttachmentSchema
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// withAuth only signs the caller in; the object key is built from the caller's
+// own profile id, as above.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const validation = await validateBody(request, DiscardSchema)
   if (!validation.ok) return validation.response
   const { draft_id: draftId, index, mime } = validation.data
 
-  const db = createServerClient()
   await discardOutboundDraft(db, { profileId: user.id, draftId, index, mime })
 
   return NextResponse.json({ success: true, data: { discarded: true } })
-}
+})

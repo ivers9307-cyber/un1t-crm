@@ -8,8 +8,7 @@
 // fault nobody fixes comes back rather than being muted for ever.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -20,22 +19,22 @@ const Body = z.object({
   note: z.string().trim().max(500).optional().nullable(),
 })
 
-async function master() {
-  const user = await getCurrentUser()
-  return user && user.profileRole === 'master' ? user : null
-}
+// Masters on their own profile role only. withAuth signs the caller in (a
+// signed-out call is its 401, where this route said 403); everyone else is
+// this 403, as before.
+const isMasterProfile = (user) => user?.profileRole === 'master'
+const forbidden = () => NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,79}$/
 
-export async function POST(request, { params }) {
-  const user = await master()
-  if (!user) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  const { name } = await params
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  if (!isMasterProfile(user)) return forbidden()
+  const name = params?.name
   if (!NAME_RE.test(String(name || ''))) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const validation = await validateBody(request, Body)
   if (!validation.ok) return validation.response
   const until = new Date(Date.now() + validation.data.hours * 3_600_000).toISOString()
-  const { data, error } = await createServerClient()
+  const { data, error } = await db
     .from('cron_heartbeats')
     .update({ acknowledged_until: until, acknowledged_by: user.id, acknowledged_note: validation.data.note || null })
     .eq('name', name)
@@ -43,14 +42,13 @@ export async function POST(request, { params }) {
   if (error) return NextResponse.json({ success: false, error: 'Could not acknowledge the job.' }, { status: 500 })
   if (!data?.length) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   return NextResponse.json({ success: true, data: data[0] })
-}
+})
 
-export async function DELETE(_request, { params }) {
-  const user = await master()
-  if (!user) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  const { name } = await params
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  if (!isMasterProfile(user)) return forbidden()
+  const name = params?.name
   if (!NAME_RE.test(String(name || ''))) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  const { data, error } = await createServerClient()
+  const { data, error } = await db
     .from('cron_heartbeats')
     .update({ acknowledged_until: null, acknowledged_by: null, acknowledged_note: null })
     .eq('name', name)
@@ -58,4 +56,4 @@ export async function DELETE(_request, { params }) {
   if (error) return NextResponse.json({ success: false, error: 'Could not clear the acknowledgement.' }, { status: 500 })
   if (!data?.length) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   return NextResponse.json({ success: true, data: data[0] })
-}
+})

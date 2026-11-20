@@ -42,8 +42,9 @@ afterEach(async () => { await db?.close() })
 describe('mig 757 seeds the trial-done arm row', () => {
   it('under the name the route stamps, on the */15 cadence, born healthy', async () => {
     expect(TRIAL_DONE_HEARTBEAT).toBe(NAME)
-    expect(ROUTE).toMatch(/stampHeartbeat\(TRIAL_DONE_HEARTBEAT, trialDone\)/)
-    expect(ROUTE).toMatch(/if \(trialDoneArmHealthy\(trialDone\)\)/)
+    // ROUTEWRAP.C9 — the route hands the arm row to defineCron's `arms`.
+    expect(ROUTE).toMatch(/\{ heartbeat: TRIAL_DONE_HEARTBEAT, outcome: trialDone \}/)
+    expect(ROUTE).toMatch(/trialDoneArmHealthy\(trialDone\) \?/)
     await runSql(MIG_757)
     const r = await row()
     expect(r).toMatchObject({ expected_interval_seconds: 900, grace_seconds: 1500 })

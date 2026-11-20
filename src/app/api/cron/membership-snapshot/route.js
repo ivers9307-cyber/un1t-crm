@@ -14,36 +14,36 @@
 // (location_id, snapshot_date) row. Heartbeat expectation tightened to
 // daily in mig 455.
 //
-// Auth: same fail-closed CRON_SECRET pattern as the other crons.
+// Auth: CRON_SECRET, via defineCron (src/lib/define-cron.js).
+//
+// ROUTEWRAP.C9 — on defineCron with the same stamps as before: a failed
+// locations read, or a tick where every eligible location's source was
+// unreadable, answers 500 and stamps nothing; every other tick stamps
+// 'membership-snapshot', including one where a location threw (ok: false +
+// stamp: true, still answered 200). The response names a failed location by id
+// with a fixed line, never the error text (that goes to the log).
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { writeMembershipSnapshot } from '@/lib/membership-snapshot'
 import { READS_BY_SOURCE } from '@/lib/membership/reads'
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
+const MODULE = 'membership-snapshot'
 
-  const db = createServerClient()
-
+export const GET = defineCron({ heartbeat: 'membership-snapshot' }, async ({ db }) => {
   const { data: locations, error: locErr } = await db
     .from('locations')
     .select('id, name, timezone')
     .eq('active', true)
   if (locErr) {
-    console.warn(`[cron][membership-snapshot] failed to list locations: ${locErr.message}`)
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    logWarn(MODULE, 'failed to list locations; not stamping', { err: locErr })
+    return { ok: false, status: 500, body: { error: 'could not list locations' } }
   }
 
   // UN1TREAD.5 — eligibility is by the location's source KEY, not by whether
@@ -62,25 +62,28 @@ export async function GET(request) {
   let skippedUnknown = 0
 
   const results = []
-  let firstError = null
+  let failed = 0
   for (const loc of locations || []) {
     try {
-      const s = await membershipStateForPage(db, loc.id)
-      if (!s?.source) {
+      const st = await membershipStateForPage(db, loc.id)
+      if (!st?.source) {
         skippedUnknown++
-        logError('membership-snapshot', 'membership source unreadable; location skipped this tick', {
-          locationId: loc.id, state: s?.state ?? null, readError: s?.readError ?? null,
+        logError(MODULE, 'membership source unreadable; location skipped this tick', {
+          locationId: loc.id, state: st?.state ?? null, readError: st?.readError ?? null,
         })
         continue
       }
-      const reads = Object.hasOwn(READS_BY_SOURCE, s.source) ? READS_BY_SOURCE[s.source] : null
+      const reads = Object.hasOwn(READS_BY_SOURCE, st.source) ? READS_BY_SOURCE[st.source] : null
       if (typeof reads?.membershipCounts !== 'function') { skippedNoSource++; continue }
       const counts = await reads.membershipCounts(db, loc.id)
       const snap = await writeMembershipSnapshot(db, loc.id, { zone: zoneOfLocation(loc), counts })
       results.push({ location_id: loc.id, location_name: loc.name, ...snap })
-    } catch (e) {
-      if (!firstError) firstError = `[${loc.id}] ${e?.message || 'threw'}`
-      results.push({ location_id: loc.id, location_name: loc.name, error: e?.message || 'threw' })
+    } catch (err) {
+      // ROUTEWRAP.C9 — the error text stays in the log; the response says only
+      // which location failed.
+      failed++
+      logError(MODULE, 'location snapshot failed', { locationId: loc.id, err })
+      results.push({ location_id: loc.id, location_name: loc.name, error: 'snapshot failed' })
     }
   }
 
@@ -88,18 +91,25 @@ export async function GET(request) {
   // was unreadable must not read healthy: 500, no heartbeat. One unknown
   // among processed locations stays a skip.
   if (results.length === 0 && skippedUnknown > 0) {
-    console.warn(`[cron][membership-snapshot] no location processed; ${skippedUnknown} had an unreadable membership source`)
-    return NextResponse.json({ success: false, error: 'membership source unreadable for every eligible location', skipped_unknown: skippedUnknown }, { status: 500 })
+    logWarn(MODULE, 'no location processed; every eligible membership source unreadable', { skippedUnknown })
+    return {
+      ok: false, status: 500,
+      body: { error: 'membership source unreadable for every eligible location', skipped_unknown: skippedUnknown },
+    }
   }
 
-  await stampHeartbeat('membership-snapshot')
-
-  return NextResponse.json({
-    success: !firstError,
-    locations_processed: results.length,
-    skipped_no_source: skippedNoSource,
-    skipped_unknown: skippedUnknown,
-    first_error: firstError,
-    snapshots: results,
-  })
-}
+  // A location that threw is a failed run (success: false) whose stamp is
+  // still recorded: the other locations snapshotted, as before.
+  return {
+    ok: failed === 0,
+    stamp: true,
+    status: 200,
+    body: {
+      locations_processed: results.length,
+      locations_failed: failed,
+      skipped_no_source: skippedNoSource,
+      skipped_unknown: skippedUnknown,
+      snapshots: results,
+    },
+  }
+})
