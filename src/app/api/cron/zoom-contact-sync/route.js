@@ -19,7 +19,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { runZoomContactSync } from '@/lib/zoom/reconcile'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,6 +40,15 @@ export async function GET(request) {
   const db = createServerClient()
   const out = await runZoomContactSync({ db, dry, limit, force, trigger: 'cron' })
 
+  // ZOOMSYNC.5 — a run that could not read the CRM's contacts or Zoom's
+  // directory did nothing: it used to stamp anyway, so a sync dead for a week
+  // looked healthy. It now answers a fixed line (the detail goes to the log
+  // and the run history) and leaves the heartbeat to go stale.
+  if (out.ok === false && !out.counts) {
+    logError('cron-zoom-contact-sync', 'run could not read its inputs; not stamping', { err: out.error ?? null })
+    return NextResponse.json({ success: false, error: 'Zoom contact sync could not read its inputs' }, { status: 500 })
+  }
+
   // Pass the outcome, don't just stamp the time. Without it the only record of
   // what a night's run did is this HTTP response, which nobody reads at 04:30 —
   // a tripped deletion guard or a run that enqueued nothing would look
@@ -59,5 +68,29 @@ export async function GET(request) {
   // `out.ok !== false` deliberately: the unconfigured skip carries no `ok`
   // key and is not a dead cron. A tripped deletion guard DOES set ok:false
   // and should show red — that is the point of the guard.
-  return NextResponse.json({ success: out.ok !== false, ...out })
+  return NextResponse.json({ success: out.ok !== false, ...publicResult(out) })
+}
+
+// ZOOMSYNC.5 — what the scheduled run's response may say. `failures` are
+// "<op> <phone number>: <provider error>" strings and the tripped guard
+// carries a sample of numbers: counts only here (the run history keeps the
+// detail for staff). A dry run (?dry=1, the operator's tool, behind the cron
+// secret) still answers in full: its sample is what decides a ?force=1.
+export function publicResult(out) {
+  if (out?.dry) return out
+  const { failures, guard, ...rest } = out || {}
+  return {
+    ...rest,
+    ...(failures?.length ? { failureCount: failures.length } : {}),
+    ...(guard ? { guard: guardSummary(guard) } : {}),
+  }
+}
+
+function guardSummary(guard) {
+  const counts = {}
+  for (const [k, v] of Object.entries(guard || {})) {
+    if (typeof v === 'number' || typeof v === 'boolean') counts[k] = v
+    else if (Array.isArray(v)) counts[`${k}Count`] = v.length
+  }
+  return counts
 }
