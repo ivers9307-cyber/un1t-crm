@@ -8,22 +8,21 @@
 // Gated on the same per-category approval grant as fulfilment, and 404s on a
 // purchase outside the caller's locations so ids can't be enumerated.
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { sendOfferPurchaseEmail } from '@/lib/offer-purchase-emails'
 
 export const runtime = 'nodejs'
 
-export async function POST(_request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in: the grant is first checked at ANY studio,
+// then at the purchase's, so every check stays here in its old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const id = params?.id
   if (!hasPermissionAtAnyLocation(user, 'approvals_offer_purchases')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: row } = await db
     .from('offer_purchases')
     .select('id, state, location_id, contact_id, buyer_name, buyer_email, amount_cents, offer:offer_id ( name, bonus_headline, category )')
@@ -48,4 +47,4 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: false, error: `Not sent: ${result.reason}` }, { status: 409 })
   }
   return NextResponse.json({ success: true, data: { sent: true, to: row.buyer_email } })
-}
+})

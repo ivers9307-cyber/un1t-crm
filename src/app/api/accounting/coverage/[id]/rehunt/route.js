@@ -10,7 +10,9 @@
 // query, and the rejected queue link stays on invoices_queue_id for
 // the audit trail.
 import { NextResponse } from 'next/server'
-import { loadLineForUser } from '../_line'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
+import { loadLineForCaller } from '../_line'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -28,9 +30,11 @@ export function rehuntPatch(line, nowIso) {
   }
 }
 
-export async function POST(request, { params }) {
-  const { id } = await params
-  const ctx = await loadLineForUser(id)
+// withAuth only signs the caller in; loadLineForCaller keeps the hand-written
+// gate (accounting_hub 'Forbidden' 403, active-location 400, line scoped to the
+// active studio, 404) exactly as the sibling line routes run it.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, params }) => {
+  const ctx = await loadLineForCaller(user, params?.id)
   if (ctx.response) return ctx.response
   const { db, line } = ctx
 
@@ -45,7 +49,10 @@ export async function POST(request, { params }) {
     .from('recon_bank_lines')
     .update(rehuntPatch(line, new Date().toISOString()))
     .eq('id', line.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('recon-coverage', 'rehunt queue failed', { err: error, lineId: line.id })
+    return NextResponse.json({ success: false, error: 'Could not queue the re-hunt.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, data: { queued: true } })
-}
+})

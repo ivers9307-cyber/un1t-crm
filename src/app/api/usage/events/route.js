@@ -17,8 +17,7 @@
 // already belongs to someone else is refused (ingest.js).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { usageEventsSchema } from '@/lib/schemas'
 import { logError } from '@/lib/log'
@@ -27,9 +26,9 @@ import { shouldRecordFor, recordUsageBatch } from '@/lib/app-usage/ingest'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (phone Bearer or browser cookie, as
+// before); no studio is required, the active one is recorded when there is one.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!shouldRecordFor(user)) {
     return NextResponse.json({ success: true, data: { recorded: false, reason: 'not_recorded' } })
   }
@@ -39,7 +38,7 @@ export async function POST(request) {
 
   try {
     const result = await recordUsageBatch({
-      db: createServerClient(),
+      db,
       profileId: user.id,
       locationId: user.activeLocation?.id || null,
       batch: v.data,
@@ -50,4 +49,4 @@ export async function POST(request) {
     logError('app-usage', 'usage batch not recorded', { message: err?.message || String(err) })
     return NextResponse.json({ success: false, error: 'Usage not recorded' }, { status: 503 })
   }
-}
+})

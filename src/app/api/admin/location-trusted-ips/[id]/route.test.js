@@ -18,14 +18,15 @@ function makeBuilder(result) {
 const fakeDb = { from: (t) => makeBuilder(results[t] ?? { data: null, error: null }) }
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
 
 import { DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { logAuditEvent } from '@/lib/audit'
 
-const MASTER = { id: 'prof-master', full_name: 'Max Master', email: 'max@un1t.ie', profileRole: 'master' }
+const MASTER = { id: 'prof-master', full_name: 'Max Master', email: 'max@un1t.ie', profileRole: 'master', isMaster: true, role: 'master' }
 const ROW = { id: 'ip-1', location_id: 'loc-1', ip_cidr: '203.0.113.0/24', label: null }
 
 beforeEach(() => {
@@ -49,5 +50,36 @@ describe('DELETE /api/admin/location-trusted-ips/[id]', () => {
       locationId: 'loc-1',
     }))
     expect(logAuditEvent.mock.calls.at(-1)[0].target.id).toBeUndefined()
+  })
+
+  // Through the real withAuth wrapper (ROUTEWRAP.R5): masters only.
+  const del = () => DELETE(new Request('http://localhost/x', { method: 'DELETE' }), { params: Promise.resolve({ id: 'ip-1' }) })
+
+  it('401 signed out (withAuth; it said 403 before), nothing removed', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await del()).status).toBe(401)
+    expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  it('403 "Forbidden" for an owner, nothing removed', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u-owner', role: 'owner', profileRole: 'owner', isMaster: false, locations: [{ id: 'loc-1' }] })
+    const res = await del()
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ success: false, error: 'Forbidden' })
+    expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  it('404 for an id that does not exist', async () => {
+    results = {}
+    const res = await del()
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Trusted IP not found' })
+  })
+
+  it('a failed write is a 500 without the database text', async () => {
+    results = { location_trusted_ips: { data: ROW, error: { message: 'secret detail' } } }
+    const res = await del()
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('secret detail')
   })
 })

@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const state = { user: null, row: null }
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: async () => state.user,
   assertLocationAccessOr404: (user, locationId) => {
     const ok = (user?.locations || []).some((l) => l.id === locationId)
@@ -11,7 +12,8 @@ vi.mock('@/lib/auth', () => ({
 }))
 // ROLESWEEP.1b — the route now pre-checks at any location and judges the
 // purchase's location; the fixture's one perms bag answers both.
-vi.mock('@/lib/permissions', () => ({
+vi.mock('@/lib/permissions', async (importOriginal) => ({
+  ...(await importOriginal()),
   hasPermission: (u, k) => Boolean(u?.perms?.[k]),
   hasPermissionAtAnyLocation: (u, k) => Boolean(u?.perms?.[k]),
   hasPermissionForLocation: (u, _l, k) => Boolean(u?.perms?.[k]),
@@ -26,6 +28,8 @@ const sendOfferPurchaseEmail = vi.fn(async () => ({ status: 'sent' }))
 vi.mock('@/lib/offer-purchase-emails', () => ({ sendOfferPurchaseEmail: (...a) => sendOfferPurchaseEmail(...a) }))
 
 import { POST } from './route'
+
+// Through the real withAuth wrapper (ROUTEWRAP.R5): it only signs the caller in.
 
 const props = { params: Promise.resolve({ id: 'p1' }) }
 const approver = { id: 'u1', locations: [{ id: 'loc1' }], perms: { approvals_offer_purchases: true } }
