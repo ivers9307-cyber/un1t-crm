@@ -251,3 +251,15 @@ describe('POST move', () => {
     })
   })
 })
+
+// ROUTEWRAP.R9 — on withAuth: a signed-out GET or POST is its 401, nothing read.
+describe('move — signed out', () => {
+  it('GET and POST answer 401 Unauthorized', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    for (const res of [await GET(new Request('http://x'), params), await POST(post({ location_id: HATCH }), params)]) {
+      expect(res.status).toBe(401)
+      expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    }
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+})

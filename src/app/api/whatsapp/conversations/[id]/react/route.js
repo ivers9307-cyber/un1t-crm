@@ -1,8 +1,9 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { withAuth } from '@/lib/with-auth'
 import { conversationAddress } from '@/lib/whatsapp-address'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendReaction } from '@/lib/whatsapp'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
@@ -18,11 +19,7 @@ const ReactSchema = z.object({ message_id: z.string().min(1), emoji: z.string().
 // with an emoji via Meta (empty string removes the reaction), then best-effort
 // log a thread row (matching the inbound 'reaction' row style) so the action
 // is visible in the inbox. Registered in src/lib/openapi.js.
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   // INBOXLOC.1 — coarse pre-check (WhatsApp at any studio); the decision is
   // requireWhatsAppInboxAt at the conversation's studio, once the row is read.
   const perm = requireWhatsAppInboxAnywhere(user)
@@ -57,7 +54,11 @@ export async function POST(request, props) {
   } catch (e) {
     // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
     // 409 with the resolver's message (it used to send from the env number).
-    return NextResponse.json({ success: false, error: e?.message || 'Meta reaction call failed' }, { status: whatsappErrorStatus(e, 502) })
+    // A no-number refusal (409) is our own setup message; Meta's error text is
+    // logged, never answered.
+    const status = whatsappErrorStatus(e, 502)
+    if (status !== 409) logError('wa-react', 'Meta reaction call failed', { conversationId: conversation.id, err: e?.message })
+    return NextResponse.json({ success: false, error: status === 409 ? e.message : 'Meta reaction call failed' }, { status })
   }
 
   // Best-effort thread row — mirrors the inbound reaction style
@@ -90,4 +91,4 @@ export async function POST(request, props) {
   }
 
   return NextResponse.json({ success: true })
-}
+})

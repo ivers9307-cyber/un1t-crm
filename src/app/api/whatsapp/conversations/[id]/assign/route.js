@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
+import { withAuth } from '@/lib/with-auth'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { AssignBodySchema, assignThread, assignPickerFor } from '@/lib/inbox-assignment'
 
@@ -25,10 +26,7 @@ async function readThread(db, id) {
   return error ? null : data
 }
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const GET = withAuth({ permission: null, location: false }, async ({ user, params }) => {
   const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
@@ -42,12 +40,9 @@ export async function GET(request, props) {
 
   const out = await assignPickerFor(db, { channel: 'whatsapp', user, thread })
   return NextResponse.json(out.body, { status: out.status })
-}
+})
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
@@ -64,4 +59,4 @@ export async function POST(request, props) {
 
   const out = await assignThread(db, { channel: 'whatsapp', user, thread, assignee: validation.data.assignee })
   return NextResponse.json(out.body, { status: out.status })
-}
+})
