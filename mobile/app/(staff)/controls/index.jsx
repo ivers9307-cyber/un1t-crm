@@ -10,6 +10,9 @@
 // on a location you don't hold the perm at while you hold it at exactly
 // one other) so a user with no controls HERE can still switch to a studio
 // they can actually use, rather than dead-ending on a back button.
+//
+// STUDIOROUTINE.1 — Open studio / Close studio sit above the tiles: lights and
+// music on the device_control key, air con on studio_management, never doors.
 import { View, Text, ScrollView, Pressable } from 'react-native'
 import { useRouter, useLocalSearchParams } from 'expo-router'
 import { useAuth } from '../../../lib/auth-context'
@@ -17,6 +20,8 @@ import { pickerLocations } from '../../../lib/control-location'
 import { homeTiles } from '../../../lib/home-logic'
 import ChoiceCard from '../../../components/ChoiceCard'
 import LocationPill from '../../../components/LocationPill'
+import StudioRoutineCard from '../../../components/StudioRoutineCard'
+import { canMobile } from '../../../lib/permissions'
 
 export default function ControlsLauncher() {
   const { profile, locations } = useAuth()
@@ -70,6 +75,14 @@ export default function ControlsLauncher() {
         source="manual"
         pickable={pickable}
         onPick={(id) => router.setParams({ loc: id })}
+      />
+      <StudioRoutineCard
+        location={location}
+        can={{
+          lights: canMobile(profile, 'device_control', location),
+          music: canMobile(profile, 'device_control', location),
+          ac: canMobile(profile, 'studio_management', location),
+        }}
       />
       <View className="gap-3">
         {tiles.map((t) => (
