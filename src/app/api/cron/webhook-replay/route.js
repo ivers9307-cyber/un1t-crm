@@ -5,7 +5,8 @@
 // Runs every 5 minutes. Fetches 'pending' rows for REPLAYABLE providers whose
 // last_attempt_at is null (never retried) or beyond the exponential-backoff
 // window (min(60 * 2^attempts, 3600) seconds). Processes oldest first, capped
-// at BATCH_SIZE. Calls stampHeartbeat on completion.
+// at BATCH_SIZE. defineCron owns the secret check and stamps the heartbeat on a
+// run whose candidate read worked (a failed read answers 500, no stamp).
 //
 // QSTASH.3: this cron is now the SWEEPER, not the only consumer — the
 // dead-letter capture (deadLetterWebhook) also publishes each replayable
@@ -20,19 +21,15 @@
 // src/lib/webhook-replay.js. Glofox is intentionally absent because
 // action-replay is not safe (partial-completion risk).
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { claimAndReplayDeadLetterRow, REPLAYABLE_PROVIDERS } from '@/lib/webhook-replay-queue'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 const BATCH_SIZE = 100
-
-function unauthorized() {
-  return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
-}
 
 /**
  * Exponential backoff window in seconds.
@@ -43,16 +40,7 @@ function backoffSeconds(attempts) {
   return Math.min(60 * Math.pow(2, attempts || 1), 3600)
 }
 
-export async function GET(request) {
-  const expected = process.env.CRON_SECRET
-  if (!expected) {
-    console.error('[cron webhook-replay] CRON_SECRET is not set')
-    return NextResponse.json({ ok: false, error: 'cron_secret_missing' }, { status: 500 })
-  }
-  const got = request.headers.get('authorization') || ''
-  if (got !== `Bearer ${expected}`) return unauthorized()
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'webhook-replay' }, async ({ db }) => {
   const now = new Date()
 
   // Build a cutoff timestamp: rows where last_attempt_at IS NULL or is older
@@ -73,8 +61,8 @@ export async function GET(request) {
     .limit(BATCH_SIZE)
 
   if (fetchErr) {
-    console.error('[cron webhook-replay] fetch failed:', fetchErr.message)
-    return NextResponse.json({ ok: false, error: fetchErr.message }, { status: 500 })
+    logError('webhook-replay', 'dead-letter candidate read failed; nothing replayed, heartbeat not stamped', { err: fetchErr })
+    return { ok: false, body: { ok: false, error: 'Could not read the dead-letter queue' } }
   }
 
   const summary = { replayed: 0, failed: 0, skipped: 0 }
@@ -109,7 +97,5 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('webhook-replay', summary)
-
-  return NextResponse.json({ ok: true, ...summary })
-}
+  return { body: { ok: true, ...summary }, outcome: summary }
+})

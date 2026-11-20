@@ -66,3 +66,58 @@ describe('GET /api/cron/glofox-data-quality — Glofox sources only (UN1TRADAR.3
     expect(queriesOf(h.db, 'contacts').map((q) => q.eq.location_id)).toEqual([STILLORGAN_ID])
   })
 })
+
+// ROUTEWRAP.C7 — the job runs inside defineCron: the wrapper owns the secret
+// check, the error boundary and the global stamp.
+describe('GET /api/cron/glofox-data-quality — defineCron', () => {
+  const reqAs = (auth) => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? auth : null) } })
+
+  it('refuses a caller without the cron secret: nothing read, nothing stamped', async () => {
+    h.db = dbFor(ESTATE_2026_10)
+    for (const auth of [null, 'Bearer nope']) expect((await GET(reqAs(auth))).status).toBe(401)
+    expect(h.db.queries).toHaveLength(0)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+    expect(stampTenantHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a fresh run stamps exactly the global row, once (tenant rows are its own helper)', async () => {
+    h.db = dbFor(ESTATE_2026_10)
+    expect((await GET(req())).status).toBe(200)
+    expect(stampHeartbeat.mock.calls).toEqual([['glofox-data-quality']])
+  })
+
+  it('a stale run still answers success but withholds the global stamp', async () => {
+    const loc = locationsResolver(ESTATE_2026_10)
+    h.db = fakeDb((q) => (q.table === 'locations' ? loc(q) : { data: { glofox_synced_at: '2020-01-01T00:00:00Z' }, error: null }))
+    const out = await (await GET(req())).json()
+    expect(out).toMatchObject({ success: true, healthy: false })
+    expect(sendOpsAlert).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a failed locations read answers a fixed line with no database text and stamps nothing', async () => {
+    h.db = fakeDb((q) => (q.table === 'locations' && !q.eq.membership_source
+      ? { data: null, error: { message: 'permission denied for table locations' } }
+      : locationsResolver(ESTATE_2026_10)(q)))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Could not read locations' })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a failed seam read answers a fixed line with no database text', async () => {
+    h.db = dbFor(ESTATE_2026_10, { listError: { message: 'connection reset by db.internal' } })
+    const body = await (await GET(req())).json()
+    expect(body).toEqual({ success: false, error: 'Could not read membership sources' })
+  })
+
+  it('a failed pack-sync read answers a fixed line and stamps no global row', async () => {
+    const loc = locationsResolver(ESTATE_2026_10)
+    h.db = fakeDb((q) => (q.table === 'locations' ? loc(q) : { data: null, error: { message: 'statement timeout on contacts' } }))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not read pack-sync freshness' })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+})
