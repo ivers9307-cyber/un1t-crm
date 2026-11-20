@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { getUserLocationIds } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { composeApprovalSuggestion } from '@/lib/agent/approval-suggest'
 import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 
@@ -16,11 +16,10 @@ import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 
 const DEFAULT_TIMEOUT_MS = 5000
 
-export async function POST(request, { params }) {
-  const { id } = await params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const db = createServerClient()
+// withAuth only signs the caller in (the same 401); the row and its studio
+// (404) keep their place here.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const { id } = params
 
   // Confirm the request belongs to a location this user can act on.
   // MIAHATCH.5 — details: a un1t.online card (details.provider) is followed up
@@ -70,4 +69,4 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: true, suggestion: null })
   }
   return NextResponse.json({ success: true, suggestion: composed.text })
-}
+})

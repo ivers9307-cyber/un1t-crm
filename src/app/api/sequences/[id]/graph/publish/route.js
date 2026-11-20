@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { publishSequence } from '@/lib/sequences/publish'
@@ -31,13 +32,14 @@ const PublishSchema = z.object({
 // are intentionally left to PUT /api/sequences/[id] (it owns webhook-token
 // generation).
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+//
+// withAuth only signs the caller in; the builder rule anywhere (403), the row
+// (404), its studio (404) and the rule there (403) keep their order here. A
+// database failure inside the publish is logged and answered with a fixed 500
+// (it used to return the error text).
+export const POST = withAuth({ permission: null, location: false }, async ({ request, user, db, params }) => {
   if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
-  const db = createServerClient()
   const { data: existing } = await db.from('email_sequences')
     .select('location_id, graph, draft_graph, status, trigger_type, trigger_config').eq('id', params.id).single()
   if (!existing) return sequenceNotFound()
@@ -58,6 +60,10 @@ export async function POST(request, props) {
   const body = validation.data
   const result = await publishSequence(db, { sequenceId: params.id, graph: body?.graph, existing })
   if (!result.ok) {
+    if (result.status === 500) {
+      logError('sequences', 'publish failed', { sequenceId: params.id, err: result.error })
+      return NextResponse.json({ success: false, error: 'Could not publish the sequence. Try again.' }, { status: 500 })
+    }
     return NextResponse.json(
       { success: false, error: result.error, ...(result.issues ? { issues: result.issues } : {}) },
       { status: result.status },
@@ -65,4 +71,4 @@ export async function POST(request, props) {
   }
 
   return NextResponse.json({ success: true, steps: result.steps })
-}
+})

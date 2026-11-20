@@ -118,9 +118,11 @@ describe('POST /api/admin/tv-displays', () => {
     expect((await res.json()).error).toBe('A TV called "Lobby TV" is already registered here.')
   })
 
-  it('any other insert error is a 500', async () => {
+  it('any other insert error is a 500 in fixed words, never the database text', async () => {
     db = makeFakeDb(() => ({ data: null, error: { message: 'boom' } }))
-    expect((await register({ location_id: LOC_A, label: 'Gym floor' })).status).toBe(500)
+    const res = await register({ location_id: LOC_A, label: 'Gym floor' })
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not register the TV' })
   })
 
   it('403 for plain staff, 404 at another studio, 401 signed out; nothing written', async () => {

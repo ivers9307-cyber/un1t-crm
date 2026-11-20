@@ -12,7 +12,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: vi.fn(),
   assertLocationAccessOr404: (user, locationId) => {
     if (!user) return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), { status: 401 })
@@ -24,7 +25,7 @@ vi.mock('@/lib/auth', () => ({
 }))
 vi.mock('@/lib/followup-owned-sequences', () => ({ refuseIfFollowupOwned: async () => null, isRetiredFollowupSequence: () => false, retiredFollowupResponse: () => null })) // PIPEBUILD.5g/5l: the guards have their own tests
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logError: vi.fn() }))
 
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
@@ -290,6 +291,7 @@ describe('publish keeps step identity (STEPATTRIB.1)', () => {
     const res = await publish(emailGraph())
 
     expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not publish the sequence. Try again.' })
     expect(m.rpcSpy).not.toHaveBeenCalled()
     expect(m.sequenceUpdate).not.toHaveBeenCalled()
   })
@@ -303,6 +305,7 @@ describe('publish keeps step identity (STEPATTRIB.1)', () => {
 
     expect(res.status).toBe(500)
     expect(body.success).toBe(false)
+    expect(JSON.stringify(body)).not.toContain('publish_sequence_steps')
     expect(m.sequenceUpdate).not.toHaveBeenCalled()
   })
 })

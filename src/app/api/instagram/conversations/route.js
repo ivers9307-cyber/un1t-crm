@@ -1,6 +1,7 @@
-import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccess, getUserLocationIds, requireInboxPermission } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { attachAssigneeNames } from '@/lib/inbox-assignment'
 import { INBOX_SEARCH_MIN_LENGTH, buildInboxSearchOr, searchInboxContactIds } from '@/lib/inbox-search-server'
 
@@ -10,10 +11,10 @@ import { INBOX_SEARCH_MIN_LENGTH, buildInboxSearchOr, searchInboxContactIds } fr
 // locations. Service-role client is used for the read because the
 // instagram_* RLS denies all authenticated access except SELECT for
 // assigned staff — we re-impose that scope here in the query.
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+//
+// withAuth only signs the caller in; the channel permission (403), the
+// ?location_id membership (403) and the query keep their order here.
+export const GET = withAuth({ permission: null, location: false }, async ({ request, user, db }) => {
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
   const perm = requireInboxPermission(user, 'ig')
   if (perm) return perm
@@ -21,7 +22,6 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
 
-  const db = createServerClient()
   let query = db.from('instagram_conversations')
     .select('*, contacts!contact_id(id, name, first_name, email, pipeline_stage_slug)')
     .order('last_message_at', { ascending: false, nullsFirst: false })
@@ -46,7 +46,10 @@ export async function GET(request) {
   }
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('instagram-conversations', 'list failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the conversations.' }, { status: 500 })
+  }
 
   // INBOX-APPROVALS — flag threads with a pending agent request so the
   // queue can badge them. One batched query over this page's ids (≤50).
@@ -65,4 +68,4 @@ export async function GET(request) {
   await attachAssigneeNames(db, conversations)
 
   return NextResponse.json({ success: true, conversations })
-}
+})

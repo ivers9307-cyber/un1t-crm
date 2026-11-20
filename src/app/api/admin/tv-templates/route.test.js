@@ -93,6 +93,13 @@ describe('POST /api/admin/tv-templates', () => {
     expect((await res.json()).error).toBe('A template called "Welcome board" already exists here.')
   })
 
+  it('any other insert error is a 500 in fixed words, never the database text', async () => {
+    db = makeFakeDb(() => ({ data: null, error: { message: 'value too long for type character varying(200)' } }))
+    const res = await create(BODY)
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not save the template' })
+  })
+
   it('403 plain staff, 404 another studio; nothing written', async () => {
     getCurrentUser.mockResolvedValue(STAFF_A)
     expect((await create(BODY)).status).toBe(403)
