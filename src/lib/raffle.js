@@ -21,15 +21,15 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from './permissi
 import { MANAGER_ROLES, uuidLike } from './schemas'
 import { logError } from './log'
 
-export const RAFFLE_COLS = 'id, race_event_id, location_id, name, ticket_price_cents, currency, sales_open, email_subject, email_intro, next_ticket_number, created_at'
-export const SALE_COLS = 'id, raffle_id, contact_id, buyer_name, buyer_email, quantity, total_cents, payment_method, first_ticket, last_ticket, sold_by, voided_at, void_reason, email_status, email_sent_at, created_at'
+export const RAFFLE_COLS = 'id, race_event_id, location_id, name, ticket_price_cents, currency, sales_open, email_subject, email_intro, next_ticket_number, ticket_options, created_at'
+export const SALE_COLS = 'id, raffle_id, contact_id, buyer_name, buyer_email, quantity, total_cents, payment_method, option_label, first_ticket, last_ticket, sold_by, voided_at, void_reason, email_status, email_sent_at, created_at'
 export const DRAW_COLS = 'id, raffle_id, prize_name, ticket_id, drawn_at, unclaimed_at, unclaimed_note'
 
 const EVENT_COLS = 'id, name, location_id, host_id, sending_location_id, accent_hex, hero_image_url, race_date'
 const PAGE = 1000
 const MAX_ROWS = 10000
 
-export { formatTicketNumber, formatTicketRange, formatEuros } from './raffle-format'
+export { formatTicketNumber, formatTicketRange, formatTicketList, formatEuros, optionLabel, priceForQuantity } from './raffle-format'
 
 /**
  * The last nine digits of a phone search, so `+353 87 123 4567`,

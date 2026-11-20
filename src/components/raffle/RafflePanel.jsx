@@ -7,9 +7,9 @@
 // changes a contact: a buyer who isn't in the CRM is a guest on the sale.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Search, UserPlus, Ticket, Trophy, Maximize2, X, Minus, Plus } from 'lucide-react'
+import { Search, UserPlus, Ticket, Trophy, Maximize2, X, Minus, Plus, Settings, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui'
-import { formatTicketNumber, formatTicketRange, formatEuros } from '@/lib/raffle-format'
+import { formatTicketNumber, formatTicketRange, formatTicketList, formatEuros, optionLabel, priceForQuantity } from '@/lib/raffle-format'
 
 const INPUT = 'w-full h-11 rounded-lg border border-un1t-border bg-white px-3 text-base text-un1t-text focus:outline-none focus:ring-2 focus:ring-un1t-accent'
 const TABS = [
@@ -41,6 +41,7 @@ export default function RafflePanel({ raceId }) {
   const [state, setState] = useState(null)
   const [loadError, setLoadError] = useState('')
   const [tab, setTab] = useState('sell')
+  const [editing, setEditing] = useState(false)
 
   const reload = useCallback(async () => {
     try {
@@ -63,14 +64,27 @@ export default function RafflePanel({ raceId }) {
   }
 
   const { raffle, totals } = state
+  if (editing) {
+    return (
+      <RaffleSetup
+        raceId={raceId} raffle={raffle}
+        onSaved={async () => { await reload(); setEditing(false) }}
+        onCancel={() => setEditing(false)}
+      />
+    )
+  }
+  const optionsLine = (raffle.ticket_options || []).map((o) => optionLabel(o.tickets, o.price_cents)).join(' · ')
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <div className="text-lg font-semibold text-un1t-text">{raffle.name}</div>
           <div className="text-sm text-un1t-subtle">
-            {formatEuros(raffle.ticket_price_cents, raffle.currency)} a ticket · {totals.tickets} sold · {formatEuros(totals.cents, raffle.currency)} raised
+            {formatEuros(raffle.ticket_price_cents, raffle.currency)} a ticket{optionsLine ? ` · ${optionsLine}` : ''} · {totals.tickets} sold · {formatEuros(totals.cents, raffle.currency)} raised
           </div>
+          {state.can_manage && (
+            <Button variant="ghost" size="sm" icon={Settings} className="mt-1 -ml-3" onClick={() => setEditing(true)}>Settings</Button>
+          )}
         </div>
         <div className="flex gap-1 rounded-lg border border-un1t-border p-1 bg-un1t-surface" role="tablist">
           {TABS.map((t) => (
@@ -94,20 +108,40 @@ export default function RafflePanel({ raceId }) {
   )
 }
 
-function RaffleSetup({ raceId, eventName, onSaved }) {
-  const [name, setName] = useState(eventName ? `${eventName} Raffle` : 'Raffle')
-  const [price, setPrice] = useState('5')
+function RaffleSetup({ raceId, eventName, raffle = null, onSaved, onCancel }) {
+  const [name, setName] = useState(raffle?.name || (eventName ? `${eventName} Raffle` : 'Raffle'))
+  const [price, setPrice] = useState(raffle ? String(raffle.ticket_price_cents / 100) : '5')
+  const [options, setOptions] = useState(
+    (raffle?.ticket_options || []).map((o) => ({ tickets: String(o.tickets), price: String(o.price_cents / 100) })),
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  const setOption = (i, patch) => setOptions((list) => list.map((o, j) => (j === i ? { ...o, ...patch } : o)))
 
   async function save(e) {
     e.preventDefault()
     const cents = Math.round(Number(price) * 100)
     if (!Number.isFinite(cents) || cents < 1) { setError('Enter a ticket price.'); return }
+    const ticketOptions = []
+    for (const o of options) {
+      if (!o.tickets && !o.price) continue
+      const tickets = parseInt(o.tickets, 10)
+      const priceCents = Math.round(Number(o.price) * 100)
+      if (!Number.isInteger(tickets) || tickets < 2) { setError('Each option needs 2 or more tickets.'); return }
+      if (!Number.isFinite(priceCents) || priceCents < 1) { setError(`Enter a price for the ${tickets}-ticket option.`); return }
+      ticketOptions.push({ tickets, price_cents: priceCents })
+    }
+    if (new Set(ticketOptions.map((o) => o.tickets)).size !== ticketOptions.length) {
+      setError('Each option needs a different number of tickets.'); return
+    }
     setBusy(true)
     setError('')
     try {
-      await api(`/api/events/${raceId}/raffle`, { method: 'POST', body: JSON.stringify({ name: name.trim(), ticket_price_cents: cents }) })
+      await api(`/api/events/${raceId}/raffle`, {
+        method: 'POST',
+        body: JSON.stringify({ name: name.trim(), ticket_price_cents: cents, ticket_options: ticketOptions }),
+      })
       await onSaved()
     } catch (err) {
       setError(err.message)
@@ -117,18 +151,36 @@ function RaffleSetup({ raceId, eventName, onSaved }) {
   }
 
   return (
-    <form onSubmit={save} className="max-w-md space-y-4 rounded-xl border border-un1t-border bg-white p-5">
-      <div className="text-base font-semibold text-un1t-text">Set up the raffle</div>
+    <form onSubmit={save} className="max-w-lg space-y-4 rounded-xl border border-un1t-border bg-white p-5">
+      <div className="text-base font-semibold text-un1t-text">{raffle ? 'Raffle settings' : 'Set up the raffle'}</div>
       <label className="block">
         <span className="block text-sm text-un1t-subtle mb-1">Raffle name</span>
         <input className={INPUT} value={name} onChange={(e) => setName(e.target.value)} required maxLength={120} />
       </label>
       <label className="block">
-        <span className="block text-sm text-un1t-subtle mb-1">Price per ticket (€)</span>
-        <input className={INPUT} type="number" inputMode="decimal" min="0.01" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} required />
+        <span className="block text-sm text-un1t-subtle mb-1">Price for one ticket (€)</span>
+        <input className={INPUT} type="number" inputMode="decimal" min="0.01" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} required aria-label="Price for one ticket" />
       </label>
-      {error && <p className="text-sm text-red-700">{error}</p>}
-      <Button type="submit" loading={busy}>Create raffle</Button>
+      <div>
+        <div className="text-sm text-un1t-subtle mb-1">Ticket options</div>
+        <div className="space-y-2">
+          {options.map((o, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <input className={`${INPUT} w-24`} type="number" inputMode="numeric" min="2" max="500" placeholder="Tickets" aria-label={`Option ${i + 1} tickets`} value={o.tickets} onChange={(e) => setOption(i, { tickets: e.target.value })} />
+              <span className="text-sm text-un1t-subtle">tickets for €</span>
+              <input className={`${INPUT} w-28`} type="number" inputMode="decimal" min="0.01" step="0.01" placeholder="Price" aria-label={`Option ${i + 1} price`} value={o.price} onChange={(e) => setOption(i, { price: e.target.value })} />
+              <Button variant="ghost" size="icon" icon={Trash2} aria-label={`Remove option ${i + 1}`} onClick={() => setOptions((list) => list.filter((_, j) => j !== i))} />
+            </div>
+          ))}
+          <Button variant="secondary" size="sm" icon={Plus} onClick={() => setOptions((list) => [...list, { tickets: '', price: '' }])}>Add an option</Button>
+        </div>
+        <p className="text-xs text-un1t-subtle mt-2">Any other number of tickets is sold at the one-ticket price. Changes apply to new sales only.</p>
+      </div>
+      {error && <p className="text-sm text-red-700" role="alert">{error}</p>}
+      <div className="flex gap-2">
+        <Button type="submit" loading={busy}>{raffle ? 'Save' : 'Create raffle'}</Button>
+        {onCancel && <Button variant="ghost" onClick={onCancel}>Cancel</Button>}
+      </div>
     </form>
   )
 }
@@ -209,7 +261,9 @@ function SellPanel({ raceId, raffle, onSold }) {
     }
   }
 
-  const total = raffle.ticket_price_cents * quantity
+  const price = priceForQuantity(raffle, quantity)
+  const total = price.cents
+  const options = raffle.ticket_options || []
 
   return (
     <form onSubmit={sell} className="grid gap-4 md:grid-cols-2">
@@ -272,6 +326,17 @@ function SellPanel({ raceId, raffle, onSold }) {
 
       <section className="rounded-xl border border-un1t-border bg-white p-4 space-y-4">
         <div className="text-sm font-semibold text-un1t-text">2. Tickets and payment</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {[{ tickets: 1, price_cents: raffle.ticket_price_cents }, ...options].map((o) => (
+            <button
+              key={o.tickets} type="button" aria-pressed={quantity === o.tickets} onClick={() => setQuantity(o.tickets)}
+              className={`h-12 rounded-lg border text-sm font-medium ${quantity === o.tickets ? 'border-un1t-accent bg-un1t-accent text-white' : 'border-un1t-border text-un1t-text'}`}
+            >
+              {o.tickets === 1 ? `1 for ${formatEuros(o.price_cents, raffle.currency)}` : optionLabel(o.tickets, o.price_cents)}
+            </button>
+          ))}
+        </div>
+        <div className="text-xs text-un1t-subtle">Or any number:</div>
         <div className="flex items-center gap-3">
           <button type="button" aria-label="One fewer" onClick={() => setQuantity((q) => Math.max(1, q - 1))} className="h-12 w-12 rounded-lg border border-un1t-border flex items-center justify-center"><Minus className="h-5 w-5" /></button>
           <input
@@ -283,6 +348,7 @@ function SellPanel({ raceId, raffle, onSold }) {
           <div className="ml-auto text-right">
             <div className="text-xs text-un1t-subtle">Total</div>
             <div className="text-2xl font-semibold text-un1t-text">{formatEuros(total, raffle.currency)}</div>
+            {price.label && <div className="text-xs text-un1t-subtle">{price.label}</div>}
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -302,7 +368,7 @@ function SellPanel({ raceId, raffle, onSold }) {
         </Button>
         {done && (
           <div className="rounded-lg bg-green-500/10 text-green-700 p-3 text-sm" role="status">
-            <div className="font-semibold text-base">{formatTicketRange(done.first_ticket, done.last_ticket)}</div>
+            <div className="font-semibold text-base">{formatTicketList(done.first_ticket, done.last_ticket)}</div>
             <div>{done.buyer_name} · {EMAIL_LABEL[done.email_status] || 'Email pending'}{done.email_status === 'sent' ? '' : ': tell them their numbers.'}</div>
           </div>
         )}
@@ -356,7 +422,7 @@ function SalesPanel({ raceId, state, onChanged }) {
               <div className="text-un1t-text">{s.buyer_name}{s.contact_id ? '' : ' (guest)'}</div>
               <div className="text-xs text-un1t-subtle">{s.buyer_email}</div>
             </div>
-            <div className="text-xs text-un1t-subtle capitalize">{s.payment_method} · {formatEuros(s.total_cents, raffle.currency)}</div>
+            <div className="text-xs text-un1t-subtle"><span className="capitalize">{s.payment_method}</span> · {formatEuros(s.total_cents, raffle.currency)}{s.option_label ? ` (${s.option_label})` : ''}</div>
             <div className="text-xs text-un1t-subtle">{new Date(s.created_at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}</div>
             <div className="text-xs">
               {s.voided_at

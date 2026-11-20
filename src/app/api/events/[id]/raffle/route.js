@@ -2,7 +2,8 @@
 //
 // GET  — the raffle page's whole state: the raffle (or null), its sales, its
 //        draws (with the winning ticket number and buyer) and the totals.
-// POST — managers: create the event's raffle, or update its name and price.
+// POST — managers: create the event's raffle, or update its name, single
+//        price and ticket options. A change applies to later sales only.
 //
 // Gate: races at the event's studio (resolveStaffRaffleEvent); 404 for an
 // event the caller cannot see.
@@ -15,9 +16,19 @@ import { logError } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+// RAFFLE.2 — ticket options ("3 for €10"), per event. Two or more tickets
+// each (one ticket is the single price), one option per ticket count.
+const TicketOption = z.object({
+  tickets: z.number().int().min(2).max(500),
+  price_cents: z.number().int().min(1).max(1000000),
+})
 const RaffleBody = z.object({
   name: z.string().trim().min(1).max(120),
   ticket_price_cents: z.number().int().min(1).max(100000),
+  ticket_options: z.array(TicketOption).max(12).optional()
+    .refine((opts) => !opts || new Set(opts.map((o) => o.tickets)).size === opts.length, {
+      message: 'Each option needs a different number of tickets.',
+    }),
 })
 
 export const GET = withAuth({ permission: null, location: false }, async ({ user, params }) => {
@@ -45,14 +56,21 @@ export const POST = withAuth({ permission: null, location: false, schema: Raffle
     return NextResponse.json({ success: false, error: 'The raffle could not be read. Try again.' }, { status: 500 })
   }
 
+  const options = input.ticket_options
+    ? [...input.ticket_options].sort((a, b) => a.tickets - b.tickets)
+    : undefined
+  const fields = {
+    name: input.name,
+    ticket_price_cents: input.ticket_price_cents,
+    ...(options ? { ticket_options: options } : {}),
+  }
   const write = existing
-    ? db.from('raffles').update({ name: input.name, ticket_price_cents: input.ticket_price_cents })
+    ? db.from('raffles').update(fields)
       .eq('id', existing.id).eq('location_id', race.location_id).select(RAFFLE_COLS).single()
     : db.from('raffles').insert({
       race_event_id: race.id,
       location_id: race.location_id,
-      name: input.name,
-      ticket_price_cents: input.ticket_price_cents,
+      ...fields,
       created_by: user.id,
     }).select(RAFFLE_COLS).single()
   const { data: raffle, error } = await write
