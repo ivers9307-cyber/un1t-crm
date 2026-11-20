@@ -154,7 +154,9 @@ describe('TZ.6 location-loop daily crons act once per location, at its slot', ()
   it('a slot tick that crashes does not stamp', async () => {
     locationIdsWithoutCapability.mockRejectedValueOnce(new Error('boom'))
     vi.setSystemTime(Date.parse('2026-07-06T06:00:00Z'))
-    await expect(ROUTES['morning-briefing'].GET(req())).rejects.toThrow('boom')
+    const res = await ROUTES['morning-briefing'].GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Cron run failed' })
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 

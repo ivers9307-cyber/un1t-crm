@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const h = vi.hoisted(() => ({ db: null }))
-vi.mock('@/lib/supabase', () => ({ createServerClient: () => h.db }))
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => h.db) }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/onboarding-journey-data', () => ({ loadJourneyLane: vi.fn(async () => ({ lane: [] })) }))
@@ -20,6 +20,8 @@ vi.mock('@/lib/glofox', async (importOriginal) => ({
 
 import { GET } from './route.js'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 import { loadJourneyLane } from '@/lib/onboarding-journey-data'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
 import { fakeDb } from '@/lib/time-off.test-helpers'
@@ -67,3 +69,52 @@ describe('GET /api/cron/notify-onboarding-pace — discovery through the members
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })
+
+describe('notify-onboarding-pace on defineCron (ROUTEWRAP.C8)', () => {
+  const noAuth = (value) => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? value : null) } })
+  // The discovery block above leaves a failing credentials read installed.
+  beforeEach(() => {
+    glofoxCredentialsForLocation.mockImplementation(async () => ({ branchId: 'b', apiKey: 'k', apiToken: 't', readError: null }))
+  })
+
+  it('401 without the secret: nothing read, nothing paced, nothing stamped', async () => {
+    h.db = dbFor(ESTATE_2026_10)
+    for (const v of [null, 'Bearer wrong']) expect((await GET(noAuth(v))).status).toBe(401)
+    delete process.env.CRON_SECRET
+    expect((await GET(noAuth('Bearer undefined'))).status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(visited()).toEqual([])
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a clean slot tick stamps exactly its own row, with its counts, and answers ok and success', async () => {
+    h.db = dbFor(ESTATE_2026_10)
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, ok: true, locations: 1, candidates: 0, nudged: 0, failed: 0, reachability_failed: 0 })
+    expect(stampHeartbeat.mock.calls).toEqual([['notify-onboarding-pace', {
+      locations: 1, skipped_unconfigured: 0, skipped_unknown: 0, skipped_source_changed: 0, candidates: 0, nudged: 0, failed: 0, reachability_failed: 0,
+    }]])
+  })
+
+  it('a failed seam read answers a fixed line, never the DB text', async () => {
+    h.db = dbFor(ESTATE_2026_10, { listError: { message: 'membership_source unreadable at db.internal' } })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, ok: false, error: 'Could not list locations' })
+    expect(logError).toHaveBeenCalledWith('cron-onboarding-pace', 'membership seam read failed', expect.anything())
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('every paced location failing to load its lane is a 500 with no stamp', async () => {
+    loadJourneyLane.mockRejectedValueOnce(new Error('statement timeout at db.internal'))
+    h.db = dbFor(ESTATE_2026_10)
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, ok: false, error: 'Every location failed', locations: 1, nudged: 0 })
+    expect(JSON.stringify(body)).not.toContain('db.internal')
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+})
+

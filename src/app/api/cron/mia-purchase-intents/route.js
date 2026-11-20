@@ -27,9 +27,10 @@
 // not do its job: every other step still runs, the answer is a 500 with the
 // counts and the row is left to go stale, so a fault lasting past one missed
 // tick pages.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+//
+// defineCron owns the CRON_SECRET check, the error boundary and the stamp: the
+// job returns the counts as the row's outcome, or ok:false for an incomplete run.
+import { defineCron } from '@/lib/define-cron'
 import { logError } from '@/lib/log'
 import {
   RECHECK_STATUSES, expireStaleIntents, markStuckPaidIntent, recheckDoublePayment, settlePurchaseIntent,
@@ -39,7 +40,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-const HEARTBEAT = 'mia-purchase-intents'
 const LOG_MODULE = 'mia-un1t'
 const INTENTS = 'mia_purchase_intents'
 /** Rows per page of each list (under the 1,000-row select cap). */
@@ -135,17 +135,10 @@ async function runWatcher(db, now) {
   return { counts, complete }
 }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'mia-purchase-intents' }, async ({ db }) => {
   const { counts, complete } = await runWatcher(db, Date.now())
   if (!complete) {
-    return NextResponse.json({ success: false, error: 'Watcher run incomplete', data: counts }, { status: 500 })
+    return { ok: false, body: { error: 'Watcher run incomplete', data: counts } }
   }
-  await stampHeartbeat(HEARTBEAT, counts)
-  return NextResponse.json({ success: true, data: counts })
-}
+  return { outcome: counts, body: { data: counts } }
+})
