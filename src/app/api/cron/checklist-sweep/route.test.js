@@ -24,7 +24,7 @@ function makeBuilder(rows, error = null) {
   b.then = (resolve) => Promise.resolve(error ? { data: null, error } : { data: rows, error: null }).then(resolve)
   return b
 }
-const fakeDb = { from: (t) => makeBuilder(tables[t] ?? [], tableErrors[t] ?? null) }
+const fakeDb = { from: vi.fn((t) => makeBuilder(tables[t] ?? [], tableErrors[t] ?? null)) }
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.resolve()) }))
@@ -93,9 +93,21 @@ beforeEach(() => {
 })
 
 describe('GET /api/cron/checklist-sweep', () => {
-  it('rejects a missing/wrong bearer', async () => {
+  it('rejects a missing/wrong bearer: no reads, no stamps', async () => {
     const res = await GET(req('Bearer nope'))
     expect(res.status).toBe(401)
+    expect((await GET({ headers: { get: () => null } })).status).toBe(401)
+    expect(fakeDb.from).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  // CRONWRAP — on defineCron the wrapper stamps: its own row with the outcome,
+  // then each clean arm the job listed.
+  it('a clean run stamps exactly its own row and both arm rows', async () => {
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampHeartbeat.mock.calls.map((c) => c[0]).sort()).toEqual(['availability-notice-sweep', 'checklist-sweep', 'swap-cover-sweep'])
+    expect(stampHeartbeat).toHaveBeenCalledWith('availability-notice-sweep', QUIET_AVAIL)
   })
 
   it('audits checklist.incomplete with the coach as target profile and the instance as resource', async () => {
@@ -182,7 +194,9 @@ describe('GET /api/cron/checklist-sweep — swap cover arm', () => {
     const res = await GET(req())
     const body = await res.json()
     expect(res.status).toBe(500)
-    expect(body).toMatchObject({ success: false, error: 'checklists down', swap_sweep_failed: 0 })
+    expect(body).toMatchObject({ success: false, error: 'Checklist sweep failed', swap_sweep_failed: 0 })
+    expect(JSON.stringify(body)).not.toContain('checklists down')
+    expect(logError).toHaveBeenCalledWith('cron-checklist-sweep', 'checklist_instances read failed', { err: 'checklists down' })
     expect(body.swap_cover).toMatchObject({ open: 2 })
     expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
     // No CHECKLIST heartbeat, as always. SWAPHB.1: the swap arm did its work,
@@ -195,7 +209,8 @@ describe('GET /api/cron/checklist-sweep — swap cover arm', () => {
     const res = await GET(req())
     const body = await res.json()
     expect(res.status).toBe(500)
-    expect(body).toMatchObject({ success: false, error: 'network reset' })
+    expect(body).toMatchObject({ success: false, error: 'Checklist sweep failed' })
+    expect(JSON.stringify(body)).not.toContain('network reset')
     expect(body.swap_cover).toMatchObject({ open: 2 })
     expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
     expect(stampedNames()).toEqual(['swap-cover-sweep'])

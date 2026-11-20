@@ -14,15 +14,17 @@
 // A failed recipients read (recipients_failed) is not recorded or audited
 // as a sent reminder (C1 RECIPIENTS.1).
 //
-// Auth: CRON_SECRET Bearer, same as every other cron.
+// defineCron owns the CRON_SECRET check, the error boundary and the heartbeat.
+// A quiet tick (no studio at its slot) answers success with `stamp: false`, so
+// the row keeps its daily clock; a slot tick stamps unless the gate faulted (a
+// claim write failed), which answers 500 unstamped. One studio failing is
+// reported in its result (fixed text; the detail is logged), never a failed run.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { listEnabledSettings, listActiveEquipment, listSubmittedSince } from '@/lib/equipment-db'
 import { isInspectionDay, selectOutstanding, buildReminderBody } from '@/lib/equipment-cron'
 import { sendPushToRolesAtLocation } from '@/lib/push'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
 import { logAuditEvent } from '@/lib/audit'
 import { logWarn } from '@/lib/log'
 
@@ -32,23 +34,17 @@ export const maxDuration = 60
 
 const ROLES = ['owner', 'master', 'manager', 'head_coach', 'staff', 'reception']
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'equipment-inspection-reminder' }, async ({ db }) => {
   const results = []
 
   // TZ.6 — which locations are at their daily slot this tick (claimed, so
   // never twice in one local day). An unreadable zone acts for nobody.
   const gate = await gateDailySlot(db, 'equipment-inspection-reminder', { module: 'equipment-cron' })
-  if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
+  if (!gate.ok) return { ok: false, body: { error: 'locations unreadable', slot: gate.summary } }
   if (gate.slots.size === 0) {
     // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
     // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
-    return NextResponse.json({ success: !gate.faulted, data: { locations: results, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
+    return { ok: !gate.faulted, stamp: false, body: { data: { locations: results, slot: gate.summary } } }
   }
 
   let settingsRows = []
@@ -56,7 +52,7 @@ export async function GET(request) {
     settingsRows = await listEnabledSettings(db)
   } catch (err) {
     logWarn('equipment-cron', 'listEnabledSettings failed', { error: err.message })
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 })
+    return { ok: false, body: { error: 'Could not read the equipment settings' } }
   }
 
   for (const settings of settingsRows) {
@@ -117,12 +113,11 @@ export async function GET(request) {
       logWarn('equipment-cron', 'reminder failed for location', {
         locationId: settings.location_id, error: err.message,
       })
-      results.push({ locationId: settings.location_id, error: err.message })
+      results.push({ locationId: settings.location_id, error: 'reminder failed' })
     }
   }
 
-  if (slotTickStampable(gate)) {
-    await stampHeartbeat('equipment-inspection-reminder')
-  }
-  return NextResponse.json({ success: !gate.faulted, data: { locations: results, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
-}
+  // A slot tick stamps (slotTickStampable: the gate read and some slot was
+  // taken); a faulted one answers 500 unstamped.
+  return { ok: !gate.faulted, body: { data: { locations: results, slot: gate.summary } } }
+})

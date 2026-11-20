@@ -25,16 +25,16 @@
 // post-hunt coverage instead of the pre-hunt snapshot this cron used
 // to email. See that cron for the report/heartbeat logic.
 //
-// NOTE on heartbeats: this file intentionally does NOT call
-// stampHeartbeat — its heartbeat is stamped by process-receipt-hunts'
-// finalizer when the weekly cycle actually completes, not by this
-// cron. (The CLAUDE.md invariant "every cron with a cron_heartbeats
-// row calls stampHeartbeat" — checked via `grep -L stampHeartbeat
-// src/app/api/cron/*/route.js` listing only health-check — now also
-// expects this file to appear in that grep; the expectation moves
-// with the heartbeat to process-receipt-hunts.)
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+// NOTE on heartbeats: this job never stamps its own row — the
+// 'receipt-coverage-weekly' heartbeat is stamped by process-receipt-hunts'
+// finalizer when the weekly cycle actually completes, not by this cron.
+// defineCron owns the CRON_SECRET check and the error boundary; every return
+// below says `stamp: false`, so the wrapper leaves the row to the finalizer.
+// A failed run (unreadable zones or connections, a faulted claim, a studio
+// whose pull failed) answers success: false as before; the response carries
+// fixed text, the detail stays in the log.
+import { defineCron } from '@/lib/define-cron'
+import { logError } from '@/lib/log'
 import { runCoveragePull } from '@/lib/recon/pull'
 import { sweepSubmittedLines, seedHunts } from '@/lib/recon/statuses'
 import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
@@ -44,20 +44,14 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-  const db = createServerClient()
-
+export const GET = defineCron({ heartbeat: 'receipt-coverage-weekly' }, async ({ db }) => {
   // TZ.6 — which locations are at their Friday 08:00 local slot this tick
   // (claimed, so never twice in one local day). An unreadable zone acts for
   // nobody. No heartbeat here either way (see the note above).
   const gate = await gateDailySlot(db, 'receipt-coverage-weekly', { module: 'receipt-coverage-weekly' })
-  if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
+  if (!gate.ok) return { ok: false, stamp: false, body: { error: 'locations unreadable', slot: gate.summary } }
   if (gate.slots.size === 0) {
-    return NextResponse.json({ success: !gate.faulted, skipped: true, slot: gate.summary }, { status: gate.faulted ? 500 : 200 })
+    return { ok: !gate.faulted, stamp: false, body: { skipped: true, slot: gate.summary } }
   }
 
   // Before mig 720 lands there is no claim, so a Europe/Dublin slot taken on
@@ -85,8 +79,8 @@ export async function GET(request) {
     .from('xero_connections')
     .select('location_id, location:location_id(id, name)')
   if (connErr) {
-    console.error('[receipt-coverage-weekly] connections load failed', connErr)
-    return NextResponse.json({ success: false, error: connErr.message }, { status: 500 })
+    logError('receipt-coverage-weekly', 'connections load failed', { err: connErr.message })
+    return { ok: false, stamp: false, body: { error: 'Could not read the Xero connections' } }
   }
 
   const perLocation = []
@@ -101,13 +95,17 @@ export async function GET(request) {
       const { seeded } = await seedHunts(db, conn.location_id)
       perLocation.push({ locationName, seeded, flagged, anomalies: summary.anomalies.length })
     } catch (e) {
-      console.error('[receipt-coverage-weekly] pull failed', locationName, e)
-      errors.push({ locationName, error: String(e?.message || e) })
+      logError('receipt-coverage-weekly', 'pull failed', { locationName, err: String(e?.message || e) })
+      errors.push({ locationName, error: 'pull failed' })
     }
   }
 
-  return NextResponse.json({
-    success: errors.length === 0 && !gate.faulted,
-    data: { locations: perLocation.length, perLocation, errors },
-  }, { status: gate.faulted ? 500 : 200 })
-}
+  // A studio whose pull failed answers success: false with a 200, as it always
+  // has; only a faulted claim answers 500.
+  return {
+    ok: errors.length === 0 && !gate.faulted,
+    status: gate.faulted ? 500 : 200,
+    stamp: false,
+    body: { data: { locations: perLocation.length, perLocation, errors } },
+  }
+})
