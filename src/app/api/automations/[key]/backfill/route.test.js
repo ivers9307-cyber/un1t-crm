@@ -17,6 +17,29 @@ beforeEach(() => { vi.clearAllMocks(); assertLocationAccess.mockReturnValue(null
 const params = (key = 'glofox_lead_provisioning') => ({ params: Promise.resolve({ key }) })
 
 describe('GET /api/automations/[key]/backfill (count)', () => {
+  // ROUTEWRAP.R6 — a signed-out call is withAuth's 401 (this route said 403).
+  it('401 signed out', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await GET(new Request('http://x/api/automations/glofox_lead_provisioning/backfill?location_id=a0000000-0000-0000-0000-000000000001'), params())
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+  })
+  it("refuses a studio outside the caller's before any read", async () => {
+    getCurrentUser.mockResolvedValue({ role: 'owner', id: 'u1', rolesByLocation: { 'a0000000-0000-0000-0000-000000000001': 'owner' } })
+    assertLocationAccess.mockReturnValue(new Response(null, { status: 403 }))
+    const rpc = vi.fn()
+    createServerClient.mockReturnValue({ rpc })
+    const res = await GET(new Request('http://x/api/automations/glofox_lead_provisioning/backfill?location_id=b0000000-0000-0000-0000-000000000002'), params())
+    expect(res.status).toBe(403)
+    expect(rpc).not.toHaveBeenCalled()
+  })
+  it('a failed count answers a fixed message', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'owner', id: 'u1', rolesByLocation: { 'a0000000-0000-0000-0000-000000000001': 'owner' } })
+    createServerClient.mockReturnValue({ rpc: vi.fn(async () => ({ data: null, error: { code: '57014', message: 'statement timeout in glofox_backfill_eligible_count' } })) })
+    const res = await GET(new Request('http://x/api/automations/glofox_lead_provisioning/backfill?location_id=a0000000-0000-0000-0000-000000000001'), params())
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).not.toMatch(/glofox_backfill/)
+  })
   it('403 for non-manager', async () => {
     getCurrentUser.mockResolvedValue({ role: 'staff', rolesByLocation: { 'a0000000-0000-0000-0000-000000000001': 'staff' } })
     const res = await GET(new Request('http://x/api/automations/glofox_lead_provisioning/backfill?location_id=a0000000-0000-0000-0000-000000000001'), params())
@@ -32,6 +55,12 @@ describe('GET /api/automations/[key]/backfill (count)', () => {
 })
 
 describe('POST /api/automations/[key]/backfill (run batch)', () => {
+  it('401 signed out, no batch', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await POST(new Request('http://x', { method: 'POST', body: JSON.stringify({ location_id: 'a0000000-0000-0000-0000-000000000001' }) }), params())
+    expect(res.status).toBe(401)
+    expect(runGlofoxBackfillBatch).not.toHaveBeenCalled()
+  })
   it('403 for non-manager', async () => {
     getCurrentUser.mockResolvedValue({ role: 'staff', rolesByLocation: { 'a0000000-0000-0000-0000-000000000001': 'staff' } })
     const res = await POST(new Request('http://x', { method: 'POST', body: JSON.stringify({ location_id: 'a0000000-0000-0000-0000-000000000001' }) }), params())

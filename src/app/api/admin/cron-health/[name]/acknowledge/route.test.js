@@ -35,6 +35,14 @@ describe('acknowledge a stale job', () => {
     expect(updates[0]).toMatchObject({ acknowledged_by: 'm1', acknowledged_note: 'reconnecting Instagram' })
   })
 
+  // ROUTEWRAP.R6 — a signed-out call is withAuth's 401 (this route said 403).
+  it('401 signed out, nothing written', async () => {
+    user = null
+    expect((await post({ hours: 1 })).status).toBe(401)
+    expect((await DELETE(new Request('http://x', { method: 'DELETE' }), props())).status).toBe(401)
+    expect(updates).toEqual([])
+  })
+
   it('only a master', async () => {
     user = { id: 'o1', profileRole: 'owner' }
     expect((await post({ hours: 1 })).status).toBe(403)
