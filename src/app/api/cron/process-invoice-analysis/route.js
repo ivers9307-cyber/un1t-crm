@@ -24,11 +24,14 @@
 // BATCH is sized so a worst-case tick (10 × ~15s) stays well under the
 // 300s function cap. 100 queued invoices drain in ~10 ticks (~10 min at
 // the */2 schedule) even with QStash entirely absent.
+//
+// defineCron owns the CRON_SECRET check (fail-closed: no secret configured →
+// 401), the error boundary and the heartbeat. Every tick stamps except one
+// whose claim RPC failed: 500 with a fixed line, the detail logged.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { processInvoiceAnalysisRow } from '@/lib/invoice-analysis-queue'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,31 +39,22 @@ export const maxDuration = 300
 
 const BATCH = 10
 
-export async function GET(request) {
-  // Fail-closed: no secret configured → reject (SEC-P0.3 pattern).
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
-
+export const GET = defineCron({ heartbeat: 'process-invoice-analysis' }, async ({ db }) => {
   const { data: claimed, error: claimErr } = await db.rpc('claim_invoice_analysis_batch', { p_limit: BATCH })
   if (claimErr) {
-    return NextResponse.json({ success: false, error: `claim: ${claimErr.message}` }, { status: 500 })
+    logError('cron-process-invoice-analysis', 'claim_invoice_analysis_batch failed; nothing processed', { err: claimErr })
+    return { ok: false, body: { error: 'Could not claim the invoice batch' } }
   }
   const rows = claimed || []
 
-  let ok = 0
+  let extracted = 0
   let failed = 0
 
   for (const row of rows) {
     const outcome = await processInvoiceAnalysisRow(db, row)
     if (outcome.extractionError) failed++
-    else ok++
+    else extracted++
   }
 
-  await stampHeartbeat('process-invoice-analysis').catch(() => {})
-
-  return NextResponse.json({ success: true, claimed: rows.length, ok, failed })
-}
+  return { body: { claimed: rows.length, ok: extracted, failed } }
+})

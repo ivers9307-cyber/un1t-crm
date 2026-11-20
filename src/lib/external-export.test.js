@@ -22,7 +22,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/tcx-builder', () => ({ buildTcx: vi.fn(() => '<tcx/>') }))
 // W1.S1a — the activity is named for the session studio's product.
 vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'UN1T Stillorgan' })) }))

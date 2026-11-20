@@ -60,7 +60,9 @@ describe('GET /api/cron/ad-insights-sync — read errors (CRONREADERR.1)', () =>
     accountsResult = { data: null, error: READ_ERR }
     const res = await GET(req())
     expect(res.status).toBe(500)
-    expect((await res.json()).success).toBe(false)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Could not read ad accounts' })
+    expect(JSON.stringify(body)).not.toContain('statement timeout')
     expect(syncAccount).not.toHaveBeenCalled()
     expect(stampHeartbeat).not.toHaveBeenCalled()
     expect(logError).toHaveBeenCalledWith(
@@ -74,14 +76,18 @@ describe('GET /api/cron/ad-insights-sync — read errors (CRONREADERR.1)', () =>
     accountsResult = { data: [], error: null }
     const res = await GET(req())
     expect(res.status).toBe(200)
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('ad-insights-sync')
   })
 
   it('one account failing at Meta still stamps: the row watches the cron, not Meta (unchanged)', async () => {
     syncAccount.mockRejectedValue(new Error('Meta 500'))
     const body = await (await GET(req())).json()
-    expect(body.results).toEqual([{ id: 'acc-1', error: 'Meta 500' }])
+    // ROUTEWRAP.C5 — a fixed line in the response; the provider text is logged
+    // and kept on the row.
+    expect(body.results).toEqual([{ id: 'acc-1', error: 'sync failed' }])
     expect(updates[0].patch).toEqual({ last_sync_error: 'Meta 500' })
+    expect(logWarn).toHaveBeenCalledWith('cron-ad-insights-sync', 'account sync failed', expect.objectContaining({ accountId: 'acc-1', err: 'Meta 500' }))
     expect(stampHeartbeat).toHaveBeenCalledWith('ad-insights-sync')
   })
 
@@ -108,5 +114,15 @@ describe('GET /api/cron/ad-insights-sync — read errors (CRONREADERR.1)', () =>
       expect.objectContaining({ accountId: 'acc-1', err: expect.objectContaining({ message: 'write failed' }) }),
     )
     expect(stampHeartbeat).toHaveBeenCalledWith('ad-insights-sync')
+  })
+
+  it('401s without the secret, reading nothing and stamping nothing', async () => {
+    const from = vi.spyOn(fakeDb, 'from')
+    const res = await GET(req('Bearer wrong'))
+    expect(res.status).toBe(401)
+    expect(from).not.toHaveBeenCalled()
+    from.mockRestore()
+    expect(syncAccount).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })

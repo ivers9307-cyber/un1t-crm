@@ -1,7 +1,11 @@
 // src/app/api/cron/ad-insights-sync/route.js
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+//
+// defineCron owns the CRON_SECRET check, the error boundary and the heartbeat.
+// Every run stamps 'ad-insights-sync' except one whose ad_accounts read failed
+// (500, fixed line). One account failing at Meta is a result with a fixed
+// line, its detail logged and kept on ad_accounts.last_sync_error; the row
+// watches the cron, not Meta.
+import { defineCron } from '@/lib/define-cron'
 import { syncAccount } from '@/lib/ads/sync'
 import * as meta from '@/lib/ads/providers/meta'
 import { adAccountDay } from '@/lib/ads/account-day'
@@ -14,13 +18,7 @@ export const maxDuration = 300
 const PROVIDERS = { meta }
 const BREAKDOWNS = ['publisher_platform', 'age', 'gender']
 
-
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'ad-insights-sync' }, async ({ db }) => {
   // yesterday+today: this cron runs every 4h so today stays live, and yesterday
   // gets its final full total after the day rolls over (a today-only window would
   // permanently miss each day's last few hours). Upsert makes the re-pull idempotent.
@@ -35,7 +33,7 @@ export async function GET(request) {
     // today, so one missed run loses no data, and the row's grace (mig 644:
     // 14400 + 18000) absorbs one missed stamp. A read broken on every run pages.
     logError('cron-ad-insights-sync', 'ad_accounts read failed; nothing synced, heartbeat not stamped', { err: accountsErr })
-    return NextResponse.json({ success: false, error: 'Could not read ad accounts' }, { status: 500 })
+    return { ok: false, body: { error: 'Could not read ad accounts' } }
   }
   const results = []
   for (const account of accounts || []) {
@@ -50,13 +48,13 @@ export async function GET(request) {
       if (syncedErr) logWarn('cron-ad-insights-sync', 'could not record the account sync time', { accountId: account.id, err: syncedErr })
       results.push({ id: account.id, ok: true })
     } catch (e) {
+      logWarn('cron-ad-insights-sync', 'account sync failed', { accountId: account.id, err: e?.message })
       // This write is the only record of WHY the account failed; if it fails,
       // the log carries the reason instead.
       const { error: recordErr } = await db.from('ad_accounts').update({ last_sync_error: e.message }).eq('id', account.id)
       if (recordErr) logError('cron-ad-insights-sync', 'could not record the account sync error', { accountId: account.id, syncError: e.message, err: recordErr })
-      results.push({ id: account.id, error: e.message })
+      results.push({ id: account.id, error: 'sync failed' })
     }
   }
-  await stampHeartbeat('ad-insights-sync').catch(() => {})
-  return NextResponse.json({ success: true, results })
-}
+  return { body: { results } }
+})
