@@ -37,7 +37,7 @@ const MASTER = { id: 'user-1', isMaster: true, role: 'master' }
 const IMP = 'imp-1'
 const ERR = { code: '40001', message: 'could not serialize access due to concurrent update' }
 
-function seed({ status = 'completed', error_message = null, created = ['c1'], updated = [['c9', { first_name: 'Ann' }]] } = {}) {
+function seed({ status = 'completed', error_message = null, rolled_back_at = null, created = ['c1'], updated = [['c9', { first_name: 'Ann' }]] } = {}) {
   const contacts = []
   const rows = []
   let n = 2
@@ -51,7 +51,7 @@ function seed({ status = 'completed', error_message = null, created = ['c1'], up
   }
   return createFakeDb({
     tables: {
-      contact_imports: [{ id: IMP, location_id: 'loc-1', status, error_message }],
+      contact_imports: [{ id: IMP, location_id: 'loc-1', status, error_message, rolled_back_at }],
       contacts,
       contact_import_rows: rows,
     },
@@ -136,7 +136,8 @@ describe('the claim must claim the batch (A09)', () => {
     db = intercept(seed(), {
       before: (b) => {
         if (b.table === 'contact_imports' && b.op === 'update' && b.payload?.status === 'rolling_back') {
-          batchRow().status = 'rolling_back' // the other request won
+          batchRow().status = 'rolling_back' // the other request won: its claim stamps the time
+          batchRow().rolled_back_at = new Date().toISOString()
         }
       },
     })
@@ -144,6 +145,19 @@ describe('the claim must claim the batch (A09)', () => {
     expect(res.status).toBe(409)
     expect(db.tables.contacts).toHaveLength(2)
     expect(rowAction('row-c1')).toBe('created')
+  })
+
+  it('refuses a batch another rollback claimed moments ago (an exclusive claim, not the status read)', async () => {
+    db = seed({ status: 'rolling_back', rolled_back_at: new Date(Date.now() - 60_000).toISOString() })
+    const res = await post()
+    expect(res.status).toBe(409)
+    expect(db.tables.contacts).toHaveLength(2)
+  })
+
+  it('re-runs a batch whose rolling_back claim is stale', async () => {
+    db = seed({ status: 'rolling_back', rolled_back_at: new Date(Date.now() - 20 * 60_000).toISOString() })
+    expect((await post()).status).toBe(200)
+    expect(batchRow().status).toBe('rolled_back')
   })
 
   it('still re-runs a batch stranded at rolling_back', async () => {

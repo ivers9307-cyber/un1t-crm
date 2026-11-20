@@ -30,7 +30,11 @@
 //   The answer is 200 with success:true, data.partial:true and the counts —
 //   the same "the reversal that happened is real" contract as C9 below.
 //   A batch stranded at 'rolling_back' (crash, or a failed closing stamp)
-//   stays re-runnable: the claim accepts it.
+//   stays re-runnable, but only once its claim is STALE: while a batch is
+//   'rolling_back', rolled_back_at holds the claim time, and one conditional
+//   UPDATE claims either a completed batch or a rolling_back batch claimed
+//   more than CLAIM_STALE_MINUTES ago. Postgres re-checks that WHERE under
+//   the row lock, so two simultaneous requests can never both claim it.
 //
 // IMPORTLEDGER.1 (audit A08) — a batch whose rollback history was not fully
 // saved (isLedgerIncomplete) is still rolled back as far as it can be, but
@@ -55,6 +59,9 @@ const STAMP_CHUNK = 300
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+/** A rolling_back claim older than this is treated as stranded and may be re-claimed. */
+export const CLAIM_STALE_MINUTES = 10
 
 export async function POST(_request, props) {
   const params = await props.params;
@@ -81,23 +88,27 @@ export async function POST(_request, props) {
   const guard = assertLocationAccessOr404(user, batch.location_id)
   if (guard) return guard
 
-  // Claim the batch: completed → rolling_back. IMPORTROLLBACK.1 — the claim
-  // must actually claim something. A concurrent rollback (or a batch that is
-  // pending / processing / failed) matches nothing and is refused, except a
-  // batch already stranded at 'rolling_back', which stays re-runnable.
+  // Claim the batch. IMPORTROLLBACK.1 — the claim must actually claim
+  // something, and it is decided by this one conditional UPDATE, never by the
+  // status read above: a completed batch, or a rolling_back batch whose claim
+  // (rolled_back_at, the claim time while rolling_back) is stale or missing.
+  // A live concurrent rollback, or a pending / processing / failed batch,
+  // matches nothing and is refused.
+  const nowIso = new Date().toISOString()
+  const staleIso = new Date(Date.now() - CLAIM_STALE_MINUTES * 60_000).toISOString()
   const { data: claimed, error: claimError } = await db.from('contact_imports')
-    .update({ status: 'rolling_back' })
+    .update({ status: 'rolling_back', rolled_back_at: nowIso })
     .eq('id', params.id)
-    .eq('status', 'completed')
+    .or(`status.eq.completed,and(status.eq.rolling_back,rolled_back_at.lt.${staleIso}),and(status.eq.rolling_back,rolled_back_at.is.null)`)
     .select('id')
   if (claimError) {
     logError('contact-import', 'rollback claim failed', { importId: params.id, code: claimError.code ?? null })
     return NextResponse.json({ success: false, error: 'Could not start the rollback. Try again.' }, { status: 500 })
   }
-  if ((!claimed || claimed.length === 0) && batch.status !== 'rolling_back') {
+  if (!claimed || claimed.length === 0) {
     return NextResponse.json({
       success: false,
-      error: 'This import cannot be rolled back right now: it is not a completed import, or another rollback has just started.',
+      error: 'This import cannot be rolled back right now: it is not a completed import, or another rollback is still running. Try again in a few minutes.',
     }, { status: 409 })
   }
 
@@ -145,7 +156,7 @@ export async function POST(_request, props) {
     // again, and answer with a fixed string (the detail goes to the log).
     logError('contact-import', 'rollback read failed — nothing reversed', { importId: params.id, err: e })
     const { error: releaseError } = await db.from('contact_imports')
-      .update({ status: 'completed' }).eq('id', params.id).eq('status', 'rolling_back')
+      .update({ status: 'completed', rolled_back_at: null }).eq('id', params.id).eq('status', 'rolling_back')
     if (releaseError) {
       logError('contact-import', 'rollback release failed — batch is stranded at rolling_back', {
         importId: params.id, code: releaseError.code ?? null,
@@ -269,7 +280,7 @@ export async function POST(_request, props) {
   // its contact is already gone, or its snapshot is restored a second time).
   const partial = failed > 0 || stampFailed.includes('rows')
   const batchStamp = partial
-    ? { status: 'completed' }
+    ? { status: 'completed', rolled_back_at: null }
     : { status: 'rolled_back', rolled_back_at: new Date().toISOString(), rolled_back_by: user.id }
   const { error: batchStampError } = await db.from('contact_imports')
     .update(batchStamp)
