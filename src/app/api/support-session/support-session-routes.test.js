@@ -5,7 +5,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const getCurrentUser = vi.fn()
-vi.mock('@/lib/auth', () => ({ getCurrentUser: () => getCurrentUser() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: () => getCurrentUser() }))
+vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: vi.fn(() => ({})) }))
 
 const startSupportSession = vi.fn()
 const switchSupportMode = vi.fn()

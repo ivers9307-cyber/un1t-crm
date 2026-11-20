@@ -130,4 +130,12 @@ describe('GET /api/email/mail/[id]/assign', () => {
   it('404 for another studio', async () => {
     expect((await get(T_B)).status).toBe(404)
   })
+  it('401 when signed out', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await get(T_A)).status).toBe(401)
+  })
+  it('404 for a caller who cannot see the mailbox', async () => {
+    getCurrentUser.mockResolvedValue(ME_USER)
+    expect((await get(T_A)).status).toBe(404)
+  })
 })
