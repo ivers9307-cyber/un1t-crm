@@ -98,7 +98,6 @@ export const DAILY_SLOTS = Object.freeze({
   // OWNERDAILY.1 — the owner briefing is daily now (was Mondays).
   'morning-briefing': Object.freeze({ hour: 6 }),
   'ad-report-email': Object.freeze({ hour: 7 }),
-  'churn-radar-digest': Object.freeze({ hour: 7, weekday: 1 }),
   'run-scheduled-reports': Object.freeze({ hour: 7 }),
   'contract-reminders': Object.freeze({ hour: 8 }),
   'roster-runway': Object.freeze({ hour: 8, rides: 'contract-reminders' }),

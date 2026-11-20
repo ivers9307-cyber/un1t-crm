@@ -1,5 +1,5 @@
-// TZ.6 — the location-loop daily crons (morning-briefing, churn-radar-digest,
-// ad-report-email, run-scheduled-reports, receipt-coverage-weekly) run hourly
+// TZ.6 — the location-loop daily crons (morning-briefing, ad-report-email,
+// run-scheduled-reports, receipt-coverage-weekly) run hourly
 // and act for each location only at its slot: the legacy UTC hour for a
 // Europe/Dublin studio (unchanged), the target LOCAL hour elsewhere, at most
 // once per local day. Bodies are mocked; what is under test is which location
@@ -23,8 +23,6 @@ vi.mock('@/lib/morning-briefing', () => ({
   buildMorningBriefingEmail: vi.fn((_rows, o) => ({ subject: o.dateLabel, html: '<p/>' })),
   shapePulseMetrics: vi.fn(() => []),
 }))
-vi.mock('@/lib/churn-radar-data', () => ({ loadRadar: vi.fn(async (_db, id) => { acted.push(['churn-radar-digest', id]); return { summary: {} } }) }))
-vi.mock('@/lib/churn-radar-digest', () => ({ buildDigestEmail: vi.fn(() => ({ subject: 's', html: '<p/>' })) }))
 vi.mock('@/lib/membership/locations-for-source', () => ({ locationIdsWithoutCapability: vi.fn(async () => ({ ids: new Set(), error: null })) }))
 vi.mock('@/lib/ads/read', () => ({ loadAdsDashboard: vi.fn(async (_db, id) => { acted.push(['ad-report-email', id]); return { kpis: {}, perAd: [] } }) }))
 vi.mock('@/lib/ads/report', () => ({ buildAdReportEmail: vi.fn(({ date }) => ({ subject: date, html: '<p/>' })) }))
@@ -62,13 +60,11 @@ vi.mock('@/lib/supabase', async () => {
 
 const ROUTES = {
   'morning-briefing': await import('./morning-briefing/route.js'),
-  'churn-radar-digest': await import('./churn-radar-digest/route.js'),
   'ad-report-email': await import('./ad-report-email/route.js'),
   'run-scheduled-reports': await import('./run-scheduled-reports/route.js'),
   'receipt-coverage-weekly': await import('./receipt-coverage-weekly/route.js'),
 }
 const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
-const { sendEmail } = await import('@/lib/postmark')
 const { buildMorningBriefingEmail } = await import('@/lib/morning-briefing')
 const { buildAdReportEmail } = await import('@/lib/ads/report')
 const { locationIdsWithoutCapability } = await import('@/lib/membership/locations-for-source')
@@ -111,11 +107,9 @@ describe('TZ.6 location-loop daily crons act once per location, at its slot', ()
     expect(await ticks(cron, isos)).toEqual([DUB, NYC])
   })
 
-  // OWNERDAILY.1 — the briefing is daily now; the Monday digest sends nothing.
-  it('the briefing acts on a Tuesday too; the radar digest acts for nobody, ever', async () => {
+  // OWNERDAILY.1 — the briefing is daily now.
+  it('the briefing acts on a Tuesday too', async () => {
     expect(await ticks('morning-briefing', ['2026-07-07T06:00:00Z', '2026-07-07T10:00:00Z'])).toEqual([DUB, NYC])
-    expect(await ticks('churn-radar-digest', ['2026-07-06T07:00:00Z', '2026-07-06T11:00:00Z'])).toEqual([])
-    expect(sendEmail.mock.calls.filter(([a]) => a?.tag === 'churn-radar-digest')).toEqual([])
   })
 
   it('receipt-coverage-weekly in winter: 08:00 GMT is 08:00Z (the old 08:00 UTC firing), not 07:00Z', async () => {
@@ -124,17 +118,17 @@ describe('TZ.6 location-loop daily crons act once per location, at its slot', ()
   })
 
   it('a quiet tick never stamps; the legacy slot tick stamps once (receipt-coverage-weekly never stamps here)', async () => {
-    const STAMPING = { 'morning-briefing': '2026-07-06T06:00:00Z', 'churn-radar-digest': '2026-07-06T07:00:00Z', 'ad-report-email': '2026-07-06T07:00:00Z', 'run-scheduled-reports': '2026-07-06T07:00:00Z' }
+    const STAMPING = { 'morning-briefing': '2026-07-06T06:00:00Z', 'ad-report-email': '2026-07-06T07:00:00Z', 'run-scheduled-reports': '2026-07-06T07:00:00Z' }
     for (const cron of [...Object.keys(STAMPING), 'receipt-coverage-weekly']) await ticks(cron, ['2026-07-06T03:00:00Z'])
     expect(stampHeartbeat).not.toHaveBeenCalled()
     for (const [cron, iso] of Object.entries(STAMPING)) await ticks(cron, [iso, iso.replace(':00:00Z', ':00:30Z')])
     await ticks('receipt-coverage-weekly', ['2026-07-03T07:00:00Z'])
-    expect(stampHeartbeat.mock.calls.map(([n]) => n).sort()).toEqual(['ad-report-email', 'churn-radar-digest', 'morning-briefing', 'run-scheduled-reports'])
+    expect(stampHeartbeat.mock.calls.map(([n]) => n).sort()).toEqual(['ad-report-email', 'morning-briefing', 'run-scheduled-reports'])
   })
 
   it('a claim-write error at the slot tick acts for nobody, stamps nothing and answers 500', async () => {
     h.claimError = { code: 'XX000', message: 'down' }
-    const SLOT = { 'morning-briefing': '2026-07-06T06:00:00Z', 'churn-radar-digest': '2026-07-06T07:00:00Z', 'ad-report-email': '2026-07-06T07:00:00Z', 'run-scheduled-reports': '2026-07-06T07:00:00Z', 'receipt-coverage-weekly': '2026-07-03T07:00:00Z' }
+    const SLOT = { 'morning-briefing': '2026-07-06T06:00:00Z', 'ad-report-email': '2026-07-06T07:00:00Z', 'run-scheduled-reports': '2026-07-06T07:00:00Z', 'receipt-coverage-weekly': '2026-07-03T07:00:00Z' }
     for (const [cron, iso] of Object.entries(SLOT)) {
       vi.setSystemTime(Date.parse(iso))
       expect((await ROUTES[cron].GET(req())).status, cron).toBe(500)

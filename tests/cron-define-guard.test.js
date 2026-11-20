@@ -13,7 +13,7 @@ const ROOT = path.resolve(import.meta.dirname, '../src/app/api/cron')
 const LEGACY = new Set([
   'ad-insights-backfill', 'ad-insights-sync', 'ad-report-email',
   'agent-followups', 'auto-end-stale-hr-sessions',
-  'churn-radar-digest', 'churn-radar-snapshot',
+  'churn-radar-snapshot',
   'class-fees',
   'contact-studios-reconcile', 'contract-reminders', 'credit-attendance',
   'event-reminders',

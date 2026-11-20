@@ -22,7 +22,6 @@ const LEGACY_SCHEDULE = {
   // OWNERDAILY.1 (19 Nov 2026) made the briefing daily; before, Mondays only.
   'morning-briefing': [0, 6, null],
   'ad-report-email': [0, 7, null],
-  'churn-radar-digest': [0, 7, 1],
   'run-scheduled-reports': [0, 7, null],
   'contract-reminders': [0, 8, null],
   // The arms of contract-reminders: they ran on its 08:00 UTC tick.
@@ -147,7 +146,7 @@ describe('TZ.6 America/New_York acts at its LOCAL hour across both 2026 US DST c
   })
 
   it('weekday slots read the LOCAL weekday: Monday 07:00 in Sydney is Sunday 21:00Z', () => {
-    const slot = DAILY_SLOTS['churn-radar-digest']
+    const slot = { hour: 7, weekday: 1 }
     expect(dailySlotDue('Australia/Sydney', at('2026-07-05T21:00:00Z'), slot)).toMatchObject({ due: true, day: '2026-07-06', legacy: false })
     expect(dailySlotDue('Europe/Dublin', at('2026-07-05T21:00:00Z'), slot).due).toBe(false)
   })

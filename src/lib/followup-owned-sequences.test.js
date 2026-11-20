@@ -36,7 +36,6 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { PUT as PATCH_SEQ } from '@/app/api/sequences/[id]/route'
 import { PUT as PUT_GRAPH } from '@/app/api/sequences/[id]/graph/route'
-import { PUT as PUT_STEPS } from '@/app/api/sequences/[id]/steps/route'
 import { POST as PUBLISH } from '@/app/api/sequences/[id]/graph/publish/route'
 import { POST as ENROL } from '@/app/api/sequences/[id]/enrol/route'
 import { POST as CLONE } from '@/app/api/sequences/[id]/clone/route'
@@ -138,7 +137,6 @@ describe('routes refuse a follow-up-owned sequence before any write', () => {
   const cases = [
     ['patchFollowupSequenceIs409', PATCH_SEQ, { name: 'x' }],
     ['graphFollowupSequenceIs409', PUT_GRAPH, { graph: { version: 1, nodes: [], edges: [] } }],
-    ['stepsFollowupSequenceIs409', PUT_STEPS, { steps: [{ id: 'd0000000-0000-4000-8000-000000000004', step_order: 1 }] }],
     ['publishFollowupSequenceIs409', PUBLISH, {}],
     ['enrolFollowupSequenceIs409', ENROL, { contact_ids: ['b0000000-0000-4000-8000-000000000009'] }],
   ]

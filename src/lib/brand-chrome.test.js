@@ -22,7 +22,6 @@ import path from 'node:path'
 import { getOpenApiSpec } from './openapi.js'
 import { SYSTEM_PROMPT } from './assistant-prompt.js'
 import { buildReportEmailHtml } from './report-generator.js'
-import { buildDigestEmail } from './churn-radar-digest.js'
 import {
   resolveDefaultSiteName,
   resolveGymSiteName,
@@ -74,20 +73,6 @@ describe('platform chrome reads Repset, not UN1T (CHROME.1)', () => {
       { appUrl: 'https://crm.repset.ie' },
     )
     expect(html).toContain('Repset · automated report delivery')
-    expect(html).not.toMatch(/UN1T/)
-  })
-
-  it('churn radar digest footer — staff digest, platform name', () => {
-    const { html } = buildDigestEmail({}, [], { locationName: 'UN1T Stillorgan' })
-    expect(html).toContain('Repset radar')
-    // The STUDIO's name still renders — that is the operator's identity and
-    // must survive; only the platform footer changed.
-    expect(html).toContain('UN1T Stillorgan')
-  })
-
-  it('churn radar digest never substitutes one tenant\'s gym for a missing name', () => {
-    const { subject, html } = buildDigestEmail({}, [], {})
-    expect(subject).not.toMatch(/UN1T/)
     expect(html).not.toMatch(/UN1T/)
   })
 

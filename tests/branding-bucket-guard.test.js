@@ -87,10 +87,6 @@ const CLIENT_UPLOADER = 'src/lib/landing-media-upload.js'
 // writers' until someone reviews its gate and adds it here.
 const WRITERS = {
   'src/app/api/settings/branding/upload/route.js': 'getCurrentUser',
-  'src/app/api/landing-page-settings/hero-image/route.js': 'getCurrentUser',
-  'src/app/api/landing-page-settings/hero-video/route.js': 'getCurrentUser',
-  'src/app/api/landing-page-settings/gallery-photo/route.js': 'getCurrentUser',
-  'src/app/api/landing-page-settings/pillar-photo/route.js': 'getCurrentUser',
   'src/app/api/landing-page-settings/media/route.js': 'getCurrentUser',
   'src/app/api/landing-page-settings/media/signed-upload/route.js': 'getCurrentUser',
   'src/app/api/chooser-settings/tile-image/route.js': 'getCurrentUser',
