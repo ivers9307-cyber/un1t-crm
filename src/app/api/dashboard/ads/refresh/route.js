@@ -4,9 +4,10 @@
 // the dashboard can refresh it); mirrors the ad-insights-sync cron scoped to a
 // single location. Returns { success, results, synced_at }.
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 import { syncAccount } from '@/lib/ads/sync'
 import * as meta from '@/lib/ads/providers/meta'
 import { adAccountDay } from '@/lib/ads/account-day'
@@ -18,17 +19,19 @@ export const maxDuration = 60
 const PROVIDERS = { meta }
 const BREAKDOWNS = ['publisher_platform', 'age', 'gender']
 
+// The provider's message (e.g. an expired token) is what tells the operator
+// what to fix, so the per-account result keeps it, as settings/ads/test does;
+// it is also kept on ad_accounts.last_sync_error and logged.
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; dashboard_ads is judged at the body's
+// studio (403 not a member, 403 without the permission), as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const { locationId } = await request.json().catch(() => ({}))
   if (!locationId) return NextResponse.json({ success: false, error: 'locationId required' }, { status: 400 })
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
   if (!hasPermissionForLocation(user, locationId, 'dashboard_ads')) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
-  const db = createServerClient()
   // TZ.11c: yesterday + today in the account's own zone (as the cron).
   const nowMs = Date.now()
   const { data: accounts } = await db.from('ad_accounts').select('*, locations(id, timezone)').eq('location_id', locationId).eq('is_active', true)
@@ -43,8 +46,9 @@ export async function POST(request) {
       results.push({ id: account.id, ok: true })
     } catch (e) {
       await db.from('ad_accounts').update({ last_sync_error: e.message }).eq('id', account.id)
+      logError('ads-refresh', 'account sync failed', { accountId: account.id, locationId, err: e })
       results.push({ id: account.id, error: e.message })
     }
   }
   return NextResponse.json({ success: true, results, synced_at: new Date().toISOString() })
-}
+})

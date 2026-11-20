@@ -7,8 +7,8 @@
 // comes only with the dashboard_business permission; built-in boards have no
 // report. Read-only.
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { canBuildSequencesAt } from '@/lib/sequence-access'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -21,12 +21,11 @@ export const dynamic = 'force-dynamic'
 const notFound = (error = 'Not found') => NextResponse.json({ success: false, error }, { status: 404 })
 const failed = (r) => NextResponse.json({ success: false, error: r.error }, { status: r.status })
 
-export async function GET(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: boardId } = await params
+// withAuth only signs the caller in: the board's studio is read from the row,
+// then membership (404) and the manager-or-builder check there (403), as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const boardId = params?.id
   if (!uuidLike.safeParse(boardId).success) return notFound()
-  const db = createServerClient()
   const where = await boardLocationId(db, boardId)
   if (!where.ok) return where.status === 404 ? notFound() : failed(where)
   const { locationId } = where
@@ -43,4 +42,4 @@ export async function GET(request, { params }) {
   const includeRevenue = hasPermissionForLocation(user, locationId, 'dashboard_business') === true
   const report = await buildBoardReport(db, { board: result.board, locationId, nowMs: Date.now(), includeRevenue })
   return NextResponse.json({ success: true, data: report })
-}
+})

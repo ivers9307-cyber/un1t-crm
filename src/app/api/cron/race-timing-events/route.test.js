@@ -5,25 +5,30 @@ process.env.TZ = 'America/Los_Angeles'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let regs = []
+let regsError = null
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/contact-events', () => ({
   emitEvent: vi.fn(async () => true),
   applyTagRules: vi.fn(async () => {}),
   EVENT_TYPES: { RACE_STARTS_IN_24H: 'race.starts_in_24h', RACE_STARTS_IN_1H: 'race.starts_in_1h', RACE_COMPLETED_24H_AGO: 'race.completed_24h_ago' },
 }))
 vi.mock('@/lib/supabase', () => ({
-  createServerClient: () => ({
+  createServerClient: vi.fn(() => ({
     from: () => {
       const b = {}
       for (const m of ['select', 'eq', 'gte', 'lte']) b[m] = () => b
-      b.then = (res, rej) => Promise.resolve({ data: regs, error: null }).then(res, rej)
+      b.then = (res, rej) => Promise.resolve(regsError ? { data: null, error: regsError } : { data: regs, error: null }).then(res, rej)
       return b
     },
-  }),
+  })),
 }))
 
 const { GET } = await import('./route')
 const { emitEvent } = await import('@/lib/contact-events')
+const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
+const { createServerClient } = await import('@/lib/supabase')
+const { logError } = await import('@/lib/log')
 const req = () => new Request('https://x.test/api/cron/race-timing-events', { headers: { authorization: 'Bearer shh' } })
 const REG = (timezone) => ({
   id: 'reg-1', contact_id: null, status: 'confirmed', race_event_id: 'race-1',
@@ -38,6 +43,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.useFakeTimers({ toFake: ['Date'] })
   process.env.CRON_SECRET = 'shh'
+  regsError = null
 })
 
 describe('TZ.6 race-timing-events', () => {
@@ -58,3 +64,39 @@ describe('TZ.6 race-timing-events', () => {
     expect(oneHourEvents()).toBe(1)
   })
 })
+
+describe('race-timing-events on defineCron (ROUTEWRAP.C8)', () => {
+  const bare = (auth) => new Request('https://x.test/api/cron/race-timing-events', { headers: auth ? { authorization: auth } : {} })
+
+  it('401 without the secret: nothing read, nothing emitted, nothing stamped', async () => {
+    regs = [REG('Europe/Dublin')]
+    vi.setSystemTime(Date.parse('2026-07-04T08:00:00Z'))
+    for (const auth of [null, 'Bearer wrong']) expect((await GET(bare(auth))).status).toBe(401)
+    delete process.env.CRON_SECRET
+    expect((await GET(bare('Bearer undefined'))).status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(emitEvent).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a completed loop stamps exactly race-timing-events with its counts and answers them', async () => {
+    regs = [REG('Europe/Dublin')]
+    vi.setSystemTime(Date.parse('2026-07-04T08:00:00Z'))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const stats = { emitted: 1, skipped: 0, errors: 0 }
+    expect(await res.json()).toEqual({ success: true, stats })
+    expect(stampHeartbeat.mock.calls).toEqual([['race-timing-events', stats]])
+  })
+
+  it('an unreadable registrations list is a 500 with a fixed line (no DB text) and no stamp', async () => {
+    regsError = { code: 'XX000', message: 'relation db.internal refused' }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not read registrations' })
+    expect(logError).toHaveBeenCalledWith('race-timing-events', 'registrations read failed', { err: regsError })
+    expect(emitEvent).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+})
+
