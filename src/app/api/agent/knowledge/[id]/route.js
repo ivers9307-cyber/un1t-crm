@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
@@ -35,14 +36,13 @@ async function loadOwned(db, user, id) {
   return { row }
 }
 
-export async function PUT(request, { params }) {
-  const { id } = await params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the coarse manager check, the row's
+// studio and the role there run below in their old order.
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const id = params?.id
   if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  const db = createServerClient()
   const owned = await loadOwned(db, user, id)
   if (owned.error) return owned.error
 
@@ -61,22 +61,25 @@ export async function PUT(request, { params }) {
     .eq('id', id)
     .select('id, category, title, content, enabled, sort_order, updated_at')
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('agent-knowledge', 'entry update failed', { id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the entry.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, entry: data })
-}
+})
 
-export async function DELETE(request, { params }) {
-  const { id } = await params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const id = params?.id
   if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  const db = createServerClient()
   const owned = await loadOwned(db, user, id)
   if (owned.error) return owned.error
 
   const { error } = await db.from('agent_knowledge').delete().eq('id', id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('agent-knowledge', 'entry delete failed', { id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not delete the entry.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
-}
+})

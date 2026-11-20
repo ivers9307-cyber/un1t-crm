@@ -22,8 +22,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { uuidLike, realIsoDate, MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { mondayOf } from '@/lib/payroll'
 import { loadRosterGrid } from '@/lib/roster-grid-data'
@@ -37,9 +37,10 @@ const QuerySchema = z.object({
   start_date: realIsoDate,
 })
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
+// withAuth signs the caller in (signed out is its 401); the manager checks run
+// below in their old order with their old words.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -67,7 +68,6 @@ export async function GET(request) {
   // this studio. A head coach keeps the grid with the contract hidden.
   const showContract = hasRoleAtLocation(user, location_id, ADMIN_ROLES)
 
-  const db = createServerClient()
   const { data, error } = await loadRosterGrid(db, { locationId: location_id, weekStart: mondayOf(start_date), showContract })
   if (error) {
     logError('api/schedule/grid', 'grid read failed', { location_id, err: error.message })
@@ -84,4 +84,4 @@ export async function GET(request) {
       members: (data?.members || []).map(({ contracted_hours: _hidden, ...m }) => m),
     },
   })
-}
+})

@@ -31,8 +31,8 @@
 // [id]/resolve (the human acknowledge path, DEADLETTER-UI.1).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { isManuallyReplayable } from '@/lib/webhook-replay'
 import { deadLetterOwnerLocationIds } from './_helpers'
 
@@ -42,11 +42,9 @@ export const dynamic = 'force-dynamic'
 const VALID_STATUSES = new Set(['pending', 'resolved', 'failed', 'discarded'])
 const ROW_LIMIT = 200
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
+// withAuth only signs the caller in; master-or-owner and the row bound are
+// decided below as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   // Master, or owner SOMEWHERE — judged per location, never by the active
   // role. A collection route, so 403 gives nothing away; the bound below
   // decides which rows that owner actually sees.
@@ -66,8 +64,6 @@ export async function GET(request) {
     }, { status: 400 })
   }
 
-  const db = createServerClient()
-
   let query = db
     .from('webhook_dead_letter')
     .select('id, provider, event_type, payload, error, attempts, status, received_at, last_attempt_at, resolved_at, location_id')
@@ -81,9 +77,10 @@ export async function GET(request) {
 
   const { data, error } = await query
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('webhook-dead-letter', 'list read failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not read the dead letters.' }, { status: 500 })
   }
 
   const rows = (data || []).map((r) => ({ ...r, replayable: isManuallyReplayable(r.provider) }))
   return NextResponse.json({ success: true, data: rows })
-}
+})

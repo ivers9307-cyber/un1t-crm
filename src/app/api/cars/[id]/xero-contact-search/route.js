@@ -12,9 +12,10 @@
 // a local table; that's deliberately out of scope here.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { withFreshToken, XeroError } from '@/lib/xero/client'
 
 export const runtime = 'nodejs'
@@ -24,10 +25,9 @@ function escapeXeroWhere(s) {
   return String(s).replace(/"/g, '""');
 }
 
-export async function GET(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; car_processing anywhere, the car, its
+// studio and the key there are checked below in their old order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
@@ -38,11 +38,10 @@ export async function GET(request, props) {
     return NextResponse.json({ success: true, contacts: [] })
   }
 
-  const db = createServerClient()
   const { data: car } = await db
     .from('cars')
     .select('id, location_id')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (!car) return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, car.location_id)
@@ -79,6 +78,7 @@ export async function GET(request, props) {
     return NextResponse.json({ success: true, contacts })
   } catch (e) {
     const status = e instanceof XeroError && e.status ? Math.min(Math.max(e.status, 400), 599) : 500
-    return NextResponse.json({ success: false, error: e.message || 'Xero lookup failed' }, { status })
+    logError('xero-contact-search', 'Xero lookup failed', { carId: car.id, status, err: e })
+    return NextResponse.json({ success: false, error: 'Xero lookup failed' }, { status })
   }
-}
+})

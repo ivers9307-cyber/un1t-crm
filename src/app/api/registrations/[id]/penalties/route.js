@@ -16,9 +16,10 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -33,10 +34,10 @@ const PenaltySchema = z.object({
   reason: z.string().trim().min(1).max(500),
 }).strict()
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in. Every check after it runs by hand, in the
+// order it always has: races anywhere 403, body 400, the registration 404, its
+// studio 404, races there 403, race-only 409.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
   }
@@ -45,11 +46,10 @@ export async function POST(request, props) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const db = createServerClient()
   const { data: reg, error: lookupErr } = await db
     .from('race_registrations')
     .select(`id, race_events ( id, location_id, kind )`)
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (lookupErr || !reg) {
     return NextResponse.json({ success: false, error: 'Registration not found' }, { status: 404 })
@@ -78,8 +78,9 @@ export async function POST(request, props) {
     .select('id, seconds, reason, applied_by, applied_at')
     .single()
   if (insErr) {
-    return NextResponse.json({ success: false, error: insErr.message }, { status: 500 })
+    logError('race-penalties', 'penalty insert failed', { registrationId: params.id, err: insErr })
+    return NextResponse.json({ success: false, error: 'Could not apply the penalty.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: inserted }, { status: 201 })
-}
+})

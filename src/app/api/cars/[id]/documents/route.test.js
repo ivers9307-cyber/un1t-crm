@@ -11,7 +11,7 @@ vi.mock('@/lib/permissions', () => ({
   hasPermissionAtAnyLocation: vi.fn(() => true), hasPermissionForLocation: vi.fn(() => true),
 }))
 vi.mock('@/lib/invoices-queue/enqueue', () => ({ enqueueFromCarDocument: vi.fn(async () => ({ ok: true })) }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logError: vi.fn() }))
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
@@ -149,7 +149,7 @@ describe('POST /api/cars/[id]/documents — recording (shared with finalise)', (
     createServerClient.mockReturnValue(db)
     const res = await post(PDF)
     expect(res.status).toBe(500)
-    expect(await res.json()).toEqual({ success: false, error: 'insert refused' })
+    expect(await res.json()).toEqual({ success: false, error: 'Could not save the document.' })
     expect(remove).toHaveBeenCalledWith([upload.mock.calls[0][0]])
   })
 

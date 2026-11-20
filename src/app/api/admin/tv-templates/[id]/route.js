@@ -14,8 +14,8 @@
 // image is kept as it is.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import {
   loadTvTemplateForUser, isTemplateBaseImagePath, TvTemplateSaveSchema,
@@ -24,19 +24,17 @@ import {
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
+// withAuth only signs the caller in; loadTvTemplateForUser keeps every other
+// check (tv_displays anywhere, the id, the template's studio, the key there).
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const id = params?.id
   const { template, response } = await loadTvTemplateForUser(db, user, id, TV_TEMPLATE_COLUMNS)
   if (response) return response
   return NextResponse.json({ success: true, data: template })
-}
+})
 
-export async function PUT(request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const id = params?.id
   const { template, response } = await loadTvTemplateForUser(db, user, id, 'id, location_id, base_image_path')
   if (response) return response
 
@@ -60,17 +58,16 @@ export async function PUT(request, props) {
     .select(TV_TEMPLATE_COLUMNS)
   if (error) {
     if (error.code === UNIQUE_VIOLATION) return tvConflict(`A template called "${body.name}" already exists here.`)
-    return tvServerError(`Could not save the template: ${error.message}`)
+    logError('tv-templates', 'template save failed', { id: template.id, err: error })
+    return tvServerError('Could not save the template.')
   }
   if (!data || data.length === 0) return tvNotFound('Template')
 
   return NextResponse.json({ success: true, data: data[0] })
-}
+})
 
-export async function DELETE(_request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const id = params?.id
   const { template, response } = await loadTvTemplateForUser(db, user, id, 'id, location_id')
   if (response) return response
 
@@ -80,7 +77,10 @@ export async function DELETE(_request, props) {
     .eq('id', template.id)
     .eq('location_id', template.location_id)
     .select('id')
-  if (error) return tvServerError(`Could not delete the template: ${error.message}`)
+  if (error) {
+    logError('tv-templates', 'template delete failed', { id: template.id, err: error })
+    return tvServerError('Could not delete the template.')
+  }
 
   return NextResponse.json({ success: true })
-}
+})

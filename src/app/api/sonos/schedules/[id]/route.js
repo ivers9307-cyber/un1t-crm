@@ -4,9 +4,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { uuidLike } from '@/lib/schemas'
 import { SchedulePayload } from '../route'
 
@@ -20,9 +20,9 @@ const Patch = SchedulePayload.extend({
   }).nullable().optional(),
 })
 
-async function authorise() {
-  const user = await getCurrentUser()
-  if (!user) return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
+// withAuth only signs the caller in; device_control and the active studio
+// are checked here with their old words, in their old order.
+function authorise(user) {
   if (!hasPermission(user, 'device_control')) {
     return { error: NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 }) }
   }
@@ -31,10 +31,10 @@ async function authorise() {
   return { locationId }
 }
 
-export async function PATCH(request, { params }) {
-  const auth = await authorise()
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const auth = authorise(user)
   if (auth.error) return auth.error
-  const { id } = await params
+  const id = params?.id
   // Malformed id -> 404, never 500 from a Postgres type-cast error, and
   // never 400 either — detail routes 404 so ids can't be enumerated.
   if (!uuidLike.safeParse(id).success) {
@@ -54,7 +54,6 @@ export async function PATCH(request, { params }) {
     return NextResponse.json({ success: false, error: 'No editable fields supplied.' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('sonos_schedules')
     .update({ ...parsed.data, updated_at: new Date().toISOString() })
@@ -62,26 +61,31 @@ export async function PATCH(request, { params }) {
     .eq('location_id', auth.locationId)
     .select()
     .maybeSingle()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('sonos-schedules', 'schedule update failed', { id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the schedule.' }, { status: 500 })
+  }
   if (!data) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   return NextResponse.json({ success: true, schedule: data })
-}
+})
 
-export async function DELETE(request, { params }) {
-  const auth = await authorise()
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const auth = authorise(user)
   if (auth.error) return auth.error
-  const { id } = await params
+  const id = params?.id
   // Same anti-enumeration reasoning as PATCH above.
   if (!uuidLike.safeParse(id).success) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
 
-  const db = createServerClient()
   const { error } = await db
     .from('sonos_schedules')
     .delete()
     .eq('id', id)
     .eq('location_id', auth.locationId)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('sonos-schedules', 'schedule delete failed', { id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not delete the schedule.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
-}
+})

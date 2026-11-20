@@ -22,8 +22,9 @@
 // (src/lib/candidates-data.js names every column).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { uuidLike, MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { liveAssignments } from '@/lib/roster'
 import { loadBlockCandidates } from '@/lib/candidates-data'
@@ -31,15 +32,12 @@ import { loadBlockCandidates } from '@/lib/candidates-data'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the block's studio and the two
+// audiences are decided below as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
 
   const parsed = uuidLike.safeParse(params?.id)
   if (!parsed.success) return NextResponse.json({ success: false, error: 'Invalid block id' }, { status: 400 })
-
-  const db = createServerClient()
 
   // Block lookup: also the studio-ownership gate.
   const { data: block, error: blockErr } = await db
@@ -47,7 +45,10 @@ export async function GET(request, props) {
     .select('id, location_id, template_id, block_date, start_time, end_time, roster_id, rosters:roster_id(status), shift_templates(name, start_time, end_time), shift_assignments(profile_id, status), locations(timezone)')
     .eq('id', parsed.data)
     .maybeSingle()
-  if (blockErr) return NextResponse.json({ success: false, error: blockErr.message }, { status: 500 })
+  if (blockErr) {
+    logError('schedule-candidates', 'block read failed', { blockId: parsed.data, err: blockErr })
+    return NextResponse.json({ success: false, error: 'Candidates could not be read' }, { status: 500 })
+  }
   if (!block) return NextResponse.json({ success: false, error: 'Block not found' }, { status: 404 })
 
   const notHere = assertLocationAccessOr404(user, block.location_id)
@@ -73,11 +74,12 @@ export async function GET(request, props) {
 
   const out = await loadBlockCandidates(db, { block, audience, withContract })
   if (out.error) {
-    return NextResponse.json({ success: false, error: out.error.message || 'Candidates could not be read' }, { status: 500 })
+    logError('schedule-candidates', 'candidates read failed', { blockId: block.id, err: out.error })
+    return NextResponse.json({ success: false, error: 'Candidates could not be read' }, { status: 500 })
   }
 
   return NextResponse.json({
     success: true,
     data: { audience, block_id: block.id, candidates: out.candidates, checked: out.checked, untimed: out.untimed },
   })
-}
+})

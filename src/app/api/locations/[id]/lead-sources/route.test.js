@@ -129,3 +129,14 @@ describe('PUT', () => {
     expect((await PUT(putReq({ sources: ['a'] }), props)).status).toBe(200)
   })
 })
+
+// ROUTEWRAP.R11 — withAuth's 'param' mode: signed out is its 401 on both methods.
+describe('signed out', () => {
+  it('401 on GET and PUT, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const written = mockDb({})
+    expect((await GET(getReq(), props)).status).toBe(401)
+    expect((await PUT(putReq({ sources: ['a'] }), props)).status).toBe(401)
+    expect(written()).toBeNull()
+  })
+})

@@ -1,7 +1,8 @@
-import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
+import { assertLocationAccess, getUserLocationIds } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
@@ -24,16 +25,14 @@ const TemplateCreateSchema = z.object({
 })
 
 // GET /api/templates — list email templates
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; membership is checked below as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
 
-  const db = createServerClient()
   let query = db.from('email_templates')
     .select('id, name, description, category, thumbnail_url, created_at, updated_at')
     .order('updated_at', { ascending: false })
@@ -47,15 +46,17 @@ export async function GET(request) {
   }
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('templates', 'template list read failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not read the templates.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, templates: data })
-}
+})
 
 // POST /api/templates — create template
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the email checks run below as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!hasPermissionAtAnyLocation(user, 'email')) return emailForbidden()
 
   const validation = await validateBody(request, TemplateCreateSchema)
@@ -66,7 +67,6 @@ export async function POST(request) {
   if (guard) return guard
   if (!hasPermissionForLocation(user, locationId, 'email')) return emailForbidden()
 
-  const db = createServerClient()
   const { data, error } = await db.from('email_templates').insert({
     name: body.name || 'Untitled Template',
     description: body.description || null,
@@ -77,7 +77,10 @@ export async function POST(request) {
     created_by: user.id,
   }).select().single()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('templates', 'template insert failed', { locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not create the template.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, template: data })
-}
+})
