@@ -4,14 +4,15 @@
 // there's no harm in leaving it. We can plumb in a hard revoke later.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
-export async function POST(req) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// Sign-in only: every check below keeps its old order and answers. A
+// signed-out call answers withAuth's 401 'Unauthorized' (was 'Unauthorised').
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request: req }) => {
   // SECFIX.1 — coarse pre-check only (owner somewhere; masters via
   // profileRole). Owner is judged at the target location below, never at the
   // caller's ACTIVE studio (`user.role`).
@@ -37,10 +38,10 @@ export async function POST(req) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { error } = await db.from('xero_connections').delete().eq('location_id', locationId)
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('xero-disconnect', 'connection delete failed', { locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not disconnect Xero. Try again.' }, { status: 500 })
   }
 
   // XERO-ONE-ORG.3 — drop the org-specific caches with the connection.
@@ -62,4 +63,4 @@ export async function POST(req) {
     purged[table] = delErr ? null : (count ?? 0)
   }
   return NextResponse.json({ success: true, data: { purged } })
-}
+})

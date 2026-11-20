@@ -5,8 +5,8 @@
 // caller is not at. Stored in locations.settings.voice_replies.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { listVoices } from '@/lib/elevenlabs'
 import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
@@ -15,9 +15,9 @@ import { canEditVoices, studioVoiceSettings, VoiceSettingsSchema } from '@/lib/w
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-async function gate() {
-  const user = await getCurrentUser()
-  if (!user) return { response: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
+// withAuth only signs the caller in (the same 401); the active studio (400),
+// membership (404) and the owner-or-manager rule (403) keep their order here.
+function gate(user) {
   const locationId = user.activeLocation?.id
   if (!locationId) return { response: NextResponse.json({ success: false, error: 'No active location' }, { status: 400 }) }
   const guard = assertLocationAccessOr404(user, locationId)
@@ -28,10 +28,9 @@ async function gate() {
   return { user, locationId }
 }
 
-export async function GET() {
-  const g = await gate()
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
+  const g = gate(user)
   if (g.response) return g.response
-  const db = createServerClient()
   const { data: loc, error } = await db.from('locations').select('settings').eq('id', g.locationId).maybeSingle()
   if (error) return NextResponse.json({ success: false, error: 'Could not read this studio’s settings.' }, { status: 500 })
   const voices = await listVoices()
@@ -40,10 +39,10 @@ export async function GET() {
     data: { ...studioVoiceSettings(loc?.settings), available: voices.ok ? voices.voices : [] },
     ...(voices.ok ? {} : { warning: 'Could not load the ElevenLabs voice list.' }),
   })
-}
+})
 
-export async function PUT(request) {
-  const g = await gate()
+export const PUT = withAuth({ permission: null, location: false }, async ({ request, user, db }) => {
+  const g = gate(user)
   if (g.response) return g.response
   const v = await validateBody(request, VoiceSettingsSchema)
   if (!v.ok) return v.response
@@ -63,8 +62,7 @@ export async function PUT(request) {
     ai_notice: String(body.ai_notice || '').trim() || null,
     buttons_line: String(body.buttons_line || '').trim() || null,
   }
-  const db = createServerClient()
   const result = await mergeLocationSettings(db, g.locationId, (current) => ({ ...current, voice_replies: next }), { scope: 'voice-replies' })
   if (!result.ok) return settingsSaveFailure(result)
   return NextResponse.json({ success: true, data: next })
-}
+})

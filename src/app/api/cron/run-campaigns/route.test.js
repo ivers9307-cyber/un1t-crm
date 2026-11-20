@@ -73,7 +73,7 @@ describe('run-campaigns promote step — empty-body guard', () => {
     const res = await GET(req())
     const body = await res.json()
 
-    expect(body.ok).toBe(true)
+    expect(body.success).toBe(true)
     const promote = updates.find(u => u.patch?.status === 'queued')
     expect(promote).toBeTruthy()
     expect(promote.filters.find(([c]) => c === 'id')[1]).toEqual(['camp-ok'])

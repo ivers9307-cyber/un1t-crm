@@ -96,16 +96,20 @@ describe('POST /api/admin/tv-displays/upload/sign', () => {
     expect(s.createSignedUploadUrl).not.toHaveBeenCalled()
   })
 
-  it('a Storage refusal is a 500 that says so', async () => {
+  it('a Storage refusal is a 500 that says so, without the Storage text', async () => {
     createServerClient.mockReturnValue(storageMock({ error: { message: 'bucket down' } }).db)
     const res = await POST(req(good))
     expect(res.status).toBe(500)
-    expect((await res.json()).error).toMatch(/Could not start the upload/)
+    const { error } = await res.json()
+    expect(error).toMatch(/Could not start the upload/)
+    expect(error).not.toContain('bucket down')
   })
 
   it('no session: 401', async () => {
     getCurrentUser.mockResolvedValue(null)
     createServerClient.mockReturnValue(storageMock().db)
-    expect((await POST(req(good))).status).toBe(401)
+    const res = await POST(req(good))
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
   })
 })

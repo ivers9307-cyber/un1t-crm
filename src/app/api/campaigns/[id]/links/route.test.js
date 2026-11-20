@@ -22,7 +22,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: vi.fn(),
   assertLocationAccessOr404: (user, locationId) => {
     if (!user) {
@@ -106,6 +107,7 @@ describe('GET /api/campaigns/[id]/links — access control', () => {
     const res = await GET(req(), props('camp-a'))
 
     expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
   })
 
   it('404s a campaign belonging to another location — never 403, so ids stay unenumerable', async () => {

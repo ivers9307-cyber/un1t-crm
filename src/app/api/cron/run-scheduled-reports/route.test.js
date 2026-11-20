@@ -26,7 +26,8 @@ const { createServerClient } = await import('@/lib/supabase')
 const { sendTransactionalEmail } = await import('@/lib/postmark')
 const { generateReport } = await import('@/lib/report-generator')
 const { filterRateReportRecipients, checkRateReportRecipientsForSave } = await import('@/lib/report-recipients')
-const { logWarn } = await import('@/lib/log')
+const { logWarn, logError } = await import('@/lib/log')
+const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const ORG = 'o0000000-0000-0000-0000-000000000001'
@@ -228,6 +229,65 @@ describe('run-scheduled-reports — REPORTS.2', () => {
   it('a row without the column (pre-mig-617 deploy) keeps the old rule for external addresses', async () => {
     const { allowed } = await filterRateReportRecipients({ db: makeDb(PEOPLE), locationId: LOC, recipients: ['accountant@firm.ie'] })
     expect(allowed).toEqual(['accountant@firm.ie'])
+  })
+})
+
+describe('ROUTEWRAP.C10 run-scheduled-reports on defineCron', () => {
+  const reqWith = (auth) => new Request('https://x.test/api/cron/run-scheduled-reports', { headers: auth ? { authorization: auth } : {} })
+
+  it('refuses a caller without the cron secret: no client, nothing run or stamped', async () => {
+    for (const auth of [null, 'Bearer nope']) expect((await GET(reqWith(auth))).status).toBe(401)
+    delete process.env.CRON_SECRET
+    expect((await GET(reqWith('Bearer secret'))).status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(generateReport).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a clean run generates the due report and stamps exactly its own row', async () => {
+    createServerClient.mockReturnValue(makeDb({ ...PEOPLE, scheduled_reports: [schedule('staff_cost', ['owner@example.com'])] }))
+    const res = await GET(cronReq())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, processed: 1, results: [{ status: 'generated', email: 'sent' }] })
+    expect(stampHeartbeat.mock.calls).toEqual([['run-scheduled-reports']])
+  })
+
+  it('nothing due at a slot tick is a clean run and stamps', async () => {
+    createServerClient.mockReturnValue(makeDb({ ...PEOPLE, scheduled_reports: [] }))
+    const res = await GET(cronReq())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, message: 'No reports due', processed: 0 })
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unreadable scheduled_reports: 500, a fixed line, no database text, no stamp', async () => {
+    createServerClient.mockReturnValue(makeDb(PEOPLE, { failTable: 'scheduled_reports' }))
+    const res = await GET(cronReq())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not read scheduled reports' })
+    expect(logError).toHaveBeenCalledWith('run-scheduled-reports', expect.any(String), expect.objectContaining({ err: { message: 'boom' } }))
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a failed report and a failed email carry fixed lines; one bad report still stamps, as before', async () => {
+    createServerClient.mockReturnValue(makeDb({ ...PEOPLE, scheduled_reports: [schedule('staff_cost', ['owner@example.com']), { ...schedule('attendance', []), id: 'sched-2' }] }))
+    generateReport
+      .mockImplementationOnce(async ({ report_type }) => ({ success: true, data: { id: 'gen-1', report_type, report_name: 'Staff Cost', summary: {} } }))
+      .mockImplementationOnce(async () => ({ success: false, error: 'relation "x" does not exist' }))
+    sendTransactionalEmail.mockRejectedValueOnce(new Error('Postmark: owner@example.com is inactive'))
+    const res = await GET(cronReq())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.results.map((r) => r.email ?? r.error)).toEqual(['failed', 'Report generation failed'])
+    expect(JSON.stringify(body)).not.toMatch(/inactive|does not exist|owner@example/)
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+  })
+
+  it('a report that throws carries a fixed line', async () => {
+    createServerClient.mockReturnValue(makeDb({ ...PEOPLE, scheduled_reports: [schedule('staff_cost', [])] }))
+    generateReport.mockRejectedValueOnce(new Error('connection to 10.0.0.1 refused'))
+    const body = await (await GET(cronReq())).json()
+    expect(body.results).toEqual([{ id: 'sched-staff_cost', report_type: 'staff_cost', status: 'error', error: 'Report run failed' }])
   })
 })
 

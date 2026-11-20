@@ -43,7 +43,19 @@ function mockDb({ links, locs }) {
 describe('GET /api/attendance/geofence-config', () => {
   it('401 when unauthenticated', async () => {
     getCurrentUser.mockResolvedValue(null)
-    expect((await GET(req())).status).toBe(401)
+    const res = await GET(req())
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+  })
+
+  it('a failed assignments read answers a fixed 400, never the database text', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    createServerClient.mockReturnValue({
+      from: () => ({ select: () => ({ eq: () => Promise.resolve({ data: null, error: { message: 'permission denied for table profile_locations' } }) }) }),
+    })
+    const res = await GET(req())
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not read your studios.' })
   })
 
   it('required=true with a region for an enabled, non-exempt assignment', async () => {

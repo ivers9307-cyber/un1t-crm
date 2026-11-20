@@ -9,6 +9,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({ tag: 'serv
 vi.mock('@/lib/auth', async (importOriginal) => {
   const real = await importOriginal()
   return {
+    ...real,
     getCurrentUser: vi.fn(),
     assertLocationAccess: vi.fn(() => null),
     // REAL: the role AT location_id is what is under test.
@@ -46,15 +47,19 @@ beforeEach(() => {
 })
 
 describe('GET /api/schedule/runway', () => {
-  it('403 with no session', async () => {
+  it('401 with no session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    expect((await GET(req({ location_id: LOC }))).status).toBe(403)
+    const res = await GET(req({ location_id: LOC }))
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
     expect(fetchRosterRunways).not.toHaveBeenCalled()
   })
 
   it('403 for a coach: whether a week is published is manager information', async () => {
     getCurrentUser.mockResolvedValue(userWith({ [LOC]: 'staff' }))
-    expect((await GET(req({ location_id: LOC }))).status).toBe(403)
+    const res = await GET(req({ location_id: LOC }))
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
     expect(fetchRosterRunways).not.toHaveBeenCalled()
   })
 
@@ -91,11 +96,13 @@ describe('GET /api/schedule/runway', () => {
     expect(await (await GET(req({ location_id: LOC }))).json()).toEqual({ success: true, data: { runway: null } })
   })
 
-  it('500 when the read fails: never "ready" by default', async () => {
+  it('500 when the read fails: never "ready" by default, and no database text', async () => {
     getCurrentUser.mockResolvedValue(userWith({ [LOC]: 'owner' }))
     fetchRosterRunways.mockResolvedValue({ success: false, error: 'blocks down' })
     const res = await GET(req({ location_id: LOC }))
     expect(res.status).toBe(500)
-    expect(await res.json()).toEqual({ success: false, error: 'blocks down' })
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(JSON.stringify(body)).not.toContain('blocks down')
   })
 })
