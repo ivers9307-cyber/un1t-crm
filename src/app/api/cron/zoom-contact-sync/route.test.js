@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/zoom/reconcile', () => ({ runZoomContactSync: vi.fn() }))
 
 import { runZoomContactSync } from '@/lib/zoom/reconcile'
@@ -69,6 +69,36 @@ describe('GET /api/cron/zoom-contact-sync', () => {
     expect(stampHeartbeat).toHaveBeenCalledWith('zoom-contact-sync', expect.objectContaining({
       guardTripped: true,
     }))
+  })
+
+  it('ZOOMSYNC.5 — a run that could not read its inputs answers a fixed line and does not stamp', async () => {
+    vi.mocked(runZoomContactSync).mockResolvedValue({ ok: false, error: 'relation secret_z does not exist' })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Zoom contact sync could not read its inputs' })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('ZOOMSYNC.5 — the scheduled response carries counts, never phone numbers or provider errors', async () => {
+    vi.mocked(runZoomContactSync).mockResolvedValue({
+      ok: false, guardTripped: true, enqueued: 1, counts: { creates: 2, updates: 0, deletes: 40 },
+      failures: ['create +353871234567: 429 rate limited'],
+      guard: { tripped: true, threshold: 25, attempted: 40, deletes: [{ e164: '+353870000001' }, { e164: '+353870000002' }] },
+    })
+    const res = await GET(req())
+    const text = JSON.stringify(await res.json())
+    expect(text).not.toMatch(/\+3538/)
+    expect(text).not.toContain('rate limited')
+    expect(JSON.parse(text)).toMatchObject({ success: false, failureCount: 1, guard: { tripped: true, threshold: 25, attempted: 40, deletesCount: 2 } })
+    expect(stampHeartbeat).toHaveBeenCalledWith('zoom-contact-sync', expect.objectContaining({ guardTripped: true, failureCount: 1 }))
+  })
+
+  it('ZOOMSYNC.5 — a dry run still answers in full for the operator', async () => {
+    const full = { ok: false, dry: true, guardTripped: true, guard: { tripped: true, deletes: [{ e164: '+353870000001' }] }, counts: {} }
+    vi.mocked(runZoomContactSync).mockResolvedValue(full)
+    const body = await (await GET(req('https://x.test/api/cron/zoom-contact-sync?dry=1'))).json()
+    expect(body.guard.deletes).toEqual([{ e164: '+353870000001' }])
   })
 
   it('reports success for a clean unconfigured skip', async () => {
