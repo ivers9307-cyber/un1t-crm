@@ -42,7 +42,7 @@ vi.mock('@/lib/permissions', () => ({
   hasPermissionAtAnyLocation: vi.fn(() => true),
   hasPermissionForLocation: vi.fn(() => true),
 }))
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()),
   getCurrentUser: vi.fn(async () => ({ id: 'user-1' })),
   assertLocationAccessOr404: vi.fn(() => null),
 }))

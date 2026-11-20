@@ -9,24 +9,19 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { HOST_COLS } from '@/lib/hosts'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-async function gate() {
-  const user = await getCurrentUser()
-  if (!user) return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
-  if (!['master', 'owner', 'manager'].includes(user.role)) {
-    return { error: NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 }) }
-  }
-  const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
-  if (!orgId) return { error: NextResponse.json({ success: false, error: 'no_active_organization' }, { status: 400 }) }
-  return { user, orgId }
-}
+// Signed in (401), the role at the active studio ('Manager+ required' 403),
+// then the active organisation (400): the order and texts as before.
+const GATE = { permission: null, location: false, roles: ['master', 'owner', 'manager'], forbiddenMessage: 'Manager+ required' }
+const activeOrgId = (user) => user.activeOrganization?.id || user.activeLocation?.organization_id || null
+const NO_ORG = () => NextResponse.json({ success: false, error: 'no_active_organization' }, { status: 400 })
 
 const CreateSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -35,29 +30,30 @@ const CreateSchema = z.object({
   payment_provider: z.enum(['stripe_connect', 'revolut']).optional(),
 })
 
-export async function GET() {
-  const g = await gate()
-  if (g.error) return g.error
-  const db = createServerClient()
+export const GET = withAuth(GATE, async ({ user, db }) => {
+  const orgId = activeOrgId(user)
+  if (!orgId) return NO_ORG()
   const { data, error } = await db
     .from('event_hosts')
     .select(HOST_COLS)
-    .eq('organization_id', g.orgId)
+    .eq('organization_id', orgId)
     .order('created_at', { ascending: false })
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('hosts', 'list failed', { orgId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the hosts.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, data: data || [] })
-}
+})
 
-export async function POST(request) {
-  const g = await gate()
-  if (g.error) return g.error
+export const POST = withAuth(GATE, async ({ request, user, db }) => {
+  const orgId = activeOrgId(user)
+  if (!orgId) return NO_ORG()
   const v = await validateBody(request, CreateSchema)
   if (!v.ok) return v.response
-  const db = createServerClient()
   const { data, error } = await db
     .from('event_hosts')
     .insert({
-      organization_id: g.orgId,
+      organization_id: orgId,
       name: v.data.name,
       email: v.data.email || null,
       payment_provider: v.data.payment_provider || 'stripe_connect',
@@ -65,6 +61,9 @@ export async function POST(request) {
     })
     .select(HOST_COLS)
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('hosts', 'create failed', { orgId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not create the host.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, data })
-}
+})

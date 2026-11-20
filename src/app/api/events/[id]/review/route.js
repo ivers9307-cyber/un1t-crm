@@ -3,8 +3,7 @@
 // same rule the approvals provider shows the item by); the event's
 // host must be in the caller's org (IDOR guard). (HOST-PORTAL.3)
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { canReviewHostEvents } from '@/lib/host-event-review-access'
 import { loadHostForOrg } from '@/lib/hosts'
 import { notifyHostEventReviewed } from '@/lib/host-notifications'
@@ -19,11 +18,13 @@ const ReviewSchema = z.object({
   reason: z.string().max(2000).optional().nullable(),
 })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!canReviewHostEvents(user)) return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+// Signed in (401), the reviewer rule ('Manager+ required' 403), then the active
+// organisation (400): the order and texts as before. (The arrow keeps
+// canReviewHostEvents on its default active studio; withAuth passes null.)
+export const POST = withAuth({
+  permission: null, location: false,
+  allow: (user) => canReviewHostEvents(user), forbiddenMessage: 'Manager+ required',
+}, async ({ request, user, db, params }) => {
   const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
   if (!orgId) return NextResponse.json({ success: false, error: 'no_active_organization' }, { status: 400 })
 
@@ -35,7 +36,6 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'A reason is required to reject.' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const { data: event } = await db.from('race_events').select('id, host_id, status, name, slug, location_id').eq('id', params.id).maybeSingle()
   if (!event || !event.host_id) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const host = await loadHostForOrg(db, event.host_id, orgId)
@@ -57,7 +57,10 @@ export async function POST(request, props) {
     .eq('id', event.id)
     .eq('status', 'pending_review')
     .select('id')
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('host-event-review', 'review update failed', { eventId: event.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the review. Try again.' }, { status: 500 })
+  }
   if (!updated || updated.length === 0) {
     return NextResponse.json({ success: false, error: 'Event is no longer pending review.' }, { status: 409 })
   }
@@ -70,4 +73,4 @@ export async function POST(request, props) {
   } catch (e) { logError('host-event-review', 'notify host failed', { err: e }) }
 
   return NextResponse.json({ success: true, data: { id: event.id, status: patch.status } })
-}
+})

@@ -5,8 +5,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 
@@ -23,18 +22,12 @@ const IntegrationPatchSchema = z.object({
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-async function requireMaster() {
-  const user = await getCurrentUser()
-  if (!user || user.profileRole !== 'master') return null
-  return user
-}
-
 const ALLOWED_FIELDS = ['client_id', 'client_secret', 'redirect_uri', 'scopes', 'is_enabled', 'notes']
 
-export async function PATCH(request, props) {
-  const params = await props.params;
-  const user = await requireMaster()
-  if (!user) return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
+// Masters only (profiles.role), no studio. A signed-in non-master keeps the
+// old { ok: false, error: 'Forbidden' } 403; a signed-out call is withAuth's 401.
+export const PATCH = withAuth({ permission: null, location: false }, async ({ request, user, db, params }) => {
+  if (user.profileRole !== 'master') return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
   const id = params?.id
   if (!id) return NextResponse.json({ ok: false, error: 'Missing id' }, { status: 400 })
 
@@ -53,7 +46,6 @@ export async function PATCH(request, props) {
     return NextResponse.json({ ok: false, error: 'No valid fields to update' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('service_integrations')
     .update(patch)
@@ -62,7 +54,7 @@ export async function PATCH(request, props) {
     .single()
   if (error) {
     logWarn('admin-integrations', 'update failed', { id, err: error })
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    return NextResponse.json({ ok: false, error: 'Could not update the integration.' }, { status: 500 })
   }
   return NextResponse.json({ ok: true, integration: data })
-}
+})

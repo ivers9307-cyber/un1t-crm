@@ -14,9 +14,9 @@ import {
 let db
 let user
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
-vi.mock('@/lib/auth', async () => {
+vi.mock('@/lib/auth', async (importOriginal) => {
   const h = await import('@/lib/campaign-session-access.test-helpers.js')
-  return { getCurrentUser: vi.fn(async () => user), ...h.authMockImpl() }
+  return { ...(await importOriginal()), getCurrentUser: vi.fn(async () => user), ...h.authMockImpl() }
 })
 vi.mock('@/lib/permissions', () => ({
   hasPermissionForLocation: vi.fn((...a) => hasPermissionForLocationImpl(...a)),
