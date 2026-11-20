@@ -11,7 +11,6 @@ import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../src/app/api/cron')
 const LEGACY = new Set([
-  'glofox-sync',
   'process-trial-purchases',
   'send-push-reminders',
   'un1t-online-sync',

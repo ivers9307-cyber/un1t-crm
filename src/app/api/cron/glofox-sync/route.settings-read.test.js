@@ -62,8 +62,13 @@ describe('GET /api/cron/glofox-sync — REGISTRYREAD.1b', () => {
   it('an unreadable settings row fails the location with the true text and calls no Glofox; the heartbeat still stamps', async () => {
     glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: 'b', apiKey: 'k', apiToken: 't', readError: null }) // the seam's discovery read
       .mockResolvedValue({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
-    const out = await (await GET(req())).json()
-    expect(out.per_location[0]).toMatchObject({ status: 'failed', first_error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
+    const res = await GET(req())
+    const out = await res.json()
+    // ROUTEWRAP.C13 — the only location failed: the answer is a failure, the
+    // true text stays on the run row (never in the response), and the stamp stays.
+    expect(res.status).toBe(500)
+    expect(out.per_location[0]).toMatchObject({ status: 'failed', has_error: true })
+    expect(JSON.stringify(out)).not.toContain(GLOFOX_SETTINGS_UNREADABLE_MESSAGE)
     expect(h.runUpdates.at(-1)).toMatchObject({ status: 'failed', first_error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
     expect(fetchAllMembersPage).not.toHaveBeenCalled()
     expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync', expect.objectContaining({ failed_locations: 1, skipped_unknown: 0 }))
@@ -74,7 +79,8 @@ describe('GET /api/cron/glofox-sync — REGISTRYREAD.1b', () => {
     glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: 'b', apiKey: 'k', apiToken: 't', readError: null }) // the seam's discovery read
       .mockResolvedValue({ branchId: null, apiKey: null, apiToken: null, readError: null })
     const out = await (await GET(req())).json()
-    expect(out.per_location[0]).toMatchObject({ status: 'failed', first_error: 'Glofox credentials missing on this location.' })
+    expect(out.per_location[0]).toMatchObject({ status: 'failed', has_error: true })
+    expect(h.runUpdates.at(-1)).toMatchObject({ status: 'failed', first_error: 'Glofox credentials missing on this location.' })
     expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync', expect.objectContaining({ failed_locations: 1, skipped_unknown: 0 }))
   })
 
