@@ -14,6 +14,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.f
 import { GET } from './route'
 import { runLieuCreditSweep } from '@/lib/lieu-credits'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logWarn } from '@/lib/log'
 
 const req = (secret = 'shh', qs = '') =>
   new Request(`https://x.test/api/cron/lieu-credits${qs}`, { headers: { authorization: `Bearer ${secret}` } })
@@ -56,11 +57,27 @@ describe('run', () => {
       expect(runLieuCreditSweep).not.toHaveBeenCalled()
     }
   })
-  it('a partial failure still stamps (it rides in last_outcome)', async () => {
-    const partial = { ...OK, failed: 1, failures: [{ location_id: 'b', step: 'shifts', error: 'down' }] }
+  it('a partial failure still stamps (it rides in last_outcome) without the database text', async () => {
+    const partial = { ...OK, failed: 1, failures: [{ location_id: 'b', step: 'shifts', error: 'relation shifts does not exist' }] }
     runLieuCreditSweep.mockResolvedValue(partial)
-    expect((await GET(req())).status).toBe(200)
-    expect(stampHeartbeat).toHaveBeenCalledWith('lieu-credits', partial)
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const redacted = { ...OK, failed: 1, failures: [{ location_id: 'b', step: 'shifts' }] }
+    expect(stampHeartbeat).toHaveBeenCalledWith('lieu-credits', redacted)
+    const text = JSON.stringify(await res.json())
+    expect(text).not.toContain('does not exist')
+    expect(JSON.stringify(stampHeartbeat.mock.calls)).not.toContain('does not exist')
+    expect(logWarn).toHaveBeenCalledWith('lieu-credits', expect.any(String),
+      { failures: partial.failures })
+  })
+  it('a failed studios read is a 500 with a fixed line, no stamp and no database text', async () => {
+    runLieuCreditSweep.mockResolvedValue({ ...OK, ok: false, locations: 0, error: 'Failed to read studios: permission denied for table locations' })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error).toBe('Lieu credit sweep failed')
+    expect(JSON.stringify(body)).not.toContain('permission denied')
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
   it('a failed sweep (ok: false) is a 500 with no stamp', async () => {
     runLieuCreditSweep.mockResolvedValue({ ...OK, ok: false, error: 'Every studio failed', failed: 2 })
@@ -73,6 +90,7 @@ describe('run', () => {
     runLieuCreditSweep.mockRejectedValue(new Error('boom'))
     const res = await GET(req())
     expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('boom')
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })
