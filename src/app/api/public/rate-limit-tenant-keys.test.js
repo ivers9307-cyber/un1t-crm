@@ -31,7 +31,8 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 // their gate; stub the gate so the limiter is the first thing that answers.
 vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn(async () => ({ id: 'u1' })) }))
 vi.mock('@/lib/host-auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentHost: vi.fn(async () => ({ host: { id: 'h1' } })) }))
-vi.mock('@/lib/event-waitlist-access', () => ({
+vi.mock('@/lib/event-waitlist-access', async (importOriginal) => ({
+  ...(await importOriginal()),
   resolveStaffWaitlistEvent: vi.fn(async (_u, id) => ({ db: {}, race: { id, location_id: 'L1' } })),
   resolveHostWaitlistEvent: vi.fn(async (_s, id) => ({ db: {}, race: { id, location_id: 'L1', host_id: 'h1' } })),
 }))
@@ -151,6 +152,14 @@ describe('SAAS-6 tenant-keyed rate limits — swept call sites', () => {
     const res = await hostOfferPOST(req('/api/host/events/e1/waitlist/offer', { method: 'POST' }), props({ id: 'e1' }))
     expect(res.status).toBe(429)
     expect(limiterKey()).toBe('waitlist-offer:e1')
+    expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 3, windowMs: 3_600_000 })
+  })
+
+  it('Offer space for one person keys on the row id, 3 per hour (WAITLISTONE.1)', async () => {
+    const rowId = 'a0000000-0000-4000-8000-0000000000a1'
+    const res = await hostOfferPOST(req('/api/host/events/e1/waitlist/offer', { method: 'POST', body: { row_id: rowId } }), props({ id: 'e1' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`waitlist-offer-row:${rowId}`)
     expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 3, windowMs: 3_600_000 })
   })
 

@@ -6,10 +6,15 @@
 // (the cron keeps the 24 h rule). Answers the round's counts; `no_room: 1`
 // means every time is full and nobody was offered. Manager+ holding `races`
 // at the event's studio.
+//
+// WAITLISTONE.1 — with a body `{ row_id }` it offers ONE person instead
+// ("Offer space"): 409 when every time is full, the event is not bookable or
+// they already booked; 404 for a row not on this event's list; 3 an hour per
+// row.
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
-import { resolveStaffWaitlistEvent } from '@/lib/event-waitlist-access'
-import { runWaitlistOffers } from '@/lib/event-waitlist'
+import { resolveStaffWaitlistEvent, readOfferRowId, offerOneWaitlistRow } from '@/lib/event-waitlist-access'
+import { runWaitlistOffers, offerWaitlistRow } from '@/lib/event-waitlist'
 import { logError } from '@/lib/log'
 import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
 
@@ -20,9 +25,13 @@ export const maxDuration = 120
 // The gate is judged at the EVENT's studio, so withAuth only signs the caller
 // in; resolveStaffWaitlistEvent keeps the races-somewhere 403, the 404 and the
 // races + manager-at-the-event's-studio 403, shared with the sibling routes.
-export const POST = withAuth({ permission: null, location: false }, async ({ user, params }) => {
+export const POST = withAuth({ permission: null, location: false }, async ({ request, user, params }) => {
   const ctx = await resolveStaffWaitlistEvent(user, params?.id)
   if (ctx.response) return ctx.response
+  // WAITLISTONE.1 — `{ row_id }`: offer a free place to that one person only.
+  const one = await readOfferRowId(request)
+  if (one.response) return one.response
+  if (one.rowId) return offerOneWaitlistRow(ctx, one.rowId, { checkRateLimit, rateLimitResponse, offerWaitlistRow })
   // Each forced round emails everyone on the list again: 3 an hour per event,
   // shared by staff and the host (one key), checked after the gate.
   const limit = await checkRateLimit(ctx.db, `waitlist-offer:${ctx.race.id}`, { max: 3, windowMs: 3_600_000 })
