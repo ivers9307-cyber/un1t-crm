@@ -21,10 +21,17 @@
 //   body     extra JSON fields for the response, beside `success`.
 //   outcome  stored on the heartbeat row's last_outcome (left unchanged if absent).
 //   status   the HTTP status; defaults to 200, or 500 when ok is false.
+//   stamp    false: a clean run that must NOT stamp the job's own row. For an
+//            hourly tick where no studio was at its daily slot (the row keeps
+//            its daily clock), or a job whose row another job stamps. The
+//            answer is still success; ignored when ok is false.
+//   arms     [{ heartbeat, outcome? }]: the ARM rows to stamp for this run
+//            (src/lib/cron-arm-health.js). The job lists only the arms whose
+//            run was clean by that arm's own rule; the wrapper stamps each one,
+//            whatever the parent's ok, and a failed arm stamp is logged, never
+//            fatal. So a wrapped job never calls stampHeartbeat itself.
 //
-// A job with arms that keep their own heartbeat rows stamps those itself
-// (src/lib/cron-arm-health.js). `tests/cron-define-guard.test.js` requires this
-// wrapper for every new job.
+// `tests/cron-define-guard.test.js` requires this wrapper for every new job.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -37,6 +44,8 @@ import { logError, logWarn } from '@/lib/log'
  * @property {Record<string, unknown>} [body]
  * @property {unknown} [outcome]
  * @property {number} [status]
+ * @property {boolean} [stamp]  false: clean, but leave the job's own row alone
+ * @property {Array<{ heartbeat: string, outcome?: unknown }>} [arms]  arm rows to stamp
  */
 
 /**
@@ -67,12 +76,25 @@ export function defineCron(options, run) {
     }
 
     const ok = result.ok !== false
-    if (ok) {
+    if (ok && result.stamp !== false) {
       try {
         if (result.outcome === undefined) await stampHeartbeat(heartbeat)
         else await stampHeartbeat(heartbeat, result.outcome)
       } catch (err) {
         logWarn(logModule, 'heartbeat failed', { err })
+      }
+    }
+    for (const arm of Array.isArray(result.arms) ? result.arms : []) {
+      const armName = arm?.heartbeat
+      if (typeof armName !== 'string' || !armName || armName === heartbeat) {
+        logWarn(logModule, 'arm heartbeat skipped: no usable name', { arm: armName ?? null })
+        continue
+      }
+      try {
+        if (arm.outcome === undefined) await stampHeartbeat(armName)
+        else await stampHeartbeat(armName, arm.outcome)
+      } catch (err) {
+        logWarn(logModule, 'arm heartbeat failed', { arm: armName, err })
       }
     }
     return NextResponse.json({ ...result.body, success: ok }, { status: result.status ?? (ok ? 200 : 500) })
