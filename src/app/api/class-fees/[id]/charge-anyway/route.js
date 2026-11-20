@@ -5,8 +5,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { canUseClassFees } from '@/lib/class-fees-access'
@@ -17,10 +17,11 @@ export const runtime = 'nodejs'
 
 export const ChargeAnywaySchema = z.object({ location_id: uuidLike })
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id } = await params
+// This moves money, so withAuth only signs the caller in (401) and every other
+// check runs here in its old order: the fee id (404), the body (400), the
+// body's studio (assertLocationAccess), class_fees there (403), then the write.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const id = params?.id
   if (!uuidLike.safeParse(id).success) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const validation = await validateBody(request, ChargeAnywaySchema)
   if (!validation.ok) return validation.response
@@ -29,7 +30,7 @@ export async function POST(request, { params }) {
   if (guard) return guard
   if (!canUseClassFees(user, locationId)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   try {
-    const r = await chargeAppealedFee(createServerClient(), { locationId, feeId: id })
+    const r = await chargeAppealedFee(db, { locationId, feeId: id })
     if (!r.ok && r.reason === 'not_found') return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     if (!r.ok) return NextResponse.json({ success: false, code: 'not_appealed', error: 'This fee is not waiting on an appeal.' }, { status: 409 })
     return NextResponse.json({ success: true, data: { id, status: 'pending' } })
@@ -37,4 +38,4 @@ export async function POST(request, { params }) {
     logError('class-fees', 'charge-anyway failed', { locationId, feeId: id, code: err?.code ?? null })
     return NextResponse.json({ success: false, error: 'Could not update the fee just now.' }, { status: 500 })
   }
-}
+})

@@ -9,35 +9,38 @@
 // (ORGCONTACTS.4: the same decision as DELETE).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { hasRoleAtAnyLocation } from '@/lib/auth'
 import { canDeleteOrRehomeContact } from '@/lib/contact-edit-gates'
 import { isOrgAdminSomewhere } from '@/lib/org-admin'
-import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { getContactImpact } from '@/lib/contact-merge'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  // ROLESWEEP.1c — coarse pre-check; the decision is made at the contact below.
-  // ORGCONTACTS.4: an organisation admin may hold no studio role at all.
-  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES) && !isOrgAdminSomewhere(user)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
-  }
+const MANAGER_REQUIRED = 'Manager+ required'
 
-  const db = createServerClient()
-  const { data: contact } = await db.from('contacts').select('id, location_id, organization_id').eq('id', params.id).single()
-  if (!contact) return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
-  // ORGCONTACTS.4 — the same decision as DELETE (this is its confirm dialog):
-  // the primary studio's admins, an organisation admin, or a master.
-  if (!canDeleteOrRehomeContact({ user, contact })) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
-  }
+// ROLESWEEP.1c — coarse pre-check (allow); the decision is made at the contact
+// below. ORGCONTACTS.4: an organisation admin may hold no studio role at all.
+export const GET = withAuth(
+  {
+    permission: null,
+    location: false,
+    allow: (user) => hasRoleAtAnyLocation(user, MANAGER_ROLES) || isOrgAdminSomewhere(user),
+    forbiddenMessage: MANAGER_REQUIRED,
+  },
+  async ({ user, db, params }) => {
+    const id = params?.id
+    const { data: contact } = await db.from('contacts').select('id, location_id, organization_id').eq('id', id).single()
+    if (!contact) return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
+    // ORGCONTACTS.4 — the same decision as DELETE (this is its confirm dialog):
+    // the primary studio's admins, an organisation admin, or a master.
+    if (!canDeleteOrRehomeContact({ user, contact })) {
+      return NextResponse.json({ success: false, error: MANAGER_REQUIRED }, { status: 403 })
+    }
 
-  const impact = await getContactImpact(db, params.id)
-  return NextResponse.json({ success: true, data: impact })
-}
+    const impact = await getContactImpact(db, id)
+    return NextResponse.json({ success: true, data: impact })
+  },
+)

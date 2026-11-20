@@ -5,17 +5,15 @@
 // (src/lib/booking-web-writes.js).
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { bookingsWriteForbiddenAnywhere, loadBookingForWebWrite } from '@/lib/booking-web-writes'
 
 const SkipSchema = z.object({ skip_reminder: z.boolean() })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// The studio is the BOOKING's, so withAuth only signs the caller in; the coarse
+// 403, the body check and the booking's own gate run here, in this order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   const coarse = bookingsWriteForbiddenAnywhere(user)
   if (coarse) return coarse
 
@@ -23,8 +21,7 @@ export async function POST(request, props) {
   if (!validation.ok) return validation.response
   const { skip_reminder } = validation.data
 
-  const db = createServerClient()
-  const { response, booking } = await loadBookingForWebWrite(db, user, params.id)
+  const { response, booking } = await loadBookingForWebWrite(db, user, params?.id)
   if (response) return response
 
   const { data, error } = await db.from('bookings')
@@ -36,4 +33,4 @@ export async function POST(request, props) {
   }
   if (!data?.length) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   return NextResponse.json({ success: true, data: data[0] })
-}
+})

@@ -5,7 +5,7 @@
 // Manager+ holding `races` at the event's studio; 404 for a row that is not on
 // this event (ids cannot be enumerated).
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { uuidLike } from '@/lib/schemas'
 import { resolveStaffWaitlistEvent, staffActorName } from '@/lib/event-waitlist-access'
 import { logError } from '@/lib/log'
@@ -13,12 +13,13 @@ import { logError } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function DELETE(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  const ctx = await resolveStaffWaitlistEvent(user, params.id)
+// The gate is judged at the EVENT's studio, so withAuth only signs the caller
+// in; resolveStaffWaitlistEvent keeps the races-somewhere 403, the 404 and the
+// races + manager-at-the-event's-studio 403, shared with the sibling routes.
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, params }) => {
+  const ctx = await resolveStaffWaitlistEvent(user, params?.id)
   if (ctx.response) return ctx.response
-  if (!uuidLike.safeParse(params.rowId).success) {
+  if (!uuidLike.safeParse(params?.rowId).success) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
 
@@ -35,4 +36,4 @@ export async function DELETE(_request, props) {
   }
   if (!data?.length) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   return NextResponse.json({ success: true, data: data[0] })
-}
+})

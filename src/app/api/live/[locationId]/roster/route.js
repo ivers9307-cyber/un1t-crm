@@ -12,22 +12,20 @@
 // (guardLiveLocation) — never the active one.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { guardLiveLocation } from '@/lib/live-access'
-import { createServerClient } from '@/lib/supabase'
 import { getClassRoster, mergeRosterWithSessions } from '@/lib/class-bookings'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  const locationId = params.locationId
+// withAuth only signs the caller in; guardLiveLocation judges the studio and
+// class_roster AT the URL's studio, as before (its 403s unchanged).
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const locationId = params?.locationId
   const denied = guardLiveLocation(user, locationId, { permission: 'class_roster' })
   if (denied) return denied
 
-  const db = createServerClient()
   const rosterData = await getClassRoster(db, { locationId })
 
   // No sessions are read here; mergeRosterWithSessions only drops CANCELLED
@@ -40,4 +38,4 @@ export async function GET(_request, props) {
     occurrence: rosterData.occurrence,
     roster,
   })
-}
+})

@@ -11,8 +11,7 @@
 // an empty list, a bad `kind` 400, a failed read 503 (never a shorter list).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { listLandingMediaForUser, MEDIA_KINDS } from '@/lib/landing-media-library'
 import { PageReadError } from '@/lib/landing-pages'
 import { logError } from '@/lib/log'
@@ -22,20 +21,19 @@ export const dynamic = 'force-dynamic'
 
 const fail = (status, error) => NextResponse.json({ success: false, error }, { status })
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return fail(401, 'Unauthorised')
-
+// Any signed-in caller; listLandingMediaForUser scopes the list to the pages
+// they may view (canViewPage), so withAuth only signs them in.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const kindRaw = new URL(request.url).searchParams.get('kind')
   const kind = kindRaw ? kindRaw : null
   if (kind && !MEDIA_KINDS.includes(kind)) return fail(400, 'kind must be video or image')
 
   try {
-    const data = await listLandingMediaForUser(createServerClient(), user, { kind })
+    const data = await listLandingMediaForUser(db, user, { kind })
     return NextResponse.json({ success: true, data })
   } catch (err) {
     if (!(err instanceof PageReadError)) throw err
     logError('landing-pages', 'media library unreadable', { code: err.cause?.code ?? null, message: err.message })
     return fail(503, 'unavailable')
   }
-}
+})
