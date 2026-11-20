@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let raffle
 let inserted
+let hostId = null
 let db
 const createRaffleOrderPayment = vi.fn(async () => ({ orderId: 'o1', checkout: { provider: 'revolut', token: 'tok', url: null } }))
 vi.mock('@/lib/raffle-online', async (importOriginal) => ({
@@ -33,7 +34,7 @@ function makeDb() {
       const q = {
         select: () => q, eq: () => q,
         single: async () => {
-          if (table === 'race_events') return { data: { id: 'e1', slug: 'day', name: 'Day', location_id: 'L1', active: true, status: 'published', host_id: null, host: null }, error: null }
+          if (table === 'race_events') return { data: { id: 'e1', slug: 'day', name: 'Day', location_id: 'L1', active: true, status: 'published', host_id: hostId, host: hostId ? { id: hostId, payment_provider: 'revolut' } : null }, error: null }
           return { data: { id: 'o1', ...inserted }, error: null }
         },
         insert: (row) => { inserted = row; return q },
@@ -52,7 +53,7 @@ const RAFFLE = {
 const req = (body) => new Request('http://x/api/public/events/day/raffle', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } })
 const params = { params: Promise.resolve({ slug: 'day' }) }
 
-beforeEach(() => { raffle = { ...RAFFLE }; inserted = null; db = makeDb(); createRaffleOrderPayment.mockClear() })
+beforeEach(() => { hostId = null; raffle = { ...RAFFLE }; inserted = null; db = makeDb(); createRaffleOrderPayment.mockClear() })
 
 describe('POST /api/public/events/[slug]/raffle', () => {
   it('prices 3 tickets at the option price, not anything the client sends', async () => {
@@ -80,5 +81,12 @@ describe('POST /api/public/events/[slug]/raffle', () => {
   })
   it('caps an online order at 50 tickets', async () => {
     expect((await POST(req({ quantity: 51, name: 'Ann', email: 'ann@example.test' }), params)).status).toBe(400)
+  })
+  it("refuses a third-party host's event even when the host is on Revolut", async () => {
+    hostId = 'h1'
+    const res = await POST(req({ quantity: 1, name: 'Ann', email: 'ann@example.test' }), params)
+    expect(res.status).toBe(400)
+    expect(inserted).toBeNull()
+    expect(createRaffleOrderPayment).not.toHaveBeenCalled()
   })
 })

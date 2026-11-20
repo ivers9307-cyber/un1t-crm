@@ -56,6 +56,10 @@ export async function POST(request, props) {
     .eq('status', 'published')
     .single()
   if (raceErr || !race || !eventIsPublic(race)) return fail(404, 'not_found', 'Event not found')
+  // The raffle checkout is UN1T's own Revolut merchant: a third-party host's
+  // event never sells raffle tickets online (the same rule as buildPublicRaffle
+  // and the settings route), whatever its raffle row says.
+  if (race.host_id || race.host) return fail(400, 'not_enabled', 'Raffle tickets are not on sale online for this event.')
 
   let raffle
   try {

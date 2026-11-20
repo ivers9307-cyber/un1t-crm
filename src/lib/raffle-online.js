@@ -90,12 +90,14 @@ export function raffleOrderDescription(brand, quantity) {
 /**
  * Open a Revolut order for an inserted `awaiting_payment` row and persist its
  * refs. The amount is the row's (priced on the server), never a client value.
- * Throws `payments_unavailable` for a third-party host's event (Stripe
- * Connect is not wired for raffles), and throws if the ref cannot be stored:
+ * Throws `payments_unavailable` for any third-party host's event (the money
+ * would land in UN1T's merchant account), and throws if the ref cannot be stored:
  * a checkout nothing could ever settle must not be handed out.
  */
 export async function createRaffleOrderPayment({ db, order, race, host, returnUrl }) {
-  if (resolvePaymentProvider(host) !== PROVIDER_REVOLUT) {
+  // UN1T events only: any host (even one on Revolut) would put its raffle
+  // money in UN1T's merchant account.
+  if (host || race?.host_id || resolvePaymentProvider(host) !== PROVIDER_REVOLUT) {
     const err = new Error('payments_unavailable')
     err.code = 'payments_unavailable'
     throw err
