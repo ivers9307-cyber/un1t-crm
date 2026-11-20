@@ -23,7 +23,9 @@
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { canUploadWaTemplateMediaAt } from '@/lib/wa-template-access'
@@ -46,10 +48,8 @@ const FinaliseSchema = z.object({
   location_id: uuidLike.optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
+// ROUTEWRAP.R9 — withAuth only signs the caller in; the gates below are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request }) => {
   // Stale-tab guard: the pre-fix client posted the file itself as
   // multipart. Give those tabs a clear instruction instead of a Zod error.
   const contentType = request.headers.get('content-type') || ''
@@ -92,9 +92,10 @@ export async function POST(request) {
     .from('whatsapp-templates')
     .download(body.path)
   if (dlErr || !blob) {
+    if (dlErr) logError('wa-template-media', 'storage download failed', { err: dlErr, locationId })
     return NextResponse.json({
       success: false,
-      error: `Uploaded file not found in storage (${dlErr?.message || 'empty'}) — try the upload again.`,
+      error: 'Uploaded file not found in storage — try the upload again.',
     }, { status: 404 })
   }
   const bytes = Buffer.from(await blob.arrayBuffer())
@@ -132,8 +133,9 @@ export async function POST(request) {
     try {
       handle = await uploadMediaForTemplate(bytes, body.mime, { config: own.config })
     } catch (e) {
-      metaError = e.message || String(e)
-      console.warn(`[wa-template upload] Meta resumable upload failed: ${metaError}`)
+      // ROUTEWRAP.R9 — Meta's own text is logged, never returned.
+      logError('wa-template-media', 'Meta resumable upload failed', { err: e, locationId })
+      metaError = 'Meta did not accept the upload. Try again.'
     }
   }
 
@@ -146,4 +148,4 @@ export async function POST(request) {
     file_size: bytes.length,
     meta_error: metaError,  // present when handle is null — surface to UI for retry
   })
-}
+})

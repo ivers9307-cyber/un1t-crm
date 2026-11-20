@@ -66,7 +66,7 @@ describe('GET', () => {
     getCurrentUser.mockResolvedValue(person({ [LOC_B]: 'owner' }, LOC_B))
     const res = await GET(get())
     expect(res.status).toBe(404)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(createServerClient).toHaveBeenCalledTimes(1) // withAuth's own client (ROUTEWRAP.R9); the route opened none
   })
 
   it('401 without a session, 400 without location_id', async () => {
@@ -185,7 +185,7 @@ describe('PUT', () => {
       getCurrentUser.mockResolvedValue(person({ [LOC_B]: 'owner' }, LOC_B))
       const res = await PUT(put({ listed: true }))
       expect(res.status).toBe(404)
-      expect(createServerClient).not.toHaveBeenCalled()
+      expect(createServerClient).toHaveBeenCalledTimes(1) // withAuth's own client (ROUTEWRAP.R9); the route opened none
     })
 
     it('owner at the studio while another studio is active is allowed', async () => {

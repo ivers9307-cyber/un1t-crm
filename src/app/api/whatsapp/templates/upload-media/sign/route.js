@@ -13,7 +13,9 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { canUploadWaTemplateMediaAt } from '@/lib/wa-template-access'
@@ -31,10 +33,8 @@ const SignSchema = z.object({
   location_id: uuidLike.optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
+// ROUTEWRAP.R9 — withAuth only signs the caller in; the gates below are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request }) => {
   const validation = await validateBody(request, SignSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
@@ -67,10 +67,8 @@ export async function POST(request) {
     .from('whatsapp-templates')
     .createSignedUploadUrl(storagePath)
   if (error || !data?.token) {
-    return NextResponse.json(
-      { success: false, error: `Could not create upload URL: ${error?.message || 'no token returned'}` },
-      { status: 500 }
-    )
+    logError('wa-template-media', 'signed upload url failed', { err: error || 'no token returned', locationId })
+    return NextResponse.json({ success: false, error: 'Could not create upload URL. Try again.' }, { status: 500 })
   }
 
   return NextResponse.json({
@@ -78,4 +76,4 @@ export async function POST(request) {
     path: storagePath,
     token: data.token,
   })
-}
+})

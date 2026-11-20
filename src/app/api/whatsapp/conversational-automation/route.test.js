@@ -87,6 +87,8 @@ describe('the mirror never wipes locations.settings', () => {
     createServerClient.mockReturnValue(db)
     const res = await POST(post())
     expect(res.status).toBe(502)
+    // ROUTEWRAP.R9 — Meta's text stays in the log.
+    expect(await res.json()).toEqual({ success: false, error: 'WhatsApp did not accept the chat openers just now. Try again.' })
     expect(db.writes).toEqual([])
   })
 })
@@ -125,7 +127,7 @@ describe('POST — WAROLE.1: master or owner AT the location', () => {
     }
     expect({ status: res.status, body }).toEqual(REFUSAL[outcome])
     expect(setConversationalAutomation).not.toHaveBeenCalled()
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(createServerClient).toHaveBeenCalledTimes(1) // withAuth's own client (ROUTEWRAP.R9); the route opened none
   })
 
   it('a manager, head coach or staff member AT the location is refused before Meta', async () => {
@@ -135,7 +137,7 @@ describe('POST — WAROLE.1: master or owner AT the location', () => {
       const res = await POST(postAt(LOC_B))
       expect([role, res.status, await res.json()]).toEqual([role, 403, REFUSAL.forbidden.body])
       expect(setConversationalAutomation).not.toHaveBeenCalled()
-      expect(createServerClient).not.toHaveBeenCalled()
+      expect(createServerClient).toHaveBeenCalledTimes(1) // withAuth's own client (ROUTEWRAP.R9); the route opened none
     }
   })
 })
@@ -155,7 +157,7 @@ describe("POST — WAROLE.1: only the location's OWN number, never the env fallb
     expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
     expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith(LOC)
     expect(setConversationalAutomation).not.toHaveBeenCalled()
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(createServerClient).toHaveBeenCalledTimes(1) // withAuth's own client (ROUTEWRAP.R9); the route opened none
   })
 
   it("owner with a number → Meta gets THAT number's config (not a location id to re-resolve)", async () => {
@@ -174,7 +176,7 @@ describe("POST — WAROLE.1: only the location's OWN number, never the env fallb
     expect(res.status).toBe(500)
     expect(await res.json()).toEqual({ success: false, error: "Could not check this location's WhatsApp number just now." })
     expect(setConversationalAutomation).not.toHaveBeenCalled()
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(createServerClient).toHaveBeenCalledTimes(1) // withAuth's own client (ROUTEWRAP.R9); the route opened none
   })
 
   it('a refused caller is refused before the number lookup', async () => {
@@ -204,7 +206,7 @@ describe('chat openers on a shared number (WAORGNUMBER.4)', () => {
     getLocationWhatsAppNumberConfig.mockResolvedValue(shared)
     const res = await POST(post())
     expect(res.status).toBe(403)
-    expect((await res.json()).error).toBe('Chat openers apply to +353 1 000 0000 at every studio that uses it. Change them at its home studio, or ask an organisation admin.')
+    expect((await res.json()).error).toBe('Chat openers apply to this number at every studio that uses it. Change them at its home studio, or ask an organisation admin.')
     expect(setConversationalAutomation).not.toHaveBeenCalled()
   })
 
@@ -251,5 +253,17 @@ describe('the openers mirror to every studio using the number (WAORGNUMBER.4)', 
     expect(res.status).toBe(500)
     expect((await res.json()).applied_at_meta).toBe(true)
     expect(db.writes).toHaveLength(1)
+  })
+})
+
+// ROUTEWRAP.R9 — on withAuth: a signed-out call is its fixed 401, before anything runs.
+describe('signed out (withAuth)', () => {
+  it('answers 401 Unauthorized and touches nothing', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await POST(post())
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(setConversationalAutomation).not.toHaveBeenCalled()
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 })

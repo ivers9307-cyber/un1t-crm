@@ -20,7 +20,7 @@
 // unresolved conversations; the badge caps display at 99+ regardless.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { needsAction } from '@/lib/inbox-queues'
@@ -28,9 +28,11 @@ import { needsAction } from '@/lib/inbox-queues'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'whatsapp')) {
+// ROUTEWRAP.R9 — withAuth signs the caller in (signed out: its 401, which the
+// badge pollers read as "keep the last count"); the permission and studio
+// checks below still answer 0, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user }) => {
+  if (!hasPermission(user, 'whatsapp')) {
     return NextResponse.json({ success: true, data: { count: 0 } })
   }
   const locationId = user.activeLocation?.id
@@ -65,4 +67,4 @@ export async function GET() {
   } catch {
     return NextResponse.json({ success: true, data: { count: 0 } })
   }
-}
+})

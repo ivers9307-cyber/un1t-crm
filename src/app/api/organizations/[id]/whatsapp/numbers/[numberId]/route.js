@@ -19,7 +19,9 @@
 // ids cannot be enumerated.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertOrganizationAdmin } from '@/lib/auth'
+import { assertOrganizationAdmin } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { orgWhatsAppNumberPatchSchema } from '@/lib/schemas'
@@ -39,15 +41,16 @@ async function ownNumber(db, orgId, numberId) {
     .eq('id', numberId)
     .eq('organization_id', orgId)
     .maybeSingle()
-  if (error) return { response: NextResponse.json({ success: false, error: error.message }, { status: 500 }) }
+  if (error) {
+    logError('org-wa-numbers', 'number read failed', { err: error, organizationId: orgId, numberId })
+    return { response: NextResponse.json({ success: false, error: 'Could not load the number.' }, { status: 500 }) }
+  }
   if (!data) return { response: NOT_FOUND() }
   return { number: data }
 }
 
-export async function PATCH(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; assertOrganizationAdmin still decides.
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   const guard = assertOrganizationAdmin(user, params.id)
   if (guard) return guard
 
@@ -78,16 +81,14 @@ export async function PATCH(request, props) {
     if (duplicateNumberMessage(error)) {
       return NextResponse.json({ success: false, error: 'Phone number ID or label already in use.' }, { status: 409 })
     }
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('org-wa-numbers', 'update failed', { err: error, organizationId: params.id, numberId: params.numberId })
+    return NextResponse.json({ success: false, error: 'Could not save the number.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, number: publicShape(data) })
-}
+})
 
-export async function DELETE(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, params }) => {
   const guard = assertOrganizationAdmin(user, params.id)
   if (guard) return guard
 
@@ -100,7 +101,10 @@ export async function DELETE(_request, props) {
     .delete()
     .eq('id', params.numberId)
     .eq('organization_id', params.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('org-wa-numbers', 'delete failed', { err: error, organizationId: params.id, numberId: params.numberId })
+    return NextResponse.json({ success: false, error: 'Could not remove the number.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true })
-}
+})

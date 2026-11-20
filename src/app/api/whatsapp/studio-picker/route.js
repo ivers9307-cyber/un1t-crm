@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { logError } from '@/lib/log'
@@ -41,9 +42,7 @@ const view = (p, has) => ({
 })
 
 // GET /api/whatsapp/studio-picker?location_id=… — the studio's picker settings.
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const GET = withAuth({ permission: null, location: false }, async ({ user, request }) => {
   const locationId = new URL(request.url).searchParams.get('location_id')
   if (!locationId) return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
   const guard = assertLocationAccessOr404(user, locationId)
@@ -64,13 +63,11 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Could not load the settings.' }, { status: 500 })
   }
   return NextResponse.json({ success: true, data: view(loc.settings?.wa_studio_picker || {}, has) })
-}
+})
 
 // PUT /api/whatsapp/studio-picker — save the studio's picker settings (the
 // wa_studio_picker key only; mergeLocationSettings, SETTINGSWIPE.1).
-export async function PUT(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, request }) => {
   const v = await validateBody(request, PutSchema)
   if (!v.ok) return v.response
   const { location_id: locationId, listed, label, keywords, enabled, question } = v.data
@@ -95,4 +92,4 @@ export async function PUT(request) {
   const saved = await mergeLocationSettings(db, locationId, (s) => ({ ...s, wa_studio_picker: next }), { scope: 'wa-studio-picker' })
   if (!saved.ok) return settingsSaveFailure(saved)
   return NextResponse.json({ success: true, data: view(next, has) })
-}
+})

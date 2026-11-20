@@ -1,7 +1,8 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { normalizeUrlish } from '@/lib/urlish'
@@ -50,10 +51,7 @@ const CardSetsPutSchema = z.object({
 })
 
 // GET /api/whatsapp/card-sets?location_id=… — list the location's card sets.
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+export const GET = withAuth({ permission: null, location: false }, async ({ user, request }) => {
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
   if (!locationId) return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
@@ -69,13 +67,10 @@ export async function GET(request) {
   }
   const sets = Array.isArray(loc?.settings?.wa_card_sets) ? loc.settings.wa_card_sets : []
   return NextResponse.json({ success: true, sets })
-}
+})
 
 // PUT /api/whatsapp/card-sets — replace the location's card-set array (the wa_card_sets key only; mergeLocationSettings, SETTINGSWIPE.1). Master or owner at the location (WAROLE.1).
-export async function PUT(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, request }) => {
   const validation = await validateBody(request, CardSetsPutSchema)
   if (!validation.ok) return validation.response
   const { location_id: locationId, sets } = validation.data
@@ -93,4 +88,4 @@ export async function PUT(request) {
   const saved = await mergeLocationSettings(db, locationId, (s) => ({ ...s, wa_card_sets: sets }), { scope: 'wa-card-sets' })
   if (!saved.ok) return settingsSaveFailure(saved)
   return NextResponse.json({ success: true, sets })
-}
+})

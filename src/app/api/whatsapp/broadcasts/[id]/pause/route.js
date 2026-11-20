@@ -4,17 +4,17 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { routeSignoffFor } from '@/lib/whatsapp-blast-signoff'
 
 const PauseSchema = z.object({ paused: z.boolean() })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// ROUTEWRAP.R9 — withAuth only signs the caller in; the gates below are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   // GATES-2 — /send's rule: `whatsapp` somewhere, then at the broadcast's studio.
   if (!hasPermissionAtAnyLocation(user, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled' }, { status: 403 })
@@ -57,7 +57,10 @@ export async function POST(request, props) {
     .eq('id', params.id)
     .select('id, paused_at')
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('wa-broadcast-pause', 'update failed', { err: error, broadcastId: params.id })
+    return NextResponse.json({ success: false, error: 'Could not update the broadcast. Try again.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, broadcast: data })
-}
+})
