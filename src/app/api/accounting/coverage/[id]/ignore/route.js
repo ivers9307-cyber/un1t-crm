@@ -5,7 +5,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { validateBody } from '@/lib/validate'
-import { loadLineForUser } from '../_line'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
+import { loadLineForCaller } from '../_line'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -14,11 +16,13 @@ const ALLOWED_FROM = ['uncovered', 'not_found', 'needs_attention']
 
 const IgnoreSchema = z.object({ reason: z.string().min(2).max(200) })
 
-export async function POST(request, { params }) {
-  const { id } = await params
-  const ctx = await loadLineForUser(id)
+// withAuth only signs the caller in; loadLineForCaller keeps the hand-written
+// gate (accounting_hub 'Forbidden' 403, active-location 400, line scoped to the
+// active studio, 404) exactly as the sibling line routes run it.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
+  const ctx = await loadLineForCaller(user, params?.id)
   if (ctx.response) return ctx.response
-  const { user, db, line } = ctx
+  const { db, line } = ctx
 
   const body = await validateBody(request, IgnoreSchema)
   if (!body.ok) return body.response
@@ -43,7 +47,10 @@ export async function POST(request, { params }) {
       updated_at: nowIso,
     })
     .eq('id', line.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('recon-coverage', 'ignore failed', { err: error, lineId: line.id })
+    return NextResponse.json({ success: false, error: 'Could not ignore the line.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true })
-}
+})

@@ -10,16 +10,17 @@
 // update only fires for the master_user_id behind the session.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { stopSupportSession } from '@/lib/support-session'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in (401 as before) — no role, no studio, so a
+// master inside a read-only session can always leave. Everything after it is
+// the hand-written body, unchanged: stop, cookie clear, then the audit row.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request }) => {
 
   // The REAL master id is on impersonatingFrom while a support session is
   // active (the master is impersonating the tenant owner); fall back to
@@ -40,4 +41,4 @@ export async function POST(request) {
   }
 
   return NextResponse.json({ success: true })
-}
+})

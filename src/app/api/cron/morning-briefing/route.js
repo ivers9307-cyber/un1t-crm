@@ -24,20 +24,25 @@
 // clear" beats a silent gap (a missing email is indistinguishable
 // from a broken cron). One bad location can't stall the sweep.
 //
-// Auth: same CRON_SECRET pattern as the other Vercel crons.
+// defineCron owns the CRON_SECRET check, the error boundary and the stamp. A
+// quiet tick (no studio at its slot) answers success with `stamp: false`, so
+// the row keeps its daily clock; a faulted gate (a claim write failed) or an
+// unreadable locations list answers 500 unstamped. One location failing is
+// reported in perLocation (fixed text; the detail is logged); a slot tick
+// where every location that had a briefing to send failed answers 500 and
+// does not stamp.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { sendEmail } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
 import { fetchLocationTodayFeed } from '@/lib/today-feed-data'
 import { fetchStudioPulse } from '@/lib/studio-pulse-data'
 import { fetchDailyHeadline } from '@/lib/owner-daily-headline'
 import { buildMorningBriefingEmail, shapePulseMetrics } from '@/lib/morning-briefing'
-import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
 import { formatInZone } from '@/lib/location-time'
 import { locationIdsWithoutCapability } from '@/lib/membership/locations-for-source'
+import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -45,24 +50,18 @@ export const dynamic = 'force-dynamic'
 // row makes a live Glofox call — same ceiling as the radar digest.
 export const maxDuration = 300
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'morning-briefing' }, async ({ db }) => {
   const appUrl = getAppUrl()
   const nowMs = Date.now()
 
   // TZ.6 — which locations are at their Monday slot this tick (claimed, so
   // never twice in one local day). An unreadable zone acts for nobody.
   const gate = await gateDailySlot(db, 'morning-briefing', { nowMs, module: 'morning-briefing' })
-  if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
+  if (!gate.ok) return { ok: false, body: { error: 'locations unreadable', slot: gate.summary } }
   if (gate.slots.size === 0) {
     // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
     // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
-    return NextResponse.json({ success: !gate.faulted, emails_sent: 0, perLocation: [], slot: gate.summary }, { status: gate.faulted ? 500 : 200 })
+    return { ok: !gate.faulted, stamp: false, body: { emails_sent: 0, perLocation: [], slot: gate.summary } }
   }
 
   const { data: locations, error: locErr } = await db
@@ -70,8 +69,8 @@ export async function GET(request) {
     .select('id, name, churn_digest_recipients')
     .eq('active', true)
   if (locErr) {
-    console.warn(`[cron][morning-briefing] failed to list locations: ${locErr.message}`)
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    logError('morning-briefing', 'failed to list locations', { err: locErr })
+    return { ok: false, body: { error: 'Could not list locations' } }
   }
 
   // UN1TCAP.1 — the pulse strip is membership numbers (members, at-risk,
@@ -116,15 +115,18 @@ export async function GET(request) {
         emailsSent++
       }
       perLocation.push({ location_id: loc.id, location_name: loc.name, rows: rows.length, recipients: recipients.length, ok: true })
-    } catch (e) {
+    } catch (err) {
       // One bad location can't stall the rest of the sweep.
-      perLocation.push({ location_id: loc.id, location_name: loc.name, ok: false, error: e.message })
+      logWarn('morning-briefing', 'briefing failed for location', { locationId: loc.id, err })
+      perLocation.push({ location_id: loc.id, location_name: loc.name, ok: false, error: 'briefing failed' })
     }
   }
 
-  if (slotTickStampable(gate)) {
-    await stampHeartbeat('morning-briefing').catch(() => {})
+  // A slot tick stamps unless the gate faulted (a claim write failed), or
+  // every location that had a briefing to send failed: then nothing was sent.
+  const allFailed = perLocation.length > 0 && perLocation.every((p) => !p.ok)
+  if (allFailed) {
+    return { ok: false, body: { error: 'Every location failed', emails_sent: emailsSent, perLocation } }
   }
-
-  return NextResponse.json({ success: !gate.faulted, emails_sent: emailsSent, perLocation }, { status: gate.faulted ? 500 : 200 })
-}
+  return { ok: !gate.faulted, body: { emails_sent: emailsSent, perLocation } }
+})

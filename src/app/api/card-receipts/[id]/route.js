@@ -6,19 +6,14 @@
 // per the repo's service-role-route lesson).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+// withAuth only signs the caller in; who may see the row (its submitter, or an
+// owner/master at its studio) is judged on the row below, 404 otherwise.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   const { data: rec, error } = await db
     .from('card_receipts')
     .select(`
@@ -31,7 +26,10 @@ export async function GET(_request, props) {
     `)
     .eq('id', params.id)
     .maybeSingle()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('card-receipts', 'receipt read failed', { receiptId: params.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the receipt.' }, { status: 400 })
+  }
   if (!rec) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
   const isSubmitter = rec.submitter_id === user.id
@@ -46,4 +44,4 @@ export async function GET(_request, props) {
   // doesn't have to re-derive the role rules.
   const viewer_role = isApprover ? (user.role === 'master' ? 'master' : 'owner') : 'submitter'
   return NextResponse.json({ success: true, data: { ...rec, viewer_role } })
-}
+})

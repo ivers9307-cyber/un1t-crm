@@ -20,15 +20,20 @@
 // HARD CONSTRAINT (pulse-scope-no-booking): the push copy from
 // buildOnboardingPacePush is motivational only — never any booking language.
 // Pulse never books, pauses or cancels.
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+//
+// defineCron owns the CRON_SECRET check, the error boundary and the stamp. The
+// answer keeps its own `ok` field beside the wrapper's `success`. A quiet tick
+// answers ok with `stamp: false`; a failed gate or seam read answers 500
+// unstamped (fixed text; the detail is logged). A slot tick stamps with its
+// counts unless the gate faulted, or every location it paced failed to load
+// its lane (then nothing was paced: 500, no stamp).
+import { defineCron } from '@/lib/define-cron'
 import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/customer-nudge-claim'
 import { loadJourneyLane } from '@/lib/onboarding-journey-data'
 import { buildOnboardingPacePush } from '@/lib/onboarding-journey'
-import { logInfo, logWarn } from '@/lib/log'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError, logInfo, logWarn } from '@/lib/log'
 import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
-import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,22 +61,17 @@ export function selectPaceNudgeRows(lane, reachable) {
 
 export async function POST(request) { return GET(request) }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'notify-onboarding-pace' }, async ({ db }) => {
   const nowMs = Date.now()
 
   // TZ.6 — which locations are at their daily slot this tick (claimed, so
   // never twice in one local day). An unreadable zone acts for nobody.
   const gate = await gateDailySlot(db, 'notify-onboarding-pace', { nowMs, module: 'cron-onboarding-pace' })
-  if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
+  if (!gate.ok) return { ok: false, body: { ok: false, slot: gate.summary } }
   if (gate.slots.size === 0) {
     // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
     // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
-    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, locations: 0, candidates: 0, nudged: 0 }, { status: gate.faulted ? 500 : 200 })
+    return { ok: !gate.faulted, stamp: false, body: { ok: !gate.faulted, slot: gate.summary, locations: 0, candidates: 0, nudged: 0 } }
   }
 
   // Live locations = Glofox-connected (attendance data only exists there); same
@@ -81,21 +81,26 @@ export async function GET(request) {
   // A failed seam read is a 500 with no heartbeat.
   const { eligible: liveLocations, skipped, error: locErr } = await locationsWithSource(db, 'glofox', { module: 'cron-onboarding-pace' })
   if (locErr) {
-    return NextResponse.json({ ok: false, error: locErr.message }, { status: 500 })
+    logError('cron-onboarding-pace', 'membership seam read failed', { err: locErr })
+    return { ok: false, body: { ok: false, error: 'Could not list locations' } }
   }
 
   let candidates = 0
   let nudged = 0
   let failed = 0
   let reachabilityFailed = 0
+  let paced = 0
+  let laneFailed = 0
 
   for (const loc of liveLocations) {
     if (!slotFor(gate.slots, loc.id)) continue // TZ.6: not this location's slot
+    paced++
     let lane
     try {
       const res = await loadJourneyLane(db, loc.id, nowMs)
       lane = res.lane
     } catch (err) {
+      laneFailed++
       logWarn('cron-onboarding-pace', 'lane load failed', { err, locationId: loc.id })
       continue
     }
@@ -135,13 +140,13 @@ export async function GET(request) {
   logInfo('cron-onboarding-pace', 'tick', {
     locations: liveLocations.length, locations_skipped: skipped.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
   })
-  if (slotTickStampable(gate)) {
-    await stampHeartbeat('notify-onboarding-pace', {
-      locations: liveLocations.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
-    }).catch((err) =>
-      logWarn('cron-onboarding-pace', 'heartbeat failed', { err }))
+  const counts = { candidates, nudged, failed, reachability_failed: reachabilityFailed }
+  const body = { locations: liveLocations.length, locations_skipped: skipped.length, ...skipCounts, ...counts }
+  // Every location at its slot failed to load its lane: nobody was paced.
+  if (paced > 0 && laneFailed === paced) {
+    return { ok: false, body: { ok: false, error: 'Every location failed', ...body } }
   }
-  return NextResponse.json({
-    ok: !gate.faulted, locations: liveLocations.length, locations_skipped: skipped.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
-  }, { status: gate.faulted ? 500 : 200 })
-}
+  // A slot tick stamps unless the gate faulted (a claim write failed).
+  const ok = !gate.faulted
+  return { ok, outcome: { locations: liveLocations.length, ...skipCounts, ...counts }, body: { ok, ...body } }
+})
