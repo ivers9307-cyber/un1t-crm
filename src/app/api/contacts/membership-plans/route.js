@@ -13,21 +13,17 @@
 // plans across all locations.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+// The role at the ACTIVE studio (withAuth's roles, the same includes(user.role)
+// check as before) with the same 403 text; no active studio is required, a
+// master without one reads every studio's plans, as before.
+export const GET = withAuth({ permission: null, location: false, roles: MANAGER_ROLES, forbiddenMessage: 'Manager+ required' }, async ({ user, db }) => {
   // Scope to the operator's ACTIVE location, mirroring /api/segments.
   const activeLocationId = user.activeLocation?.id || null
   if (!activeLocationId && user.role !== 'master') {
@@ -41,7 +37,8 @@ export async function GET() {
   if (activeLocationId) q = q.eq('location_id', activeLocationId)
   const { data, error } = await q.limit(20000)
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('contacts', 'membership plans read failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the membership plans.' }, { status: 500 })
   }
 
   // The Supabase JS client has no DISTINCT, so de-dup in memory. The
@@ -51,4 +48,4 @@ export async function GET() {
   ).sort((a, b) => a.localeCompare(b))
 
   return NextResponse.json({ success: true, data: plans })
-}
+})

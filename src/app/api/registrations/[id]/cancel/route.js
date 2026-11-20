@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { logError } from '@/lib/log'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { cancelRaceRegistration, placedSolosRefusal } from '@/lib/race-cancel'
 
@@ -8,18 +9,16 @@ import { cancelRaceRegistration, placedSolosRefusal } from '@/lib/race-cancel'
 // registration (the first cancel primitive these rows have had).
 // Capacity frees implicitly: wave counts exclude cancelled rows.
 // Refunds, if any, are decided and processed by a human in Revolut.
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in: manager+ somewhere, then at the event's
+// studio (404 outside the caller's studios), stay here in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: reg } = await db.from('race_registrations')
     .select('id, race_events!inner(location_id)')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .maybeSingle()
   // 404 (not 403) so registration ids can't be enumerated.
   if (!reg) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -33,7 +32,7 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const result = await cancelRaceRegistration(db, params.id)
+  const result = await cancelRaceRegistration(db, params?.id)
   // FINDTEAM.8 (I3) — a placed solo's row is not an active entry to cancel.
   if (!result.ok && result.error === 'not_active') {
     return NextResponse.json({
@@ -48,7 +47,9 @@ export async function POST(request, props) {
     return NextResponse.json(placedSolosRefusal(result.placedCount, 'cancelled'), { status: 409 })
   }
   if (!result.ok) {
-    return NextResponse.json({ success: false, error: result.error }, { status: 500 })
+    // A read failure carries the database's text; answer a fixed message.
+    logError('race-cancel', 'registration cancel failed', { registrationId: reg.id, err: result.error })
+    return NextResponse.json({ success: false, error: 'Could not cancel the registration. Try again.' }, { status: 500 })
   }
   return NextResponse.json({ success: true, already_cancelled: !!result.alreadyCancelled })
-}
+})

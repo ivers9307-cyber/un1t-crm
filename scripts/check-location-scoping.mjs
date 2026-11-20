@@ -220,6 +220,11 @@ const SCOPING_HELPERS = [
   // src/app/api/invoices-inbox/_helpers.js — getCurrentUser + master/owner-
   // at-location + invoice fetched via its location (401/403/404).
   'loadInvoiceForUser(',
+  // Same file: loadInvoiceForCaller is the body of loadInvoiceForUser for a
+  // caller withAuth already signed in (ROUTEWRAP.R5) — the same row read, the
+  // invoices_inbox and master-or-owner checks at the row's location_id, and a
+  // 404 on a missing row or a refusal.
+  'loadInvoiceForCaller(',
   // src/lib/campaign-session-access.js (MEMBERWRITESWEEP.1e) — reads the
   // campaign by pk, 404s a campaign with no location_id, then runs
   // assertLocationAccessOr404 at the CAMPAIGN's location_id and
