@@ -85,6 +85,32 @@ describe('defineCron', () => {
     expect(logWarn).toHaveBeenCalledWith('cron.job', 'heartbeat failed', { err })
   })
 
+  it('stamp: false is a clean run that leaves the job\'s own row alone', async () => {
+    expect(await call(async () => ({ stamp: false, body: { skipped: 'no_slot' } }))).toEqual({ status: 200, body: { skipped: 'no_slot', success: true } })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('stamps each listed arm row, with or without an outcome, beside the job row', async () => {
+    await call(async () => ({ outcome: { n: 1 }, arms: [{ heartbeat: 'arm-a', outcome: { sent: 2 } }, { heartbeat: 'arm-b' }] }))
+    expect(stampHeartbeat.mock.calls).toEqual([['job', { n: 1 }], ['arm-a', { sent: 2 }], ['arm-b']])
+  })
+
+  it('an arm is stamped even when the parent run failed or stays quiet (the job vouches for the arm)', async () => {
+    await call(async () => ({ ok: false, arms: [{ heartbeat: 'arm-a' }] }))
+    await call(async () => ({ stamp: false, arms: [{ heartbeat: 'arm-b' }] }))
+    expect(stampHeartbeat.mock.calls).toEqual([['arm-a'], ['arm-b']])
+  })
+
+  it('a failed arm stamp is logged and never fails the run; a nameless arm is skipped', async () => {
+    const err = new Error('arm down')
+    stampHeartbeat.mockImplementation(async (name) => { if (name === 'arm-a') throw err })
+    const res = await call(async () => ({ arms: [{ heartbeat: 'arm-a' }, { heartbeat: '' }, { heartbeat: 'job' }, { heartbeat: 'arm-c' }] }))
+    expect(res.status).toBe(200)
+    expect(logWarn).toHaveBeenCalledWith('cron.job', 'arm heartbeat failed', { arm: 'arm-a', err })
+    expect(stampHeartbeat.mock.calls.map((c) => c[0])).toEqual(['job', 'arm-a', 'arm-c'])
+    stampHeartbeat.mockImplementation(async () => {})
+  })
+
   it('refuses a job with no heartbeat name when the file loads', () => {
     expect(() => defineCron({}, async () => {})).toThrow(/heartbeat/)
     expect(() => defineCron({ heartbeat: 'job' })).toThrow(/run/)

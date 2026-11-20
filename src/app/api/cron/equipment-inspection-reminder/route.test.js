@@ -13,13 +13,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const h = vi.hoisted(() => ({
   today: '2026-08-04',
+  gate: null, // a gate result to answer instead of the open one (quiet / faulted / unreadable ticks)
 }))
 
 // TZ.6 — this file's subject is not the daily-slot gate: every location is due,
 // on the pinned "today" (route.tz6.test.js covers the gate).
 vi.mock('@/lib/cron-daily-slot', async (importOriginal) => ({
   ...(await importOriginal()),
-  gateDailySlot: (...a) => import('@/lib/cron-daily-slot.test-helpers').then(({ openGateOn }) => openGateOn(h.today)(...a)),
+  gateDailySlot: (...a) => (h.gate
+    ? Promise.resolve(h.gate)
+    : import('@/lib/cron-daily-slot.test-helpers').then(({ openGateOn }) => openGateOn(h.today)(...a))),
 }))
 
 const updateSpy = vi.fn()
@@ -30,7 +33,7 @@ function makeBuilder() {
   b.then = (resolve) => Promise.resolve({ data: [], error: null }).then(resolve)
   return b
 }
-const fakeDb = { from: () => makeBuilder() }
+const fakeDb = { from: vi.fn(() => makeBuilder()) }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
 
 vi.mock('@/lib/equipment-db', () => ({
@@ -43,7 +46,7 @@ vi.mock('@/lib/push', () => ({
 }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
 import { GET } from './route.js'
 import { listEnabledSettings, listActiveEquipment, listSubmittedSince } from '@/lib/equipment-db'
@@ -67,6 +70,7 @@ beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   vi.clearAllMocks()
   h.today = '2026-08-04'
+  h.gate = null
   listEnabledSettings.mockResolvedValue([])
   listActiveEquipment.mockResolvedValue([])
   listSubmittedSince.mockResolvedValue([])
@@ -76,6 +80,8 @@ describe('GET /api/cron/equipment-inspection-reminder', () => {
   it('rejects a missing bearer with 401', async () => {
     const res = await GET({ headers: { get: () => null } })
     expect(res.status).toBe(401)
+    expect(listEnabledSettings).not.toHaveBeenCalled()
+    expect(fakeDb.from).not.toHaveBeenCalled()
     expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
@@ -132,7 +138,8 @@ describe('GET /api/cron/equipment-inspection-reminder', () => {
     // The failing location is recorded as an error, the healthy one
     // as pushed — proving the throw did not abort the loop.
     const byLocation = Object.fromEntries(body.data.locations.map((l) => [l.locationId, l]))
-    expect(byLocation['loc-tue'].error).toBeTruthy()
+    expect(byLocation['loc-tue'].error).toBe('reminder failed')
+    expect(JSON.stringify(body)).not.toContain('boom')
     expect(byLocation['loc-tue-2'].pushed).toBe(true)
     expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
     expect(sendPushToRolesAtLocation).toHaveBeenCalledWith(
@@ -192,5 +199,51 @@ describe('GET /api/cron/equipment-inspection-reminder', () => {
     listActiveEquipment.mockResolvedValue(ASSETS)
     await GET(req())
     expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  // CRONWRAP — on defineCron: the wrapper stamps, and only on the paths below.
+  it('a slot tick that did its work stamps exactly its own row', async () => {
+    listEnabledSettings.mockResolvedValue([TUESDAY_SETTINGS])
+    listActiveEquipment.mockResolvedValue(ASSETS)
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat.mock.calls).toEqual([['equipment-inspection-reminder']])
+  })
+
+  it('a quiet tick (no studio at its slot) answers success and does not stamp', async () => {
+    h.gate = { ok: true, faulted: false, slots: new Map(), summary: { due: 0 } }
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body).toEqual({ success: true, data: { locations: [], slot: { due: 0 } } })
+    expect(listEnabledSettings).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a faulted gate (a claim write failed) answers 500 and does not stamp', async () => {
+    h.gate = { ok: true, faulted: true, slots: new Map(), summary: { due: 0 } }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect((await res.json()).success).toBe(false)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('unreadable zones answer 500 and do not stamp', async () => {
+    h.gate = { ok: false, faulted: true, slots: new Map(), summary: { due: 0 } }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toMatchObject({ success: false, error: 'locations unreadable' })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('an unreadable settings list answers 500 with fixed text and does not stamp', async () => {
+    listEnabledSettings.mockRejectedValue(new Error('relation "equipment_settings" is down'))
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(500)
+    expect(body).toEqual({ success: false, error: 'Could not read the equipment settings' })
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })
