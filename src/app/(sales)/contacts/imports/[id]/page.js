@@ -12,6 +12,7 @@ import { getCurrentUser, assertLocationAccess, hasRoleAtAnyLocation, hasRoleAtLo
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
 import ImportRollbackButton from '@/components/ImportRollbackButton'
+import { isLedgerIncomplete } from '@/lib/contact-import-runner'
 
 export const dynamic = 'force-dynamic'
 
@@ -61,7 +62,15 @@ export default async function ImportDetailPage(props) {
     rows = []
   }
 
-  const canRollback = (user.isMaster || user.role === 'master') && batch.status === 'completed'
+  // IMPORTROLLBACK.1 — 'rolling_back' too: a batch stranded there (a crash or
+  // a failed closing stamp) is re-runnable by design, and this button is the
+  // only way to re-run it.
+  const canRollback = (user.isMaster || user.role === 'master')
+    && (batch.status === 'completed' || batch.status === 'rolling_back')
+  const ledgerIncomplete = isLedgerIncomplete(batch)
+  // A partial rollback hands the batch back to 'completed' with its finished
+  // rows already stamped rolled_back.
+  const rollbackUnfinished = batch.status !== 'rolled_back' && rows.some(r => r.action === 'rolled_back')
   const hasFailedRows = (batch.errored_count + batch.skipped_count) > 0
 
   return (
@@ -100,6 +109,20 @@ export default async function ImportDetailPage(props) {
         <Stat label="Skipped" value={batch.skipped_count} tone="amber" />
         <Stat label="Errored" value={batch.errored_count} tone="red" />
       </div>
+
+      {ledgerIncomplete && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-md p-3 mb-6 text-sm text-red-700">
+          Part of this import&rsquo;s rollback history was not saved when it ran. A rollback will delete the contacts it created,
+          but cannot restore every contact it updated.
+        </div>
+      )}
+
+      {rollbackUnfinished && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-md p-3 mb-6 text-sm text-amber-700">
+          A rollback of this import did not finish. Rows still shown as created or updated were not reversed;
+          run the rollback again to retry just those rows.
+        </div>
+      )}
 
       {batch.status === 'rolled_back' && (
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-md p-3 mb-6 text-sm text-amber-700">

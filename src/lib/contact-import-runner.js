@@ -16,15 +16,39 @@
 //      processing, then calls runImportCommit() with the same
 //      arguments shape.
 //
-// Returns { counts: { created, updated, skipped, errored } }.
-// Side-effect: every row insert is written to contact_import_rows.
+// Returns { counts: { created, updated, skipped, errored }, ledgerFailed }.
+// Side-effect: every row outcome is written to contact_import_rows.
 // On unexpected error throws — caller is responsible for marking
 // the batch as failed.
+//
+// IMPORTLEDGER.1 (audit A08) — contact_import_rows is the rollback
+// history: an 'updated' row's before_snapshot is the ONLY copy of the
+// contact's pre-import values. A ledger chunk that fails to save is
+// retried once; if it still fails, its row count is returned as
+// `ledgerFailed` (never swallowed) so the caller can mark the batch with
+// ledgerIncompleteMessage() — a rollback of that batch then warns that it
+// cannot restore everything instead of claiming a full restore.
 
 import { validateRow, deriveName, fieldsTouchedByMapping } from './contact-import.js'
-import { logWarn } from './log.js'
+import { logWarn, logError } from './log.js'
 import { selectAllByKeys } from './select-all.js'
 import { emailStatusResetForAddressChange } from './email-reputation.js'
+
+// IMPORTLEDGER.1 — the marker a batch carries in contact_imports.error_message
+// when some of its row outcomes (and so possibly some before_snapshots) were
+// never saved. Uses the existing column and status values: the batch is still
+// 'completed' (its contacts really were written), but this message tells the
+// detail page and the rollback route that its rollback history is incomplete.
+export const LEDGER_INCOMPLETE_PREFIX = 'Rollback history incomplete:'
+
+export function ledgerIncompleteMessage(lostRows) {
+  return `${LEDGER_INCOMPLETE_PREFIX} ${lostRows} row outcome${lostRows === 1 ? '' : 's'} could not be saved. `
+    + 'A rollback will delete the contacts this import created, but cannot restore every contact it updated.'
+}
+
+export function isLedgerIncomplete(batch) {
+  return typeof batch?.error_message === 'string' && batch.error_message.startsWith(LEDGER_INCOMPLETE_PREFIX)
+}
 
 export async function runImportCommit(db, {
   importId,
@@ -220,15 +244,33 @@ export async function runImportCommit(db, {
     }
   }
 
-  // Persist outcomes (chunked).
+  // Persist outcomes (chunked). IMPORTLEDGER.1 — a failed chunk is retried
+  // once, then counted into ledgerFailed rather than discarded: losing it
+  // loses the before_snapshots rollback needs. A retry after an ambiguous
+  // failure can at worst duplicate ledger rows, which rollback tolerates
+  // (the same snapshot restored twice, the same row stamped twice).
   const CHUNK = 500
+  let ledgerFailed = 0
   for (let i = 0; i < importRowInserts.length; i += CHUNK) {
     const slice = importRowInserts.slice(i, i + CHUNK)
-    const { error } = await db.from('contact_import_rows').insert(slice)
+    let { error } = await db.from('contact_import_rows').insert(slice)
     if (error) {
-      logWarn('contact-import-runner', 'row chunk failed', { chunkIndex: i, err: error })
+      logWarn('contact-import-runner', 'row chunk failed — retrying once', {
+        importId, chunkStart: i, rows: slice.length, code: error.code ?? null,
+      })
+      ;({ error } = await db.from('contact_import_rows').insert(slice))
+    }
+    if (error) {
+      ledgerFailed += slice.length
+      logError('contact-import-runner', 'row chunk lost after retry — rollback history incomplete', {
+        importId,
+        chunkStart: i,
+        rows: slice.length,
+        reversibleRows: slice.filter(r => r.action === 'created' || r.action === 'updated').length,
+        code: error.code ?? null,
+      })
     }
   }
 
-  return { counts }
+  return { counts, ledgerFailed }
 }

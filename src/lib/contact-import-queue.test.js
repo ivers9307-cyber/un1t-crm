@@ -18,12 +18,15 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/contact-import-runner', () => ({
+vi.mock('@/lib/contact-import-runner', async (importOriginal) => ({
+  ...(await importOriginal()),
   runImportCommit: vi.fn(),
 }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { claimAndProcessImportJob, STUCK_AFTER_MINUTES } from './contact-import-queue.js'
-import { runImportCommit } from '@/lib/contact-import-runner'
+import { runImportCommit, isLedgerIncomplete } from '@/lib/contact-import-runner'
+import { logError } from '@/lib/log'
 
 // ── db mock factory ───────────────────────────────────────────────────────────
 
@@ -202,5 +205,35 @@ describe('claimAndProcessImportJob', () => {
     expect(result.status).toBe('failed')
     expect(result.error).toHaveLength(2000)
     expect(db._calls.updates[1].payload.error_message).toHaveLength(2000)
+  })
+
+  // IMPORTLEDGER.1 (audit A08) — a lost ledger chunk loses before_snapshots,
+  // so the import must not look fully recoverable.
+  it('a lost ledger chunk cannot produce an apparently fully recoverable completed import', async () => {
+    const db = makeDb()
+    runImportCommit.mockResolvedValue({ counts: { created: 3, updated: 500, skipped: 0, errored: 0 }, ledgerFailed: 500 })
+
+    const result = await claimAndProcessImportJob(db, JOB)
+
+    expect(result).toEqual({ status: 'processed', ledgerIncomplete: true })
+    const stamp = db._calls.updates[1]
+    expect(stamp.payload.status).toBe('completed')
+    // The payload is KEPT: it is the only record left of the lost rows.
+    expect('payload' in stamp.payload).toBe(false)
+    // The batch carries the marker the detail page and the rollback route read.
+    expect(isLedgerIncomplete({ error_message: stamp.payload.error_message })).toBe(true)
+    expect(stamp.payload.error_message).toContain('500')
+    expect(logError).toHaveBeenCalled()
+    expect(JSON.stringify(logError.mock.calls.at(-1)[2])).toContain('imp-1')
+  })
+
+  it('a clean run carries no ledger marker', async () => {
+    const db = makeDb()
+    runImportCommit.mockResolvedValue({ counts: { created: 1, updated: 0, skipped: 0, errored: 0 }, ledgerFailed: 0 })
+
+    await claimAndProcessImportJob(db, JOB)
+
+    expect(db._calls.updates[1].payload.error_message).toBeUndefined()
+    expect(db._calls.updates[1].payload.payload).toBeNull()
   })
 })
