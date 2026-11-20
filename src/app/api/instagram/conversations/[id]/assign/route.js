@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { AssignBodySchema, assignThread, assignPickerFor } from '@/lib/inbox-assignment'
 
@@ -15,10 +15,9 @@ import { AssignBodySchema, assignThread, assignPickerFor } from '@/lib/inbox-ass
 // src/lib/inbox-assignment.js, the same code path as WhatsApp and mail.
 // The Instagram agent pages only the owner of an assigned thread.
 
-async function loadGatedThread(user, id) {
+async function loadGatedThread(db, user, id) {
   const perm = requireInboxPermission(user, 'ig')
   if (perm) return { response: perm }
-  const db = createServerClient()
   const { data: thread, error } = await db.from('instagram_conversations')
     .select('id, location_id, assigned_to')
     .eq('id', id)
@@ -31,28 +30,24 @@ async function loadGatedThread(user, id) {
   return { db, thread }
 }
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const loaded = await loadGatedThread(user, params.id)
+// withAuth only signs the caller in; the channel permission and the thread's
+// studio (404) are judged below in their old order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const loaded = await loadGatedThread(db, user, params?.id)
   if (loaded.response) return loaded.response
   const out = await assignPickerFor(loaded.db, { channel: 'instagram', user, thread: loaded.thread })
   return NextResponse.json(out.body, { status: out.status })
-}
+})
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   const pre = requireInboxPermission(user, 'ig')
   if (pre) return pre
   const validation = await validateBody(request, AssignBodySchema)
   if (!validation.ok) return validation.response
-  const loaded = await loadGatedThread(user, params.id)
+  const loaded = await loadGatedThread(db, user, params?.id)
   if (loaded.response) return loaded.response
   const out = await assignThread(loaded.db, {
     channel: 'instagram', user, thread: loaded.thread, assignee: validation.data.assignee,
   })
   return NextResponse.json(out.body, { status: out.status })
-}
+})

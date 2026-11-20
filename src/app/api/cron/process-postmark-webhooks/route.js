@@ -14,9 +14,11 @@
 // retries is now captured in webhook_dead_letter instead of vanishing.
 // The count is surfaced in the response AND in the heartbeat's last_outcome.
 //
-// Pattern matches run-sequences — uses
-// CRON_SECRET bearer auth, stamps a heartbeat, returns a small
-// JSON summary.
+// Auth, the error boundary and the heartbeat: defineCron (ROUTEWRAP.C11).
+// An unset CRON_SECRET is refused 401 (was a 500 'cron_secret_missing'), the
+// answer is { success, ...summary } (was { ok, ...summary }), and a failed
+// batch read answers a fixed line with the detail in the log. Every other
+// path stamps exactly as before, with the summary as last_outcome.
 //
 // QSTASH.1: this cron is now the SWEEPER, not the only consumer — the
 // webhook route also publishes each queued row to QStash, whose worker
@@ -33,10 +35,9 @@
 // the dashboard is fine — open / click stats aren't real-time
 // SLAs.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { claimAndProcessQueueRow, reclaimStaleQueueClaims, MAX_ATTEMPTS } from '@/lib/postmark-queue'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -60,21 +61,7 @@ const BATCH_SIZE = 300 // events processed per cron tick
 // batch getting larger must never turn into a timeout that strands a claim.
 const TIME_BUDGET_MS = 240_000
 
-function unauthorized() {
-  return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
-}
-
-export async function GET(request) {
-  const expected = process.env.CRON_SECRET
-  if (!expected) {
-    console.error('[cron process-postmark-webhooks] CRON_SECRET is not set')
-    return NextResponse.json({ ok: false, error: 'cron_secret_missing' }, { status: 500 })
-  }
-  const got = request.headers.get('authorization') || ''
-  if (got !== `Bearer ${expected}`) return unauthorized()
-
-  const db = createServerClient()
-
+export const GET = defineCron({ heartbeat: 'process-postmark-webhooks' }, async ({ db }) => {
   // POSTMARK-QUEUE-RECLAIM.1 — give back claims whose owners died (consumer
   // killed mid-processing, or a release UPDATE that failed twice). Runs here,
   // in the sweeper, not in the QStash worker: this cron is the delivery
@@ -94,8 +81,8 @@ export async function GET(request) {
     .limit(BATCH_SIZE)
 
   if (fetchErr) {
-    console.error('[cron process-postmark-webhooks] fetch failed:', fetchErr.message)
-    return NextResponse.json({ ok: false, error: fetchErr.message }, { status: 500 })
+    logError('process-postmark-webhooks', 'queue read failed; nothing claimed, heartbeat not stamped', { err: fetchErr.message })
+    return { ok: false, body: { error: 'Could not read the Postmark event queue' } }
   }
 
   const summary = {
@@ -115,10 +102,9 @@ export async function GET(request) {
       summary.unreached = (summary.batch_size || 0) - (
         summary.processed + summary.failed + (summary.deferred || 0) + (summary.skipped || 0)
       )
-      console.warn(
-        `[cron process-postmark-webhooks] time budget spent after ${summary.processed} processed — ` +
-        `${summary.unreached} rows left pending for the next tick`
-      )
+      logWarn('process-postmark-webhooks', 'time budget spent; rows left pending for the next tick', {
+        processed: summary.processed, unreached: summary.unreached,
+      })
       break
     }
     // Claim-before-process CAS, shared with the QStash worker route
@@ -151,12 +137,11 @@ export async function GET(request) {
       const attempt = outcome.attempts ?? (row.attempts || 0) + 1
       if (outcome.deadLettered) {
         summary.dead_lettered += 1
-        console.error(
-          `[cron process-postmark-webhooks] event ${row.id} EXHAUSTED after ${attempt} attempts ` +
-          `— dead-lettered to webhook_dead_letter (provider postmark_queue): ${outcome.error}`
-        )
+        logError('process-postmark-webhooks', 'event exhausted its attempts; dead-lettered to webhook_dead_letter (provider postmark_queue)', {
+          id: row.id, attempt, err: outcome.error,
+        })
       } else {
-        console.warn(`[cron process-postmark-webhooks] event ${row.id} failed (attempt ${attempt}): ${outcome.error}`)
+        logWarn('process-postmark-webhooks', 'event failed; it retries next tick', { id: row.id, attempt, err: outcome.error })
       }
     }
   }
@@ -164,7 +149,5 @@ export async function GET(request) {
   // Pass the summary as the heartbeat outcome (mig 315's last_outcome) so a
   // tick that dead-lettered an unsubscribe is distinguishable from an idle
   // one without reading Vercel logs.
-  await stampHeartbeat('process-postmark-webhooks', summary)
-
-  return NextResponse.json({ ok: true, ...summary })
-}
+  return { body: summary, outcome: summary }
+})

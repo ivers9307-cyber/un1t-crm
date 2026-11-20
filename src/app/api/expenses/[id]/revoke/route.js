@@ -6,8 +6,8 @@
 // same period — the partial unique index excludes revoked rows.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canSeeExpenseClaim } from '@/lib/fte-expense-access'
 import { canTransition } from '@/lib/fte-expenses'
 import { logAuditEvent } from '@/lib/audit'
@@ -15,12 +15,11 @@ import { logAuditEvent } from '@/lib/audit'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id } = await params
+// withAuth only signs the caller in; the claim's visibility (404), the
+// submitter check (403) and the state check (409) follow in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const id = params?.id
 
-  const db = createServerClient()
   const { data: claim } = await db
     .from('fte_expense_claims')
     .select('id, profile_id, location_id, status, period_start, total_amount')
@@ -44,7 +43,10 @@ export async function POST(request, { params }) {
     .eq('status', 'submitted')
     .select()
     .single()
-  if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+  if (updErr) {
+    logError('expenses', 'claim not revoked', { claimId: claim.id, code: updErr.code ?? null })
+    return NextResponse.json({ success: false, error: 'Could not revoke the claim. Refresh and try again.' }, { status: 500 })
+  }
   if (!updated) return NextResponse.json({ success: false, error: 'Claim status changed concurrently — refresh and retry.' }, { status: 409 })
 
   await logAuditEvent({
@@ -58,4 +60,4 @@ export async function POST(request, { params }) {
   })
 
   return NextResponse.json({ success: true, data: updated })
-}
+})

@@ -8,8 +8,7 @@
 // rename routes are the authority; this is the form's pre-check.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { activeOrganizationId } from '@/lib/org-admin'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
@@ -22,13 +21,11 @@ export const dynamic = 'force-dynamic'
 const fail = (status, error) => NextResponse.json({ success: false, error }, { status })
 const answer = (available, problem) => NextResponse.json({ success: true, data: { available, problem } })
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return fail(401, 'Unauthorised')
-
+// withAuth only signs the caller in (its 401 'Unauthorized'); the studio
+// permission and the organisation are judged below, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const params = new URL(request.url).searchParams
   const locationId = params.get('location_id') || null
-  const db = createServerClient()
   let orgId
   if (locationId) {
     if (!uuidLike.safeParse(locationId).success) return fail(404, 'not_found')
@@ -58,4 +55,4 @@ export async function GET(request) {
     if (!(err instanceof PageReadError)) throw err
     return fail(503, 'unavailable')
   }
-}
+})

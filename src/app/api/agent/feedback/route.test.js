@@ -42,6 +42,25 @@ describe('POST /api/agent/feedback', () => {
     createServerClient.mockReturnValue(fakeDb({ id: LOC, conversation_id: 'c1', location_id: LOC, source: 'agent' }))
     expect((await post({ channel: 'instagram', message_id: LOC, rating: 'down', note: 'wrong price' })).status).toBe(200)
   })
+  it('401 signed out (ROUTEWRAP.R6)', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await post({ channel: 'whatsapp', message_id: MSG, rating: 'up' })).status).toBe(401)
+    expect(upserts).toHaveLength(0)
+  })
+  it("404 for a message at another studio, nothing saved", async () => {
+    createServerClient.mockReturnValue(fakeDb({ id: MSG, conversation_id: 'c1', location_id: 'b0000000-0000-0000-0000-000000000002', source: 'agent' }))
+    expect((await post({ channel: 'whatsapp', message_id: MSG, rating: 'up' })).status).toBe(404)
+    expect(upserts).toHaveLength(0)
+  })
+  it('a failed save is a 500 with a fixed message', async () => {
+    const db = fakeDb({ id: MSG, conversation_id: 'c1', location_id: LOC, source: 'agent' })
+    const from = db.from
+    db.from = (t) => (t === 'agent_message_feedback' ? { upsert: () => Promise.resolve({ error: { code: '23505', message: 'duplicate key on agent_message_feedback' } }) } : from(t))
+    createServerClient.mockReturnValue(db)
+    const res = await post({ channel: 'whatsapp', message_id: MSG, rating: 'up' })
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).not.toMatch(/agent_message_feedback/)
+  })
   it('refuses a message id that is not a uuid', async () => {
     expect((await post({ channel: 'whatsapp', message_id: 'not-an-id', rating: 'up' })).status).toBe(400)
     expect(upserts).toHaveLength(0)

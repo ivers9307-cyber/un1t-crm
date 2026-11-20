@@ -37,11 +37,13 @@
 // the member read (200 success:false — MEMBERRESULT.1), leaves that
 // member's existing aggregates / plan untouched (never wiped).
 //
-// Auth: same CRON_SECRET pattern as the other Vercel crons.
+// Auth, the error boundary and the stamp: defineCron (ROUTEWRAP.C11).
+// Responses carry fixed lines; database text and error detail go to the log
+// and the run row. A run where no studio completed (each one failed, or the
+// only Glofox studio's credentials could not be read at discovery, which used
+// to stamp as an idle run) answers 500 and stamps nothing.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { glofoxCredentialsForLocation, fetchUserBookingsResult, fetchMemberResult, glofoxHttpStats, glofoxHttpStatsSince } from '@/lib/glofox'
 import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
@@ -76,23 +78,23 @@ const MEMBER_STATUSES = ['member', 'credit_member']
 const PROSPECT_EXCLUDED_STATUSES = [...MEMBER_STATUSES, 'classpass_payg']
 const PROSPECT_WINDOW_DAYS = 35
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
+const MISSING_CREDS_MESSAGE = 'Glofox credentials missing on this location.'
+// The location errors the response may carry; anything else (database text)
+// is answered as a fixed line and kept on the run row and in the log.
+const PUBLIC_LOCATION_ERRORS = new Set([GLOFOX_SETTINGS_UNREADABLE_MESSAGE, MISSING_CREDS_MESSAGE])
+const publicLocationError = (msg) => (PUBLIC_LOCATION_ERRORS.has(msg) ? msg : 'Location run failed')
 
+export const GET = defineCron({ heartbeat: 'glofox-attendance-refresh' }, async ({ db }) => {
   const startedAt = Date.now()
   // CREDITSREAD.1 — Glofox traffic for this invocation (instance-wide counters).
   const httpBefore = glofoxHttpStats()
-  const db = createServerClient()
 
   // W1.M3b — same discovery as glofox-sync: the membership seam, never the
   // settings slice. A failed seam read is a 500 with no heartbeat.
   const { eligible, skipped, error: locErr } = await locationsWithSource(db, 'glofox', { module: 'glofox-attendance-refresh' })
   if (locErr) {
-    console.warn(`[cron][glofox-attendance-refresh] list locations failed: ${locErr.message}`)
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    logError('glofox-attendance-refresh', 'list locations failed; heartbeat not stamped', { err: locErr.message })
+    return { ok: false, body: { error: 'Could not read the Glofox studios' } }
   }
 
   const perLocation = []
@@ -112,25 +114,30 @@ export async function GET(request) {
   // GLOFOX414.1 — a location that failed did no work, so it withholds the stamp
   // (as glofox-detail-backfill does): the heartbeat goes stale and pages. It
   // used to stamp anyway, so from 25 Oct 2026 a failing Stillorgan run looked
-  // healthy with failed_locations: 1 and no member refreshed.
-  const failed = perLocation.filter((r) => r.status === 'failed')
-  if (failed.length > 0) {
-    logError('glofox-attendance-refresh', 'location run failed; heartbeat not stamped', {
-      failed: failed.map((r) => ({ locationId: r.location_id, error: r.error })),
-    })
-  } else {
-    await stampHeartbeat('glofox-attendance-refresh', attendanceOutcome(perLocation, budgetExhausted, glofoxHttpStatsSince(httpBefore), skipped))
-  }
-
-  return NextResponse.json({
-    success: failed.length === 0,
+  // healthy with failed_locations: 1 and no member refreshed. A failed location
+  // answers success:false at 200; a run where none completed answers 500.
+  const body = {
     locations_processed: perLocation.length,
     locations_skipped: skipped.length,
     ...skippedSummary(skipped),
     budget_exhausted: budgetExhausted,
     per_location: perLocation,
-  })
-}
+  }
+  const failed = perLocation.filter((r) => r.status === 'failed')
+  const unknown = skipped.filter((s) => s.state === 'unknown')
+  const completed = perLocation.length - failed.length
+  if (failed.length > 0 || (completed === 0 && unknown.length > 0)) {
+    logError('glofox-attendance-refresh', 'location run failed; heartbeat not stamped', {
+      failed: [
+        ...failed.map((r) => ({ locationId: r.location_id, error: r.error })),
+        ...(completed === 0 ? unknown.map((s) => ({ locationId: s.id, error: 'membership source state unknown' })) : []),
+      ],
+    })
+    for (const r of failed) r.error = publicLocationError(r.error)
+    return { ok: false, status: completed === 0 ? 500 : 200, body }
+  }
+  return { body, outcome: attendanceOutcome(perLocation, budgetExhausted, glofoxHttpStatsSince(httpBefore), skipped) }
+})
 
 function attendanceOutcome(perLocation, budgetExhausted, glofoxHttp, skipped = []) {
   const sum = (k) => perLocation.reduce((n, r) => n + (r.summary?.[k] ?? 0), 0)
@@ -183,7 +190,7 @@ async function refreshLocation(db, location, startedAt) {
   // SILENT: the error lives in the result object, so `const { data } =` threw it
   // away and the whole run then wrote its progress to runId=null.
   if (runErr) {
-    console.warn(`[cron][glofox-attendance-refresh] audit run row insert failed for ${location.id}: ${runErr.message}`)
+    logWarn('glofox-attendance-refresh', 'audit run row insert failed', { locationId: location.id, err: runErr.message })
   }
   const runId = runRow?.id
 
@@ -194,7 +201,7 @@ async function refreshLocation(db, location, startedAt) {
       throw new Error(GLOFOX_SETTINGS_UNREADABLE_MESSAGE)
     }
     if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
-      throw new Error('Glofox credentials missing on this location.')
+      throw new Error(MISSING_CREDS_MESSAGE)
     }
 
     // GLOFOXREADERS.1 — Glofox members whose contact lives at a sibling studio
@@ -324,7 +331,7 @@ async function refreshLocation(db, location, startedAt) {
         status: 'failed',
       }).eq('id', runId)
     }
-    console.warn(`[cron][glofox-attendance-refresh] location ${location.id} failed: ${msg}`)
+    logWarn('glofox-attendance-refresh', 'location run failed', { locationId: location.id, err: msg })
     return {
       location_id: location.id,
       location_name: location.name,
