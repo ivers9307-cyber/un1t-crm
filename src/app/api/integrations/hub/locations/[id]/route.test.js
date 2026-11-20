@@ -79,21 +79,28 @@ function defaultDb(over = {}) {
   })
 }
 
-beforeEach(() => { vi.clearAllMocks() })
+// withAuth makes the client before the handler runs; "before any read" means
+// no query on it.
+let idleDb
+beforeEach(() => {
+  vi.clearAllMocks()
+  idleDb = fakeDb()
+  createServerClient.mockReturnValue(idleDb)
+})
 
 describe('GET /api/integrations/hub/locations/[id] — gates', () => {
   it('401 with no session', async () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await GET(new Request('http://x'), params())
     expect(res.status).toBe(401)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(idleDb.calls).toEqual({})
   })
 
   it('404 (not 403) for a location the caller is not a member of, before any read', async () => {
     getCurrentUser.mockResolvedValue(ownerHere)
     const res = await GET(new Request('http://x'), params(OTHER))
     expect(res.status).toBe(404)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(idleDb.calls).toEqual({})
   })
 
   it('404 for a member who is not owner at THIS location (a manager here, owner elsewhere)', async () => {
@@ -105,7 +112,7 @@ describe('GET /api/integrations/hub/locations/[id] — gates', () => {
     })
     const res = await GET(new Request('http://x'), params())
     expect(res.status).toBe(404)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(idleDb.calls).toEqual({})
   })
 
   it('200 for an owner here, a master, and an org admin with the synthetic owner role', async () => {

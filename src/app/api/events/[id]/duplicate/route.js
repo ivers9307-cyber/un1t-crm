@@ -7,9 +7,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { duplicateEvent, DUPLICATE_ERRORS } from '@/lib/event-duplicate'
@@ -23,14 +23,12 @@ export const DuplicateBodySchema = z.object({
 
 const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in: `races` is first checked at ANY studio
+// (not the active one), then at the event's, so both stay here in order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  if (!uuidLike.safeParse(params.id).success) return notFound()
+  if (!uuidLike.safeParse(params?.id).success) return notFound()
 
-  const db = createServerClient()
   const { data: race } = await db.from('race_events').select('id, location_id').eq('id', params.id).maybeSingle()
   if (!race?.location_id) return notFound()
   const guard = assertLocationAccessOr404(user, race.location_id)
@@ -48,4 +46,4 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: result.message, code: result.error }, { status })
   }
   return NextResponse.json({ success: true, data: result.event })
-}
+})

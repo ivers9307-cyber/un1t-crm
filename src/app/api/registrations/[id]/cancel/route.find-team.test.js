@@ -10,6 +10,7 @@ let placedCount = 0
 let placedErr = null
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 const { getCurrentUser } = await import('@/lib/auth')
 const { POST } = await import('./route.js')
 
@@ -70,7 +71,28 @@ describe('POST /api/registrations/[id]/cancel — placed', () => {
   it('an unreadable placed count is a 500, nothing written', async () => {
     reg = { id: 'r1', status: 'confirmed', race_events: { location_id: L1 } }
     placedErr = { message: 'boom' }
-    expect((await call()).status).toBe(500)
+    const res = await call()
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('boom')
+    expect(db.queries.some((x) => x.action === 'update')).toBe(false)
+  })
+})
+
+// The gates, through the real withAuth wrapper (ROUTEWRAP.R5).
+describe('POST /api/registrations/[id]/cancel — gates', () => {
+  const L2 = 'a0000000-0000-0000-0000-000000000002'
+  it('401 signed out', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await call()).status).toBe(401)
+  })
+  it('403 for staff (no manager role anywhere), nothing read', async () => {
+    getCurrentUser.mockResolvedValue({ ...manager, role: 'staff', profileRole: 'staff', rolesByLocation: { [L1]: 'staff' } })
+    expect((await call()).status).toBe(403)
+    expect(db.queries.length).toBe(0)
+  })
+  it('404 for a registration at another studio, nothing written', async () => {
+    reg = { id: 'r1', status: 'confirmed', race_events: { location_id: L2 } }
+    expect((await call()).status).toBe(404)
     expect(db.queries.some((x) => x.action === 'update')).toBe(false)
   })
 })
