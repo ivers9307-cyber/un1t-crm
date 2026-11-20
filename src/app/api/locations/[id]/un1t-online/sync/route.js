@@ -13,8 +13,7 @@
 // 'in_progress', and nothing was read or written.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { runUn1tSync } from '@/lib/un1t-online-sync'
 import { logError } from '@/lib/log'
 
@@ -22,20 +21,9 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const locationId = params.id
-  const access = assertLocationAccessOr404(user, locationId)
-  if (access) return access
-  const role = guardMasterOrOwner(user, locationId)
-  if (role) {
-    return NextResponse.json({ success: false, error: 'Only owners and masters can sync un1t.online.' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+// The URL's studio, judged there: not one of the caller's studios is a 404;
+// roles ['owner'] at it (masters pass on profiles.role) is guardMasterOrOwner.
+export const POST = withAuth({ permission: null, location: 'param', roles: ['owner'], forbiddenMessage: 'Only owners and masters can sync un1t.online.' }, async ({ db, locationId }) => {
   try {
     const result = await runUn1tSync(db, locationId)
     return NextResponse.json({ success: true, data: result })
@@ -43,4 +31,4 @@ export async function POST(request, props) {
     logError('un1t-online-sync-now', 'sync threw', { locationId, errName: err?.name })
     return NextResponse.json({ success: false, error: 'The sync failed unexpectedly.' }, { status: 500 })
   }
-}
+})

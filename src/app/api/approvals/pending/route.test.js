@@ -9,6 +9,7 @@ vi.mock('@/lib/auth', async () => {
   return { ...actual, getCurrentUser: vi.fn() }
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 vi.mock('@/lib/approvals/registry', () => ({ getPendingApprovals: vi.fn() }))
 vi.mock('@/lib/approvals/all-studios', () => ({
   getPendingApprovalsAllStudios: vi.fn(),
@@ -88,11 +89,11 @@ describe('GET /api/approvals/pending', () => {
     expect(getPendingApprovals).not.toHaveBeenCalled()
   })
 
-  it('a thrown error is a 500 with the message, as before', async () => {
+  it('a thrown error is a 500 with a fixed code, never the error text (ROUTEWRAP.R5)', async () => {
     getCurrentUser.mockResolvedValue(user)
     getPendingApprovals.mockRejectedValue(new Error('db down'))
     const res = await GET(req())
     expect(res.status).toBe(500)
-    expect(await res.json()).toEqual({ success: false, error: 'db down' })
+    expect(await res.json()).toEqual({ success: false, error: 'fetch_failed' })
   })
 })

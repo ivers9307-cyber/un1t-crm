@@ -4,9 +4,8 @@
 // Detail-route IDOR posture: a missing session or missing per-location
 // permission both answer 404 (not 403) — same as the sibling session routes.
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { sessionToExampleText } from '@/lib/hyrox/example-text'
 import { MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
@@ -14,11 +13,10 @@ import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-setti
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(request, { params }) {
-  const { id } = await params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const db = createServerClient()
+// withAuth only signs the caller in; the permission is judged at the
+// session's own studio below (404 when missing), as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const id = params?.id
   const { data: session } = await db.from('hyrox_sessions').select('*').eq('id', id).maybeSingle()
   if (!session) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   if (!hasPermissionForLocation(user, session.location_id, APPROVAL_CATEGORY_PERMISSION.hyrox_sessions)) {
@@ -43,4 +41,4 @@ export async function POST(request, { params }) {
   // C32 HYROXSTAR.1 — hand the entry back so the page adds it to its own
   // list: its house-style Save then keeps it instead of deleting it.
   return NextResponse.json({ success: true, data: { added: true, example: added } })
-}
+})

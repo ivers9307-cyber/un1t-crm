@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
@@ -10,9 +10,9 @@ export const dynamic = 'force-dynamic'
 // event location, flagged with which one is the org master. Feeds the
 // "Send comms from" picker on the event form. Access-controlled by
 // assertLocationAccess on the event's own location; results are org-scoped.
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in: `races` is judged anywhere first, then at
+// the event's location (never the active studio), as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   // ROLESWEEP.1b — coarse pre-check (a caller holding `races` nowhere keeps
   // the old refusal, even without a param); judged at the event's location below.
   if (!hasPermissionAtAnyLocation(user, 'races')) {
@@ -27,7 +27,6 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: anchor } = await db.from('locations')
     .select('organization_id').eq('id', eventLocationId).maybeSingle()
   if (!anchor?.organization_id) return NextResponse.json({ success: true, data: [] })
@@ -40,4 +39,4 @@ export async function GET(request) {
   const masterId = org?.master_location_id || null
   const data = (locs || []).map(l => ({ id: l.id, name: l.name, is_master: l.id === masterId }))
   return NextResponse.json({ success: true, data })
-}
+})

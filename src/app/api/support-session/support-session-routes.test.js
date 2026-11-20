@@ -5,7 +5,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const getCurrentUser = vi.fn()
-vi.mock('@/lib/auth', () => ({ getCurrentUser: () => getCurrentUser() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: () => getCurrentUser() }))
+vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: vi.fn(() => ({})) }))
 
 const startSupportSession = vi.fn()
 const switchSupportMode = vi.fn()
@@ -16,6 +17,8 @@ vi.mock('@/lib/support-session', () => ({
   stopSupportSession: (...a) => stopSupportSession(...a),
 }))
 
+// exit is on withAuth, which opens the service-role client before the handler.
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
 vi.mock('next/headers', () => ({ headers: async () => new Headers() }))
 vi.mock('@/lib/validate', () => ({
@@ -90,16 +93,19 @@ describe('switch — master only', () => {
 })
 
 describe('exit — always clears (defensive), audited only when a session closed', () => {
-  it('unauthenticated → 401', async () => {
+  it('unauthenticated → 401, nothing stopped', async () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await exitPOST(req())
     expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(stopSupportSession).not.toHaveBeenCalled()
   })
 
   it('master in a session → stops it via the real master id', async () => {
     getCurrentUser.mockResolvedValue({ id: 'owner-x', impersonatingFrom: { masterId: 'master-1' } })
     const res = await exitPOST(req())
     expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true })
     expect(stopSupportSession).toHaveBeenCalledWith({ masterUserId: 'master-1' })
   })
 })

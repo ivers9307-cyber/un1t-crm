@@ -5,8 +5,8 @@
 // per-location failure is recorded and the run continues and stamps.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const h = vi.hoisted(() => ({ db: null, rows: [], unknown: new Set(), override: new Map() }))
-vi.mock('@/lib/supabase', () => ({ createServerClient: () => h.db }))
+const h = vi.hoisted(() => ({ db: null, rows: [], unknown: new Set(), override: new Map(), clients: 0 }))
+vi.mock('@/lib/supabase', () => ({ createServerClient: () => { h.clients++; return h.db } }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/membership-snapshot', () => ({
@@ -34,22 +34,33 @@ import { GET } from './route.js'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { writeMembershipSnapshot, computeMembershipCounts } from '@/lib/membership-snapshot'
 import { un1tOnlineReads } from '@/lib/membership/reads/un1t-online'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { fakeDb } from '@/lib/time-off.test-helpers'
 import { ESTATE_2026_10, ESTATE_2026_10_17, HATCH_ID, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
 
-const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
+const req = (auth = 'Bearer test-secret') => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? auth : null) } })
 const visited = () => writeMembershipSnapshot.mock.calls.map(([, id]) => id)
 const useEstate = (rows, opts) => { h.rows = rows; h.db = fakeDb(locationsResolver(rows, opts)) }
-beforeEach(() => { process.env.CRON_SECRET = 'test-secret'; vi.clearAllMocks(); h.unknown = new Set(); h.override = new Map() })
+beforeEach(() => { process.env.CRON_SECRET = 'test-secret'; vi.clearAllMocks(); h.unknown = new Set(); h.override = new Map(); h.clients = 0 })
 
 describe('GET /api/cron/membership-snapshot — snapshots sources that provide member counts', () => {
-  it('snapshots Stillorgan, skips the five none locations with a count, stamps', async () => {
+  it('401 without the cron secret: nothing read, nothing written, nothing stamped', async () => {
     useEstate(ESTATE_2026_10)
-    const out = await (await GET(req())).json()
+    const res = await GET(req('Bearer wrong'))
+    expect(res.status).toBe(401)
+    expect(h.clients).toBe(0)
+    expect(visited()).toEqual([])
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('snapshots Stillorgan, skips the five none locations with a count, stamps exactly its own row', async () => {
+    useEstate(ESTATE_2026_10)
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const out = await res.json()
     expect(visited()).toEqual([STILLORGAN_ID])
-    expect(out).toMatchObject({ success: true, locations_processed: 1, skipped_no_source: 5 })
-    expect(stampHeartbeat).toHaveBeenCalledWith('membership-snapshot')
+    expect(out).toMatchObject({ success: true, locations_processed: 1, locations_failed: 0, skipped_no_source: 5 })
+    expect(stampHeartbeat.mock.calls).toEqual([['membership-snapshot']])
   })
 
   it('UN1TREAD.5 — snapshots Stillorgan (glofox) and Hatch (un1t.online, un1t counts); still skips the four none locations', async () => {
@@ -69,14 +80,21 @@ describe('GET /api/cron/membership-snapshot — snapshots sources that provide m
 
   it('a failed un1t counts read records that location\'s error and continues; the heartbeat still stamps', async () => {
     useEstate(ESTATE_2026_10_17)
-    un1tOnlineReads.membershipCounts.mockRejectedValueOnce(new Error('un1t_subscriptions: boom'))
-    const out = await (await GET(req())).json()
+    const err = new Error('un1t_subscriptions: boom')
+    un1tOnlineReads.membershipCounts.mockRejectedValueOnce(err)
+    const res = await GET(req())
+    // ROUTEWRAP.C9 — a failed run that still stamps: success:false, 200 as before.
+    expect(res.status).toBe(200)
+    const out = await res.json()
     expect(visited()).toEqual([STILLORGAN_ID])
-    expect(out).toMatchObject({ success: false, locations_processed: 2, skipped_no_source: 4 })
-    expect(out.first_error).toContain(HATCH_ID)
-    expect(out.first_error).toContain('un1t_subscriptions: boom')
-    expect(out.snapshots.find((s) => s.location_id === HATCH_ID).error).toBe('un1t_subscriptions: boom')
-    expect(stampHeartbeat).toHaveBeenCalledWith('membership-snapshot')
+    expect(out).toMatchObject({ success: false, locations_processed: 2, locations_failed: 1, skipped_no_source: 4 })
+    expect(out.snapshots.find((s) => s.location_id === HATCH_ID).error).toBe('snapshot failed')
+    expect(stampHeartbeat.mock.calls).toEqual([['membership-snapshot']])
+    // The error text is logged (ids only beside it), never answered.
+    expect(JSON.stringify(out)).not.toContain('boom')
+    expect(JSON.stringify(out)).not.toContain('un1t_subscriptions')
+    expect(out).not.toHaveProperty('first_error')
+    expect(logError).toHaveBeenCalledWith('membership-snapshot', 'location snapshot failed', { locationId: HATCH_ID, err })
   })
 
   it('a Glofox location in state unconfigured (credentials missing) IS snapshotted from stored contacts', async () => {
@@ -120,14 +138,18 @@ describe('GET /api/cron/membership-snapshot — snapshots sources that provide m
     for (const r of ESTATE_2026_10_17) h.unknown.add(r.id)
     const res = await GET(req())
     expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'membership source unreadable for every eligible location', skipped_unknown: ESTATE_2026_10_17.length })
     expect(visited()).toEqual([])
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
-  it('a failed locations read answers 500 and does NOT stamp', async () => {
+  it('a failed locations read answers a fixed 500 (no DB text) and does NOT stamp', async () => {
     h.rows = ESTATE_2026_10
-    h.db = fakeDb((q) => (q.table === 'locations' ? { data: null, error: { message: 'down' } } : { data: [], error: null }))
-    expect((await GET(req())).status).toBe(500)
+    h.db = fakeDb((q) => (q.table === 'locations' ? { data: null, error: { message: 'relation secret_locations down' } } : { data: [], error: null }))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'could not list locations' })
+    expect(logWarn).toHaveBeenCalled()
     expect(visited()).toEqual([])
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
