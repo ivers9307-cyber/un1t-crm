@@ -6,8 +6,8 @@
 // master(s) so they know there's something in their queue.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canSeeExpenseClaim } from '@/lib/fte-expense-access'
 import { canTransition, periodLabel } from '@/lib/fte-expenses'
 import { sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
@@ -16,12 +16,11 @@ import { logAuditEvent } from '@/lib/audit'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id } = await params
+// withAuth only signs the caller in. Every check after it runs by hand, in the
+// order it always has: visibility 404, submitter 403, state 409, items 400.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const id = params?.id
 
-  const db = createServerClient()
   const { data: claim } = await db
     .from('fte_expense_claims')
     .select('id, profile_id, location_id, status, period_start, item_count, total_amount, location:location_id(name)')
@@ -54,7 +53,10 @@ export async function POST(request, { params }) {
     .eq('status', 'draft')
     .select()
     .single()
-  if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+  if (updErr) {
+    logError('expenses', 'claim submit update failed', { claimId: id, err: updErr })
+    return NextResponse.json({ success: false, error: 'Could not submit the claim.' }, { status: 500 })
+  }
   if (!updated) return NextResponse.json({ success: false, error: 'Claim status changed concurrently — refresh and retry.' }, { status: 409 })
 
   // Notify approvers (owners at the location + masters platform-
@@ -83,4 +85,4 @@ export async function POST(request, { params }) {
   })
 
   return NextResponse.json({ success: true, data: updated })
-}
+})

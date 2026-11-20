@@ -14,21 +14,20 @@
 // whose label we still want to show.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const LIMIT = 50
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user || user.profileRole !== 'master') {
+// withAuth only signs the caller in (signed out is its 401). Masters only
+// (profiles.role, never a studio role), refused with the same 403 'Forbidden'.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
+  if (user.profileRole !== 'master') {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-
-  const db = createServerClient()
 
   const { data: attempts, error } = await db
     .from('pin_login_attempts')
@@ -36,7 +35,8 @@ export async function GET() {
     .order('attempted_at', { ascending: false })
     .limit(LIMIT)
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('studio-devices-activity', 'attempts read failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not read the sign-in activity.' }, { status: 500 })
   }
   const rows = attempts || []
 
@@ -81,4 +81,4 @@ export async function GET() {
   })
 
   return NextResponse.json({ success: true, attempts: activity })
-}
+})
