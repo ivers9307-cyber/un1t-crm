@@ -34,9 +34,17 @@ describe('POST /api/pipelines/[id]/enable', () => {
     expect(setBoardEnabled).not.toHaveBeenCalled()
   })
 
+  it('signedOutIs401', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await POST(req(), props)).status).toBe(401)
+    expect(setBoardEnabled).not.toHaveBeenCalled()
+  })
+
   it('managerCannotSwitch', async () => {
     getCurrentUser.mockResolvedValue(userWith('manager'))
-    expect((await POST(req(), props)).status).toBe(403)
+    const res = await POST(req(), props)
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ success: false, error: 'Only owners and masters can switch boards on or off.' })
     expect(setBoardEnabled).not.toHaveBeenCalled()
   })
 

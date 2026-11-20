@@ -7,15 +7,16 @@
 // matching the underlying session.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { stopImpersonation } from '@/lib/impersonation'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in (401 as before) — no role, no studio: any
+// session may clear its own cookie. The body is unchanged: stop, then the
+// audit row only for a real impersonation session.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request }) => {
 
   // The "real" master id is on impersonatingFrom when active. If
   // we're not in an impersonation session, fall back to the user id —
@@ -42,4 +43,4 @@ export async function POST(request) {
   }
 
   return NextResponse.json({ success: true })
-}
+})

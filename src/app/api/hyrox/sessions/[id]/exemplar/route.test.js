@@ -15,6 +15,7 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.f
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { fakeLocationsDb, BOOM } from '@/lib/location-settings.test-helpers'
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
@@ -26,6 +27,23 @@ const db = (locRead, write) => fakeLocationsDb({ reads: locRead, write, tables: 
 beforeEach(() => { vi.clearAllMocks(); getCurrentUser.mockResolvedValue({ id: 'u1', role: 'head_coach', locations: [{ id: LOC }] }) })
 
 describe('POST …/exemplar', () => {
+  it('401 signed out, nothing read', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const d = db({ data: { settings: {} }, error: null })
+    createServerClient.mockReturnValue(d)
+    expect((await call()).status).toBe(401)
+    expect(d.writes).toEqual([])
+  })
+  it('404 without the permission at the session\'s studio, nothing written', async () => {
+    hasPermissionForLocation.mockReturnValueOnce(false)
+    const d = db({ data: { settings: { hyrox: { style_examples: [] } } }, error: null })
+    createServerClient.mockReturnValue(d)
+    const res = await call()
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Not found' })
+    expect(hasPermissionForLocation).toHaveBeenCalledWith(expect.anything(), LOC, expect.any(String))
+    expect(d.writes).toEqual([])
+  })
   it('a failed settings read → 500, NOTHING written', async () => {
     const d = db({ data: null, error: BOOM })
     createServerClient.mockReturnValue(d)
