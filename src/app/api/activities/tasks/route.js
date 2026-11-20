@@ -8,8 +8,8 @@
 // /api/tasks and /api/activities, unchanged.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, timeOfDay, activityTypeSchema } from '@/lib/schemas'
 import { activitiesWriteForbiddenAnywhere, taskWriteRefusalAt, taskLinksRefusal } from '@/lib/activity-web-writes'
@@ -32,9 +32,9 @@ const CreateTaskSchema = z.object({
 // TasksPage renders the new card from this shape (contact link, assignee).
 const TASK_ROW = '*, contacts(id, name), profiles!activities_assignee_id_fkey(id, full_name)'
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the coarse rule (403), the body, the
+// body studio's membership (403) and the rule there keep their order here.
+export const POST = withAuth({ permission: null, location: false }, async ({ request, user, db }) => {
   const coarse = activitiesWriteForbiddenAnywhere(user)
   if (coarse) return coarse
 
@@ -49,7 +49,6 @@ export async function POST(request) {
   const refused = taskWriteRefusalAt(user, body.location_id)
   if (refused) return refused
 
-  const db = createServerClient()
   const linkRefusal = await taskLinksRefusal(db, {
     locationId: body.location_id, contactId: body.contact_id, assigneeId: body.assignee_id,
   })
@@ -66,4 +65,4 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Could not save the task. Try again.' }, { status: 500 })
   }
   return NextResponse.json({ success: true, data })
-}
+})

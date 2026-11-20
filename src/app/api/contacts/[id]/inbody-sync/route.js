@@ -10,25 +10,21 @@
 // page). Service-role route, so the permission check IS the access gate.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { getUserLocationIds } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-  // ROLESWEEP.1c — coarse pre-check; judged at the contact's location below.
-  if (!hasPermissionAtAnyLocation(user, 'consultations')) {
-    return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+// ROLESWEEP.1c — coarse pre-check (`consultations` somewhere, the same 'Not
+// permitted' 403); judged at the contact's location below. A signed-out call is
+// withAuth's 401 'Unauthorized' (it said 'Unauthorised').
+export const POST = withAuth({
+  permission: null, location: false,
+  allow: (user) => hasPermissionAtAnyLocation(user, 'consultations'), forbiddenMessage: 'Not permitted',
+}, async ({ user, db, params }) => {
   const { data: contact, error: lookupErr } = await db
     .from('contacts')
     .select('id, phone, wa_phone, location_id')
@@ -66,8 +62,9 @@ export async function POST(_request, props) {
     .select('id, status')
     .single()
   if (insertErr) {
-    return NextResponse.json({ success: false, error: insertErr.message }, { status: 500 })
+    logError('inbody-sync', 'backfill request insert failed', { contactId: contact.id, err: insertErr })
+    return NextResponse.json({ success: false, error: 'Could not queue the InBody sync. Try again.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: { request_id: req.id, status: req.status } })
-}
+})

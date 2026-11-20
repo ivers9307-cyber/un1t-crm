@@ -7,8 +7,8 @@
 // (if still possible) through the normal campaign cancel path.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 
 // GATES-2 — /send's rule (email at the campaign's studio); before, any member
@@ -18,13 +18,11 @@ const emailForbidden = () => NextResponse.json(
 
 export const dynamic = 'force-dynamic'
 
-export async function DELETE(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (the same 401); email somewhere (403), the
+// campaign (404), its studio (404) and email there (403) keep their order here.
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'email')) return emailForbidden()
 
-  const db = createServerClient()
   const { data: campaign, error } = await db
     .from('campaigns')
     .select('id, location_id, resend_enabled')
@@ -68,4 +66,4 @@ export async function DELETE(_request, props) {
     return NextResponse.json({ success: false, error: 'Could not cancel the resend. Try again.' }, { status: 500 })
   }
   return NextResponse.json({ success: true })
-}
+})

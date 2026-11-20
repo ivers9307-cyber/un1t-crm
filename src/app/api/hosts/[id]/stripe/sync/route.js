@@ -6,8 +6,8 @@
 // account.updated webhook keeps it fresh thereafter. (EVENTS-HOST.2)
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { HOST_COLS, loadHostForOrg } from '@/lib/hosts'
 import { retrieveAccountStatus } from '@/lib/payments/stripe-connect'
 import { registerCheckoutDomainsForAccount } from '@/lib/payments/apple-pay-domains'
@@ -15,9 +15,9 @@ import { registerCheckoutDomainsForAccount } from '@/lib/payments/apple-pay-doma
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-async function gate() {
-  const user = await getCurrentUser()
-  if (!user) return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
+// withAuth only signs the caller in (the same 401); the manager rule (403) and
+// the active organisation (400) keep their order and texts here.
+function gate(user) {
   if (!['master', 'owner', 'manager'].includes(user.role)) {
     return { error: NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 }) }
   }
@@ -26,11 +26,9 @@ async function gate() {
   return { user, orgId }
 }
 
-export async function POST(_request, props) {
-  const params = await props.params
-  const g = await gate()
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const g = gate(user)
   if (g.error) return g.error
-  const db = createServerClient()
   const host = await loadHostForOrg(db, params.id, g.orgId)
   if (!host) return NextResponse.json({ success: false, error: 'Host not found' }, { status: 404 })
   if (!host.stripe_connected_account_id) {
@@ -54,16 +52,20 @@ export async function POST(_request, props) {
       .eq('id', host.id)
       .select(HOST_COLS)
       .single()
-    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    if (error) {
+      logError('host-stripe-sync', 'status save failed', { hostId: host.id, err: error })
+      return NextResponse.json({ success: false, error: 'Could not save the Stripe status. Try again.' }, { status: 500 })
+    }
     // HOSTAPPLEPAY.1 — once the host can charge, register our checkout
     // domains on their account so Apple Pay shows on their checkout. Best
     // effort (never throws); the daily cron retries anything missed.
     if (st.chargesEnabled) await registerCheckoutDomainsForAccount(db, host.stripe_connected_account_id)
     return NextResponse.json({ success: true, data })
   } catch (e) {
+    logError('host-stripe-sync', 'Stripe sync failed', { hostId: host.id, err: e })
     return NextResponse.json(
-      { success: false, error: `Stripe sync failed: ${e.message || 'unknown'}` },
+      { success: false, error: 'Stripe sync failed. Try again.' },
       { status: 502 },
     )
   }
-}
+})
