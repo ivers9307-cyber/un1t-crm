@@ -8,12 +8,14 @@
 // Auth (TRAINERSROLE.1): master, or owner/manager AT THIS LOCATION
 // (ADMIN_ROLES). Membership first (404), then the role judged at the PATH id
 // with hasRoleAtLocation, never `user.role` (the ACTIVE studio's role). Same
-// gate as /glofox-trainers and /unifi-users.
+// gate as /glofox-trainers and /unifi-users. withAuth's 'param' mode runs the
+// same two checks in the same order with the same texts (404 'Not found', then
+// ADMIN_ROLES at the path id, 403 'forbidden'); a signed-out call is its 401.
 
 import { NextResponse } from 'next/server'
 import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logWarn } from '@/lib/log'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { glofoxCredentialsForLocation, listGlofoxMemberships } from '@/lib/glofox'
 import { learnedPrivateMemberships } from '@/lib/glofox-catalog'
@@ -21,21 +23,7 @@ import { learnedPrivateMemberships } from '@/lib/glofox-catalog'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'unauthenticated' }, { status: 401 })
-
-  const { id: locationId } = await params
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'missing_location_id' }, { status: 400 })
-  }
-  const denied = assertLocationAccessOr404(user, locationId)
-  if (denied) return denied
-  if (!hasRoleAtLocation(user, locationId, ADMIN_ROLES)) {
-    return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+export const GET = withAuth({ permission: null, location: 'param', roles: ADMIN_ROLES, forbiddenMessage: 'forbidden' }, async ({ db, locationId }) => {
   const creds = await glofoxCredentialsForLocation(db, locationId)
   // REGISTRYREAD.1b: a failed settings read is not "not configured".
   if (creds.readError) {
@@ -50,9 +38,10 @@ export async function GET(_request, { params }) {
 
   const result = await listGlofoxMemberships(creds)
   if (!result.ok) {
+    logWarn('glofox-memberships', 'membership list failed', { locationId, err: result.error })
     return NextResponse.json({
       success: false, error: 'glofox_request_failed',
-      message: result.error,
+      message: 'Could not load the memberships from Glofox. Try again.',
     }, { status: 502 })
   }
   // GLOFOXPRIVATE.1 — Glofox's list returns only public memberships; the ones
@@ -69,4 +58,4 @@ export async function GET(_request, { params }) {
     count: memberships.length,
     ...(learned.error ? { private_unread: true } : {}),
   })
-}
+})

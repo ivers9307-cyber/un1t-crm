@@ -10,8 +10,8 @@
 // index (mig 641): 409 already_offered.
 
 import { NextResponse, after } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { readOfferBlock, createOffer, processOffer } from '@/lib/shift-offer-server'
 import { offerRefusal, OFFER_REFUSALS } from '@shared/offer-to-team'
@@ -23,20 +23,17 @@ import { logError } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  // Coarse only: the real decision is at the shift's studio.
-  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
-    return NextResponse.json({ success: false, error: 'Only a manager can offer a shift to the team' }, { status: 403 })
-  }
+// Signed in (401), then the coarse manager rule (the same 403 text); the real
+// decision is at the shift's studio below.
+export const POST = withAuth({
+  permission: null, location: false,
+  allow: (user) => hasRoleAtAnyLocation(user, MANAGER_ROLES), forbiddenMessage: 'Only a manager can offer a shift to the team',
+}, async ({ user, db, params }) => {
   // A malformed id is an id that does not exist: 404, nothing read.
   if (!uuidLike.safeParse(params?.id).success) {
     return NextResponse.json({ success: false, error: 'Shift not found' }, { status: 404 })
   }
 
-  const db = createServerClient()
   const { block, error } = await readOfferBlock(db, params.id)
   if (error) return NextResponse.json({ success: false, error: 'Could not read the shift' }, { status: 500 })
   if (!block) return NextResponse.json({ success: false, error: 'Shift not found' }, { status: 404 })
@@ -69,4 +66,4 @@ export async function POST(_request, props) {
     success: true,
     data: { offer_id: created.offer.id, notice: inStaffPushHours(nowMs, tz) ? 'now' : 'morning' },
   }, { status: 201 })
-}
+})

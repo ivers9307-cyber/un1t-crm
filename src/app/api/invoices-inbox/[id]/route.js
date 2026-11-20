@@ -4,7 +4,9 @@
 // DELETE /api/invoices-inbox/[id]  — delete (rejected rows only; master + owner)
 
 import { NextResponse } from 'next/server'
-import { loadInvoiceForUser } from '../_helpers'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
+import { loadInvoiceForCaller } from '../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -20,18 +22,20 @@ export function removalBucket(row) {
   return row?.attachment_bucket || STORAGE_BUCKET
 }
 
-export async function GET(_request, { params }) {
-  const { id } = await params
-  const ctx = await loadInvoiceForUser(id)
+// withAuth only signs the caller in; loadInvoiceForCaller keeps the
+// invoices_inbox permission and the master / owner-at-the-row's-studio check
+// (404 on no access), as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, params }) => {
+  const ctx = await loadInvoiceForCaller(user, params?.id)
   if (ctx.response) return ctx.response
   return NextResponse.json({ success: true, data: ctx.row })
-}
+})
 
 // Deletion is allowed only for terminal-rejected rows so the inbox
 // doesn't accumulate junk. Forwarded rows stay around for audit.
-export async function DELETE(_request, { params }) {
-  const { id } = await params
-  const ctx = await loadInvoiceForUser(id)
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, params }) => {
+  const id = params?.id
+  const ctx = await loadInvoiceForCaller(user, id)
   if (ctx.response) return ctx.response
   const { db, row } = ctx
 
@@ -53,7 +57,8 @@ export async function DELETE(_request, { params }) {
     .eq('id', id)
     .eq('status', 'rejected') // belt + braces against a race
   if (delErr) {
-    return NextResponse.json({ success: false, error: delErr.message }, { status: 500 })
+    logError('invoices-inbox', 'rejected row not deleted', { invoiceId: id, code: delErr.code ?? null })
+    return NextResponse.json({ success: false, error: 'Could not delete the invoice. Try again.' }, { status: 500 })
   }
   return NextResponse.json({ success: true })
-}
+})

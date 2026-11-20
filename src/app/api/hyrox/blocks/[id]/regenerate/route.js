@@ -6,9 +6,9 @@
 // remaining weeks". Destructive, so the client confirms before calling.
 // Same 404-not-403 detail-route posture as the sibling expand/regenerate routes.
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { anthropicMessages } from '@/lib/anthropic'
 import { resolveHyroxSettings } from '@/lib/hyrox/settings'
@@ -21,12 +21,10 @@ export const dynamic = 'force-dynamic'
 // (POST /api/hyrox/blocks, sessions/[id]/regenerate), which use 300.
 export const maxDuration = 300
 
-export async function POST(_request, { params }) {
-  const { id } = await params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
+// withAuth only signs the caller in (the same 401); the block (404) and the
+// hyrox key at its studio (404) keep their order here.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const { id } = params
   const { data: block } = await db.from('hyrox_blocks')
     .select('id, location_id, weeks, sessions_per_week, difficulty_dial')
     .eq('id', id)
@@ -62,12 +60,18 @@ export async function POST(_request, { params }) {
     .eq('block_id', id)
     .neq('status', 'published')
     .select('id')
-  if (delErr) return NextResponse.json({ success: false, error: delErr.message }, { status: 400 })
+  if (delErr) {
+    logError('hyrox', 'regenerate: session delete failed', { blockId: id, err: delErr })
+    return NextResponse.json({ success: false, error: 'Could not clear the old sessions. Nothing was changed. Try again.' }, { status: 400 })
+  }
 
   const { error: updErr } = await db.from('hyrox_blocks')
     .update({ arc: arcRes.data, generated_by: HYROX_MODEL })
     .eq('id', id)
-  if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 400 })
+  if (updErr) {
+    logError('hyrox', 'regenerate: block update failed', { blockId: id, err: updErr })
+    return NextResponse.json({ success: false, error: 'Could not save the new plan. Try again.' }, { status: 400 })
+  }
 
   return NextResponse.json({ success: true, data: { regenerated: true, sessionsDeleted: (deleted || []).length } })
-}
+})

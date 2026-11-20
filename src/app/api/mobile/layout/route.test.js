@@ -37,6 +37,19 @@ describe('PUT /api/mobile/layout', () => {
     expect(upsert.mock.calls[0][0]).toMatchObject({ profile_id: 'u1', location_id: LOC1, bar: ['pipeline', 'schedule', 'whatsapp'] })
   })
 
+  it('a failed save is a 400 with a fixed message (ROUTEWRAP.R6)', async () => {
+    getCurrentUser.mockResolvedValue({
+      id: 'u1', role: 'manager', employment_type: 'fte',
+      locations: [{ id: LOC1 }],
+      rolesByLocation: { [LOC1]: 'manager' },
+      assignmentsByLocation: { [LOC1]: { permissions: { mobile: {} } } },
+    })
+    upsert.mockReturnValueOnce({ error: { code: '23503', message: 'violates foreign key constraint "mobile_bar_prefs_profile_id_fkey"' } })
+    const res = await PUT(req({ location_id: LOC1, bar: ['pipeline'] }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).not.toMatch(/constraint/)
+  })
+
   it('401 when unauthenticated', async () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await PUT(req({ location_id: LOC1, bar: [] }))

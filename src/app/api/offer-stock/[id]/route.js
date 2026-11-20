@@ -6,10 +6,10 @@
 // sold out. Paid purchases are never touched.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { ADMIN_ROLES } from '@/lib/schemas'
-import { createServerClient } from '@/lib/supabase'
 import { uuidLike, validateBody } from '@/lib/validate'
 import { logError } from '@/lib/log'
 
@@ -21,16 +21,15 @@ export const offerStockSchema = z.object({
 
 const NOT_FOUND = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
-export async function PATCH(request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the id, the body, the offer's studio
+// (404) and the role AT that studio (403) follow in their old order.
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const id = params?.id
   if (!uuidLike.safeParse(id).success) return NOT_FOUND()
 
   const parsed = await validateBody(request, offerStockSchema)
   if (!parsed.ok) return parsed.response
 
-  const db = createServerClient()
   const { data: offer, error: readErr } = await db
     .from('sale_offers')
     .select('id, location_id')
@@ -58,4 +57,4 @@ export async function PATCH(request, props) {
     return NextResponse.json({ success: false, error: 'Could not save the limit' }, { status: 500 })
   }
   return NextResponse.json({ success: true, data: { id, stock_limit: parsed.data.stock_limit } })
-}
+})

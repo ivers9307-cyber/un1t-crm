@@ -29,8 +29,11 @@
 // stamped WITHOUT a send and said with a logError (mirrors 1a's bounded
 // retries). Nothing is sent without a claim either way. The window is counted
 // in the challenge studio's own days (TZ.6).
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+//
+// ROUTEWRAP.C10 — defineCron owns the secret check, the error boundary and the
+// stamp. A failed challenges read used to be swallowed into "no challenges"
+// and the slot tick stamped as clean; it now answers 500 with no heartbeat.
+import { defineCron } from '@/lib/define-cron'
 import { sendCustomerPush } from '@/lib/customer-push'
 import { pushOutcome } from '@/lib/push-outcome'
 import { computeStandings, computeCollective } from '@/lib/challenges-io'
@@ -39,7 +42,6 @@ import { getLocationZone } from '@/lib/location-time'
 import { buildChallengeStartPush, buildChallengeResultPush, buildCollectiveTargetPush } from '@/lib/challenge-notifications'
 import { getLocationBranding } from '@/lib/location-branding'
 import { logInfo, logWarn, logError } from '@/lib/log'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { selectAll } from '@/lib/select-all'
 import { addDaysIn } from '@/lib/location-time'
 import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
@@ -138,37 +140,40 @@ async function tokenHolders(db, locationId) {
 
 export async function POST(request) { return GET(request) }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'run-challenge-events' }, async ({ db }) => {
   const nowMs = Date.now()
   const stamp = new Date(nowMs).toISOString()
 
   // TZ.6 — which studios are at their daily slot this tick (claimed, so never
   // twice in one local day). An unreadable zone acts for nobody.
   const gate = await gateDailySlot(db, 'run-challenge-events', { nowMs, module: MODULE })
-  if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
+  if (!gate.ok) return { ok: false, body: { ok: false, slot: gate.summary } }
   if (gate.slots.size === 0) {
     // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
     // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
-    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, started: 0, ended: 0, targets: 0, failed: 0, gave_up: 0 }, { status: gate.faulted ? 500 : 200 })
+    const body = { ok: !gate.faulted, slot: gate.summary, started: 0, ended: 0, targets: 0, failed: 0, gave_up: 0 }
+    return gate.faulted ? { ok: false, body } : { body, stamp: false }
   }
 
   // Only challenges that still need an event: start or end not yet announced.
   // (Active-collective target checks need end-null, so they're covered.)
   // AUDIT P1-2 — paginated across all locations; the un-announced set grows
   // unbounded as locations onboard, and a 1000-row cap would silently stop
-  // announcing once it's exceeded. Keep best-effort so a fetch error doesn't
-  // skip the heartbeat stamp at the end of the tick.
-  const challenges = await selectAll((from, to) => db
-    .from('challenges')
-    .select('*')
-    .or('announced_start_at.is.null,announced_end_at.is.null')
-    .order('id', { ascending: true })
-    .range(from, to)).catch(() => [])
+  // announcing once it's exceeded. ROUTEWRAP.C10: a failed read is not "no
+  // challenges": nothing is announced, the tick answers 500 and the heartbeat
+  // is withheld (the slot is already claimed, so it pages rather than retries).
+  let challenges
+  try {
+    challenges = await selectAll((from, to) => db
+      .from('challenges')
+      .select('*')
+      .or('announced_start_at.is.null,announced_end_at.is.null')
+      .order('id', { ascending: true })
+      .range(from, to))
+  } catch (err) {
+    logError(MODULE, 'challenges unreadable; nothing announced this tick, heartbeat not stamped', { err })
+    return { ok: false, body: { ok: false, error: 'challenges unreadable', slot: gate.summary, started: 0, ended: 0, targets: 0, failed: 0, gave_up: 0 } }
+  }
   let started = 0, ended = 0, targets = 0, failed = 0, gaveUp = 0
   const count = (outcome, bump) => {
     if (ANNOUNCED.has(outcome)) bump()
@@ -230,8 +235,6 @@ export async function GET(request) {
     }
   }
   logInfo(MODULE, 'tick', { started, ended, targets, failed, gave_up: gaveUp, slot: gate.summary })
-  if (slotTickStampable(gate)) {
-    await stampHeartbeat('run-challenge-events').catch((err) => logWarn('cron-challenge-events', 'heartbeat failed', { err }))
-  }
-  return NextResponse.json({ ok: !gate.faulted, started, ended, targets, failed, gave_up: gaveUp }, { status: gate.faulted ? 500 : 200 })
-}
+  // Slots held here, so stampable exactly when the gate did not fault.
+  return { ok: slotTickStampable(gate), body: { ok: !gate.faulted, started, ended, targets, failed, gave_up: gaveUp } }
+})

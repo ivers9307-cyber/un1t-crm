@@ -9,8 +9,8 @@
 // column yet — add one (+ a channel selector) as a follow-up.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { loadHostForOrg } from '@/lib/hosts'
@@ -20,18 +20,13 @@ import { sendHostOnboardingEmail } from '@/lib/host-onboarding-email'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!ADMIN_ROLES.includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
-  }
+// ADMIN_ROLES on the active-studio role ('Manager+ required' 403), then the
+// active organisation (400), as before; the host is read within that org.
+export const POST = withAuth({ permission: null, location: false, roles: ADMIN_ROLES, forbiddenMessage: 'Manager+ required' }, async ({ user, db, params }) => {
   const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
   if (!orgId) return NextResponse.json({ success: false, error: 'no_active_organization' }, { status: 400 })
 
-  const db = createServerClient()
-  const host = await loadHostForOrg(db, params.id, orgId)
+  const host = await loadHostForOrg(db, params?.id, orgId)
   if (!host) return NextResponse.json({ success: false, error: 'Host not found' }, { status: 404 })
   if (host.payment_provider !== 'stripe_connect') {
     return NextResponse.json({ success: false, error: 'Only Stripe Connect hosts need an onboarding link.' }, { status: 400 })
@@ -50,8 +45,10 @@ export async function POST(_request, props) {
 
   try {
     await sendHostOnboardingEmail({ host, url, db })
-  } catch (e) {
-    return NextResponse.json({ success: false, error: `Could not send the email: ${e.message || 'unknown'}` }, { status: 502 })
+  } catch (err) {
+    // The provider's text stays in the log; the operator gets a fixed line.
+    logError('hosts', 'onboarding email not sent', { hostId: host.id, err })
+    return NextResponse.json({ success: false, error: 'Could not send the email. Try again, or copy the link and send it yourself.' }, { status: 502 })
   }
   return NextResponse.json({ success: true, data: { sentTo: host.email } })
-}
+})

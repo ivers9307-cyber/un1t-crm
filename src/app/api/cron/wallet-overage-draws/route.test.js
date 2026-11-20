@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let tables = {}
+let readErrors = {}
 let rpcMock
 const fakeDb = {
   from: (t) => {
@@ -21,7 +22,9 @@ const fakeDb = {
     b.maybeSingle = () => Promise.resolve({ data: rows[0] ?? null, error: null })
     b.single = () => Promise.resolve({ data: rows[0] ?? null, error: null })
     b.then = (resolve, reject) => {
-      const out = state.head
+      const out = readErrors[t]
+        ? { data: null, error: readErrors[t] }
+        : state.head
         ? { count: rows.length, error: null }
         : { data: rows, error: null }
       return Promise.resolve(out).then(resolve, reject)
@@ -57,6 +60,7 @@ let errSpy
 beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   tables = {}
+  readErrors = {}
   rpcMock = vi.fn(async () => ({ data: 0, error: null }))
   clearBillingStateCache()
   vi.clearAllMocks()
@@ -67,7 +71,39 @@ describe('GET /api/cron/wallet-overage-draws', () => {
   it('rejects a missing/wrong bearer', async () => {
     expect((await GET(req(null))).status).toBe(401)
     expect((await GET(req('Bearer wrong'))).status).toBe(401)
+    delete process.env.CRON_SECRET
+    expect((await GET(req())).status).toBe(401)
     expect(rpcMock).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('ROUTEWRAP.C10: an unreadable location_plans is a 500 with a fixed line: no database text, nothing drawn or stamped', async () => {
+    readErrors = { location_plans: { message: 'permission denied for table location_plans' } }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Could not read location plans' })
+    expect(rpcMock).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('ROUTEWRAP.C10: one location failing of two answers success but WITHHOLDS the heartbeat; the other still draws', async () => {
+    tables = {
+      location_plans: [TIER_PIN('loc-1'), TIER_PIN('loc-2')],
+      wallets: [{ location_id: 'loc-1', balance_cents: 1000, period_start: null }],
+      usage_rollups_daily: [{ meter: 'email_send', quantity: 1001 }],
+      usage_events: [],
+      wallet_transactions: [],
+    }
+    rpcMock = vi.fn()
+      .mockImplementationOnce(async () => ({ data: null, error: { message: 'connection reset' } }))
+      .mockImplementation(async (_fn, args) => ({ data: 1000 + args.p_amount_cents, error: null }))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: true, locations: 2, draws: 1, failed: 1 })
+    expect(JSON.stringify(body)).not.toContain('connection reset')
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('no pinned locations → clean no-op run, heartbeat stamped', async () => {
@@ -199,8 +235,12 @@ describe('GET /api/cron/wallet-overage-draws', () => {
       wallet_transactions: [],
     }
     rpcMock = vi.fn(async () => ({ data: null, error: { message: 'connection reset' } }))
-    const body = await (await GET(req())).json()
-    expect(body).toMatchObject({ failed: 1, draws: 0 })
+    const res = await GET(req())
+    // ROUTEWRAP.C10: every location the run tried failed, so the run did: 500.
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, error: 'Every location due a draw failed', failed: 1, draws: 0 })
+    expect(JSON.stringify(body)).not.toContain('connection reset')
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })

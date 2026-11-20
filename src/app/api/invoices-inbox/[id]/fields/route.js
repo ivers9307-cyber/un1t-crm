@@ -12,6 +12,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { validateBody } from '@/lib/validate'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { loadInvoiceForUser } from '../../_helpers'
 import { invoiceFieldsSchema } from '@/lib/invoice-extraction'
 
@@ -24,8 +26,10 @@ const Schema = z.object({
   extracted_fields: invoiceFieldsSchema,
 })
 
-export async function PATCH(request, { params }) {
-  const { id } = await params
+// withAuth only signs the caller in; loadInvoiceForUser keeps the row gate
+// (404 unknown or not allowed) in its old place, before the state check.
+export const PATCH = withAuth({ permission: null, location: false }, async ({ request, params }) => {
+  const { id } = params
   const ctx = await loadInvoiceForUser(id)
   if (ctx.response) return ctx.response
   const { db, row } = ctx
@@ -56,7 +60,10 @@ export async function PATCH(request, { params }) {
     .eq('status', row.status)   // concurrency guard for the state we loaded
     .select('id, status, extracted_fields, updated_at')
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('invoices-inbox', 'fields update failed', { id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the fields. Try again.' }, { status: 500 })
+  }
   if (!updated) {
     return NextResponse.json({
       success: false,
@@ -64,4 +71,4 @@ export async function PATCH(request, { params }) {
     }, { status: 409 })
   }
   return NextResponse.json({ success: true, data: updated })
-}
+})
