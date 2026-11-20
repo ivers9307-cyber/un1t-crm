@@ -9,27 +9,23 @@
 // no per-location scoping — operating cross-tenant is its job.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { getTenantsRoster } from '@/lib/admin-tenants'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  if (user.profileRole !== 'master') {
-    return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
-  }
-
-  const db = createServerClient()
-  try {
-    const data = await getTenantsRoster(db)
-    return NextResponse.json({ success: true, data })
-  } catch (e) {
-    return NextResponse.json({ success: false, error: e.message }, { status: 500 })
-  }
-}
+// Masters only (profiles.role), as before; no studio.
+export const GET = withAuth(
+  { permission: null, location: false, allow: (user) => user.profileRole === 'master', forbiddenMessage: 'Master only' },
+  async ({ db }) => {
+    try {
+      const data = await getTenantsRoster(db)
+      return NextResponse.json({ success: true, data })
+    } catch (err) {
+      logError('admin-tenants', 'roster failed', { err })
+      return NextResponse.json({ success: false, error: 'Could not load the tenants.' }, { status: 500 })
+    }
+  },
+)

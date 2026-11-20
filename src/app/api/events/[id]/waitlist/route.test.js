@@ -125,6 +125,12 @@ describe('DELETE /api/events/[id]/waitlist/[rowId]', () => {
 })
 
 describe('POST /api/events/[id]/waitlist/offer', () => {
+  it('401 signed out, no round', async () => {
+    user = null
+    expect((await OFFER(new Request('https://crm.test', { method: 'POST' }), props())).status).toBe(401)
+    expect(runWaitlistOffers).not.toHaveBeenCalled()
+  })
+
   it('runs the round for this event only and answers its counts', async () => {
     const res = await OFFER(new Request('https://crm.test', { method: 'POST' }), props())
     expect(res.status).toBe(200)

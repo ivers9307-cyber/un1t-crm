@@ -6,9 +6,16 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { hasPermission } from '@/lib/permissions'
+import { logError } from '@/lib/log'
 
 export async function loadLineForUser(id) {
-  const user = await getCurrentUser()
+  return loadLineForCaller(await getCurrentUser(), id)
+}
+
+// The same gate for a caller already signed in (withAuth routes): the
+// accounting_hub 403, the active-location 400 and the scoped 404 run here, in
+// this order, with these messages, for both entry points.
+export async function loadLineForCaller(user, id) {
   if (!user) {
     return { response: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
   }
@@ -28,7 +35,8 @@ export async function loadLineForUser(id) {
     .eq('location_id', locationId)
     .maybeSingle()
   if (error) {
-    return { response: NextResponse.json({ success: false, error: error.message }, { status: 500 }) }
+    logError('recon-coverage', 'line read failed', { err: error, lineId: id })
+    return { response: NextResponse.json({ success: false, error: 'Could not load the line.' }, { status: 500 }) }
   }
   if (!line) {
     return { response: NextResponse.json({ success: false, error: 'Not found' }, { status: 404 }) }

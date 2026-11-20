@@ -10,26 +10,25 @@
 // board can no longer end its sessions out of band.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { guardLiveLocation, LIVE_MUTATION_ROLES } from '@/lib/live-access'
-import { createServerClient } from '@/lib/supabase'
 import { endAllAtLocation } from '@/lib/live-class'
 import { logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  const locationId = params.locationId
+// withAuth only signs the caller in. The studio, role and permission are all
+// judged AT the URL's studio by guardLiveLocation, as before: its 403s (not in
+// scope / coach only / no studio_management) and its master bypass are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const locationId = params?.locationId
   const denied = guardLiveLocation(user, locationId, { roles: LIVE_MUTATION_ROLES })
   if (denied) return denied
 
-  const db = createServerClient()
   const out = await endAllAtLocation(db, locationId)
   logInfo('live-class', 'end-all', {
     locationId, ended: out.ended, actor: user.id,
   })
   return NextResponse.json({ ok: true, ended: out.ended })
-}
+})
