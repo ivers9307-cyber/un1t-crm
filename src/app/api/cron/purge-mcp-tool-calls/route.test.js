@@ -152,13 +152,14 @@ describe('deletes rows older than 90 days in pages and stamps', () => {
 })
 
 describe('does not stamp when a delete errors', () => {
-  it('answers 500 with the error and leaves the heartbeat alone', async () => {
+  it('answers 500 with a fixed error and leaves the heartbeat alone', async () => {
     setupDb([row('old', 200)], { failDelete: true })
     const res = await GET(req())
     expect(res.status).toBe(500)
     const body = await res.json()
     expect(body.success).toBe(false)
-    expect(body.error).toContain('boom')
+    expect(body.error).toBe('purge failed: delete failed')
+    expect(JSON.stringify(body)).not.toContain('boom')
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 

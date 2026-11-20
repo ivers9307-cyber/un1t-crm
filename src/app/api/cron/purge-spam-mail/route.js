@@ -1,6 +1,4 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logError, logInfo } from '@/lib/log'
 import { spamPurgeCutoff, SPAM_RETENTION_DAYS } from '@/lib/email-spam'
 import { purgeAttachmentsForMessages } from '@/lib/email-attachments-server'
@@ -68,22 +66,15 @@ const SCAN_PAGE = 1000
  * short page ends the run; MAX_PAGES bounds it. Every hop pages with
  * .range(): every .select() caps at 1,000 rows whatever the code asks for.
  *
- * FAILURE: any hop that errors answers 500 and does NOT stamp — a purge that
+ * FAILURE: any hop that errors answers 500 (a fixed message; the detail goes
+ * to the log) and does NOT stamp — a purge that
  * is silently not purging would show up only as a Spam view that keeps
  * growing. Idle runs (nothing to purge) DO stamp: the cron ran and was right
  * to do nothing.
  *
- * Secured by CRON_SECRET (Vercel cron sends Authorization: Bearer <secret>).
- * Heartbeat row + vercel.json entry ship with mig 584.
+ * defineCron owns the CRON_SECRET check and the heartbeat stamp. Heartbeat row + vercel.json entry ship with mig 584.
  */
-export async function GET(request) {
-  const cronSecret = process.env.CRON_SECRET
-  const authHeader = request.headers.get('authorization')
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'purge-spam-tickets' }, async ({ db }) => {
   const cutoff = spamPurgeCutoff(Date.now())
 
   let ticketsDeleted = 0
@@ -105,7 +96,7 @@ export async function GET(request) {
       .range(0, PURGE_PAGE_SIZE - 1)
     if (candErr) {
       logError('cron.purge-spam-tickets', 'candidate scan failed', { err: candErr.message })
-      return NextResponse.json({ success: false, error: candErr.message }, { status: 500 })
+      return { ok: false, body: { error: 'purge failed: candidate scan failed' } }
     }
     const ticketIds = (candidates || []).map(t => t.id).filter(Boolean)
     if (ticketIds.length === 0) break
@@ -122,7 +113,7 @@ export async function GET(request) {
         .range(from, from + SCAN_PAGE - 1)
       if (msgErr) {
         logError('cron.purge-spam-tickets', 'message scan failed', { err: msgErr.message })
-        return NextResponse.json({ success: false, error: msgErr.message }, { status: 500 })
+        return { ok: false, body: { error: 'purge failed: message scan failed' } }
       }
       const page = msgs || []
       for (const m of page) if (m?.id) messageIds.push(m.id)
@@ -140,7 +131,7 @@ export async function GET(request) {
         .range(from, from + SCAN_PAGE - 1)
       if (tombErr) {
         logError('cron.purge-spam-tickets', 'tombstone scan failed', { err: tombErr.message })
-        return NextResponse.json({ success: false, error: tombErr.message }, { status: 500 })
+        return { ok: false, body: { error: 'purge failed: tombstone scan failed' } }
       }
       const page = tombs || []
       for (const t of page) if (t?.id) tombstones.push(t)
@@ -157,7 +148,7 @@ export async function GET(request) {
           .range(from, from + SCAN_PAGE - 1)
         if (msgErr) {
           logError('cron.purge-spam-tickets', 'tombstone message scan failed', { err: msgErr.message })
-          return NextResponse.json({ success: false, error: msgErr.message }, { status: 500 })
+          return { ok: false, body: { error: 'purge failed: tombstone message scan failed' } }
         }
         const page = msgs || []
         for (const m of page) if (m?.id) messageIds.push(m.id)
@@ -193,7 +184,7 @@ export async function GET(request) {
         .eq('is_spam', true)
       if (recheckErr) {
         logError('cron.purge-spam-tickets', 'merge-target re-check failed', { err: recheckErr.message, page: pages })
-        return NextResponse.json({ success: false, error: recheckErr.message }, { status: 500 })
+        return { ok: false, body: { error: 'purge failed: merge-target re-check failed' } }
       }
       const targetSet = new Set((stillSpam || []).map(t => t.id))
       const targets = scannedTargets.filter(id => targetSet.has(id))
@@ -207,7 +198,7 @@ export async function GET(request) {
           .or(`is_spam.eq.true,merged_into_id.in.(${targets.join(',')})`)
         if (pairErr) {
           logError('cron.purge-spam-tickets', 'merged-ticket delete failed', { err: pairErr.message, page: pages })
-          return NextResponse.json({ success: false, error: pairErr.message }, { status: 500 })
+          return { ok: false, body: { error: 'purge failed: merged-ticket delete failed' } }
         }
         ticketsDeleted += targets.length
         tombstonesDeleted += tombIds.length
@@ -222,7 +213,7 @@ export async function GET(request) {
         .in('id', remaining)
       if (delErr) {
         logError('cron.purge-spam-tickets', 'ticket delete failed', { err: delErr.message, page: pages })
-        return NextResponse.json({ success: false, error: delErr.message }, { status: 500 })
+        return { ok: false, body: { error: 'purge failed: ticket delete failed' } }
       }
       ticketsDeleted += remaining.length
     }
@@ -242,6 +233,5 @@ export async function GET(request) {
   }
   logInfo('cron.purge-spam-tickets', 'run complete', outcome)
 
-  await stampHeartbeat('purge-spam-tickets', outcome)
-  return NextResponse.json({ success: true, data: outcome })
-}
+  return { body: { data: outcome }, outcome }
+})

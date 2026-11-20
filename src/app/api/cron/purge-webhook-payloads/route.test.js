@@ -333,7 +333,8 @@ describe('glofox_webhook_attempts — what gets purged (WEBHOOKAUDIT.1)', () => 
     expect(res.status).toBe(500)
     const body = await res.json()
     expect(body.error).toMatch(/glofox_webhook_attempts/)
-    expect(body.data.errors).toEqual({ glofox_webhook_attempts: 'relation does not exist' })
+    expect(body.data.failed_tables).toEqual(['glofox_webhook_attempts'])
+    expect(JSON.stringify(body)).not.toContain('relation does not exist')
     expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 1, postmark_webhook_queue_exhausted: 0, glofox_webhook_attempts: 0 })
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
@@ -355,7 +356,7 @@ describe('heartbeat and per-table failure', () => {
     }))
   })
 
-  it('a failed dead-letter delete still purges the queue, answers 500 with the error, and does NOT stamp', async () => {
+  it('a failed dead-letter delete still purges the queue, answers 500 naming the table, and does NOT stamp', async () => {
     setupDb({
       deadLetters: [deadLetter('d-old', 'resolved', { resolvedDaysAgo: 200 })],
       webhookQueue: [queueRow('q-old', { processedDaysAgo: 200 }), queueRow('q-young', { processedDaysAgo: 10 })],
@@ -366,7 +367,8 @@ describe('heartbeat and per-table failure', () => {
     const body = await res.json()
     expect(body.success).toBe(false)
     expect(body.error).toMatch(/webhook_dead_letter/)
-    expect(body.data.errors).toEqual({ webhook_dead_letter: 'column does not exist' })
+    expect(body.data.failed_tables).toEqual(['webhook_dead_letter'])
+    expect(JSON.stringify(body)).not.toContain('column does not exist')
     expect(body.data.deleted).toEqual({ webhook_dead_letter: 0, postmark_webhook_queue: 1, postmark_webhook_queue_exhausted: 0, glofox_webhook_attempts: 0 })
     expect(ids(db._state.webhookQueue)).toEqual(['q-young'])
     expect(stampHeartbeat).not.toHaveBeenCalled()
@@ -384,7 +386,9 @@ describe('heartbeat and per-table failure', () => {
     expect(body.error).toMatch(/postmark_webhook_queue/)
     // The injected error fails every operation on the table, so the
     // exhausted spec's scan fails too (PURGEEXHAUSTED.1).
-    expect(body.data.errors).toEqual({ postmark_webhook_queue: 'permission denied', postmark_webhook_queue_exhausted: 'permission denied' })
+    expect(body.data.failed_tables).toEqual(expect.arrayContaining(['postmark_webhook_queue', 'postmark_webhook_queue_exhausted']))
+    expect(body.data.failed_tables).toHaveLength(2)
+    expect(JSON.stringify(body)).not.toContain('permission denied')
     expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 0, postmark_webhook_queue_exhausted: 0, glofox_webhook_attempts: 0 })
     expect(ids(db._state.deadLetters)).toEqual(['d-pending'])
     expect(stampHeartbeat).not.toHaveBeenCalled()
@@ -479,7 +483,7 @@ describe('postmark_webhook_queue — exhausted rows (PURGEEXHAUSTED.1)', () => {
     const res = await GET(req())
     expect(res.status).toBe(500)
     const body = await res.json()
-    expect(body.data.errors).toMatchObject({ postmark_webhook_queue_exhausted: 'statement timeout' })
+    expect(body.data.failed_tables).toContain('postmark_webhook_queue_exhausted')
     expect(ids(db._state.webhookQueue)).toEqual(['q-ex'])
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
@@ -495,7 +499,7 @@ describe('event_page_views arm (HOSTSTATS.1)', () => {
     const res = await GET(req())
     expect(res.status).toBe(200)
     expect(runEventPageViewsPurgeArm).toHaveBeenCalledWith(db)
-    expect((await res.json()).data.event_page_views).toEqual({ ok: true, deleted: 42, pages: 1, cutoff: '2026-05-12T10:00:00.000Z' })
+    expect((await res.json()).data.event_page_views).toEqual({ ok: true, deleted: 42, pages: 1, cutoff: '2026-05-12T10:00:00.000Z', capped: false })
   })
   it('an arm that throws does not stop the parent from stamping purge-webhook-payloads', async () => {
     setupDb({ deadLetters: [], webhookQueue: [] })
@@ -503,6 +507,15 @@ describe('event_page_views arm (HOSTSTATS.1)', () => {
     const res = await GET(req())
     expect(res.status).toBe(200)
     expect(stampHeartbeat).toHaveBeenCalledWith('purge-webhook-payloads', expect.anything())
-    expect((await res.json()).data.event_page_views).toEqual({ ok: false, error: 'arm down' })
+    expect((await res.json()).data.event_page_views).toEqual({ ok: false, error: 'event_page_views purge failed' })
+  })
+  it('a failed arm reports counts and a fixed line, never the database error', async () => {
+    setupDb({ deadLetters: [], webhookQueue: [] })
+    runEventPageViewsPurgeArm.mockResolvedValueOnce({ ok: false, error: { message: 'relation secret_table does not exist' }, deleted: 3, pages: 1, cutoff: 'c' })
+    const res = await GET(req())
+    const text = JSON.stringify(await res.json())
+    expect(text).not.toContain('secret_table')
+    expect(JSON.parse(text).data.event_page_views).toEqual({ ok: false, error: 'event_page_views purge failed', deleted: 3, pages: 1 })
+    expect(JSON.stringify(stampHeartbeat.mock.calls)).not.toContain('secret_table')
   })
 })

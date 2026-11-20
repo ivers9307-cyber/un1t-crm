@@ -231,7 +231,10 @@ describe('failure is closed', () => {
     expect(res.status).toBe(500)
     expect(db.deleted).toEqual([])
     expect(stampHeartbeat).not.toHaveBeenCalled()
-    expect((await res.json()).success).toBe(false)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toBe('purge failed at the candidate read')
+    expect(JSON.stringify(body)).not.toContain('boom')
   })
 
   it('a failed attempt-guard read deletes nothing, answers 500 and does NOT stamp', async () => {
