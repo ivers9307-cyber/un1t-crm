@@ -13,7 +13,7 @@ const fakeDb = { __brand: 'db' }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
 vi.mock('@/lib/shelly/reconcile', () => ({ runShellyReconcile: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
 import { GET } from './route.js'
 import { runShellyReconcile } from '@/lib/shelly/reconcile'
@@ -34,6 +34,7 @@ describe('GET /api/cron/shelly-reconcile', () => {
     expect((await GET(req('Bearer nope'))).status).toBe(401)
     expect((await GET(req(''))).status).toBe(401)
     expect(runShellyReconcile).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('stamps the heartbeat with the run outcome, not a bare timestamp', async () => {
@@ -45,13 +46,17 @@ describe('GET /api/cron/shelly-reconcile', () => {
     expect(runShellyReconcile).toHaveBeenCalledWith(fakeDb)
     // The counters are the whole point of the second argument — a stamp
     // without them cannot tell "ran, 0 connections" from "ran, 12 failed".
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('shelly-reconcile', out)
     expect(body).toMatchObject({ success: true, ...out })
   })
 
   it('success mirrors ok !== false: false only on an explicit ok:false', async () => {
     runShellyReconcile.mockResolvedValue({ ok: false, reason: 'bad_clock' })
-    expect(await (await GET(req())).json()).toMatchObject({ success: false, reason: 'bad_clock' })
+    const badClock = await GET(req())
+    // An explicit ok:false has always answered 200 with success:false.
+    expect(badClock.status).toBe(200)
+    expect(await badClock.json()).toMatchObject({ success: false, reason: 'bad_clock' })
 
     runShellyReconcile.mockResolvedValue({ ok: false })
     expect((await (await GET(req())).json()).success).toBe(false)
@@ -68,5 +73,15 @@ describe('GET /api/cron/shelly-reconcile', () => {
     // 900 s grace; a sustained one is not, and that is the alert.
     expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('shelly-reconcile', { skipped: 'dormant' })
+  })
+
+  it('a run that throws answers 500 with a fixed line and no stamp', async () => {
+    runShellyReconcile.mockRejectedValue(new Error('relation secret_s does not exist'))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Cron run failed' })
+    expect(JSON.stringify(body)).not.toContain('secret_s')
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })

@@ -17,29 +17,30 @@
 //
 // ?dry=1 decides everything and writes nothing.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+// defineCron owns the CRON_SECRET check, the error boundary and the heartbeat.
+// A run with any error (a whole-run abort or a failed write) answers 500 with
+// a fixed line and the counts, no stamp; the error text is logged by the
+// sweep, never answered.
+
+import { defineCron } from '@/lib/define-cron'
 import { runRepeatBounceSweep } from '@/lib/bounce-escalation-sweep'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 export async function POST(request) { return GET(request) }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
+export const GET = defineCron({ heartbeat: 'repeat-bounce-sweep' }, async ({ db, request }) => {
   const dry = new URL(request.url).searchParams.get('dry') === '1'
-  const result = await runRepeatBounceSweep({ db: createServerClient(), dry })
+  const result = await runRepeatBounceSweep({ db, dry })
 
   // Heartbeat on a clean run only — a sweep that half-failed should read as
   // stale rather than quietly healthy. A dry run is a manual probe, not the
   // scheduled work, so it never stamps either.
-  if (result.ok && !dry) await stampHeartbeat('repeat-bounce-sweep', result)
-
-  return NextResponse.json({ success: result.ok, ...result }, { status: result.ok ? 200 : 500 })
-}
+  if (!result.ok) {
+    const { errors = [], ...counts } = result
+    return { ok: false, body: { ...counts, error: 'Repeat-bounce sweep failed', errorCount: errors.length } }
+  }
+  return { stamp: !dry, outcome: result, body: result }
+})

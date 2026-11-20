@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/instagram-feed', () => ({ syncLocationIgFeed: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/connection-health', async (importActual) => ({
   ...(await importActual()),
   stampConnectionError: vi.fn(async () => {}),
@@ -58,7 +59,9 @@ describe('instagram-feed-sync', () => {
     db = fakeDb([], { code: '57014', message: 'canceling statement due to statement timeout' })
     const res = await GET(req())
     expect(res.status).toBe(500)
-    expect((await res.json()).success).toBe(false)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Could not read Instagram connections' })
+    expect(JSON.stringify(body)).not.toContain('statement timeout')
     expect(syncLocationIgFeed).not.toHaveBeenCalled()
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
@@ -72,7 +75,8 @@ describe('instagram-feed-sync', () => {
   it('stamps the heartbeat and flags nothing on a clean run', async () => {
     syncLocationIgFeed.mockResolvedValue({ synced: 3 })
     const res = await GET(req())
-    expect((await res.json()).data).toEqual({ locations: 1, ok: 1, failed: 0 })
+    expect(await res.json()).toEqual({ success: true, data: { locations: 1, ok: 1, failed: 0 } })
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('instagram-feed-sync')
     expect(stampConnectionError).not.toHaveBeenCalled()
   })
@@ -83,7 +87,9 @@ describe('instagram-feed-sync', () => {
       type: 'OAuthException', code: 190, error_subcode: 460,
     }))
     const res = await GET(req())
-    expect((await res.json()).data).toEqual({ locations: 1, ok: 0, failed: 1 })
+    // Every connection failed: still a 200 success, but no stamp (unchanged).
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, data: { locations: 1, ok: 0, failed: 1 } })
     expect(stampHeartbeat).not.toHaveBeenCalled()
     expect(stampConnectionError).toHaveBeenCalledTimes(1)
     const [dbArg, connId, message] = stampConnectionError.mock.calls[0]
@@ -112,6 +118,8 @@ describe('instagram-feed-sync', () => {
 
   it('401s without the secret', async () => {
     expect((await GET(req('wrong'))).status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
     expect(syncLocationIgFeed).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })

@@ -11,7 +11,6 @@ import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../src/app/api/cron')
 const LEGACY = new Set([
-  'ad-insights-backfill', 'ad-insights-sync', 'ad-report-email',
   'agent-followups', 'auto-end-stale-hr-sessions',
   'churn-radar-snapshot',
   'class-fees',
@@ -19,16 +18,15 @@ const LEGACY = new Set([
   'event-reminders',
   'glofox-arrears-reconcile', 'glofox-attendance-history', 'glofox-attendance-refresh',
   'glofox-data-quality', 'glofox-detail-backfill', 'glofox-sync', 'health-check',
-  'instagram-feed-sync',
   'membership-snapshot', 'mia-purchase-intents', 'morning-briefing',
   'notify-onboarding-pace', 'notify-streak-at-risk', 'notify-winback', 'person-detect-scan',
   'poll-imap-mailboxes', 'process-class-bookings', 'process-contact-imports',
-  'process-invoice-analysis', 'process-postmark-webhooks', 'process-receipt-hunts',
+  'process-postmark-webhooks', 'process-receipt-hunts',
   'process-trial-purchases', 'race-timing-events',
-  'repeat-bounce-sweep', 'revolut-reconcile', 'run-campaigns',
-  'run-challenge-events', 'run-scheduled-reports', 'run-sequences', 'run-strava-exports',
+  'run-campaigns',
+  'run-challenge-events', 'run-scheduled-reports', 'run-sequences',
   'run-whatsapp-broadcasts', 'send-class-booking-reminders', 'send-host-campaigns',
-  'send-push-reminders', 'shelly-reconcile', 'stripe-connect-apple-pay-domains',
+  'send-push-reminders', 'stripe-connect-apple-pay-domains',
   'sync-class-occurrences', 'un1t-online-sync',
   'wallet-monthly-reset', 'wallet-overage-draws', 'webhook-replay', 'zoom-contact-sync',
 ])

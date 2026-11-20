@@ -14,7 +14,7 @@
 // the run) and surfaced via last_error on both the job row and
 // the parent contact_external_integrations row.
 
-import { logInfo, logWarn } from '@/lib/log'
+import { logError, logInfo, logWarn } from '@/lib/log'
 import { buildTcx } from '@/lib/tcx-builder'
 import { refreshAccessToken, uploadTcx, pollUpload } from '@/lib/strava'
 import { selectAll } from '@/lib/select-all'
@@ -122,13 +122,21 @@ export async function runExportWorker(db, { batchSize = 20, nowMs = Date.now() }
   // window where two cron ticks race. The per-job UNIQUE on
   // (session, contact, provider) means duplicate uploads to Strava
   // are rare AND harmless (Strava de-dupes by external_id).
-  const { data: claimed } = await db
+  const { data: claimed, error: claimErr } = await db
     .from('external_export_jobs')
     .select('id, session_id, contact_id, provider, attempts')
     .in('status', ['queued', 'processing'])
     .lte('next_attempt_at', nowIso)
     .order('next_attempt_at', { ascending: true })
     .limit(batchSize)
+
+  // ROUTEWRAP.C5 — a failed read is not "nothing due": it used to return
+  // { ok: true, processed: 0 } and the cron stamped its heartbeat over an
+  // outage. ok:false lets the cron answer 500 unstamped.
+  if (claimErr) {
+    logError('export-worker', 'external_export_jobs read failed; nothing processed', { err: claimErr })
+    return { ok: false, processed: 0 }
+  }
 
   if (!claimed || claimed.length === 0) return { ok: true, processed: 0 }
 

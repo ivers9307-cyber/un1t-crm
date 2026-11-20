@@ -40,8 +40,10 @@ afterEach(async () => { await db?.close() })
 
 describe('mig 773 seeds the reconcile row', () => {
   it('under the name the route stamps, on the */15 cadence, born healthy', async () => {
-    expect(ROUTE).toMatch(/const HEARTBEAT = 'revolut-reconcile'/)
-    expect(ROUTE).toMatch(/stampHeartbeat\(HEARTBEAT, counts\)/)
+    // ROUTEWRAP.C5 — the route is on defineCron, which stamps this name with
+    // the outcome the job returns.
+    expect(ROUTE).toMatch(/defineCron\(\{ heartbeat: 'revolut-reconcile' \}/)
+    expect(ROUTE).toMatch(/outcome: counts/)
     await runSql(MIG_773)
     expect(await row()).toMatchObject({
       expected_interval_seconds: 900, grace_seconds: 1200,

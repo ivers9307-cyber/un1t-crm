@@ -1,20 +1,19 @@
 // SHELLY.9 — Vercel cron, every minute. Reads every Shelly-connected
 // location's device state, rolls energy, and applies schedule windows and
 // manual overrides exactly once each. runShellyReconcile is the tested body;
-// this is a thin CRON_SECRET-guarded wrapper, same skeleton as sonos-reconcile.
+// this is a thin wrapper on defineCron (which owns the CRON_SECRET check, the
+// error boundary and the heartbeat), same skeleton as sonos-reconcile.
 //
 // Dormant by construction: zero shelly_connections rows → { ok:true,
 // locations:0 } and the heartbeat still stamps, so a deploy ahead of the first
 // connection never pages. A tick that did NOT complete does not stamp — see
-// the heartbeat comment in GET.
+// the heartbeat comment in GET. An explicit ok:false still answers 200 (with
+// success:false), as it always has.
 //
 // Auth: CRON_SECRET.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { runShellyReconcile } from '@/lib/shelly/reconcile'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -22,13 +21,7 @@ export const dynamic = 'force-dynamic'
 // run 4 in parallel and the run itself stops issuing calls after 90 s.
 export const maxDuration = 120
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'shelly-reconcile' }, async ({ db }) => {
   const out = await runShellyReconcile(db)
 
   // STAMPED ONLY ON A COMPLETED TICK. `out.ok !== false` is the same test the
@@ -45,13 +38,10 @@ export async function GET(request) {
   // store verbatim: every key runShellyReconcile returns is a number, plus
   // `ok` and the `bad_clock` reason — the host, the auth key and the vendor
   // error text are redacted into the logs and never into the result.
-  if (out.ok !== false) {
-    await stampHeartbeat('shelly-reconcile', out).catch((err) =>
-      logWarn('cron-shelly-reconcile', 'heartbeat failed', { err }))
-  }
-
+  //
   // `out.ok !== false`, not `out.ok === true`: a dormant deploy must not page.
   // Both false results SHOULD — a sweep that cannot read its own configuration,
-  // or cannot trust its clock, is not a quiet minute.
-  return NextResponse.json({ success: out.ok !== false, ...out })
-}
+  // or cannot trust its clock, is not a quiet minute. They answer 200, as before.
+  if (out.ok === false) return { ok: false, status: 200, body: out }
+  return { outcome: out, body: out }
+})
