@@ -1,6 +1,4 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logError, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -75,20 +73,15 @@ export function retentionCutoff(nowMs = Date.now()) {
  * the rows actually removed.
  *
  * FAIL CLOSED. A failed read (candidates or the attempt guard) or a failed
- * delete stops the run: nothing more is deleted, the route answers 500, and
- * the heartbeat is NOT stamped, so a purge that has stopped purging pages.
- * A run with nothing to delete, or one that hit the cap, stamps.
+ * delete stops the run: nothing more is deleted, the route answers 500 (the
+ * detail goes to the log, not the response), and the heartbeat is NOT
+ * stamped, so a purge that has stopped purging pages. A run with nothing to
+ * delete, or one that hit the cap, stamps.
  *
- * Secured by CRON_SECRET. Heartbeat row: mig 694. vercel.json: daily 04:05 UTC.
+ * defineCron owns the CRON_SECRET check and the heartbeat. Heartbeat row: mig
+ * 694. vercel.json: daily 04:05 UTC.
  */
-export async function GET(request) {
-  const cronSecret = process.env.CRON_SECRET
-  const authHeader = request.headers.get('authorization')
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: HEARTBEAT_NAME }, async ({ db }) => {
   const cutoff = retentionCutoff(Date.now())
   const pastRetention = (q) => q
     .lt('received_at', cutoff)
@@ -139,17 +132,12 @@ export async function GET(request) {
 
   if (failure) {
     logError('cron.purge-glofox-webhook-events', `${failure.step} failed, not stamping`, { ...outcome, err: failure.message })
-    return NextResponse.json({
-      success: false,
-      error: `purge failed at the ${failure.step}: ${failure.message}`,
-      data: outcome,
-    }, { status: 500 })
+    return { ok: false, body: { error: `purge failed at the ${failure.step}`, data: outcome } }
   }
 
   logInfo('cron.purge-glofox-webhook-events', 'run complete', outcome)
-  await stampHeartbeat(HEARTBEAT_NAME, outcome)
-  return NextResponse.json({ success: true, data: outcome })
-}
+  return { body: { data: outcome }, outcome }
+})
 
 /**
  * The subset of `ids` with a glofox_webhook_attempts row processed on or

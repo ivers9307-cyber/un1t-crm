@@ -57,7 +57,7 @@ const fakeDb = {
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logInfo: vi.fn(), logWarn: vi.fn() }))
 
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { GET } from './route.js'

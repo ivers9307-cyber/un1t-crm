@@ -1,6 +1,4 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logError, logInfo, logWarn } from '@/lib/log'
 import { CLAIMED_ERROR_MARKER, EXHAUSTED_PROVIDER, MAX_ATTEMPTS } from '@/lib/postmark-queue'
 import { escapeLikePattern } from '@/lib/like-escape'
@@ -110,21 +108,14 @@ export function retentionCutoff(nowMs = Date.now()) {
  * FAILURE IS COLLECTED PER TABLE. A broken read or delete on one table does
  * not stop the other — a GDPR purge that stalls on one table for a schema
  * hiccup on the other is two problems instead of one. The run then answers
- * 500 with each table's error and does NOT stamp: a purge that is silently not
+ * 500 naming the failed tables (each table's error goes to the log, not the
+ * response) and does NOT stamp: a purge that is silently not
  * purging would show up only as a table that keeps growing. Idle runs (nothing
  * past retention) DO stamp: the cron ran and was right to do nothing.
  *
- * Secured by CRON_SECRET (Vercel cron sends Authorization: Bearer <secret>).
- * Heartbeat row + partial indexes ship with mig 587; vercel.json 03:45 UTC.
+ * defineCron owns the CRON_SECRET check and the heartbeat stamp. Heartbeat row + partial indexes ship with mig 587; vercel.json 03:45 UTC.
  */
-export async function GET(request) {
-  const cronSecret = process.env.CRON_SECRET
-  const authHeader = request.headers.get('authorization')
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'purge-webhook-payloads' }, async ({ db }) => {
   const cutoff = retentionCutoff(Date.now())
 
   const tables = [
@@ -176,12 +167,17 @@ export async function GET(request) {
   // run with its OWN heartbeat row (mig 822), stamped inside the arm. Its
   // result is reported here and never decides this cron's stamp or status:
   // a thrown arm is a field, not a failed run (its own row goes stale).
+  // ROUTEWRAP — the arm's database error never leaves in the response or the
+  // stamped outcome: counts and a fixed line only (the arm logs the detail).
   let eventPageViews
   try {
-    eventPageViews = await runEventPageViewsPurgeArm(db)
+    const arm = await runEventPageViewsPurgeArm(db)
+    eventPageViews = arm?.ok
+      ? { ok: true, deleted: arm.deleted, pages: arm.pages, cutoff: arm.cutoff, capped: arm.capped === true }
+      : { ok: false, error: 'event_page_views purge failed', deleted: arm?.deleted ?? 0, pages: arm?.pages ?? 0 }
   } catch (err) {
     logError('cron.purge-webhook-payloads', 'event_page_views arm threw', { err })
-    eventPageViews = { ok: false, error: err?.message || String(err) }
+    eventPageViews = { ok: false, error: 'event_page_views purge failed' }
   }
 
   const outcome = { cutoff, retention_days: RETENTION_DAYS, deleted, pages, cap_reached: capReached, kept_no_twin: keptNoTwin, event_page_views: eventPageViews }
@@ -189,17 +185,15 @@ export async function GET(request) {
   const failedTables = Object.keys(errors)
   if (failedTables.length > 0) {
     logError('cron.purge-webhook-payloads', 'run failed for one or more tables — not stamping', { ...outcome, errors })
-    return NextResponse.json({
-      success: false,
-      error: `purge failed for: ${failedTables.join(', ')}`,
-      data: { ...outcome, errors },
-    }, { status: 500 })
+    return {
+      ok: false,
+      body: { error: `purge failed for: ${failedTables.join(', ')}`, data: { ...outcome, failed_tables: failedTables } },
+    }
   }
 
   logInfo('cron.purge-webhook-payloads', 'run complete', outcome)
-  await stampHeartbeat('purge-webhook-payloads', outcome)
-  return NextResponse.json({ success: true, data: outcome })
-}
+  return { body: { data: outcome }, outcome }
+})
 
 /**
  * Purge one table's finished rows past the cutoff, page by page. Never throws

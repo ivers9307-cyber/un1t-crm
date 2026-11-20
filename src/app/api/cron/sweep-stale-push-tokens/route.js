@@ -14,28 +14,22 @@
 //   tokens accumulate. This sweep is the floor.
 //
 // Idempotent. Daily at 04:00 UTC (after the 03:00 + 03:30 sync jobs).
-// CRON_SECRET bearer auth, same as every other cron.
+// defineCron owns the CRON_SECRET check and the heartbeat stamp. A failed
+// select or delete answers 500 with a fixed message; the detail goes to the log.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { logInfo, logWarn, logError } from '@/lib/log'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 const STALE_AFTER_DAYS = 90
 const LEDGER_RETENTION_DAYS = 30 // push_event_sends rows (PUSH.2, mig 349)
 
 export async function POST(request) { return GET(request) }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'sweep-stale-push-tokens' }, async ({ db }) => {
   const cutoffIso = new Date(Date.now() - STALE_AFTER_DAYS * 86400 * 1000).toISOString()
 
   // Pull-then-delete for the count + an audit-friendly log. The
@@ -48,7 +42,7 @@ export async function GET(request) {
 
   if (selErr) {
     logError('cron-sweep-stale-push-tokens', 'select failed', { err: selErr })
-    return NextResponse.json({ ok: false, error: selErr.message }, { status: 500 })
+    return { ok: false, body: { ok: false, error: 'sweep failed: select failed' } }
   }
 
   const ids = (stale || []).map(t => t.id)
@@ -60,7 +54,7 @@ export async function GET(request) {
       .in('id', ids)
     if (delErr) {
       logError('cron-sweep-stale-push-tokens', 'delete failed', { err: delErr })
-      return NextResponse.json({ ok: false, error: delErr.message }, { status: 500 })
+      return { ok: false, body: { ok: false, error: 'sweep failed: delete failed' } }
     }
     deleted = ids.length
 
@@ -99,14 +93,13 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('sweep-stale-push-tokens').catch((err) =>
-    logWarn('cron-sweep-stale-push-tokens', 'heartbeat failed', { err }))
-
-  return NextResponse.json({
-    ok: true,
-    deleted,
-    ledger_pruned: ledgerPruned,
-    cutoff_iso: cutoffIso,
-    stale_after_days: STALE_AFTER_DAYS,
-  })
-}
+  return {
+    body: {
+      ok: true,
+      deleted,
+      ledger_pruned: ledgerPruned,
+      cutoff_iso: cutoffIso,
+      stale_after_days: STALE_AFTER_DAYS,
+    },
+  }
+})

@@ -1,6 +1,4 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logError, logInfo } from '@/lib/log'
 import { parseCarDocumentUploadPath } from '@/lib/car-document-upload'
 import { ALL_DOCUMENT_TYPES } from '@/lib/cars'
@@ -69,23 +67,18 @@ const DOC_TYPE_KEYS = new Set(ALL_DOCUMENT_TYPES.map((t) => t.key))
  * FAIL CLOSED. Every list and every reference read is checked; any failure
  * stops the run BEFORE anything is removed (an unreadable folder or table
  * could hide a reference), answers 500 and does NOT stamp. A failed remove
- * answers 500 and does not stamp. A clean run stamps, including one with
+ * answers 500 and does not stamp. A 500 names the failed step only; the
+ * provider's error text goes to the log. A clean run stamps, including one with
  * nothing to remove and one that hit the cap. Logs and the heartbeat outcome
  * carry counts only, never a path.
  *
  * ACCEPTED RACE. None in practice: an object old enough to sweep was signed
  * at least a day ago, and finalise is called right after the upload.
  *
- * Secured by CRON_SECRET. Heartbeat row: mig 694. vercel.json: daily 04:25 UTC.
+ * defineCron owns the CRON_SECRET check and the heartbeat. Heartbeat row:
+ * mig 694. vercel.json: daily 04:25 UTC.
  */
-export async function GET(request) {
-  const cronSecret = process.env.CRON_SECRET
-  const authHeader = request.headers.get('authorization')
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: HEARTBEAT_NAME }, async ({ db }) => {
   const bucket = db.storage.from(BUCKET)
   const nowMs = Date.now()
   const olderThanMs = nowMs - ORPHAN_MIN_AGE_HOURS * 60 * 60 * 1000
@@ -93,7 +86,7 @@ export async function GET(request) {
   const fail = (step, message) => {
     const outcome = { ...counts, older_than: new Date(olderThanMs).toISOString(), cap_reached: false }
     logError('cron.sweep-car-document-orphans', `${step} failed, nothing more removed, not stamping`, { ...outcome, err: message })
-    return NextResponse.json({ success: false, error: `sweep failed at the ${step}: ${message}`, data: outcome }, { status: 500 })
+    return { ok: false, body: { error: `sweep failed at the ${step}`, data: outcome } }
   }
 
   // ── 1. Find the candidates: slot-shaped, old enough. ─────────────────
@@ -150,9 +143,8 @@ export async function GET(request) {
     scan_truncated: lister.truncated(),
   }
   logInfo('cron.sweep-car-document-orphans', 'run complete', outcome)
-  await stampHeartbeat(HEARTBEAT_NAME, outcome)
-  return NextResponse.json({ success: true, data: outcome })
-}
+  return { body: { data: outcome }, outcome }
+})
 
 /**
  * A paged folder lister with a run-wide call budget. Supabase Storage lists

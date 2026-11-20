@@ -1,6 +1,4 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logError, logInfo } from '@/lib/log'
 import {
   HR_RAW_RETENTION_MONTHS,
@@ -15,6 +13,7 @@ import {
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 /**
  * GET /api/cron/prune-hr-samples
@@ -39,15 +38,11 @@ export const dynamic = 'force-dynamic'
  *   - Idempotent: after a session is downsampled, a re-run finds one sample
  *     per bucket and deletes nothing.
  *
- * Secured by CRON_SECRET (Vercel cron sends Authorization: Bearer <secret>).
+ * defineCron owns the CRON_SECRET check and the heartbeat stamp. A failed
+ * candidate scan answers 500 with a fixed message (detail in the log); one
+ * session's failed fetch or delete is logged and skipped, not a failed run.
  */
-export async function GET(request) {
-  const cronSecret = process.env.CRON_SECRET
-  const authHeader = request.headers.get('authorization')
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
+export const GET = defineCron({ heartbeat: 'prune-hr-samples' }, async ({ db }) => {
   const now = new Date()
   const cutoff = retentionCutoff(now, HR_RAW_RETENTION_MONTHS)
 
@@ -57,14 +52,10 @@ export async function GET(request) {
       cutoff: cutoff.toISOString(),
       now: now.toISOString(),
     })
-    return NextResponse.json(
-      { success: false, error: 'unsafe_cutoff', cutoff: cutoff.toISOString() },
-      { status: 500 },
-    )
+    return { ok: false, body: { error: 'unsafe_cutoff', cutoff: cutoff.toISOString() } }
   }
 
   const cutoffIso = cutoff.toISOString()
-  const db = createServerClient()
 
   // Candidate sessions = those that STARTED before the cutoff. We anchor on
   // heart_rate_sessions.started_at (one row per workout — low cardinality)
@@ -83,7 +74,7 @@ export async function GET(request) {
 
   if (candErr) {
     logError('cron.prune-hr-samples', 'candidate scan failed', { err: candErr.message })
-    return NextResponse.json({ success: false, error: candErr.message }, { status: 500 })
+    return { ok: false, body: { error: 'prune failed: candidate scan failed' } }
   }
 
   const sessionIds = (candidateSessions || []).map(s => s.id).filter(Boolean)
@@ -176,6 +167,5 @@ export async function GET(request) {
   }
   logInfo('cron.prune-hr-samples', 'run complete', outcome)
 
-  await stampHeartbeat('prune-hr-samples', outcome)
-  return NextResponse.json({ success: true, data: outcome })
-}
+  return { body: { data: outcome }, outcome }
+})

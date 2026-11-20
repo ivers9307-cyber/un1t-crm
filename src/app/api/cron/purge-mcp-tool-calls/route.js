@@ -1,6 +1,4 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logError, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -39,23 +37,16 @@ export function retentionCutoff(nowMs = Date.now()) {
  * A short page ends the run; MAX_PAGES bounds it. The cutoff predicate rides
  * along on every delete as belt and braces.
  *
- * FAILURE: a failed scan or delete answers 500 and does NOT stamp the
- * heartbeat: a purge that silently is not purging shows up only as a table
+ * FAILURE: a failed scan or delete answers 500 (detail in the log only) and
+ * does NOT stamp the heartbeat: a purge that silently is not purging shows up only as a table
  * that keeps growing. An idle run (nothing past retention) DOES stamp: the
  * cron ran and was right to do nothing.
  *
- * Secured by CRON_SECRET (Vercel cron sends Authorization: Bearer <secret>).
- * Heartbeat row ships with mig 802, applied right after this code deploys;
- * vercel.json 04:35 UTC.
+ * defineCron owns the CRON_SECRET check and the heartbeat stamp. Heartbeat
+ * row ships with mig 802, applied right after this code deploys; vercel.json
+ * 04:35 UTC.
  */
-export async function GET(request) {
-  const cronSecret = process.env.CRON_SECRET
-  const authHeader = request.headers.get('authorization')
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'purge-mcp-tool-calls' }, async ({ db }) => {
   const cutoff = retentionCutoff(Date.now())
 
   let deleted = 0
@@ -97,15 +88,10 @@ export async function GET(request) {
 
   const outcome = { cutoff, deleted }
   logInfo('cron.purge-mcp-tool-calls', 'run complete', { ...outcome, retention_days: RETENTION_DAYS, pages, cap_reached: capReached })
-  await stampHeartbeat('purge-mcp-tool-calls', outcome)
-  return NextResponse.json({ success: true, data: { ...outcome, retention_days: RETENTION_DAYS, pages, cap_reached: capReached } })
-}
+  return { body: { data: { ...outcome, retention_days: RETENTION_DAYS, pages, cap_reached: capReached } }, outcome }
+})
 
 function fail(what, err, progress) {
   logError('cron.purge-mcp-tool-calls', `${what} — not stamping`, { err: err.message, ...progress })
-  return NextResponse.json({
-    success: false,
-    error: `purge failed: ${what}: ${err.message}`,
-    data: progress,
-  }, { status: 500 })
+  return { ok: false, body: { error: `purge failed: ${what}`, data: progress } }
 }

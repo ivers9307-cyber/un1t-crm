@@ -1,6 +1,4 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { logError, logInfo } from '@/lib/log'
 import {
   HR_DETECTIONS_RETENTION_DAYS,
@@ -13,6 +11,7 @@ import {
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 /**
  * GET /api/cron/prune-hr-detections
@@ -49,7 +48,8 @@ export const dynamic = 'force-dynamic'
  *     touch a recently-seen row.
  *   - Idempotent: a re-run finds nothing older than the cutoff and deletes 0.
  *
- * Secured by CRON_SECRET (Vercel cron sends Authorization: Bearer <secret>).
+ * defineCron owns the CRON_SECRET check and the heartbeat stamp. A failed
+ * phase answers 500 with a fixed message; the database detail goes to the log.
  */
 
 /**
@@ -98,13 +98,7 @@ async function pruneTable(db, table, ageColumn, cutoffIso) {
   return { deleted, capReached, error: null }
 }
 
-export async function GET(request) {
-  const cronSecret = process.env.CRON_SECRET
-  const authHeader = request.headers.get('authorization')
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
+export const GET = defineCron({ heartbeat: 'prune-hr-detections' }, async ({ db }) => {
   const now = new Date()
   const cutoff = detectionsRetentionCutoff(now, HR_DETECTIONS_RETENTION_DAYS)
 
@@ -114,20 +108,16 @@ export async function GET(request) {
       cutoff: cutoff.toISOString(),
       now: now.toISOString(),
     })
-    return NextResponse.json(
-      { success: false, error: 'unsafe_cutoff', cutoff: cutoff.toISOString() },
-      { status: 500 },
-    )
+    return { ok: false, body: { error: 'unsafe_cutoff', cutoff: cutoff.toISOString() } }
   }
 
   const cutoffIso = cutoff.toISOString()
-  const db = createServerClient()
 
   // Phase 1 — stale visits (last activity in the visit older than the cutoff).
   const visits = await pruneTable(db, 'hr_detection_visits', 'last_sample_at', cutoffIso)
   if (visits.error) {
     logError('cron.prune-hr-detections', 'visit prune failed', { err: visits.error })
-    return NextResponse.json({ success: false, error: visits.error }, { status: 500 })
+    return { ok: false, body: { error: 'prune failed: visit prune failed' } }
   }
 
   // Phase 2 — stale detections (strap not seen at all since the cutoff).
@@ -135,7 +125,7 @@ export async function GET(request) {
   const detections = await pruneTable(db, 'hr_detections', 'last_seen_at', cutoffIso)
   if (detections.error) {
     logError('cron.prune-hr-detections', 'detection prune failed', { err: detections.error })
-    return NextResponse.json({ success: false, error: detections.error }, { status: 500 })
+    return { ok: false, body: { error: 'prune failed: detection prune failed' } }
   }
 
   const outcome = {
@@ -147,6 +137,5 @@ export async function GET(request) {
   }
   logInfo('cron.prune-hr-detections', 'run complete', outcome)
 
-  await stampHeartbeat('prune-hr-detections', outcome)
-  return NextResponse.json({ success: true, data: outcome })
-}
+  return { body: { data: outcome }, outcome }
+})
