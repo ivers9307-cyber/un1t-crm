@@ -34,6 +34,7 @@ const { resolveCustomerBaseUrl } = await import('./tenant-host')
 const {
   eventHasRoom, isOfferDue, registrationWindowOpen, joinWaitlist, runWaitlistOffers,
   claimWaitlistOnRegistration, claimWaitlistByEmail, sendWaitlistOffer, buildWaitlistJoinedEmail, claimFellThrough,
+  offerWaitlistRow,
 } = await import('./event-waitlist.js')
 const { signWaitlistClaimToken, verifyWaitlistClaimToken } = await import('./event-waitlist-tokens.js')
 
@@ -582,3 +583,55 @@ describe('claimFellThrough — the unpaid hold', () => {
   })
 })
 
+
+describe('offerWaitlistRow (WAITLISTONE.1: one person, not the list)', () => {
+  function oneDb({ row = ROW, race = RACE, regs = [confirmed('w1')], rowError = null } = {}) {
+    return fakeDb((q) => {
+      if (q.table === 'event_waitlist' && q.action === 'select') return rowError ? { data: null, error: rowError } : { data: row, error: null }
+      if (q.table === 'event_waitlist' && q.action === 'update') return { data: [{ id: eqOf(q, 'id') }], error: null }
+      if (q.table === 'race_events') return { data: race ? [race] : [], error: null }
+      if (q.table === 'race_registrations') return { data: regs, error: null }
+      if (q.table === 'contacts') return { data: { id: 'c1', wa_status: null }, error: null }
+      if (q.table === 'location_whatsapp_numbers') return { data: [{ location_id: 'L1' }], error: null }
+      return { data: null, error: null }
+    })
+  }
+  const args = { eventId: 'e1', rowId: 'wl1', now: NOW, todayStr: '2026-10-09' }
+
+  it('offers only that row when a time has room, past the 24 h rule, and stamps it', async () => {
+    const db = oneDb({ row: { ...ROW, status: 'offered', last_offered_at: new Date(NOW - HOUR).toISOString(), offer_count: 2 } })
+    const out = await offerWaitlistRow(db, args)
+    expect(out).toMatchObject({ result: 'offered', email: 'sent', whatsapp: 'sent' })
+    expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
+    expect(sendTransactionalEmail.mock.calls[0][0].to).toBe('ann@example.test')
+    const read = db.queries.find((q) => q.table === 'event_waitlist' && q.action === 'select')
+    expect(eqOf(read, 'id')).toBe('wl1')
+    expect(eqOf(read, 'race_event_id')).toBe('e1')
+    const stamp = db.queries.find((q) => q.table === 'event_waitlist' && q.action === 'update')
+    expect(stamp.payload).toEqual({ status: 'offered', last_offered_at: new Date(NOW).toISOString(), offer_count: 3 })
+    expect(stamp.ops).toContainEqual(['in', 'status', ['waiting', 'offered']])
+  })
+
+  it('sends nothing when every time is full, the event is not bookable or past, or the row is not on the list', async () => {
+    expect((await offerWaitlistRow(oneDb({ regs: [confirmed('w1'), confirmed('w2')] }), args)).result).toBe('no_room')
+    expect((await offerWaitlistRow(oneDb({ race: { ...RACE, status: 'draft' } }), args)).result).toBe('not_bookable')
+    expect((await offerWaitlistRow(oneDb({ race: { ...RACE, race_date: '2026-10-08' } }), args)).result).toBe('past')
+    expect((await offerWaitlistRow(oneDb({ row: null }), args)).result).toBe('not_found')
+    expect((await offerWaitlistRow(oneDb({ rowError: { message: 'boom' } }), args)).result).toBe('load_failed')
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+  })
+
+  it('marks them claimed instead when they already hold a place', async () => {
+    const db = oneDb({ regs: [{ id: 'reg9', wave_id: 'w1', status: 'confirmed', contact_id: 'c1', team: { size: 1 } }] })
+    expect((await offerWaitlistRow(db, args)).result).toBe('already_booked')
+    const upd = db.queries.find((q) => q.table === 'event_waitlist' && q.action === 'update')
+    expect(upd.payload).toEqual({ status: 'claimed', claimed_registration_id: 'reg9' })
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+  })
+
+  it('answers not_sent when every channel is suppressed', async () => {
+    checkTransactionalConsent.mockResolvedValue({ allowed: false, reason: 'opted_out' })
+    const out = await offerWaitlistRow(oneDb({ row: { ...ROW, phone: null } }), args)
+    expect(out.result).toBe('not_sent')
+  })
+})

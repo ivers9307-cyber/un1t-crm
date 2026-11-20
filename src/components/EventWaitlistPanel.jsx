@@ -11,7 +11,9 @@
 //
 // Props:
 //   listUrl       GET → { rows, waiting }
-//   offerUrl      POST → the round's counts
+//   offerUrl      POST → the round's counts; POST { row_id } → offer one
+//                 person (WAITLISTONE.1, the "Offer space" button on each
+//                 row still on the list)
 //   removeUrlFor  (rowId) => DELETE url, or null for read-only (hosts)
 //   dark          host-portal styling
 
@@ -41,6 +43,13 @@ export function offerResultMessage(counts) {
   if (skipped > 0) extra.push(`${skipped} skipped (offered in the last 24 hours, or opted out)`)
   if (failed > 0) extra.push(`${failed} could not be sent (logged; tried again in 24 hours)`)
   return extra.length ? `${base} ${extra.join('; ')}.` : base
+}
+
+/** One sentence about what a single offer did. Exported for the tests. */
+export function offerOneMessage(name, data) {
+  if (data?.result === 'offered') return `Space offered to ${name}.`
+  if (data?.result === 'failed') return `The offer to ${name} could not be sent (logged).`
+  return `Nothing was sent to ${name}: they have opted out of these messages.`
 }
 
 export default function EventWaitlistPanel({ listUrl, offerUrl, removeUrlFor = null, dark = false }) {
@@ -79,6 +88,26 @@ export default function EventWaitlistPanel({ listUrl, offerUrl, removeUrlFor = n
         setError(j.message || j.error || `Offer failed (${r.status})`)
       } else {
         setNotice(offerResultMessage(j.data))
+        await load()
+      }
+    } catch (e) {
+      setError(e.message || 'Network error')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function offerOne(row) {
+    if (!confirm(`Offer a space to ${row.name}? Only they are emailed (and WhatsApped if they gave a number). Nothing holds the place, so it still goes to whoever books first.`)) return
+    setBusy(row.id)
+    setNotice(null)
+    setError(null)
+    try {
+      const r = await fetch(offerUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ row_id: row.id }) })
+      const j = await r.json()
+      if (!r.ok || j.success === false) setError(j.message || j.error || `Offer failed (${r.status})`)
+      else {
+        setNotice(offerOneMessage(row.name, j.data))
         await load()
       }
     } catch (e) {
@@ -160,7 +189,7 @@ export default function EventWaitlistPanel({ listUrl, offerUrl, removeUrlFor = n
                 <th className="px-3 py-2 font-medium">Joined</th>
                 <th className="px-3 py-2 font-medium">Last offered</th>
                 <th className="px-3 py-2 font-medium">Status</th>
-                {removeUrlFor && <th className="px-3 py-2 font-medium"><span className="sr-only">Actions</span></th>}
+                <th className="px-3 py-2 font-medium"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -178,15 +207,20 @@ export default function EventWaitlistPanel({ listUrl, offerUrl, removeUrlFor = n
                       {STATUS_LABEL[row.status] || row.status}
                       {row.status === 'removed' && row.removed_by_name ? ` by ${row.removed_by_name}` : ''}
                     </td>
-                    {removeUrlFor && (
-                      <td className={`${c.cell} text-right`}>
-                        {onList && (
-                          <button type="button" onClick={() => remove(row)} disabled={busy === row.id} className={c.button}>
-                            Remove
+                    <td className={`${c.cell} text-right`}>
+                      {onList && (
+                        <span className="inline-flex gap-2">
+                          <button type="button" onClick={() => offerOne(row)} disabled={busy === row.id} className={c.button}>
+                            Offer space
                           </button>
-                        )}
-                      </td>
-                    )}
+                          {removeUrlFor && (
+                            <button type="button" onClick={() => remove(row)} disabled={busy === row.id} className={c.button}>
+                              Remove
+                            </button>
+                          )}
+                        </span>
+                      )}
+                    </td>
                   </tr>
                 )
               })}
