@@ -7,8 +7,8 @@
 // (EVENTS-HOST.2)
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { getAppUrl } from '@/lib/app-url'
 import { loadHostForOrg } from '@/lib/hosts'
 import { createConnectedAccount, createOnboardingLink } from '@/lib/payments/stripe-connect'
@@ -16,9 +16,9 @@ import { createConnectedAccount, createOnboardingLink } from '@/lib/payments/str
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-async function gate() {
-  const user = await getCurrentUser()
-  if (!user) return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
+// The caller is signed in by withAuth; the role and organisation checks keep
+// their old order and answers.
+function gate(user) {
   if (!['master', 'owner', 'manager'].includes(user.role)) {
     return { error: NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 }) }
   }
@@ -27,12 +27,12 @@ async function gate() {
   return { user, orgId }
 }
 
-export async function POST(_request, props) {
-  const params = await props.params
-  const g = await gate()
+// Sign-in only: Manager+ on the active role (403), the active organisation
+// (400), then the host read within it (404), as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const g = gate(user)
   if (g.error) return g.error
-  const db = createServerClient()
-  const host = await loadHostForOrg(db, params.id, g.orgId)
+  const host = await loadHostForOrg(db, params?.id, g.orgId)
   if (!host) return NextResponse.json({ success: false, error: 'Host not found' }, { status: 404 })
   if (host.payment_provider !== 'stripe_connect') {
     return NextResponse.json({ success: false, error: 'This host is not a Stripe Connect host.' }, { status: 400 })
@@ -46,7 +46,10 @@ export async function POST(_request, props) {
         .from('event_hosts')
         .update({ stripe_connected_account_id: accountId })
         .eq('id', host.id)
-      if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
+      if (upErr) {
+        logError('host-stripe-connect', 'saving the connected account failed', { hostId: host.id, err: upErr })
+        return NextResponse.json({ success: false, error: 'Could not save the Stripe account. Try again.' }, { status: 500 })
+      }
     }
     const base = getAppUrl()
     const url = await createOnboardingLink({
@@ -56,9 +59,10 @@ export async function POST(_request, props) {
     })
     return NextResponse.json({ success: true, data: { url } })
   } catch (e) {
+    logError('host-stripe-connect', 'Stripe onboarding failed', { hostId: host.id, err: e })
     return NextResponse.json(
-      { success: false, error: `Stripe onboarding failed: ${e.message || 'unknown'}` },
+      { success: false, error: 'Stripe onboarding failed. Try again.' },
       { status: 502 },
     )
   }
-}
+})

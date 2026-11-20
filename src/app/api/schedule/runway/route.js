@@ -22,41 +22,44 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { fetchRosterRunways } from '@/lib/roster-runway-data'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const QuerySchema = z.object({ location_id: uuidLike })
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
-  }
+// MANAGER_ROLES somewhere (403 'Unauthorized'), the query (400), then the
+// studio (assertLocationAccess) and MANAGER_ROLES there (403), as before. A
+// signed-out call is a 401 now.
+export const GET = withAuth(
+  { permission: null, location: false, allow: (user) => hasRoleAtAnyLocation(user, MANAGER_ROLES), forbiddenMessage: 'Unauthorized' },
+  async ({ user, db, request }) => {
+    const url = new URL(request.url)
+    const parsed = QuerySchema.safeParse({ location_id: url.searchParams.get('location_id') })
+    if (!parsed.success) {
+      return NextResponse.json({
+        success: false,
+        error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+      }, { status: 400 })
+    }
+    const { location_id } = parsed.data
 
-  const url = new URL(request.url)
-  const parsed = QuerySchema.safeParse({ location_id: url.searchParams.get('location_id') })
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
-    }, { status: 400 })
-  }
-  const { location_id } = parsed.data
+    const guard = assertLocationAccess(user, location_id)
+    if (guard) return guard
+    if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+    }
 
-  const guard = assertLocationAccess(user, location_id)
-  if (guard) return guard
-  if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
-  }
-
-  const res = await fetchRosterRunways(createServerClient(), [location_id])
-  if (!res.success) {
-    return NextResponse.json({ success: false, error: res.error }, { status: 500 })
-  }
-  return NextResponse.json({ success: true, data: { runway: res.data.byLocation[location_id] ?? null } })
-}
+    const res = await fetchRosterRunways(db, [location_id])
+    if (!res.success) {
+      logError('schedule-runway', 'runway read failed', { locationId: location_id, err: res.error })
+      return NextResponse.json({ success: false, error: 'Could not read the roster runway. Try again.' }, { status: 500 })
+    }
+    return NextResponse.json({ success: true, data: { runway: res.data.byLocation[location_id] ?? null } })
+  },
+)

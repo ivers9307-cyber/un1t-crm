@@ -85,18 +85,26 @@ beforeEach(() => {
 })
 
 describe('GET /api/cron/send-host-campaigns', () => {
-  it('rejects a missing/wrong bearer', async () => {
-    const { db } = makeDb(routeFor())
+  it('rejects a missing/wrong bearer: no client, nothing launched, sent or stamped', async () => {
+    const { db, statements } = makeDb(routeFor({ due: [{ id: 'd1', host_id: 'h1' }], campaigns: [CAMPAIGN_A] }))
     createServerClient.mockReturnValue(db)
-    const res = await GET(req('Bearer wrong'))
-    expect(res.status).toBe(401)
+    for (const auth of [null, 'Bearer wrong']) expect((await GET(req(auth))).status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(statements).toHaveLength(0)
+    expect(launchHostCampaign).not.toHaveBeenCalled()
     expect(processHostCampaignChunk).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
-  it('500s when CRON_SECRET is unset', async () => {
+  // ROUTEWRAP.C12 — defineCron refuses an unset secret as a 401 (it was a 500).
+  it('refuses every caller when CRON_SECRET is unset (401), touching nothing', async () => {
     delete process.env.CRON_SECRET
     const res = await GET(req())
-    expect(res.status).toBe(500)
+    expect(res.status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(launchHostCampaign).not.toHaveBeenCalled()
+    expect(processHostCampaignChunk).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('sweeps stale claims per campaign BEFORE the chunk, then delegates to the shared lib', async () => {
@@ -126,7 +134,7 @@ describe('GET /api/cron/send-host-campaigns', () => {
 
     const res = await GET(req())
     const json = await res.json()
-    expect(json).toMatchObject({ ok: true, campaigns: 2, sent: 53, failed: 1, finalised: 1, errors: [] })
+    expect(json).toMatchObject({ success: true, campaigns: 2, sent: 53, failed: 1, finalised: 1, errors: [] })
 
     // Positional, not selector-narrowed: [0] is the due pick (no due rows
     // here, no refusals, so no back-to-draft write either), [1] is the
@@ -137,7 +145,7 @@ describe('GET /api/cron/send-host-campaigns', () => {
     expect(hasEq(pick, 'status', 'sending')).toBe(true)
     expect(op(pick, 'limit').args[0]).toBe(5)
     expect(op(pick, 'order').args[0]).toBe('created_at')
-    expect(stampHeartbeat).toHaveBeenCalledWith('send-host-campaigns')
+    expect(stampHeartbeat.mock.calls).toEqual([['send-host-campaigns']])
   })
 
   it('a failed chunk lands in errors without stopping the other campaigns or the heartbeat', async () => {
@@ -149,7 +157,9 @@ describe('GET /api/cron/send-host-campaigns', () => {
 
     const res = await GET(req())
     const json = await res.json()
-    expect(json.errors).toEqual([{ campaign_id: CAMPAIGN_A.id, error: 'host load failed: boom' }])
+    expect(json.errors).toEqual([{ campaign_id: CAMPAIGN_A.id, error: 'Chunk failed' }])
+    expect(JSON.stringify(json)).not.toContain('boom')
+    expect(logError).toHaveBeenCalledWith('host-campaigns', 'campaign tick threw', { campaign_id: CAMPAIGN_A.id, error: 'host load failed: boom' })
     expect(json.campaigns).toBe(1) // only the campaign that ticked cleanly
     expect(processHostCampaignChunk).toHaveBeenCalledTimes(2)
     expect(stampHeartbeat).toHaveBeenCalledWith('send-host-campaigns')
@@ -162,6 +172,10 @@ describe('GET /api/cron/send-host-campaigns', () => {
     createServerClient.mockReturnValue(db)
     const res = await GET(req())
     expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, error: 'Could not read the sending campaigns' })
+    expect(JSON.stringify(body)).not.toContain('pick broke')
+    expect(processHostCampaignChunk).not.toHaveBeenCalled()
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })
@@ -244,7 +258,8 @@ describe('GET /api/cron/send-host-campaigns — scheduled launches', () => {
 
     const body = await (await GET(req())).json()
     expect(body.refused).toEqual([])
-    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'write boom' }])
+    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'Could not return the campaign to draft' }])
+    expect(JSON.stringify(body)).not.toContain('write boom')
     expect(logError).toHaveBeenCalledWith('host-campaigns', 'scheduled refusal write failed', { campaign_id: DUE_1.id, error: 'write boom' })
     const back = statements.find((s) => s.table === 'host_campaigns' && op(s, 'update'))
     expect(op(back, 'select').args[0]).toBe('id')
@@ -269,7 +284,8 @@ describe('GET /api/cron/send-host-campaigns — scheduled launches', () => {
 
     const body = await (await GET(req())).json()
     expect(body.refused).toEqual([])
-    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'boom' }])
+    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'Launch deferred', reason: 'db_error' }])
+    expect(logError).toHaveBeenCalledWith('host-campaigns', 'scheduled launch deferred', { campaign_id: DUE_1.id, reason: 'db_error', error: 'boom' })
     const backs = statements.filter((s) => s.table === 'host_campaigns' && op(s, 'update'))
     expect(backs).toHaveLength(0)
   })
@@ -297,7 +313,8 @@ describe('GET /api/cron/send-host-campaigns — scheduled launches', () => {
 
     const body = await (await GET(req())).json()
     expect(body.refused).toEqual([])
-    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'resolver exploded' }])
+    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'Launch deferred', reason: 'resolve_failed' }])
+    expect(JSON.stringify(body)).not.toContain('exploded')
     const backs = statements.filter((s) => s.table === 'host_campaigns' && op(s, 'update'))
     expect(backs).toHaveLength(0)
   })
@@ -309,7 +326,9 @@ describe('GET /api/cron/send-host-campaigns — scheduled launches', () => {
 
     const body = await (await GET(req())).json()
     expect(body.refused).toEqual([])
-    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'Queueing failed: boom' }])
+    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'Launch deferred', reason: 'enqueue_failed' }])
+    expect(JSON.stringify(body)).not.toContain('boom')
+    expect(stampHeartbeat.mock.calls).toEqual([['send-host-campaigns']]) // one deferred launch is not a failed run
     const backs = statements.filter((s) => s.table === 'host_campaigns' && op(s, 'update'))
     expect(backs).toHaveLength(0)
   })
@@ -326,14 +345,34 @@ describe('GET /api/cron/send-host-campaigns — scheduled launches', () => {
     expect(stampHeartbeat).toHaveBeenCalled()
   })
 
-  it('a failed due pick is logged into errors and the sending pass still runs', async () => {
+  // ROUTEWRAP.C12 — CHANGED: this answered 200 and stamped, so a due list that
+  // was unreadable on every tick looked like "nothing scheduled" for ever. The
+  // sending pass still runs exactly as before; the run now answers 500 unstamped.
+  it('a failed due pick still runs the sending pass, then answers 500 and does not stamp', async () => {
     const { db } = makeDb(routeFor({ dueErr: { message: 'pick broke' }, campaigns: [CAMPAIGN_A] }))
     createServerClient.mockReturnValue(db)
     const res = await GET(req())
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(500)
     const body = await res.json()
-    expect(body.errors).toEqual([{ stage: 'due_pick', error: 'pick broke' }])
+    expect(body).toMatchObject({ success: false, error: 'Could not read the scheduled campaigns', campaigns: 1 })
+    expect(body.errors).toEqual([{ stage: 'due_pick', error: 'Could not read the scheduled campaigns' }])
+    expect(JSON.stringify(body)).not.toContain('pick broke')
+    expect(logError).toHaveBeenCalledWith('host-campaigns', 'due pick failed', { error: 'pick broke' })
     expect(launchHostCampaign).not.toHaveBeenCalled()
     expect(processHostCampaignChunk).toHaveBeenCalledWith(db, CAMPAIGN_A.id)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a throw outside the per-campaign catch answers the fixed 500 and stamps nothing', async () => {
+    // The sending pick throws (a rejected query, not an { error } answer).
+    const { db } = makeDb((state) => {
+      if (state.table === 'host_campaigns' && !op(state, 'update') && !hasEq(state, 'status', 'scheduled')) throw new Error('socket hang up at db.internal')
+      return routeFor()(state)
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Cron run failed' })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })

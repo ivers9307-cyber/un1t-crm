@@ -2,28 +2,23 @@
 // Service-role route: authorise in app code, scope by active location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { getSonosConfig, withFreshToken, sonosGetGroups, sonosGetFavorites, isHouseholdGone } from '@/lib/sonos/client'
 import { mapGroups } from '@/lib/sonos/groups'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'device_control')) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
+// device_control at the active studio ('Forbidden' 403), then the active
+// studio (400), in that order and with these texts, as before.
+export const GET = withAuth({ permission: null, location: false, allow: (user) => hasPermission(user, 'device_control'), forbiddenMessage: 'Forbidden' }, async ({ user, db }) => {
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
 
   const cfg = getSonosConfig()
   if (!cfg || cfg.error) return NextResponse.json({ success: true, connected: false, reason: 'not_configured' })
 
-  const db = createServerClient()
   const tok = await withFreshToken(db, locationId, cfg)
   if (!tok.ok) return NextResponse.json({ success: true, connected: false, reason: tok.reason })
 
@@ -63,4 +58,4 @@ export async function GET() {
     favorites,
     ...(favoritesFailed ? { favoritesFailed: true, favoritesStatusCode: favRes.statusCode } : {}),
   })
-}
+})
