@@ -11,12 +11,14 @@
 // (source_type, source_id, event_type) for these specific event
 // types. Re-firing within the same window is a silent no-op.
 //
-// Auth: same bearer-token pattern as other crons.
+// defineCron owns the CRON_SECRET check, the error boundary and the stamp.
+// A failed registrations read answers 500 with a fixed error and no stamp (the
+// detail is logged); a completed loop stamps its counts, per-target emit
+// failures included (counted in `errors`).
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError } from '@/lib/log'
 import { localToUtc } from '@/lib/push-reminders'
 import { zoneOfLocation } from '@/lib/location-time'
 
@@ -33,13 +35,7 @@ const WINDOWS = [
   { event: EVENT_TYPES.RACE_COMPLETED_24H_AGO, minMinutes: -26 * 60, maxMinutes: -22 * 60 },
 ]
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'race-timing-events' }, async ({ db }) => {
   const stats = { emitted: 0, skipped: 0, errors: 0 }
   const now = new Date()
 
@@ -75,7 +71,8 @@ export async function GET(request) {
     // Don't stamp the heartbeat on a query failure — the whole point
     // of the health-check is to surface this. Caller (Vercel cron)
     // sees a 500 in its log too.
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('race-timing-events', 'registrations read failed', { err: error })
+    return { ok: false, body: { error: 'Could not read registrations' } }
   }
 
   for (const reg of (regs || [])) {
@@ -157,10 +154,8 @@ export async function GET(request) {
     }
   }
 
-  // Stamp the heartbeat after the loop completes — the health-check
-  // (mig 053) needs this to know the cron is alive. Best-effort: a
-  // failed write here shouldn't take down a successful run.
-  await stampHeartbeat('race-timing-events', stats).catch(() => {})
-
-  return NextResponse.json({ success: true, stats })
-}
+  // The wrapper stamps the heartbeat after the loop completes — the
+  // health-check (mig 053) needs this to know the cron is alive. Best-effort:
+  // a failed write there never takes down a successful run.
+  return { outcome: stats, body: { stats } }
+})

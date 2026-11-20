@@ -10,9 +10,12 @@
 //
 // Auth-gated by CRON_SECRET so we don't expose cron names + timestamps to
 // the public internet (mild info disclosure, but no reason to allow it).
+// defineCron owns that check and the error boundary.
 //
 // This route does NOT stamp a heartbeat for itself — it's a status reader,
-// not a worker.
+// not a worker: every answer returns `stamp: false`, and a stale or unreadable
+// answer is ok:false with its 503, so the wrapper never stamps either way.
+// An unreadable cron_health answers a fixed error; the detail is logged.
 //
 // RESILIENCE (2026-05-30): the read of cron_health used to 503 on the
 // FIRST DB error. A single transient blip — Supabase pooler reconnect,
@@ -25,11 +28,12 @@
 // cron-staleness semantics are UNCHANGED: a genuinely stale cron still
 // returns 503 every time.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 const ATTEMPT_TIMEOUT_MS = 2500
 const RETRY_DELAY_MS = 400
@@ -37,9 +41,8 @@ const RETRY_DELAY_MS = 400
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // One bounded read of the cron_health view. Returns { ok, checks } on
-// success or { ok: false, error } on a transient/DB failure.
-async function readCronHealth() {
-  const db = createServerClient()
+// success or { ok: false } (logged) on a transient/DB failure.
+async function readCronHealth(db) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS)
   try {
@@ -48,35 +51,30 @@ async function readCronHealth() {
       .select('name, last_ok_at, stale_seconds, max_allowed_seconds, is_stale, is_acknowledged, acknowledged_until, acknowledged_note')
       .order('name')
       .abortSignal(controller.signal)
-    if (error) return { ok: false, error: error.message }
+    if (error) {
+      logWarn('cron-health-check', 'cron_health read failed', { err: error })
+      return { ok: false }
+    }
     return { ok: true, checks: data || [] }
-  } catch (e) {
-    return { ok: false, error: e?.message || 'health check failed' }
+  } catch (err) {
+    logWarn('cron-health-check', 'cron_health read threw', { err })
+    return { ok: false }
   } finally {
     clearTimeout(timer)
   }
 }
 
-export async function GET(request) {
-  const cronSecret = process.env.CRON_SECRET
-  const authHeader = request.headers.get('authorization')
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
+export const GET = defineCron({ heartbeat: 'health-check' }, async ({ db }) => {
   // Read cron_health, tolerating a single transient blip. Only a
   // SUSTAINED failure to read it (both attempts) is treated as a cron
   // health failure worth a 503.
-  let result = await readCronHealth()
+  let result = await readCronHealth(db)
   if (!result.ok) {
     await sleep(RETRY_DELAY_MS)
-    result = await readCronHealth()
+    result = await readCronHealth(db)
   }
   if (!result.ok) {
-    return NextResponse.json(
-      { success: false, error: result.error, all_healthy: false },
-      { status: 503 }
-    )
+    return { ok: false, stamp: false, status: 503, body: { error: 'Could not read cron health', all_healthy: false } }
   }
 
   const checks = result.checks
@@ -97,7 +95,6 @@ export async function GET(request) {
   // route the alert instead of hunting.
   let tenantStale = []
   try {
-    const db = createServerClient()
     const { data } = await db
       .from('tenant_cron_health')
       .select('name, location_id, last_ok_at, stale_seconds')
@@ -108,9 +105,11 @@ export async function GET(request) {
     /* tenant detail is diagnostic — never fail the health check over it */
   }
 
-  return NextResponse.json(
-    {
-      success: allHealthy,
+  return {
+    ok: allHealthy,
+    stamp: false,
+    status: allHealthy ? 200 : 503,
+    body: {
       all_healthy: allHealthy,
       stale: stale.map((c) => c.name),
       acknowledged: acknowledged.map((c) => ({ name: c.name, until: c.acknowledged_until, note: c.acknowledged_note || null })),
@@ -118,6 +117,5 @@ export async function GET(request) {
       checks,
       checked_at: new Date().toISOString(),
     },
-    { status: allHealthy ? 200 : 503 }
-  )
-}
+  }
+})
