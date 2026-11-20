@@ -8,21 +8,22 @@
 // the only writer today).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request, { params }) {
-  const user = await getCurrentUser()
-  // ROLESWEEP.1a — coarse pre-check; the role is judged at the location below.
-  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
-  }
-
-  const { key } = await params
+// ROLESWEEP.1a — coarse pre-check (a manager-tier role somewhere, the same
+// 'Unauthorized' 403); the role is judged at the location below. A signed-out
+// call is withAuth's 401 (it was this 403).
+export const GET = withAuth({
+  permission: null, location: false,
+  allow: (user) => hasRoleAtAnyLocation(user, MANAGER_ROLES), forbiddenMessage: 'Unauthorized',
+}, async ({ request, user, db, params }) => {
+  const { key } = params
 
   const url = new URL(request.url)
   const locationId = url.searchParams.get('location_id')
@@ -37,7 +38,6 @@ export async function GET(request, { params }) {
 
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '25', 10) || 25, 1), 100)
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('automation_fire_log')
     .select('glofox_event_id, device_id, action_step, status, detail, fired_at')
@@ -45,7 +45,10 @@ export async function GET(request, { params }) {
     .eq('location_id', locationId)
     .order('fired_at', { ascending: false })
     .limit(limit)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('automations', 'history read failed', { key, locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the run history.' }, { status: 500 })
+  }
 
   // Resolve device labels with a small separate lookup (avoids a PostgREST
   // embed; the device set is tiny).
@@ -67,4 +70,4 @@ export async function GET(request, { params }) {
     fired_at: r.fired_at,
   }))
   return NextResponse.json({ success: true, items })
-}
+})

@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let db
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()),
   getCurrentUser: vi.fn(async () => ({ id: 'staff-1' })),
   getUserLocationIds: vi.fn(() => null),
 }))
