@@ -850,3 +850,74 @@ export async function claimWaitlistByEmail(db, { raceEventId, email, registratio
     return { claimed: false, reason: 'error' }
   }
 }
+
+/**
+ * WAITLISTONE.1 — offer a free place to ONE person on the list, picked by
+ * staff or the host, instead of the whole list. The same checks as one event
+ * of the round (the event is bookable, a time has room, they have not already
+ * booked), the same sends, the same stamp; the 24 h rule does not apply (a
+ * person picks them). Nothing holds the place: the register route's capacity
+ * gate still decides, as for every offer.
+ *
+ * @param {object} db  service-role client
+ * @param {{ eventId: string, rowId: string, now?: number, todayStr?: string }} args
+ * @returns {Promise<{ result: 'offered'|'not_sent'|'failed'|'not_found'|'past'|'not_bookable'|'no_room'|'already_booked'|'load_failed', email?: string, whatsapp?: string }>}
+ */
+export async function offerWaitlistRow(db, { eventId, rowId, now = Date.now(), todayStr = null }) {
+  const { data: row, error: rowErr } = await db
+    .from('event_waitlist')
+    .select(WAITLIST_ROW_COLUMNS)
+    .eq('id', rowId)
+    .eq('race_event_id', eventId)
+    .in('status', ACTIVE_WAITLIST_STATUSES)
+    .maybeSingle()
+  if (rowErr) {
+    logError('event-waitlist', 'single offer: row read failed', { err: rowErr, eventId, rowId })
+    return { result: 'load_failed' }
+  }
+  if (!row) return { result: 'not_found' }
+
+  const { events, error: evErr } = await readEvents(db, [eventId])
+  if (evErr) {
+    logError('event-waitlist', 'single offer: event read failed', { err: evErr, eventId })
+    return { result: 'load_failed' }
+  }
+  const race = events.get(eventId)
+  if (!race) return { result: 'not_found' }
+  if (race.race_date && race.race_date < (todayStr || eventToday(race, now))) return { result: 'past' }
+  if (!(race.active === true && race.status === 'published') || !registrationWindowOpen(race, now)) return { result: 'not_bookable' }
+
+  const { data: liveRows, error: regsErr } = await readLiveRegistrations(db, eventId)
+  if (regsErr) {
+    logError('event-waitlist', 'single offer: registrations read failed', { err: regsErr, eventId })
+    return { result: 'load_failed' }
+  }
+  const liveRegs = holdingPlaces(liveRows, now, race)
+  const email = normaliseWaitlistEmail(row.email)
+  const booked = liveRegs.find((reg) => (row.contact_id && reg.contact_id === row.contact_id) || (email && normaliseWaitlistEmail(reg.contact?.email) === email))
+  if (booked) {
+    const { error } = await db
+      .from('event_waitlist')
+      .update({ status: 'claimed', claimed_registration_id: booked.id })
+      .eq('id', row.id)
+      .in('status', ACTIVE_WAITLIST_STATUSES)
+    if (error) logError('event-waitlist', 'single offer: marking an already-booked row claimed failed', { err: error, waitlistId: row.id })
+    return { result: 'already_booked' }
+  }
+  if (!eventHasRoom(race, liveRegs, now)) return { result: 'no_room' }
+
+  const commsLocationId = await commsLocationIdFor(db, race, { raceEventId: eventId })
+  const res = await sendWaitlistOffer(db, { race, row, now, commsLocationId })
+  const sent = res.email === 'sent' || res.whatsapp === 'sent'
+  const failedAll = !sent && (res.email === 'failed' || res.whatsapp === 'failed')
+  if (failedAll) logError('event-waitlist', 'single offer not delivered: every channel failed', { waitlistId: row.id, email: res.email, whatsapp: res.whatsapp })
+
+  const { error: stampErr } = await db
+    .from('event_waitlist')
+    .update({ status: 'offered', last_offered_at: new Date(now).toISOString(), offer_count: (Number(row.offer_count) || 0) + 1 })
+    .eq('id', row.id)
+    .in('status', ACTIVE_WAITLIST_STATUSES)
+  if (stampErr) logError('event-waitlist', 'single offer sent but the row could not be stamped', { err: stampErr, waitlistId: row.id })
+
+  return { result: sent ? 'offered' : failedAll ? 'failed' : 'not_sent', email: res.email, whatsapp: res.whatsapp }
+}

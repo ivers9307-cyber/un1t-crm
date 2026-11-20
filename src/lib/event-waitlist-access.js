@@ -93,3 +93,49 @@ export async function listEventWaitlist(db, race) {
   }
   return { rows, waiting: rows.filter((r) => ACTIVE_WAITLIST_STATUSES.includes(r.status)).length }
 }
+
+const ONE_OFFER_ANSWERS = {
+  not_found: [404, 'Not found', 'They are no longer on the waitlist.'],
+  past: [409, 'past', 'This event has already happened.'],
+  not_bookable: [409, 'not_bookable', 'The event is not open for bookings, so no offer was sent.'],
+  no_room: [409, 'no_room', 'Every time is still full. Free a place first, then offer it.'],
+  already_booked: [409, 'already_booked', 'They have already booked a place.'],
+  load_failed: [500, 'load_failed', 'The waitlist could not be read. Try again.'],
+}
+
+/**
+ * WAITLISTONE.1 — the optional `{ row_id }` body of the staff and host
+ * "Offer now" routes. No body (or no row_id): the whole-list round, as
+ * before. Answers { rowId } (null for the round) or { response } (404 for a
+ * row id that is not a uuid, 400 for a body that is not JSON).
+ */
+export async function readOfferRowId(request) {
+  const text = await request.text().catch(() => '')
+  if (!text.trim()) return { rowId: null }
+  let body
+  try { body = JSON.parse(text) } catch { return { response: json(400, { success: false, error: 'invalid_body' }) } }
+  const rowId = body && typeof body === 'object' ? body.row_id : undefined
+  if (rowId == null) return { rowId: null }
+  if (!uuidLike.safeParse(rowId).success) return { response: notFound() }
+  return { rowId }
+}
+
+/**
+ * WAITLISTONE.1 — the staff and host "Offer space" (one row) share this: rate
+ * limit per row (3 an hour), run offerWaitlistRow, answer in one shape.
+ * `rowId` comes from readOfferRowId (uuid-checked).
+ */
+export async function offerOneWaitlistRow(ctx, rowId, { checkRateLimit, rateLimitResponse, offerWaitlistRow }) {
+  const limit = await checkRateLimit(ctx.db, `waitlist-offer-row:${rowId}`, { max: 3, windowMs: 3_600_000 })
+  if (!limit.allowed) return rateLimitResponse(limit, 'You can offer a space to the same person 3 times an hour. Try again later.')
+  let out
+  try {
+    out = await offerWaitlistRow(ctx.db, { eventId: ctx.race.id, rowId })
+  } catch (e) {
+    logError('event-waitlist', 'single offer threw', { err: e, eventId: ctx.race.id, rowId })
+    out = { result: 'load_failed' }
+  }
+  const refusal = ONE_OFFER_ANSWERS[out.result]
+  if (refusal) return json(refusal[0], { success: false, error: refusal[1], message: refusal[2] })
+  return json(200, { success: true, data: out })
+}

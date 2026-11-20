@@ -9,9 +9,9 @@
 // actual network call through the metered wrapper.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate } from '@/lib/schemas'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
@@ -37,9 +37,13 @@ const BlockCreateSchema = z.object({
   expand_weeks: z.number().int().min(1).max(12).optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// The fixed failure codes createBlockWithArc answers with; anything else is
+// database text, logged and answered with block_insert_failed.
+const BLOCK_ERROR_CODES = new Set(['arc_generation_failed', 'block_insert_failed', 'no_arc_week', 'session_generation_failed'])
+
+// withAuth only signs the caller in; the body 400 and the grant AT the body's
+// studio run below in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const v = await validateBody(request, BlockCreateSchema)
   if (!v.ok) return v.response
   const body = v.data
@@ -51,7 +55,6 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: loc } = await db.from('locations').select('id, name, settings').eq('id', body.location_id).single()
   const { charter: settingsCharter, houseStyle } = resolveHyroxSettings(loc)
   const charter = body.charter?.trim() || settingsCharter
@@ -80,6 +83,10 @@ export async function POST(request) {
     houseStyle,
     caller,
   })
-  if (!out.ok) return NextResponse.json({ success: false, error: out.error }, { status: 502 })
+  if (!out.ok) {
+    if (BLOCK_ERROR_CODES.has(out.error)) return NextResponse.json({ success: false, error: out.error }, { status: 502 })
+    logError('hyrox-blocks', 'block create failed', { locationId: body.location_id, err: out.error })
+    return NextResponse.json({ success: false, error: 'block_insert_failed' }, { status: 502 })
+  }
   return NextResponse.json({ success: true, data: { block: out.block, sessionsCreated: 0 } }, { status: 201 })
-}
+})

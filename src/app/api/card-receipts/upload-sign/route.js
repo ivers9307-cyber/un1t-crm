@@ -15,9 +15,9 @@
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionAtAnyLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import {
   buildReceiptPath, RECEIPT_MIME_TYPES, CARD_RECEIPTS_BUCKET, MAX_RECEIPT_BYTES,
@@ -32,11 +32,8 @@ const SignSchema = z.object({
   file_name: z.string().min(1).max(200),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// withAuth only signs the caller in; the card_receipts check stays below.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   // ROLESWEEP.1b — no location is known here (the slot is the submitter's own
   // folder); POST /api/card-receipts judges the receipt's location.
   if (!hasPermissionAtAnyLocation(user, 'card_receipts')) {
@@ -67,16 +64,13 @@ export async function POST(request) {
     originalFilename: body.file_name,
   })
 
-  const db = createServerClient()
   const { data, error } = await db.storage
     .from(CARD_RECEIPTS_BUCKET)
     .createSignedUploadUrl(storagePath)
   if (error || !data?.token) {
-    return NextResponse.json(
-      { success: false, error: `Could not create upload URL: ${error?.message || 'no token returned'}` },
-      { status: 500 }
-    )
+    logError('card-receipts', 'signed upload url failed', { err: error, noToken: !data?.token })
+    return NextResponse.json({ success: false, error: 'Could not create upload URL.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, path: storagePath, token: data.token })
-}
+})

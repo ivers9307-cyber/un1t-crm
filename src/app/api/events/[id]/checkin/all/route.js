@@ -4,8 +4,9 @@
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -17,10 +18,8 @@ const Schema = z.object({
   race_registration_id: uuidLike,
 })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; the races checks run below as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
@@ -29,13 +28,12 @@ export async function POST(request, props) {
   if (!validation.ok) return validation.response
   const { race_registration_id } = validation.data
 
-  const db = createServerClient()
   const { data: reg } = await db
     .from('race_registrations')
     .select('id, race_event_id, race_events!inner ( id, location_id ), teams ( id, team_members ( id, email, contact_id ) )')
     .eq('id', race_registration_id)
     .maybeSingle()
-  if (!reg || reg.race_event_id !== params.id) {
+  if (!reg || reg.race_event_id !== params?.id) {
     return NextResponse.json({ success: false, error: 'Registration not found for this event', status: 404 }, { status: 404 })
   }
   const locationId = reg.race_events?.location_id
@@ -63,7 +61,10 @@ export async function POST(request, props) {
   const { error } = await db
     .from('race_checkins')
     .upsert(rows, { onConflict: 'race_registration_id,team_member_id', ignoreDuplicates: true })
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('race-checkin-all', 'check-in upsert failed', { registrationId: race_registration_id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not check the team in.' }, { status: 400 })
+  }
 
   for (const m of members) {
     if (!m.email) continue
@@ -80,4 +81,4 @@ export async function POST(request, props) {
   }
 
   return NextResponse.json({ success: true, data: { checked_in: members.length } })
-}
+})
