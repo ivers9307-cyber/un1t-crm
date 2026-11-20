@@ -10,7 +10,9 @@
 // permission check (system actor; we already know the session
 // was created legitimately).
 //
-// Auth: CRON_SECRET, same pattern other crons use.
+// defineCron owns the CRON_SECRET check, the service-role client and the
+// heartbeat stamp: a run that processed its rows (vendor failures included)
+// stamps; a failed session read answers 500 and does not.
 //
 // Per-row error handling: a vendor blip on one device shouldn't
 // stop the loop for others. Failed rows get status='failed' +
@@ -28,8 +30,7 @@
 // (auto_off_attempts / auto_off_alerted_at, mig 704) because
 // failure_reason is overwritten every attempt.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { vendorTurnOff, loadDeviceWithLocation } from '@/lib/ac-devices'
 import {
   failedRetryCutoffIso, buildAutoOffFailureAlert,
@@ -37,8 +38,7 @@ import {
 } from '@/lib/ac-auto-off'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 // Statuses this cron owns. 'on' and 'extended' are the live states,
 // picked up every tick; 'failed' rows are picked up separately on
@@ -56,13 +56,7 @@ export const maxDuration = 60
 // started burns a full vendor timeout plus a retry.
 const LOOP_BUDGET_MS = 40_000
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'ac-auto-off' }, async ({ db }) => {
   const nowMs = Date.now()
   const nowIso = new Date(nowMs).toISOString()
 
@@ -79,7 +73,8 @@ export async function GET(request) {
     .limit(50)
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('cron-ac-auto-off', 'live session read failed — not stamping', { err: error.message })
+    return { ok: false, body: { error: 'Could not read AC sessions' } }
   }
 
   // 'failed' rows self-heal on a backoff, not every tick. The query
@@ -99,7 +94,8 @@ export async function GET(request) {
     .limit(20)
 
   if (failedErr) {
-    return NextResponse.json({ success: false, error: failedErr.message }, { status: 500 })
+    logError('cron-ac-auto-off', 'failed session read failed — not stamping', { err: failedErr.message })
+    return { ok: false, body: { error: 'Could not read AC sessions' } }
   }
 
   const dueFailed = (failedRows || []).filter((row) => shouldRetryFailedRow(row, nowMs))
@@ -238,8 +234,5 @@ export async function GET(request) {
     stats.off++
   }
 
-  await stampHeartbeat('ac-auto-off').catch((err) =>
-    logWarn('cron-ac-auto-off', 'heartbeat failed', { err }))
-
-  return NextResponse.json({ success: true, stats })
-}
+  return { body: { stats } }
+})

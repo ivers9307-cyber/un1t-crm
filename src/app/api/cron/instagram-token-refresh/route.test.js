@@ -52,6 +52,8 @@ describe('instagram-token-refresh', () => {
   it('refuses without the cron secret', async () => {
     const res = await GET(new Request('https://x.test/', { headers: { authorization: 'Bearer nope' } }))
     expect(res.status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('a failed connections read answers 500 and withholds the heartbeat', async () => {
@@ -59,6 +61,9 @@ describe('instagram-token-refresh', () => {
     vi.stubGlobal('fetch', graph(200, {}))
     const res = await GET(req())
     expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ success: false, error: 'Could not read Instagram connections' })
+    expect(JSON.stringify(body)).not.toContain('statement timeout')
     expect(fetch).not.toHaveBeenCalled()
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
@@ -81,7 +86,8 @@ describe('instagram-token-refresh', () => {
   it('a dead token (OAuthException 190) flags the connection and withholds the heartbeat', async () => {
     vi.stubGlobal('fetch', graph(400, { error: { message: 'Invalid OAuth access token - Cannot parse access token', type: 'OAuthException', code: 190 } }))
     const res = await GET(req())
-    expect(await res.json()).toMatchObject({ refreshed: 0, failed: 1 })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: false, refreshed: 0, failed: 1 })
     expect(stampHeartbeat).not.toHaveBeenCalled()
     expect(stampConnectionError).toHaveBeenCalledTimes(1)
     expect(stampConnectionError.mock.calls[0][1]).toBe('conn-1')
@@ -99,7 +105,9 @@ describe('instagram-token-refresh', () => {
     db = fakeDb({ updateError: { code: '42501', message: 'permission denied' } })
     vi.stubGlobal('fetch', graph(200, { access_token: 'new-tok', token_type: 'bearer', expires_in: 5184000 }))
     const res = await GET(req())
-    expect(await res.json()).toMatchObject({ refreshed: 0, failed: 1 })
+    const body = await res.json()
+    expect(body).toMatchObject({ refreshed: 0, failed: 1 })
+    expect(JSON.stringify(body)).not.toContain('permission denied')
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })

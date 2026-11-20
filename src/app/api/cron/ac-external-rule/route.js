@@ -14,7 +14,9 @@
 // insert, leave alone, or fire. Splitting would double the vendor
 // API calls for no benefit.
 //
-// Auth: CRON_SECRET (same pattern as /api/cron/ac-auto-off).
+// defineCron owns the CRON_SECRET check, the service-role client and the
+// heartbeat stamp: a run that walked its devices (vendor errors included)
+// stamps; a failed device read answers 500 and does not.
 //
 // Per-row error isolation: a vendor blip on one device must not
 // stop the loop for others. Vendor failures during the poll mean
@@ -22,8 +24,7 @@
 // insert nor clear, neither fire); failures during turn-off keep
 // the row in place so the next tick retries.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { defineCron } from '@/lib/define-cron'
 import { vendorGetState, vendorTurnOff, loadDeviceWithLocation, cacheDeviceState } from '@/lib/ac-devices'
 import { AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 import {
@@ -32,20 +33,13 @@ import {
   clearExternalStart,
 } from '@/lib/ac-external-rule'
 import { logAuditEvent } from '@/lib/audit'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'ac-external-rule' }, async ({ db }) => {
   const now = new Date()
   const stats = {
     devices_checked: 0,
@@ -68,7 +62,8 @@ export async function GET(request) {
     .limit(200)
 
   if (devicesErr) {
-    return NextResponse.json({ success: false, error: devicesErr.message }, { status: 500 })
+    logError('cron-ac-external-rule', 'device read failed — not stamping', { err: devicesErr.message })
+    return { ok: false, body: { error: 'Could not read AC devices' } }
   }
 
   for (const device of devices || []) {
@@ -181,8 +176,5 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('ac-external-rule').catch((err) =>
-    logWarn('cron-ac-external-rule', 'heartbeat failed', { err }))
-
-  return NextResponse.json({ success: true, stats })
-}
+  return { body: { stats } }
+})
