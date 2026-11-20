@@ -18,6 +18,7 @@ import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAt
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { buildContactExport } from '@/lib/contact-export'
 import { logAuditEvent } from '@/lib/audit'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -52,18 +53,28 @@ export async function GET(request, props) {
     bundle = await buildContactExport(db, contact)
   } catch (e) {
     // An incomplete DSAR bundle must fail loudly, never ship with a
-    // silently missing section.
-    return NextResponse.json({ success: false, error: `Export failed: ${e.message}` }, { status: 500 })
+    // silently missing section. The detail goes to the log, not the response.
+    logError('contact-export', 'export bundle failed', { contactId: contact.id, err: e })
+    return NextResponse.json({ success: false, error: 'Export failed. Try again.' }, { status: 500 })
   }
 
-  await logAuditEvent({
-    category: 'privacy',
+  // AUDITEXPORT.1 (October audit A20) — this used to log category 'privacy',
+  // which audit_events' CHECK (mig 180: auth, business, mutation, assignment)
+  // refuses, and it ignored the refusal: no single-contact export was ever
+  // recorded. Same contract as the bulk export (CONTACTEXPORT.1): a supported
+  // category, written BEFORE the file leaves, and no file without the record.
+  const audit = await logAuditEvent({
+    category: 'business',
     action: 'contact_export',
     actor: user,
     target: { resource: `contacts/${contact.id}`, label: contact.name || contact.email || contact.id },
     locationId: contact.location_id,
     request,
   })
+  if (!audit?.logged) {
+    logError('contact-export', 'audit write failed; export withheld', { contactId: contact.id })
+    return NextResponse.json({ success: false, error: 'Could not record this export, so it was not sent. Try again.' }, { status: 503 })
+  }
 
   return new NextResponse(JSON.stringify(bundle, null, 2), {
     status: 200,
