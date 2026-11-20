@@ -171,8 +171,8 @@ describe('TZ follow-up: the arms claim independently of the contract half and of
   it('a throwing arm costs the other arm and the contract half nothing, and its own row is not stamped', async () => {
     runRosterRunwayAlerts.mockRejectedValueOnce(new Error('runway down'))
     const body = await at('2026-07-01T08:00:00Z')
-    expect(body).toMatchObject({ success: true, runway_arm_failed: 1, qualification_arm_failed: 0, runway: { error: 'runway down' } })
-    expect(stampHeartbeat.mock.calls.map(([n]) => n)).toEqual(['qualification-digest', 'contract-reminders'])
+    expect(body).toMatchObject({ success: true, runway_arm_failed: 1, qualification_arm_failed: 0, runway: { error: 'runway arm failed' } })
+    expect(stampHeartbeat.mock.calls.map(([n]) => n)).toEqual(['contract-reminders', 'qualification-digest'])
     expect(reminded()).toEqual(['k-dub'])
   })
 })

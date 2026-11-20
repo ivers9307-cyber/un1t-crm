@@ -1,6 +1,4 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { runAgentFollowups, runFirstClassCheckins } from '@/lib/agent/followups'
 import { runHandoffSlaSweep, runHandoffAutoResolve } from '@/lib/agent/handoff-sla'
 import { runApprovalsSlaSweep } from '@/lib/agent/approvals-sla'
@@ -8,7 +6,7 @@ import { rollupCheckinDay } from '@/lib/agent/checkin-day-rollup'
 import { runTrialDoneOutreach } from '@/lib/agent/trial-done-runner'
 import { TRIAL_DONE_HEARTBEAT, trialDoneArmHealthy } from '@/lib/cron-arm-health'
 import { dayStrIn, PLATFORM_TZ } from '@/lib/location-time'
-import { logError, logWarn } from '@/lib/log'
+import { logError } from '@/lib/log'
 
 // AGENT-FOLLOWUP.1 — every 15 min (vercel.json): run Mia's proactive
 // follow-up ladder for every location that enabled it. Stage 1 =
@@ -17,16 +15,16 @@ import { logError, logWarn } from '@/lib/log'
 // (settings.customer_agent.followups.enabled). Daytime on each studio's own
 // clock only (09:00-19:59 in its locations.timezone, TZ.5): outside it the
 // run is a cheap no-op for that studio (heartbeat still stamps).
+//
+// ROUTEWRAP.C9 — on defineCron (src/lib/define-cron.js), which owns the
+// fail-closed secret check (CRONSTAMP.1), with the same stamps as before: a
+// follow-ups tick that throws answers 500 and stamps nothing; every other tick
+// stamps 'agent-followups', an arm failure included (ok: false + stamp: true,
+// still answered 200). The trial-done arm's own row goes in `arms` whenever it
+// ran clean, even if a later step then throws.
 export const maxDuration = 300
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization')
-  // CRONSTAMP.1: fail closed when the secret is unset ("Bearer undefined" used to pass).
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'agent-followups' }, async ({ db }) => {
   let results = null
   let checkins = null
   // CRONSTAMP.1 (audit 2026-11-15, item 12): the safety-net arms below
@@ -39,8 +37,8 @@ export async function GET(request) {
   try {
     results = await runAgentFollowups(db)
   } catch (e) {
-    console.error('[radar-agent] followups tick failed:', e?.message || e)
-    return NextResponse.json({ success: false, error: e?.message || 'tick failed' }, { status: 500 })
+    logError('cron-agent-followups', 'followups tick failed; not stamping', { err: e })
+    return { ok: false, status: 500, body: { error: 'Follow-ups tick failed' } }
   }
   // AGENT-CHECKIN.1 — same tick, independent failure domain.
   try {
@@ -59,12 +57,22 @@ export async function GET(request) {
   }
   // TRIALDONE.7 — the arm's OWN row, 'trial-done-outreach' (mig 757): stamped
   // only when it returned an outcome with no fault of its own
-  // (cron-arm-health.js trialDoneArmHealthy), right here so no later arm can
-  // cost it its stamp, under its own catch. A tick with nothing to send stamps.
-  if (trialDoneArmHealthy(trialDone)) {
-    await stampHeartbeat(TRIAL_DONE_HEARTBEAT, trialDone).catch((err) =>
-      logWarn('cron-agent-followups', 'trial-done-outreach heartbeat failed', { err }))
+  // (cron-arm-health.js trialDoneArmHealthy). Decided right here and handed to
+  // defineCron on every path below, so no later arm can cost it its stamp;
+  // defineCron stamps it under its own catch. A tick with nothing to send stamps.
+  const arms = trialDoneArmHealthy(trialDone) ? [{ heartbeat: TRIAL_DONE_HEARTBEAT, outcome: trialDone }] : []
+  try {
+    return { ...(await runLaterArms(db, { results, checkins, trialDone, armErrors })), arms }
+  } catch (err) {
+    // A later step that throws answers 500 and stamps no 'agent-followups'
+    // (as before); the trial-done arm keeps its stamp.
+    logError('cron-agent-followups', 'tick failed after the trial-done arm', { err })
+    return { ok: false, status: 500, body: { error: 'Follow-ups tick failed' }, arms }
   }
+})
+
+/** The SLA arms, the check-in day rollup and the tick's own result. */
+async function runLaterArms(db, { results, checkins, trialDone, armErrors }) {
   // AGENT-HANDOFF-SLA.1 — same tick, independent failure domain: re-alert
   // managers about handed-off threads no human has picked up.
   let handoffSla = null
@@ -120,6 +128,14 @@ export async function GET(request) {
   // TZ.18b — the check-in rollup is ONE platform-wide heartbeat row across every
   // studio, so its day key is the platform calendar's (PLATFORM_TZ, D4), not a studio's.
   const checkinsDay = rollupCheckinDay(prevDay, checkins, { day: dayStrIn(Date.now(), PLATFORM_TZ), carryFailed })
-  await stampHeartbeat('agent-followups', { followups: results, checkins, checkins_day: checkinsDay, trial_done: trialDone, handoffSla, autoResolve, approvalsSla, ...(armErrors.length ? { arm_errors: armErrors } : {}) })
-  return NextResponse.json({ success: armErrors.length === 0, results, checkins, trial_done: trialDone, handoffSla, autoResolve, approvalsSla, ...(armErrors.length ? { arm_errors: armErrors } : {}) })
+  const failures = armErrors.length ? { arm_errors: armErrors } : {}
+  // An arm that failed is a failed tick (success: false) whose stamp is still
+  // recorded, answered 200, as before: it carries the check-in day rollup.
+  return {
+    ok: armErrors.length === 0,
+    stamp: true,
+    status: 200,
+    outcome: { followups: results, checkins, checkins_day: checkinsDay, trial_done: trialDone, handoffSla, autoResolve, approvalsSla, ...failures },
+    body: { results, checkins, trial_done: trialDone, handoffSla, autoResolve, approvalsSla, ...failures },
+  }
 }
