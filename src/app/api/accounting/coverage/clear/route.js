@@ -6,26 +6,14 @@
 // location. Destructive but recoverable (Refresh from Xero re-pulls
 // bt: lines; a re-upload re-adds csv: lines; Xero bills are untouched).
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
-import { hasPermission } from '@/lib/permissions'
+import { withAuth } from '@/lib/with-auth'
 import { clearOpenLines } from '@/lib/recon/clear-board'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'accounting_hub')) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-  const locationId = user.activeLocation?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
-  }
-
-  const db = createServerClient()
+// A failed delete throws; withAuth logs it and answers a fixed 500.
+export const POST = withAuth({ permission: 'accounting_hub', location: true }, async ({ user, db, locationId }) => {
   const result = await clearOpenLines(db, locationId, user.id)
   return NextResponse.json({ success: true, data: result })
-}
+})

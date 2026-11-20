@@ -7,18 +7,13 @@
 // scopes to the caller's active organisation; no organisation reads nothing).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { listPoliciesWithStatus } from '@/lib/policies'
 
 export const runtime = 'nodejs'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  try {
-    const policies = await listPoliciesWithStatus(user)
-    return NextResponse.json({ success: true, data: policies })
-  } catch (e) {
-    return NextResponse.json({ success: false, error: e.message || 'Failed to load policies' }, { status: 500 })
-  }
-}
+// A failed read throws; withAuth logs it and answers a fixed 500.
+export const GET = withAuth({ permission: null, location: false }, async ({ user }) => {
+  const policies = await listPoliciesWithStatus(user)
+  return NextResponse.json({ success: true, data: policies })
+})
