@@ -419,6 +419,12 @@ export const EXEMPT = {
   'src/app/api/public/events/[slug]/donate/route.js': {
     race_events: 'CHARITY.5 public donation start: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the donations row is inserted under that event\'s own race_event_id/location_id and no other tenant\'s rows are read. Rate-limited per slug and IP.',
   },
+  'src/app/api/public/events/[slug]/raffle/route.js': {
+    race_events: 'RAFFLE.3 public raffle order start: race_events row resolved by published slug + active/published flags (the same row the public event page serves), refused for any host event; the raffle and the raffle_orders row are read and inserted under that event\'s own id/location_id and no other tenant\'s rows are read. Rate-limited per slug and IP.',
+  },
+  'src/app/api/public/raffle-orders/[id]/route.js': {
+    raffle_orders: 'RAFFLE.3 public raffle order status poll: the row is resolved by its own unguessable UUID (the order id handed to the buyer in the order response); the id IS the capability token, not enumerable. Returns only display-safe checkout fields, the public state and ticket numbers, no buyer name or email. Mirrors public/donations/[id].',
+  },
   'src/app/api/public/class-booking-payments/[id]/route.js': {
     class_booking_requests: 'Public paid-booking status poll: the row is resolved by its own unguessable UUID (the payment id handed to the payer in the create response) — the id IS the capability token, not enumerable. Returns only display-safe checkout fields (status/provider/token/url/amount/class_name), no contact PII. Mirrors public/event-payments/[id].',
   },
@@ -445,6 +451,7 @@ export const EXEMPT = {
   'src/app/api/webhooks/revolut/donations/route.js': {
     donations: 'CHARITY.7 signature-verified donations webhook: the re-read is by the row\'s own id, taken from resolveDonationByRef on the provider\'s order id from the verified payload — the provider\'s order id IS the row identity.',
     race_events: 'CHARITY.7 signature-verified donations webhook: the event row is read by the donation\'s own race_event_id (never by caller input) for the match multiplier and the paid side effects.',
+    raffle_orders: 'RAFFLE.3 signature-verified webhook, raffle order path: the re-read is by the order\'s own id, taken from resolveRaffleOrderByRef on the provider\'s order id from the verified payload — the provider\'s order id IS the row identity.',
   },
   'src/app/api/webhooks/stripe/route.js': {
     donations: 'CHARITY.7 signature-verified Stripe webhook (constructEvent): the post-mark re-read is by the row\'s own id, taken from resolveDonationByRef on the verified Checkout Session id — the provider\'s session id IS the row identity.',

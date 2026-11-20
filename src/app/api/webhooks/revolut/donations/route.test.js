@@ -31,6 +31,17 @@ vi.mock('@/lib/charity-donations', () => ({
   resolveCharitySettings: (race) => ({ match_multiplier: race?.charity?.match_multiplier || 1 }),
 }))
 
+// RAFFLE.3 — a raffle order paid through the same merchant falls through here.
+const resolveRaffleOrderByRef = vi.fn(async () => null)
+const markRaffleOrderPaymentStatus = vi.fn(async () => ({ status: 'paid', changed: true }))
+const runPaidRaffleOrderEffects = vi.fn(async () => ({ tickets: 'issued' }))
+vi.mock('@/lib/raffle-online', () => ({
+  RAFFLE_ORDER_COLS: 'id, status',
+  resolveRaffleOrderByRef: (...a) => resolveRaffleOrderByRef(...a),
+  markRaffleOrderPaymentStatus: (...a) => markRaffleOrderPaymentStatus(...a),
+  runPaidRaffleOrderEffects: (...a) => runPaidRaffleOrderEffects(...a),
+}))
+
 const logWarn = vi.fn()
 const logError = vi.fn()
 vi.mock('@/lib/log', () => ({ logWarn: (...a) => logWarn(...a), logError: (...a) => logError(...a) }))
@@ -38,11 +49,12 @@ vi.mock('@/lib/log', () => ({ logWarn: (...a) => logWarn(...a), logError: (...a)
 const raceRow = { id: 'ev1', name: 'Race', charity: { match_multiplier: 2 } }
 let eventResult
 let rereadResult
+let raffleReread = { data: { id: 'ro1', status: 'paid' }, error: null }
 const from = vi.fn((table) => {
   const chain = {
     select: () => chain,
     eq: () => chain,
-    maybeSingle: async () => (table === 'donations' ? rereadResult : eventResult),
+    maybeSingle: async () => (table === 'donations' ? rereadResult : table === 'raffle_orders' ? raffleReread : eventResult),
   }
   return chain
 })
@@ -110,6 +122,18 @@ describe('POST /api/webhooks/revolut/donations', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).skipped).toBe('unknown_order')
     expect(getOrder).not.toHaveBeenCalled()
+  })
+  it('a raffle order is marked and gets its tickets, never the donation path', async () => {
+    resolveDonationByRef.mockResolvedValueOnce(null)
+    resolveRaffleOrderByRef.mockResolvedValueOnce({ id: 'ro1', status: 'awaiting_payment' })
+    const res = await POST(makeRequest(completed))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body).toMatchObject({ state: 'paid', kind: 'raffle_order' })
+    expect(markRaffleOrderPaymentStatus).toHaveBeenCalledWith(expect.objectContaining({ providerState: 'completed', providerAmount: 2500 }))
+    expect(runPaidRaffleOrderEffects).toHaveBeenCalledWith(expect.objectContaining({ order: { id: 'ro1', status: 'paid' } }))
+    expect(markDonationPaymentStatus).not.toHaveBeenCalled()
+    expect(runPaidDonationSideEffects).not.toHaveBeenCalled()
   })
   it('getOrder failure defers (200, no state write)', async () => {
     getOrder.mockRejectedValueOnce(new Error('revolut down'))

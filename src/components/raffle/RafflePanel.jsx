@@ -67,7 +67,7 @@ export default function RafflePanel({ raceId }) {
   if (editing) {
     return (
       <RaffleSetup
-        raceId={raceId} raffle={raffle}
+        raceId={raceId} raffle={raffle} onlineAvailable={!!state.online_available}
         onSaved={async () => { await reload(); setEditing(false) }}
         onCancel={() => setEditing(false)}
       />
@@ -108,12 +108,15 @@ export default function RafflePanel({ raceId }) {
   )
 }
 
-function RaffleSetup({ raceId, eventName, raffle = null, onSaved, onCancel }) {
+function RaffleSetup({ raceId, eventName, raffle = null, onlineAvailable = false, onSaved, onCancel }) {
   const [name, setName] = useState(raffle?.name || (eventName ? `${eventName} Raffle` : 'Raffle'))
   const [price, setPrice] = useState(raffle ? String(raffle.ticket_price_cents / 100) : '5')
   const [options, setOptions] = useState(
     (raffle?.ticket_options || []).map((o) => ({ tickets: String(o.tickets), price: String(o.price_cents / 100) })),
   )
+  const [online, setOnline] = useState(!!raffle?.online_enabled)
+  const [closesDate, setClosesDate] = useState(raffle?.online_closes_local?.date || '')
+  const [closesTime, setClosesTime] = useState(raffle?.online_closes_local?.time || '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -135,12 +138,20 @@ function RaffleSetup({ raceId, eventName, raffle = null, onSaved, onCancel }) {
     if (new Set(ticketOptions.map((o) => o.tickets)).size !== ticketOptions.length) {
       setError('Each option needs a different number of tickets.'); return
     }
+    if (online && (!closesDate || !closesTime)) { setError('Set when online sales close.'); return }
     setBusy(true)
     setError('')
     try {
       await api(`/api/events/${raceId}/raffle`, {
         method: 'POST',
-        body: JSON.stringify({ name: name.trim(), ticket_price_cents: cents, ticket_options: ticketOptions }),
+        body: JSON.stringify({
+          name: name.trim(), ticket_price_cents: cents, ticket_options: ticketOptions,
+          ...(raffle && onlineAvailable ? {
+            online_enabled: online,
+            online_closes_date: closesDate || null,
+            online_closes_time: closesTime || null,
+          } : {}),
+        }),
       })
       await onSaved()
     } catch (err) {
@@ -176,6 +187,24 @@ function RaffleSetup({ raceId, eventName, raffle = null, onSaved, onCancel }) {
         </div>
         <p className="text-xs text-un1t-subtle mt-2">Any other number of tickets is sold at the one-ticket price. Changes apply to new sales only.</p>
       </div>
+      {raffle && onlineAvailable && (
+        <div className="rounded-lg border border-un1t-border p-3 space-y-3">
+          <label className="flex items-center gap-2 text-sm text-un1t-text">
+            <input type="checkbox" checked={online} onChange={(e) => setOnline(e.target.checked)} aria-label="Sell tickets online" />
+            Sell tickets online on the event page
+          </label>
+          {online && (
+            <div>
+              <div className="text-sm text-un1t-subtle mb-1">Online sales close</div>
+              <div className="flex gap-2">
+                <input className={`${INPUT} w-44`} type="date" aria-label="Online sales close date" value={closesDate} onChange={(e) => setClosesDate(e.target.value)} />
+                <input className={`${INPUT} w-32`} type="time" aria-label="Online sales close time" value={closesTime} onChange={(e) => setClosesTime(e.target.value)} />
+              </div>
+              <p className="text-xs text-un1t-subtle mt-1">Online buyers pay by card on the event page and get their numbers by email. Online sales are up to 50 tickets each.</p>
+            </div>
+          )}
+        </div>
+      )}
       {error && <p className="text-sm text-red-700" role="alert">{error}</p>}
       <div className="flex gap-2">
         <Button type="submit" loading={busy}>{raffle ? 'Save' : 'Create raffle'}</Button>
@@ -419,7 +448,7 @@ function SalesPanel({ raceId, state, onChanged }) {
           <li key={s.id} className={`flex flex-wrap items-center gap-3 p-3 ${s.voided_at ? 'opacity-50' : ''}`}>
             <div className="w-32 font-semibold text-un1t-text">{formatTicketRange(s.first_ticket, s.last_ticket)}</div>
             <div className="flex-1 min-w-[10rem]">
-              <div className="text-un1t-text">{s.buyer_name}{s.contact_id ? '' : ' (guest)'}</div>
+              <div className="text-un1t-text">{s.buyer_name}{s.contact_id ? '' : ' (guest)'}{s.channel === 'online' && <span className="ml-2 rounded bg-blue-500/10 text-blue-700 px-1.5 py-0.5 text-[11px]">Online</span>}</div>
               <div className="text-xs text-un1t-subtle">{s.buyer_email}</div>
             </div>
             <div className="text-xs text-un1t-subtle"><span className="capitalize">{s.payment_method}</span> · {formatEuros(s.total_cents, raffle.currency)}{s.option_label ? ` (${s.option_label})` : ''}</div>
@@ -494,7 +523,7 @@ function DrawPanel({ raceId, state, onChanged }) {
               <span className="w-6 text-un1t-subtle">{i + 1}.</span>
               <span className="flex-1 text-un1t-text">{d.prize_name}</span>
               <span className="font-semibold text-un1t-text">{formatTicketNumber(d.ticket_number)}</span>
-              <span className="text-un1t-text">{d.buyer_name}</span>
+              <span className="text-un1t-text">{d.buyer_name}{d.channel === 'online' && d.buyer_email ? <a className="ml-2 text-xs text-un1t-accent underline" href={`mailto:${d.buyer_email}`}>{d.buyer_email}</a> : null}</span>
               {d.unclaimed_at
                 ? <span className="text-xs rounded bg-amber-500/10 text-amber-700 px-2 py-0.5">Not claimed{d.unclaimed_note ? `: ${d.unclaimed_note}` : ''}</span>
                 : canManage && <Button variant="ghost" size="sm" onClick={() => unclaimed(d)}>Not claimed</Button>}

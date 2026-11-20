@@ -18,6 +18,8 @@ import { getOrgBrandName } from '@/lib/location-branding'
 import { resolveCharitySettings, computeCharityTotals, resolveCharityVideo } from '@/lib/charity-donations'
 import { resolveEntryAmountSettings } from '@/lib/charity-entry-amount'
 import { resolveFindTeamSettings, isSoloClosedForWave } from '@/lib/find-team'
+import { loadRaffleForEvent, publicRaffleBlock } from '@/lib/raffle-online'
+import { getLocationZone } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -172,6 +174,7 @@ export async function GET(request, props) {
   const organizationName = await getOrgBrandName(db, publicLocation?.organization_id || null)
 
   const charity = await buildPublicCharity(db, data)
+  const raffle = charity ? await buildPublicRaffle(db, data) : null
 
   // FINDTEAM.3 — the resolved "find me a team" option, only for a race that has
   // it switched on. The raw settings (confirmation/placed copy) stay server-side.
@@ -189,6 +192,7 @@ export async function GET(request, props) {
     data: {
       ...racePublic,
       ...(charity ? { charity } : {}),
+      ...(raffle ? { raffle } : {}),
       ...(findTeam ? { find_team: findTeam } : {}),
       locations: publicLocation ? publicLocationSafe : publicLocation,
       venue_name: pickAudienceVenueName({
@@ -318,4 +322,21 @@ async function buildPublicCharity(db, race) {
   block.donation_count = totals.donation_count
   block.team_count = teamsRes.count || 0
   return block
+}
+
+// RAFFLE.3 — the online raffle card's data, or null. Only on a UN1T event (no
+// host: the raffle checkout is Revolut-only) with online sales switched on.
+// Display-safe: name, prices, options and whether sales are open; never a
+// buyer, a sale or a total. A failed read hides the card, never the page.
+async function buildPublicRaffle(db, race) {
+  if (race.host_id || race.host) return null
+  try {
+    const raffle = await loadRaffleForEvent(db, race)
+    if (!raffle?.online_enabled) return null
+    const zone = await getLocationZone(db, race.location_id)
+    return publicRaffleBlock(raffle, zone)
+  } catch (e) {
+    logWarn('public-event', 'raffle read failed; serving the page without the raffle card', { err: e, raceId: race.id })
+    return null
+  }
 }
