@@ -5,13 +5,14 @@
 // placement pass with dryRun:true, which never writes; a board that is off is
 // included for this run only. Built-in boards answer 409. A failed run is 503.
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
 import { uuidLike } from '@/lib/schemas'
 import { boardLocationId, getBoard, listBoards } from '@/lib/pipeline-boards'
 import { assertNotLegacyBoard } from '@/lib/pipeline-board-guard'
 import { reclassifyAllContacts } from '@/lib/pipeline-reclassify'
 import { summariseBoardDryRun } from '@/lib/pipeline-board-dry-run'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -23,13 +24,12 @@ const failure = (r) => NextResponse.json(
   { status: r.status || 503 },
 )
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: boardId } = await params
+// Sign-in only: the board's studio (404), owner/master there (403), then the
+// board itself, in the old order with the old answers.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const boardId = params?.id
   if (!uuidLike.safeParse(boardId).success) return notFound()
 
-  const db = createServerClient()
   const where = await boardLocationId(db, boardId)
   if (!where.ok) return where.status === 404 ? notFound() : failure(where)
   const locationId = where.locationId
@@ -54,7 +54,8 @@ export async function POST(request, { params }) {
     includeDisabledBoardIds: board.enabled ? [] : [board.id],
   })
   if (!result?.ok) {
-    return NextResponse.json({ success: false, error: result?.error || 'The dry run could not be completed.' }, { status: 503 })
+    logError('pipeline-dry-run', 'dry run failed', { boardId, locationId, err: result?.error })
+    return NextResponse.json({ success: false, error: 'The dry run could not be completed.' }, { status: 503 })
   }
 
   // Names for the overlap rows (built-in boards too); a failed read just
@@ -63,4 +64,4 @@ export async function POST(request, { params }) {
   const names = all.ok ? Object.fromEntries(all.boards.map((b) => [b.key, b.name])) : {}
 
   return NextResponse.json({ success: true, data: summariseBoardDryRun(result, board, names) })
-}
+})

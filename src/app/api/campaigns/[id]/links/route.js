@@ -19,22 +19,19 @@
 // a guard: it takes a bare campaign uuid and does no location check of its own.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { logError } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
-
+// Sign-in only: the campaign read and its 404 for another studio stay below,
+// as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   const { data: campaign, error: campaignError } = await db
     .from('campaigns')
     .select('id, location_id')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (campaignError || !campaign) {
     return NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
@@ -42,9 +39,9 @@ export async function GET(_request, props) {
   const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
 
-  const { data, error } = await db.rpc('campaign_link_click_stats', { p_campaign_id: params.id })
+  const { data, error } = await db.rpc('campaign_link_click_stats', { p_campaign_id: params?.id })
   if (error) {
-    console.error('[campaign links] campaign_link_click_stats failed:', error.message)
+    logError('campaign-links', 'campaign_link_click_stats failed', { campaignId: params?.id, err: error })
     return NextResponse.json({ success: false, error: 'Could not load the link report' }, { status: 500 })
   }
 
@@ -61,4 +58,4 @@ export async function GET(_request, props) {
     .sort((a, b) => b.unique_clickers - a.unique_clickers || b.clicks - a.clicks)
 
   return NextResponse.json({ success: true, data: rows })
-}
+})

@@ -5,16 +5,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ user: null, race: null, donation: null, accessGuard: null, isManager: true, updates: [], reads: [] }))
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: vi.fn(async () => mocks.user),
   assertLocationAccessOr404: vi.fn(() => mocks.accessGuard),
 }))
-vi.mock('@/lib/permissions', () => ({
+vi.mock('@/lib/permissions', async (importOriginal) => ({
+  ...(await importOriginal()),
   hasPermissionAtAnyLocation: vi.fn(() => true),
   hasPermissionForLocation: vi.fn(() => true),
 }))
-vi.mock('@/lib/role-at-location', () => ({ hasRoleAtLocation: vi.fn(() => mocks.isManager) }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
+vi.mock('@/lib/role-at-location', async (importOriginal) => ({ ...(await importOriginal()), hasRoleAtLocation: vi.fn(() => mocks.isManager) }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn(), logWarn: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from: (table) => {
@@ -70,7 +72,10 @@ beforeEach(() => {
 describe('POST /api/events/[id]/donations/[donationId]/refunded', () => {
   it('401s an anonymous caller', async () => {
     mocks.user = null
-    expect((await POST(req(), ctx)).status).toBe(401)
+    const res = await POST(req(), ctx)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(mocks.reads).toHaveLength(0)
   })
 
   it('404s an event at a studio the caller cannot see, without reading the donation', async () => {
