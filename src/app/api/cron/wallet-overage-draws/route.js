@@ -44,12 +44,13 @@
 // double-bill the delta, so the location is SKIPPED with a loud log
 // — the next healthy day catches up via cumulative-minus-drawn.
 //
-// Bearer CRON_SECRET. Heartbeat only on a clean run (mig 417 seeds
-// the row: 86400s window + 21600s grace).
+// defineCron owns the secret check (ROUTEWRAP.C10). Heartbeat only on a
+// clean run (mig 417 seeds the row: 86400s window + 21600s grace). A run
+// where some locations failed answers success but leaves the heartbeat
+// unstamped; one where every location it tried failed answers 500.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
+import { logError } from '@/lib/log'
 import { todayStrIn, addDaysISO, PLATFORM_TZ } from '@/lib/location-time'
 import { getLocationPlan } from '@/lib/plans'
 import { getWallet, applyWalletEntry } from '@/lib/wallet'
@@ -77,13 +78,7 @@ const RATE_KEY_BY_METER = {
   ai_message: 'ai_message',
 }
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const db = createServerClient()
+export const GET = defineCron({ heartbeat: 'wallet-overage-draws' }, async ({ db }) => {
   const today = todayStrIn(PLATFORM_TZ) // D5: the platform billing calendar (PLATFORM_TZ)
   // Billing month = the Dublin month containing YESTERDAY (final-sweep
   // semantics on the 1st — see header).
@@ -97,8 +92,8 @@ export async function GET(request) {
     .select('location_id, version:plan_versions!plan_version_id(plan:plans!plan_id(kind))')
     .eq('active', true)
   if (pinsError) {
-    console.error('[wallet-overage-draws] location_plans fetch failed:', pinsError.message)
-    return NextResponse.json({ success: false, error: pinsError.message }, { status: 500 })
+    logError('wallet-overage-draws', 'location_plans fetch failed; nothing drawn, heartbeat not stamped', { err: pinsError })
+    return { ok: false, body: { error: 'Could not read location plans' } }
   }
   const pinnedLocationIds = [...new Set(
     (pins || [])
@@ -116,10 +111,13 @@ export async function GET(request) {
     failed: 0,
   }
 
+  // Pins deactivated between the list and the plan read: neither tried nor
+  // failed, so they leave the denominator for "every location failed".
+  let unpinned = 0
   for (const locationId of pinnedLocationIds) {
     try {
       const plan = await getLocationPlan(db, locationId)
-      if (!plan) continue // pin deactivated between the list and here
+      if (!plan) { unpinned += 1; continue } // pin deactivated between the list and here
 
       const wallet = await getWallet(db, locationId)
       if (wallet?.period_start && String(wallet.period_start) !== window.monthStart) {
@@ -214,6 +212,11 @@ export async function GET(request) {
     }
   }
 
-  if (stats.failed === 0) await stampHeartbeat('wallet-overage-draws', stats)
-  return NextResponse.json({ success: true, ...stats })
-}
+  // Every location the run tried (pinned, still pinned, period in step)
+  // failed: a whole-run outage, not one bad location.
+  const tried = pinnedLocationIds.length - unpinned - stats.skippedPeriodMismatch
+  if (stats.failed > 0 && stats.failed === tried) {
+    return { ok: false, body: { ...stats, error: 'Every location due a draw failed' } }
+  }
+  return { body: stats, outcome: { ...stats }, stamp: stats.failed === 0 }
+})
