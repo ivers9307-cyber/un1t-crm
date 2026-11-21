@@ -1376,8 +1376,10 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           {/* CHARITY.13 — items-start so the donate card hugs its content instead of
               stretching to the taller signup card; the OR rule still spans the row. */}
           {signupOff ? (
-            // CHARITYSIGNUPOFF.1 — donate and raffle side by side; they stack on a phone.
-            <div className="grid gap-6 md:gap-5 md:items-start md:grid-cols-2">
+            // CHARITYSIGNUPOFF.1 — donate and raffle side by side. On a phone they
+            // stack raffle first (flex-col-reverse); the DOM order, and so the
+            // desktop row (donate left, raffle right), is unchanged.
+            <div className="flex flex-col-reverse gap-6 md:grid md:gap-5 md:items-start md:grid-cols-2">
               <Suspense fallback={null}>
                 <DonateCardFromUrl
                   slug={slug}

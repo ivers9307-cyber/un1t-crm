@@ -171,6 +171,13 @@ describe('event page — donations and raffle only', () => {
     expect(screen.queryByRole('button', { name: /Register and pay/ })).toBeNull()
     expect(screen.queryByText('OR')).toBeNull()
   })
+  it('on a phone the raffle card stacks above the donate card; desktop keeps donate left', async () => {
+    await renderOff()
+    const donate = await screen.findByRole('button', { name: /^Donate/ })
+    const row = donate.closest('.flex-col-reverse')
+    expect(row).toBeTruthy()
+    expect(row.className).toContain('md:grid-cols-2')
+  })
   it('the embed points to the event page instead of a form', async () => {
     await renderOff({ embedded: true })
     await screen.findByText(/Sign-up is not open for this event/)
