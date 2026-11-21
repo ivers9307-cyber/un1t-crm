@@ -181,8 +181,52 @@ describe('GET /api/events/[id]/donations', () => {
     expect(res.headers.get('Content-Disposition')).toBe('attachment; filename="charity-day-donations.csv"')
     const text = (await res.text()).replace(/^﻿/, '')
     const lines = text.split('\r\n')
-    expect(lines[0]).toBe('paid_at,name,email,amount,matched,status,message')
-    expect(lines[1]).toBe('"1 Jul 2026, 12:30","Ava, ""AJ"" Byrne",ava@example.com,25.00,50.00,paid,"Go\nteam"')
+    expect(lines[0]).toBe('paid_at,name,email,amount,matched,status,message,type')
+    expect(lines[1]).toBe('"1 Jul 2026, 12:30","Ava, ""AJ"" Byrne",ava@example.com,25.00,50.00,paid,"Go\nteam",donation')
     expect(text).not.toContain('2500')
+  })
+
+  // RAFFLEDONATIONS.2 — the same unvoided raffle sales are listed (and exported), labelled raffle.
+  const SALE = {
+    id: 's1', quantity: 20, total_cents: 1000, voided_at: null, created_at: '2026-07-01T07:24:00.000Z',
+    buyer_name: 'Sam Till', buyer_email: 'sam@example.com', first_ticket: 3, last_ticket: 22,
+    payment_method: 'card', channel: 'till', option_label: '20 for €10', email_status: 'sent',
+  }
+
+  it('lists the raffle sales newest first, in the event zone, beside the donations', async () => {
+    mocks.raffle = { id: 'raf-1' }
+    mocks.raffleSales = [
+      SALE,
+      { ...SALE, id: 's2', quantity: 1, total_cents: 100, created_at: '2026-07-01T07:48:00.000Z', first_ticket: 23, last_ticket: 23, channel: 'online', option_label: null, email_status: null },
+    ]
+    const res = await GET(req(), ctx)
+    const { data } = await res.json()
+    expect(data.donations.map((d) => d.id)).toEqual(['d1', 'd2', 'd3', 'd4'])
+    expect(data.raffle_sales.map((r) => r.id)).toEqual(['s2', 's1'])
+    expect(data.raffle_sales[1]).toEqual({
+      id: 's1', sold_at: '2026-07-01T07:24:00.000Z', sold_at_label: expect.stringMatching(/08:24/),
+      buyer_name: 'Sam Till', buyer_email: 'sam@example.com', quantity: 20, total_cents: 1000,
+      tickets_label: '#003–#022', payment_method: 'card', channel: 'till', option_label: '20 for €10', email_status: 'sent',
+    })
+    expect(data.raffle_sales[0].tickets_label).toBe('#023')
+    // Listed and counted from the same rows: no voided sale, nothing counted twice.
+    expect(data.totals.raffle_cents).toBe(1100)
+    expect(data.totals.raised_cents).toBe(5000 + 1100)
+  })
+
+  it('returns an empty raffle list when the event has no raffle', async () => {
+    const res = await GET(req(), ctx)
+    const { data } = await res.json()
+    expect(data.raffle_sales).toEqual([])
+    expect(mocks.queries.some((x) => x.table === 'raffle_sales')).toBe(false)
+  })
+
+  it('?format=csv adds one raffle line per sale after the donations, never matched', async () => {
+    mocks.raffle = { id: 'raf-1' }
+    mocks.raffleSales = [SALE]
+    const res = await GET(req('?format=csv'), ctx)
+    const lines = (await res.text()).replace(/^﻿/, '').split('\r\n').filter(Boolean)
+    expect(lines).toHaveLength(1 + 4 + 1)
+    expect(lines[5]).toBe('"1 Jul 2026, 08:24",Sam Till,sam@example.com,10.00,,paid,20 tickets #003–#022 · card,raffle')
   })
 })

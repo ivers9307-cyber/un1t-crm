@@ -16,6 +16,7 @@ import { computeCharityTotals, resolveCharitySettings } from '@/lib/charity-dona
 import { getLocationZone, formatInZone, DEFAULT_TZ } from '@/lib/location-time'
 import { csvCell } from '@/lib/attendee-csv'
 import { logWarn } from '@/lib/log'
+import { formatTicketRange } from '@/lib/raffle-format'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -95,7 +96,7 @@ export async function GET(request, props) {
     for (let from = 0; ; from += 1000) {
       const { data, error: salesErr } = await db
         .from('raffle_sales')
-        .select('id, quantity, total_cents, voided_at')
+        .select('id, quantity, total_cents, voided_at, created_at, buyer_name, buyer_email, first_ticket, last_ticket, payment_method, channel, option_label, email_status')
         .eq('raffle_id', raffle.id)
         .eq('location_id', race.location_id)
         .is('voided_at', null)
@@ -141,14 +142,41 @@ export async function GET(request, props) {
     }
   })
 
+  // RAFFLEDONATIONS.2 — the same unvoided raffle sales listed beside the
+  // donations (labelled raffle, never matched). A sale is stamped when it was
+  // made; an online sale is only written once its order is paid.
+  const raffleOut = raffleSales.map((r) => ({
+    id: r.id,
+    sold_at: r.created_at,
+    sold_at_label: r.created_at ? formatInZone(r.created_at, zone, WHEN_FORMAT) : null,
+    buyer_name: r.buyer_name,
+    buyer_email: r.buyer_email,
+    quantity: r.quantity,
+    total_cents: r.total_cents,
+    tickets_label: formatTicketRange(r.first_ticket, r.last_ticket),
+    payment_method: r.payment_method,
+    channel: r.channel || 'till',
+    option_label: r.option_label || null,
+    email_status: r.email_status || null,
+  })).sort((a, b) => String(b.sold_at || '').localeCompare(String(a.sold_at || '')))
+
   const url = new URL(request.url)
   if (url.searchParams.get('format') === 'csv') {
-    const header = ['paid_at', 'name', 'email', 'amount', 'matched', 'status', 'message']
+    // `type` is appended last so a sheet built on the old columns still lines up.
+    const header = ['paid_at', 'name', 'email', 'amount', 'matched', 'status', 'message', 'type']
     const lines = [header.join(',')]
     for (const d of out) {
       lines.push([
         d.paid_at_label || '', d.donor_name || '', d.donor_email || '',
-        euros(d.amount_cents), euros(d.matched_cents), d.status, d.message || '',
+        euros(d.amount_cents), euros(d.matched_cents), d.status, d.message || '', 'donation',
+      ].map(csvCell).join(','))
+    }
+    for (const r of raffleOut) {
+      lines.push([
+        r.sold_at_label || '', r.buyer_name || '', r.buyer_email || '',
+        euros(r.total_cents), '', 'paid',
+        `${r.quantity} ${r.quantity === 1 ? 'ticket' : 'tickets'} ${r.tickets_label} · ${r.channel === 'online' ? 'online' : r.payment_method}`,
+        'raffle',
       ].map(csvCell).join(','))
     }
     const safe = String(race.slug || race.name || 'event')
@@ -167,6 +195,7 @@ export async function GET(request, props) {
     success: true,
     data: {
       donations: out,
+      raffle_sales: raffleOut,
       totals,
       currency,
       settings: { name: settings.name, match_multiplier: settings.match_multiplier, include_entries: !!settings.include_entries, has_raffle: !!raffle },

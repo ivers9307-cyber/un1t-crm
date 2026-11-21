@@ -9,7 +9,9 @@
 // same Re-check: a staff click always lands after the status route's
 // single-sender minute, so it re-runs the stamp-keyed side effects. The server
 // renders paid_at in the event's zone (paid_at_label), so nothing here does
-// zone maths.
+// zone maths. RAFFLEDONATIONS.2 — the event's unvoided raffle sales are
+// listed in the same table with a Raffle chip: never matched, no actions (a
+// sale is voided on the raffle page).
 import { useCallback, useEffect, useState } from 'react'
 import { Download } from 'lucide-react'
 import { Button, Table } from '@/components/ui'
@@ -25,12 +27,48 @@ const STATUS_CHIP = {
 
 const RECEIPT_LABEL = { sent: 'Sent', suppressed: 'Suppressed', failed: 'Failed' }
 
+const RAFFLE_CHIP = { label: 'Raffle', cls: 'bg-violet-500/10 text-violet-700' }
+
+// One table row per raffle sale, in the donation row's shape.
+function raffleRow(r) {
+  const how = r.channel === 'online' ? 'online' : (r.payment_method === 'cash' ? 'cash' : 'card')
+  const tickets = `${r.quantity} ${r.quantity === 1 ? 'ticket' : 'tickets'}`
+  return {
+    id: `raffle-${r.id}`,
+    kind: 'raffle',
+    at: r.sold_at,
+    paid_at_label: r.sold_at_label,
+    donor_name: r.buyer_name,
+    donor_email: r.buyer_email,
+    amount_cents: r.total_cents,
+    receipt_email_status: r.email_status,
+    message: `${tickets} ${r.tickets_label} · ${how}${r.option_label ? ` (${r.option_label})` : ''}`,
+  }
+}
+
+// Donations and raffle sales together, newest first; rows with no time last.
+export function mergeRows(donations = [], raffleSales = []) {
+  const rows = [
+    ...donations.map((d) => ({ ...d, kind: 'donation', at: d.paid_at })),
+    ...raffleSales.map(raffleRow),
+  ]
+  return rows
+    .map((row, i) => ({ row, i }))
+    .sort((a, b) => {
+      if (!a.row.at && !b.row.at) return a.i - b.i
+      if (!a.row.at) return 1
+      if (!b.row.at) return -1
+      return Date.parse(b.row.at) - Date.parse(a.row.at) || a.i - b.i
+    })
+    .map(({ row }) => row)
+}
+
 // Unconfirmed, or paid with a side effect still outstanding.
 const needsRecheck = (d) => d.status === 'awaiting_payment'
   || (d.status === 'paid' && (!d.receipt_email_status || d.receipt_email_status === 'failed' || !d.contact_id))
 
-function StatusChip({ status }) {
-  const chip = STATUS_CHIP[status] || { label: status, cls: 'bg-un1t-surface text-un1t-subtle' }
+function StatusChip({ status, raffle = false }) {
+  const chip = raffle ? RAFFLE_CHIP : STATUS_CHIP[status] || { label: status, cls: 'bg-un1t-surface text-un1t-subtle' }
   return <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${chip.cls}`}>{chip.label}</span>
 }
 
@@ -111,13 +149,14 @@ export default function EventDonationsList({ raceId, canMarkRefunded = false }) 
       ),
     },
     { key: 'amount', header: 'Amount', align: 'right', render: (d) => formatCents(d.amount_cents, d.currency || currency) },
-    { key: 'matched', header: matchLabel, align: 'right', render: (d) => (d.status === 'paid' ? formatCents(d.matched_cents, d.currency || currency) : '—') },
-    { key: 'status', header: 'Status', render: (d) => <StatusChip status={d.status} /> },
+    { key: 'matched', header: matchLabel, align: 'right', render: (d) => (d.kind !== 'raffle' && d.status === 'paid' ? formatCents(d.matched_cents, d.currency || currency) : '—') },
+    { key: 'status', header: 'Status', render: (d) => <StatusChip status={d.status} raffle={d.kind === 'raffle'} /> },
     { key: 'receipt', header: 'Receipt', render: (d) => <span data-col="receipt">{RECEIPT_LABEL[d.receipt_email_status] || '—'}</span> },
     { key: 'message', header: 'Message', render: (d) => <span className="text-un1t-subtle">{d.message || ''}</span> },
     {
       key: 'actions', header: '', align: 'right',
       render: (d) => {
+        if (d.kind === 'raffle') return null
         const recheckButton = needsRecheck(d) ? (
           <Button type="button" variant="ghost" size="sm" loading={recheckingId === d.id} onClick={() => recheck(d)}>
             Re-check
@@ -160,7 +199,7 @@ export default function EventDonationsList({ raceId, canMarkRefunded = false }) 
       </div>
       <Table
         columns={columns}
-        rows={data?.donations || []}
+        rows={mergeRows(data?.donations || [], data?.raffle_sales || [])}
         loading={!data && !error}
         empty="No donations yet."
       />

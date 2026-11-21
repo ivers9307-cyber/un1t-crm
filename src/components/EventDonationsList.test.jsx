@@ -5,7 +5,7 @@
 // (awaiting_payment) rows with a Re-check, and the receipt column.
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, waitFor, fireEvent } from '@testing-library/react'
-import EventDonationsList from './EventDonationsList.jsx'
+import EventDonationsList, { mergeRows } from './EventDonationsList.jsx'
 
 const PAYLOAD = {
   success: true,
@@ -135,5 +135,33 @@ describe('EventDonationsList', () => {
     await waitFor(() => expect(screen.getByText('Ava Byrne')).toBeTruthy())
     fireEvent.click(screen.getByText('Mark as refunded'))
     expect(calls.filter((c) => c.opts?.method === 'POST')).toHaveLength(0)
+  })
+
+  // RAFFLEDONATIONS.2 — raffle sales listed in the same table.
+  const RAFFLE = [
+    { id: 's1', sold_at: '2026-07-01T12:00:00Z', sold_at_label: '1 Jul 2026, 13:00', buyer_name: 'Sam Till', buyer_email: 'sam@example.com', quantity: 20, total_cents: 1000, tickets_label: '#003–#022', payment_method: 'card', channel: 'till', option_label: '20 for €10', email_status: 'sent' },
+    { id: 's2', sold_at: '2026-07-01T10:30:00Z', sold_at_label: '1 Jul 2026, 11:30', buyer_name: 'Olive Web', buyer_email: 'olive@example.com', quantity: 1, total_cents: 100, tickets_label: '#023', payment_method: 'card', channel: 'online', option_label: null, email_status: null },
+  ]
+
+  it('lists raffle sales with a Raffle chip, tickets and method, no match and no actions', async () => {
+    stubFetch(() => json({ ...PAYLOAD, data: { ...PAYLOAD.data, raffle_sales: RAFFLE } }))
+    render(<EventDonationsList raceId="ev-1" canMarkRefunded />)
+    await waitFor(() => expect(screen.getByText('Sam Till')).toBeTruthy())
+    const row = screen.getByText('Sam Till').closest('tr')
+    expect(row.textContent).toContain('Raffle')
+    expect(row.textContent).toContain('€10.00')
+    expect(row.textContent).toContain('20 tickets #003–#022 · card (20 for €10)')
+    expect(row.textContent).toContain('1 Jul 2026, 13:00')
+    expect(row.textContent).not.toContain('Paid')
+    expect(row.querySelector('[data-col="receipt"]').textContent).toBe('Sent')
+    expect(row.querySelector('button')).toBeNull()
+    expect(screen.getByText('Olive Web').closest('tr').textContent).toContain('1 ticket #023 · online')
+    // Only the paid donation still offers a refund.
+    expect(screen.getAllByText('Mark as refunded')).toHaveLength(1)
+  })
+
+  it('orders donations and raffle sales together, newest first, untimed rows last', () => {
+    const rows = mergeRows(PAYLOAD.data.donations, RAFFLE)
+    expect(rows.map((r) => r.id)).toEqual(['raffle-s1', 'd1', 'raffle-s2', 'd3', 'd2', 'd4'])
   })
 })
