@@ -2,9 +2,10 @@
 // location's provider lacks the memberships capability.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
-vi.mock('@/lib/permissions', () => ({ hasMobilePermission: vi.fn(() => true) }))
-vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({ tag: 'db' })) }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/permissions', async (importOriginal) => ({ ...(await importOriginal()), hasMobilePermission: vi.fn(() => true) }))
+vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: vi.fn(() => ({ tag: 'db' })) }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 vi.mock('@/lib/radar-availability', () => ({ radarAvailability: vi.fn() }))
 vi.mock('@/lib/churn-radar-data', () => ({ loadRadar: vi.fn(async () => ({ radar: [], summary: { activeBase: 3, overdueValueCents: 100 } })) }))
 
@@ -39,7 +40,8 @@ describe('/api/mobile/radar availability', () => {
     radarAvailability.mockRejectedValue(new Error('membership source unreadable'))
     const body = await (await GET()).json()
     expect(body.data.churn).toBeNull()
-    expect(body.data.churnError).toBe('membership source unreadable')
+    // The cause is logged; the phone gets a fixed flag (it shows its own copy).
+    expect(body.data.churnError).toBe('fetch_failed')
     expect(body.data).not.toHaveProperty('leadError')
   })
 })

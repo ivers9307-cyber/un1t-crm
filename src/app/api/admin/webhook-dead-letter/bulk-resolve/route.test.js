@@ -109,9 +109,12 @@ describe('POST /api/admin/webhook-dead-letter/bulk-resolve — the write is boun
     expect(writes).toHaveLength(0)
   })
 
-  it('anonymous is 401', async () => {
+  it('anonymous is 401 (withAuth\'s body since ROUTEWRAP.R12; it said \'Unauthorised\')', async () => {
     getCurrentUser.mockResolvedValue(null)
-    expect((await call({ provider: 'zoom_contact_sync' })).status).toBe(401)
+    const res = await call({ provider: 'zoom_contact_sync' })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(writes).toHaveLength(0)
   })
 })
 

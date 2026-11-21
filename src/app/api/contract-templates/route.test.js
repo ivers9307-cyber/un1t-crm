@@ -155,3 +155,14 @@ describe('GET /api/contract-templates — list scoping', () => {
     expect(calls.in).toHaveLength(0)
   })
 })
+
+describe('GET /api/contract-templates — a failed read (ROUTEWRAP.R12)', () => {
+  it('answers a fixed 500, never the database text', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm1', isMaster: true, role: 'master', profileRole: 'master', locations: [], rolesByLocation: {}, orgAdminOrgIds: [] })
+    const { db } = mockDb({ error: { message: 'permission denied for table contract_templates' } })
+    createServerClient.mockReturnValue(db)
+    const res = await GET()
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not load the templates. Try again.' })
+  })
+})

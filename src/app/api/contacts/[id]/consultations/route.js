@@ -4,11 +4,15 @@
 //
 // Authorization: session auth + consultations permission.
 // [id] is the contact the consultation belongs to.
+// withAuth signs the caller in (401) and asks for `consultations` somewhere
+// (the same 403 'Unauthorized'); the contact (404), its studio (404) and the
+// permission there (403) follow, as before.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -29,19 +33,13 @@ const CreateConsultationSchema = z.object({
 // ============================================================
 // POST /api/contacts/[id]/consultations — create a consultation
 // ============================================================
-export async function POST(request, props) {
-  const params = await props.params
+export const POST = withAuth({
+  permission: null,
+  location: false,
+  allow: (user) => hasPermissionAtAnyLocation(user, 'consultations'),
+  forbiddenMessage: 'Unauthorized',
+}, async ({ user, db, request, params }) => {
   const { id } = params
-
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  if (!hasPermissionAtAnyLocation(user, 'consultations')) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
-  }
-
-  const db = createServerClient()
 
   const { data: contact, error: contactErr } = await db
     .from('contacts')
@@ -85,8 +83,9 @@ export async function POST(request, props) {
     .single()
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('consultations', 'consultation create failed', { contactId: id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the consultation. Try again.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data })
-}
+})

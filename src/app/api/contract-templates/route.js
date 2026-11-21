@@ -6,10 +6,13 @@
 // Templates are master/org-admin-only artefacts — staff and contractors
 // never see them. The issue wizard surfaces them only through this
 // authorised route.
+//
+// withAuth only signs the caller in (the same 401); the contract gates and
+// the org scoping stay below in their old order with their old texts.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { adminOrganizationIds } from '@/lib/org-admin'
 import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import { contractTemplateSchema } from '@/lib/schemas'
@@ -17,10 +20,7 @@ import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  // GATES-3 (c) — the issue wizard's list. The rows are scoped to the orgs the
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {  // GATES-3 (c) — the issue wizard's list. The rows are scoped to the orgs the
   // caller manages below, so the gate is GATES-2's coarse rule (an org admin
   // of SOME org; C18 ORGROLE.1), not the ACTIVE studio's role: an owner of another org
   // working from a studio where they are a manager got a 403 and an empty
@@ -34,7 +34,6 @@ export async function GET() {
   // otherwise any owner reads every org's templates (incl. comp body
   // copy). Master sees all; a non-master is scoped to the orgs they
   // administer.
-  const db = createServerClient()
   let query = db
     .from('contract_templates')
     .select('id, organization_id, name, description, body_markdown, variables_schema, employment_type, version, active, created_at, updated_at')
@@ -52,14 +51,14 @@ export async function GET() {
   }
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('contract-templates', 'template list failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the templates. Try again.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, data })
-}
+})
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  // GATES-2 — the template is created in the ACTIVE org (below), so that is
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {  // GATES-2 — the template is created in the ACTIVE org (below), so that is
   // the org the caller must manage. isOwnerOrMaster let any org admin through
   // (an admin of X created templates in Y, where they are a manager) and
   // refused nobody the org check would have caught.
@@ -78,7 +77,6 @@ export async function POST(request) {
   // collaborators on the same org.
   const orgId = user.activeOrganization?.id || null
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('contract_templates')
     .insert({
@@ -88,6 +86,9 @@ export async function POST(request) {
     })
     .select()
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('contract-templates', 'template create failed', { orgId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not create the template. Try again.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, data })
-}
+})
