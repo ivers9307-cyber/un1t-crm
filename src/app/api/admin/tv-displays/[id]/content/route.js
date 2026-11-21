@@ -14,8 +14,8 @@
 // publish runner) writes tv_content with the service role and is unchanged.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { ringScreensForDisplay } from '@/lib/screen-doorbell'
 import {
@@ -26,11 +26,10 @@ export const dynamic = 'force-dynamic'
 
 class TemplateReadError extends Error {}
 
-export async function PUT(request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
-  const { display, response } = await loadTvDisplayForUser(db, user, id, 'id, location_id')
+// withAuth only signs the caller in; loadTvDisplayForUser keeps the coarse
+// tv_displays check and the TV's studio (404), as before.
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const { display, response } = await loadTvDisplayForUser(db, user, params?.id, 'id, location_id')
   if (response) return response
 
   const validation = await validateBody(request, TvPushSchema)
@@ -64,20 +63,20 @@ export async function PUT(request, props) {
     }, { onConflict: 'tv_display_id' })
     .select(TV_CONTENT_COLUMNS)
     .single()
-  if (error) return tvServerError(`Could not push to the TV: ${error.message}`)
+  if (error) {
+    logError('tv-admin', 'push not saved', { tvId: display.id, code: error.code ?? null })
+    return tvServerError('Could not push to the TV.')
+  }
 
   // SCREENMODE.9 — wake the screen boxes linked to this TV so they reload now
   // instead of at their next (slow, kiosk) poll.
   try { await ringScreensForDisplay(db, display.id) } catch { /* a ring never changes the response */ }
 
   return NextResponse.json({ success: true, data })
-}
+})
 
-export async function DELETE(_request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
-  const { display, response } = await loadTvDisplayForUser(db, user, id, 'id, location_id')
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const { display, response } = await loadTvDisplayForUser(db, user, params?.id, 'id, location_id')
   if (response) return response
 
   // Already idle (zero rows) is the state that was asked for: 200.
@@ -85,9 +84,12 @@ export async function DELETE(_request, props) {
     .delete()
     .eq('tv_display_id', display.id)
     .select('tv_display_id')
-  if (error) return tvServerError(`Could not clear the TV: ${error.message}`)
+  if (error) {
+    logError('tv-admin', 'clear not saved', { tvId: display.id, code: error.code ?? null })
+    return tvServerError('Could not clear the TV.')
+  }
 
   try { await ringScreensForDisplay(db, display.id) } catch { /* a ring never changes the response */ }
 
   return NextResponse.json({ success: true })
-}
+})

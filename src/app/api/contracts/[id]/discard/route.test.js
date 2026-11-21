@@ -191,5 +191,16 @@ describe('POST /api/contracts/[id]/discard', () => {
     createServerClient.mockReturnValue(mockDb({ contractError: { message: 'boom' } }).db)
     const res = await POST(FAKE_REQUEST, { params: { id: 'c1' } })
     expect(res.status).toBe(500)
+    // ROUTEWRAP.R12 — a fixed message; the database text goes to the log.
+    expect(await res.json()).toEqual({ success: false, error: 'Could not load the contract. Try again.' })
+  })
+
+  it('a failed write is a fixed 500 too, and nothing is audited', async () => {
+    getCurrentUser.mockResolvedValue(masterUser)
+    createServerClient.mockReturnValue(mockDb({ contract: draftFixture(), updatedError: { message: 'deadlock detected' } }).db)
+    const res = await POST(FAKE_REQUEST, { params: { id: 'c1' } })
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not discard the draft. Refresh and try again.' })
+    expect(logAuditEvent).not.toHaveBeenCalled()
   })
 })

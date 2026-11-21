@@ -10,11 +10,16 @@
 //                            buyer details / Xero invoice is enforced
 //                            server-side. UI shows the same checks
 //                            inline; the API is the security boundary.
+//
+// withAuth only signs the caller in (the same 401); the coarse permission
+// (403), the body (400), the car (404), its studio (404) and the permission
+// there (403) keep their order here, and the write is unchanged.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { completionGaps } from '@/lib/cars'
@@ -23,10 +28,7 @@ const PromoteSchema = z.object({
   to: z.enum(['new', 'pending', 'completed']),
 })
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
@@ -35,7 +37,6 @@ export async function POST(request, props) {
   if (!validation.ok) return validation.response
   const { to } = validation.data
 
-  const db = createServerClient()
   const { data: car } = await db
     .from('cars')
     .select('*, car_documents(doc_type, xero_sent_at)')
@@ -86,6 +87,9 @@ export async function POST(request, props) {
     .eq('id', params.id)
     .select()
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('cars', 'promote failed', { carId: params.id, to, err: error })
+    return NextResponse.json({ success: false, error: 'Could not move the car on. Refresh and try again.' }, { status: 400 })
+  }
   return NextResponse.json({ success: true, data })
-}
+})

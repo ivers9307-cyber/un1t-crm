@@ -8,12 +8,15 @@
 // Platform-level surface (like /api/admin/organizations): master role
 // only, no per-location scoping. Writes go through the service client;
 // RLS on the plans tables is master-read + service-role-write.
+//
+// withAuth signs the caller in (a signed-out call is its 401; it was this
+// route's 403 'Master only' before), then profiles.role master or the same
+// 403 'Master only', then the body.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
-import { validateBody } from '@/lib/validate'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { PLAN_KINDS } from '@shared/plans'
 
 export const runtime = 'nodejs'
@@ -27,25 +30,16 @@ const CreateBody = z.object({
   sort: z.number().int().min(0).max(10000).optional(),
 })
 
-async function requireMaster() {
-  const user = await getCurrentUser()
-  if (!user || user.profileRole !== 'master') return null
-  return user
-}
+const isProfileMaster = (user) => user.profileRole === 'master'
 
-export async function GET() {
-  const user = await requireMaster()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+export const GET = withAuth({ permission: null, location: false, allow: isProfileMaster, forbiddenMessage: 'Master only' }, async ({ db }) => {
   const { data, error } = await db
     .from('plans')
     .select('*, versions:plan_versions!plan_id(*)')
     .order('sort', { ascending: true })
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('admin-plans', 'plan catalogue read failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the plans. Try again.' }, { status: 500 })
   }
 
   // Newest version first within each plan — the editor renders history
@@ -57,19 +51,11 @@ export async function GET() {
     ),
   }))
   return NextResponse.json({ success: true, data: plans })
-}
+})
 
-export async function POST(request) {
-  const user = await requireMaster()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
-  }
+export const POST = withAuth({ permission: null, location: false, allow: isProfileMaster, forbiddenMessage: 'Master only', schema: CreateBody }, async ({ db, input }) => {
+  const { slug, name, kind, sort } = input
 
-  const validation = await validateBody(request, CreateBody)
-  if (!validation.ok) return validation.response
-  const { slug, name, kind, sort } = validation.data
-
-  const db = createServerClient()
   const { data: created, error } = await db
     .from('plans')
     .insert({ slug, name, kind, sort: sort ?? (kind === 'addon' ? 100 : 0) })
@@ -84,8 +70,9 @@ export async function POST(request) {
         code: 'duplicate_slug',
       }, { status: 409 })
     }
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    logError('admin-plans', 'plan create failed', { slug, err: error })
+    return NextResponse.json({ success: false, error: 'Could not create the plan. Try again.' }, { status: 400 })
   }
 
   return NextResponse.json({ success: true, data: created })
-}
+})

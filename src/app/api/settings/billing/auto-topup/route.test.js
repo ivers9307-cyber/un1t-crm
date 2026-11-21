@@ -191,3 +191,17 @@ describe('PATCH auto-topup — write shape', () => {
     expect(patch.auto_topup_enabled).toBe(false)
   })
 })
+
+describe('PATCH auto-topup — a failed write (ROUTEWRAP.R12)', () => {
+  it('answers a fixed 400, never the database text, and writes nothing else', async () => {
+    getCurrentUser.mockResolvedValue(ownerA)
+    createServerClient.mockReturnValue({
+      from: (table) => (table === 'locations'
+        ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { id: LOC_A, organization_id: 'org-a' }, error: null }) }) }) }
+        : { upsert: () => ({ select: () => ({ single: async () => ({ data: null, error: { code: '23514', message: 'new row for relation "wallets" violates check constraint' } }) }) }) }),
+    })
+    const res = await PATCH(patchReq(validBody))
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not save the auto-top-up settings. Try again.' })
+  })
+})
