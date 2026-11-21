@@ -1,5 +1,6 @@
 // ROUTEWRAP.1 — a new /api route uses a wrapper: withAuth (src/lib/with-auth.js)
-// for a signed-in session, defineCron for a scheduled job. They own the sign-in
+// for a signed-in staff session, withHostAuth (src/lib/with-host-auth.js) for
+// a host-portal session, defineCron for a scheduled job. They own the sign-in
 // check, the studio check, the role check and one error boundary, which routes
 // otherwise write by hand in a dozen slightly different ways.
 //
@@ -25,6 +26,8 @@ const outsideRule = (r) => /^(webhooks|public|cron)\//.test(r.name)
   || /\b(requireApiKeyOrManager|authenticateApiKey)\(/.test(r.src)
 const wrapped = (src) => (src.includes("from '@/lib/with-auth'") && /\bwithAuth\(/.test(src))
   || (src.includes("from '@/lib/define-cron'") && /\bdefineCron\(/.test(src))
+  // HOSTCHECKIN.1 — the host portal's twin of withAuth (host sessions only).
+  || (src.includes("from '@/lib/with-host-auth'") && /\bwithHostAuth\(/.test(src))
 
 describe('new API routes use a wrapper', () => {
   it('finds the routes', () => {

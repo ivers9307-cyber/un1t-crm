@@ -18,7 +18,8 @@ import { uuidLike } from '@/lib/schemas'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { checkinCounts } from '@/lib/event-checkins'
 import { sumWaveCapacity } from '@/lib/event-signups'
-import { followPlacementForCheckin, isPlacedRedirect, checkinStatusRefusal } from '@/lib/placed-checkin'
+import { checkinStatusRefusal } from '@/lib/placed-checkin'
+import { resolveCheckinTarget as resolve } from '@/lib/event-checkin-write'
 
 export const runtime = 'nodejs'
 
@@ -26,41 +27,6 @@ const Schema = z.object({
   team_member_id: uuidLike,
   race_registration_id: uuidLike,
 })
-
-// Load the registration, confirm it belongs to THIS event, and locate the
-// member on its team. Returns { error, status } or
-// { member, locationId, registrationId }.
-//
-// FINDTEAM.8 (I2): a placed solo row is followed to the team entry it joined
-// (placed_into_registration_id) and the person's member row THERE (by
-// contact, else email), so check-in and its undo land on the team, never on
-// the dead solo row. registrationId is the row the check-in belongs to.
-async function resolve(db, eventId, registrationId, memberId) {
-  const { data: reg, error: regErr } = await db
-    .from('race_registrations')
-    .select('id, race_event_id, status, contact_id, placed_into_registration_id, race_events!inner ( id, location_id ), teams ( id, team_members ( id, email, contact_id ) )')
-    .eq('id', registrationId)
-    .maybeSingle()
-  if (regErr) return { error: 'Could not read the registration', status: 500 }
-  if (!reg || reg.race_event_id !== eventId) {
-    return { error: 'Registration not found for this event', status: 404 }
-  }
-  const locationId = reg.race_events?.location_id
-  const member = (reg.teams?.team_members || []).find((m) => m.id === memberId)
-  if (!member) return { error: 'That person is not on this registration', status: 400 }
-  if (!isPlacedRedirect(reg)) return { member, locationId, registrationId, registrationStatus: reg.status }
-  const followed = await followPlacementForCheckin(db, {
-    eventId,
-    placedIntoId: reg.placed_into_registration_id,
-    person: { contact_id: member.contact_id || reg.contact_id || null, email: member.email },
-  })
-  if (!followed.ok) {
-    if (followed.reason === 'load_failed') return { error: 'Could not read the registration', status: 500 }
-    if (followed.reason === 'not_found') return { error: 'Registration not found for this event', status: 404 }
-    return { error: 'That person is not on this registration', status: 400 }
-  }
-  return { member: followed.member, locationId, registrationId: followed.registrationId, registrationStatus: followed.registrationStatus }
-}
 
 export async function POST(request, props) {
   const params = await props.params

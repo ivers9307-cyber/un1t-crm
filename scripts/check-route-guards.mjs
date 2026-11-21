@@ -73,6 +73,9 @@ const SESSION_GUARDS = [
   // returns null for staff/non-host users; every /api/host route 401s on null
   // and scopes all reads to host.id — verified in src/lib/host-auth.js. (HOST-PORTAL.1)
   'getCurrentHost(',
+  // HOSTCHECKIN.1 — withHostAuth (src/lib/with-host-auth.js) calls getCurrentHost
+  // and 401s on null before the handler runs; the route still scopes to host.id.
+  'withHostAuth(',
 ]
 
 // MAIL-RENAME.1 — a pure re-export shim (`export { POST } from '@/app/api/…'`,

@@ -408,6 +408,9 @@ export const EXEMPT = {
   'src/app/api/public/events/[slug]/calendar.ics/route.js': {
     race_events: 'CALENDAR.1 add-to-calendar file: race_events row resolved by published slug + active/published flags (the same row the public event page serves); reads one row, writes nothing, rate-limited per IP.',
   },
+  'src/app/api/host/events/[id]/checkin/all/route.js': {
+    race_checkins: 'HOSTCHECKIN.1 — a host checks in everyone on one entry of their OWN event. The registration is read by id and refused (404) unless its race_event_id is the URL event AND that event\'s host_id is the signed-in host (withHostAuth → getCurrentHost); host events sit on a hidden anchor location, so host_id is their tenancy boundary (HOST-PORTAL.1). The upsert writes only that registration\'s own team members, with the event\'s own location_id.',
+  },
   'src/app/api/public/event-rating/[token]/route.js': {
     race_registrations: 'HOSTPAGE.2 — the post-event rating page. The entry is reached ONLY through the HMAC rating token (src/lib/event-ratings.js) that names exactly one (registration, event) pair, signed with the service-role key, 30 days; the capability IS the scoping, the same argument as /api/public/entry/[token]. The read returns the event name/date and the host name; a UN1T event or an inactive one is 404.',
     event_ratings: 'HOSTPAGE.2 — read and written by the token-named registration_id only (UNIQUE), carrying the event\'s own host_id.',
