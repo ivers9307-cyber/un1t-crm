@@ -16,13 +16,13 @@
 //      the row.
 //
 // Same contractor gate as the submit route — only contractor accounts
-// ever mint upload slots.
+// ever mint upload slots. withAuth signs the caller in (401), then the
+// contractor check (the same 403 text), then the body (400), in that order.
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
-import { validateBody } from '@/lib/validate'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { periodForMonth, buildPdfPath, RECEIPT_MIME_TYPES } from '@/lib/contractor-invoices'
 
 export const runtime = 'nodejs'
@@ -38,22 +38,13 @@ const SignSchema = z.object({
   file_name: z.string().min(1).max(200),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  if (user.employment_type !== 'contractor') {
-    return NextResponse.json(
-      { success: false, error: 'Only contractor accounts can submit invoices.' },
-      { status: 403 }
-    )
-  }
-
-  const validation = await validateBody(request, SignSchema)
-  if (!validation.ok) return validation.response
-  const body = validation.data
-
+export const POST = withAuth({
+  permission: null,
+  location: false,
+  allow: (user) => user.employment_type === 'contractor',
+  forbiddenMessage: 'Only contractor accounts can submit invoices.',
+  schema: SignSchema,
+}, async ({ user, db, input: body }) => {
   if (!RECEIPT_MIME_TYPES.includes(body.mime)) {
     return NextResponse.json({ success: false, error: 'Only a PDF or photo (JPG, PNG, HEIC) is accepted.' }, { status: 400 })
   }
@@ -74,16 +65,16 @@ export async function POST(request) {
     originalFilename: body.file_name,
   })
 
-  const db = createServerClient()
   const { data, error } = await db.storage
     .from(STORAGE_BUCKET)
     .createSignedUploadUrl(storagePath)
   if (error || !data?.token) {
+    logError('contractor-invoices', 'signed upload url failed', { userId: user.id, err: error || 'no token returned' })
     return NextResponse.json(
-      { success: false, error: `Could not create upload URL: ${error?.message || 'no token returned'}` },
+      { success: false, error: 'Could not create the upload link. Try again.' },
       { status: 500 }
     )
   }
 
   return NextResponse.json({ success: true, path: storagePath, token: data.token })
-}
+})

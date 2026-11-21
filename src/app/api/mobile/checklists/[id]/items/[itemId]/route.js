@@ -8,11 +8,15 @@
 // either way: when the last item is ticked the instance becomes
 // 'complete' with a completed_at stamp; unticking from complete
 // drops back to 'pending' and clears completed_at.
+//
+// withAuth signs the caller in (the same 401); the ids (400), the body and
+// tickItem's own-instance check (404) keep their order. A failed write is
+// logged and answered with a fixed message, never the database text.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { tickItem } from '@/lib/checklist-instances'
 import { logAuditEvent } from '@/lib/audit'
 import { validateBody } from '@/lib/validate'
@@ -24,12 +28,8 @@ const TickSchema = z.object({
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-async function applyTick(request, params, checkedDefault) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  const { id, itemId } = (await params) || {}
+async function applyTick({ user, db, request, params }, checkedDefault) {
+  const { id, itemId } = params || {}
   if (!id || !itemId) {
     return NextResponse.json(
       { success: false, error: 'Instance id + item id required.' },
@@ -44,11 +44,17 @@ async function applyTick(request, params, checkedDefault) {
     if (typeof validation.data?.checked === 'boolean') checked = validation.data.checked
   }
 
-  const db = createServerClient()
   const out = await tickItem(db, {
     instanceId: id, itemId, checked, user: { id: user.id },
   })
   if (!out.ok) {
+    if (out.code === 'update_failed') {
+      logError('checklists', 'tick write failed', { instanceId: id, itemId, err: out.error })
+      return NextResponse.json(
+        { success: false, error: 'Could not save the tick. Try again.', code: out.code },
+        { status: out.status || 500 }
+      )
+    }
     return NextResponse.json(
       { success: false, error: out.error, code: out.code },
       { status: out.status || 500 }
@@ -82,10 +88,6 @@ async function applyTick(request, params, checkedDefault) {
   return NextResponse.json({ success: true, data: out.data })
 }
 
-export async function POST(request, { params }) {
-  return applyTick(request, params, true)
-}
+export const POST = withAuth({ permission: null, location: false }, (ctx) => applyTick(ctx, true))
 
-export async function DELETE(request, { params }) {
-  return applyTick(request, params, false)
-}
+export const DELETE = withAuth({ permission: null, location: false }, (ctx) => applyTick(ctx, false))

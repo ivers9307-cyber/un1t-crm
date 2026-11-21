@@ -30,10 +30,13 @@
 // studio role, which let an owner in org A acknowledge org B's unfiled mail in
 // one POST. SQL's IN is never true for NULL, so NULL-location rows are left
 // to master, matching the list route.
+//
+// withAuth signs the caller in (its 401 'Unauthorized'; this route said
+// 'Unauthorised'); the owner check (403) and the body keep their order.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { deadLetterOwnerLocationIds } from '../_helpers'
 
 export const runtime = 'nodejs'
@@ -42,12 +45,7 @@ export const dynamic = 'force-dynamic'
 const ALLOWED_TARGETS = new Set(['resolved', 'discarded'])
 const OPEN_STATUSES = ['pending', 'failed']
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-  // Master, or owner at SOME location — judged per location, not by the
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {  // Master, or owner at SOME location — judged per location, not by the
   // active role. The bound below is what decides which rows the write reaches.
   const ownerLocationIds = deadLetterOwnerLocationIds(user)
   if (ownerLocationIds !== null && ownerLocationIds.length === 0) {
@@ -69,8 +67,6 @@ export async function POST(request) {
     }, { status: 400 })
   }
 
-  const db = createServerClient()
-
   // resolved_at is stamped for both targets — it is what integration health
   // counts on (`resolved_at IS NULL`), same as the single-row route.
   let write = db
@@ -83,11 +79,12 @@ export async function POST(request) {
   const { data, error } = await write.select('id')
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('webhook-dead-letter', 'bulk resolve failed', { provider, err: error })
+    return NextResponse.json({ success: false, error: 'Could not update the rows. Try again.' }, { status: 500 })
   }
 
   return NextResponse.json({
     success: true,
     data: { provider, status: target, updated: (data || []).length },
   })
-}
+})

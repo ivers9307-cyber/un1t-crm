@@ -13,11 +13,14 @@
 // a class the same studio day only), and a done move hands the panel the
 // studio's editable "your booking was moved" text (chat_template), which the
 // panel drops into an open WhatsApp thread exactly as a booking's is.
+//
+// withAuth only signs the caller in (its 401 'Unauthorized'; this route said
+// 'Unauthorised'); the body, the staff gate and every read before the write
+// keep their order here, and the write is unchanged.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { gateUn1tStaffBooking, staffWriteAnswer, UN1T_STAFF_COPY } from '@/lib/un1t-staff-booking'
@@ -38,14 +41,10 @@ const Schema = z.object({
   event_id: un1tId('event'),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  const validation = await validateBody(request, Schema)
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {  const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
   const b = validation.data
 
-  const db = createServerClient()
   const gate = await gateUn1tStaffBooking(db, user, { locationId: b.location_id, contactId: b.contact_id })
   if (!gate.ok) return NextResponse.json({ success: false, error: gate.error }, { status: gate.status })
 
@@ -92,4 +91,4 @@ export async function POST(request) {
     body.data.chat_template = chat.template ?? null
   }
   return NextResponse.json(body, { status })
-}
+})

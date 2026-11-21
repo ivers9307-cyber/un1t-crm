@@ -10,10 +10,13 @@
 //   - caller is master or owner
 //   - org-scoped (404 not 403 for a foreign-org id — non-enumerable)
 //   - status must be 'draft' (409 otherwise)
+//
+// withAuth only signs the caller in (the same 401); every check after it
+// keeps its order and text, and the write is unchanged.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import { canTransition } from '@/lib/contracts'
 import { logAuditEvent } from '@/lib/audit'
@@ -21,24 +24,22 @@ import { logAuditEvent } from '@/lib/audit'
 export const runtime = 'nodejs'
 
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  // GATES-2 — coarse only (master, or owner/admin of SOME org). It asked
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {  // GATES-2 — coarse only (master, or owner/admin of SOME org). It asked
   // user.role, the ACTIVE studio's role, which refused an owner of the
   // contract's org working from another studio. The decision is below.
   if (!canManageContractsSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: contract, error: cErr } = await db
     .from('contracts')
     .select('id, status, organization_id, location_id, profile_id')
     .eq('id', params.id)
     .maybeSingle()
-  if (cErr) return NextResponse.json({ success: false, error: cErr.message }, { status: 500 })
+  if (cErr) {
+    logError('contracts', 'discard: contract read failed', { contractId: params.id, err: cErr })
+    return NextResponse.json({ success: false, error: 'Could not load the contract. Try again.' }, { status: 500 })
+  }
   if (!contract) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   // Service-role read bypasses RLS — an owner must only be able to
   // discard drafts in an org they own. 404 (not 403) so a non-owner
@@ -70,7 +71,10 @@ export async function POST(request, props) {
     .eq('status', 'draft') // optimistic-concurrency guard
     .select()
     .single()
-  if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+  if (updErr) {
+    logError('contracts', 'discard: write failed', { contractId: contract.id, err: updErr })
+    return NextResponse.json({ success: false, error: 'Could not discard the draft. Refresh and try again.' }, { status: 500 })
+  }
   if (!updated) {
     return NextResponse.json({ success: false, error: 'Contract status changed concurrently — refresh and retry.' }, { status: 409 })
   }
@@ -93,4 +97,4 @@ export async function POST(request, props) {
   })
 
   return NextResponse.json({ success: true, data: updated })
-}
+})

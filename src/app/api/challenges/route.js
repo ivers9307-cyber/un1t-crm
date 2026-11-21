@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, getUserLocationIds, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { getUserLocationIds, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { resolveLocationBrand } from '@/lib/host-brand'
@@ -35,9 +36,9 @@ export const CreateSchema = z.object({
   .refine((d) => !d.is_flagship || d.mode === 'individual', { message: 'A flagship transformation challenge must be an individual challenge.', path: ['is_flagship'] })
 
 // ROLESWEEP.1b — a coarse pre-check only: the role and the key are judged at
-// the challenge's location by targetGate() once it is known.
+// the challenge's location by targetGate() once it is known. withAuth signs
+// the caller in (its 401); this and every check after it keep their order.
 function guard(user) {
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!hasRoleAtAnyLocation(user, CHALLENGE_ADMIN_ROLES)) return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   if (!hasPermissionAtAnyLocation(user, 'challenges')) return NextResponse.json({ success: false, error: 'Challenges feature is disabled at this location' }, { status: 403 })
   return null
@@ -53,11 +54,9 @@ function targetGate(user, locationId) {
   return null
 }
 
-export async function GET(request) {
-  const user = await getCurrentUser()
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const g = guard(user); if (g) return g
   const filterLocation = new URL(request.url).searchParams.get('location_id')
-  const db = createServerClient()
   // ROLESWEEP.1b — "every location I belong to" narrows to where the caller passes both halves THERE.
   const locationIds = filterLocation ? [filterLocation] : getUserLocationIds(user).filter((id) => passesAt(user, id))
   if (locationIds.length === 0) return NextResponse.json({ success: true, data: [] })
@@ -65,15 +64,17 @@ export async function GET(request) {
   // ROLESWEEP.1b — judged at ?location_id.
   if (filterLocation) { const t = targetGate(user, filterLocation); if (t) return t }
   const { data, error } = await db.from('challenges').select('*').in('location_id', locationIds).order('ends_on', { ascending: false })
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('challenges', 'challenge list failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the challenges. Try again.' }, { status: 500 })
+  }
   // W1.S1b — each listed location's short brand, so the page labels a
   // points challenge "{Brand} Points" for ITS studio (cached per location).
   const brandRows = await Promise.all(locationIds.map(async (id) => [id, (await resolveLocationBrand({ locationId: id, db })).shortName]))
   return NextResponse.json({ success: true, data: data || [], brands: Object.fromEntries(brandRows) })
-}
+})
 
-export async function POST(request) {
-  const user = await getCurrentUser()
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const g = guard(user); if (g) return g
   const validation = await validateBody(request, CreateSchema)
   if (!validation.ok) return validation.response
@@ -81,7 +82,6 @@ export async function POST(request) {
   const a = assertLocationAccess(user, body.location_id); if (a) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   // ROLESWEEP.1b — judged at body.location_id.
   const t = targetGate(user, body.location_id); if (t) return t
-  const db = createServerClient()
   const { data, error } = await db.from('challenges').insert({
     location_id: body.location_id, name: body.name, mode: body.mode, metric: body.metric,
     starts_on: body.starts_on, ends_on: body.ends_on,
@@ -89,6 +89,9 @@ export async function POST(request) {
     is_flagship: body.is_flagship,
     created_by: user.id,
   }).select().single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('challenges', 'challenge create failed', { locationId: body.location_id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not create the challenge. Try again.' }, { status: 400 })
+  }
   return NextResponse.json({ success: true, data }, { status: 201 })
-}
+})

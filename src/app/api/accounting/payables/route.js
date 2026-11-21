@@ -4,8 +4,11 @@
 // Live pull from Xero (unpaid supplier bills), always fresh, no cached
 // table. Guards: session -> accounting_hub -> active location -> that
 // location's Xero connection. Scope accounting.invoices (already held).
+// withAuth only signs the caller in (the same 401); the permission (403) and
+// the studio (400) checks keep their order and texts here.
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError, logWarn } from '@/lib/log'
 import { hasPermission } from '@/lib/permissions'
 import { withFreshToken, XeroError } from '@/lib/xero/client'
 import { mapPayableInvoices, agePayables } from '@/lib/xero/aged-payables'
@@ -17,10 +20,7 @@ export const maxDuration = 60
 
 const MAX_PAGES = 30 // × 100/page — 3,000 open bills is far beyond expectation
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'accounting_hub')) {
+export const GET = withAuth({ permission: null, location: false }, async ({ user }) => {  if (!hasPermission(user, 'accounting_hub')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
   const locationId = user.activeLocation?.id
@@ -44,7 +44,7 @@ export async function GET() {
       const rawCount = Array.isArray(res?.Invoices) ? res.Invoices.length : 0
       if (rawCount < 100) break
       if (page === MAX_PAGES) {
-        console.error(`[accounting/payables] ${locationId}: hit MAX_PAGES — list truncated`)
+        logWarn('accounting-payables', 'hit MAX_PAGES — list truncated', { locationId })
       }
     }
 
@@ -81,14 +81,14 @@ export async function GET() {
           { status: 409 }
         )
       }
-      // Any other Xero API failure: report it as an upstream error with
-      // the actual message so it's diagnosable, not disguised.
-      console.error('[accounting/payables] Xero error:', status, e.message)
+      // Any other Xero API failure: an upstream error with its status, so
+      // it is diagnosable; Xero's own text goes to the log, not the page.
+      logError('accounting-payables', 'Xero error', { locationId, status, err: e })
       return NextResponse.json(
-        { success: false, error: `Xero error${status ? ` (${status})` : ''}: ${e.message}` },
+        { success: false, error: `Xero error${status ? ` (${status})` : ''}. Try again, or reconnect Xero in Settings if it keeps happening.` },
         { status: 502 }
       )
     }
     throw e
   }
-}
+})

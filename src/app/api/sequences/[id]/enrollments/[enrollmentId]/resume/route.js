@@ -9,11 +9,16 @@
 //
 // Same guard idiom as /api/sequences/[id]/enrol: session auth + email
 // permission + location scope on the parent sequence.
+//
+// withAuth signs the caller in (its 401 'Unauthorized'; this route said
+// 'Unauthorised') and asks for `email` somewhere with the same 403 text; the
+// ids (404), the sequence (404), its studio (404) and `email` there (403)
+// follow in their old order.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { sequenceNotFound } from '@/lib/sequence-access'
 import { logError } from '@/lib/log'
 import { uuidLike } from '@/lib/schemas'
@@ -21,14 +26,12 @@ import { buildResumePatch, classifyResumeOutcome } from '@/lib/sequences/resume'
 
 export const runtime = 'nodejs'
 
-export async function POST(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermissionAtAnyLocation(user, 'email')) {
-    return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
-  }
-  if (!uuidLike.safeParse(params.enrollmentId).success) {
+export const POST = withAuth({
+  permission: null,
+  location: false,
+  allow: (user) => hasPermissionAtAnyLocation(user, 'email'),
+  forbiddenMessage: 'Email permission required',
+}, async ({ user, db, params }) => {  if (!uuidLike.safeParse(params.enrollmentId).success) {
     return NextResponse.json({ success: false, error: 'Enrollment not found' }, { status: 404 })
   }
 
@@ -36,7 +39,6 @@ export async function POST(_request, props) {
   // 404 (was 404 vs 403, which confirmed the id existed). A failed read is a
   // logged 500, not "not found"; a garbage id is not found without a read.
   if (!uuidLike.safeParse(params.id).success) return sequenceNotFound()
-  const db = createServerClient()
   const { data: sequence, error: seqErr } = await db
     .from('email_sequences')
     .select('id, location_id')
@@ -63,6 +65,7 @@ export async function POST(_request, props) {
     .eq('sequence_id', params.id)
     .maybeSingle()
   if (currentErr) {
+    logError('sequences', 'resume: enrolment read failed', { sequenceId: params.id, code: currentErr.code || null })
     return NextResponse.json({ success: false, error: 'Could not load the enrolment' }, { status: 500 })
   }
 
@@ -77,7 +80,8 @@ export async function POST(_request, props) {
     .select('id, status, next_step_at')
     .maybeSingle()
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('sequences', 'resume: write failed', { sequenceId: params.id, enrollmentId: params.enrollmentId, code: error.code || null })
+    return NextResponse.json({ success: false, error: 'Could not resume the enrolment. Try again.' }, { status: 500 })
   }
 
   if (!updated) {
@@ -92,4 +96,4 @@ export async function POST(_request, props) {
   }
 
   return NextResponse.json({ success: true, data: updated })
-}
+})

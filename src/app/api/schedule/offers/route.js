@@ -17,8 +17,8 @@
 // from the query, not from a row).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { rangeQueryError, MAX_LIST_RANGE_DAYS } from '@/lib/report-period'
 import { listOpenOffers } from '@/lib/shift-offer-server'
@@ -31,9 +31,9 @@ import { logWarn } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (the same 401); the query, the studio
+// (403) and the manager check keep their order and texts.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
   if (!locationId) return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
@@ -56,7 +56,6 @@ export async function GET(request) {
   const rangeError = rangeQueryError(startDate, endDate, { maxDays: MAX_LIST_RANGE_DAYS })
   if (rangeError) return NextResponse.json({ success: false, error: rangeError }, { status: 400 })
 
-  const db = createServerClient()
   const { offers, error } = await listOpenOffers(db, { locationId })
   if (error) return NextResponse.json({ success: false, error: 'Could not read offers' }, { status: 500 })
   const nowMs = Date.now()
@@ -89,4 +88,4 @@ export async function GET(request) {
     }
   }
   return NextResponse.json({ success: true, data: rows })
-}
+})
