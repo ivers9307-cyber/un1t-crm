@@ -1,6 +1,6 @@
 'use client'
 
-// The five tabs under a host event's header (HOSTPORTAL.2). GuardedLinks so a
+// The six tabs under a host event's header (HOSTPORTAL.2). GuardedLinks so a
 // tab change asks first when a form is unsaved; the strip scrolls inside
 // itself on a narrow phone. /edit (the old edit route) counts as Set up.
 
@@ -12,6 +12,7 @@ import { HOST_TAB, HOST_TAB_ACTIVE } from '@/components/host/host-ui'
 export const EVENT_TABS = [
   { key: 'overview', label: 'Overview', path: '' },
   { key: 'attendees', label: 'Attendees', path: '/attendees' },
+  { key: 'checkin', label: 'Check-in', path: '/checkin' },
   { key: 'setup', label: 'Set up', path: '/setup' },
   { key: 'promote', label: 'Promote', path: '/promote' },
   { key: 'insights', label: 'Insights', path: '/insights' },

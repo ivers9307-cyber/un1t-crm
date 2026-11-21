@@ -91,3 +91,16 @@ describe('EventCheckinClient — several times', () => {
     expect(screen.queryByRole('button', { name: /09:20 · Wave 2/ })).toBeNull()
   })
 })
+
+describe('EventCheckinClient — host portal (HOSTCHECKIN.1)', () => {
+  it('talks to the host routes and uses the host theme', async () => {
+    render(<EventCheckinClient eventId="e1" isRace={false} registrations={ONE_TIME} apiBase="/api/host/events/e1/checkin" host />)
+    const row = screen.getByRole('button', { name: /^Zoe Example/ })
+    expect(row.className).toContain('text-host-text')
+    expect(row.className).not.toContain('un1t')
+    fireEvent.click(row)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/host/events/e1/checkin', expect.objectContaining({ method: 'POST' })))
+    fireEvent.click(screen.getByRole('button', { name: 'Check in both' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/host/events/e1/checkin/all', expect.objectContaining({ method: 'POST' })))
+  })
+})

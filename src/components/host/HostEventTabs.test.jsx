@@ -28,7 +28,8 @@ describe('HostEventTabs', () => {
   it('links every tab under the event and marks the current one', () => {
     pathname = '/host/events/e1/promote'
     render(<HostEventTabs eventId="e1" attendeeCount={null} />)
-    expect(EVENT_TABS.map((t) => t.label)).toEqual(['Overview', 'Attendees', 'Set up', 'Promote', 'Insights'])
+    expect(EVENT_TABS.map((t) => t.label)).toEqual(['Overview', 'Attendees', 'Check-in', 'Set up', 'Promote', 'Insights'])
+    expect(screen.getByRole('link', { name: 'Check-in' }).getAttribute('href')).toBe('/host/events/e1/checkin')
     expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/host/events/e1')
     expect(screen.getByRole('link', { name: 'Set up' }).getAttribute('href')).toBe('/host/events/e1/setup')
     expect(screen.getByRole('link', { name: 'Promote' }).getAttribute('aria-current')).toBe('page')
