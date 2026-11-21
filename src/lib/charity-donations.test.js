@@ -31,6 +31,17 @@ describe('computeCharityTotals (CHARITY.2)', () => {
     expect(t.donation_count).toBe(2)
     expect(t.raised_cents).toBe(6000)
   })
+  it('adds unvoided raffle sales at face value, never matched (RAFFLEDONATIONS.1)', () => {
+    const t = computeCharityTotals({
+      donations, entries: [], multiplier: 2, includeEntries: false,
+      raffleSales: [{ quantity: 20, total_cents: 1000, voided_at: null }, { quantity: 5, total_cents: 500, voided_at: '2026-11-21T10:00:00Z' }],
+    })
+    expect(t.raffle_cents).toBe(1000)
+    expect(t.raffle_ticket_count).toBe(20)
+    expect(t.raffle_sale_count).toBe(1)
+    expect(t.raised_cents).toBe(6000 + 1000)
+    expect(computeCharityTotals({ donations, entries: [] }).raffle_cents).toBe(0)
+  })
   it('counts completed entries only and includes them in raised when asked', () => {
     const on = computeCharityTotals({ donations: [], entries, multiplier: 2, includeEntries: true })
     expect(on.entries_cents).toBe(4000)
@@ -51,7 +62,7 @@ describe('computeCharityTotals (CHARITY.2)', () => {
     expect(t.entries_matched_cents).toBe(500)
   })
   it('empty or missing inputs give zeros', () => {
-    const zero = { donations_cents: 0, donations_matched_cents: 0, entries_cents: 0, entries_matched_cents: 0, raised_cents: 0, donation_count: 0 }
+    const zero = { donations_cents: 0, donations_matched_cents: 0, entries_cents: 0, entries_matched_cents: 0, raffle_cents: 0, raffle_ticket_count: 0, raffle_sale_count: 0, raised_cents: 0, donation_count: 0 }
     expect(computeCharityTotals({ donations: [], entries: [], multiplier: 1, includeEntries: true })).toEqual(zero)
     expect(computeCharityTotals({})).toEqual(zero)
   })
