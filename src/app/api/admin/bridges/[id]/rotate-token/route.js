@@ -13,26 +13,21 @@
 // previous token stops working.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { issueBridgeToken, TOKEN_GRACE_MS } from '@/lib/bridge-auth'
 import { logInfo, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
-  }
+// withAuth only signs the caller in (signed out is its 401). The master check
+// stays here so its 403 keeps the { ok: false } shape the admin page reads.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!user.isMaster) {
     return NextResponse.json({ ok: false, error: 'Master only' }, { status: 403 })
   }
 
   const { raw, hash } = issueBridgeToken()
-  const db = createServerClient()
 
   // Read the current hash first so we can move it into the grace slot. A
   // supabase-js .update() sends literal values, so we can't express
@@ -45,7 +40,7 @@ export async function POST(_request, props) {
 
   if (readErr) {
     logWarn('bridge-admin', 'rotate-token read failed', { err: readErr, bridgeId: params.id })
-    return NextResponse.json({ ok: false, error: readErr.message || 'rotate_failed' }, { status: 400 })
+    return NextResponse.json({ ok: false, error: 'rotate_failed' }, { status: 400 })
   }
   if (!existing) {
     return NextResponse.json({ ok: false, error: 'Bridge not found' }, { status: 404 })
@@ -69,7 +64,7 @@ export async function POST(_request, props) {
       return NextResponse.json({ ok: false, error: 'Bridge not found' }, { status: 404 })
     }
     logWarn('bridge-admin', 'rotate-token failed', { err: error, bridgeId: params.id })
-    return NextResponse.json({ ok: false, error: error?.message || 'rotate_failed' }, { status: 400 })
+    return NextResponse.json({ ok: false, error: 'rotate_failed' }, { status: 400 })
   }
 
   logInfo('bridge-admin', 'bridge token rotated', {
@@ -85,4 +80,4 @@ export async function POST(_request, props) {
     previous_token_expires_at: previousExpiresAt,
     setup_hint: 'Paste this token into the Pi. The previous token keeps working for 24h, so there is no rush and no HR-ingest downtime.',
   })
-}
+})

@@ -17,7 +17,9 @@
 //   sibling settings keys are left as they are. Responds with the GET shape.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES, studioConsentCopySchema } from '@/lib/schemas'
@@ -37,27 +39,26 @@ const shape = (settings, name, canEdit) => ({
   can_edit: canEdit,
 })
 
-export async function GET(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return fail('Unauthorised', 401)
+// withAuth signs the caller in and (location: 'param') 404s a studio they are
+// not at; the hand-written checks below still decide, in their old order.
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ user, params }) => {
   const guard = assertLocationAccess(user, params.id)
   if (guard) return guard
 
   const db = createServerClient()
   const { data: location, error } = await db.from('locations').select('id, name, settings').eq('id', params.id).maybeSingle()
-  if (error) return fail(error.message)
+  if (error) {
+    logError('wa-consent-copy', 'studio read failed', { err: error, locationId: params.id })
+    return fail('Could not load the studio.')
+  }
   if (!location) return fail('Studio not found', 404)
   return NextResponse.json({
     success: true,
     data: shape(location.settings, location.name, hasRoleAtLocation(user, params.id, ADMIN_ROLES)),
   })
-}
+})
 
-export async function PUT(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return fail('Unauthorised', 401)
+export const PUT = withAuth({ permission: null, location: 'param' }, async ({ user, request, params }) => {
   const locationId = params.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
@@ -80,4 +81,4 @@ export async function PUT(request, props) {
   // The name is only for the card's preview; a failed read leaves it null.
   const { data: location } = await db.from('locations').select('name').eq('id', locationId).maybeSingle()
   return NextResponse.json({ success: true, data: shape(saved.settings, location?.name, true) })
-}
+})

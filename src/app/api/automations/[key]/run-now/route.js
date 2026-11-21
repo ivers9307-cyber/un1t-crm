@@ -6,8 +6,8 @@
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
@@ -31,14 +31,14 @@ const Schema = z.object({
   dry_run: z.boolean().optional(),
 })
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
+// withAuth only signs the caller in (signed out: its 401, it was this 403).
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   // ROLESWEEP.1a — coarse pre-check; the role is judged at the location below.
-  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const { key } = await params
+  const key = params?.key
   const runner = RUNNERS[key]
   if (!runner) {
     return NextResponse.json({ success: false, error: 'run-now is not supported for this automation' }, { status: 400 })
@@ -53,8 +53,6 @@ export async function POST(request, { params }) {
   if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
-
-  const db = createServerClient()
 
   // Refresh the schedule first so "run now" reflects the live timetable.
   const creds = await glofoxCredentialsForLocation(db, location_id)
@@ -78,4 +76,4 @@ export async function POST(request, { params }) {
     actions: loc.actions,
     errors: loc.errors,
   })
-}
+})

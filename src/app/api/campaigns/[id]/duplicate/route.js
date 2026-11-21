@@ -27,8 +27,9 @@
 // sequences and is the established shape in this repo.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 import { buildCampaignDuplicate } from '@/lib/campaign-duplicate'
@@ -36,17 +37,14 @@ import { buildCampaignDuplicate } from '@/lib/campaign-duplicate'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; the id, the campaign's studio and email
+// there are checked below as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
 
   const sourceId = params?.id
   if (!sourceId || !uuidLike.safeParse(sourceId).success) {
     return NextResponse.json({ success: false, error: 'Invalid campaign id' }, { status: 400 })
   }
-
-  const db = createServerClient()
 
   const { data: source, error: srcErr } = await db
     .from('campaigns')
@@ -76,11 +74,9 @@ export async function POST(_request, props) {
     .single()
 
   if (insErr || !created) {
-    return NextResponse.json(
-      { success: false, error: insErr?.message || 'Could not duplicate campaign' },
-      { status: 500 },
-    )
+    logError('campaign-duplicate', 'duplicate insert failed', { sourceId, err: insErr })
+    return NextResponse.json({ success: false, error: 'Could not duplicate campaign' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: { id: created.id, name: created.name } })
-}
+})

@@ -8,8 +8,8 @@
 // location ownership manually before returning anything).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { ALL_DOCUMENT_TYPES } from '@/lib/cars'
 import { carDocumentsGate } from '@/lib/car-documents-gate'
 import { recordCarDocument } from '@/lib/car-document-record'
@@ -22,12 +22,11 @@ export const runtime = 'nodejs'
 
 const VALID_TYPES = new Set(ALL_DOCUMENT_TYPES.map(t => t.key))
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  const db = createServerClient()
-  // CARDOCUPLOAD.1 — the gate is shared with …/documents/sign and …/finalise.
-  const gate = await carDocumentsGate(user, db, params.id)
+// withAuth only signs the caller in; carDocumentsGate keeps every other check
+// in its order. CARDOCUPLOAD.1 — the gate is shared with …/documents/sign and
+// …/finalise.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const gate = await carDocumentsGate(user, db, params?.id)
   if (gate.response) return gate.response
   const { car } = gate
 
@@ -72,7 +71,8 @@ export async function POST(request, props) {
       upsert: false,
     })
   if (uploadErr) {
-    return NextResponse.json({ success: false, error: `Upload failed: ${uploadErr.message}` }, { status: 500 })
+    logError('car-documents-upload', 'storage upload failed', { carId: car.id, err: uploadErr })
+    return NextResponse.json({ success: false, error: 'Upload failed.' }, { status: 500 })
   }
 
   // CARDOCUPLOAD.1 — the row, the orphan rollback and the bookkeeper queue
@@ -80,7 +80,12 @@ export async function POST(request, props) {
   const rec = await recordCarDocument(db, {
     car, docType, storagePath, filename: file.name, mimeType: contentType, sizeBytes: file.size, userId: user.id, notes,
   })
-  if (!rec.ok) return NextResponse.json({ success: false, error: rec.error }, { status: rec.conflict ? 409 : 500 })
+  if (!rec.ok) {
+    // A conflict's text is the fixed CAR_DOCUMENT_ALREADY_SAVED; any other is database text.
+    if (rec.conflict) return NextResponse.json({ success: false, error: rec.error }, { status: 409 })
+    logError('car-documents-upload', 'document row failed', { carId: car.id, err: rec.error })
+    return NextResponse.json({ success: false, error: 'Could not save the document.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, data: rec.doc, queue_warning: rec.queueWarning }, { status: 201 })
-}
+})

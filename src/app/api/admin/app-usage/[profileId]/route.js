@@ -8,8 +8,7 @@
 // someone outside the chosen tenant), so ids cannot be probed.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
 import { uuidLike, isoDate } from '@/lib/schemas'
 import { todayStrIn, addDaysIn, PLATFORM_TZ } from '@shared/zoned-time'
@@ -23,12 +22,12 @@ export const dynamic = 'force-dynamic'
 
 const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
-export async function GET(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the report-viewer check (403) and the
+// out-of-scope 404 run here, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!isUsageReportViewer(user)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
-  const { profileId } = await params
+  const profileId = params?.profileId
   if (!uuidLike.safeParse(profileId).success) return notFound()
 
   const url = new URL(request.url)
@@ -37,7 +36,6 @@ export async function GET(request, { params }) {
   const today = todayStrIn(PLATFORM_TZ, nowMs)
   const dayParam = url.searchParams.get('day')
   const day = dayParam && isoDate.safeParse(dayParam).success ? dayParam : today
-  const db = createServerClient()
 
   try {
     const scope = await loadUsageScope(db, filters)
@@ -72,4 +70,4 @@ export async function GET(request, { params }) {
     logError('app-usage', 'person report read failed', { message: err?.message || String(err) })
     return NextResponse.json({ success: false, error: 'Could not load app usage' }, { status: 500 })
   }
-}
+})

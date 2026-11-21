@@ -16,17 +16,28 @@
 //   5. Update the glofox_sync_runs row with finished_at + summary.
 //   6. Stamp cron_heartbeat.
 //
-// Auth: same CRON_SECRET pattern as the other Vercel crons.
+// Auth: CRON_SECRET, via defineCron (src/lib/define-cron.js).
+//
+// ROUTEWRAP.C13 — on defineCron with the same stamps as before:
+//   - a failed seam read answers 500 and stamps nothing;
+//   - no eligible location stamps 'glofox-sync' with the skip counts; when a
+//     location's credentials could not be read (skipped_unknown) the run now
+//     answers failure, but the row is still stamped (stamp: true) as before;
+//   - otherwise every run stamps with locations_processed / failed_locations;
+//     a run where EVERY location failed answers failure and still stamps;
+//   - per-location tenant heartbeats and glofox_sync_runs rows are unchanged,
+//     written in the same order, before the global stamp.
+// The response carries counts and statuses only: each location's first error
+// stays on its glofox_sync_runs row and in the logs.
 
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { defineCron } from '@/lib/define-cron'
 import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
 import { glofoxCredentialsForLocation, fetchAllMembersPage, glofoxHttpStats, glofoxHttpStatsSince } from '@/lib/glofox'
 import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { syncMembershipCatalog } from '@/lib/glofox-catalog'
 import { applyMemberSync } from '@/lib/glofox-sync'
 import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,14 +51,7 @@ export const maxDuration = 300
 const PAGE_SIZE = 50
 const LOOKBACK_HOURS = 25
 
-export async function GET(request) {
-  const auth = request.headers.get('authorization') || ''
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-
-  const db = createServerClient()
-
+export const GET = defineCron({ heartbeat: 'glofox-sync' }, async ({ db }) => {
   // W1.M3b — discovery goes through the membership seam: every active
   // location whose membership_source is 'glofox' and whose provider is
   // configured. (Until this task the cron sniffed settings->'glofox' plus the
@@ -56,8 +60,8 @@ export async function GET(request) {
   // seam read is a 500 with no heartbeat, never "no locations".
   const { eligible: eligibleLocations, skipped, error: locErr } = await locationsWithSource(db, 'glofox', { module: 'glofox-sync' })
   if (locErr) {
-    console.warn(`[cron][glofox-sync] failed to list locations: ${locErr.message}`)
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    logError('cron.glofox-sync', 'failed to list locations; not stamping', { err: locErr })
+    return { ok: false, body: { error: 'Could not list the Glofox locations' } }
   }
 
   // The skip counts ride on every global stamp as last_outcome, so a tick that
@@ -67,16 +71,23 @@ export async function GET(request) {
   const skipCounts = skippedSummary(skipped)
 
   if (eligibleLocations.length === 0) {
-    await stampHeartbeat('glofox-sync', { locations_processed: 0, ...skipCounts })
-    return NextResponse.json({
-      success: true,
-      message: skipped.length > 0
-        ? `No Glofox location synced: ${skipCounts.skipped_unknown} unreadable, ${skipCounts.skipped_unconfigured} not configured.`
-        : 'No locations with Glofox credentials configured.',
-      locations_processed: 0,
-      locations_skipped: skipped.length,
-      ...skipCounts,
-    })
+    // ROUTEWRAP.C13 — nothing synced because a location could not be read is a
+    // failed run in the answer, but it keeps its stamp (with the counts).
+    const unreadable = skipCounts.skipped_unknown > 0
+    return {
+      ok: !unreadable,
+      ...(unreadable ? { stamp: true } : {}),
+      outcome: { locations_processed: 0, ...skipCounts },
+      body: {
+        ...(unreadable ? { error: 'No Glofox location synced: a location could not be read' } : {}),
+        message: skipped.length > 0
+          ? `No Glofox location synced: ${skipCounts.skipped_unknown} unreadable, ${skipCounts.skipped_unconfigured} not configured.`
+          : 'No locations with Glofox credentials configured.',
+        locations_processed: 0,
+        locations_skipped: skipped.length,
+        ...skipCounts,
+      },
+    }
   }
 
   const lookbackSec = Math.floor((Date.now() - LOOKBACK_HOURS * 3600 * 1000) / 1000)
@@ -99,11 +110,12 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('glofox-sync', {
+  const failedCount = perLocationResults.filter((r) => r.status === 'failed').length
+  const outcome = {
     locations_processed: perLocationResults.length,
-    failed_locations: perLocationResults.filter((r) => r.status === 'failed').length,
+    failed_locations: failedCount,
     ...skipCounts,
-  })
+  }
 
   // Roll up across all locations for the response.
   const totals = perLocationResults.reduce((acc, r) => {
@@ -116,16 +128,26 @@ export async function GET(request) {
     return acc
   }, { leads_processed: 0, pages_fetched: 0, summary: {}, failed_locations: 0 })
 
-  return NextResponse.json({
-    success: true,
-    lookback_hours: LOOKBACK_HOURS,
-    locations_processed: perLocationResults.length,
-    locations_skipped: skipped.length,
-    ...skipCounts,
-    totals,
-    per_location: perLocationResults,
-  })
-}
+  // ROUTEWRAP.C13 — every location failing is a failed run in the answer; it
+  // is still stamped with failed_locations, as before. One of several failing
+  // is not a failed run: it shows in failed_locations and tenant_cron_health.
+  const allFailed = failedCount === perLocationResults.length
+  return {
+    ok: !allFailed,
+    ...(allFailed ? { stamp: true } : {}),
+    outcome,
+    body: {
+      ...(allFailed ? { error: 'Every Glofox location failed to sync' } : {}),
+      lookback_hours: LOOKBACK_HOURS,
+      locations_processed: perLocationResults.length,
+      locations_skipped: skipped.length,
+      ...skipCounts,
+      totals,
+      // first_error is raw Glofox / database text: it stays on the run row.
+      per_location: perLocationResults.map(({ first_error: firstError, ...rest }) => ({ ...rest, has_error: Boolean(firstError) })),
+    },
+  }
+})
 
 /**
  * Sync one location. Inserts an audit row, paginates through

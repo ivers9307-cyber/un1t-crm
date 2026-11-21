@@ -109,3 +109,15 @@ describe('PATCH …/ac-devices/[deviceId] (ACDEVLOC.1)', () => {
     expect(db.calls).toEqual([])
   })
 })
+
+describe('PATCH …/ac-devices/[deviceId] — signed out (ROUTEWRAP.R10)', () => {
+  it('answers withAuth’s 401 and writes nothing', async () => {
+    const db = fakeDb()
+    createServerClient.mockReturnValue(db.client)
+    getCurrentUser.mockResolvedValue(null)
+    const res = await patch(LOC_B, DEV, { label: 'x' })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(db.calls).toEqual([])
+  })
+})

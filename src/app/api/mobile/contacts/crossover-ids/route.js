@@ -31,9 +31,8 @@
 // fallback) + the x-active-location header — same contract as /api/mobile/me.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasMobilePermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -41,12 +40,9 @@ export const dynamic = 'force-dynamic'
 
 export const MOBILE_CROSSOVER_ID_CAP = 100
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
+// withAuth only signs the caller in (session or Bearer, as before); the
+// active-studio 400 and the mobile contacts 403 keep their old words here.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   const locationId = user.activeLocation?.id
   if (!locationId) {
     return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
@@ -59,7 +55,6 @@ export async function GET() {
   // Best-effort by design: a failed read answers [] and the directory lists
   // the studio's own contacts, as it always has. One page of cap + 1 rows
   // says whether the cap was hit without reading past it.
-  const db = createServerClient()
   const { data, error } = await db
     .from('studio_contacts')
     .select('id')
@@ -76,4 +71,4 @@ export async function GET() {
     logWarn('mobile-crossover-ids', 'crossover ids exceed cap; truncating for URL-length safety', { locationId, cap: MOBILE_CROSSOVER_ID_CAP })
   }
   return NextResponse.json({ success: true, data: { ids: all.slice(0, MOBILE_CROSSOVER_ID_CAP) } })
-}
+})

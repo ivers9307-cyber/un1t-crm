@@ -4,9 +4,9 @@
 // auth/permission/404 gates as the sibling PUT route (detail-route IDOR
 // posture — a missing row and a permission-denied row both read as 404).
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { anthropicMessages } from '@/lib/anthropic'
 import { resolveHyroxSettings } from '@/lib/hyrox/settings'
@@ -16,12 +16,10 @@ import { summarizePrevWeek } from '@/lib/hyrox/generate-block'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-export async function POST(_request, { params }) {
-  const { id } = await params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
+// withAuth only signs the caller in; the session's studio and the
+// hyrox_sessions permission there (404 either way) run here, as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const id = params?.id
   const { data: row } = await db.from('hyrox_sessions')
     .select('id, block_id, location_id, week_no, slot, status')
     .eq('id', id)
@@ -71,6 +69,9 @@ export async function POST(_request, { params }) {
     .eq('id', id)
     .select('*')
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('hyrox', 'regenerated session save failed', { sessionId: id, code: error.code ?? null, message: error.message })
+    return NextResponse.json({ success: false, error: 'Could not save the regenerated session.' }, { status: 400 })
+  }
   return NextResponse.json({ success: true, data })
-}
+})

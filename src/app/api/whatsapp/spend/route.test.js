@@ -68,3 +68,15 @@ describe('GET /api/whatsapp/spend', () => {
     expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
   })
 })
+
+// ROUTEWRAP.R9 — on withAuth: a signed-out call is its fixed 401, before anything runs.
+describe('signed out (withAuth)', () => {
+  it('answers 401 Unauthorized and touches nothing', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await GET(get())
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+    expect(db.rpc).not.toHaveBeenCalled()
+  })
+})

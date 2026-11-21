@@ -3,7 +3,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const state = {}
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null) }))
+// ROUTEWRAP.R9 — the real module under the two mocks: withAuth needs userAtLocation.
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null) }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from(table) {
@@ -40,7 +41,7 @@ const put = (loc, body) => PUT(
   new Request(`http://x/api/locations/${loc}/whatsapp/consent-copy`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   ctx(loc),
 )
-const user = (role, loc = HATCH) => ({ id: 'u1', role, profileRole: role === 'master' ? 'master' : 'staff', rolesByLocation: { [loc]: role } })
+const user = (role, loc = HATCH) => ({ id: 'u1', role, profileRole: role === 'master' ? 'master' : 'staff', rolesByLocation: { [loc]: role }, locations: [{ id: loc }] })
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -71,9 +72,11 @@ describe('GET /api/locations/[id]/whatsapp/consent-copy', () => {
     expect(j.data.can_edit).toBe(false)
   })
 
-  it('a failed read is a 500, not the defaults', async () => {
+  it('a failed read is a 500, not the defaults, and no database text', async () => {
     state.fail = 'locations'
-    expect((await GET(new Request('http://x'), ctx(HATCH))).status).toBe(500)
+    const res = await GET(new Request('http://x'), ctx(HATCH))
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('boom')
   })
 })
 
@@ -84,9 +87,27 @@ describe('PUT /api/locations/[id]/whatsapp/consent-copy', () => {
     expect(state.writes).toEqual([])
   })
 
-  it('an owner at another studio is 403 here (role judged at the path id)', async () => {
-    getCurrentUser.mockResolvedValue(user('owner', STILL))
+  it('an owner at another studio who is staff here is 403 (role judged at the path id)', async () => {
+    getCurrentUser.mockResolvedValue({ ...user('owner', STILL), rolesByLocation: { [STILL]: 'owner', [HATCH]: 'staff' }, locations: [{ id: STILL }, { id: HATCH }] })
     expect((await put(HATCH, { stop_ack: 'x', start_ack: null })).status).toBe(403)
+    expect(state.writes).toEqual([])
+  })
+
+  // ROUTEWRAP.R9 — withAuth (location: 'param') answers before the body.
+  it('an owner of another studio only is 404 here, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(user('owner', STILL))
+    const res = await put(HATCH, { stop_ack: 'x', start_ack: null })
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Not found' })
+    expect(state.writes).toEqual([])
+  })
+
+  it('signed out is withAuth\'s 401, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await put(HATCH, { stop_ack: 'x', start_ack: null })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect((await GET(new Request('http://x'), ctx(HATCH))).status).toBe(401)
     expect(state.writes).toEqual([])
   })
 

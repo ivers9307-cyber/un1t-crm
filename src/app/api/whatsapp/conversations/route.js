@@ -1,15 +1,15 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccess, getUserLocationIds, requireInboxPermission } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { attachAssigneeNames } from '@/lib/inbox-assignment'
 import { INBOX_SEARCH_MIN_LENGTH, buildInboxSearchOr, searchInboxContactIds, searchWhatsAppMessageHits } from '@/lib/inbox-search-server'
 import { hasPermissionForLocation, hasMobilePermissionForLocation } from '@/lib/permissions'
 
 // GET /api/whatsapp/conversations — list conversations (inbox)
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// ROUTEWRAP.R9 — withAuth only signs the caller in; the gates below are unchanged.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, request }) => {
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
   const perm = requireInboxPermission(user, 'wa')
   if (perm) return perm
@@ -57,7 +57,10 @@ export async function GET(request) {
   }
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('wa-inbox', 'conversation list failed', { err: error, locationId })
+    return NextResponse.json({ success: false, error: 'Could not load conversations. Try again.' }, { status: 500 })
+  }
 
   // INBOX-APPROVALS — flag threads with a pending agent request so the
   // queue can badge them. One batched query over this page's ids (≤50).
@@ -79,4 +82,4 @@ export async function GET(request) {
   await attachAssigneeNames(db, conversations)
 
   return NextResponse.json({ success: true, conversations })
-}
+})
