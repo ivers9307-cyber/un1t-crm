@@ -202,7 +202,8 @@ describe('PATCH …/participants', () => {
     const res = await patch(T_STUDIO.id, { remove: ['rates@council.ie'] })
 
     expect(res.status).toBe(500)
-    expect((await res.json()).error).toContain('email_tickets write exploded')
+    // ROUTEWRAP.R15 — the database text is logged, never answered.
+    expect(await res.json()).toEqual({ success: false, error: 'Could not save the change. Try again.' })
     expect(stored()).toBeUndefined()
     errors.mockRestore()
   })

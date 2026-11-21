@@ -1,7 +1,8 @@
-import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { logError } from '@/lib/log'
 import { resolveRearmPatch } from '@/lib/agent/core'
 import { validateBody } from '@/lib/validate'
 
@@ -11,16 +12,14 @@ const PatchConversationBody = z.object({
 
 // GET /api/instagram/conversations/[id] — conversation + messages thread.
 // Mirrors the WhatsApp single-conversation route. Resets unread_count.
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (the same 401); the channel permission,
+// the row (404) and its studio (404) keep their order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
   const perm = requireInboxPermission(user, 'ig')
   if (perm) return perm
 
-  const db = createServerClient()
   const { searchParams } = new URL(request.url)
   const limit = parseInt(searchParams.get('limit') || '50')
 
@@ -58,7 +57,7 @@ export async function GET(request, props) {
   if (readError) console.error('[ig-conversation] clearing unread_count failed (non-fatal):', readError.message)
 
   return NextResponse.json({ success: true, conversation, messages: messages || [] })
-}
+})
 
 
 // PATCH /api/instagram/conversations/[id] — operator workflow state.
@@ -66,10 +65,7 @@ export async function GET(request, props) {
 // mig 255). Resolve drops the thread out of the unified inbox's
 // "Needs reply" queue; a new inbound message auto-clears it in the
 // webhook so replied-to threads come back.
-export async function PATCH(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
   const perm = requireInboxPermission(user, 'ig')
@@ -79,7 +75,6 @@ export async function PATCH(request, props) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const db = createServerClient()
   const { data: conversation, error } = await db.from('instagram_conversations')
     .select('id, location_id, agent_handed_off_at')
     .eq('id', params.id)
@@ -99,7 +94,10 @@ export async function PATCH(request, props) {
       ...resolveRearmPatch({ resolved: body.resolved, agent_handed_off_at: conversation.agent_handed_off_at }),
     })
     .eq('id', params.id)
-  if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
+  if (upErr) {
+    logError('ig-conversation', 'resolve update failed', { conversationId: params.id, err: upErr })
+    return NextResponse.json({ success: false, error: 'Could not update the conversation. Try again.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, resolved: body.resolved })
-}
+})

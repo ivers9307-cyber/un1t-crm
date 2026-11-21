@@ -31,8 +31,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { normalizeAddressList, MAX_RECIPIENTS } from '@/lib/email-recipients'
 import { loadConversationForUser } from '../../_conversation'
@@ -55,15 +55,12 @@ const ParticipantsSchema = z.object({
   { message: 'Name at least one address to remove or restore' }
 )
 
-export async function PATCH(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// withAuth only signs the caller in (the same 401); the body, then
+// loadConversationForUser (every refusal a 404), keep their order.
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   const validation = await validateBody(request, ParticipantsSchema)
   if (!validation.ok) return validation.response
 
-  const db = createServerClient()
   const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
   const { conversation } = loaded
@@ -97,9 +94,9 @@ export async function PATCH(request, props) {
     .update({ excluded_participants: next, updated_at: new Date().toISOString() })
     .eq('id', conversation.id)
   if (error) {
-    console.error('[conversations/:id/participants] update failed:', error.message)
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('conversation-participants', 'update failed', { conversationId: conversation.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the change. Try again.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: { excluded_participants: next } })
-}
+})

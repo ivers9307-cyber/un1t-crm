@@ -32,9 +32,11 @@ beforeEach(() => {
 })
 
 describe('GET /api/landing-pages', () => {
-  it('401 without a session', async () => {
+  it('401 without a session (withAuth; was "Unauthorised")', async () => {
     getCurrentUser.mockResolvedValue(null)
-    expect((await GET(list())).status).toBe(401)
+    const res = await GET(list())
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
   })
 
   it('GET lists only pages the caller can view: a Stillorgan manager sees stillorgan, 50plus, trial (read-only flag), not corp', async () => {
@@ -92,6 +94,14 @@ describe('GET /api/landing-pages', () => {
 })
 
 describe('POST /api/landing-pages', () => {
+  it('401 signed out, before the body, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await POST(create(NEW_ONE))
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(db.writes('landing_pages')).toEqual([])
+  })
+
   it('POST refuses a reserved slug (400 reserved), a taken slug (409 taken), an all-studios page from a non-admin (403)', async () => {
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
     // settings and api are app segments; contacts is a route-group segment (Review Focus 2).

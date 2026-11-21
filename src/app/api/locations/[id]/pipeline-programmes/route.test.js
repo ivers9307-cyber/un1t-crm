@@ -65,14 +65,29 @@ describe('GET', () => {
     mockDb({}, { boards: [] })
     expect((await (await GET(getReq(), props)).json()).data).toEqual({ has_board: false, lead_sources: [], glofox_plan_patterns: [], can_edit: true })
   })
-  it('a non-member is refused', async () => {
+  it('a non-member is refused with 404 (withAuth \'param\'; was 403)', async () => {
     getCurrentUser.mockResolvedValue({ ...owner, locations: [{ id: 'other' }], rolesByLocation: { other: 'owner' }, activeLocation: { id: 'other' } })
     mockDb(SEEDED)
-    expect((await GET(getReq(), props)).status).toBe(403)
+    const res = await GET(getReq(), props)
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Not found' })
+  })
+  it('401 signed out', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    mockDb(SEEDED)
+    const res = await GET(getReq(), props)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
   })
 })
 
 describe('PUT', () => {
+  it('a non-member is refused with 404 before the body, nothing written', async () => {
+    getCurrentUser.mockResolvedValue({ ...owner, locations: [{ id: 'other' }], rolesByLocation: { other: 'owner' }, activeLocation: { id: 'other' } })
+    const written = mockDb(SEEDED)
+    expect((await PUT(putReq({ lead_sources: ['x'], glofox_plan_patterns: [] }), props)).status).toBe(404)
+    expect(written()).toBeNull()
+  })
   it('a manager is refused', async () => {
     getCurrentUser.mockResolvedValue(withRole('manager'))
     const written = mockDb(SEEDED)

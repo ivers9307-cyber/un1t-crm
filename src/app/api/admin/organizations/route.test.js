@@ -7,15 +7,15 @@ import { makeFakeDb } from '@/lib/api-auth.test-helpers.js'
 
 let db
 let currentUser
-vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => currentUser) }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: () => db }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn(async () => currentUser) }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { POST } from './route.js'
 import { logError } from '@/lib/log'
 
-const MASTER = { id: 'u-master', profileRole: 'master' }
-const OWNER = { id: 'u-owner', profileRole: 'owner' }
+const MASTER = { id: 'u-master', profileRole: 'master', isMaster: true }
+const OWNER = { id: 'u-owner', profileRole: 'owner', isMaster: false }
 const NEW_ORG_ID = 'a0000000-0000-0000-0000-0000000000a1'
 
 const postReq = (body) =>
@@ -52,9 +52,13 @@ beforeEach(() => {
 describe('auth (401 / 403)', () => {
   it('no session → 401; non-master → 403; nothing inserted', async () => {
     currentUser = null
-    expect((await POST(postReq({ name: 'Acme Gyms' }))).status).toBe(401)
+    let res = await POST(postReq({ name: 'Acme Gyms' }))
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' }) // withAuth; was 'Unauthorised'
     currentUser = OWNER
-    expect((await POST(postReq({ name: 'Acme Gyms' }))).status).toBe(403)
+    res = await POST(postReq({ name: 'Acme Gyms' }))
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ success: false, error: 'Master only' })
     expect((await db.from('organizations').select('id')).data).toEqual([])
     expect((await db.from('tenant_domains').select('id')).data).toEqual([])
   })

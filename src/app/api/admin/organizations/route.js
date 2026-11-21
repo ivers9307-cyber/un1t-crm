@@ -19,8 +19,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { toSlug } from '@/lib/slug'
 import { logError } from '@/lib/log'
@@ -39,14 +38,9 @@ const Body = z.object({
     .optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-  if (user.profileRole !== 'master') {
-    return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
-  }
+// withAuth: signed out is its 401 'Unauthorized' (was 'Unauthorised'); a
+// non-master keeps the same 403 'Master only' (master: true reads profiles.role).
+export const POST = withAuth({ permission: null, location: false, master: true, forbiddenMessage: 'Master only' }, async ({ db, request }) => {
 
   const validation = await validateBody(request, Body)
   if (!validation.ok) return validation.response
@@ -77,7 +71,6 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: `"${slug}" is reserved: ${reserved}`, code: 'reserved_slug' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const { data: created, error: insertErr } = await db
     .from('organizations')
     .insert({ name, slug })
@@ -94,7 +87,8 @@ export async function POST(request) {
         code: 'duplicate_slug',
       }, { status: 409 })
     }
-    return NextResponse.json({ success: false, error: insertErr.message }, { status: 400 })
+    logError('organizations.create', 'organization insert failed', { slug, err: insertErr })
+    return NextResponse.json({ success: false, error: 'Could not create the organisation. Try again.' }, { status: 400 })
   }
 
   // W1.L1 — the platform host is born with the org (mig 716). The org is
@@ -108,4 +102,4 @@ export async function POST(request) {
   }
 
   return NextResponse.json({ success: true, data: created })
-}
+})

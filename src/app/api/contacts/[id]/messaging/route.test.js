@@ -3,22 +3,24 @@
 // permission rules are swept in tests/role-sweep/contact-messaging.test.js.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: vi.fn(),
   assertLocationAccessOr404: (user, locationId) => {
     const allowed = (user.locations || []).some((l) => l.id === locationId)
     return allowed ? null : new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404 })
   },
 }))
-vi.mock('@/lib/permissions', () => ({
+vi.mock('@/lib/permissions', async (importOriginal) => ({
+  ...(await importOriginal()),
   hasPermissionAtAnyLocation: () => true,
   hasMobilePermissionAtAnyLocation: () => false,
   // `whatsapp` held exactly at the studios in user.whatsappAt.
   hasPermissionForLocation: (u, loc) => (u.whatsappAt || []).includes(loc),
   hasMobilePermissionForLocation: () => false,
 }))
-vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/contact-studios', () => ({ hasRelationshipAt: vi.fn() }))
+vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: vi.fn() }))
+vi.mock('@/lib/contact-studios', async (importOriginal) => ({ ...(await importOriginal()), hasRelationshipAt: vi.fn() }))
 
 import { GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
@@ -108,5 +110,17 @@ describe('GET /api/contacts/[id]/messaging — ?location_id= (CARDLENS-M.7)', ()
     hasRelationshipAt.mockResolvedValue({ ok: false, error: 'boom' })
     createServerClient.mockReturnValue(mockDb())
     expect((await GET(req('?location_id=hatch'), props)).status).toBe(503)
+  })
+})
+
+describe('GET /api/contacts/[id]/messaging — signed out (ROUTEWRAP.R15)', () => {
+  it('401 from withAuth, nothing read', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const db = mockDb()
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req(), props)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(db.from).not.toHaveBeenCalled()
   })
 })

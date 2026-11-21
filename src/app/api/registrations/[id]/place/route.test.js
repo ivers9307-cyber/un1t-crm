@@ -47,9 +47,12 @@ beforeEach(() => {
 })
 
 describe('POST /api/registrations/[id]/place — gate', () => {
-  it('401 without a user', async () => {
+  it('401 without a user (withAuth; was "Unauthorised"), nothing placed', async () => {
     getCurrentUser.mockResolvedValue(null)
-    expect((await POST(post(BODY), props())).status).toBe(401)
+    const res = await POST(post(BODY), props())
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(placeSoloIntoTeam).not.toHaveBeenCalled()
   })
   it('403 for a caller holding races nowhere', async () => {
     getCurrentUser.mockResolvedValue(manager([L1], 'manager', false))
