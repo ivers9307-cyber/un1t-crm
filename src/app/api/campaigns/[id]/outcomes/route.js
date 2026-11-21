@@ -20,8 +20,9 @@
 // not a measurement.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -71,17 +72,13 @@ export function buildOutcomeComparison(rows, windowDays) {
   }
 }
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
+// withAuth only signs the caller in; the campaign's studio (404) runs by hand.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   const { data: campaign, error: campaignError } = await db
     .from('campaigns')
     .select('id, location_id')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (campaignError || !campaign) {
     return NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
@@ -92,13 +89,13 @@ export async function GET(request, props) {
   const windowDays = parseWindowDays(new URL(request.url).searchParams.get('window_days'))
 
   const { data, error } = await db.rpc('campaign_outcome_stats', {
-    p_campaign_id: params.id,
+    p_campaign_id: campaign.id,
     p_window_days: windowDays,
   })
   if (error) {
-    console.error('[campaign outcomes] campaign_outcome_stats failed:', error.message)
+    logError('campaign-outcomes', 'campaign_outcome_stats failed', { campaignId: campaign.id, err: error })
     return NextResponse.json({ success: false, error: 'Could not load the outcome report' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: buildOutcomeComparison(data, windowDays) })
-}
+})

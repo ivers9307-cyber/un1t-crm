@@ -1,0 +1,89 @@
+// /api/instagram/conversations/[id] through the real withAuth wrapper, which
+// only signs the caller in. The channel permission (403), the row (404) and
+// its studio (404, never 403) keep their order.
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createFakeDb } from '../../../../../../tests/helpers/fake-db.js'
+import { person, LOC_A, LOC_B } from '../../../../../../tests/helpers/role-sweep-callers.js'
+
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
+
+const { getCurrentUser } = await import('@/lib/auth')
+const { createServerClient } = await import('@/lib/supabase')
+const { GET, PATCH } = await import('./route.js')
+
+const CONV_A = '1c000000-0000-4000-8000-00000000000a'
+const CONV_B = '1c000000-0000-4000-8000-00000000000b'
+const INBOX_A = person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: true } } }, LOC_A)
+const NO_INBOX = person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false } } }, LOC_A)
+const ctx = (id) => ({ params: Promise.resolve({ id }) })
+const get = (id) => GET(new Request(`http://localhost/api/instagram/conversations/${id}`), ctx(id))
+const patch = (id, body = { resolved: true }) => PATCH(new Request(`http://localhost/api/instagram/conversations/${id}`, {
+  method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+}), ctx(id))
+let db
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  db = createFakeDb({ tables: {
+    instagram_conversations: [
+      { id: CONV_A, location_id: LOC_A, unread_count: 3, resolved_at: null, agent_handed_off_at: null },
+      { id: CONV_B, location_id: LOC_B, unread_count: 2, resolved_at: null, agent_handed_off_at: null },
+    ],
+    instagram_messages: [],
+    contacts: [],
+  } })
+  createServerClient.mockReturnValue(db)
+})
+
+describe('GET /api/instagram/conversations/[id]', () => {
+  it('401 signed out', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await get(CONV_A)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+  })
+
+  it('403 without the inbox permission', async () => {
+    getCurrentUser.mockResolvedValue(NO_INBOX)
+    expect((await get(CONV_A)).status).toBe(403)
+  })
+
+  it('404 for another studio’s thread, unread left alone', async () => {
+    getCurrentUser.mockResolvedValue(INBOX_A)
+    expect((await get(CONV_B)).status).toBe(404)
+    expect(db.tables.instagram_conversations[1].unread_count).toBe(2)
+  })
+
+  it('opens the caller’s own thread and clears unread', async () => {
+    getCurrentUser.mockResolvedValue(INBOX_A)
+    const res = await get(CONV_A)
+    expect(res.status).toBe(200)
+    expect(db.tables.instagram_conversations[0].unread_count).toBe(0)
+  })
+})
+
+describe('PATCH /api/instagram/conversations/[id]', () => {
+  it('401 signed out, 404 for another studio’s thread, nothing resolved', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await patch(CONV_A)).status).toBe(401)
+    getCurrentUser.mockResolvedValue(INBOX_A)
+    expect((await patch(CONV_B)).status).toBe(404)
+    expect(db.tables.instagram_conversations[1].resolved_at).toBeNull()
+  })
+
+  it('resolves the caller’s own thread', async () => {
+    getCurrentUser.mockResolvedValue(INBOX_A)
+    expect((await patch(CONV_A)).status).toBe(200)
+    expect(db.tables.instagram_conversations[0].resolved_at).not.toBeNull()
+  })
+
+  it('a failed write answers a fixed 500, never the database text', async () => {
+    getCurrentUser.mockResolvedValue(INBOX_A)
+    db.errors.instagram_conversations = { update: { message: 'column "resolved_at" is of type timestamptz' } }
+    const res = await patch(CONV_A)
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not update the conversation. Try again.' })
+  })
+})

@@ -17,8 +17,7 @@
 // own route.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { getLocationZones } from '@/lib/location-time'
@@ -37,9 +36,9 @@ const OutcomesSchema = z.object({
 
 const fail = (error, status = 500) => NextResponse.json({ success: false, error }, { status })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return fail('Unauthorized', 401)
+// withAuth only signs the caller in (the same 401); the coarse bookings check
+// and every per-booking judgement keep their order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const coarse = bookingsWriteForbiddenAnywhere(user)
   if (coarse) return coarse
 
@@ -48,7 +47,6 @@ export async function POST(request) {
   const { status } = validation.data
   const ids = [...new Set(validation.data.booking_ids)]
 
-  const db = createServerClient()
   // At most 200 ids: one read, under the 1,000-row cap.
   const { data: rows, error: readError } = await db.from('bookings')
     .select('id, status, location_id, booking_date, start_time, end_time, event_types(location_id)')
@@ -107,4 +105,4 @@ export async function POST(request) {
   for (const id of accepted) if (!done.has(id)) skipped.push({ id, reason: 'changed' })
 
   return NextResponse.json({ success: true, data: { updated, skipped } })
-}
+})

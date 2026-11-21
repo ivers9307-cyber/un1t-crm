@@ -9,8 +9,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { generateDeviceToken } from '@/lib/studio-devices'
 import { logAuditEvent } from '@/lib/audit'
@@ -18,17 +18,15 @@ import { logAuditEvent } from '@/lib/audit'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-async function requireMaster() {
-  const user = await getCurrentUser()
-  if (!user || user.profileRole !== 'master') return null
-  return user
-}
+// withAuth only signs the caller in: signed out is its 401 (a 403 before). A
+// non-master keeps the same 403 'Forbidden', checked here on profiles.role as
+// requireMaster did (this master-only surface lists every studio's devices).
+const notMaster = (user) => user.profileRole !== 'master'
+const forbidden = () => NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
-export async function GET() {
-  const user = await requireMaster()
-  if (!user) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
+  if (notMaster(user)) return forbidden()
 
-  const db = createServerClient()
   // Join in location label for readability. Pull the lockout window
   // count too so the admin UI can show "3 failed attempts in the
   // last 15 min" without a second query.
@@ -37,10 +35,11 @@ export async function GET() {
     .select('id, location_id, device_kind, label, paired_at, paired_by, last_seen_at, revoked_at')
     .order('paired_at', { ascending: false })
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('studio-devices', 'device list failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the devices. Try again.' }, { status: 500 })
   }
   return NextResponse.json({ success: true, devices: data || [] })
-}
+})
 
 const PairBody = z.object({
   location_id: uuidLike,
@@ -48,15 +47,12 @@ const PairBody = z.object({
   label: z.string().min(1).max(80),
 })
 
-export async function POST(request) {
-  const user = await requireMaster()
-  if (!user) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
+  if (notMaster(user)) return forbidden()
 
   const validation = await validateBody(request, PairBody)
   if (!validation.ok) return validation.response
   const { location_id, device_kind, label } = validation.data
-
-  const db = createServerClient()
 
   // Ensure the location exists — surface a clean 404 instead of a
   // generic FK violation.
@@ -80,7 +76,8 @@ export async function POST(request) {
     .select('id, location_id, device_kind, label, paired_at')
     .single()
   if (insErr) {
-    return NextResponse.json({ success: false, error: insErr.message }, { status: 500 })
+    logError('studio-devices', 'device pair insert failed', { locationId: location_id, err: insErr })
+    return NextResponse.json({ success: false, error: 'Could not pair the device. Try again.' }, { status: 500 })
   }
 
   // Audit — token value NEVER hits the log.
@@ -102,4 +99,4 @@ export async function POST(request) {
     device: row,
     pairing_token: token,
   })
-}
+})

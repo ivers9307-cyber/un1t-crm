@@ -10,8 +10,8 @@
 // re-issue with a new contract row if the situation changes.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { contractDeclineSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
 import { sendContractDeclinedEmail } from '@/lib/contracts-email'
@@ -20,22 +20,24 @@ import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (the same 401). The body, the contract
+// (404), the recipient check (403) and the state (409) keep their order; the
+// write, the audit row and the issuer email are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   const validation = await validateBody(request, contractDeclineSchema)
   if (!validation.ok) return validation.response
   const parsed = { data: validation.data }
 
-  const db = createServerClient()
   const { data: contract, error: rErr } = await db
     .from('contracts')
     .select('id, profile_id, status')
     .eq('id', params.id)
     .maybeSingle()
-  if (rErr) return NextResponse.json({ success: false, error: rErr.message }, { status: 500 })
+  if (rErr) {
+    logError('contracts-decline', 'contract read failed', { contractId: params.id, err: rErr })
+    return NextResponse.json({ success: false, error: 'Could not read the contract. Try again.' }, { status: 500 })
+  }
   if (!contract) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   if (contract.profile_id !== user.id) {
     return NextResponse.json({ success: false, error: 'Only the recipient can decline this contract.' }, { status: 403 })
@@ -58,7 +60,10 @@ export async function POST(request, props) {
     .in('status', ['issued', 'viewed'])
     .select()
     .single()
-  if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+  if (updErr) {
+    logError('contracts-decline', 'decline update failed', { contractId: contract.id, err: updErr })
+    return NextResponse.json({ success: false, error: 'Could not decline the contract. Refresh and try again.' }, { status: 500 })
+  }
   if (!updated) {
     return NextResponse.json({ success: false, error: 'Contract status changed concurrently — refresh and retry.' }, { status: 409 })
   }
@@ -103,9 +108,10 @@ export async function POST(request, props) {
     templateName: detail?.template?.name,
   })
 
+  if (!emailResult.ok) logError('contracts-decline', 'issuer email failed', { contractId: updated.id, err: emailResult.error })
   return NextResponse.json({
     success: true,
     data: updated,
-    warning: emailResult.ok ? undefined : `Decline recorded but issuer email failed: ${emailResult.error}`,
+    warning: emailResult.ok ? undefined : 'Decline recorded but the issuer email failed.',
   })
-}
+})

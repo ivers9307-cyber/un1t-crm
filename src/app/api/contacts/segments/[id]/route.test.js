@@ -141,7 +141,8 @@ describe('PUT /api/contacts/segments/[id] — location gate', () => {
     const res = await PUT(makeRequest(validBody), { params: { id: SEG } })
     expect(res.status).toBe(401)
     const body = await res.json()
-    expect(body).toEqual({ success: false, error: 'Unauthorised' })
+    // ROUTEWRAP.R16 — withAuth's 401 (was 'Unauthorised').
+    expect(body).toEqual({ success: false, error: 'Unauthorized' })
   })
 
   it('returns 404 when the segment does not exist', async () => {

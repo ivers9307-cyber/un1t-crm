@@ -24,8 +24,9 @@
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { buildEligibleAudienceQuery } from '@/lib/audience-eligibility'
@@ -42,9 +43,9 @@ const Schema = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the body and the studio (404) run by hand,
+// in their old order. The audience comes from the send builder, unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
@@ -59,7 +60,6 @@ export async function POST(request) {
   const pageSize = Math.min(Number(limit) || PREVIEW_PAGE_SIZE, PREVIEW_MAX_PAGE_SIZE)
   const start = Math.max(Number(offset) || 0, 0)
 
-  const db = createServerClient()
   const filter = audience_filter || { logic: 'and', filters: [] }
 
   try {
@@ -78,7 +78,10 @@ export async function POST(request) {
     const { data, count, error } = await query
       .order('id', { ascending: true })
       .range(start, start + pageSize - 1)
-    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    if (error) {
+      logError('audience-preview', 'preview query failed', { locationId: location_id, err: error })
+      return NextResponse.json({ success: false, error: 'Could not preview audience' }, { status: 400 })
+    }
 
     return NextResponse.json({
       success: true,
@@ -98,7 +101,12 @@ export async function POST(request) {
     })
   } catch (e) {
     // InvalidAudienceFilterError on a non-whitelisted (field, op) is the
-    // operator's filter being wrong, not the server failing — 400, not 500.
-    return NextResponse.json({ success: false, error: e?.message || 'Could not preview audience' }, { status: 400 })
+    // operator's filter being wrong, not the server failing — 400, not 500,
+    // and its words are ours. Anything else is logged and answered fixed.
+    if (e?.name === 'InvalidAudienceFilterError' && e.message) {
+      return NextResponse.json({ success: false, error: e.message }, { status: 400 })
+    }
+    logError('audience-preview', 'preview build failed', { locationId: location_id, err: e?.message || String(e) })
+    return NextResponse.json({ success: false, error: 'Could not preview audience' }, { status: 400 })
   }
-}
+})

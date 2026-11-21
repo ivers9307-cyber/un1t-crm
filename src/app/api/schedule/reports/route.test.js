@@ -330,3 +330,20 @@ describe('POST /api/schedule/reports — utilisation (CONTRACTVIS.1)', () => {
     expect(generateReport).not.toHaveBeenCalled()
   })
 })
+
+// ROUTEWRAP.R16 — signed in through withAuth: signed out is its 401 now (this
+// route answered 403 'Unauthorized' before).
+describe('/api/schedule/reports — signed out', () => {
+  it('401 on both methods, nothing generated', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const list = await GET(new Request(`http://localhost/api/schedule/reports?location_id=${LOC_A}`))
+    expect(list.status).toBe(401)
+    expect(await list.json()).toEqual({ success: false, error: 'Unauthorized' })
+    const run = await POST(new Request('http://localhost/api/schedule/reports', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ report_type: 'staff_hours', period_start: '2026-09-01', period_end: '2026-09-30', location_id: LOC_A }),
+    }))
+    expect(run.status).toBe(401)
+    expect(generateReport).not.toHaveBeenCalled()
+  })
+})

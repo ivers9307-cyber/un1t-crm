@@ -8,10 +8,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
-import { logWarn } from '@/lib/log'
+import { withAuth } from '@/lib/with-auth'
+import { logWarn, logError } from '@/lib/log'
 import { zoneOfLocation } from '@/lib/location-time'
 import { WindowBase, NOT_SAME_BOUNDARY, windowsOverlapIssue } from '@/lib/schedule/windows'
 
@@ -55,23 +54,25 @@ export const SchedulePayload = z.object({
   windows: z.array(Window).max(16).superRefine(windowsOverlapIssue).optional(),
 })
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; device_control ('Forbidden' 403) and the
+// active studio (400) stay by hand, in their old order and words.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   if (!hasPermission(user, 'device_control')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('sonos_schedules')
     .select('*')
     .eq('location_id', locationId)
     .order('created_at', { ascending: true })
     .limit(MAX_SCHEDULES_PER_LOCATION)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('sonos-schedules', 'schedule list read failed', { locationId, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not load the schedules.' }, { status: 500 })
+  }
   // A cap that truncates in silence reads as "that's everything". Say so
   // instead — same fix the reconcile cron already carries for its own cap.
   if (data?.length === MAX_SCHEDULES_PER_LOCATION) {
@@ -85,11 +86,9 @@ export async function GET() {
   // does. It travels WITH the schedules, so the two can never be for
   // different locations.
   return NextResponse.json({ success: true, schedules: data || [], timezone: zoneOfLocation(user.activeLocation) })
-}
+})
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!hasPermission(user, 'device_control')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
@@ -101,12 +100,14 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: parsed.error.issues[0]?.message || 'Invalid payload' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('sonos_schedules')
     .insert({ location_id: locationId, ...parsed.data })
     .select()
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('sonos-schedules', 'schedule insert failed', { locationId, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not save the schedule.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, schedule: data })
-}
+})

@@ -14,7 +14,7 @@ let db
 let currentUser
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => currentUser) }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn(async () => currentUser) }))
 vi.mock('@/lib/admin-tenants', () => ({
   getTenantsRoster: vi.fn(),
   getTenantDetail: vi.fn(),

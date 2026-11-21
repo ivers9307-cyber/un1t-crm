@@ -17,27 +17,27 @@
 
 import { NextResponse } from 'next/server'
 import QRCode from 'qrcode'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// A staff session (the event edit form's Download QR), not the public page.
+// withAuth only signs the caller in; races somewhere, the event's studio (404)
+// and races there run by hand, in their old order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: event, error } = await db
     .from('race_events')
     .select('id, slug, name, location_id, active')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (error || !event) {
     return NextResponse.json({ success: false, error: 'Event not found' }, { status: 404 })
@@ -59,9 +59,10 @@ export async function GET(_request, props) {
     const baseUrl = new URL(await resolveCustomerBaseUrl(db, event.location_id)).origin
     publicUrl = `${baseUrl}/event/${event.slug}`
   } catch (e) {
+    logError('event-qr-code', 'public url build failed', { eventId: event.id, err: e?.message || String(e) })
     return NextResponse.json({
       success: false,
-      error: `Cannot build public URL — check NEXT_PUBLIC_APP_URL is configured. (${e?.message || 'invalid'})`,
+      error: 'Cannot build public URL — check NEXT_PUBLIC_APP_URL is configured.',
     }, { status: 500 })
   }
 
@@ -75,9 +76,10 @@ export async function GET(_request, props) {
       color: { dark: '#000000', light: '#FFFFFF' },
     })
   } catch (e) {
+    logError('event-qr-code', 'qr generation failed', { eventId: event.id, err: e?.message || String(e) })
     return NextResponse.json({
       success: false,
-      error: `QR generation failed: ${e?.message || 'unknown'}`,
+      error: 'QR generation failed.',
     }, { status: 500 })
   }
 
@@ -95,4 +97,4 @@ export async function GET(_request, props) {
       'Cache-Control': 'private, no-store',
     },
   })
-}
+})

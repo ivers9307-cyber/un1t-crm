@@ -5,11 +5,16 @@
 // CLASS-TIMER. Gated by the `class_timer` permission (CLASS-TIMER-PERM.1);
 // loads the row first and checks location access, returning 404 (not 403) on
 // a missing/foreign row so ids can't be enumerated.
+//
+// withAuth only signs the caller in (its 401; a signed-out call was a 403
+// before). class_timer somewhere (403), the row (404) and class_timer at its
+// studio (403) keep their order below.
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { logError } from '@/lib/log'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { validateStructure, buildTimeline } from '@/lib/class-timer'
@@ -36,30 +41,26 @@ async function loadOwned(db, user, id) {
   return { row }
 }
 
-export async function GET(_request, { params }) {
-  const user = await getCurrentUser()
-  if (!user || !hasPermissionAtAnyLocation(user, 'class_timer')) {
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  if (!hasPermissionAtAnyLocation(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
-  const { id } = await params
-  const db = createServerClient()
+  const { id } = params
   const { row, notFound, denied } = await loadOwned(db, user, id)
   if (notFound) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   if (denied) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   return NextResponse.json({ success: true, template: row })
-}
+})
 
-export async function PUT(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user || !hasPermissionAtAnyLocation(user, 'class_timer')) {
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  if (!hasPermissionAtAnyLocation(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
-  const { id } = await params
+  const { id } = params
   const validation = await validateBody(request, UpdateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const db = createServerClient()
   const { row, notFound, denied } = await loadOwned(db, user, id)
   if (notFound) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   if (denied) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
@@ -80,17 +81,18 @@ export async function PUT(request, { params }) {
     .eq('id', row.id)
     .select('id, name, structure, total_seconds, glofox_program, updated_at')
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('timer-templates', 'template update failed', { templateId: row.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the template. Try again.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, template: data })
-}
+})
 
-export async function DELETE(_request, { params }) {
-  const user = await getCurrentUser()
-  if (!user || !hasPermissionAtAnyLocation(user, 'class_timer')) {
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  if (!hasPermissionAtAnyLocation(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
-  const { id } = await params
-  const db = createServerClient()
+  const { id } = params
   const { row, notFound, denied } = await loadOwned(db, user, id)
   if (notFound) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   if (denied) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
@@ -99,6 +101,9 @@ export async function DELETE(_request, { params }) {
     .from('class_timer_templates')
     .update({ is_active: false, updated_at: new Date().toISOString() })
     .eq('id', row.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('timer-templates', 'template delete failed', { templateId: row.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not delete the template. Try again.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
-}
+})

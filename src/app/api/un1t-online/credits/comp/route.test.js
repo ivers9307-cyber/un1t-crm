@@ -218,3 +218,14 @@ describe('GET /api/un1t-online/classes — the comp block', () => {
     expect(j.data.comp.given.find((g) => g.id === 'w-2')).toMatchObject({ by: null, confirmed: false })
   })
 })
+
+// ROUTEWRAP.R16 — signed in through withAuth.
+describe('POST /api/un1t-online/credits/comp — signed out', () => {
+  it("401 is withAuth's (was 'Unauthorised'), nothing sent", async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await post()
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(grantCompCredits).not.toHaveBeenCalled()
+  })
+})

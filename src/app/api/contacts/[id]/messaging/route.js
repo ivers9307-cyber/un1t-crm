@@ -19,31 +19,28 @@
 // templates are then that studio's, and `whatsapp` is judged there.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import {
   hasPermissionAtAnyLocation, hasPermissionForLocation,
   hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
 } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import { resolveRouteStudio } from '@/lib/contact-acting-studio'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// withAuth only signs the caller in (the same 401). The coarse whatsapp check
+// (403), the contact (404), the studio (404 / 503) and whatsapp there (403)
+// keep their order; nothing is sent from here.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   // ROLESWEEP.1c — coarse pre-check; judged at the contact's location below.
   if (!hasPermissionAtAnyLocation(user, 'whatsapp') && !hasMobilePermissionAtAnyLocation(user, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
   const { id: contactId } = params
-  const db = createServerClient()
 
   const { data: contact } = await db
     .from('contacts')
@@ -104,4 +101,4 @@ export async function GET(request, props) {
       templates,
     },
   })
-}
+})

@@ -16,8 +16,8 @@
 // pack_not_for_stage). The order of the writes (the old sequence stopped
 // before the new one exists) lives in src/lib/pipeline-board-followups.js.
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { followupActionSchema, uuidLike } from '@/lib/schemas'
 import { canBuildSequencesAt } from '@/lib/sequence-access'
 import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
@@ -35,13 +35,12 @@ const failure = (r) => NextResponse.json(
   { status: r.status },
 )
 
-export async function PUT(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: boardId, stageId } = await params
+// withAuth only signs the caller in; the ids, the board's studio (404) and the
+// owner-or-wording gate run by hand, in their old order.
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const { id: boardId, stageId } = params || {}
   if (!uuidLike.safeParse(boardId).success || !uuidLike.safeParse(stageId).success) return notFound()
 
-  const db = createServerClient()
   const where = await boardLocationId(db, boardId)
   if (!where.ok) return where.status === 404 ? notFound() : failure(where)
   const locationId = where.locationId
@@ -95,4 +94,4 @@ export async function PUT(request, { params }) {
       ...(result.code ? { code: result.code } : {}),
     },
   })
-}
+})

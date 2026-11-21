@@ -1,8 +1,8 @@
 // HATCHPIPE.2 — include_disabled reaches the orchestrator only on a dry run.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
-vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({ fake: 'db' })) }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: vi.fn(() => ({ fake: 'db' })) }))
 vi.mock('@/lib/pipeline-reclassify', () => ({ reclassifyAllContacts: vi.fn(), restampUn1tDealDates: vi.fn() }))
 
 const { getCurrentUser } = await import('@/lib/auth')

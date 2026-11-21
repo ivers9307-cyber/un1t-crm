@@ -84,6 +84,17 @@ describe('GET unifi-doors — role judged at the path location', () => {
     expect(listDoors).not.toHaveBeenCalled()
   })
 
+  it('keeps the controller\'s own error text out of the response (logged instead)', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    listDoors.mockRejectedValue(new Error('ECONNREFUSED 10.0.0.7:12445'))
+    const res = await call(LOC_B)
+    expect(res.status).toBe(502)
+    const body = await res.json()
+    expect(body.error).toBe('unifi_request_failed')
+    expect(JSON.stringify(body)).not.toContain('10.0.0.7')
+    expect(logError).toHaveBeenCalled()
+  })
+
   it('still 404s location_not_found when the read succeeds with no row', async () => {
     getCurrentUser.mockResolvedValue(MASTER)
     createServerClient.mockReturnValue(fakeDb({ data: null, error: null }))

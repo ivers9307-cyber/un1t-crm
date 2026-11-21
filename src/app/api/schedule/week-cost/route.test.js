@@ -10,6 +10,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('@/lib/auth', async (importOriginal) => {
   const real = await importOriginal()
   return {
+    ...real,
     getCurrentUser: vi.fn(),
     assertLocationAccess: vi.fn(() => null),
     // SCHEDROLES.1 — REAL: the role at location_id is under test.
@@ -55,10 +56,10 @@ beforeEach(() => {
 })
 
 describe('GET /api/schedule/week-cost — auth', () => {
-  it('403 when there is no session', async () => {
+  it('401 when there is no session (withAuth)', async () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await GET(buildReq(okParams))
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(401)
     expect(computeWeeklyFteHours).not.toHaveBeenCalled()
   })
 
@@ -189,11 +190,11 @@ describe('GET /api/schedule/week-cost — contract', () => {
     )
   })
 
-  it('500s with the failure named rather than an empty week', async () => {
+  it('500s rather than an empty week, without the helper\'s text', async () => {
     computeWeeklyFteHours.mockRejectedValue(new Error('blocks read failed'))
     const res = await GET(buildReq(okParams))
     expect(res.status).toBe(500)
-    expect((await res.json()).error).toBe('blocks read failed')
+    expect((await res.json()).error).toBe('Failed to compute weekly hours')
   })
 })
 

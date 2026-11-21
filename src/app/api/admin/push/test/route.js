@@ -44,8 +44,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { sendPush } from '@/lib/push'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -60,11 +59,9 @@ const PushTestSchema = z.object({
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// withAuth only signs the caller in (the same 401); the organisation-admin 403,
+// the body, the fleet 404 and the send stay by hand, exactly as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!isActiveOrgAdmin(user)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
@@ -72,8 +69,6 @@ export async function POST(request) {
   const v = await validateBody(request, PushTestSchema)
   if (!v.ok) return v.response
   const recipientId = v.data.recipient_id
-
-  const db = createServerClient()
 
   let scope
   try {
@@ -112,4 +107,4 @@ export async function POST(request) {
     success: true,
     data: result,  // { sent, skipped, invalidated }
   })
-}
+})

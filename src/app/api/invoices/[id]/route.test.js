@@ -158,3 +158,13 @@ describe('GET /api/invoices/[id] — INVOICEHOURS.1 roster read failure', () => 
     expect(computeScheduledForPeriod).not.toHaveBeenCalled()
   })
 })
+
+// ROUTEWRAP.R16 — signed in through withAuth (the same 401 as before).
+describe('GET /api/invoices/[id] — signed out', () => {
+  it('401', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await GET({}, props)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+  })
+})

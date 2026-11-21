@@ -9,8 +9,8 @@
 // directory entries, so both are owner/master only.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertOrganizationAccess } from '@/lib/auth'
+import { assertOrganizationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionInOrganization } from '@/lib/permissions'
 import { runZoomContactSync } from '@/lib/zoom/reconcile'
 
@@ -20,9 +20,9 @@ export const dynamic = 'force-dynamic'
 // and relies on the same bounded-concurrency publish loop.
 export const maxDuration = 300
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; the body, the organisation gate and the
+// write permission stay by hand, in their old order, and the run is unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   let body
   try { body = await request.json() } catch {
@@ -82,7 +82,6 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const out = await runZoomContactSync({
     db, dry, limit, force, trigger: 'manual', triggeredBy: user.id,
   })
@@ -99,7 +98,7 @@ export async function POST(request) {
   const data = canManage || !out?.guard ? out : { ...out, guard: redactGuard(out.guard) }
 
   return NextResponse.json({ success: out.ok !== false, data })
-}
+})
 
 /**
  * Allowlist, not denylist: a field added to the guard later must fail closed

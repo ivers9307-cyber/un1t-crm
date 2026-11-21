@@ -14,8 +14,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { METERS, UNIT_RATE_KEYS, FEATURE_KEYS } from '@shared/plans'
 
@@ -52,13 +52,10 @@ const VersionBody = z.object({
   notes: z.string().max(2000).optional().nullable(),
 })
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user || user.profileRole !== 'master') {
-    return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
-  }
-
-  const { id } = await params
+// withAuth: signed out is its 401 (a 403 before); a non-master keeps the same
+// 403 'Master only' (master: true reads profiles.role, as this did).
+export const POST = withAuth({ permission: null, location: false, master: true, forbiddenMessage: 'Master only' }, async ({ user, db, request, params }) => {
+  const { id } = params
   if (!uuidLike.safeParse(id).success) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
@@ -66,8 +63,6 @@ export async function POST(request, { params }) {
   const validation = await validateBody(request, VersionBody)
   if (!validation.ok) return validation.response
   const body = validation.data
-
-  const db = createServerClient()
 
   const { data: plan } = await db.from('plans').select('id, slug, kind').eq('id', id).single()
   if (!plan) {
@@ -98,8 +93,9 @@ export async function POST(request, { params }) {
         code: 'duplicate_effective_from',
       }, { status: 409 })
     }
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    logError('admin-plans', 'plan version insert failed', { planId: plan.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the version. Check the numbers and try again.' }, { status: 400 })
   }
 
   return NextResponse.json({ success: true, data: created })
-}
+})

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 
 import { PATCH } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
@@ -31,6 +31,15 @@ beforeEach(() => {
 })
 
 describe('PATCH /api/admin/fleet/devices/[name]', () => {
+  it('401 signed out: withAuth\'s body (was { ok: false, error: "Unauthorised" })', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const db = fakeDb()
+    const res = await patch({ location_id: LOC_A, role: 'screen' })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(db.calls).toHaveLength(0)
+  })
+
   it('403 for a non-master owner', async () => {
     getCurrentUser.mockResolvedValue(OWNER_A)
     const db = fakeDb()

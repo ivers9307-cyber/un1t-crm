@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto'
-import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
+import { assertLocationAccess, getUserLocationIds } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -48,9 +49,9 @@ const SequenceCreateSchema = z.object({
 const SEQUENCE_LIST_COLUMNS = 'id, location_id, name, description, status, trigger_type, created_at, updated_at, sequence_steps(count)'
 
 // GET /api/sequences — list sequences
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (the same 401); the builder rule and the
+// studio checks stay by hand, in their old order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   // SEQROUTEGATE.1 — the builder's rule (email or whatsapp), judged at the
   // location listed; a coarse pre-check first.
   if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
@@ -61,7 +62,6 @@ export async function GET(request) {
   if (guard) return guard
   if (locationId && !canBuildSequencesAt(user, locationId)) return sequencePermissionRequired()
 
-  const db = createServerClient()
   let query = db.from('email_sequences')
     .select(SEQUENCE_LIST_COLUMNS)
     .order('created_at', { ascending: false })
@@ -76,15 +76,16 @@ export async function GET(request) {
   }
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('sequences', 'sequence list read failed', { locationId, code: error.code || null, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not load the sequences.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, sequences: data })
-}
+})
 
 // POST /api/sequences — create sequence
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const validation = await validateBody(request, SequenceCreateSchema)
@@ -96,7 +97,6 @@ export async function POST(request) {
   if (guard) return guard
   if (!canBuildSequencesAt(user, locationId)) return sequencePermissionRequired()
 
-  const db = createServerClient()
   // FLOW2 — auto-generate a webhook_token whenever the sequence
   // is created with trigger_type='webhook'. Operator can rotate
   // it later via the editor's "Regenerate" button.
@@ -116,7 +116,10 @@ export async function POST(request) {
     created_by: user.id,
   }).select().single()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('sequences', 'sequence insert failed', { locationId, code: error.code || null, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not create the sequence.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, sequence: data })
-}
+})

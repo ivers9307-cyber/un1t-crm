@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { isOrgAdminSomewhere, resolveAdminOrgId } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { httpUrl } from '@/lib/schemas'
@@ -50,15 +50,14 @@ function resolveOrgId(user, requested) {
 }
 
 // GET /api/settings/org-branding?organization_id=xxx — org branding defaults
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (the same 401); the organisation the caller
+// administers is resolved by hand below, as before.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   const { searchParams } = new URL(request.url)
   const orgId = resolveOrgId(user, searchParams.get('organization_id'))
   if (!orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
 
-  const db = createServerClient()
   const { data, error } = await db.from('org_settings')
     .select(ORG_BRANDING_COLUMNS)
     .eq('organization_id', orgId)
@@ -68,12 +67,10 @@ export async function GET(request) {
   }
 
   return NextResponse.json({ success: true, data: data || null })
-}
+})
 
 // PUT /api/settings/org-branding — upsert org branding (organisation admin)
-export async function PUT(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!isOrgAdminSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Only organisation admins can update organisation branding' }, { status: 403 })
   }
@@ -85,7 +82,6 @@ export async function PUT(request) {
   const orgId = resolveOrgId(user, body.organization_id)
   if (!orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
 
-  const db = createServerClient()
   const record = {
     organization_id: orgId,
     logo_url: body.logo_url ?? null,
@@ -111,6 +107,9 @@ export async function PUT(request) {
     .select(ORG_BRANDING_COLUMNS)
     .single()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('org-branding', 'org branding save failed', { orgId, code: error.code || null, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not save the organisation branding.' }, { status: 400 })
+  }
   return NextResponse.json({ success: true, data })
-}
+})

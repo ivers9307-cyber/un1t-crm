@@ -20,8 +20,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { logError } from '@/lib/log'
 import { listPods, SensiboError } from '@/lib/sensibo'
@@ -47,23 +46,13 @@ function vendorFailure(e, ErrorClass, code, secrets, locationId) {
   return NextResponse.json({ success: false, error: message, code }, { status })
 }
 
-export async function POST(request, props) {
-  const params = await props.params
-  const locationId = params?.id || null
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!locationId) return NextResponse.json({ success: false, error: 'Location id required.' }, { status: 400 })
-  const notMember = assertLocationAccessOr404(user, locationId)
-  if (notMember) return notMember
-  if (!user.isMaster) {
-    return NextResponse.json({ success: false, error: 'Only master can discover AC devices.' }, { status: 403 })
-  }
-
+// The studio in the PATH: not one of the caller's studios is a 404 (withAuth's
+// 'param' mode, judged before the master check as before), then masters only.
+export const POST = withAuth({ permission: null, location: 'param', master: true, forbiddenMessage: 'Only master can discover AC devices.' }, async ({ db, request, locationId }) => {
   const parsed = await validateBody(request, DiscoverBody)
   if (!parsed.ok) return parsed.response
   const body = parsed.data
 
-  const db = createServerClient()
   const read = await readAcCredentials(db, locationId)
   if (read.error) {
     logError('ac-devices', 'credentials read failed', { locationId, err: read.error.message })
@@ -112,4 +101,4 @@ export async function POST(request, props) {
   } catch (e) {
     return vendorFailure(e, ThinqError, 'thinq_error', [pat, clientId], locationId)
   }
-}
+})

@@ -430,7 +430,9 @@ describe('template sends (WATPLSEND.1)', () => {
 
     const res = await POST(templateReq(TPL_PLAIN, [bodyParams('ALPHA')]), props)
     expect(res.status).toBe(400)
-    expect((await res.json()).error).toContain('132000')
+    // ROUTEWRAP.R13 — a fixed line plus Meta's numeric code; Meta's own text
+    // (which can carry the customer's number) stays in the logs.
+    expect((await res.json()).error).toBe('Could not send the message. Try again. (Meta code 132000)')
     expect(insertSpy).not.toHaveBeenCalled()
   })
 })

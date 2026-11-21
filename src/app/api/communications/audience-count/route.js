@@ -13,11 +13,12 @@
 // read the retired GLOBAL contacts.email_marketing column.
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
-import { applyAudienceFilterAsync, scopedAudienceSource } from '@/lib/audience-filter'
+import { applyAudienceFilterAsync, scopedAudienceSource, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { computeWhatsAppReachabilitySummary } from '@/lib/whatsapp'
 // FILTER-B.8 — the will-receive number for EVERY channel comes from the
 // shared per-channel eligibility builder (buildEligibleAudienceQuery), which
@@ -37,10 +38,9 @@ const Schema = z.object({
   channel: z.enum(['whatsapp', 'email']).optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// withAuth only signs the caller in (the same 401); the body and the studio
+// check stay by hand, in their old order. The counting is unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
   const { location_id, audience_filter, channel } = validation.data
@@ -48,7 +48,6 @@ export async function POST(request) {
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
 
-  const db = createServerClient()
   try {
     if (channel === 'whatsapp') {
       // FILTER-C.5 — `reachable` (the will-receive number) is now built by
@@ -105,12 +104,21 @@ export async function POST(request) {
         .eq('studio_location_id', location_id),
     })
     const { count, error } = await query
-    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    if (error) {
+      logError('audience-count', 'match count failed', { locationId: location_id, code: error.code || null, err: error.message })
+      return NextResponse.json({ success: false, error: 'Could not count audience' }, { status: 400 })
+    }
 
     return NextResponse.json({ success: true, count: count || 0 })
   } catch (e) {
     // applyAudienceFilter throws InvalidAudienceFilterError on a non-whitelisted
-    // (field, op) — surface it as a 400 rather than a 500.
-    return NextResponse.json({ success: false, error: e?.message || 'Could not count audience' }, { status: 400 })
+    // (field, op) — surface it as a 400 rather than a 500. Any other failure (a
+    // count the database refused) is the same 400 with a fixed line; its text
+    // stays in the log.
+    if (e instanceof InvalidAudienceFilterError) {
+      return NextResponse.json({ success: false, error: e.message || 'Could not count audience' }, { status: 400 })
+    }
+    logError('audience-count', 'count failed', { locationId: location_id, channel: channel || null, err: e?.message || String(e) })
+    return NextResponse.json({ success: false, error: 'Could not count audience' }, { status: 400 })
   }
-}
+})

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: vi.fn(async () => ({ id: 'u1' })),
   assertLocationAccess: vi.fn(() => null),
 }))
@@ -14,7 +15,10 @@ vi.mock('@/lib/whatsapp', () => ({
   })),
 }))
 // Channel-agnostic path resolves the filter then awaits a { count } builder.
-vi.mock('@/lib/audience-filter', () => ({
+// ROUTEWRAP.R16 — spread the real module: the route also imports
+// InvalidAudienceFilterError from it.
+vi.mock('@/lib/audience-filter', async (importOriginal) => ({
+  ...(await importOriginal()),
   applyAudienceFilterAsync: vi.fn(async ({ query }) => ({ query })),
 }))
 // COMMSFIX.B.5 — the email branch counts eligibility through the SEND
@@ -102,7 +106,8 @@ describe('audience-count POST', () => {
     expect(res.status).toBe(400)
     const json = await res.json()
     expect(json.success).toBe(false)
-    expect(json.error).toMatch(/boom/)
+    // ROUTEWRAP.R16 — the database's text stays in the log.
+    expect(json.error).toBe('Could not count audience')
   })
 
   // TWILIO-RETIRE.1 — the SMS branch left with the channel; the route's

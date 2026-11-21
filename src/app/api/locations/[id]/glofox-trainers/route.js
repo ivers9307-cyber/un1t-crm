@@ -16,12 +16,14 @@
 // hasRoleAtLocation. Never `user.role`: that is the caller's ACTIVE studio's
 // role, so a manager at Stillorgan who is plain staff at Hatch read Hatch's
 // list from a Stillorgan session, and a manager was refused at their own
-// studio while another was active (the SCHEDROLES.1 class).
+// studio while another was active (the SCHEDROLES.1 class). withAuth's
+// 'param' mode runs the same two checks in the same order with the same texts
+// (404 'Not found', then ADMIN_ROLES at the path id, 403 'forbidden'); a
+// signed-out call is its 401 'Unauthorized' (was 'unauthenticated').
 
 import { NextResponse } from 'next/server'
 import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { logError } from '@/lib/log'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
@@ -33,21 +35,7 @@ export const dynamic = 'force-dynamic'
 const MODULE = 'locations-glofox-trainers'
 const WINDOW_DAYS = 28
 
-export async function GET(_request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'unauthenticated' }, { status: 401 })
-
-  const { id: locationId } = await params
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'missing_location_id' }, { status: 400 })
-  }
-  const denied = assertLocationAccessOr404(user, locationId)
-  if (denied) return denied
-  if (!hasRoleAtLocation(user, locationId, ADMIN_ROLES)) {
-    return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+export const GET = withAuth({ permission: null, location: 'param', roles: ADMIN_ROLES, forbiddenMessage: 'forbidden' }, async ({ db, locationId }) => {
   const creds = await glofoxCredentialsForLocation(db, locationId)
   // REGISTRYREAD.1b: a failed settings read is not "not configured".
   if (creds.readError) {
@@ -105,4 +93,4 @@ export async function GET(_request, { params }) {
     .sort((a, b) => b.classes - a.classes)
 
   return NextResponse.json({ success: true, data: { trainers, windowDays: WINDOW_DAYS } })
-}
+})

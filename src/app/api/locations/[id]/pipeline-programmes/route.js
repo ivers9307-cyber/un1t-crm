@@ -21,11 +21,16 @@
 // jsonb is merged through mergeLocationSettings (SETTINGSWIPE.1), never
 // clobbered. Neither key is secret-named, so the audit trigger records the
 // change in clear, which is right.
+//
+// withAuth's 'param' mode is the membership check, as on the payroll route: a
+// studio the caller is not at is now 404 (was 403), signed out is its 401.
+// guardMasterOrOwner still names the path studio explicitly.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { guardMasterOrOwner } from '@/lib/auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
 import { programmeRulesFromSettings } from '@/lib/pipeline-claims'
@@ -59,33 +64,24 @@ async function hasProgrammesBoard(db, locationId) {
   return Array.isArray(data) && data.length > 0
 }
 
-export async function GET(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: locationId } = await params
-  const guard = assertLocationAccess(user, locationId)
-  if (guard) return guard
-
-  const db = createServerClient()
+export const GET = withAuth({ permission: null, location: 'param' }, async ({ user, db, locationId }) => {
   const { data: location, error } = await db
     .from('locations')
     .select('id, settings')
     .eq('id', locationId)
     .maybeSingle()                         // primary key; 0 rows = not found
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('pipeline-programmes', 'location read failed', { locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not read the studio settings. Try again.' }, { status: 500 })
+  }
   if (!location) return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
 
   const hasBoard = await hasProgrammesBoard(db, locationId)
   const canEdit = guardMasterOrOwner(user, locationId) === null
   return NextResponse.json({ success: true, data: shape(location.settings, hasBoard, canEdit) })
-}
+})
 
-export async function PUT(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: locationId } = await params
-  const guard = assertLocationAccess(user, locationId)
-  if (guard) return guard
+export const PUT = withAuth({ permission: null, location: 'param' }, async ({ user, db, request, locationId }) => {
   const roleGuard = guardMasterOrOwner(user, locationId)
   if (roleGuard) {
     return NextResponse.json({ success: false, error: 'Only owners and masters can change the Programmes board rules.' }, { status: 403 })
@@ -96,7 +92,6 @@ export async function PUT(request, { params }) {
   const clean = (list) => [...new Set(list.map((v) => v.trim().toLowerCase()).filter(Boolean))]
   const next = { lead_sources: clean(validation.data.lead_sources), glofox_plan_patterns: clean(validation.data.glofox_plan_patterns) }
 
-  const db = createServerClient()
   const result = await mergeLocationSettings(db, locationId, (current) => {
     const pipelines = { ...(current.pipelines || {}) }
     pipelines.programmes = next
@@ -105,4 +100,4 @@ export async function PUT(request, { params }) {
   if (!result.ok) return settingsSaveFailure(result)
   const hasBoard = await hasProgrammesBoard(db, locationId)
   return NextResponse.json({ success: true, data: shape(result.settings, hasBoard, true) })
-}
+})

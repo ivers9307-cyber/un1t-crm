@@ -22,8 +22,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, hasRoleAtLocation } from '@/lib/auth'
+import { hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { todayStrIn } from '@/lib/location-time'
@@ -37,26 +38,30 @@ const UnassignSchema = z.object({
   assignment_ids: z.array(uuidLike).min(1).max(200).optional(),
 })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+const MODULE = 'time-off-unassign-clashes'
 
+// withAuth only signs the caller in (the same 401); every gate above runs by
+// hand, in its old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   const validation = await validateBody(request, UnassignSchema)
   if (!validation.ok) return validation.response
   const { assignment_ids } = validation.data
 
-  const db = createServerClient()
-
   const { data: leave, error: leaveError } = await db.from('time_off_requests')
     .select('id, profile_id, location_id, status, type, start_date, end_date')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .maybeSingle()
-  if (leaveError) return NextResponse.json({ success: false, error: leaveError.message }, { status: 500 })
+  if (leaveError) {
+    logError(MODULE, 'leave read failed', { requestId: params?.id, code: leaveError.code || null, err: leaveError.message })
+    return NextResponse.json({ success: false, error: 'Could not load the request. Try again.' }, { status: 500 })
+  }
   if (!leave) return NextResponse.json({ success: false, error: 'Request not found' }, { status: 404 })
 
   const { ids: requesterLocations, error: locError } = await getProfileLocationIds(db, leave.profile_id)
-  if (locError) return NextResponse.json({ success: false, error: locError.message }, { status: 500 })
+  if (locError) {
+    logError(MODULE, 'requester studios read failed', { requestId: leave.id, err: locError.message })
+    return NextResponse.json({ success: false, error: 'Could not load the request. Try again.' }, { status: 500 })
+  }
   if (!canDecideTimeOff(user, leave.location_id, requesterLocations)) {
     return NextResponse.json({ success: false, error: 'Request not found' }, { status: 404 })
   }
@@ -76,7 +81,10 @@ export async function POST(request, props) {
   const { clashes, error: clashError } = await findLeaveClashes(db, leave, today, {
     scopeLocationIds: decidingLocationIds(user, leave.location_id, requesterLocations),
   })
-  if (clashError) return NextResponse.json({ success: false, error: clashError.message }, { status: 500 })
+  if (clashError) {
+    logError(MODULE, 'clash read failed', { requestId: leave.id, err: clashError.message })
+    return NextResponse.json({ success: false, error: 'Could not read the roster. Try again.' }, { status: 500 })
+  }
 
   const wanted = assignment_ids ? new Set(assignment_ids) : null
   const isMaster = user.profileRole === 'master'
@@ -101,6 +109,12 @@ export async function POST(request, props) {
     : allChanged ? (failed.length === 1 ? SHIFT_CHANGED_ERROR : SHIFTS_CHANGED_ERROR)
       : `${failed.length} shift${failed.length === 1 ? '' : 's'} could not be unassigned`
   const row = (c) => ({ assignment_id: c.id, block_date: c.block_date, location_name: c.location_name })
+  // A delete the database refused carries its text; that stays in the log.
+  const failedOut = failed.map((f) => {
+    if (f.code === 'changed') return f
+    logError(MODULE, 'unassign failed', { requestId: leave.id, assignmentId: f.id, err: f.error })
+    return { id: f.id, error: 'delete_failed' }
+  })
 
   return NextResponse.json({
     success: failed.length === 0,
@@ -110,7 +124,7 @@ export async function POST(request, props) {
       removed: removed.map(row),
       already_removed: gone.map(row),
       skipped,
-      failed,
+      failed: failedOut,
     },
   }, { status })
-}
+})

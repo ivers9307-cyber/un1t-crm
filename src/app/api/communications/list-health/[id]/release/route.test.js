@@ -20,11 +20,11 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 // ROLESWEEP.1a — the route's pre-check is hasPermissionAtAnyLocation and its
 // decision hasPermissionForLocation; all three share one mock so the
 // "without the email permission" switch below still switches the gate.
-vi.mock('@/lib/permissions', () => {
+vi.mock('@/lib/permissions', async (importOriginal) => {
   const perm = vi.fn(() => true)
-  return { hasPermission: perm, hasPermissionAtAnyLocation: perm, hasPermissionForLocation: perm }
+  return { ...(await importOriginal()), hasPermission: perm, hasPermissionAtAnyLocation: perm, hasPermissionForLocation: perm }
 })
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()),
   getCurrentUser: vi.fn(),
   assertLocationAccessOr404: (user, locationId) => {
     if (!user) return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), { status: 401 })

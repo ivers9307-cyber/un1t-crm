@@ -85,7 +85,7 @@ describe('GET glofox-trainers — role judged at the path location', () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await call(LOC_B)
     expect(res.status).toBe(401)
-    expect(await res.json()).toEqual({ success: false, error: 'unauthenticated' })
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' }) // withAuth; was 'unauthenticated'
     expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
   })
 

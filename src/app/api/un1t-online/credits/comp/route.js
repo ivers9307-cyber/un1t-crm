@@ -19,8 +19,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { gateUn1tStaffBooking, staffWriteAnswer, UN1T_STAFF_COPY } from '@/lib/un1t-staff-booking'
@@ -59,9 +58,9 @@ const CompCreditsSchema = z.object({
   }),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; the body, the permission at the booking
+// studio, the class-route gate and the grant run exactly as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const validation = await validateBody(request, CompCreditsSchema)
   if (!validation.ok) return validation.response
   const b = validation.data
@@ -71,7 +70,6 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: UN1T_STAFF_COPY.compForbidden }, { status: 403 })
   }
 
-  const db = createServerClient()
   const gate = await gateUn1tStaffBooking(db, user, { locationId: b.location_id, contactId: b.contact_id, offText: UN1T_STAFF_COPY.compOff })
   if (!gate.ok) return NextResponse.json({ success: false, error: gate.error }, { status: gate.status })
 
@@ -113,4 +111,4 @@ export async function POST(request) {
     body.data.chat_template = chat.template ?? null
   }
   return NextResponse.json(body, { status })
-}
+})

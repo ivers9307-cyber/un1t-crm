@@ -24,9 +24,9 @@
 // get NO RLS — nothing else filters this).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { sequenceNotFound } from '@/lib/sequence-access'
 import { logError } from '@/lib/log'
 import { uuidLike } from '@/lib/schemas'
@@ -34,10 +34,9 @@ import { buildExitPatch, classifyExitOutcome, EXITABLE_STATUSES } from '@/lib/se
 
 export const runtime = 'nodejs'
 
-export async function POST(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; every check after it keeps its order and
+// its words (Email somewhere, the ids, the sequence's studio 404, Email there).
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'email')) {
     return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
@@ -49,7 +48,6 @@ export async function POST(_request, props) {
   // 404 (was 404 vs 403, which confirmed the id existed). A failed read is a
   // logged 500, not "not found"; a garbage id is not found without a read.
   if (!uuidLike.safeParse(params.id).success) return sequenceNotFound()
-  const db = createServerClient()
   const { data: sequence, error: seqErr } = await db
     .from('email_sequences')
     .select('id, location_id')
@@ -78,7 +76,8 @@ export async function POST(_request, props) {
     .select('id, status, exit_reason')
     .maybeSingle()
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('sequences', 'exit: enrollment update failed', { sequenceId: params.id, code: error.code || null })
+    return NextResponse.json({ success: false, error: 'Could not exit the enrollment' }, { status: 500 })
   }
 
   if (!updated) {
@@ -93,4 +92,4 @@ export async function POST(_request, props) {
   }
 
   return NextResponse.json({ success: true, data: updated })
-}
+})

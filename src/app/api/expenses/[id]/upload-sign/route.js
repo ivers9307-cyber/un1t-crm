@@ -21,8 +21,8 @@
 // Same gate as the items route: submitter-only, draft claims only.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canSeeExpenseClaim } from '@/lib/fte-expense-access'
 import {
   RECEIPT_ACCEPTED_MIMES,
@@ -35,12 +35,11 @@ export const dynamic = 'force-dynamic'
 
 const STORAGE_BUCKET = 'fte-expense-receipts'
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id: claimId } = await params
+// withAuth only signs the caller in (the same 401); the claim (404), the
+// submitter (403) and the draft status (409) stay by hand, in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const claimId = params?.id
 
-  const db = createServerClient()
   const { data: claim } = await db
     .from('fte_expense_claims')
     .select('id, profile_id, location_id, status')
@@ -109,11 +108,12 @@ export async function POST(request, { params }) {
     .from(STORAGE_BUCKET)
     .createSignedUploadUrl(path)
   if (error || !data?.token) {
+    logError('expense-upload-sign', 'signed upload url failed', { claimId, err: error?.message || 'no token returned' })
     return NextResponse.json(
-      { success: false, error: `Could not create upload URL: ${error?.message || 'no token returned'}` },
+      { success: false, error: 'Could not create upload URL.' },
       { status: 500 }
     )
   }
 
   return NextResponse.json({ success: true, slots: [{ path, token: data.token }] })
-}
+})

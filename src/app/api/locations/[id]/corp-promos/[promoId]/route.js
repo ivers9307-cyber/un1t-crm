@@ -14,8 +14,7 @@
 // it off first (409 still_live), so a claim link cannot vanish under a visitor.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { corpPromoPatchSchema } from '@/lib/schemas'
 import { promoView, CORP_PROMO_COLUMNS } from '@/lib/corp-promos-db'
@@ -26,16 +25,9 @@ export const dynamic = 'force-dynamic'
 
 const fail = (status, error, extra = {}) => NextResponse.json({ success: false, error, ...extra }, { status })
 
-async function gate(params) {
-  const user = await getCurrentUser()
-  if (!user) return { refusal: fail(401, 'Unauthorized') }
-  const { id: locationId, promoId } = await params
-  const guard = assertLocationAccessOr404(user, locationId)
-  if (guard) return { refusal: guard }
-  if (guardMasterOrOwner(user, locationId)) return { refusal: fail(403, 'Only owners and masters can change promos.') }
-  return { user, locationId, promoId }
-}
-
+// The gate is withAuth's, on both methods: signed in (401), the PATH's studio
+// one of the caller's (404, 'param' mode), then owner AT it, masters passing
+// (403 'Only owners and masters can change promos.').
 async function readPromoRow(db, locationId, promoId) {
   const { data, error } = await db
     .from('corp_promos')
@@ -46,17 +38,13 @@ async function readPromoRow(db, locationId, promoId) {
   return { row: data, error }
 }
 
-export async function PATCH(request, { params }) {
-  const g = await gate(params)
-  if (g.refusal) return g.refusal
-  const { locationId, promoId } = g
-
+export const PATCH = withAuth({ permission: null, location: 'param', roles: ['owner'], forbiddenMessage: 'Only owners and masters can change promos.' }, async ({ db, request, locationId, params }) => {
+  const promoId = params?.promoId
   const validation = await validateBody(request, corpPromoPatchSchema)
   if (!validation.ok) return validation.response
   const patch = { ...validation.data }
   delete patch.key                       // refused by the schema; never written
 
-  const db = createServerClient()
   const { row, error: readError } = await readPromoRow(db, locationId, promoId)
   if (readError) return fail(500, 'Could not read the promo')
   if (!row) return fail(404, 'Not found')
@@ -79,14 +67,10 @@ export async function PATCH(request, { params }) {
   if (error) return fail(500, 'Could not save the promo')
   if (!data) return fail(404, 'Not found')
   return NextResponse.json({ success: true, data: { promo: promoView(data) } })
-}
+})
 
-export async function DELETE(request, { params }) {
-  const g = await gate(params)
-  if (g.refusal) return g.refusal
-  const { locationId, promoId } = g
-
-  const db = createServerClient()
+export const DELETE = withAuth({ permission: null, location: 'param', roles: ['owner'], forbiddenMessage: 'Only owners and masters can change promos.' }, async ({ db, locationId, params }) => {
+  const promoId = params?.promoId
   const { row, error: readError } = await readPromoRow(db, locationId, promoId)
   if (readError) return fail(500, 'Could not read the promo')
   if (!row) return fail(404, 'Not found')
@@ -112,4 +96,4 @@ export async function DELETE(request, { params }) {
   if (error) return fail(500, 'Could not delete the promo')
   if (!Array.isArray(data) || data.length === 0) return fail(404, 'Not found')
   return NextResponse.json({ success: true, data: { deleted: true } })
-}
+})
