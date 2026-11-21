@@ -8,7 +8,7 @@
 // src/lib/roster-read.test.js.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()),
   getCurrentUser: vi.fn(),
   assertLocationAccess: vi.fn(() => null),
   getUserLocationIds: vi.fn(() => ['loc-1']),
@@ -267,5 +267,24 @@ describe('GET /api/schedule/shifts — in order and at most 92 days (RANGEVALID.
     getCurrentUser.mockResolvedValue(COACH)
     expect((await GET(req(url('&start_date=2026-09-28&end_date=2026-09-28')))).status).toBe(200)
     expect((await GET(req('http://x/api/schedule/shifts?profile_id=c&start_date=2026-09-28&end_date=2026-10-04'))).status).toBe(200)
+  })
+})
+
+// ROUTEWRAP.R14 — the route signs in through withAuth.
+describe('GET /api/schedule/shifts — withAuth', () => {
+  it('401 signed out, the same answer assertLocationAccess gave, and no read', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await GET(req())
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(fetchApiShiftRows).not.toHaveBeenCalled()
+  })
+
+  it('a failed shift read keeps its 400 but not the database text', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' } })
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: null, error: { message: 'column shift_blocks.secret does not exist' } })
+    const res = await GET(req())
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not read the shifts.' })
   })
 })

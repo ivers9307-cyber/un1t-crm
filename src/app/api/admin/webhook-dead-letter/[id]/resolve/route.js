@@ -30,8 +30,8 @@
 // and nothing else.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { resolveDeadLetterLocation, canReplayDeadLetter } from '../../_helpers'
 
 export const runtime = 'nodejs'
@@ -39,16 +39,10 @@ export const dynamic = 'force-dynamic'
 
 const ALLOWED_TARGETS = new Set(['resolved', 'discarded'])
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
-  // Next 16 hands route handlers a PROMISE for params. Reading `params.id`
-  // synchronously was `undefined`, so every Resolve/Discard click 400'd
-  // "Missing id" in production (MAIL-DEADLETTER.1). `await` also accepts a
-  // plain object, so direct callers are unaffected.
-  const { id } = await params
+// withAuth only signs the caller in (and awaits Next 16's params promise, the
+// MAIL-DEADLETTER.1 bug); every check after it keeps its order and words.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const { id } = params || {}
   if (!id) {
     return NextResponse.json({ success: false, error: 'Missing id' }, { status: 400 })
   }
@@ -62,8 +56,6 @@ export async function POST(request, { params }) {
       error: `Invalid status. Must be one of: ${[...ALLOWED_TARGETS].join(', ')}`,
     }, { status: 400 })
   }
-
-  const db = createServerClient()
 
   const { data: row, error: fetchErr } = await db
     .from('webhook_dead_letter')
@@ -92,8 +84,9 @@ export async function POST(request, { params }) {
     .update({ status: target, resolved_at: new Date().toISOString() })
     .eq('id', id)
   if (updErr) {
-    return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+    logError('webhook-dead-letter', 'resolve update failed', { id: row.id, err: updErr })
+    return NextResponse.json({ success: false, error: 'Could not update the row.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: { id: row.id, status: target } })
-}
+})

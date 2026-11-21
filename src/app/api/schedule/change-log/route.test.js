@@ -10,6 +10,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('@/lib/auth', async (importOriginal) => {
   const real = await importOriginal()
   return {
+    ...real,
     getCurrentUser: vi.fn(),
     assertLocationAccess: vi.fn(() => null),
     // SCHEDROLES.1 — REAL: the role at location_id is under test.
@@ -53,9 +54,9 @@ beforeEach(() => {
 })
 
 describe('GET /api/schedule/change-log — auth', () => {
-  it('403 with no session, and reads nothing', async () => {
+  it('401 with no session (withAuth), and reads nothing', async () => {
     getCurrentUser.mockResolvedValue(null)
-    expect((await GET(buildReq(ok))).status).toBe(403)
+    expect((await GET(buildReq(ok))).status).toBe(401)
     expect(listRosterChanges).not.toHaveBeenCalled()
   })
 
@@ -159,7 +160,8 @@ describe('GET /api/schedule/change-log — contract', () => {
     listRosterChanges.mockResolvedValue({ changes: [], truncated: false, error: { message: 'boom' } })
     const res = await GET(buildReq(ok))
     expect(res.status).toBe(500)
-    expect(await res.json()).toEqual({ success: false, error: 'boom' })
+    // The database text stays in the log.
+    expect(await res.json()).toEqual({ success: false, error: 'Could not read the change log.' })
   })
 
   it('carries no pay field', async () => {

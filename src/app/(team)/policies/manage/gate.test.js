@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/policies', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -119,18 +119,32 @@ describe('POST /api/admin/policies/[slug]/versions (C141)', () => {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
   })
 
+  // withAuth makes the client up front; "before reading anything" is no query.
   it('refuses an owner without an org_admin grant (403) before reading anything', async () => {
+    const client = db()
+    vi.mocked(createServerClient).mockReturnValue(client)
     vi.mocked(getCurrentUser).mockResolvedValue(owner([]))
     const res = await publishVersion(req(), params)
     expect(res.status).toBe(403)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(client.from).not.toHaveBeenCalled()
+  })
+
+  it('401 signed out, before reading anything', async () => {
+    const client = db()
+    vi.mocked(createServerClient).mockReturnValue(client)
+    vi.mocked(getCurrentUser).mockResolvedValue(null)
+    const res = await publishVersion(req(), params)
+    expect(res.status).toBe(401)
+    expect(client.from).not.toHaveBeenCalled()
   })
 
   it('refuses an org admin of the active organisation (403, master only) before reading anything', async () => {
+    const client = db()
+    vi.mocked(createServerClient).mockReturnValue(client)
     vi.mocked(getCurrentUser).mockResolvedValue(owner([ORG]))
     const res = await publishVersion(req(), params)
     expect(res.status).toBe(403)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(client.from).not.toHaveBeenCalled()
   })
 
   it('lets a master through to validation (400 on an empty body)', async () => {

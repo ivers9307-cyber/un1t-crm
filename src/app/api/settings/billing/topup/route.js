@@ -14,8 +14,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { isOrgAdmin, isOrgAdminSomewhere } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { createTopup, TOPUP_DENOMINATIONS_CENTS } from '@/lib/wallet-topup'
@@ -35,11 +34,10 @@ export const TopupSchema = z.object({
     }),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// withAuth only signs the caller in. Every check after it runs by hand, in the
+// order it always has: org admin somewhere 403, body 400, the location's
+// organisation 404; the checkout it starts is unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   // C18 ORGROLE.1 — organisation admins only (master or an org_admin grant);
   // the coarse check here, the location's organisation below.
   if (!isOrgAdminSomewhere(user)) {
@@ -53,7 +51,6 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const db = createServerClient()
 
   // Resolve the location's org; foreign or missing → identical 404.
   const { data: location, error: locationError } = await db
@@ -96,4 +93,4 @@ export async function POST(request) {
       { status: 502 }
     )
   }
-}
+})

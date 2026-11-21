@@ -5,7 +5,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const state = {}
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null) }))
+// ROUTEWRAP.R13 — GET and PUT are on withAuth (location: 'param'), which needs
+// the real userAtLocation; only the session and the access check are faked.
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()), getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null),
+}))
 vi.mock('@/lib/supabase', async () => {
   const { fakeOrgNumbersDb } = await import('@/lib/org-whatsapp-numbers-fake-db.test-helpers.js')
   return { createServerClient: () => fakeOrgNumbersDb(state) }
@@ -14,6 +18,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.f
 
 import { GET, POST, PUT } from './route.js'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { logError } from '@/lib/log'
 
 const STILL = 'a0000000-0000-4000-8000-000000000001'
 const HATCH = 'a0000000-0000-4000-8000-000000000002'
@@ -38,7 +43,11 @@ const post = () => POST(
   new Request(`http://x/api/locations/${STILL}/whatsapp/numbers`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
   ctx(STILL),
 )
-const user = (role, loc = HATCH) => ({ id: 'u1', role, profileRole: role === 'master' ? 'master' : 'staff', rolesByLocation: { [loc]: role } })
+// A member of both studios (withAuth's path check), with a role only at `loc`.
+const user = (role, loc = HATCH, locations = [STILL, HATCH]) => ({
+  id: 'u1', role, profileRole: role === 'master' ? 'master' : 'staff', rolesByLocation: { [loc]: role },
+  locations: locations.map((id) => ({ id })),
+})
 const linksAt = (loc) => state.links.filter((l) => l.location_id === loc)
 const defaultAt = (loc) => linksAt(loc).filter((l) => l.is_default).map((l) => l.whatsapp_number_id)
 
@@ -75,6 +84,22 @@ describe('GET /api/locations/[id]/whatsapp/numbers', () => {
     getCurrentUser.mockResolvedValue(null)
     expect((await GET(new Request('http://x'), ctx(STILL))).status).toBe(401)
   })
+
+  it('ROUTEWRAP.R13: a caller not at the studio in the path is 404', async () => {
+    getCurrentUser.mockResolvedValue(user('manager', HATCH, [HATCH]))
+    const res = await GET(new Request('http://x'), ctx(STILL))
+    expect(res.status).toBe(404)
+    expect(state.ops).toEqual([])
+  })
+
+  it('ROUTEWRAP.R13: a failed read is a 500 with a fixed line, the database text logged', async () => {
+    state.faults['whatsapp_numbers:select'] = { message: 'relation secret-detail does not exist' }
+    const res = await GET(new Request('http://x'), ctx(STILL))
+    expect(res.status).toBe(500)
+    const text = JSON.stringify(await res.json())
+    expect(text).not.toContain('secret-detail')
+    expect(logError).toHaveBeenCalled()
+  })
 })
 
 describe('PUT /api/locations/[id]/whatsapp/numbers', () => {
@@ -82,6 +107,12 @@ describe('PUT /api/locations/[id]/whatsapp/numbers', () => {
     getCurrentUser.mockResolvedValue(user('head_coach'))
     const res = await put(HATCH, { numberId: NUM_A, on: true })
     expect(res.status).toBe(403)
+    expect(state.ops).toEqual([])
+  })
+
+  it('ROUTEWRAP.R13: a caller not at the studio in the path is 404, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(user('manager', STILL, [STILL]))
+    expect((await put(HATCH, { numberId: NUM_A, on: true })).status).toBe(404)
     expect(state.ops).toEqual([])
   })
 
@@ -183,11 +214,12 @@ describe('PUT /api/locations/[id]/whatsapp/numbers', () => {
     expect(state.ops).toEqual([])
   })
 
-  it('a failed write is a 500 with the message, never a silent success', async () => {
+  it('a failed write is a 500, never a silent success; the database text is logged, not answered', async () => {
     state.faults['location_whatsapp_numbers:insert'] = { message: 'boom' }
     const res = await put(HATCH, { numberId: NUM_A, on: true })
     expect(res.status).toBe(500)
-    expect((await res.json()).error).toBe('boom')
+    expect((await res.json()).error).toBe('Could not save the WhatsApp number change. Try again.')
+    expect(logError).toHaveBeenCalledWith('wa-studio-numbers', expect.any(String), expect.objectContaining({ err: { message: 'boom' } }))
   })
 
   it('a failed promote after a switch-off is a 500', async () => {

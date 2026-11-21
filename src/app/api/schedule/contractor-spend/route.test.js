@@ -12,6 +12,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('@/lib/auth', async (importOriginal) => {
   const real = await importOriginal()
   return {
+    ...real,
     getCurrentUser: vi.fn(),
     getUserLocationIds: vi.fn(),
     // SCHEDROLES.1 — REAL: the role at location_id is under test.
@@ -49,10 +50,11 @@ const buildReq = (params = {}) => {
 const okParams = { location_id: LOC, reference_date: '2026-05-01' }
 
 describe('GET /api/schedule/contractor-spend — auth', () => {
-  it('403 when no user', async () => {
+  it('401 when no user (withAuth)', async () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await GET(buildReq(okParams))
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
   })
 
   it('403 when caller is not in MANAGER_ROLES (staff)', async () => {
@@ -193,10 +195,11 @@ describe('GET — success + error envelopes', () => {
     expect(res.status).toBe(404)
   })
 
-  it('500s on any other helper failure', async () => {
+  it('500s on any other helper failure, without the helper\'s text', async () => {
     computeMonthlyContractorSpend.mockRejectedValue(new Error('db down'))
     const res = await GET(buildReq(okParams))
     expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('Failed to compute contractor spend')
   })
 })
 

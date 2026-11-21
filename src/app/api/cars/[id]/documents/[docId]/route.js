@@ -5,9 +5,10 @@
 // stream through the API to keep memory usage flat for large PDFs.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -29,37 +30,32 @@ async function loadDocAndCheckAccess(db, user, carId, docId) {
 
 // GET — returns a 1-hour signed URL the browser can use to fetch
 // the file directly from Supabase Storage.
-export async function GET(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; car_processing somewhere, the car's
+// studio (404) and car_processing there run by hand, in their old order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const db = createServerClient()
-  const { doc, error } = await loadDocAndCheckAccess(db, user, params.id, params.docId)
+  const { doc, error } = await loadDocAndCheckAccess(db, user, params?.id, params?.docId)
   if (error) return error
 
   const { data, error: signErr } = await db.storage
     .from('car-documents')
     .createSignedUrl(doc.storage_path, 60 * 60)  // 1 hour
   if (signErr) {
-    return NextResponse.json({ success: false, error: signErr.message }, { status: 500 })
+    logError('car-documents', 'signed url failed', { docId: doc.id, err: signErr })
+    return NextResponse.json({ success: false, error: 'Could not open the document.' }, { status: 500 })
   }
   return NextResponse.json({ success: true, data: { url: data.signedUrl, filename: doc.filename } })
-}
+})
 
-export async function DELETE(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const db = createServerClient()
-  const { doc, error } = await loadDocAndCheckAccess(db, user, params.id, params.docId)
+  const { doc, error } = await loadDocAndCheckAccess(db, user, params?.id, params?.docId)
   if (error) return error
 
   // CAR-DOC-DELETE-GUARD — refuse delete if the linked invoices_queue
@@ -92,6 +88,9 @@ export async function DELETE(_request, props) {
   // linked queue row with it.
   await db.storage.from('car-documents').remove([doc.storage_path]).catch(() => {})
   const { error: delErr } = await db.from('car_documents').delete().eq('id', doc.id)
-  if (delErr) return NextResponse.json({ success: false, error: delErr.message }, { status: 500 })
+  if (delErr) {
+    logError('car-documents', 'document delete failed', { docId: doc.id, err: delErr })
+    return NextResponse.json({ success: false, error: 'Could not remove the document.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
-}
+})

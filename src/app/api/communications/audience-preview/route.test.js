@@ -16,11 +16,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCurrentUser: vi.fn(async () => ({ id: 'u1' })),
   assertLocationAccessOr404: vi.fn(() => null),
 }))
-vi.mock('@/lib/validate', () => ({
+vi.mock('@/lib/validate', async (importOriginal) => ({
+  ...(await importOriginal()),
   validateBody: vi.fn(async (req) => ({ ok: true, data: await req.json() })),
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
@@ -30,6 +32,7 @@ import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { buildEligibleAudienceQuery } from '@/lib/audience-eligibility'
+import { InvalidAudienceFilterError } from '@/lib/audience-filter'
 
 function reqWith(body) { return { json: async () => body } }
 
@@ -164,16 +167,24 @@ describe('audience-preview — masked, and only ever masked', () => {
 
 describe('audience-preview — errors', () => {
   it('surfaces an invalid filter as a 400, not a 500', async () => {
-    buildEligibleAudienceQuery.mockRejectedValue(new Error('Unknown audience field: nope'))
+    buildEligibleAudienceQuery.mockRejectedValue(new InvalidAudienceFilterError('Unknown audience field: nope'))
     const res = await POST(reqWith(BODY))
     expect(res.status).toBe(400)
     const json = await res.json()
     expect(json.error).toMatch(/Unknown audience field/)
   })
 
-  it('surfaces a query error as a 400', async () => {
+  it('any other build failure is a 400 with a fixed line, not its text', async () => {
+    buildEligibleAudienceQuery.mockRejectedValue(new Error('relation "contacts" timed out'))
+    const res = await POST(reqWith(BODY))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Could not preview audience')
+  })
+
+  it('surfaces a query error as a 400, without the database text', async () => {
     buildEligibleAudienceQuery.mockResolvedValue({ query: fakeQuery({ data: null, error: { message: 'bad range' } }) })
     const res = await POST(reqWith(BODY))
     expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Could not preview audience')
   })
 })

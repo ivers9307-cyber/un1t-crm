@@ -6,9 +6,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({ tag: 'service-role' })) }))
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null) }))
-vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn() }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null) }))
+vi.mock('@/lib/permissions', async (importOriginal) => ({ ...(await importOriginal()), hasPermissionForLocation: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 vi.mock('@shared/dashboard-data', () => ({ fetchStudioContactCounts: vi.fn() }))
 // TZ.11a — the studio's zone (Dublin unless a test says otherwise).
 vi.mock('@/lib/display-zone', () => ({ displayZoneFor: vi.fn(async () => 'Europe/Dublin') }))
@@ -70,7 +70,7 @@ describe('GET /api/dashboard/studio-contacts', () => {
     expect((await GET(req({ location_id: LOC }))).status).toBe(403)
     expect(assertLocationAccess).toHaveBeenCalledWith(USER, LOC)
     expect(fetchStudioContactCounts).not.toHaveBeenCalled()
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(displayZoneFor).not.toHaveBeenCalled() // withAuth makes the client; nothing is read
   })
 
   it('403 without dashboard_studio AT that studio; Contacts is never consulted', async () => {
@@ -79,7 +79,7 @@ describe('GET /api/dashboard/studio-contacts', () => {
     expect(hasPermissionForLocation).toHaveBeenCalledWith(USER, LOC, 'dashboard_studio')
     expect(hasPermissionForLocation.mock.calls.map((c) => c[2])).not.toContain('contacts')
     expect(fetchStudioContactCounts).not.toHaveBeenCalled()
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(displayZoneFor).not.toHaveBeenCalled() // withAuth makes the client; nothing is read
   })
 
   it('200: that ONE studio, the service-role client, the Europe/Dublin Monday', async () => {

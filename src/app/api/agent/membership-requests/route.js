@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { getUserLocationIds } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 import { userIsMaster } from '@/lib/approvals/registry'
 
 // RADAR-AGENT Phase 2 — operator approval queue for agent-captured
@@ -36,10 +36,8 @@ async function attachDeciderNames(db, rows, viewer) {
   return rows.map(({ decided_by, ...rest }) => ({ ...rest, decided_by_name: (decided_by && names.get(decided_by)) || null }))
 }
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const db = createServerClient()
+// withAuth only signs the caller in; both forms keep their own checks below.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   const { searchParams } = new URL(request.url)
   const conversationId = searchParams.get('conversation_id')
@@ -55,7 +53,10 @@ export async function GET(request) {
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true })
       .limit(100)
-    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    if (error) {
+      logError('agent-membership-requests', 'conversation requests read failed', { err: error })
+      return NextResponse.json({ success: false, error: 'Could not load the requests.' }, { status: 500 })
+    }
     const rows = data || []
     // Cross-tenant probe and unknown id are indistinguishable: both get
     // the same 200-empty shape (no existence oracle — a 403 form would
@@ -96,7 +97,8 @@ export async function GET(request) {
       .order('id', { ascending: true })
       .range(from, to))
   } catch (err) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 })
+    logError('agent-membership-requests', 'request history read failed', { locationId, err: err?.message || String(err) })
+    return NextResponse.json({ success: false, error: 'Could not load the requests.' }, { status: 500 })
   }
   return NextResponse.json({ success: true, requests: await attachDeciderNames(db, data || [], user) })
-}
+})

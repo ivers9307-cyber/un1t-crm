@@ -89,7 +89,10 @@ describe('POST /api/whatsapp/templates — MANAGER_ROLES at the location created
     const res = await POST(create({ location_id: LOC_B }))
     expect({ status: res.status, body: await res.json() }).toEqual({ status: 403, body: FORBIDDEN })
     expect(createMetaTemplate).not.toHaveBeenCalled()
-    expect(createServerClient).not.toHaveBeenCalled()
+    // ROUTEWRAP.R13 — withAuth makes the one client before the handler runs;
+    // nothing is read or written through it (the fake records every write).
+    expect(createServerClient).toHaveBeenCalledTimes(1)
+    expect(db.inserts).toEqual([])
     // The role 403 comes before the location's number lookup (C81).
     expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
   })
