@@ -180,7 +180,9 @@ describe('POST /api/contracts/[id]/resend', () => {
 
     expect(res.status).toBe(200)
     expect(body.success).toBe(true)
-    expect(body.warning).toMatch(/Postmark down/)
+    // ROUTEWRAP.R16 — the provider's text stays in the log, never the banner.
+    expect(body.warning).toMatch(/email service did not accept it/)
+    expect(body.warning).not.toMatch(/Postmark down/)
   })
 
   it('surfaces a DB error as a 500', async () => {

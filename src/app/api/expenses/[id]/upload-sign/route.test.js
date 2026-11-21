@@ -126,6 +126,7 @@ describe('POST /api/expenses/[id]/upload-sign', () => {
     h.signError = 'bucket not found'
     const res = await POST(req({ files: [jpeg()] }), ctx)
     expect(res.status).toBe(500)
-    expect((await res.json()).error).toMatch(/bucket not found/)
+    // ROUTEWRAP.R16 — storage's own text stays in the log.
+    expect((await res.json()).error).toBe('Could not create upload URL.')
   })
 })

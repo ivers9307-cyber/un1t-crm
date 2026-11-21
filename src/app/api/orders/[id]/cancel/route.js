@@ -19,9 +19,10 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError, logWarn } from '@/lib/log'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 
@@ -32,10 +33,10 @@ const Body = z.object({
   reason: z.string().max(500).optional(),
 })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; orders and Manager+ somewhere, the body,
+// the order's studio (404), orders and Manager+ there and the pending-only 409
+// stay by hand, in their old order. The writes are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'orders')) {
     return NextResponse.json({ success: false, error: 'Orders feature is disabled at this location' }, { status: 403 })
   }
@@ -47,11 +48,10 @@ export async function POST(request, props) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const db = createServerClient()
   const { data: order, error: lookupErr } = await db
     .from('orders')
     .select('*')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (lookupErr || !order) {
     return NextResponse.json({ success: false, error: 'Order not found' }, { status: 404 })
@@ -90,7 +90,8 @@ export async function POST(request, props) {
   }
   const { error: updErr } = await db.from('orders').update(updates).eq('id', order.id)
   if (updErr) {
-    return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+    logError('orders-cancel', 'order update failed', { orderId: order.id, code: updErr.code || null, err: updErr.message })
+    return NextResponse.json({ success: false, error: 'Could not cancel the order. Try again.' }, { status: 500 })
   }
 
   // Cascade to the source row so the projection and the lifecycle source
@@ -112,11 +113,11 @@ export async function POST(request, props) {
         .eq('id', order.source_id)
     }
   } catch (e) {
-    console.warn(`[orders-cancel] source cascade failed for order ${order.id}: ${e?.message || e}`)
+    logWarn('orders-cancel', 'source cascade failed', { orderId: order.id, err: e?.message || String(e) })
   }
 
   return NextResponse.json({
     success: true,
     data: { order_id: order.id, status: 'cancelled', cancelled_at: nowIso },
   })
-}
+})

@@ -22,20 +22,17 @@
 //        Access model is unchanged: same recipient/master/owner gate.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canManageContractsInOrg } from '@/lib/contract-gates'
 import { canTransition } from '@/lib/contracts'
 import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 
 export const runtime = 'nodejs'
 
-export async function GET(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
+// withAuth only signs the caller in (the same 401); recipient / master / org
+// admin is decided on the contract below, a refusal the same 404 as a miss.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   const { data: contract, error } = await db
     .from('contracts')
     .select(`
@@ -52,9 +49,12 @@ export async function GET(_request, props) {
       issuer:profiles!issued_by (full_name, email, role),
       template:contract_templates!template_id (name, version)
     `)
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .maybeSingle()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('contracts', 'contract read failed', { contractId: params?.id, code: error.code || null, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not load the contract.' }, { status: 500 })
+  }
   if (!contract) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
   // App-layer visibility gate (C1). Service-role read above bypassed
@@ -117,4 +117,4 @@ export async function GET(_request, props) {
     success: true,
     data: { ...contract, contracting_entity: contractingEntity },
   })
-}
+})

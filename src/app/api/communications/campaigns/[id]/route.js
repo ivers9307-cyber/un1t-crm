@@ -15,8 +15,8 @@
 // campaigns_block_sent_delete (migs 522/523) are the second lock.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import {
   EDITABLE_CAMPAIGN_STATUSES, isCampaignContentEditable, campaignLockedReason,
@@ -29,11 +29,11 @@ import { fromAddressReport } from '@/lib/from-address'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
-  const { campaign, response } = await loadCampaignForUser(db, user, id,
+// withAuth only signs the caller in (the same 401 loadCampaignForUser gave);
+// the id, the campaign's studio (404) and email there (403) stay in
+// loadCampaignForUser, in their old order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  const { campaign, response } = await loadCampaignForUser(db, user, params?.id,
     'id, location_id, status, total_sent, total_recipients, cancel_requested_at')
   if (response) return response
 
@@ -46,13 +46,10 @@ export async function GET(_request, props) {
       cancel_requested_at: campaign.cancel_requested_at,
     },
   })
-}
+})
 
-export async function PUT(request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
-  const { campaign, response } = await loadCampaignForUser(db, user, id,
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const { campaign, response } = await loadCampaignForUser(db, user, params?.id,
     'id, location_id, status, postmark_stream, resend_enabled, resend_wait_hours')
   if (response) return response
 
@@ -79,22 +76,20 @@ export async function PUT(request, props) {
       const now = await currentStatus(db, campaign.id, null)
       return conflict(campaignLockedReason(now) || STATUS_CHANGED, now)
     }
-    return serverError(error.message)
+    logError('campaign-session', 'campaign save failed', { campaignId: campaign.id, code: error.code || null, err: error.message })
+    return serverError('Could not save the campaign')
   }
   if (!data || data.length === 0) return conflict(STATUS_CHANGED, await currentStatus(db, campaign.id, campaign.status))
 
   // FROMDOMAIN — stored as given, sent only when on the verified domain.
   const from_address = await fromAddressReport(db, campaign.location_id, validation.data)
   return NextResponse.json({ success: true, data: data[0], ...(from_address ? { from_address } : {}) })
-}
+})
 
-export async function DELETE(_request, props) {
-  const { id } = await props.params
-  const user = await getCurrentUser()
-  const db = createServerClient()
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   // The re-read CampaignEditor used to do from the browser (CAMPDEL.1): the
   // status held in React can be stale while the cron sends the campaign.
-  const { campaign, response } = await loadCampaignForUser(db, user, id, 'id, location_id, status')
+  const { campaign, response } = await loadCampaignForUser(db, user, params?.id, 'id, location_id, status')
   if (response) return response
 
   if (!isCampaignContentEditable(campaign.status)) {
@@ -111,9 +106,10 @@ export async function DELETE(_request, props) {
       const now = await currentStatus(db, campaign.id, null)
       return conflict(undeletableMessage(now), now)
     }
-    return serverError(error.message)
+    logError('campaign-session', 'campaign delete failed', { campaignId: campaign.id, code: error.code || null, err: error.message })
+    return serverError('Could not delete the campaign')
   }
   if (!data || data.length === 0) return conflict(STATUS_CHANGED, await currentStatus(db, campaign.id, campaign.status))
 
   return NextResponse.json({ success: true })
-}
+})

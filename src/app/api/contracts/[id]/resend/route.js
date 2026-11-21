@@ -13,8 +13,8 @@
 //   - status must be 'issued' or 'viewed' (409 otherwise)
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import { sendContractIssuedEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
@@ -23,11 +23,12 @@ import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
+// sendContractIssuedEmail's own refusal is safe to show; a provider's text is not.
+const emailProblem = (err) => (err === 'No recipient email' ? err : 'the email service did not accept it')
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (the same 401); the coarse 403, the org 404
+// and the status 409 stay by hand, in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   // GATES-2 — coarse only (master, or owner/admin of SOME org). It asked
   // user.role, the ACTIVE studio's role, which refused an owner of the
   // contract's org working from another studio. The decision is below.
@@ -35,7 +36,6 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: contract, error: cErr } = await db
     .from('contracts')
     .select(`
@@ -44,9 +44,12 @@ export async function POST(request, props) {
       issuer:profiles!issued_by (full_name),
       template:contract_templates!template_id (name)
     `)
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .maybeSingle()
-  if (cErr) return NextResponse.json({ success: false, error: cErr.message }, { status: 500 })
+  if (cErr) {
+    logError('contracts', 'contract read failed (resend)', { contractId: params?.id, code: cErr.code || null, err: cErr.message })
+    return NextResponse.json({ success: false, error: 'Could not load the contract.' }, { status: 500 })
+  }
   if (!contract) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   // Service-role read bypasses RLS — an owner must only be able to
   // resend contracts in an org they own. 404 (not 403) so a non-owner
@@ -107,8 +110,10 @@ export async function POST(request, props) {
     request,
   })
 
+  // The provider's own text stays in the log; the banner gets a fixed line.
+  if (!emailResult.ok) logError('contracts', 'resend email failed', { contractId: contract.id, err: emailResult.error })
   return NextResponse.json({
     success: true,
-    warning: emailResult.ok ? undefined : `Email could not be sent: ${emailResult.error}`,
+    warning: emailResult.ok ? undefined : `Email could not be sent: ${emailProblem(emailResult.error)}`,
   })
-}
+})

@@ -18,8 +18,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { HOST_COLS, loadHostForOrg } from '@/lib/hosts'
 import { getDomain, verifyDkim, verifyReturnPath, dnsRecordsFrom, domainIsFullyVerified } from '@/lib/postmark-domains'
@@ -47,10 +46,10 @@ function domainStatePayload(hostRow, domain) {
   }
 }
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// A staff session (the host settings page), not the host portal. withAuth only
+// signs the caller in (the same 401); Manager+ (403), the active organisation
+// (400), the body and the org-scoped host (404) stay by hand, in order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!ADMIN_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
@@ -65,8 +64,7 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Invalid request body.' }, { status: 400 })
   }
 
-  const db = createServerClient()
-  const host = await loadHostForOrg(db, params.id, orgId)
+  const host = await loadHostForOrg(db, params?.id, orgId)
   if (!host) return NextResponse.json({ success: false, error: 'Host not found' }, { status: 404 })
 
   // ── Kill switch: force-unverify, no Postmark round-trip ──────────
@@ -77,7 +75,10 @@ export async function POST(request, props) {
       .eq('id', host.id)
       .select(HOST_COLS)
       .single()
-    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    if (error) {
+      logError('host-email-domain', 'force-unverify failed', { hostId: host.id, code: error.code || null, err: error.message })
+      return NextResponse.json({ success: false, error: 'Could not save the sending domain state.' }, { status: 500 })
+    }
     return NextResponse.json({ success: true, data: domainStatePayload(updated, null) })
   }
 
@@ -103,7 +104,7 @@ export async function POST(request, props) {
     domain = await getDomain(host.postmark_domain_id)
   } catch (e) {
     logError('host-email-domain', 'getDomain failed during verify', { err: e })
-    return NextResponse.json({ success: false, error: e.message || 'Could not read the sending domain.' }, { status: 502 })
+    return NextResponse.json({ success: false, error: 'Could not read the sending domain.' }, { status: 502 })
   }
 
   const verified = domainIsFullyVerified(domain)
@@ -114,8 +115,9 @@ export async function POST(request, props) {
     .select(HOST_COLS)
     .single()
   if (updateErr) {
-    return NextResponse.json({ success: false, error: updateErr.message }, { status: 500 })
+    logError('host-email-domain', 'verified flag save failed', { hostId: host.id, code: updateErr.code || null, err: updateErr.message })
+    return NextResponse.json({ success: false, error: 'Could not save the sending domain state.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: domainStatePayload(updated, domain) })
-}
+})

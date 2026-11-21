@@ -25,9 +25,10 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -44,10 +45,9 @@ const EditSchema = z.object({
   { message: 'At least one of started_at / finished_at is required.' },
 )
 
-export async function PATCH(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; races somewhere, the body, the race's
+// studio (404) and races there stay by hand, in their old order.
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
   }
@@ -56,14 +56,13 @@ export async function PATCH(request, props) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const db = createServerClient()
   const { data: reg, error: lookupErr } = await db
     .from('race_registrations')
     .select(`
       id, race_started_at, race_finished_at,
       race_events ( id, location_id, kind )
     `)
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (lookupErr || !reg) {
     return NextResponse.json({ success: false, error: 'Registration not found' }, { status: 404 })
@@ -107,8 +106,9 @@ export async function PATCH(request, props) {
     .select('id, race_started_at, race_finished_at')
     .single()
   if (upErr) {
-    return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
+    logError('race-edit', 'timing update failed', { registrationId: reg.id, code: upErr.code || null, err: upErr.message })
+    return NextResponse.json({ success: false, error: 'Could not save the timing.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: updated })
-}
+})

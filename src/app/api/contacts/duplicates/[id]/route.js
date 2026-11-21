@@ -17,13 +17,19 @@
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { linkContactPair } from '@/lib/person-links'
 
 export const runtime = 'nodejs'
+
+const MODULE = 'contact-duplicates'
+// linkContactPair's one refusal a person can act on; anything else it throws
+// carries database text, which stays in the log.
+const DIFFERENT_PEOPLE = 'Both contacts are already linked to different people'
 
 const PatchSchema = z.object({
   status: z.enum(['linked', 'dismissed']),
@@ -32,11 +38,10 @@ const PatchSchema = z.object({
 // ============================================================
 // PATCH /api/contacts/duplicates/[id]
 // ============================================================
-export async function PATCH(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// withAuth only signs the caller in (the same 401); contact_linking somewhere,
+// the body, the suggestion's studio (404) and contact_linking there stay by
+// hand, in their old order.
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'contact_linking')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
@@ -45,9 +50,7 @@ export async function PATCH(request, { params }) {
   if (!validation.ok) return validation.response
 
   const { status } = validation.data
-  const { id } = await params
-
-  const db = createServerClient()
+  const id = params?.id
 
   // Load the suggestion
   const { data: suggestion, error: suggestionError } = await db
@@ -82,7 +85,8 @@ export async function PATCH(request, { params }) {
       .single()
 
     if (error) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+      logError(MODULE, 'dismiss failed', { suggestionId: id, code: error.code || null, err: error.message })
+      return NextResponse.json({ success: false, error: 'Could not update the suggestion' }, { status: 500 })
     }
 
     return NextResponse.json({ success: true, data })
@@ -99,8 +103,9 @@ export async function PATCH(request, { params }) {
       locationId: suggestion.location_id,
     })
   } catch (e) {
+    if (e?.message !== DIFFERENT_PEOPLE) logError(MODULE, 'link failed', { suggestionId: id, err: e?.message || String(e) })
     return NextResponse.json(
-      { success: false, error: e?.message || 'Could not link contacts' },
+      { success: false, error: e?.message === DIFFERENT_PEOPLE ? DIFFERENT_PEOPLE : 'Could not link contacts' },
       { status: 400 }
     )
   }
@@ -114,8 +119,9 @@ export async function PATCH(request, { params }) {
     .single()
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError(MODULE, 'mark linked failed', { suggestionId: id, code: error.code || null, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not update the suggestion' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data })
-}
+})

@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
+import { assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { generateReport } from '@/lib/report-generator'
 import { reportPeriodError } from '@/lib/report-period'
 import { validateBody } from '@/lib/validate'
@@ -32,17 +33,16 @@ const ReportRunSchema = z.object({
 const forbidden = () => NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
 // GET /api/schedule/reports?location_id=xxx — List generated reports
-export async function GET(request) {
-  const user = await getCurrentUser()
-  // Role is judged per studio below, never from the ACTIVE studio's user.role.
-  if (!user) return forbidden()
+// withAuth signs the caller in (signed out is its 401 now; this answered 403
+// 'Unauthorized' before). Role is judged per studio below, never from the
+// ACTIVE studio's user.role.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
 
-  const db = createServerClient()
   let query = db.from('generated_reports')
     .select('*')
     .order('created_at', { ascending: false })
@@ -69,18 +69,20 @@ export async function GET(request) {
   }
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('schedule-reports', 'report list read failed', { locationId, code: error.code || null, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not load the reports.' }, { status: 400 })
+  }
   // Defence in depth: the query already excludes them, but a report row with
   // rates must never cross the wire because a filter string was wrong.
   const visible = (data || []).filter(r => canViewReportType(user, r.location_id, r.report_type, { hasRole: hasRoleAtLocation }))
   return NextResponse.json({ success: true, data: visible })
-}
+})
 
 // POST /api/schedule/reports — Generate a report on demand
-export async function POST(request) {
-  const user = await getCurrentUser()
-  // Role is judged per studio below, never from the ACTIVE studio's user.role.
-  if (!user) return forbidden()
+// withAuth signs the caller in (401 signed out; was 403). Role is judged per
+// studio below, never from the ACTIVE studio's user.role.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request }) => {
 
   const validation = await validateBody(request, ReportRunSchema)
   if (!validation.ok) return validation.response
@@ -117,4 +119,4 @@ export async function POST(request) {
   }
 
   return NextResponse.json({ success: true, data: result.data }, { status: 201 })
-}
+})

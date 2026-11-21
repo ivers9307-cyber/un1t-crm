@@ -10,8 +10,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
@@ -22,10 +23,10 @@ export const runtime = 'nodejs'
 
 const Schema = z.object({ token: z.string().min(1).max(2000) })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in (a staff session; the QR token is checked
+// below, as before); races somewhere, the token, the event's studio (404) and
+// races there stay by hand, in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
@@ -35,11 +36,10 @@ export async function POST(request, props) {
   const secret = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!secret) return NextResponse.json({ success: false, error: 'Check-in temporarily unavailable' }, { status: 503 })
   const payload = verifyCheckinToken(validation.data.token, secret)
-  if (!payload || payload.eventId !== params.id) {
+  if (!payload || payload.eventId !== params?.id) {
     return NextResponse.json({ success: false, error: 'Invalid check-in code', code: 'bad_token' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const { data: reg, error: regErr } = await db
     .from('race_registrations')
     .select('id, race_event_id, status, contact_id, placed_into_registration_id, race_events!inner ( id, location_id ), teams ( id, team_members ( id, name, email, contact_id ) )')
@@ -90,7 +90,8 @@ export async function POST(request, props) {
   })
   const already = isAlreadyCheckedIn(error)
   if (error && !already) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    logError('event-checkin-scan', 'check-in insert failed', { registrationId, code: error.code || null, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not check them in. Try again.' }, { status: 400 })
   }
   // A repeat scan used to answer exactly like a first one, so door staff could
   // not tell a reused or shared code from a new arrival.
@@ -112,4 +113,4 @@ export async function POST(request, props) {
   }
 
   return NextResponse.json({ success: true, data: { checked_in: true, name: member.name || member.email || 'Attendee' } })
-}
+})

@@ -160,3 +160,14 @@ describe('POST /api/admin/push/test', () => {
     expect(global.fetch).not.toHaveBeenCalled()
   })
 })
+
+// ROUTEWRAP.R16 — signed in through withAuth (the same 401 as before).
+describe('POST /api/admin/push/test — signed out', () => {
+  it('401, nothing sent', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await POST(req({ recipient_id: STAFF }))
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+})

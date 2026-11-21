@@ -142,3 +142,24 @@ describe('POST /api/schedule/templates — kind (SHIFTTYPE.1)', () => {
     expect(insertSpy).not.toHaveBeenCalled()
   })
 })
+
+// ROUTEWRAP.R16 — signed in through withAuth: signed out is its 401 now (POST
+// answered 403 'Unauthorized' before; GET already gave 401).
+describe('/api/schedule/templates — signed out', () => {
+  it('401 on POST, nothing inserted', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const { db, insertSpy } = buildDb()
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req(body(LOC_A)))
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('401 on GET', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const { GET } = await import('./route.js')
+    const res = await GET(new Request(`http://localhost/api/schedule/templates?location_id=${LOC_A}`))
+    expect(res.status).toBe(401)
+  })
+})
