@@ -369,3 +369,29 @@ describe('POST /api/contacts/[id]/whatsapp — location_id (acting studio)', () 
     expect(sendTextMessage).not.toHaveBeenCalled()
   })
 })
+
+// ROUTEWRAP.R13 — on withAuth: a signed-out call is withAuth's 401 before any
+// read, and Meta's own error text (it can carry the customer's number) is
+// logged, never answered; only Meta's numeric code is repeated.
+describe('POST /api/contacts/[id]/whatsapp — ROUTEWRAP.R13', () => {
+  it('signed out: 401, nothing read', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await POST(postReq({ text: 'Hi' }), props)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it("a Meta refusal is a 502 with a fixed line; Meta's text is not answered", async () => {
+    const { sendTextMessage } = await import('@/lib/whatsapp')
+    const insertSpy = echoInsert()
+    createServerClient.mockReturnValue(makeDb(insertSpy))
+    sendTextMessage.mockRejectedValueOnce(new Error('Recipient +353 87 000 0000 is not a valid WhatsApp user (Meta code 131026)'))
+    const res = await POST(postReq({ text: 'Hi' }), props)
+    expect(res.status).toBe(502)
+    const body = await res.json()
+    expect(body.error).toBe('Failed to send WhatsApp message (Meta code 131026)')
+    expect(JSON.stringify(body)).not.toContain('353')
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
