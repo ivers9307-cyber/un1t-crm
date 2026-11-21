@@ -264,6 +264,8 @@ async function buildPublicCharity(db, race) {
     match_label: s.match_label,
     goal_cents: s.goal_cents,
     show_total: s.show_total,
+    // CHARITYSIGNUPOFF.1 — donate + raffle only; the widget drops the sign-up card.
+    signup_off: s.signup_off === true,
     consent_label: s.consent_label,
     thank_you_title: s.thank_you_title,
     thank_you_body: s.thank_you_body,

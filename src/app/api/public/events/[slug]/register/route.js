@@ -39,6 +39,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
 import { applyTierPricing } from '@/lib/pricing-tiers'
+import { resolveCharitySettings } from '@/lib/charity-donations'
 import { resolveEntryAmountSettings, validateEntryAmount, priceRaceAtChosenAmount } from '@/lib/charity-entry-amount'
 import { resolveRegistrationQuestions, validateAnswers } from '@/lib/registration-questions'
 import { normalizeCode, computeDiscountCents, promoCodeError } from '@/lib/promo-codes'
@@ -258,6 +259,19 @@ export async function POST(request, props) {
   }
   const contactLocationId = hostRow ? (await resolveMasterLocationId(db, hostRow) || race.location_id) : race.location_id
   const contactInsertFields = hostRow ? { automations_exempt: true } : {}
+
+  // CHARITYSIGNUPOFF.1 — a charity day set to donations + raffle only takes no
+  // entries, even from a form cached before the switch.
+  {
+    const charity = resolveCharitySettings(race)
+    if (charity.enabled && charity.signup_off === true) {
+      return NextResponse.json({
+        success: false,
+        error: 'Sign-up is not open for this event. You can still donate or buy raffle tickets on the event page.',
+        code: 'signup_off',
+      }, { status: 409 })
+    }
+  }
 
   // Registration-window check.
   const now = Date.now()

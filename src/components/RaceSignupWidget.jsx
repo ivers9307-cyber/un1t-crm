@@ -772,6 +772,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
 
   // CHARITY.8 — donations on: the side-by-side page. Never in the embed.
   const charityOn = !embedded && !!race.charity?.enabled
+  // CHARITYSIGNUPOFF.1 — donations + raffle only: no sign-up card anywhere
+  // (the register route refuses entries too).
+  const signupOff = !!race.charity?.enabled && race.charity?.signup_off === true
   // After a paid donation, re-read the event so the strip's total moves; only
   // the charity block is taken, so the signup form's state is left alone.
   const refreshCharity = () => {
@@ -1372,6 +1375,26 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           <CharityRaisedStrip charity={race.charity} currency={race.payment_currency || 'EUR'} brand={race.organization_name || ''} />
           {/* CHARITY.13 — items-start so the donate card hugs its content instead of
               stretching to the taller signup card; the OR rule still spans the row. */}
+          {signupOff ? (
+            // CHARITYSIGNUPOFF.1 — donate and raffle side by side; they stack on a phone.
+            <div className="grid gap-6 md:gap-5 md:items-start md:grid-cols-2">
+              <Suspense fallback={null}>
+                <DonateCardFromUrl
+                  slug={slug}
+                  charity={race.charity}
+                  currency={race.payment_currency || 'EUR'}
+                  brand={race.organization_name || ''}
+                  onRaised={refreshCharity}
+                />
+              </Suspense>
+              {race.raffle ? (
+                <Suspense fallback={null}>
+                  <RaffleBuyCardFromUrl slug={slug} raffle={race.raffle} />
+                </Suspense>
+              ) : null}
+            </div>
+          ) : (
+          <>
           <DonateJumpLink charity={race.charity} brand={race.organization_name || ''} />
           {/* EVENTMOBILE.1 — on a phone the cards stack, and the signup (what
               most visitors came for) goes first: flex-col-reverse shows signup,
@@ -1397,6 +1420,8 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               </Suspense>
             </div>
           ) : null}
+          </>
+          )}
           {/* CHARITY.13 — the operator's video beside the summary when set. */}
           {race.charity?.video?.provider ? (
             <div className="mt-12 grid gap-8 md:grid-cols-2 md:items-start">
@@ -1460,12 +1485,17 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         {/* LEFT — event story + details + pricing (full page only) */}
         {!embedded && eventDetails}
 
-        {signupCard}
+        {signupOff ? (
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-[15px] text-white/80">
+            Sign-up is not open for this event.{' '}
+            <a href={`/event/${slug}`} target="_top" className="underline text-white">Donate or buy raffle tickets on the event page</a>.
+          </div>
+        ) : signupCard}
       </div>
       )}
 
       {/* ── MOBILE STICKY ACTION BAR (full page only) ─────────────── */}
-      {!isClosed && !embedded && (
+      {!isClosed && !embedded && !signupOff && (
         <div className="md:hidden fixed inset-x-0 bottom-0 z-40 flex items-center justify-between gap-3 px-4 py-3 bg-black/85 backdrop-blur border-t border-white/10" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
           <div className="shrink-0">
             <div className="text-lg font-bold text-white tabular-nums leading-none">{liveTotalLabel}</div>

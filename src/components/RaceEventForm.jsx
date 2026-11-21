@@ -1914,6 +1914,8 @@ function charityToForm(saved) {
   f.match_multiplier = s.match_multiplier != null ? String(s.match_multiplier) : ''
   f.custom_allowed = s.custom_allowed ?? CHARITY_DEFAULTS.custom_allowed
   f.show_total = s.show_total ?? CHARITY_DEFAULTS.show_total
+  // CHARITYSIGNUPOFF.1 — donate + raffle only.
+  f.signup_off = s.signup_off === true
   f.include_entries = s.include_entries ?? CHARITY_DEFAULTS.include_entries
   return f
 }
@@ -1968,6 +1970,7 @@ function charityFromForm(f) {
     out.entry_min_cents = Math.round(n * 100)
   }
   out.show_total = !!f.show_total
+  out.signup_off = !!f.signup_off
   out.include_entries = !!f.include_entries
 
   // Name the offending amounts (the schema's rule is generic, and with a blank
@@ -2058,6 +2061,12 @@ function CharityDaySection({ enabled, onEnabled, values, onChange, eventId = nul
       {enabled && (
         <div className="space-y-4 pt-2 border-t border-un1t-border">
           <p className="text-[11px] text-un1t-subtle">Leave any text blank to use the default shown in grey.</p>
+
+          {/* CHARITYSIGNUPOFF.1 — the page keeps only the donate and raffle cards. */}
+          <div className="space-y-1">
+            {check('signup_off', 'Donations and raffle only (hide the sign-up form)')}
+            <p className={hintCls}>The event page shows the donate card and raffle tickets, with no sign-up form, and new entries are refused. Existing entries are kept.</p>
+          </div>
 
           {text('name', 'Charity name', 'e.g. MS Ireland')}
           {text('heading', 'Heading', CHARITY_DEFAULTS.heading)}
