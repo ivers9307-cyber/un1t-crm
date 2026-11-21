@@ -4,18 +4,17 @@
 // already started. Manager+ at the race's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
-import { logWarn } from '@/lib/log'
+import { withAuth } from '@/lib/with-auth'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; races somewhere, the race's studio (404)
+// and races there stay by hand, in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
   }
@@ -50,14 +49,13 @@ export async function POST(request, props) {
     // Leave the flag false; the request proceeds unchanged.
   }
 
-  const db = createServerClient()
   const { data: reg, error: lookupErr } = await db
     .from('race_registrations')
     .select(`
       id, status, race_started_at, race_finished_at,
       race_events ( id, location_id, kind )
     `)
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (lookupErr || !reg) {
     return NextResponse.json({ success: false, error: 'Registration not found' }, { status: 404 })
@@ -100,7 +98,10 @@ export async function POST(request, props) {
     .from('race_registrations')
     .update({ race_started_at: startedAt })
     .eq('id', reg.id)
-  if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
+  if (upErr) {
+    logError('race-control', 'race start update failed', { registrationId: reg.id, code: upErr.code || null, err: upErr.message })
+    return NextResponse.json({ success: false, error: 'Could not start the race. Try again.' }, { status: 500 })
+  }
 
   // RACEDAY.1 — record that this stamp came from an offsite override.
   // There is no audit TABLE to write to: these routes record no actor at all
@@ -119,4 +120,4 @@ export async function POST(request, props) {
   }
 
   return NextResponse.json({ success: true, race_started_at: startedAt })
-}
+})

@@ -8,7 +8,9 @@
 import { NextResponse } from 'next/server'
 import { sniffReceiptMime } from '@/lib/card-receipts'
 import { prepareManualUpload, findQueueRowByHash } from '@/lib/recon/manual-upload'
-import { loadLineForUser } from '../_line'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
+import { loadLineForCaller } from '../_line'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -17,11 +19,15 @@ const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // mirrors the inbound-invoices cap
 const ALLOWED_FROM = ['uncovered', 'not_found', 'needs_attention']
 const BUCKET = 'inbound-invoices'
 
-export async function POST(request, { params }) {
-  const { id } = await params
-  const ctx = await loadLineForUser(id)
+const MODULE = 'recon-coverage-upload'
+
+// withAuth only signs the caller in; loadLineForCaller keeps the hand-written
+// gate (accounting_hub 'Forbidden' 403, active-location 400, line scoped to the
+// active studio, 404) exactly as the sibling line routes run it.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
+  const ctx = await loadLineForCaller(user, params?.id)
   if (ctx.response) return ctx.response
-  const { user, db, locationId, line } = ctx
+  const { db, locationId, line } = ctx
 
   if (!ALLOWED_FROM.includes(line.status)) {
     return NextResponse.json(
@@ -71,7 +77,8 @@ export async function POST(request, { params }) {
         upsert: false,
       })
       if (upErr) {
-        return NextResponse.json({ success: false, error: `Upload failed: ${upErr.message}` }, { status: 502 })
+        logError(MODULE, 'storage upload failed', { lineId: line.id, err: upErr.message })
+        return NextResponse.json({ success: false, error: 'Upload failed.' }, { status: 502 })
       }
       const { data: inserted, error: insErr } = await db
         .from('invoices_queue')
@@ -91,7 +98,8 @@ export async function POST(request, { params }) {
         .select('id')
         .single()
       if (insErr) {
-        return NextResponse.json({ success: false, error: `Queue insert failed: ${insErr.message}` }, { status: 500 })
+        logError(MODULE, 'queue insert failed', { lineId: line.id, code: insErr.code || null, err: insErr.message })
+        return NextResponse.json({ success: false, error: 'Queue insert failed.' }, { status: 500 })
       }
       queueId = inserted.id
     }
@@ -107,12 +115,13 @@ export async function POST(request, { params }) {
       })
       .eq('id', line.id)
     if (linkErr) {
-      return NextResponse.json({ success: false, error: `Line link failed: ${linkErr.message}` }, { status: 500 })
+      logError(MODULE, 'line link failed', { lineId: line.id, code: linkErr.code || null, err: linkErr.message })
+      return NextResponse.json({ success: false, error: 'Line link failed.' }, { status: 500 })
     }
 
     return NextResponse.json({ success: true, data: { queueId, deduped } })
   } catch (e) {
-    console.error('[coverage/upload]', e)
-    return NextResponse.json({ success: false, error: String(e?.message || e) }, { status: 500 })
+    logError(MODULE, 'upload failed', { lineId: line.id, err: e?.message || String(e) })
+    return NextResponse.json({ success: false, error: 'Upload failed.' }, { status: 500 })
   }
-}
+})

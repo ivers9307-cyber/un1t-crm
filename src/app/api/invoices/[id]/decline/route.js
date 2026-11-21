@@ -6,15 +6,14 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { validateBody } from '@/lib/validate'
 import { sendInvoiceDeclinedEmail } from '@/lib/contractor-invoice-email'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { periodLabel } from '@/lib/contractor-invoices'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -22,22 +21,18 @@ const DeclineSchema = z.object({
   reason: z.string().trim().min(1, 'Reason is required').max(1000),
 })
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// withAuth only signs the caller in (the same 401); the body, the invoice, the
+// permission at its studio (404) and the status 409 stay by hand, in order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   const validation = await validateBody(request, DeclineSchema)
   if (!validation.ok) return validation.response
   const { reason } = validation.data
 
-  const db = createServerClient()
   const { data: inv, error: loadErr } = await db
     .from('contractor_invoices')
     .select('id, contractor_id, location_id, status')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (loadErr || !inv) {
     return NextResponse.json({ success: false, error: 'Invoice not found' }, { status: 404 })
@@ -73,7 +68,8 @@ export async function POST(request, props) {
     .select()
     .single()
   if (updErr) {
-    return NextResponse.json({ success: false, error: updErr.message }, { status: 400 })
+    logError('invoice-decline', 'decline update failed', { invoiceId: inv.id, code: updErr.code || null, err: updErr.message })
+    return NextResponse.json({ success: false, error: 'Could not decline the invoice. Try again.' }, { status: 400 })
   }
   if (!declined) {
     return NextResponse.json(
@@ -86,7 +82,8 @@ export async function POST(request, props) {
   try {
     await sendInvoiceDeclinedEmail(declined.id)
   } catch (e) {
-    warnings.push(`Decline email failed: ${e?.message || String(e)}. Contractor will see the status next time they open Invoices.`)
+    logWarn('invoice-decline', 'decline email failed', { invoiceId: declined.id, err: e?.message || String(e) })
+    warnings.push('Decline email failed. Contractor will see the status next time they open Invoices.')
   }
 
   // NOTIF.9 — migrated to notifyUsers so contractors without the
@@ -115,4 +112,4 @@ export async function POST(request, props) {
     data: declined,
     ...(warnings.length > 0 ? { warnings } : {}),
   })
-}
+})

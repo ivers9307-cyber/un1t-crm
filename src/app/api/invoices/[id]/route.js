@@ -9,22 +9,16 @@
 //   owner-at-loc / master — can read + see calc.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { computeScheduledForPeriod, loadQueueRowsForInvoices } from '@/lib/contractor-invoices'
 import { selectReviewComparison, contractorInvoiceLifecycle } from '@shared/contractor-invoice-review'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
-export async function GET(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  const db = createServerClient()
-
+// withAuth only signs the caller in (the same 401); self / owner here / master
+// is decided on the invoice below, a refusal the same 404 as a missing row.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   const { data: inv, error } = await db
     .from('contractor_invoices')
     .select(`
@@ -33,7 +27,7 @@ export async function GET(_request, props) {
       location:location_id ( id, name ),
       reviewer:reviewed_by ( id, full_name )
     `)
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (error || !inv) {
     return NextResponse.json({ success: false, error: 'Invoice not found' }, { status: 404 })
@@ -112,4 +106,4 @@ export async function GET(_request, props) {
       viewer_role: isMaster ? 'master' : isOwnerHere ? 'owner' : 'self',
     },
   })
-}
+})

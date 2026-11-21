@@ -14,8 +14,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { audienceFilterSchema } from '@/lib/schemas'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { logError } from '@/lib/log'
@@ -58,13 +58,11 @@ async function gateSegmentChange(db, user, segmentId) {
   return { segment }
 }
 
-export async function PUT(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!uuidLike.safeParse(params.id).success) return segmentNotFound()
+// withAuth only signs the caller in; the id shape, the row, the studio (404)
+// and the segment rules (403) stay in gateSegmentChange, in their old order.
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  if (!uuidLike.safeParse(params?.id).success) return segmentNotFound()
 
-  const db = createServerClient()
   const gate = await gateSegmentChange(db, user, params.id)
   if (gate.response) return gate.response
 
@@ -92,22 +90,22 @@ export async function PUT(request, props) {
     if (/duplicate key|unique constraint/i.test(error.message)) {
       return NextResponse.json({ success: false, error: 'A segment with this name already exists.' }, { status: 409 })
     }
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('contacts', 'segment update failed', { segmentId: params.id, code: error.code || null, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not save the segment' }, { status: 500 })
   }
   return NextResponse.json({ success: true, segment: data })
-}
+})
 
-export async function DELETE(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!uuidLike.safeParse(params.id).success) return segmentNotFound()
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
+  if (!uuidLike.safeParse(params?.id).success) return segmentNotFound()
 
-  const db = createServerClient()
   const gate = await gateSegmentChange(db, user, params.id)
   if (gate.response) return gate.response
 
   const { error } = await db.from('contact_segments').delete().eq('id', params.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('contacts', 'segment delete failed', { segmentId: params.id, code: error.code || null, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not delete the segment' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
-}
+})
