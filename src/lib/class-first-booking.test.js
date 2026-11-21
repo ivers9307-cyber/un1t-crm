@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ push: vi.fn(), logError: vi.fn() }))
-vi.mock('@/lib/qstash', () => ({ publishQueuePush: mocks.push, CLASS_BOOKINGS_WORKER_PATH: '/api/webhooks/qstash/class-bookings' }))
+vi.mock('@/lib/qstash', () => ({ publishClassBookingJob: mocks.push }))
 vi.mock('@/lib/log', () => ({ logError: mocks.logError, logWarn: vi.fn() }))
 
 import { queueFundedClassBooking, fundedBookingFromRow, FUNDED_BY, FUNDED_NO_BALANCE } from './class-first-booking'
@@ -58,7 +58,7 @@ describe('fundedBookingFromRow', () => {
 describe('queueFundedClassBooking', () => {
   const args = fundedBookingFromRow(PURCHASE, { fundedBy: FUNDED_BY.trialPurchase })
 
-  it('inserts one queued row, no trial pair, marked funded, and nudges QStash with the dash-only dedup id', async () => {
+  it('inserts one queued row, no trial pair, marked funded, and nudges the class-bookings queue', async () => {
     const { db, inserts } = makeDb()
     expect(await queueFundedClassBooking(db, args)).toEqual({ queued: true, id: 'cbr-1' })
     expect(inserts).toHaveLength(1)
@@ -69,7 +69,7 @@ describe('queueFundedClassBooking', () => {
       customer_name: 'Ava Byrne', customer_email: 'ava@example.com', customer_phone: '+353850000001',
       trial_membership_id: null, trial_plan_code: null, funded_by: 'trial_purchase', funded_by_id: 'tp-1', status: 'queued',
     })
-    expect(mocks.push).toHaveBeenCalledWith({ path: '/api/webhooks/qstash/class-bookings', body: { id: 'cbr-1' }, deduplicationId: 'class-booking-cbr-1' })
+    expect(mocks.push).toHaveBeenCalledWith('cbr-1')
     expect(mocks.logError).not.toHaveBeenCalled()
   })
   it('a unique violation is already queued: no nudge, no error', async () => {

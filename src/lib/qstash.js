@@ -46,9 +46,17 @@ export const INVOICE_ANALYSIS_QUEUE_NAME = 'invoice-analysis'
 export const INVOICE_ANALYSIS_QUEUE_PARALLELISM = 2
 // QSTASH.7 — worker for class_booking_requests pushes (published by
 // /api/public/class-booking and the WhatsApp Flow completion handler,
-// swept by /api/cron/process-class-bookings). Plain publish — bookings
-// arrive one at a time, no parallelism bound needed.
+// swept by /api/cron/process-class-bookings).
 export const CLASS_BOOKINGS_WORKER_PATH = '/api/webhooks/qstash/class-bookings'
+// BOOKQUEUE.1 — class bookings go through a named QStash QUEUE at
+// parallelism 1, so Glofox sees them one after another. They used to be a
+// plain publish on the belief that bookings arrive one at a time; an Open
+// Week or /corp claim books up to five classes in one submit, and five
+// bookings landing on a credit pack Glofox added seconds earlier got two
+// YOU_HAVE_NO_CREDITS_LEFT refusals with credits on the account (20 Nov
+// 2026). The cron already drains the table strictly in order.
+export const CLASS_BOOKINGS_QUEUE_NAME = 'class-bookings'
+export const CLASS_BOOKINGS_QUEUE_PARALLELISM = 1
 // PAIDTRIAL.1 — the paid trial purchases worker (same claim CAS shape).
 export const TRIAL_PURCHASES_WORKER_PATH = '/api/webhooks/qstash/trial-purchases'
 // QSTASH.8 — worker for host campaign sends (swept by
@@ -294,4 +302,24 @@ export function verifyQStashSignature({ signature, rawBody, url, now = Date.now(
   if (url && claims.sub !== url) return { ok: false, reason: 'url_mismatch' }
 
   return { ok: true, matched }
+}
+
+/**
+ * BOOKQUEUE.1 — publish one class_booking_requests row to its worker, on the
+ * class-bookings queue (one delivery at a time). Every place that queues a
+ * class booking publishes through this, so none of them can skip the queue.
+ * Never throws (publishQueuePush's contract); the table row stays the
+ * delivery guarantee, the cron drains it if this publish fails.
+ *
+ * @param {string} id — class_booking_requests.id
+ * @param {{ publish?: typeof publishQueuePush }} [opts] — injectable for tests
+ */
+export function publishClassBookingJob(id, { publish = publishQueuePush } = {}) {
+  return publish({
+    path: CLASS_BOOKINGS_WORKER_PATH,
+    body: { id },
+    deduplicationId: `class-booking-${id}`,
+    queueName: CLASS_BOOKINGS_QUEUE_NAME,
+    queueParallelism: CLASS_BOOKINGS_QUEUE_PARALLELISM,
+  })
 }

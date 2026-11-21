@@ -7,7 +7,7 @@
 import { parseFlowCompletion } from './handler.js'
 import { applyFormMarketingConsent } from '@/lib/marketing-consent.js'
 import { createEventBooking } from '@/lib/bookings-write.js'
-import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash.js'
+import { publishClassBookingJob } from '@/lib/qstash.js'
 import { sendCtwaConversion } from '@/lib/meta-capi'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
@@ -114,12 +114,8 @@ export async function handleFlowCompletion(db, { interactive, contact, locationI
 export async function publishFlowClassBooking(requestId) {
   if (!requestId) return
   try {
-    await publishQueuePush({
-      path: CLASS_BOOKINGS_WORKER_PATH,
-      body: { id: requestId },
-      deduplicationId: `class-booking-${requestId}`,
-    })
+    await publishClassBookingJob(requestId)
   } catch {
-    // publishQueuePush swallows its own errors; belt-and-braces only.
+    // publishClassBookingJob swallows its own errors; belt-and-braces only.
   }
 }

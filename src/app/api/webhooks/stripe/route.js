@@ -28,7 +28,7 @@ import {
   runPaidDonationSideEffects,
 } from '@/lib/donation-payments'
 import { resolveCharitySettings } from '@/lib/charity-donations'
-import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
+import { publishClassBookingJob } from '@/lib/qstash'
 import { logWarn, logError } from '@/lib/log'
 import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 import { registerCheckoutDomainsForAccount } from '@/lib/payments/apple-pay-domains'
@@ -135,11 +135,7 @@ export async function POST(request) {
           })
           if (released) {
             try {
-              await publishQueuePush({
-                path: CLASS_BOOKINGS_WORKER_PATH,
-                body: { id: row.id },
-                deduplicationId: `class-booking-${row.id}`,
-              })
+              await publishClassBookingJob(row.id)
             } catch {
               // Queue publish is best-effort here — the row is already 'queued'
               // in the DB, which is the durable guarantee; a drain/poll path

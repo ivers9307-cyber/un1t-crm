@@ -16,7 +16,7 @@ vi.mock('@/lib/trial-purchase-payments', () => ({
 }))
 vi.mock('@/lib/qstash', () => ({
   publishQueuePush: vi.fn(async () => {}),
-  CLASS_BOOKINGS_WORKER_PATH: '/w/class',
+  publishClassBookingJob: vi.fn(async () => {}),
   TRIAL_PURCHASES_WORKER_PATH: '/w/trial',
 }))
 vi.mock('@/lib/webhook-events', () => ({
@@ -29,7 +29,7 @@ import { POST, GET } from './route.js'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
 import { resolveTrialPurchaseByRef, markTrialPurchasePaymentStatus } from '@/lib/trial-purchase-payments'
-import { publishQueuePush } from '@/lib/qstash'
+import { publishQueuePush, publishClassBookingJob } from '@/lib/qstash'
 import { recordWebhookEvent, releaseWebhookEvent } from '@/lib/webhook-events'
 
 function makeRequest(body = JSON.stringify({ event: 'ORDER_COMPLETED', order_id: 'ord-1' })) {
@@ -95,7 +95,7 @@ describe('POST /api/webhooks/revolut/class-bookings', () => {
     it('fresh completion releases the booking and nudges the queue; claim kept', async () => {
       const res = await POST(makeRequest())
       expect((await res.json()).released).toBe(true)
-      expect(publishQueuePush).toHaveBeenCalledWith(expect.objectContaining({ path: '/w/class', body: { id: 'cb1' } }))
+      expect(publishClassBookingJob).toHaveBeenCalledWith('cb1')
       expect(releaseWebhookEvent).not.toHaveBeenCalled()
     })
 
@@ -113,7 +113,7 @@ describe('POST /api/webhooks/revolut/class-bookings', () => {
       expect(res.status).toBe(200)
       expect((await res.json()).deferred).toBe(true)
       expect(releaseWebhookEvent).toHaveBeenCalledWith(expect.objectContaining(CLAIM))
-      expect(publishQueuePush).not.toHaveBeenCalled()
+      expect(publishClassBookingJob).not.toHaveBeenCalled()
     })
 
     it('a thrown mark → deferred, claim released', async () => {
@@ -124,7 +124,7 @@ describe('POST /api/webhooks/revolut/class-bookings', () => {
     })
 
     it('a queue nudge that throws after a landed mark never releases the claim', async () => {
-      publishQueuePush.mockRejectedValueOnce(new Error('qstash down'))
+      publishClassBookingJob.mockRejectedValueOnce(new Error('qstash down'))
       const res = await POST(makeRequest())
       expect(res.status).toBe(200)
       expect(releaseWebhookEvent).not.toHaveBeenCalled()

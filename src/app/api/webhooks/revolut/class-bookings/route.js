@@ -35,7 +35,7 @@ import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
 import { resolveTrialPurchaseByRef, markTrialPurchasePaymentStatus } from '@/lib/trial-purchase-payments'
-import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH, TRIAL_PURCHASES_WORKER_PATH } from '@/lib/qstash'
+import { publishQueuePush, publishClassBookingJob, TRIAL_PURCHASES_WORKER_PATH } from '@/lib/qstash'
 import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { logWarn, logError } from '@/lib/log'
 
@@ -155,13 +155,9 @@ export async function POST(request) {
     // failure leaves the row for the cron — the queue table (row
     // status='queued') is the delivery guarantee, not this push.
     try {
-      await publishQueuePush({
-        path: CLASS_BOOKINGS_WORKER_PATH,
-        body: { id: row.id },
-        deduplicationId: `class-booking-${row.id}`,
-      })
+      await publishClassBookingJob(row.id)
     } catch {
-      // publishQueuePush swallows its own errors; belt-and-braces only.
+      // publishClassBookingJob swallows its own errors; belt-and-braces only.
     }
   }
 

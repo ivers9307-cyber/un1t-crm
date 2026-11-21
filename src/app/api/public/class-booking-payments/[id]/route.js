@@ -6,7 +6,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { paymentsFor } from '@/lib/payments'
 import { markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
-import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
+import { publishClassBookingJob } from '@/lib/qstash'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { logWarn } from '@/lib/log'
 
@@ -35,7 +35,7 @@ export async function GET(_request, props) {
       if (norm) {
         const { released } = await markClassBookingPaymentStatus({ db, request: row, providerState: norm.state, providerAmount: Number.isFinite(norm.amountCents) ? norm.amountCents : null })
         if (released) {
-          try { await publishQueuePush({ path: CLASS_BOOKINGS_WORKER_PATH, body: { id: row.id }, deduplicationId: `class-booking-${row.id}` }) } catch { /* queue is the guarantee */ }
+          try { await publishClassBookingJob(row.id) } catch { /* queue is the guarantee */ }
         }
         const { data: fresh } = await db.from('class_booking_requests')
           .select('id, status, payment_status, payment_provider, payment_checkout_token, payment_checkout_url, amount_cents, currency, class_name, connected_account_id')

@@ -79,7 +79,7 @@ import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from './race-p
 import { runRacePaymentCompletedEffects } from './race-payment-completed'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from './class-booking-payments'
 import { resolveTrialPurchaseByRef, markTrialPurchasePaymentStatus } from './trial-purchase-payments'
-import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH, TRIAL_PURCHASES_WORKER_PATH } from './qstash'
+import { publishQueuePush, publishClassBookingJob, TRIAL_PURCHASES_WORKER_PATH } from './qstash'
 import { resolveOfferPurchaseByOrderId, markOfferPurchaseState } from './sale-offers'
 import { runOfferPaidSideEffects } from './offer-purchase-paid'
 import {
@@ -365,7 +365,7 @@ const APPLY = {
     if (markErr) throw markErr
     if (released) {
       // The webhook's nudge, with its dedup id. The queue row is the guarantee.
-      try { await publish({ path: CLASS_BOOKINGS_WORKER_PATH, body: { id: request.id }, deduplicationId: `class-booking-${request.id}` }) } catch { /* queue is the guarantee */ }
+      try { await publishClassBookingJob(request.id, { publish }) } catch { /* queue is the guarantee */ }
     }
     return transientOr(state, 'settled')
   },

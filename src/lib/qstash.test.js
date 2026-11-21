@@ -13,6 +13,10 @@ import {
   INVOICE_ANALYSIS_WORKER_PATH,
   INVOICE_ANALYSIS_QUEUE_NAME,
   INVOICE_ANALYSIS_QUEUE_PARALLELISM,
+  CLASS_BOOKINGS_WORKER_PATH,
+  CLASS_BOOKINGS_QUEUE_NAME,
+  CLASS_BOOKINGS_QUEUE_PARALLELISM,
+  publishClassBookingJob,
   qstashEnabled,
   publishQueuePush,
   ensureQueue,
@@ -628,5 +632,42 @@ describe('verifyQStashSignature', () => {
       now: NOW_MS,
     })
     expect(result).toEqual({ ok: true, matched: 'current' })
+  })
+})
+
+// ── publishClassBookingJob (BOOKQUEUE.1) ──────────────────────────────────────
+//
+// Class bookings go to Glofox ONE AT A TIME: a claim that books five classes
+// at once raced Glofox's credit count and got YOU_HAVE_NO_CREDITS_LEFT with
+// credits on the account (20 Nov 2026).
+
+describe('publishClassBookingJob', () => {
+  it('queues the row on the class-bookings queue at parallelism 1 with its dash-only dedup id', async () => {
+    const publish = vi.fn(async () => ({ ok: true, messageId: 'm1' }))
+    expect(await publishClassBookingJob('cbr-1', { publish })).toEqual({ ok: true, messageId: 'm1' })
+    expect(publish).toHaveBeenCalledWith({
+      path: CLASS_BOOKINGS_WORKER_PATH,
+      body: { id: 'cbr-1' },
+      deduplicationId: 'class-booking-cbr-1',
+      queueName: 'class-bookings',
+      queueParallelism: 1,
+    })
+    expect(CLASS_BOOKINGS_QUEUE_NAME).toBe('class-bookings')
+    expect(CLASS_BOOKINGS_QUEUE_PARALLELISM).toBe(1)
+  })
+
+  it('enqueues (not plain-publishes) to the class-bookings queue by default', async () => {
+    vi.stubEnv('QSTASH_TOKEN', 'tok_123')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.example.com')
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ messageId: 'm2' }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await publishClassBookingJob('cbr-2')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(`https://qstash.upstash.io/v2/enqueue/class-bookings/https://crm.example.com${CLASS_BOOKINGS_WORKER_PATH}`)
+    expect(init.headers['Upstash-Deduplication-Id']).toBe('class-booking-cbr-2')
+    expect(JSON.parse(init.body)).toEqual({ id: 'cbr-2' })
   })
 })
