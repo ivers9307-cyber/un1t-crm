@@ -158,7 +158,10 @@ const mult = (v) => {
  * Money raised so far. Only 'paid' donations and 'completed' entries count.
  * Each donation is matched at its own stored multiplier; entries at `multiplier`.
  */
-export function computeCharityTotals({ donations, entries, multiplier, includeEntries } = {}) {
+// RAFFLEDONATIONS.1 — `raffleSales` (unvoided raffle_sales rows, till and
+// online) adds raffle money at face value, never matched. Only the staff
+// donations page passes it; the public total leaves it out.
+export function computeCharityTotals({ donations, entries, multiplier, includeEntries, raffleSales } = {}) {
   let donationsCents = 0
   let donationsMatched = 0
   let donationCount = 0
@@ -178,12 +181,24 @@ export function computeCharityTotals({ donations, entries, multiplier, includeEn
     entriesCents += amount
     entriesMatched += Math.round(amount * entryMult)
   }
+  let raffleCents = 0
+  let raffleTickets = 0
+  let raffleSaleCount = 0
+  for (const r of Array.isArray(raffleSales) ? raffleSales : []) {
+    if (!r || r.voided_at) continue
+    raffleCents += num(r.total_cents)
+    raffleTickets += num(r.quantity)
+    raffleSaleCount += 1
+  }
   return {
     donations_cents: donationsCents,
     donations_matched_cents: donationsMatched,
     entries_cents: entriesCents,
     entries_matched_cents: entriesMatched,
-    raised_cents: donationsMatched + (includeEntries ? entriesMatched : 0),
+    raffle_cents: raffleCents,
+    raffle_ticket_count: raffleTickets,
+    raffle_sale_count: raffleSaleCount,
+    raised_cents: donationsMatched + (includeEntries ? entriesMatched : 0) + raffleCents,
     donation_count: donationCount,
   }
 }

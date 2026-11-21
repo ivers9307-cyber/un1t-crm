@@ -140,12 +140,16 @@ export default function EventDonationsList({ raceId, canMarkRefunded = false }) 
         <div className="mb-3 text-sm text-red-700 bg-red-500/10 border border-red-500/30 rounded-md p-2">{error}</div>
       )}
       {totals && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-3 mb-5">
           <Tile label="Raised" value={formatCents(totals.raised_cents, currency)} hint={data.settings?.name || undefined} />
           <Tile label="Donations" value={formatCents(totals.donations_cents, currency)} hint={`${totals.donation_count} paid`} />
           <Tile label="Donations matched" value={formatCents(totals.donations_matched_cents, currency)} />
           {data.settings?.include_entries && (
             <Tile label="Entries matched" value={formatCents(totals.entries_matched_cents, currency)} hint={`${formatCents(totals.entries_cents, currency)} in entries`} />
+          )}
+          {/* RAFFLEDONATIONS.1 — raffle money (till + online), counted in Raised, not matched. */}
+          {data.settings?.has_raffle && (
+            <Tile label="Raffle" value={formatCents(totals.raffle_cents, currency)} hint={`${totals.raffle_ticket_count} tickets · not matched`} />
           )}
         </div>
       )}
