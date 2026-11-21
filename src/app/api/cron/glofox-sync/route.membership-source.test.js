@@ -81,6 +81,8 @@ describe('GET /api/cron/glofox-sync — discovery through the membership seam (W
     expect(res.status).toBe(500)
     expect(visited(h.db)).toEqual([])
     expect(stampHeartbeat).not.toHaveBeenCalled()
+    // ROUTEWRAP.C13 — the database's text stays in the log.
+    expect(JSON.stringify(await res.json())).not.toContain('membership_source unreadable')
   })
 
   it('no glofox location at all is a healthy quiet run (stamps), not an error', async () => {
@@ -95,9 +97,12 @@ describe('GET /api/cron/glofox-sync — discovery through the membership seam (W
       id === STILLORGAN_ID ? { branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' } : { branchId: 'b', apiKey: 'k', apiToken: 't', readError: null }
     ))
     h.db = dbFor(ESTATE_2026_10)
-    const out = await (await GET(req())).json()
+    const res = await GET(req())
+    const out = await res.json()
     expect(visited(h.db)).toEqual([])
-    expect(out).toMatchObject({ locations_processed: 0, locations_skipped: 1, skipped_unknown: 1 })
+    // ROUTEWRAP.C13 — answered as a failure, still stamped (stamp: true).
+    expect(res.status).toBe(500)
+    expect(out).toMatchObject({ success: false, locations_processed: 0, locations_skipped: 1, skipped_unknown: 1 })
     expect(out.message).not.toBe('No locations with Glofox credentials configured.')
     expect(out.message).toMatch(/1 unreadable/)
     expect(stampHeartbeat).toHaveBeenCalledWith('glofox-sync', expect.objectContaining({ skipped_unknown: 1 }))
