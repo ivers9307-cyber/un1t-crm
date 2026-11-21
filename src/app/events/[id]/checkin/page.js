@@ -31,7 +31,7 @@ export default async function EventCheckinPage(props) {
       id, name, slug, location_id, race_date, kind,
       waves:race_waves ( id, start_time, label, display_order ),
       registrations:race_registrations (
-        id, status, wave_id,
+        id, status, wave_id, contact_id, placed_into_registration_id,
         teams ( id, name, team_members ( id, name, email, contact_id ) )
       )
     `)
@@ -43,8 +43,9 @@ export default async function EventCheckinPage(props) {
   if (!hasPermissionForLocation(user, race.location_id, 'races')) redirect('/')
 
   // Confirmed registrations only, each member stamped from race_checkins
-  // (shared with the host check-in page, HOSTCHECKIN.1).
-  const roster = await loadCheckinRoster(db, race)
+  // (shared with the host check-in page, HOSTCHECKIN.1). CHECKINPAID.1: staff
+  // also see what each person paid, beside their name.
+  const roster = await loadCheckinRoster(db, race, { withPaid: true })
   if (roster.error) throw roster.error
   const registrations = roster.rows
 
