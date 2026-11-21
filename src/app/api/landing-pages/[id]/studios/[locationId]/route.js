@@ -16,8 +16,7 @@
 // readiness (studioRowReadiness, the list's and the publish gate's rule).
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { landingPageStudioSchema } from '@/lib/landing-page-schemas'
 import { OFFER_BLOCK_TYPE, studioOfferSchema } from '@/lib/landing-page-offers'
@@ -34,11 +33,10 @@ export const dynamic = 'force-dynamic'
 
 const fail = (status, error, extra = {}) => NextResponse.json({ success: false, error, ...extra }, { status })
 
-export async function PUT(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return fail(401, 'Unauthorised')
-  const { id, locationId } = await params
-  const db = createServerClient()
+// withAuth signs the caller in (its 401 'Unauthorized'; this route said
+// 'Unauthorised'); every check after it keeps its order and text.
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const { id, locationId } = params
 
   try {
     const loaded = await loadViewablePage(db, user, id)
@@ -89,4 +87,4 @@ export async function PUT(request, { params }) {
     logError('landing-pages', 'studio row read failed', { pageId: id, locationId, code: err.cause?.code ?? null })
     return fail(503, 'unavailable')
   }
-}
+})

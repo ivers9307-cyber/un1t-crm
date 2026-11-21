@@ -17,10 +17,13 @@
 //     `class_timer` is a CROSS_PLATFORM_KEY that routes to the TOP-LEVEL web
 //     resolver, the screen gate and this route resolve the identical key with
 //     identical semantics — no web/mobile namespace split to disagree across.
+// withAuth signs the caller in (its 401 'Unauthorized'; this route said
+// 'Unauthorised'); the query, scope (403) and permission (403) checks keep
+// their order and texts here.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { getUserLocationIds } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
@@ -29,10 +32,7 @@ import { matchTemplateToClassName, buildTimeline, computeEffectiveElapsedMs, res
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const url = new URL(request.url)
   const locationId = url.searchParams.get('location_id')
   if (!locationId || !uuidLike.safeParse(locationId).success) {
@@ -45,7 +45,6 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data } = await db
     .from('class_timer_runs')
     .select('*')
@@ -88,4 +87,4 @@ export async function GET(request) {
   }
 
   return NextResponse.json({ success: true, run: activeRun, live_class: liveClass, suggested_template: suggestedTemplate })
-}
+})

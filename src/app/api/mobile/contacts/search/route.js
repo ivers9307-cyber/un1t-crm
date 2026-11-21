@@ -22,11 +22,12 @@
 //
 // Auth: Supabase JWT in the Authorization header (getCurrentUser's Bearer
 // fallback) + the x-active-location header — same contract as /api/mobile/me.
+// withAuth signs the caller in (401); the studio (400) and the permission
+// (403) keep their order and texts here.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasMobilePermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -46,12 +47,7 @@ function parseLimit(raw) {
   return Math.min(n, MOBILE_CONTACT_SEARCH_MAX)
 }
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const locationId = user.activeLocation?.id
   if (!locationId) {
     return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
@@ -65,7 +61,6 @@ export async function GET(request) {
   const term = clean(url.searchParams.get('q'))
   const limit = parseLimit(url.searchParams.get('limit'))
 
-  const db = createServerClient()
   // CONTACT-DEDUP (mig 334): one profile per linked person (the group primary).
   let q = db
     .from('studio_contacts')
@@ -92,4 +87,4 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Could not search contacts' }, { status: 500 })
   }
   return NextResponse.json({ success: true, data: { contacts: data || [] } })
-}
+})

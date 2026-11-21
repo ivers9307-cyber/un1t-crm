@@ -2,21 +2,21 @@
 //
 // Operator-mistake undo. Clears both timestamps back to NULL.
 // Doesn't touch the team_id link or status — just the timing.
+//
+// withAuth only signs the caller in (its 401 'Unauthorized'; this route said
+// 'Unauthorised'); the permission, the registration (404), its studio (404),
+// the permission there (403) and the kind (409) keep their order here.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermissionAtAnyLocation(user, 'races')) {
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
   }
 
@@ -44,7 +44,6 @@ export async function POST(request, props) {
     // No body, or not JSON — the historical call shape. Flag stays false.
   }
 
-  const db = createServerClient()
   const { data: reg, error: lookupErr } = await db
     .from('race_registrations')
     .select(`id, race_events ( id, location_id, kind )`)
@@ -72,7 +71,10 @@ export async function POST(request, props) {
     .from('race_registrations')
     .update({ race_started_at: null, race_finished_at: null })
     .eq('id', reg.id)
-  if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
+  if (upErr) {
+    logError('race-control', 'race reset failed', { registration_id: reg.id, err: upErr })
+    return NextResponse.json({ success: false, error: 'Could not reset the timing. Try again.' }, { status: 500 })
+  }
 
   // RACEDAY.1 — record that this came from an offsite override. There is no
   // audit TABLE to write to: these routes record no actor at all today, not
@@ -91,4 +93,4 @@ export async function POST(request, props) {
   }
 
   return NextResponse.json({ success: true })
-}
+})

@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 // HUBDOOR.2 — same role floor as /api/challenges, from the one module the
 // page gate and the redirect chain also read (src/lib/challenges-access).
@@ -27,9 +28,9 @@ export const PatchSchema = z.object({
 })
 
 // ROLESWEEP.1b — a coarse pre-check only; targetAuthz() judges the
-// challenge's own location once the row is loaded.
+// challenge's own location once the row is loaded. withAuth signs the caller
+// in (its 401); this and every check after it keep their order and texts.
 function authz(user) {
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!hasRoleAtAnyLocation(user, CHALLENGE_ADMIN_ROLES)) return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   if (!hasPermissionAtAnyLocation(user, 'challenges')) return NextResponse.json({ success: false, error: 'Disabled' }, { status: 403 })
   return null
@@ -41,11 +42,8 @@ function targetAuthz(user, locationId) {
   return null
 }
 
-export async function PUT(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   const g = authz(user); if (g) return g
-  const db = createServerClient()
   const { data: existing } = await db.from('challenges').select('*').eq('id', params.id).maybeSingle()
   if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const a = assertLocationAccessOr404(user, existing.location_id); if (a) return a
@@ -70,21 +68,24 @@ export async function PUT(request, props) {
   const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined))
   clean.updated_at = new Date().toISOString()
   const { data, error } = await db.from('challenges').update(clean).eq('id', params.id).select().single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('challenges', 'challenge update failed', { challengeId: params.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the challenge. Try again.' }, { status: 400 })
+  }
   return NextResponse.json({ success: true, data })
-}
+})
 
-export async function DELETE(_request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   const g = authz(user); if (g) return g
-  const db = createServerClient()
   const { data: existing } = await db.from('challenges').select('location_id').eq('id', params.id).maybeSingle()
   if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const a = assertLocationAccessOr404(user, existing.location_id); if (a) return a
   // ROLESWEEP.1b — judged at the challenge's location.
   const t = targetAuthz(user, existing.location_id); if (t) return t
   const { error } = await db.from('challenges').delete().eq('id', params.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('challenges', 'challenge delete failed', { challengeId: params.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not delete the challenge. Try again.' }, { status: 400 })
+  }
   return NextResponse.json({ success: true })
-}
+})

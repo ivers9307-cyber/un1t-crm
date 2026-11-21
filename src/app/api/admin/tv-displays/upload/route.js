@@ -24,23 +24,24 @@
 //                                or tv_templates.base_image_path
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
+import { assertLocationAccess } from '@/lib/auth'
 import {
   hasPermissionAtAnyLocation, hasPermissionForLocation,
   hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
 } from '@/lib/permissions'
 import { TV_IMAGE_MIME_TYPES, TV_IMAGE_MAX_BYTES } from '@/lib/tv-media'
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  // Same gate as the /admin/tv-displays page itself, plus the mobile
-  // tv_displays permission so the phone's "Push → Photo" can upload here
-  // (TV-MOBILE.B).
-  // ROLESWEEP.1c — coarse pre-check; judged at the upload's location below.
-  if (!user || (!hasPermissionAtAnyLocation(user, 'tv_displays') && !hasMobilePermissionAtAnyLocation(user, 'tv_displays'))) {
-    return NextResponse.json({ success: false, error: 'Not authorised for TV displays' }, { status: 403 })
-  }
+// Same gate as the /admin/tv-displays page itself, plus the mobile
+// tv_displays permission so the phone's "Push → Photo" can upload here
+// (TV-MOBILE.B).
+// ROLESWEEP.1c — coarse pre-check; judged at the upload's location below.
+// withAuth signs the caller in (a signed-out call is its 401; it was this
+// route's 403 before), then the coarse check with the same 403 text.
+const tvSomewhere = (user) => hasPermissionAtAnyLocation(user, 'tv_displays') || hasMobilePermissionAtAnyLocation(user, 'tv_displays')
+
+export const POST = withAuth({ permission: null, location: false, allow: tvSomewhere, forbiddenMessage: 'Not authorised for TV displays' }, async ({ user, db, request }) => {
 
   const formData = await request.formData()
   const file = formData.get('file')
@@ -78,7 +79,6 @@ export async function POST(request) {
   const prefix = kind === 'template' ? `${locationId}/templates` : `${locationId}`
   const path = `${prefix}/${crypto.randomUUID()}.${ext}`
 
-  const db = createServerClient()
   const buffer = Buffer.from(await file.arrayBuffer())
   const { error: uploadError } = await db.storage
     .from('tv-content')
@@ -89,8 +89,9 @@ export async function POST(request) {
     })
 
   if (uploadError) {
-    return NextResponse.json({ success: false, error: uploadError.message }, { status: 400 })
+    logError('tv-admin', 'image upload failed', { locationId, err: uploadError })
+    return NextResponse.json({ success: false, error: 'Could not upload the image. Try again.' }, { status: 400 })
   }
 
   return NextResponse.json({ success: true, path })
-}
+})

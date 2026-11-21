@@ -19,10 +19,12 @@
 // organization_id in step, the audit trigger logs it, and the target already
 // holds a contact_studios row (the gate refused otherwise), so no row is
 // minted here. Moving to the current primary is a no-op 200.
+//
+// withAuth only signs the caller in (the same 401); every check after it
+// keeps its order and text, and the write is unchanged.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { canViewContact } from '@/lib/contact-crossovers'
@@ -35,12 +37,7 @@ export const dynamic = 'force-dynamic'
 
 export const PrimaryStudioBodySchema = z.object({ location_id: uuidLike })
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   const { data: contact } = await db
     .from('contacts')
     .select('id, location_id, organization_id')
@@ -92,4 +89,4 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
   }
   return NextResponse.json({ success: true, data: { location_id: target } })
-}
+})

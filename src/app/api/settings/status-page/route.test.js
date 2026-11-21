@@ -9,7 +9,7 @@ vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
 })
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
+vi.mock('@/lib/permissions', async (importOriginal) => ({ ...(await importOriginal()), hasPermission: vi.fn(() => true) }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { GET, PUT } from './route.js'

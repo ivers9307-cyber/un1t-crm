@@ -9,28 +9,32 @@
 // rejected_stage is set to 'quality' if the row was at 'received',
 // otherwise 'data' (the same convention the single-row reject
 // routes use).
+//
+// withAuth signs the caller in (the same 401) and asks for the bookkeeper
+// flag with loadBookkeeper's 403 text, then the body (400), as before.
 
 import { NextResponse } from 'next/server'
 import {
   BulkRejectSchema,
-  loadBookkeeper,
   loadAndScopeBulkRows,
 } from '../_bulk-helpers'
-import { validateBody } from '@/lib/validate'
+import { withAuth } from '@/lib/with-auth'
+import { hasPermission } from '@/lib/permissions'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const REJECTABLE_STATUSES = ['received', 'quality_approved', 'extracted', 'data_approved']
 
-export async function POST(request) {
-  const ctx = await loadBookkeeper()
-  if (ctx.response) return ctx.response
-  const { user, db } = ctx
-
-  const validation = await validateBody(request, BulkRejectSchema)
-  if (!validation.ok) return validation.response
-  const { ids, reason } = validation.data
+export const POST = withAuth({
+  permission: null,
+  location: false,
+  allow: (user) => hasPermission(user, 'bookkeeper'),
+  forbiddenMessage: 'Bookkeeper permission required — ask a master to grant the bookkeeper flag.',
+  schema: BulkRejectSchema,
+}, async ({ user, db, input }) => {
+  const { ids, reason } = input
 
   let scoped
   try {
@@ -39,7 +43,8 @@ export async function POST(request) {
       select: 'id, location_id, status, source_type',
     })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e.message }, { status: 500 })
+    logError('invoices-inbox', 'bulk reject: row lookup failed', { count: ids.length, err: e })
+    return NextResponse.json({ success: false, error: 'Could not load the invoices. Try again.' }, { status: 500 })
   }
   const { rowsById, missingIds, forbiddenIds } = scoped
 
@@ -75,7 +80,8 @@ export async function POST(request) {
       .in('status', REJECTABLE_STATUSES) // belt + braces against a race
 
     if (updErr) {
-      results.push({ id, outcome: 'failed', error: updErr.message })
+      logError('invoices-inbox', 'bulk reject: update failed', { invoiceId: id, err: updErr })
+      results.push({ id, outcome: 'failed', error: 'Could not reject this invoice.' })
       continue
     }
     results.push({ id, outcome: 'ok', stage })
@@ -87,4 +93,4 @@ export async function POST(request) {
   }, {})
 
   return NextResponse.json({ success: true, data: { results, counts } })
-}
+})

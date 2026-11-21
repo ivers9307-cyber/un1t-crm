@@ -12,15 +12,16 @@
 // hasRoleAtLocation. Never `user.role`: StaffForm calls this once per studio
 // the staff member is assigned to, whichever studio is active, and the
 // active studio's role let a manager at one studio who is staff at another
-// read the other's list.
+// read the other's list. withAuth's 'param' mode runs the same two checks in
+// the same order with the same texts (404 'Not found', then ADMIN_ROLES at the
+// path id, 403 'forbidden'); a signed-out call is its 401.
 //
 // Returns:
 //   { success: true, users: [{ id, full_name, user_email, employee_number,
 //                              status, nfc_count }] }
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { logError } from '@/lib/log'
 import {
@@ -34,20 +35,7 @@ export const dynamic = 'force-dynamic'
 
 const MODULE = 'locations-unifi-users'
 
-export async function GET(_request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'unauthenticated' }, { status: 401 })
-
-  const { id: locationId } = await params
-  if (!locationId) return NextResponse.json({ success: false, error: 'missing_location_id' }, { status: 400 })
-
-  const denied = assertLocationAccessOr404(user, locationId)
-  if (denied) return denied
-  if (!hasRoleAtLocation(user, locationId, ADMIN_ROLES)) {
-    return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+export const GET = withAuth({ permission: null, location: 'param', roles: ADMIN_ROLES, forbiddenMessage: 'forbidden' }, async ({ db, locationId }) => {
   const { data: location, error: locErr } = await db
     .from('locations')
     .select('id, name, settings')
@@ -81,10 +69,11 @@ export async function GET(_request, { params }) {
     return NextResponse.json({ success: true, users, count: users.length })
   } catch (e) {
     const status = e instanceof UnifiError && e.status ? e.status : 502
+    logError(MODULE, 'UniFi user list failed', { locationId, status, err: e })
     return NextResponse.json({
       success: false,
       error: 'unifi_request_failed',
-      message: e.message || String(e),
+      message: 'Could not load the users from UniFi Access. Try again.',
     }, { status })
   }
-}
+})
