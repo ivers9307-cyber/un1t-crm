@@ -8,6 +8,7 @@
 // each header carries its own count and folds; the first time with anyone
 // still to arrive opens on its own, and a search opens every time it matches.
 // Every tap shows an Undo toast. Optimistic updates with revert-on-failure.
+// CHECKINPAID.1: a member carrying paid_cents shows the amount beside the name.
 // Talks to /api/events/[id]/checkin (+ /all). Phone-browser friendly.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -36,6 +37,16 @@ const HOST_CLASSES = {
   'text-emerald-800': 'text-host-ok',
   'text-emerald-700': 'text-host-ok',
   'text-red-700': 'text-host-bad',
+}
+
+// CHECKINPAID.1 — what a person paid (set on the staff roster only): '€25', '€12.50'.
+function formatPaid(cents, currency) {
+  const n = Number(cents) || 0
+  const whole = n % 100 === 0
+  return new Intl.NumberFormat('en-IE', {
+    style: 'currency', currency: currency || 'EUR',
+    minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2,
+  }).format(n / 100)
 }
 
 const TABS = [
@@ -261,6 +272,11 @@ export default function EventCheckinClient({ eventId, isRace, registrations: ini
                             {together && !isRace && m.name !== lead && lead ? <span className={th("text-xs text-un1t-subtle")}> · with {lead.split(/\s+/)[0]}</span> : null}
                             {m.emailMatch && m.email ? <span className={th("block text-xs text-un1t-subtle truncate")}>{m.email}</span> : null}
                           </span>
+                          {m.paid_cents > 0 ? (
+                            <span className={th("ml-auto shrink-0 text-xs tabular-nums text-un1t-subtle")} aria-label={`Paid ${formatPaid(m.paid_cents, m.paid_currency)}${m.paid_for > 1 ? ` for ${m.paid_for}` : ''}`}>
+                              {formatPaid(m.paid_cents, m.paid_currency)}{m.paid_for > 1 ? ` for ${m.paid_for}` : ''}
+                            </span>
+                          ) : null}
                           <span
                             className={th(`shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-full border ${
                               m.checked_in ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-un1t-muted'

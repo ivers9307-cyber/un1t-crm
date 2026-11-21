@@ -51,10 +51,31 @@ export async function resolveCheckinTarget(db, eventId, registrationId, memberId
  * `race` carries `waves` and `registrations` (id, status, wave_id,
  * teams ( id, name, team_members ( id, name, email ) )) as both check-in pages
  * select them. Reads race_checkins; returns { rows } or { error }.
+ *
+ * CHECKINPAID.1 — `{ withPaid: true }` also stamps what each person paid
+ * (paidByMember below); the registrations then need contact_id and
+ * placed_into_registration_id, and team_members contact_id.
  */
-export async function loadCheckinRoster(db, race) {
+export async function loadCheckinRoster(db, race, { withPaid = false } = {}) {
   const confirmed = (race?.registrations || []).filter((r) => r.status === 'confirmed')
   const regIds = confirmed.map((r) => r.id)
+  let paid = new Map()
+  if (withPaid && race?.id) {
+    const payments = []
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await db
+        .from('race_payments')
+        .select('id, race_registration_id, amount_cents, refunded_amount_cents, currency, contact_id, contact_email')
+        .eq('race_event_id', race.id)
+        .eq('status', 'completed')
+        .order('id')
+        .range(from, from + 999)
+      if (error) return { error }
+      payments.push(...(data || []))
+      if (!data || data.length < 1000) break
+    }
+    paid = paidByMember(race.registrations || [], payments)
+  }
   const checked = new Set()
   for (let i = 0; i < regIds.length; i += 200) {
     const { data, error } = await db
@@ -84,10 +105,81 @@ export async function loadCheckinRoster(db, race) {
             name: m.name || m.email || 'Member',
             email: m.email || null,
             checked_in: checked.has(`${r.id}:${m.id}`),
+            ...(withPaid ? paidFields(paid.get(`${r.id}:${m.id}`)) : {}),
           })),
         },
       }
     })
     .sort((a, b) => a._order - b._order || a.team.name.localeCompare(b.team.name))
   return { rows }
+}
+
+function paidFields(p) {
+  return p ? { paid_cents: p.cents, paid_for: p.people, paid_currency: p.currency } : { paid_cents: null, paid_for: null, paid_currency: null }
+}
+
+const lower = (s) => String(s ?? '').trim().toLowerCase()
+
+function findMember(members, { contactId, email }) {
+  let m = contactId ? members.find((x) => x.contact_id && x.contact_id === contactId) : null
+  const e = lower(email)
+  if (!m && e) m = members.find((x) => lower(x.email) === e)
+  return m || null
+}
+
+/**
+ * CHECKINPAID.1 — who paid what, keyed `${registrationId}:${memberId}` on the
+ * door roster. Completed payments only, less anything refunded; a booking's
+ * payments (entry and any date-change top-up) are added together.
+ *
+ * - A confirmed booking's money sits beside the person who paid it (matched
+ *   on the payment's contact, else email; else the booking's contact; else
+ *   the first name), with `people` = everyone on that booking.
+ * - A placed solo ("Find me a team") keeps the payment on their own row: it
+ *   is followed to the team entry they joined and set beside their name
+ *   there, the same contact-then-email match the check-in uses.
+ *
+ * Returns Map<key, { cents, people, currency }>.
+ */
+export function paidByMember(registrations, payments) {
+  const byReg = new Map()
+  for (const p of payments || []) {
+    if (!p?.race_registration_id) continue
+    const net = Math.max(0, (Number(p.amount_cents) || 0) - (Number(p.refunded_amount_cents) || 0))
+    const cur = byReg.get(p.race_registration_id) || { cents: 0, currency: p.currency || 'EUR', payer: null }
+    cur.cents += net
+    if (!cur.payer && (p.contact_id || p.contact_email)) cur.payer = { contactId: p.contact_id || null, email: p.contact_email || null }
+    byReg.set(p.race_registration_id, cur)
+  }
+
+  const regs = Array.isArray(registrations) ? registrations : []
+  const confirmedById = new Map(regs.filter((r) => r.status === 'confirmed').map((r) => [r.id, r]))
+  const out = new Map()
+  const add = (key, cents, people, currency) => {
+    const prev = out.get(key)
+    out.set(key, prev ? { cents: prev.cents + cents, people: Math.max(prev.people, people), currency: prev.currency } : { cents, people, currency })
+  }
+
+  for (const r of regs) {
+    const pay = byReg.get(r.id)
+    if (!pay || pay.cents <= 0) continue
+    const own = r.teams?.team_members || []
+    if (r.status === 'confirmed') {
+      if (!own.length) continue
+      const who = (pay.payer && findMember(own, pay.payer))
+        || (r.contact_id && findMember(own, { contactId: r.contact_id }))
+        || own[0]
+      add(`${r.id}:${who.id}`, pay.cents, own.length, pay.currency)
+    } else if (r.status === 'placed') {
+      const target = confirmedById.get(r.placed_into_registration_id)
+      if (!target) continue
+      const solo = own[0] || {}
+      const who = findMember(target.teams?.team_members || [], {
+        contactId: solo.contact_id || r.contact_id || pay.payer?.contactId || null,
+        email: solo.email || pay.payer?.email || null,
+      })
+      if (who) add(`${target.id}:${who.id}`, pay.cents, 1, pay.currency)
+    }
+  }
+  return out
 }

@@ -104,3 +104,18 @@ describe('EventCheckinClient — host portal (HOSTCHECKIN.1)', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/host/events/e1/checkin/all', expect.objectContaining({ method: 'POST' })))
   })
 })
+
+describe('EventCheckinClient — amount paid (CHECKINPAID.1)', () => {
+  it('shows what a person paid beside their name, "for N" when it covers a booking', () => {
+    const regs = [
+      reg('r1', 'w', 0, '12:30', [['Zoe Example', false]]),
+      reg('r2', 'w', 0, '12:30', [['Ben Walsh', false], ['Cara Walsh', false]]),
+    ]
+    regs[0].team.team_members[0] = { ...regs[0].team.team_members[0], paid_cents: 1250, paid_for: 1, paid_currency: 'EUR' }
+    regs[1].team.team_members[0] = { ...regs[1].team.team_members[0], paid_cents: 5000, paid_for: 2, paid_currency: 'EUR' }
+    render(<EventCheckinClient eventId="e1" isRace={false} registrations={regs} />)
+    expect(screen.getByLabelText('Paid €12.50')).toBeTruthy()
+    expect(screen.getByLabelText('Paid €50 for 2').textContent).toBe('€50 for 2')
+    expect(screen.getAllByLabelText(/^Paid /)).toHaveLength(2)
+  })
+})
