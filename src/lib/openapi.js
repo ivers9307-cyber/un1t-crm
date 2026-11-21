@@ -2079,10 +2079,10 @@ registry.registerPath({
   tags: ['Events'],
   security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: "An event's card donations, totals and charity settings (staff, races at the event's studio; CHARITY.10)",
-  description: 'Session auth + the races permission at the event\'s location; an event at a studio the caller cannot see is a 404. Rows newest first (every row, awaiting_payment included however old: staff reconcile them), each with paid_at_label rendered in the event location\'s zone and matched_cents (amount x the multiplier snapshotted at paid; 0 until paid). Returns { donations, totals, currency, settings: { name, match_multiplier, include_entries } }. `?format=csv` streams the hand-over file for the charity: paid_at, name, email, amount, matched, status, message (UTF-8 with BOM).',
+  description: 'Session auth + the races permission at the event\'s location; an event at a studio the caller cannot see is a 404. Rows newest first (every row, awaiting_payment included however old: staff reconcile them), each with paid_at_label rendered in the event location\'s zone and matched_cents (amount x the multiplier snapshotted at paid; 0 until paid). Returns { donations, raffle_sales, totals, currency, settings: { name, match_multiplier, include_entries, has_raffle } }; raffle_sales (RAFFLEDONATIONS.2) are the event raffle\'s unvoided sales, newest first, the same rows counted in totals.raffle_cents. `?format=csv` streams the hand-over file for the charity: paid_at, name, email, amount, matched, status, message, type (donation or raffle; UTF-8 with BOM).',
   request: { params: z.object({ id: uuidLike }), query: z.object({ format: z.enum(['csv']).optional() }) },
   responses: {
-    200: { description: '{ donations, totals, currency, settings }, or text/csv with ?format=csv', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventDonations') } } },
+    200: { description: '{ donations, raffle_sales, totals, currency, settings }, or text/csv with ?format=csv', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventDonations') } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: "No races permission at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
