@@ -81,8 +81,34 @@ export async function GET(request, props) {
     entries = data || []
   }
 
+  // RAFFLEDONATIONS.1 — the event's raffle money (till and online, voided
+  // sales left out) counts toward Raised at face value, unmatched.
+  const { data: raffle, error: raffleErr } = await db
+    .from('raffles')
+    .select('id')
+    .eq('race_event_id', race.id)
+    .eq('location_id', race.location_id)
+    .maybeSingle()
+  if (raffleErr) return NextResponse.json({ success: false, error: raffleErr.message }, { status: 500 })
+  const raffleSales = []
+  if (raffle) {
+    for (let from = 0; ; from += 1000) {
+      const { data, error: salesErr } = await db
+        .from('raffle_sales')
+        .select('id, quantity, total_cents, voided_at')
+        .eq('raffle_id', raffle.id)
+        .eq('location_id', race.location_id)
+        .is('voided_at', null)
+        .order('id', { ascending: true })
+        .range(from, from + 999)
+      if (salesErr) return NextResponse.json({ success: false, error: salesErr.message }, { status: 500 })
+      raffleSales.push(...(data || []))
+      if (!data || data.length < 1000) break
+    }
+  }
+
   const totals = computeCharityTotals({
-    donations, entries, multiplier: settings.match_multiplier, includeEntries: settings.include_entries,
+    donations, entries, multiplier: settings.match_multiplier, includeEntries: settings.include_entries, raffleSales,
   })
 
   // paid_at is an instant: render it in the event location's zone here so the
@@ -143,7 +169,7 @@ export async function GET(request, props) {
       donations: out,
       totals,
       currency,
-      settings: { name: settings.name, match_multiplier: settings.match_multiplier, include_entries: !!settings.include_entries },
+      settings: { name: settings.name, match_multiplier: settings.match_multiplier, include_entries: !!settings.include_entries, has_raffle: !!raffle },
     },
   })
 }

@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  user: null, race: null, donations: [], payments: [], accessGuard: null, zone: null, queries: [],
+  user: null, race: null, donations: [], payments: [], raffle: null, raffleSales: [], accessGuard: null, zone: null, queries: [],
 }))
 
 vi.mock('@/lib/auth', () => ({
@@ -29,11 +29,15 @@ vi.mock('@/lib/supabase', () => ({
         if (table === 'race_events') return { data: mocks.race, error: mocks.race ? null : { message: 'none' } }
         if (table === 'donations') return { data: mocks.donations, error: null }
         if (table === 'race_payments') return { data: mocks.payments, error: null }
+        if (table === 'raffles') return { data: mocks.raffle, error: null }
+        if (table === 'raffle_sales') return { data: mocks.raffleSales, error: null }
         throw new Error(`unexpected table ${table}`)
       }
       const chain = {
         select: () => chain,
         eq: (c, v) => { q.filters.push([c, v]); return chain },
+        is: (c, v) => { q.filters.push([c, v]); return chain },
+        maybeSingle: () => Promise.resolve(result()),
         order: () => chain,
         range: (a, b) => { q.range = [a, b]; return chain },
         single: () => Promise.resolve(result()),
@@ -63,6 +67,8 @@ beforeEach(() => {
   mocks.accessGuard = null
   mocks.zone = 'Europe/Dublin'
   mocks.payments = []
+  mocks.raffle = null
+  mocks.raffleSales = []
   mocks.donations = [
     PAID,
     { ...PAID, id: 'd2', status: 'awaiting_payment', paid_at: null, created_at: hoursAgo(5), match_multiplier: null },
@@ -100,8 +106,10 @@ describe('GET /api/events/[id]/donations', () => {
     // The page offers a Re-check on a paid row with no linked contact.
     expect(data.donations[0].contact_id).toBe('c1')
     expect(data.totals).toEqual({
-      donations_cents: 2500, donations_matched_cents: 5000, entries_cents: 0, entries_matched_cents: 0, raised_cents: 5000, donation_count: 1,
+      donations_cents: 2500, donations_matched_cents: 5000, entries_cents: 0, entries_matched_cents: 0,
+      raffle_cents: 0, raffle_ticket_count: 0, raffle_sale_count: 0, raised_cents: 5000, donation_count: 1,
     })
+    expect(data.settings.has_raffle).toBe(false)
     expect(data.currency).toBe('EUR')
     expect(data.settings.name).toBe('MS Ireland')
     expect(data.settings.match_multiplier).toBe(2)
@@ -148,6 +156,22 @@ describe('GET /api/events/[id]/donations', () => {
     expect(data.totals.entries_matched_cents).toBe(8000)
     expect(data.totals.raised_cents).toBe(13000)
     expect(mocks.queries.find((x) => x.table === 'race_payments').filters).toEqual([['race_event_id', 'ev-1'], ['status', 'completed']])
+  })
+
+  // RAFFLEDONATIONS.1 — raffle money counts toward Raised at face value.
+  it('adds the event raffle sales to Raised, unmatched, read at this location without voided sales', async () => {
+    mocks.raffle = { id: 'raf-1' }
+    mocks.raffleSales = [{ id: 's1', quantity: 20, total_cents: 1000, voided_at: null }, { id: 's2', quantity: 1, total_cents: 100, voided_at: null }]
+    const res = await GET(req(), ctx)
+    const { data } = await res.json()
+    expect(data.totals.raffle_cents).toBe(1100)
+    expect(data.totals.raffle_ticket_count).toBe(21)
+    expect(data.totals.raised_cents).toBe(5000 + 1100)
+    expect(data.settings.has_raffle).toBe(true)
+    expect(mocks.queries.find((x) => x.table === 'raffles').filters).toEqual([['race_event_id', 'ev-1'], ['location_id', 'loc-1']])
+    const s = mocks.queries.find((x) => x.table === 'raffle_sales')
+    expect(s.filters).toEqual([['raffle_id', 'raf-1'], ['location_id', 'loc-1'], ['voided_at', null]])
+    expect(s.range).toEqual([0, 999])
   })
 
   it('?format=csv returns a text/csv attachment with euro amounts and escaped cells', async () => {
