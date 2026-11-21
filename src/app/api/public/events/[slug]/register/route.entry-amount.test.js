@@ -96,3 +96,19 @@ describe('register route: choose-your-entry-amount', () => {
     expect(pricingSent().total_cents).toBe(5000)
   })
 })
+
+// CHARITYSIGNUPOFF.1 — donations + raffle only: no entries, nothing written.
+describe('register route: charity day with sign-up off', () => {
+  it('refuses with 409 signup_off before writing anything', async () => {
+    race = { ...CHARITY_RACE, charity: { signup_off: true } }
+    const res = await post(SOLO)
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('signup_off')
+    expect(inserted()).toBeUndefined()
+    expect(createRacePayment).not.toHaveBeenCalled()
+  })
+  it('the switch does nothing when charity day itself is off', async () => {
+    race = { ...CHARITY_RACE, charity_enabled: false, member_pricing_enabled: false, charity: { signup_off: true } }
+    expect((await post(SOLO)).status).toBe(200)
+  })
+})

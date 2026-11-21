@@ -157,3 +157,23 @@ describe('event page — donations on, layout polish (CHARITY.13)', () => {
     expect(document.querySelector('iframe').closest('.aspect-video')).toBeTruthy()
   })
 })
+
+// CHARITYSIGNUPOFF.1 — donations + raffle only: no sign-up card, no OR, no
+// mobile register bar; the donate card stays.
+describe('event page — donations and raffle only', () => {
+  async function renderOff(props = {}) {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(jsonRes({ success: true, data: { ...BASE, charity: { ...CHARITY, signup_off: true } } }))))
+    render(<RaceSignupWidget slug="charity-day" {...props} />)
+  }
+  it('shows the donate card and no sign-up form', async () => {
+    await renderOff()
+    await screen.findByRole('button', { name: /^Donate/ })
+    expect(screen.queryByRole('button', { name: /Register and pay/ })).toBeNull()
+    expect(screen.queryByText('OR')).toBeNull()
+  })
+  it('the embed points to the event page instead of a form', async () => {
+    await renderOff({ embedded: true })
+    await screen.findByText(/Sign-up is not open for this event/)
+    expect(screen.queryByRole('button', { name: /Register and pay/ })).toBeNull()
+  })
+})

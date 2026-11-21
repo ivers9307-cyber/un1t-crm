@@ -24,6 +24,9 @@ export const CHARITY_DEFAULTS = Object.freeze({
   goal_cents: null,
   show_total: true,
   include_entries: true,
+  // CHARITYSIGNUPOFF.1 — the page shows only the donate and raffle cards: no
+  // sign-up form, and the register route refuses entries.
+  signup_off: false,
   consent_label: '',
   thank_you_title: 'Thank you, {{first_name}}.',
   thank_you_body:
@@ -75,6 +78,7 @@ export const CharitySettingsSchema = z
     match_label: text.optional(),
     goal_cents: cents.nullable().optional(),
     show_total: z.boolean().optional(),
+    signup_off: z.boolean().optional(),
     include_entries: z.boolean().optional(),
     consent_label: text.optional(),
     thank_you_title: text.optional(),
