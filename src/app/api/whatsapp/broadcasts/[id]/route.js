@@ -1,7 +1,8 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url } from '@/lib/schemas'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
@@ -58,10 +59,8 @@ const STATUS_FROM = {
 }
 
 // GET /api/whatsapp/broadcasts/[id]
-export async function GET(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// ROUTEWRAP.R13 — withAuth only signs the caller in; the gates below are unchanged.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
   const db = createServerClient()
@@ -70,20 +69,22 @@ export async function GET(request, props) {
     .eq('id', params.id)
     .single()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
+  if (error) {
+    // No row (PGRST116) is the plain 404; any other failed read is logged and
+    // answered the same way, never with the database's text.
+    if (error.code !== 'PGRST116') logError('api:whatsapp-broadcasts', 'broadcast read failed', { broadcastId: params.id, err: error })
+    return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
+  }
 
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
   if (!hasPermissionForLocation(user, data.location_id, 'whatsapp')) return waForbidden()
 
   return NextResponse.json({ success: true, broadcast: data })
-}
+})
 
 // PUT /api/whatsapp/broadcasts/[id]
-export async function PUT(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
   const db = createServerClient()
@@ -192,7 +193,10 @@ export async function PUT(request, props) {
   if (updates.status) write = write.eq('status', row.status)
   const { data, error } = await write.select().maybeSingle()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('api:whatsapp-broadcasts', 'broadcast update failed', { broadcastId: params.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the broadcast' }, { status: 500 })
+  }
   if (!data) {
     return NextResponse.json({
       success: false,
@@ -200,13 +204,10 @@ export async function PUT(request, props) {
     }, { status: 409 })
   }
   return NextResponse.json({ success: true, broadcast: data, ...(signoffCleared ? { signoff_cleared: true } : {}) })
-}
+})
 
 // DELETE /api/whatsapp/broadcasts/[id]
-export async function DELETE(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
   const db = createServerClient()
@@ -235,4 +236,4 @@ export async function DELETE(request, props) {
     return NextResponse.json({ success: false, error: 'Could not delete the broadcast; nothing was deleted' }, { status: 500 })
   }
   return NextResponse.json({ success: true })
-}
+})

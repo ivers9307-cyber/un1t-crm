@@ -3,7 +3,8 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getTemplates as getMetaTemplates } from '@/lib/whatsapp'
 import { submitWhatsappTemplate } from '@/lib/whatsapp-template-submit'
-import { getCurrentUser, assertLocationAccess, assertLocationAccessOr404, getUserLocationIds } from '@/lib/auth'
+import { assertLocationAccess, assertLocationAccessOr404, getUserLocationIds } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -44,9 +45,8 @@ const WaTemplateCreateSchema = z.object({
 })
 
 // GET /api/whatsapp/templates — list templates (syncs with Meta)
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// ROUTEWRAP.R13 — withAuth only signs the caller in; the gates below are unchanged.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, request }) => {
 
   const { searchParams } = new URL(request.url)
   // The picker inside a thread asks by conversation: it lists the thread's
@@ -71,7 +71,10 @@ export async function GET(request) {
     const status = searchParams.get('status')
     if (status) q = q.eq('status', status)
     const { data: templates, error } = await q
-    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    if (error) {
+      logError('wa-templates', 'template list read failed', { conversationId, locationId: templateLocationId, err: error })
+      return NextResponse.json({ success: false, error: 'Could not load the templates' }, { status: 500 })
+    }
     return NextResponse.json({ success: true, templates: templates || [], template_location_id: templateLocationId })
   }
 
@@ -119,10 +122,13 @@ export async function GET(request) {
   if (status) query = query.eq('status', status)
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('wa-templates', 'template list read failed', { locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the templates' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, templates: data, ...syncField })
-}
+})
 
 // Every whatsapp_templates row on one WABA, any studio (the sync planner's
 // rowsOnWaba), paged under the 1,000-row cap. Throws on a failed read.
@@ -231,9 +237,7 @@ async function syncTemplatesFromMeta(db, locationId) {
 // POST /api/whatsapp/templates — create template and submit to Meta. MANAGER_ROLES
 // and `whatsapp` at the location created at, the resubmit rule (WATPLROLE.1,
 // GATES-3).
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request }) => {
 
   const validation = await validateBody(request, WaTemplateCreateSchema)
   if (!validation.ok) return validation.response
@@ -267,6 +271,17 @@ export async function POST(request) {
     headerMediaPath: body.header_media_path,
     displayGroup: body.display_group,
   })
-  if (!result.ok) return NextResponse.json({ success: false, error: result.error }, { status: result.status })
+  if (!result.ok) {
+    // ROUTEWRAP.R13 — a template Meta accepted but the save here failed carries
+    // the database's text in its message: log it, answer the fixed line.
+    if (result.code === 'orphan_at_meta') {
+      logError('wa-templates', 'template submitted to Meta but not saved', { locationId, name: body.name, err: result.error })
+      return NextResponse.json({
+        success: false,
+        error: 'The template was submitted to Meta but could not be saved here. It exists at Meta; a re-sync will adopt it.',
+      }, { status: result.status })
+    }
+    return NextResponse.json({ success: false, error: result.error }, { status: result.status })
+  }
   return NextResponse.json({ success: true, template: result.template })
-}
+})
