@@ -6,8 +6,8 @@
 // are fakes.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
-vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: vi.fn() }))
 vi.mock('@/lib/membership/reads/index.js', () => ({
   membershipReadsFor: vi.fn(),
   supportsRead: (r, key) => typeof r?.reads?.[key] === 'function',
@@ -153,6 +153,8 @@ describe('restamp_dates — access', () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await POST(req({ location_id: HATCH, restamp_dates: true }))
     expect(res.status).toBe(401)
+    // ROUTEWRAP.R15 — withAuth's body (was { ok: false, error: 'Unauthorised' }).
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
   })
 
   it('needs an explicit location_id (never the active location)', async () => {

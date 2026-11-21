@@ -12,8 +12,7 @@
 // Design: docs/superpowers/specs/2026-10-30-landing-pages-editor-design.md §7-8.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { isOrgAdmin } from '@/lib/org-admin'
 import { validateBody } from '@/lib/validate'
@@ -29,27 +28,23 @@ export const dynamic = 'force-dynamic'
 const fail = (status, error, extra = {}) => NextResponse.json({ success: false, error, ...extra }, { status })
 const unavailable = () => fail(503, 'unavailable')
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return fail(401, 'Unauthorised')
+// withAuth only signs the caller in (its 401); every rule below runs by hand
+// in its old order with its old answers.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   try {
-    const pages = await listPagesForUser(createServerClient(), user)
+    const pages = await listPagesForUser(db, user)
     return NextResponse.json({ success: true, data: pages })
   } catch (err) {
     if (!(err instanceof PageReadError)) throw err
     logError('landing-pages', 'pages list unreadable', { code: err.cause?.code ?? null })
     return unavailable()
   }
-}
+})
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return fail(401, 'Unauthorised')
-
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const validation = await validateBody(request, landingPageCreateSchema)
   if (!validation.ok) return validation.response
   const input = validation.data
-  const db = createServerClient()
 
   let orgId
   if (input.scope === 'one') {
@@ -101,4 +96,4 @@ export async function POST(request) {
     logError('landing-pages', 'page create read failed', { orgId, code: err.cause?.code ?? null })
     return unavailable()
   }
-}
+})

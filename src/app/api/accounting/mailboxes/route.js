@@ -6,10 +6,14 @@
 // so these routes gate on accounting_hub AND the active location. The
 // imap_password column is NEVER selected here — GET returns only the
 // operator-facing metadata columns.
+//
+// withAuth only signs the caller in (its 401): its own permission and studio
+// answers word the 403 and 400 differently, so accounting_hub (403 'Forbidden')
+// and the active studio (400) stay below in their old order.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { verifyMailboxLogin } from '@/lib/recon/imap-client'
@@ -23,9 +27,7 @@ const MailboxCreateSchema = z.object({
   password: z.string().min(8).max(128),
 })
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   if (!hasPermission(user, 'accounting_hub')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
@@ -34,23 +36,20 @@ export async function GET() {
     return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('recon_mailboxes')
     .select('id, label, email, active, last_ok_at, last_error, created_at')
     .eq('location_id', locationId)
     .order('created_at', { ascending: true })
   if (error) {
-    console.error('[accounting/mailboxes] list query failed:', error)
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('accounting-mailboxes', 'list query failed', { locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the inboxes. Try again.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: data || [] })
-}
+})
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!hasPermission(user, 'accounting_hub')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
@@ -74,7 +73,6 @@ export async function POST(request) {
     )
   }
 
-  const db = createServerClient()
   const { data: created, error: insErr } = await db
     .from('recon_mailboxes')
     .insert({
@@ -95,11 +93,11 @@ export async function POST(request) {
         { status: 409 }
       )
     }
-    // Never log credentials — insErr.message is a Postgres error
-    // string, not the password, but log defensively anyway.
-    console.error('[accounting/mailboxes] insert failed:', insErr.message)
-    return NextResponse.json({ success: false, error: insErr.message }, { status: 500 })
+    // Never log credentials — only the Postgres code and message, never the
+    // row that carried the password.
+    logError('accounting-mailboxes', 'insert failed', { locationId, code: insErr.code ?? null, message: insErr.message })
+    return NextResponse.json({ success: false, error: 'Could not add the inbox. Try again.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data: { id: created.id } })
-}
+})

@@ -24,8 +24,8 @@
 // worked here".
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertOrganizationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { assertOrganizationAccess } from '@/lib/auth'
 import { uuidLike } from '@/lib/schemas'
 import { reportPeriodError } from '@/lib/report-period'
 import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
@@ -41,9 +41,9 @@ function qs(searchParams, key) {
   return typeof v === 'string' && v.trim() ? v.trim() : null
 }
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (the same 401); the query, the
+// organisation (403) and canDownloadWrcPack (403) keep their order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   const { searchParams } = new URL(request.url)
   const requestedOrg = qs(searchParams, 'organization_id')
@@ -71,7 +71,6 @@ export async function GET(request) {
   if (periodError) return NextResponse.json({ success: false, error: periodError }, { status: 400 })
   const year = Number(to.slice(0, 4))
 
-  const db = createServerClient()
   const { pack, locations, error } = await generateWrcPack(db, { organizationId, from, to, year })
   if (error) {
     logError('wrc-pack', 'pack read failed', { organizationId, from, to, err: error })
@@ -102,4 +101,4 @@ export async function GET(request) {
       shifts: pack.shifts,
     },
   })
-}
+})

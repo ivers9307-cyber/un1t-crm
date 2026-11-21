@@ -7,8 +7,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { canApproveExpenseClaim, canSeeExpenseClaim } from '@/lib/fte-expense-access'
 import { validateBody } from '@/lib/validate'
 import { canTransition, periodLabel } from '@/lib/fte-expenses'
@@ -22,16 +22,16 @@ const Body = z.object({
   reason: z.string().min(1).max(1000),
 })
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const { id } = await params
+// withAuth only signs the caller in (the same 401). The body, the claim (404),
+// own claim (403), the approver check (403) and the state (409) keep their
+// order; the write, the push and the audit row are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const { id } = params
 
   const validation = await validateBody(request, Body)
   if (!validation.ok) return validation.response
   const { reason } = validation.data
 
-  const db = createServerClient()
   const { data: claim } = await db
     .from('fte_expense_claims')
     .select(`
@@ -74,7 +74,10 @@ export async function POST(request, { params }) {
     .eq('status', 'submitted')
     .select()
     .single()
-  if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+  if (updErr) {
+    logError('expenses-decline', 'decline update failed', { claimId: id, err: updErr })
+    return NextResponse.json({ success: false, error: 'Could not decline the claim. Refresh and try again.' }, { status: 500 })
+  }
   if (!updated) return NextResponse.json({ success: false, error: 'Claim was reviewed by someone else — refresh and retry.' }, { status: 409 })
 
   const warnings = []
@@ -87,7 +90,8 @@ export async function POST(request, { params }) {
       data: { type: 'expense_declined', claim_id: claim.id },
     })
   } catch (e) {
-    warnings.push(`Notification failed: ${e?.message || 'unknown'}`)
+    logError('expenses-decline', 'decline notification failed', { claimId: claim.id, err: e?.message || String(e) })
+    warnings.push('The claimant could not be notified.')
   }
 
   await logAuditEvent({
@@ -105,4 +109,4 @@ export async function POST(request, { params }) {
     data: updated,
     warning: warnings.length ? warnings.join(' ') : undefined,
   })
-}
+})

@@ -9,23 +9,24 @@
 // a clear message.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { issueCarInvoice, validateInvoiceFields } from '@/lib/xero/invoices'
 import { XeroError } from '@/lib/xero/client'
 
 export const runtime = 'nodejs'
 
-export async function POST(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in (its 401 'Unauthorized'; was 'Unauthorised').
+// car_processing somewhere (403), the car (404), its studio (404),
+// car_processing there (403), already issued (409) and the fields (400) keep
+// their order; the Xero call and the write are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: car, error: loadErr } = await db
     .from('cars').select('*').eq('id', params.id).single()
   if (loadErr || !car) {
@@ -72,9 +73,10 @@ export async function POST(_request, props) {
     }).eq('id', car.id)
 
     if (upErr) {
+      logError('cars-xero-invoice', 'car update after invoice failed', { carId: car.id, invoiceNumber: result.invoiceNumber, err: upErr })
       return NextResponse.json({
         success: false,
-        error: `Invoice created in Xero (${result.invoiceNumber}) but DB update failed: ${upErr.message}`,
+        error: `Invoice created in Xero (${result.invoiceNumber}) but saving it on the car failed.`,
         invoice: result,
       }, { status: 500 })
     }
@@ -100,13 +102,17 @@ export async function POST(_request, props) {
         }
       }
     }
+    // ROUTEWRAP.R15 — Xero's own per-field validation messages are the
+    // operator's to fix and still ride the answer; the top-level error text
+    // (which can carry database or token-exchange detail) is logged instead.
+    logError('cars-xero-invoice', 'issue failed', { carId: car.id, status, err: e?.message || String(e) })
     const message = validationDetails.length
-      ? `${e.message || 'Xero error'} — ${validationDetails.join(' · ')}`
-      : (e.message || 'Xero error')
+      ? `Xero refused the invoice — ${validationDetails.join(' · ')}`
+      : 'Xero could not issue the invoice. Try again.'
     return NextResponse.json({
       success: false,
       error: message,
       ...(validationDetails.length ? { validationDetails } : {}),
     }, { status })
   }
-}
+})

@@ -1,8 +1,8 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/org-admin', () => ({ isOrgAdminSomewhere: vi.fn(), resolveAdminOrgId: vi.fn(() => ({ orgId: 'org-1' })) }))
-vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: vi.fn() }))
 vi.mock('@/lib/usage-summary', () => ({ getOrgUsageSummary: vi.fn() }))
 
 import { PUT } from './route'

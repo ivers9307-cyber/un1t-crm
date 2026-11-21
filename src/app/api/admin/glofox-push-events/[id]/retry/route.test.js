@@ -5,9 +5,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
-vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/glofox-push', () => ({ findOrCreateGlofoxMember: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: vi.fn() }))
+vi.mock('@/lib/glofox-push', async (importOriginal) => ({ ...(await importOriginal()), findOrCreateGlofoxMember: vi.fn() }))
 
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
@@ -50,4 +50,34 @@ describe('POST /api/admin/glofox-push-events/[id]/retry — no password in the r
       expect(body.retried_event_id).toBe('ev-1')
     })
   }
+})
+
+// ROUTEWRAP.R15 — withAuth only signs the caller in; the master check and the
+// single Glofox call keep their place.
+describe('POST /api/admin/glofox-push-events/[id]/retry — the gate', () => {
+  const retry = () => POST(new Request('http://x.test', { method: 'POST' }), { params: Promise.resolve({ id: 'ev-1' }) })
+
+  it('401 signed out, Glofox never called', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await retry()
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(findOrCreateGlofoxMember).not.toHaveBeenCalled()
+  })
+
+  it('403 "Master only" for an owner, Glofox never called', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u-2', role: 'owner', profileRole: 'staff' })
+    const res = await retry()
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ success: false, error: 'Master only' })
+    expect(findOrCreateGlofoxMember).not.toHaveBeenCalled()
+  })
+
+  it('a master retries once, in the original source\'s mode', async () => {
+    findOrCreateGlofoxMember.mockResolvedValue({ status: 'matched', glofox_member_id: 'gx-1', error: null })
+    const res = await retry()
+    expect(res.status).toBe(200)
+    expect(findOrCreateGlofoxMember).toHaveBeenCalledTimes(1)
+    expect(findOrCreateGlofoxMember.mock.calls[0][0]).toMatchObject({ locationId: 'loc-1', source: 'manual_button', createIfMissing: true, attachTrial: true })
+  })
 })

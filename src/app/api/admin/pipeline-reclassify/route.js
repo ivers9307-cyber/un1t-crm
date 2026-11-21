@@ -23,8 +23,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { reclassifyAllContacts, restampUn1tDealDates } from '@/lib/pipeline-reclassify'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -60,9 +59,10 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in: signed out is its 401
+// { success: false, error: 'Unauthorized' } (was { ok: false, 'Unauthorised' }).
+// The master check keeps this file's own 403 body; the run is unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (user.profileRole !== 'master') {
     return NextResponse.json({ ok: false, error: 'Master only' }, { status: 403 })
   }
@@ -80,8 +80,6 @@ export async function POST(request) {
   // Operator can pass 'manual' for ad-hoc post-tweak re-runs.
   const source = body?.source === 'manual' ? 'manual' : 'backfill'
   const dryRun = body?.dry_run === true
-
-  const db = createServerClient()
 
   // HATCHPIPE.5 — the one-off date backfill. Scoped to body.location_id (the
   // schema requires it), un1t.online boards only; see restampUn1tDealDates.
@@ -106,4 +104,4 @@ export async function POST(request) {
     return NextResponse.json(result, { status: 500 })
   }
   return NextResponse.json(result)
-}
+})

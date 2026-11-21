@@ -11,8 +11,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { buildAchievementContext, runDetectors } from '@/lib/achievements'
 import { selectAll } from '@/lib/select-all'
 import { validateBody } from '@/lib/validate'
@@ -28,15 +28,10 @@ export const dynamic = 'force-dynamic'
 
 const HISTORY_LOOKBACK_DAYS = 365
 
-async function requireMaster() {
-  const user = await getCurrentUser()
-  if (!user || user.profileRole !== 'master') return null
-  return user
-}
-
-export async function POST(request) {
-  const user = await requireMaster()
-  if (!user) return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
+// withAuth only signs the caller in: signed out is its 401 (a 403
+// { ok: false } before). A non-master keeps this file's own 403 body.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
+  if (user.profileRole !== 'master') return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
 
   const v = await validateBody(request, AchievementTestSchema)
   if (!v.ok) return v.response
@@ -45,13 +40,11 @@ export async function POST(request) {
   const contactId = body.contact_id
   const ruleId = body.rule_id ?? null
 
-  const db = createServerClient()
-
   // Load contact's sessions.
   // AUDIT P1-2 — paginated (mirrors achievements.js runDetectionForSession):
   // the same 365-day history fetch, which can exceed the 1000-row cap for a
   // frequent member and silently truncate the preview. selectAll throws on a
-  // DB error; map it back to the existing 500-with-message path.
+  // DB error: logged, and answered with a fixed 500.
   const since = new Date(Date.now() - HISTORY_LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
   let sessions
   try {
@@ -65,7 +58,8 @@ export async function POST(request) {
       .order('id', { ascending: true })
       .range(from, to))
   } catch (err) {
-    return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
+    logError('achievements-test', 'session history read failed', { contactId, err: err?.message || String(err) })
+    return NextResponse.json({ ok: false, error: 'Could not read the session history. Try again.' }, { status: 500 })
   }
   if (!sessions || sessions.length === 0) {
     return NextResponse.json({ ok: true, fired: [], reason: 'no sessions in window' })
@@ -104,4 +98,4 @@ export async function POST(request) {
     sessions_in_window: sessions.length,
     fired: result,
   })
-}
+})

@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
 import { buildAudienceQueryAsync, consentFieldForStream } from '@/lib/postmark'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { audienceFilterSchema } from '@/lib/schemas'
 
@@ -13,6 +14,8 @@ const CampaignPreviewSchema = z.object({
 })
 
 export const dynamic = 'force-dynamic'
+
+const COUNT_FAILED = 'Could not count the audience'
 
 // CLASSIFY.1 — count now goes through buildAudienceQueryAsync which
 // uses denormalised contacts.email_marketing instead of an inner-join
@@ -38,20 +41,25 @@ async function computeCount(db, filter, locationId, consentField) {
       consentField,
     }))
   } catch (err) {
-    return { ok: false, status: 400, error: err.message }
+    // InvalidAudienceFilterError is the operator's filter being wrong, in our
+    // own words; anything else is logged and answered fixed (still 400).
+    if (err?.name === 'InvalidAudienceFilterError' && err.message) return { ok: false, status: 400, error: err.message }
+    logError('campaign-preview', 'audience build failed', { locationId, err: err?.message || String(err) })
+    return { ok: false, status: 400, error: COUNT_FAILED }
   }
   const { count, error } = await query
-  if (error) return { ok: false, status: 400, error: error.message }
+  if (error) {
+    logError('campaign-preview', 'audience count failed', { locationId, err: error })
+    return { ok: false, status: 400, error: COUNT_FAILED }
+  }
   return { ok: true, count: count || 0 }
 }
 
-// GET /api/campaigns/[id]/preview — Audience count for the SAVED filter.
-export async function GET(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (the same 401); the campaign (404) and its
+// studio (404) keep their order on both verbs.
 
-  const db = createServerClient()
+// GET /api/campaigns/[id]/preview — Audience count for the SAVED filter.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   const { data: campaign } = await db.from('campaigns')
     .select('audience_filter, location_id, postmark_stream')
     .eq('id', params.id)
@@ -66,7 +74,7 @@ export async function GET(_request, props) {
   const r = await computeCount(db, campaign.audience_filter, campaign.location_id, consentFieldForStream(campaign.postmark_stream))
   if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
   return NextResponse.json({ success: true, audience_count: r.count })
-}
+})
 
 // POST /api/campaigns/[id]/preview — Audience count for an IN-FLIGHT
 // filter (what the operator is currently editing). Body: { filter }.
@@ -75,12 +83,7 @@ export async function GET(_request, props) {
 // reflected the SAVED filter, not what the operator was looking at.
 // POST lets the editor compute against the live filter so the number
 // is always meaningful, and errors actually surface.
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   const { data: campaign } = await db.from('campaigns')
     .select('audience_filter, location_id, postmark_stream')
     .eq('id', params.id)
@@ -107,4 +110,4 @@ export async function POST(request, props) {
   const r = await computeCount(db, filter, campaign.location_id, consentFieldForStream(stream))
   if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
   return NextResponse.json({ success: true, audience_count: r.count })
-}
+})

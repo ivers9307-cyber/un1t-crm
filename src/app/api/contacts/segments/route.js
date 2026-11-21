@@ -14,8 +14,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { audienceFilterSchema } from '@/lib/schemas'
 import { validateBody, uuidLike } from '@/lib/validate'
 import {
@@ -39,9 +40,10 @@ const CreateBody = z.object({
   location_id: uuidLike.optional(),
 })
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in (its 401 'Unauthorized'; was
+// 'Unauthorised'). The studio (membership 403, then the permission there)
+// keeps its order on both verbs.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   const url = new URL(request.url)
   const locationId = url.searchParams.get('location_id') || user.activeLocation?.id
@@ -51,20 +53,20 @@ export async function GET(request) {
   // SEGMENTROUTE.1: the permission AT that studio, after membership.
   if (!canReadSegmentsAt(user, locationId)) return segmentReadRefused()
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('contact_segments')
     .select('id, name, description, filter, created_at, updated_at, created_by')
     .eq('location_id', locationId)
     .order('name', { ascending: true })
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('contact-segments', 'segment list failed', { locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the segments. Try again.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, segments: data || [] })
-}
+})
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   const validation = await validateBody(request, CreateBody)
   if (!validation.ok) return validation.response
@@ -85,7 +87,6 @@ export async function POST(request) {
   const invalid = audienceFilterRefusal(parsed.data.filter)
   if (invalid) return invalid
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('contact_segments')
     .insert({
@@ -103,8 +104,9 @@ export async function POST(request) {
     if (/duplicate key|unique constraint/i.test(error.message)) {
       return NextResponse.json({ success: false, error: 'A segment with this name already exists.' }, { status: 409 })
     }
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('contact-segments', 'segment insert failed', { locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the segment. Try again.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, segment: data })
-}
+})

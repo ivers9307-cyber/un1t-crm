@@ -20,8 +20,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { getAppUrl } from '@/lib/app-url'
 import { logError } from '@/lib/log'
@@ -37,28 +36,25 @@ const IssueSchema = z.object({ replace: z.boolean().optional() }).strict()
 function json(body, status = 200) {
   return NextResponse.json(body, { status, headers: NO_STORE })
 }
-const unauthorized = () => json({ success: false, error: 'Unauthorized' }, 401)
 const viewingAsSomeone = (user) => !!(user.impersonatingFrom || user.supportSession?.impersonatedUserId)
 const impersonating = () => json({
   success: false,
   error: 'A calendar link can only be made or turned off by the person it belongs to, not while viewing as them.',
 }, 403)
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return unauthorized()
-  const db = createServerClient()
+// withAuth only signs the caller in: the same 401 body (without this file's
+// no-store header, which carries nothing on a refusal). The impersonation
+// refusal and everything after it keep their order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   const { data, error } = await getCalendarFeedStatus(db, user.id)
   if (error) {
     logError('calendar-feed', 'status read failed', { err: error })
     return json({ success: false, error: 'Could not read your calendar link.' }, 500)
   }
   return json({ success: true, data })
-}
+})
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return unauthorized()
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (viewingAsSomeone(user)) return impersonating()
 
   const validation = await validateBody(request, IssueSchema, { allowEmpty: true })
@@ -74,7 +70,6 @@ export async function POST(request) {
     return json({ success: false, error: 'Calendar links are not configured on this server.' }, 500)
   }
 
-  const db = createServerClient()
   const result = await issueCalendarFeed(db, user.id, { replace: validation.data.replace === true })
   if (result.conflict) {
     return json({
@@ -88,18 +83,15 @@ export async function POST(request) {
     return json({ success: false, error: 'Could not make your calendar link.' }, 500)
   }
   return json({ success: true, data: { ...calendarFeedUrls(base, result.token), replaced: result.replaced } })
-}
+})
 
-export async function DELETE() {
-  const user = await getCurrentUser()
-  if (!user) return unauthorized()
+export const DELETE = withAuth({ permission: null, location: false }, async ({ user, db }) => {
   if (viewingAsSomeone(user)) return impersonating()
 
-  const db = createServerClient()
   const { revoked, error } = await revokeCalendarFeed(db, user.id)
   if (error) {
     logError('calendar-feed', 'revoke failed', { err: error })
     return json({ success: false, error: 'Could not turn off your calendar link.' }, 500)
   }
   return json({ success: true, data: { revoked } })
-}
+})

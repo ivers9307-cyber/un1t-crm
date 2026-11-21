@@ -6,14 +6,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let db
-vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: () => db }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/permissions', async (importOriginal) => ({ ...(await importOriginal()), hasPermission: vi.fn(() => true) }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/pipeline-card-signals', async (importOriginal) => ({ ...(await importOriginal()), loadCardSignals: vi.fn() }))
 
 import { GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { logWarn } from '@/lib/log'
 import { loadCardSignals } from '@/lib/pipeline-card-signals'
 
@@ -198,5 +199,49 @@ describe('GET /api/pipeline/deals — board filter (BOARDFILTER.1)', () => {
     expect(res.status).toBe(200)
     expect(seen.deals.ilike).toEqual(['title', '%pat%'])
     expect(seen.deals.or).toMatch(/^stage_entered_at\.lte\./)
+  })
+})
+
+// ROUTEWRAP.R15 — withAuth signs the caller in; pipeline (403), the active
+// studio (400) and the stage at that studio (404) keep their order and words.
+describe('GET /api/pipeline/deals — the gate', () => {
+  it('401 signed out', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    setup({ data: { module: 'acquisition', board_type: null }, error: null })
+    const res = await GET(req())
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+  })
+
+  it('403 "Forbidden" without pipeline', async () => {
+    hasPermission.mockReturnValueOnce(false)
+    setup({ data: { module: 'acquisition', board_type: null }, error: null })
+    const res = await GET(req())
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ success: false, error: 'Forbidden' })
+  })
+
+  it('400 with no active studio', async () => {
+    getCurrentUser.mockResolvedValue({ activeLocation: null })
+    setup({ data: { module: 'acquisition', board_type: null }, error: null })
+    const res = await GET(req())
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'No active location' })
+  })
+
+  it('404 for a stage that is not at the active studio', async () => {
+    db = fakeDb({ pipeline_stages: { data: null, error: null } })
+    const res = await GET(req())
+    expect(res.status).toBe(404)
+  })
+
+  it('a failed deals read answers a fixed 500, never the database text', async () => {
+    db = fakeDb({
+      pipeline_stages: { data: { id: STAGE, pipeline_id: null }, error: null },
+      deals: { data: null, error: { message: 'column deals.secret does not exist' } },
+    })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not load more deals. Try again.' })
   })
 })

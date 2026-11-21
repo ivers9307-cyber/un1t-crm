@@ -19,20 +19,20 @@
 // + a Postmark transactional send. Out of scope for v1.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { getAppUrl } from '@/lib/app-url'
 import { ADMIN_ROLES } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  }
+// withAuth only signs the caller in (its 401 'Unauthorized'; was 'Unauthorised').
+// The coarse admin check (403), the target (404), the shared-studio overlap
+// (404), the email (400) and active (409) keep their order; the one reset
+// email is sent exactly as before.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   // Master, or ADMIN_ROLES at a location the target staffer works at, can
   // trigger a reset. ROLESWEEP.1c — this is only the coarse pre-check (admin
   // somewhere); the real decision is the overlap below, which counts only the
@@ -41,7 +41,6 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { data: target, error: lookupErr } = await db
     .from('profiles')
     .select('id, email, full_name, active, profile_locations(location_id)')
@@ -97,9 +96,10 @@ export async function POST(_request, props) {
     redirectTo ? { redirectTo } : undefined,
   )
   if (sendErr) {
+    logError('staff-password-reset', 'reset email failed', { targetId: target.id, err: sendErr })
     return NextResponse.json({
       success: false,
-      error: `Failed to send reset email: ${sendErr.message}`,
+      error: 'Failed to send the reset email. Try again.',
     }, { status: 502 })
   }
 
@@ -108,4 +108,4 @@ export async function POST(_request, props) {
     sent_to: target.email,
     message: `Password reset email sent to ${target.email}.`,
   })
-}
+})

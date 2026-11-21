@@ -12,8 +12,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { isOrgAdminSomewhere, resolveAdminOrgId } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { getOrgUsageSummary } from '@/lib/usage-summary'
@@ -26,10 +26,11 @@ function resolveOrgId(user, requested) {
   return resolveAdminOrgId(user, requested).orgId || null
 }
 
+// withAuth only signs the caller in (the same 401); the org-admin check and the
+// organisation keep their order and their 403 texts.
+
 // GET /api/settings/org-usage?organization_id=xxx
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!isOrgAdminSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
@@ -38,10 +39,9 @@ export async function GET(request) {
   const orgId = resolveOrgId(user, searchParams.get('organization_id'))
   if (!orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
 
-  const db = createServerClient()
   const data = await getOrgUsageSummary(db, orgId)
   return NextResponse.json({ success: true, data })
-}
+})
 
 const CapsSchema = z.object({
   organization_id: uuidLike.optional(),
@@ -65,9 +65,7 @@ const CapsSchema = z.object({
 })
 
 // PUT /api/settings/org-usage — set/clear the org hard caps (organisation admin)
-export async function PUT(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!isOrgAdminSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Only organisation admins can change usage caps' }, { status: 403 })
   }
@@ -93,13 +91,15 @@ export async function PUT(request) {
     patch.ops_alert_emails = emails.length > 0 ? emails : null
   }
 
-  const db = createServerClient()
   const { data, error } = await db
     .from('org_settings')
     .upsert(patch, { onConflict: 'organization_id' })
     .select('ai_hard_cap_cents, assistant_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, voice_transcription_enabled, voice_transcription_monthly_cap_minutes, voice_reply_mode, voice_reply_test_phones, voice_reply_monthly_cap')
     .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('org-usage', 'caps save failed', { orgId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the usage settings. Try again.' }, { status: 400 })
+  }
 
   return NextResponse.json({ success: true, data })
-}
+})
