@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
+import { assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { fetchApiShiftRows } from '@/lib/roster-read'
 import { fetchOwnOpenSwaps, annotateOwnOpenSwaps, ownShiftIds } from '@/lib/shift-open-swaps'
 import { fetchOwnArrivalFacts, annotateOwnArrivals, ownLocationIds } from '@/lib/shift-arrivals'
@@ -16,8 +16,9 @@ import { logError } from '@/lib/log'
 // public.shifts table no longer has any reader after this.)
 
 // GET /api/schedule/shifts?location_id=xxx&start_date=2026-04-27&end_date=2026-05-03&profile_id=xxx
-export async function GET(request) {
-  const user = await getCurrentUser()
+// withAuth only signs the caller in (the same 401 assertLocationAccess gave a
+// signed-out caller); the studio check below keeps its place.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
   const guard = assertLocationAccess(user, locationId)
@@ -39,7 +40,6 @@ export async function GET(request) {
   // a wide range one unpaged select PostgREST silently cut at 1,000 rows.
   const rangeError = rangeQueryError(startDate, endDate, { maxDays: MAX_LIST_RANGE_DAYS })
   if (rangeError) return NextResponse.json({ success: false, error: rangeError }, { status: 400 })
-  const db = createServerClient()
 
   // Specific location, or fall back to all of the caller's own locations.
   const locationIds = locationId ? [locationId] : getUserLocationIds(user)
@@ -67,7 +67,10 @@ export async function GET(request) {
       isManagerAt: (locId) => hasRoleAtLocation(user, locId, MANAGER_ROLES),
     },
   })
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    logError('schedule', 'shift read failed', { err: error?.message || String(error) })
+    return NextResponse.json({ success: false, error: 'Could not read the shifts.' }, { status: 400 })
+  }
 
   // COVERLOOP.2 — the caller's OWN rows say whether a swap is open on them
   // (the phone's "Swap pending" chip). Keyed on the caller AND bounded to the
@@ -94,4 +97,4 @@ export async function GET(request) {
     data = withSwaps.map((r) => ({ ...r, arrival: null }))
   }
   return NextResponse.json({ success: true, data })
-}
+})

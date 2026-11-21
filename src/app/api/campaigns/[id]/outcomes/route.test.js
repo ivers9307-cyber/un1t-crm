@@ -20,7 +20,7 @@ let campaignRow = { id: CAMPAIGN, location_id: STILLORGAN }
 let rpcRows = []
 let rpcError = null
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()),
   getCurrentUser: vi.fn(async () => ({ id: 'u1' })),
   assertLocationAccessOr404: vi.fn((_user, locationId) =>
     locationId === STILLORGAN
@@ -106,6 +106,15 @@ describe('GET /api/campaigns/[id]/outcomes (GAPS-P2)', () => {
     const res = await GET(req(), props)
     expect(res.status).toBe(404)
     expect(rpcCalls).toEqual([])
+  })
+
+  it('401s a signed-out caller through withAuth, reading nothing', async () => {
+    const { getCurrentUser } = await import('@/lib/auth')
+    getCurrentUser.mockResolvedValueOnce(null)
+    const res = await GET(req(), props)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(rpcCalls).toHaveLength(0)
   })
 
   it('404s a missing campaign the same way (ids are not enumerable)', async () => {

@@ -12,8 +12,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { publishVersion, policyOrgIdFor, isCalendarDate } from '@/lib/policies'
 import { logAuditEvent } from '@/lib/audit'
@@ -35,10 +35,10 @@ const PublishSchema = z.object({
 // policies belong to an organisation: the slug resolves inside the caller's
 // ACTIVE organisation only, so a version is published into that tenant alone.
 
-export async function POST(request, { params }) {
-  const { slug } = await params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; canManagePolicies, the body and the slug
+// inside the active organisation run by hand, in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const { slug } = params || {}
   if (!canManagePolicies(user)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
@@ -51,7 +51,6 @@ export async function POST(request, { params }) {
   if (!orgId) {
     return NextResponse.json({ success: false, error: 'Policy not found' }, { status: 404 })
   }
-  const db = createServerClient()
   const { data: policy } = await db
     .from('policies')
     .select('id, active')
@@ -97,6 +96,7 @@ export async function POST(request, { params }) {
 
     return NextResponse.json({ success: true, version })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e.message || 'Publish failed' }, { status: 500 })
+    logError('policies', 'publish failed', { policyId: policy.id, err: e?.message || String(e) })
+    return NextResponse.json({ success: false, error: 'Publish failed' }, { status: 500 })
   }
-}
+})

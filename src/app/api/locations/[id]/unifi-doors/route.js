@@ -16,8 +16,7 @@
 //   { success: true, doors: [{ id, name }], count: <number> }
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { logError } from '@/lib/log'
 import {
@@ -31,22 +30,9 @@ export const dynamic = 'force-dynamic'
 
 const MODULE = 'locations-unifi-doors'
 
-export async function GET(_request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'unauthenticated' }, { status: 401 })
-
-  const { id: locationId } = await params
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'missing_location_id' }, { status: 400 })
-  }
-
-  const denied = assertLocationAccessOr404(user, locationId)
-  if (denied) return denied
-  if (!hasRoleAtLocation(user, locationId, ADMIN_ROLES)) {
-    return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
-  }
-
-  const db = createServerClient()
+// The URL's studio: not one of the caller's studios is a 404 (withAuth's
+// 'param' mode), then ADMIN_ROLES AT that studio (masters pass), 403 'forbidden'.
+export const GET = withAuth({ permission: null, location: 'param', roles: ADMIN_ROLES, forbiddenMessage: 'forbidden' }, async ({ db, locationId }) => {
   const { data: location, error: locErr } = await db
     .from('locations')
     .select('id, name, settings')
@@ -88,10 +74,12 @@ export async function GET(_request, { params }) {
     return NextResponse.json({ success: true, doors, count: doors.length })
   } catch (e) {
     const status = e instanceof UnifiError && e.status ? e.status : 502
+    // The controller's own text stays in the log, never the response.
+    logError(MODULE, 'listing the doors failed', { locationId, status, err: e?.message || String(e) })
     return NextResponse.json({
       success: false,
       error: 'unifi_request_failed',
-      message: e.message || String(e),
+      message: 'The UniFi Access controller could not list the doors.',
     }, { status })
   }
-}
+})

@@ -8,9 +8,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 
 // recipients is optional — an empty array is valid (disables the digest)
@@ -24,13 +24,10 @@ export const dynamic = 'force-dynamic'
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const MAX_RECIPIENTS = 20
 
-// Shared auth + active-location resolution. Returns { locationId } or
-// { error: NextResponse }.
-async function guard() {
-  const user = await getCurrentUser()
-  if (!user) {
-    return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
-  }
+// withAuth signs the caller in; this keeps churn_radar at the active studio
+// (403 'Forbidden') and the active studio (400) in their old words.
+// Returns { locationId } or { error: NextResponse }.
+function guard(user) {
   if (!hasPermission(user, 'churn_radar')) {
     return { error: NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 }) }
   }
@@ -41,26 +38,26 @@ async function guard() {
   return { locationId }
 }
 
-export async function GET() {
-  const g = await guard()
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
+  const g = guard(user)
   if (g.error) return g.error
-  const db = createServerClient()
   const { data, error } = await db
     .from('locations')
     .select('churn_digest_recipients')
     .eq('id', g.locationId)
     .single()
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('churn-digest-settings', 'recipients read failed', { locationId: g.locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the digest settings.' }, { status: 500 })
   }
   return NextResponse.json({
     success: true,
     data: { recipients: data?.churn_digest_recipients || [] },
   })
-}
+})
 
-export async function PUT(request) {
-  const g = await guard()
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
+  const g = guard(user)
   if (g.error) return g.error
 
   const v = await validateBody(request, DigestSettingsSchema, { allowEmpty: true })
@@ -92,13 +89,13 @@ export async function PUT(request) {
     )
   }
 
-  const db = createServerClient()
   const { error } = await db
     .from('locations')
     .update({ churn_digest_recipients: recipients })
     .eq('id', g.locationId)
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('churn-digest-settings', 'recipients update failed', { locationId: g.locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the digest settings.' }, { status: 500 })
   }
   return NextResponse.json({ success: true, data: { recipients } })
-}
+})

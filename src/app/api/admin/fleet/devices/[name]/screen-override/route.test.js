@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/screen-doorbell', () => ({ ringScreens: vi.fn(async () => 1) }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'

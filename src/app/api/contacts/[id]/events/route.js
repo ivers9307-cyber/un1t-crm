@@ -11,22 +11,19 @@
 // location check answering 404 (not 403) so ids can't be enumerated.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
-  const db = createServerClient()
+// withAuth only signs the caller in; the contact's studio (404) runs by hand.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   const { data: contact, error: contactErr } = await db
     .from('contacts')
     .select('id, location_id')
-    .eq('id', params.id)
+    .eq('id', params?.id)
     .single()
   if (contactErr || !contact) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
@@ -52,10 +49,11 @@ export async function GET(_request, props) {
         )
       )
     `)
-    .eq('contact_id', params.id)
+    .eq('contact_id', contact.id)
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    logError('contact-events', 'race history read failed', { contactId: contact.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the events.' }, { status: 500 })
   }
 
   // Flatten into one entry per registration, with elapsed time
@@ -97,4 +95,4 @@ export async function GET(_request, props) {
   out.sort((a, b) => (b.race?.race_date || '').localeCompare(a.race?.race_date || ''))
 
   return NextResponse.json({ success: true, data: out })
-}
+})

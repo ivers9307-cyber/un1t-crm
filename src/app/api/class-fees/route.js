@@ -3,8 +3,8 @@
 // Session auth + the class_fees permission at that studio.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { canUseClassFees } from '@/lib/class-fees-access'
 import { readClassFeeContext, contactNames, FEE_COLUMNS } from '@/lib/class-fees-run'
 import { dateKeyIn, addDaysIn, dayStartMsIn } from '@/lib/location-time'
@@ -20,9 +20,9 @@ const TAB_STATUSES = Object.freeze({
   history: ['charged', 'waived', 'recorded'],
 })
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in. Every check after it runs by hand, in the
+// order it always has: location_id 400, tab 400, studio 403, class fees 403.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const url = new URL(request.url)
   const locationId = url.searchParams.get('location_id') || user.activeLocation?.id
   const tab = url.searchParams.get('tab') || 'due'
@@ -32,7 +32,6 @@ export async function GET(request) {
   if (guard) return guard
   if (!canUseClassFees(user, locationId)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
-  const db = createServerClient()
   try {
     const ctx = await readClassFeeContext(db, locationId)
     if (ctx.location.membershipSource !== 'un1t_online') {
@@ -59,7 +58,7 @@ export async function GET(request) {
     logError('class-fees', 'list failed', { locationId, tab, code: err?.code ?? null })
     return NextResponse.json({ success: false, error: 'Could not load class fees just now.' }, { status: 500 })
   }
-}
+})
 
 // Bookings still `booked` after their class (last 7 days): never charged
 // while undecided; staff mark them in un1t.online.

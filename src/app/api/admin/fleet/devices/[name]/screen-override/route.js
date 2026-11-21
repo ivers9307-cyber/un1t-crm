@@ -18,9 +18,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { SCREEN_MODES, OVERRIDE_MINUTES } from '@/lib/screen-mode'
 import { ringScreens } from '@/lib/screen-doorbell'
@@ -37,18 +36,14 @@ const OverrideSchema = z.union([
   z.object({ clear: z.literal(true) }),
 ])
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
-  }
+// A staff session (master or fleet_restart at the device's studio). withAuth
+// only signs the caller in; the device read and the 404 gate keep their order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   const validation = await validateBody(request, OverrideSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const db = createServerClient()
   const { data: device, error: readError } = await db
     .from('fleet_devices')
     .select('device_name, role, location_id')
@@ -99,4 +94,4 @@ export async function POST(request, props) {
   }
 
   return NextResponse.json({ ok: true, override })
-}
+})

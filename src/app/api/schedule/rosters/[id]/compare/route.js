@@ -26,8 +26,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { uuidLike, realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { loadRosterComparison } from '@/lib/roster-snapshot'
 
@@ -44,10 +44,10 @@ function fail(status, error) {
   return NextResponse.json({ success: false, error }, { status })
 }
 
-export async function GET(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) return fail(403, 'Unauthorized')
+// withAuth only signs the caller in (signed out is its 401). Every check after
+// it runs by hand, in the order it always has.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) return fail(403, 'Unauthorized')
 
   const url = new URL(request.url)
   const parsed = QuerySchema.safeParse({
@@ -62,9 +62,8 @@ export async function GET(request, props) {
   if (from && to && to < from) return fail(400, 'to must be on or after from')
 
   // A malformed id is simply not a roster: 404, never Postgres's 22P02 text.
-  if (!uuidLike.safeParse(params.id).success) return fail(404, 'Roster not found')
+  if (!uuidLike.safeParse(params?.id).success) return fail(404, 'Roster not found')
 
-  const db = createServerClient()
   const { data: roster, error: rosterErr } = await db
     .from('rosters')
     .select('id, location_id, status, period_start, period_end, published_at, published_by')
@@ -95,4 +94,4 @@ export async function GET(request, props) {
   // be a lie. loadRosterComparison has already logged it.
   if (result.error || !result.data) return fail(500, 'The comparison could not be read')
   return NextResponse.json({ success: true, data: result.data })
-}
+})

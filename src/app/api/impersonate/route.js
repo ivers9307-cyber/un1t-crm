@@ -10,22 +10,31 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { headers } from 'next/headers'
-import { getCurrentUser } from '@/lib/auth'
 import { startImpersonation } from '@/lib/impersonation'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { logAuditEvent } from '@/lib/audit'
 import { validateBody } from '@/lib/validate'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
+
+// The fixed refusals startImpersonation throws; anything else it throws is
+// database text, logged and answered with the generic line.
+const START_REFUSALS = new Set([
+  'Only master accounts can start an impersonation session.',
+  'Cannot impersonate yourself.',
+  'Target user not found.',
+])
 
 const Body = z.object({
   target_user_id: z.string().uuid(),
   reason: z.string().max(500).nullable().optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in. The real-master check (including the
+// already-impersonating case), the body, the self check and the target read
+// all run by hand below, in the order they always have.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   // The REAL underlying session must be a master. When already
   // impersonating, the visible `user` is the target — but we know
@@ -48,7 +57,6 @@ export async function POST(request) {
 
   // Sanity-check target exists + is active. RLS on profiles allows
   // master to read everyone via private.auth_is_master().
-  const db = createServerClient()
   const { data: target, error: tErr } = await db
     .from('profiles')
     .select('id, full_name, role, active')
@@ -92,6 +100,8 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, ...result })
   } catch (e) {
-    return NextResponse.json({ success: false, error: e.message || 'Impersonation failed' }, { status: 500 })
+    const known = START_REFUSALS.has(e?.message)
+    if (!known) logError('impersonate', 'start failed', { masterId: realMasterId, err: e?.message || String(e) })
+    return NextResponse.json({ success: false, error: known ? e.message : 'Impersonation failed' }, { status: 500 })
   }
-}
+})

@@ -13,8 +13,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { assertDisplayAtLocation } from '@/lib/screen-plan'
@@ -35,12 +34,9 @@ const ClaimSchema = z.object({
   tv_display_id: uuidLike.nullable().optional(),
 })
 
-export async function PATCH(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
-  }
+// A master's staff session (not the device token, which is …/token). withAuth
+// only signs the caller in; the master check keeps its { ok } body.
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!user.isMaster) {
     return NextResponse.json({ ok: false, error: 'Master only' }, { status: 403 })
   }
@@ -48,7 +44,6 @@ export async function PATCH(request, props) {
   const validation = await validateBody(request, ClaimSchema)
   if (!validation.ok) return validation.response
 
-  const db = createServerClient()
 
   // A display is only linkable when it is active and at the studio the device
   // is being claimed into. Checked before any write.
@@ -96,4 +91,4 @@ export async function PATCH(request, props) {
 
   logInfo('fleet-cmd', 'device claimed', { device: params.name, by: user.id })
   return NextResponse.json({ ok: true, device: data })
-}
+})
