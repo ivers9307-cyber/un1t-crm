@@ -26,8 +26,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { uuidLike, isoDate, isRealCalendarDate, MANAGER_ROLES } from '@/lib/schemas'
 import { listRosterChanges } from '@/lib/roster-change-log'
 
@@ -42,9 +43,10 @@ const QuerySchema = z.object({
   to: isoDate,
 })
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
+// withAuth only signs the caller in (signed out is its 401). Every check after
+// it runs by hand, in the order it always has.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -86,11 +88,13 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const db = createServerClient()
   const { changes, truncated, error } = await listRosterChanges(db, { locationId: location_id, from, to })
   // A failed read is a 500, never `changes: []`: an empty drawer says "nothing
   // changed", and that would be a lie.
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('schedule-change-log', 'change log read failed', { locationId: location_id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not read the change log.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, data: { changes, truncated } })
-}
+})

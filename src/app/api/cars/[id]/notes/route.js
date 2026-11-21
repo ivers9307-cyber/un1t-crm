@@ -10,9 +10,10 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -27,16 +28,14 @@ async function loadCar(db, carId) {
   return data
 }
 
-export async function GET(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; car_processing somewhere, the car's
+// studio (404) and car_processing there run by hand, in their old order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
-  const db = createServerClient()
-  const car = await loadCar(db, params.id)
+  const car = await loadCar(db, params?.id)
   if (!car) return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
@@ -48,22 +47,22 @@ export async function GET(_request, props) {
   const { data, error } = await db
     .from('car_notes')
     .select('id, content, kind, created_at, created_by, profiles:created_by(full_name)')
-    .eq('car_id', params.id)
+    .eq('car_id', car.id)
     .order('created_at', { ascending: false })
     .limit(200)
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('car-notes', 'notes read failed', { carId: car.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load the notes.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, notes: data || [] })
-}
+})
 
 const PostBody = z.object({
   content: z.string().min(1).max(5000),
 })
 
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
@@ -71,8 +70,7 @@ export async function POST(request, props) {
   const v = await validateBody(request, PostBody)
   if (!v.ok) return v.response
 
-  const db = createServerClient()
-  const car = await loadCar(db, params.id)
+  const car = await loadCar(db, params?.id)
   if (!car) return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
@@ -93,6 +91,9 @@ export async function POST(request, props) {
     .select('id, content, kind, created_at, created_by, profiles:created_by(full_name)')
     .single()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('car-notes', 'note insert failed', { carId: car.id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not save the note.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, note: data })
-}
+})

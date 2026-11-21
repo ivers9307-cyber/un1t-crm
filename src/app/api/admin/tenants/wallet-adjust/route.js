@@ -16,8 +16,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { applyWalletEntry } from '@/lib/wallet'
 import { logAuditEvent } from '@/lib/audit'
@@ -37,11 +37,10 @@ const AdjustBody = z.object({
   note: z.string().trim().min(5, 'A note of at least 5 characters is required').max(500),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// withAuth only signs the caller in. Every check after it runs by hand, in the
+// order it always has (profiles.role master 403, body 400, location 404), and
+// the wallet write is unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (user.profileRole !== 'master') {
     return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
   }
@@ -50,7 +49,6 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const { locationId, amountCents, note } = validation.data
 
-  const db = createServerClient()
 
   // Existence check first — a clean 404 beats an FK error from the RPC
   // (and 404 not 403: detail semantics, ids aren't enumerable).
@@ -60,7 +58,8 @@ export async function POST(request) {
     .eq('id', locationId)
     .maybeSingle()
   if (locErr) {
-    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
+    logError('wallet-adjust', 'location read failed', { locationId, err: locErr })
+    return NextResponse.json({ success: false, error: 'Could not read the location.' }, { status: 500 })
   }
   if (!location) {
     return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
@@ -76,9 +75,15 @@ export async function POST(request) {
       createdBy: user.id,
     })
   } catch (e) {
-    // wallet_apply enforces the -1000c grace floor and kind semantics —
-    // surface its message (e.g. a debit that would breach the floor).
-    return NextResponse.json({ success: false, error: e.message }, { status: 400 })
+    // wallet_apply enforces the -1000c grace floor and kind semantics. Its
+    // text is database text (it names the location id and the balance), so it
+    // is logged and the caller gets a fixed line, still a 400.
+    logError('wallet-adjust', 'wallet_apply refused the adjustment', { locationId, err: e?.message || String(e) })
+    const floor = /grace floor/.test(String(e?.message || ''))
+    return NextResponse.json({
+      success: false,
+      error: floor ? 'That debit would take the wallet below its grace floor.' : 'The adjustment could not be applied.',
+    }, { status: 400 })
   }
 
   // Fire-and-forget secondary audit trail — never blocks the response
@@ -98,4 +103,4 @@ export async function POST(request) {
   }
 
   return NextResponse.json({ success: true, data: { locationId, balanceCents } })
-}
+})

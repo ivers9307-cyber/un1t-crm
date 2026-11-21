@@ -10,6 +10,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/auth', async (importOriginal) => {
   const real = await importOriginal()
   return {
+    ...real,
     getCurrentUser: vi.fn(),
     // REAL: membership (404) and the role at the roster's studio (403) are under test.
     assertLocationAccessOr404: real.assertLocationAccessOr404,
@@ -87,16 +88,21 @@ describe('GET /api/schedule/rosters/[id]/compare', () => {
     expect(loadRosterComparison.mock.calls[0][1]).toMatchObject({ againstId: SID, from: null, to: null })
   })
 
+  // withAuth makes the client up front; "before any read" is no query on it.
   it('no manager role anywhere: 403 before any read', async () => {
+    const db = rosterDb()
+    createServerClient.mockReturnValue(db)
     getCurrentUser.mockResolvedValue({ ...MANAGER, rolesByLocation: { [LOC]: 'staff' } })
     const res = await GET(get(), props())
     expect(res.status).toBe(403)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(db.calls).toHaveLength(0)
   })
 
-  it('no session: 403', async () => {
+  it('no session: withAuth\'s 401', async () => {
     getCurrentUser.mockResolvedValue(null)
-    expect((await GET(get(), props())).status).toBe(403)
+    const res = await GET(get(), props())
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
   })
 
   it('refuses a date that is not real, a reversed range and a malformed baseline id', async () => {
@@ -108,9 +114,11 @@ describe('GET /api/schedule/rosters/[id]/compare', () => {
   })
 
   it('a malformed roster id is simply not found', async () => {
+    const db = rosterDb()
+    createServerClient.mockReturnValue(db)
     const res = await GET(get(), props('nope'))
     expect(res.status).toBe(404)
-    expect(createServerClient).not.toHaveBeenCalled()
+    expect(db.calls).toHaveLength(0)
   })
 
   it('an unknown roster: 404', async () => {

@@ -12,25 +12,22 @@
 // already shaped for the palette via the shared entityResult() mapper.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { sanitizeSearchTerm, MIN_CONTACT_SEARCH_LEN, LAUNCHER_RESULT_CAP, entityResult } from '@/lib/command-palette'
 import { formatShortDate } from '@/lib/dates'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; the active-studio 400 keeps its words.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
 
   const term = sanitizeSearchTerm(new URL(request.url).searchParams.get('q'))
   if (term.length < MIN_CONTACT_SEARCH_LEN) return NextResponse.json({ success: true, results: [] })
 
-  const db = createServerClient()
   const like = `%${term}%`
   const results = []
   const tasks = []
@@ -95,4 +92,4 @@ export async function GET(request) {
 
   await Promise.all(tasks)
   return NextResponse.json({ success: true, results })
-}
+})

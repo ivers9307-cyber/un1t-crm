@@ -3,11 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let db
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()),
   getCurrentUser: vi.fn(async () => ({ id: 'u1', role: 'manager', activeLocation: { id: 'L1' }, locations: [{ id: 'L1' }] })),
   getUserLocationIds: vi.fn(() => ['L1']),
 }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn() }))
 
 import { logWarn } from '@/lib/log'
 import { getUserLocationIds, getCurrentUser } from '@/lib/auth'
@@ -110,5 +110,37 @@ describe('GET conversation outside the caller\'s studios', () => {
     const res = await conversation()
     expect(await res.json()).toEqual({ success: true, requests: [] })
     expect(profileReads).toHaveLength(0)
+  })
+})
+
+// ROUTEWRAP.R14 — the route signs in through withAuth; the manager gate on the
+// history form keeps its place and words.
+describe('GET /api/agent/membership-requests — withAuth', () => {
+  it('401 signed out, for both forms', async () => {
+    db = makeDb(rows, async () => ({ data: [], error: null }))
+    getCurrentUser.mockResolvedValueOnce(null)
+    expect((await history()).status).toBe(401)
+    getCurrentUser.mockResolvedValueOnce(null)
+    expect((await conversation()).status).toBe(401)
+  })
+
+  it('403 "Forbidden" on the history for a staff role at the active studio', async () => {
+    db = makeDb(rows, async () => ({ data: [], error: null }))
+    getCurrentUser.mockResolvedValueOnce({ id: 'u2', role: 'staff', activeLocation: { id: 'L1' }, locations: [{ id: 'L1' }] })
+    const res = await history()
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ success: false, error: 'Forbidden' })
+  })
+
+  it('a failed history read is a 500 without the database text', async () => {
+    db = {
+      from: () => {
+        const b = { select: () => b, eq: () => b, order: () => b, range: async () => ({ data: null, error: { message: 'relation agent_membership_requests is locked' } }) }
+        return b
+      },
+    }
+    const res = await history()
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not load the requests.' })
   })
 })

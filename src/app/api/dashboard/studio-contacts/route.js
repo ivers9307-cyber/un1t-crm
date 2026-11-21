@@ -28,8 +28,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { assertLocationAccess } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 import { weekStartMsIn } from '@/lib/location-time'
@@ -45,11 +45,9 @@ const QuerySchema = z.object({ location_id: uuidLike })
 
 const READ_FAILED = 'Could not read the contact numbers'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// withAuth only signs the caller in. Every check after it runs by hand, in the
+// order it always has: location_id 400, studio 403, dashboard_studio there 403.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   const url = new URL(request.url)
   const parsed = QuerySchema.safeParse({ location_id: url.searchParams.get('location_id') })
@@ -67,7 +65,6 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const db = createServerClient()
   // TZ.11a — "this week" starts at the STUDIO's Monday 00:00 (a display
   // count: an unreadable zone falls back to DEFAULT_TZ, logged).
   const zone = await displayZoneFor(db, user, location_id, 'dashboard.studio-contacts')
@@ -97,4 +94,4 @@ export async function GET(request) {
       }),
     },
   })
-}
+})

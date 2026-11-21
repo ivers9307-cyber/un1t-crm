@@ -34,8 +34,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { uuidLike, realIsoDate, MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { computeWeeklyFteHours } from '@/lib/roster-week-cost'
 import { mondayOf } from '@/lib/payroll'
@@ -51,9 +52,10 @@ const QuerySchema = z.object({
   week_start: realIsoDate,
 })
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
+// withAuth only signs the caller in (signed out is its 401). Every check after
+// it runs by hand, in the order it always has; the pay figures stay server-side.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -91,13 +93,13 @@ export async function GET(request) {
   }
 
   try {
-    const db = createServerClient()
     const data = await computeWeeklyFteHours({ db, locationId: location_id, weekStart: week_start })
     return NextResponse.json({ success: true, data: { ...data, contract_visible: true } })
   } catch (e) {
+    logError('schedule', 'weekly hours failed', { locationId: location_id, err: e?.message || String(e) })
     return NextResponse.json(
-      { success: false, error: e?.message || 'Failed to compute weekly hours' },
+      { success: false, error: 'Failed to compute weekly hours' },
       { status: 500 },
     )
   }
-}
+})

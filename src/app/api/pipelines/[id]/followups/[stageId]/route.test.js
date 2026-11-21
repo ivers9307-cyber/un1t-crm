@@ -170,6 +170,13 @@ describe('PUT /api/pipelines/[id]/followups/[stageId]', () => {
     expect((await PUT(req(body), props)).status).toBe(404)
   })
 
+  it('signedOutIs401FromWithAuth', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await PUT(req(body), props)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+  })
+
   it('badIdsAre404WithoutARead', async () => {
     getCurrentUser.mockResolvedValue(userWith('owner'))
     const res = await PUT(req(body), { params: Promise.resolve({ id: BOARD, stageId: 'nope' }) })

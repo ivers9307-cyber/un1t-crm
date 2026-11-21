@@ -8,17 +8,17 @@
 // Manager+ at the race's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in; races somewhere, the race's studio (404)
+// and races there run by hand, in their old order.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
@@ -33,7 +33,6 @@ export async function GET(_request, props) {
   //
   // The name feeds the mobile board's offsite banner, which has to say which
   // studio the operator needs to be standing in.
-  const db = createServerClient()
   const { data: race, error: raceErr } = await db
     .from('race_events')
     .select(`
@@ -85,7 +84,8 @@ export async function GET(_request, props) {
     .order('registered_at', { ascending: true })
 
   if (regErr) {
-    return NextResponse.json({ success: false, error: regErr.message }, { status: 500 })
+    logError('race-control-board', 'registrations read failed', { raceId: race.id, err: regErr })
+    return NextResponse.json({ success: false, error: 'Could not load the registrations.' }, { status: 500 })
   }
 
   return NextResponse.json({
@@ -94,4 +94,4 @@ export async function GET(_request, props) {
     registrations: registrations || [],
     server_now: new Date().toISOString(),
   })
-}
+})

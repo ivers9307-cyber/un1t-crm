@@ -23,34 +23,36 @@
 // Detail route -> 404, not 403, so escalation ids cannot be enumerated.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 import { ESCALATION_TABLE, RELEASE_REASON_OPERATOR } from '@/lib/bounce-escalation-sweep'
 
 export const runtime = 'nodejs'
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in; Email somewhere, the id, the row's studio
+// (404) and Email there run by hand, in their old order.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'email')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const { id } = await params
+  const { id } = params || {}
   // A malformed id is a 404, not a Postgres cast error surfaced as a 500.
   if (!uuidLike.safeParse(id).success) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
-  const db = createServerClient()
-
   const { data: row, error } = await db
     .from(ESCALATION_TABLE)
     .select('id, contact_id, location_id, decision, released_at')
     .eq('id', id)
     .maybeSingle()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('list-health-release', 'escalation read failed', { id, err: error })
+    return NextResponse.json({ success: false, error: 'Could not read the escalation.' }, { status: 500 })
+  }
   if (!row) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
   const guard = assertLocationAccessOr404(user, row.location_id)
@@ -77,7 +79,10 @@ export async function POST(request, { params }) {
     })
     .eq('id', row.id)
     .is('released_at', null)
-  if (relErr) return NextResponse.json({ success: false, error: relErr.message }, { status: 500 })
+  if (relErr) {
+    logError('list-health-release', 'release update failed', { id: row.id, err: relErr })
+    return NextResponse.json({ success: false, error: 'Could not release the escalation.' }, { status: 500 })
+  }
 
   // Only a suppression put a stamp on. A review row never did, so clearing
   // one here would silently undo an unrelated inactivity suppression.
@@ -88,7 +93,10 @@ export async function POST(request, { params }) {
       .update({ email_suppressed_at: null })
       .eq('id', row.contact_id)
       .not('email_suppressed_at', 'is', null)
-    if (stampErr) return NextResponse.json({ success: false, error: stampErr.message }, { status: 500 })
+    if (stampErr) {
+      logError('list-health-release', 'suppression stamp clear failed', { id: row.id, err: stampErr })
+      return NextResponse.json({ success: false, error: 'Could not clear the suppression.' }, { status: 500 })
+    }
     stampCleared = true
   }
 
@@ -96,4 +104,4 @@ export async function POST(request, { params }) {
     success: true,
     data: { id: row.id, released_at: nowIso, decision: row.decision, stampCleared },
   })
-}
+})
