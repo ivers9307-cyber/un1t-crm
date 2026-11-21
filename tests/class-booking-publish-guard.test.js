@@ -35,8 +35,10 @@ describe('class bookings publish only through the one-at-a-time queue', () => {
       .map((f) => path.relative(ROOT, f).split(path.sep).join('/'))
       .filter((rel) => !ALLOWED.has(rel))
       .filter((rel) => {
-        const code = stripComments(readFileSync(path.join(ROOT, rel), 'utf8'), rel)
-        return code.includes('CLASS_BOOKINGS_WORKER_PATH')
+        // Cheap text check first: parsing every file in src to strip comments
+        // timed out under CI load. Only a file that names it is parsed.
+        const text = readFileSync(path.join(ROOT, rel), 'utf8')
+        return text.includes('CLASS_BOOKINGS_WORKER_PATH') && stripComments(text, rel).includes('CLASS_BOOKINGS_WORKER_PATH')
       })
     expect(offenders).toEqual([])
   })
