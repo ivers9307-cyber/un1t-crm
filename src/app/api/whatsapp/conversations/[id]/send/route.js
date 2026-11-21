@@ -3,7 +3,8 @@ import { NextResponse } from 'next/server'
 import { conversationAddress } from '@/lib/whatsapp-address'
 import { z } from 'zod'
 import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, headerComponentFor } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { url } from '@/lib/schemas'
 import { manualTakeoverPatch } from '@/lib/agent/core'
@@ -44,8 +45,15 @@ const TEXT = Object.freeze({
   templateMissing: "That template is not in this studio's approved list in that language, so nothing was sent. Reopen the template list and pick it again.",
   flowNeedsContact: 'Not sent. This template has a booking Flow button, which books against a contact: add the sender as a contact first.',
   notLogged: 'Sent to the customer, but it could not be saved to this thread. Do not send it again.',
+  sendFailed: 'Could not send the message. Try again.',
   threadNotUpdated: 'Sent to the customer, but the conversation could not be updated, so it may not move to the top of the list and Mia may still reply in this thread.',
 })
+// sendTemplateMessage puts Meta's numeric code on its error, " (Meta code
+// 132000)", for the operator's alert; only those digits are repeated.
+const metaCodeSuffix = (err) => {
+  const m = /\(Meta code (\d+(?:\/\d+)?)\)/.exec(String(err?.message || ''))
+  return m ? ` (Meta code ${m[1]})` : ''
+}
 const blockedText = (block) => `This template can't be sent from the inbox. ${SEND_BLOCK_TEXT[block]}`
 // A template judged as if it had no HEADER: what is left to refuse once a
 // client has supplied its own header parameter.
@@ -56,11 +64,8 @@ const withoutHeader = (tpl) => ({
 })
 
 // POST /api/whatsapp/conversations/[id]/send — send a message in a conversation
-export async function POST(request, props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
+// ROUTEWRAP.R13 — withAuth only signs the caller in; the gates below are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   // INBOXLOC.1 — coarse pre-check (WhatsApp at any studio); the decision is
   // requireWhatsAppInboxAt at the conversation's studio, once the row is read.
   const perm = requireWhatsAppInboxAnywhere(user)
@@ -245,7 +250,11 @@ export async function POST(request, props) {
   } catch (err) {
     // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a
     // 409 with the resolver's message (it used to send from the env number).
-    return NextResponse.json({ success: false, error: err.message }, { status: whatsappErrorStatus(err, 400) })
+    // ROUTEWRAP.R13 — that 409 is our own setup message; Meta's error text can
+    // carry the customer's number, so it is logged, never answered.
+    const status = whatsappErrorStatus(err, 400)
+    if (status !== 409) logError(LOG, 'Meta send failed', { conversationId: params.id, locationId: conversation.location_id, messageType, err: err?.message })
+    return NextResponse.json({ success: false, error: status === 409 ? err.message : TEXT.sendFailed + metaCodeSuffix(err) }, { status })
   }
 
   // ── Meta has accepted the message: the customer has it. ─────────────────────
@@ -316,4 +325,4 @@ export async function POST(request, props) {
     messageId: result?.messageId,
     ...(warnings.length ? { warnings } : {}),
   })
-}
+})

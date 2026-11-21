@@ -26,7 +26,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import {
   hasPermissionAtAnyLocation, hasPermissionForLocation,
   hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
@@ -57,6 +59,13 @@ const SendSchema = z.object({
   message: 'Provide exactly one of text or template_name',
 })
 
+// sendTemplateMessage puts Meta's numeric code on its error, " (Meta code
+// 132000)", for the operator; only those digits are repeated (ROUTEWRAP.R13).
+const metaCodeSuffix = (err) => {
+  const m = /\(Meta code (\d+(?:\/\d+)?)\)/.exec(String(err?.message || ''))
+  return m ? ` (Meta code ${m[1]})` : ''
+}
+
 function firstNameOf(contact) {
   if (contact?.first_name && String(contact.first_name).trim()) {
     return String(contact.first_name).trim()
@@ -64,12 +73,8 @@ function firstNameOf(contact) {
   return String(contact?.name || '').trim().split(/\s+/)[0] || 'there'
 }
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+// ROUTEWRAP.R13 — withAuth only signs the caller in; the gates below are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, request, params }) => {
   // Web sidebar `whatsapp` OR the `.mobile.whatsapp` toggle — the
   // composer ships on both the web contact profile and the iOS app.
   // ROLESWEEP.1c — coarse pre-check; judged at the contact's location below.
@@ -198,7 +203,12 @@ export async function POST(request, props) {
     // nor the checked default is on resolves by location + WABA inside
     // sendTemplateMessage, and refuses (409) when the studio has no number
     // switched on on that WABA.
-    return NextResponse.json({ success: false, error: e?.message || 'Failed to send WhatsApp message' }, { status: whatsappErrorStatus(e, 502) })
+    // ROUTEWRAP.R13 — a no-number refusal (409) is our own setup message;
+    // Meta's error text can carry the customer's number, so it is logged,
+    // never answered.
+    const status = whatsappErrorStatus(e, 502)
+    if (status !== 409) logError('contact-whatsapp-send', 'Meta send failed', { contactId, locationId: studioId, err: e?.message })
+    return NextResponse.json({ success: false, error: status === 409 ? e.message : `Failed to send WhatsApp message${metaCodeSuffix(e)}` }, { status })
   }
 
   // ── Log ─────────────────────────────────────────────────────────
@@ -245,4 +255,4 @@ export async function POST(request, props) {
     success: true,
     data: { messageId: result.messageId, conversationId: conversation.id },
   })
-}
+})
