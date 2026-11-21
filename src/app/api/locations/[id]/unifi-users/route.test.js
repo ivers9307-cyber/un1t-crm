@@ -67,11 +67,21 @@ describe('GET unifi-users — role judged at the path location', () => {
     }
   })
 
-  it('401s an anonymous caller', async () => {
+  it('401s an anonymous caller (withAuth\'s body since ROUTEWRAP.R12)', async () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await call(LOC_B)
     expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
     expect(listUnifiUsers).not.toHaveBeenCalled()
+  })
+
+  it('a failed UniFi call keeps its status and answers a fixed message, never the controller text', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    listUnifiUsers.mockRejectedValue(new Error('connect ECONNREFUSED 10.0.0.5:12445'))
+    const res = await call(LOC_B)
+    expect(res.status).toBe(502)
+    expect(await res.json()).toEqual({ success: false, error: 'unifi_request_failed', message: 'Could not load the users from UniFi Access. Try again.' })
+    expect(logError).toHaveBeenCalled()
   })
 
   // F3 (TRAINERSROLE.1): a FAILED locations read is a 500 with the error

@@ -2,13 +2,14 @@
 // status page (STATUS-PAGE.2). Stored on locations.settings.status_page
 // (jsonb), the exact override shape buildStatusView() reads. Session-guarded,
 // `settings` permission. Blank fields are dropped (pruneStatusOverrides) so
-// they transparently fall back to the shipped defaults.
+// they transparently fall back to the shipped defaults. withAuth signs the
+// caller in (401); requireSettings keeps the permission (403) and the studio
+// (400) checks in their old order with their old texts.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { DEFAULT_COPY, pruneStatusOverrides } from '@/lib/status-page'
 import { logError } from '@/lib/log'
@@ -27,9 +28,7 @@ const Schema = z.object({
   verdict: z.object({ operational: verdict, degraded: verdict, down: verdict }).partial().optional(),
 })
 
-async function requireSettings() {
-  const user = await getCurrentUser()
-  if (!user) return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
+function requireSettings(user) {
   if (!hasPermission(user, 'settings')) {
     return { error: NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 }) }
   }
@@ -38,10 +37,9 @@ async function requireSettings() {
   return { user, locationId }
 }
 
-export async function GET() {
-  const gate = await requireSettings()
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db }) => {
+  const gate = requireSettings(user)
   if (gate.error) return gate.error
-  const db = createServerClient()
 
   // SETTINGSWIPE.1 — a failed read is not "no overrides" (the form would show
   // the defaults and Save/Reset would drop the real copy).
@@ -66,10 +64,10 @@ export async function GET() {
     publicPath: publicPath || null,
     location: { id: gate.locationId, name: loc?.name || null },
   })
-}
+})
 
-export async function PUT(request) {
-  const gate = await requireSettings()
+export const PUT = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
+  const gate = requireSettings(user)
   if (gate.error) return gate.error
 
   const v = await validateBody(request, Schema)
@@ -77,7 +75,6 @@ export async function PUT(request) {
 
   const overrides = pruneStatusOverrides(v.data)
 
-  const db = createServerClient()
   // SETTINGSWIPE.1 — ONE key, through mergeLocationSettings (this used to
   // discard the read error, rewrite the whole column and ignore the write).
   const saved = await mergeLocationSettings(db, gate.locationId, (settings) => {
@@ -87,4 +84,4 @@ export async function PUT(request) {
   }, { scope: 'settings-status-page' })
   if (!saved.ok) return settingsSaveFailure(saved)
   return NextResponse.json({ success: true, overrides })
-}
+})

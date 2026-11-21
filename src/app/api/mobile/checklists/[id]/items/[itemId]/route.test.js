@@ -49,6 +49,21 @@ describe('POST /api/mobile/checklists/[id]/items/[itemId]', () => {
     getCurrentUser.mockResolvedValue(null)
     const res = await POST(req({ checked: true }), { params: { id: 'inst-1', itemId: 'a' } })
     expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ success: false, error: 'Unauthorized' })
+    expect(tickItem).not.toHaveBeenCalled()
+  })
+
+  it('a failed write answers a fixed message, never the database text', async () => {
+    tickItem.mockResolvedValue({ ok: false, status: 500, error: 'deadlock detected on checklist_instances', code: 'update_failed' })
+    const res = await POST(req({ checked: true }), { params: { id: 'inst-1', itemId: 'a' } })
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not save the tick. Try again.', code: 'update_failed' })
+  })
+
+  it('another person\'s checklist stays tickItem\'s 404', async () => {
+    tickItem.mockResolvedValue({ ok: false, status: 404, error: 'Checklist not found.', code: 'not_yours' })
+    const res = await POST(req({ checked: true }), { params: { id: 'inst-2', itemId: 'a' } })
+    expect(res.status).toBe(404)
   })
 
   it('audits the tick with an instance resource target and no target.id', async () => {

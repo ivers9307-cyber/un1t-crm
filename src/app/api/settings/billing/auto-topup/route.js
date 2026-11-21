@@ -16,11 +16,14 @@
 // Access: an organisation admin of the location's org (C18 ORGROLE.1:
 // master or an org_admin grant; a studio owner is not one). A foreign/unknown location_id answers 404,
 // never 403 (no cross-tenant existence probing).
+//
+// withAuth only signs the caller in (the same 401); the org-admin check
+// (403), the body, the location (404) and the write keep their order here.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
 import { isOrgAdmin, isOrgAdminSomewhere } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
 
@@ -37,12 +40,7 @@ export const AutoTopupSchema = z.object({
   threshold_cents: z.number().int().min(0).max(20000).nullable().optional(),
 })
 
-export async function PATCH(request) {
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-  // C18 ORGROLE.1 — organisation admins only (master or an org_admin grant);
+export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {  // C18 ORGROLE.1 — organisation admins only (master or an org_admin grant);
   // the coarse check here, the location's organisation below.
   if (!isOrgAdminSomewhere(user)) {
     return NextResponse.json(
@@ -54,8 +52,6 @@ export async function PATCH(request) {
   const validation = await validateBody(request, AutoTopupSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
-
-  const db = createServerClient()
 
   // Resolve the location's org; foreign or missing → identical 404.
   const { data: location, error: locationError } = await db
@@ -88,8 +84,9 @@ export async function PATCH(request) {
     .select('auto_topup_enabled, auto_topup_amount_cents, auto_topup_threshold_cents')
     .single()
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    logError('billing-auto-topup', 'config write failed', { locationId: location.id, code: error.code ?? null })
+    return NextResponse.json({ success: false, error: 'Could not save the auto-top-up settings. Try again.' }, { status: 400 })
   }
 
   return NextResponse.json({ success: true, data })
-}
+})

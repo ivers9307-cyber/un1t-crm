@@ -16,8 +16,7 @@
 // change leave a redirect behind.
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { landingPagePublishSchema } from '@/lib/landing-page-schemas'
 import { OFFER_BLOCK_TYPE } from '@/lib/landing-page-offers'
@@ -31,11 +30,10 @@ export const dynamic = 'force-dynamic'
 
 const fail = (status, error, extra = {}) => NextResponse.json({ success: false, error, ...extra }, { status })
 
-export async function POST(request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return fail(401, 'Unauthorised')
-  const { id } = await params
-  const db = createServerClient()
+// withAuth signs the caller in (its 401 'Unauthorized'; this route said
+// 'Unauthorised'); every check after it keeps its order and text.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
+  const { id } = params
 
   try {
     const loaded = await loadViewablePage(db, user, id)
@@ -91,4 +89,4 @@ export async function POST(request, { params }) {
     logError('landing-pages', 'publish read failed', { pageId: id, code: err.cause?.code ?? null })
     return fail(503, 'unavailable')
   }
-}
+})
