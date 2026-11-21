@@ -17,8 +17,7 @@
 // only too.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 
 export const runtime = 'nodejs'
@@ -26,17 +25,17 @@ export const dynamic = 'force-dynamic'
 
 const CREATE_SOURCES = new Set(['booking_form', 'event_registration', 'manual_button', 'cron'])
 
-export async function POST(_request, { params }) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (the same 401). The master check, the id,
+// the event, the contact and the one Glofox call (never retried here) keep
+// their order, and what is written is unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
   if (user.role !== 'master') {
     return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
   }
 
-  const { id } = await params
+  const { id } = params
   if (!id) return NextResponse.json({ success: false, error: 'missing event id' }, { status: 400 })
 
-  const db = createServerClient()
   const { data: ev, error: evErr } = await db
     .from('glofox_push_events')
     .select('id, contact_id, location_id, source, status, reviewed_at')
@@ -102,4 +101,4 @@ export async function POST(_request, { params }) {
     retried_event_id: id,
     result: safeResult,
   })
-}
+})

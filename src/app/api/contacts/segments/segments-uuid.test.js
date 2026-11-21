@@ -25,7 +25,8 @@ const HATCH      = '28c78d6b-f7b3-4edf-8c7c-840bd047b3f4'  // ordinary v4
 
 let inserted = []
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal()),
   // SEGMENTROUTE.1: saving needs Contacts and Email AT the studio, so the caller holds a role there (owner: both on by default).
   getCurrentUser: vi.fn(async () => ({
     id: 'u1',
@@ -36,7 +37,8 @@ vi.mock('@/lib/auth', () => ({
   assertLocationAccess: vi.fn(() => null),
 }))
 
-vi.mock('@/lib/supabase', () => ({
+vi.mock('@/lib/supabase', async (importOriginal) => ({
+  ...(await importOriginal()),
   createServerClient: () => ({
     from: () => ({
       insert: (row) => {

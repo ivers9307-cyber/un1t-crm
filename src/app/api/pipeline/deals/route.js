@@ -7,10 +7,9 @@
 // the deals query filters location_id (service-role bypasses RLS).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
-import { logWarn } from '@/lib/log'
+import { withAuth } from '@/lib/with-auth'
+import { logWarn, logError } from '@/lib/log'
 import { pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, classesOf3ForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
 import { loadCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
 import { stageShowsSignals } from '@/lib/pipeline-card-signal-slugs'
@@ -20,9 +19,9 @@ import { parseBoardFilter, applyBoardFilter } from '@/lib/pipeline-board-filter'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+// withAuth only signs the caller in (the same 401): its own permission and
+// studio answers word the 403 and 400 differently, so they stay below.
+export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
   if (!hasPermission(user, 'pipeline')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
@@ -40,8 +39,6 @@ export async function GET(request) {
   // BOARDFILTER.1 — the board's search and "stuck" filter, the same as its
   // first page, so the next page continues the filtered column.
   const filter = parseBoardFilter(searchParams, { view })
-
-  const db = createServerClient()
 
   // Tenant scope: 404 (not 403) if the stage isn't at this location so ids
   // can't be enumerated across tenants.
@@ -91,7 +88,10 @@ export async function GET(request) {
     .order('id')
     .range(offset, offset + PIPELINE_PAGE_SIZE - 1)
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('pipeline-deals', 'deals page read failed', { stageId, locationId, err: error })
+    return NextResponse.json({ success: false, error: 'Could not load more deals. Try again.' }, { status: 500 })
+  }
 
   // HATCHCARD.1 — the same signals the board's first page carries: a
   // known board (un1t.online or Glofox, CARDSIGNALS.1), the live view, a live funnel column. Decoration: a
@@ -108,4 +108,4 @@ export async function GET(request) {
   }
 
   return NextResponse.json({ success: true, deals: (data || []).map(boardDealMapper({ ...cardOptions, signals, showSignals, classesOf3: classesOf3ForModule(boardModule) })) })
-}
+})

@@ -15,9 +15,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { logError } from '@/lib/log'
@@ -56,14 +56,14 @@ function refusal(code, extra = {}) {
   }, { status: STATUS_FOR[code] || 400 })
 }
 
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in (its 401 'Unauthorized'; was 'Unauthorised').
+// races somewhere, the id, the row, its studio (404), races + manager there,
+// the body and the placement keep their order; what is written and sent is
+// unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   if (!hasPermissionAtAnyLocation(user, 'races')) return forbidden()
   if (!uuidLike.safeParse(params.id).success) return notFound()
 
-  const db = createServerClient()
   const { data: solo, error: readErr } = await db
     .from('race_registrations')
     .select('id, race_event_id, race:race_event_id ( id, location_id )')
@@ -102,4 +102,4 @@ export async function POST(request, props) {
     logError('registration-place', 'placed email threw; the entrant is placed but was not told', { err: e, registrationId: params.id })
   }
   return NextResponse.json({ success: true, data: { placed: true } })
-}
+})

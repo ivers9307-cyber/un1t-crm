@@ -14,9 +14,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { headers } from 'next/headers'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { logAuditEvent } from '@/lib/audit'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -25,9 +25,11 @@ const Body = z.object({
   reason: z.string().max(500).nullable().optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+// withAuth only signs the caller in (its 401 'Unauthorized'; was 'Unauthorised').
+// The real-master check (including the already-impersonating case), the body,
+// the self check and the target read run by hand below, in their old order;
+// the log rows and the audit event are unchanged.
+export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request }) => {
 
   // Real master id — falls back to user.id when not currently
   // impersonating, and to impersonatingFrom.masterId when the caller
@@ -50,7 +52,6 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Cannot impersonate yourself.' }, { status: 400 })
   }
 
-  const db = createServerClient()
   const { data: target, error: tErr } = await db
     .from('profiles')
     .select('id, full_name, role, active')
@@ -80,7 +81,8 @@ export async function POST(request) {
     reason: parsed.data.reason || null,
   })
   if (insErr) {
-    return NextResponse.json({ success: false, error: insErr.message }, { status: 500 })
+    logError('mobile-impersonate', 'impersonation log insert failed', { masterId: realMasterId, err: insErr })
+    return NextResponse.json({ success: false, error: 'Impersonation failed' }, { status: 500 })
   }
 
   // AUDIT-EXPAND.1 — mirror the cookie-path event so mobile-initiated
@@ -108,4 +110,4 @@ export async function POST(request) {
     targetName: target.full_name,
     targetRole: target.role,
   })
-}
+})
