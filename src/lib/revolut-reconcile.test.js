@@ -42,7 +42,7 @@ vi.mock('@/lib/donation-payments', () => ({
 vi.mock('@/lib/charity-donations', () => ({ resolveCharitySettings: () => ({ match_multiplier: 2 }) }))
 vi.mock('@/lib/qstash', () => ({
   publishQueuePush: vi.fn(async () => {}),
-  CLASS_BOOKINGS_WORKER_PATH: '/w/class-bookings',
+  publishClassBookingJob: vi.fn(async (id, { publish }) => publish({ path: '/w/class-bookings', body: { id }, deduplicationId: `class-booking-${id}` })),
   TRIAL_PURCHASES_WORKER_PATH: '/w/trial-purchases',
 }))
 

@@ -16,7 +16,7 @@
 // failed insert is logged at error with ids and returned, never thrown. A
 // unique violation (one active row per contact and class) is "already
 // queued": a re-run of the grant's side effects queues nothing twice.
-import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
+import { publishClassBookingJob } from '@/lib/qstash'
 import { logError } from '@/lib/log'
 
 export const FUNDED_BY = Object.freeze({ trialPurchase: 'trial_purchase', corpPromo: 'corp_promo' })
@@ -108,8 +108,8 @@ export async function queueFundedClassBooking(db, { fundedBy, fundedById, locati
   if (id) {
     // Push delivery (QSTASH.7): a nudge, never the guarantee; the cron drains the row either way.
     try {
-      await publishQueuePush({ path: CLASS_BOOKINGS_WORKER_PATH, body: { id }, deduplicationId: `class-booking-${id}` })
-    } catch { /* publishQueuePush swallows its own errors; belt and braces */ }
+      await publishClassBookingJob(id)
+    } catch { /* publishClassBookingJob swallows its own errors; belt and braces */ }
   }
   return { queued: true, id }
 }

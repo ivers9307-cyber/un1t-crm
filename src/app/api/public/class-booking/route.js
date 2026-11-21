@@ -26,7 +26,7 @@ import { applyOfferFormConsent } from '@/lib/offer-form-consent'
 import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
-import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
+import { publishClassBookingJob } from '@/lib/qstash'
 import { logWarn, logError } from '@/lib/log'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 import { placeContactNow } from '@/lib/pipeline-place-now'
@@ -478,13 +478,9 @@ export async function POST(request) {
     // the cron — the queue table is the delivery guarantee. Dedup id is DASH-ONLY
     // (QStash 400s on colons — the QSTASH.2 lesson).
     try {
-      await publishQueuePush({
-        path: CLASS_BOOKINGS_WORKER_PATH,
-        body: { id: queuedRow.id },
-        deduplicationId: `class-booking-${queuedRow.id}`,
-      })
+      await publishClassBookingJob(queuedRow.id)
     } catch {
-      // publishQueuePush swallows its own errors; belt-and-braces only.
+      // publishClassBookingJob swallows its own errors; belt-and-braces only.
     }
   }
 

@@ -3,14 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/marketing-consent.js', () => ({ applyFormMarketingConsent: vi.fn(async () => ({})) }))
 vi.mock('@/lib/bookings-write.js', () => ({ createEventBooking: vi.fn(async () => ({ bookingId: 'bk1' })) }))
 vi.mock('@/lib/qstash.js', () => ({
-  publishQueuePush: vi.fn(async () => ({ ok: true, messageId: 'm1' })),
-  CLASS_BOOKINGS_WORKER_PATH: '/api/webhooks/qstash/class-bookings',
+  publishClassBookingJob: vi.fn(async () => ({ ok: true, messageId: 'm1' })),
 }))
 
 import { handleFlowCompletion, publishFlowClassBooking } from './completion.js'
 import { applyFormMarketingConsent } from '@/lib/marketing-consent.js'
 import { createEventBooking } from '@/lib/bookings-write.js'
-import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash.js'
+import { publishClassBookingJob } from '@/lib/qstash.js'
 
 function fakeDb(inserts, { insertResult = { data: { id: 'cbr1' }, error: null }, existing = { data: null, error: null }, reads = [] } = {}) {
   return {
@@ -63,17 +62,13 @@ describe('handleFlowCompletion', () => {
     const interactive = { type: 'nfm_reply', nfm_reply: { response_json: JSON.stringify({
       path: 'class', slot: 'c1|2026-07-03T18:00:00Z|HIIT', name: 'Ann', email: 'ann@x.ie', marketing_opt_in: false }) } }
     await handleFlowCompletion(fakeDb({}), { interactive, contact, locationId: 'loc1' })
-    expect(publishQueuePush).not.toHaveBeenCalled()
+    expect(publishClassBookingJob).not.toHaveBeenCalled()
   })
 
-  it('publishFlowClassBooking → fire-and-forget QStash push for the queued row (dash-only dedup id)', async () => {
+  it('publishFlowClassBooking → fire-and-forget push onto the class-bookings queue', async () => {
     await publishFlowClassBooking('cbr1')
 
-    expect(publishQueuePush).toHaveBeenCalledWith({
-      path: CLASS_BOOKINGS_WORKER_PATH,
-      body: { id: 'cbr1' },
-      deduplicationId: 'class-booking-cbr1',
-    })
+    expect(publishClassBookingJob).toHaveBeenCalledWith('cbr1')
   })
 
   // FLOWACK.1 review — a duplicate submission names itself and the row that
@@ -96,7 +91,7 @@ describe('handleFlowCompletion', () => {
     expect(reads[0].ops).toEqual(expect.arrayContaining([
       ['eq', 'contact_id', 'ct1'], ['eq', 'glofox_event_id', 'c1'], ['in', 'status', ['queued', 'processing', 'booked']],
     ]))
-    expect(publishQueuePush).not.toHaveBeenCalled()
+    expect(publishClassBookingJob).not.toHaveBeenCalled()
   })
 
   it('23505 dedupe with an unreadable existing row → still a duplicate, status unknown', async () => {
@@ -110,7 +105,7 @@ describe('handleFlowCompletion', () => {
   })
 
   it('a publish rejection never throws (belt-and-braces)', async () => {
-    publishQueuePush.mockRejectedValueOnce(new Error('qstash down'))
+    publishClassBookingJob.mockRejectedValueOnce(new Error('qstash down'))
     await expect(publishFlowClassBooking('cbr1')).resolves.toBeUndefined()
     await expect(publishFlowClassBooking(null)).resolves.toBeUndefined()
   })
@@ -128,7 +123,7 @@ describe('handleFlowCompletion', () => {
       event: { id: 'ev1', location_id: 'loc1' }, date: '2026-07-03', startTime: '18:00', endTime: '18:30', source: 'whatsapp_flow',
     }))
     // marketing_opt_in false → consent NOT recorded on this call
-    expect(publishQueuePush).not.toHaveBeenCalled()
+    expect(publishClassBookingJob).not.toHaveBeenCalled()
   })
 
   it('ignores a non-Flow interactive', async () => {
@@ -136,6 +131,6 @@ describe('handleFlowCompletion', () => {
     const res = await handleFlowCompletion(fakeDb(inserts), { interactive: { type: 'button_reply' }, contact, locationId: 'loc1' })
     expect(res).toEqual({ handled: false })
     expect(inserts.class_booking_requests).toBeUndefined()
-    expect(publishQueuePush).not.toHaveBeenCalled()
+    expect(publishClassBookingJob).not.toHaveBeenCalled()
   })
 })

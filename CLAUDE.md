@@ -41,6 +41,7 @@ Guidance for Claude Code working in **un1t-crm**: the staff and admin CRM (Next.
 - Glofox answers 200 with a failure body on bookings, member reads, registration and purchases: judge with the `interpret*Result()` helpers in `src/lib/glofox.js`.
 - A failed Glofox credits or membership read is "unknown", never "no packs".
 - `glofoxFetch` never blind-retries a write; every write call declares a `retry:` policy.
+- Class bookings reach Glofox one at a time: publish a `class_booking_requests` row only through `publishClassBookingJob`.
 - `glofox_webhook_events.event_id` is the entity id (one row per booking); per-delivery history is `glofox_webhook_attempts`.
 - Glofox mints a new `invoice_id` per payment attempt, and `glofox_invoices` is stale: never compute amounts owed from it.
 - **One location = one Xero organisation**, enforced by a unique index; changing the org invalidates every cached Xero id.
