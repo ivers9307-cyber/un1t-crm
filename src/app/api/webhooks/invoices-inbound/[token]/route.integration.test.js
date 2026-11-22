@@ -7,7 +7,10 @@ import { createFakeDb } from '../../../../../../tests/helpers/fake-db.js'
 let db
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 
+vi.mock('@/lib/invoices-queue/queue-preparation', () => ({ queueInvoicePreparation: vi.fn(async () => ({ queued: [] })) }))
+
 const { POST } = await import('./route.js')
+const { queueInvoicePreparation } = await import('@/lib/invoices-queue/queue-preparation')
 
 const TOKEN = 'test-token'
 const LOC = '11111111-1111-4111-8111-111111111111'
@@ -97,6 +100,24 @@ describe('inbound invoice webhook, end to end over the fake database', () => {
     expect(again.status).toBe(200)
     expect(queue()).toHaveLength(2)
     expect(queue().every((r) => r.attachment_path && r.content_hash)).toBe(true)
+  })
+
+  it('queues every inserted row, not-received ones included, and a repeat queues nothing (INVOICEPREP.3)', async () => {
+    const body = email([pdf('a.pdf'), { Name: 'big.pdf', ContentType: 'application/pdf', Content: '', _un1t_staged: { v: 1, error: 'too_large' } }])
+    const first = await POST(req(body), ctx())
+    expect(first.status).toBe(200)
+    expect(queue()).toHaveLength(2)
+    expect(queueInvoicePreparation).toHaveBeenCalledTimes(1)
+    const [calledDb, ids] = queueInvoicePreparation.mock.calls[0]
+    expect(calledDb).toBe(db)
+    expect([...ids].sort()).toEqual(queue().map((r) => r.id).sort())
+    expect(queue().some((r) => r.not_invoice_reason?.startsWith('attachment_not_received'))).toBe(true)
+
+    queueInvoicePreparation.mockClear()
+    const again = await POST(req(body), ctx())
+    expect(again.status).toBe(200)
+    expect(queue()).toHaveLength(2)
+    expect(queueInvoicePreparation).not.toHaveBeenCalled()
   })
 
   it('stores the email when a claim was left held with nothing stored', async () => {

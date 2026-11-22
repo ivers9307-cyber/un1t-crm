@@ -143,7 +143,7 @@ describe('ingestInboundEmail', () => {
     const dup = createFakeDb({ tables: seed(), errors: { invoices_queue: { insert: { code: '23505', message: 'dup' } } } })
     dup.storage = db.storage
     const r = await ingestInboundEmail(dup, { location: LOC, body: email([pdf()]) })
-    expect(r).toEqual({ ok: true, created: [], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
+    expect(r).toEqual({ ok: true, created: [], rowIds: [], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
     expect(upload).not.toHaveBeenCalled()
   })
   it('fails when the path update fails, and a retry leaves one row with a path', async () => {
@@ -191,7 +191,7 @@ describe('ingestInboundEmail', () => {
       source_type: 'supplier_email', attachment_bucket: 'inbound-invoices',
     })
     const r = await ingestInboundEmail(db, { location: LOC, body: email([pdf()]) })
-    expect(r).toEqual({ ok: true, created: [], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
+    expect(r).toEqual({ ok: true, created: [], rowIds: [], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
     const rows = await all(db)
     expect(rows).toHaveLength(1)
     expect(rows[0].status).toBe('rejected')
@@ -210,7 +210,7 @@ describe('ingestInboundEmail', () => {
       return realFrom(table)
     }
     const r = await ingestInboundEmail(db, { location: LOC, body: email([pdf()]) })
-    expect(r).toEqual({ ok: true, created: [], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
+    expect(r).toEqual({ ok: true, created: [], rowIds: [], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
     expect(db.tables.invoices_queue).toHaveLength(1)
     expect(db.tables.invoices_queue[0].attachment_path).toBe('loc/done.pdf')
     expect(upload).not.toHaveBeenCalled()
@@ -271,7 +271,7 @@ describe('ingestInboundEmail with attachments the shim parked in Storage', () =>
     expect(files.size).toBe(0)
     download.mockClear()
     const again = await ingestInboundEmail(db, { location: LOC, body })
-    expect(again).toEqual({ ok: true, created: [], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
+    expect(again).toEqual({ ok: true, created: [], rowIds: [], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
     expect(download).not.toHaveBeenCalled()
     expect(await all(db)).toHaveLength(1)
   })
@@ -327,8 +327,9 @@ describe('ingestInboundEmail with attachments the shim parked in Storage', () =>
   it('an email whose attachments all failed gets only the not-received rows', async () => {
     const body = email([notMoved('too_large'), notMoved('upload_failed', { Name: 'x.pdf' })])
     const r = await ingestInboundEmail(db, { location: LOC, body })
-    expect(r).toEqual({ ok: true, created: [], alreadyStored: 0, skippedInline: 0, notReceived: 2 })
     const rows = await all(db)
+    expect(r).toEqual({ ok: true, created: [], rowIds: rows.map((x) => x.id), alreadyStored: 0, skippedInline: 0, notReceived: 2 })
+    expect(r.rowIds).toHaveLength(2)
     expect(rows.map((x) => x.email_message_id)).toEqual(['m1-missing-0', 'm1-missing-1'])
     expect(rows.map((x) => x.not_invoice_reason)).toEqual(['attachment_not_received: too_large', 'attachment_not_received: rehost_failed'])
     expect(rows.some((x) => x.not_invoice_reason === 'no_attachment')).toBe(false)
@@ -410,6 +411,34 @@ describe('ingestInboundEmail with attachments the shim parked in Storage', () =>
     const dup = createFakeDb({ tables: seed(), errors: { invoices_queue: { insert: { code: '23505', message: 'dup' } } } })
     dup.storage = fakeStorage()
     expect(await ingestInboundEmail(dup, { location: LOC, body: email([notMoved('too_large')]) }))
-      .toEqual({ ok: true, created: [], alreadyStored: 0, skippedInline: 0, notReceived: 0 })
+      .toEqual({ ok: true, created: [], rowIds: [], alreadyStored: 0, skippedInline: 0, notReceived: 0 })
+  })
+
+  // INVOICEPREP.3 — rowIds lists every row this call inserted, for queueing.
+  describe('rowIds', () => {
+    it('lists every stored row, and a repeat inserts none', async () => {
+      const r = await ingestInboundEmail(db, args)
+      const rows = await all(db)
+      expect(r.created).toHaveLength(2)
+      expect(r.rowIds.slice().sort()).toEqual(rows.map((x) => x.id).sort())
+      const again = await ingestInboundEmail(db, args)
+      expect(again.rowIds).toEqual([])
+    })
+
+    it('includes the not-received rows beside the stored ones', async () => {
+      const r = await ingestInboundEmail(db, { location: LOC, body: email([pdf(), notMoved('too_large')]) })
+      const rows = await all(db)
+      expect(r.created).toHaveLength(1)
+      expect(r.notReceived).toBe(1)
+      expect(r.rowIds.slice().sort()).toEqual(rows.map((x) => x.id).sort())
+      expect(r.rowIds).toHaveLength(2)
+    })
+
+    it('includes the single empty-email row, once', async () => {
+      const r = await ingestInboundEmail(db, { location: LOC, body: email([]) })
+      const rows = await all(db)
+      expect(r.rowIds).toEqual([rows[0].id])
+      expect((await ingestInboundEmail(db, { location: LOC, body: email([]) })).rowIds).toEqual([])
+    })
   })
 })

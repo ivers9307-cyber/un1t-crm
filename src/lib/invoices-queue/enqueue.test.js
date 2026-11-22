@@ -17,6 +17,8 @@ const mockDb = {
   from: vi.fn(),
 }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => mockDb }))
+// INVOICEPREP.3 — every function that stores a row with a file queues it.
+vi.mock('@/lib/invoices-queue/queue-preparation', () => ({ queueInvoicePreparation: vi.fn(async () => ({ queued: [] })) }))
 
 // Helper to build a fluent chainable mock that resolves to a
 // fixed value at the end of the chain. supabase-js's
@@ -40,6 +42,7 @@ function buildChainable(finalValue) {
 }
 
 let enqueueModule
+let queueInvoicePreparation
 
 beforeEach(async () => {
   vi.resetModules()
@@ -49,6 +52,7 @@ beforeEach(async () => {
   // never leak into a test that means to exercise the no-Storage fallback.
   delete mockDb.storage
   enqueueModule = await import('./enqueue')
+  ;({ queueInvoicePreparation } = await import('@/lib/invoices-queue/queue-preparation'))
 })
 
 afterEach(() => {
@@ -468,12 +472,146 @@ describe('enqueue is idempotent (APPROVEQUEUE.1)', () => {
       if (t === 'invoices_queue') {
         call++
         if (call === 1) return { select: () => ({ in: () => Promise.resolve({ data: [{ id: 'q1', source_fte_expense_item_id: 'i1' }], error: null }) }) }
-        const c = { insert: (rows) => { inserted.push(...rows); return c }, select: () => Promise.resolve({ data: [{ id: 'q2' }], error: null }) }
+        const c = { insert: (rows) => { inserted.push(...rows); return c }, select: () => Promise.resolve({ data: [{ id: 'q2', source_fte_expense_item_id: 'i2' }], error: null }) }
         return c
       }
       throw new Error(`unexpected table ${t}`)
     })
     expect(await enqueueModule.enqueueFromFteExpenseClaim('c1')).toEqual({ ok: true, queueIds: ['q1', 'q2'] })
     expect(inserted.map((r) => r.source_fte_expense_item_id)).toEqual(['i2'])
+    // Only the newly inserted row is queued; q1 was queued by the earlier approve.
+    expect(queueInvoicePreparation).toHaveBeenCalledTimes(1)
+    expect(queueInvoicePreparation).toHaveBeenCalledWith(mockDb, ['q2'])
+  })
+
+  it('an already-queued contractor invoice, and a hunt dedupe, queue nothing', async () => {
+    const invChain = buildChainable({ data: { id: 'inv1', location_id: 'loc1', pdf_path: 'inv1.pdf', contractor: {} }, error: null })
+    const queueChain = {
+      select: vi.fn(() => queueChain), eq: vi.fn(() => queueChain),
+      limit: vi.fn(() => Promise.resolve({ data: [{ id: 'q-old' }], error: null })),
+      insert: vi.fn(),
+    }
+    mockDb.from.mockImplementation((t) => (t === 'contractor_invoices' ? invChain : queueChain))
+    await enqueueModule.enqueueFromContractorInvoice('inv1')
+
+    const dedupe = buildChainable({ data: { id: 'existing', status: 'sent' }, error: null })
+    mockDb.from.mockImplementation(() => dedupe)
+    const r = await enqueueModule.enqueueFromHuntFind({
+      locationId: 'loc1', huntId: 'h1', bucketPath: 'p.pdf', contentHash: 'sha256:x',
+    })
+    expect(r.deduped).toBe(true)
+    expect(queueInvoicePreparation).not.toHaveBeenCalled()
+  })
+})
+
+// INVOICEPREP.3 — what each path hands to queueInvoicePreparation.
+describe('every new row with a file is sent for preparation (INVOICEPREP.3)', () => {
+  const ARGS = { locationId: 'loc1', huntId: 'h1', bucketPath: 'h1/r.pdf', contentHash: 'sha256:abc' }
+
+  function contractorSetup() {
+    const invChain = buildChainable({
+      data: { id: 'inv1', location_id: 'loc1', status: 'approved', pdf_path: 'inv1.pdf', contractor: { full_name: 'Sam' } },
+      error: null,
+    })
+    const queueChain = {
+      select: vi.fn(() => queueChain), eq: vi.fn(() => queueChain),
+      limit: vi.fn(() => Promise.resolve({ data: [], error: null })),
+      insert: vi.fn(() => queueChain),
+      single: vi.fn().mockResolvedValue({ data: { id: 'q1' }, error: null }),
+    }
+    mockDb.from.mockImplementation((t) => (t === 'contractor_invoices' ? invChain : queueChain))
+  }
+  function carSetup() {
+    const docChain = buildChainable({
+      data: { id: 'd1', car_id: 'car1', storage_path: 'c/d1.pdf', car: { id: 'car1', location_id: 'loc1' } },
+      error: null,
+    })
+    mockDb.from.mockImplementation((t) => (t === 'car_documents' ? docChain : buildChainable({ data: { id: 'q1' }, error: null })))
+  }
+  function cardSetup() {
+    const recChain = buildChainable({ data: { id: 'r1', location_id: 'loc1', receipt_path: 'r/1.jpg', submitter: {} }, error: null })
+    mockDb.from.mockImplementation((t) => (t === 'card_receipts' ? recChain : buildChainable({ data: { id: 'q1' }, error: null })))
+  }
+  function huntSetup() {
+    const q = {
+      select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      insert: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: { id: 'q1' }, error: null }),
+    }
+    mockDb.from.mockImplementation(() => q)
+  }
+  function expenseSetup(items) {
+    const claimChain = buildChainable({ data: { id: 'c1', location_id: 'loc1', status: 'approved' }, error: null })
+    let call = 0
+    mockDb.from.mockImplementation((t) => {
+      if (t === 'fte_expense_claims') return claimChain
+      if (t === 'fte_expense_items') return { select: vi.fn().mockReturnThis(), eq: vi.fn(() => Promise.resolve({ data: items, error: null })) }
+      call++
+      if (call === 1) return { select: () => ({ in: () => Promise.resolve({ data: [], error: null }) }) }
+      const c = {
+        insert: (rows) => { c.rows = rows; return c },
+        select: () => Promise.resolve({ data: c.rows.map((r, i) => ({ id: `q${i + 1}`, source_fte_expense_item_id: r.source_fte_expense_item_id })), error: null }),
+      }
+      return c
+    })
+  }
+
+  const cases = [
+    ['contractor invoice', contractorSetup, () => enqueueModule.enqueueFromContractorInvoice('inv1')],
+    ['car document', carSetup, () => enqueueModule.enqueueFromCarDocument('d1')],
+    ['card receipt', cardSetup, () => enqueueModule.enqueueFromCardReceipt('r1')],
+    ['hunted file', huntSetup, () => enqueueModule.enqueueFromHuntFind(ARGS)],
+  ]
+
+  it.each(cases)('%s: queues the new id once with the same client, return value unchanged', async (_n, setup, run) => {
+    setup()
+    const r = await run()
+    expect(r.ok).toBe(true)
+    expect(r.queueIds).toEqual(['q1'])
+    expect(queueInvoicePreparation).toHaveBeenCalledTimes(1)
+    expect(queueInvoicePreparation).toHaveBeenCalledWith(mockDb, ['q1'])
+  })
+
+  it.each(cases)('%s: a helper that rejects does not change the result', async (_n, setup, run) => {
+    setup()
+    queueInvoicePreparation.mockRejectedValue(new Error('qstash down'))
+    const r = await run()
+    expect(r.ok).toBe(true)
+    expect(r.queueIds).toEqual(['q1'])
+  })
+
+  it('an insert failure queues nothing', async () => {
+    const docChain = buildChainable({
+      data: { id: 'd1', car_id: 'car1', storage_path: 'c/d1.pdf', car: { id: 'car1', location_id: 'loc1' } },
+      error: null,
+    })
+    mockDb.from.mockImplementation((t) => (t === 'car_documents' ? docChain : buildChainable({ data: null, error: { message: 'no' } })))
+    expect((await enqueueModule.enqueueFromCarDocument('d1')).ok).toBe(false)
+    expect(queueInvoicePreparation).not.toHaveBeenCalled()
+  })
+
+  it('expense claim: queues the rows that have a receipt, never the receiptless extracted ones', async () => {
+    expenseSetup([
+      { id: 'i1', claim_id: 'c1', receipt_path: 'r/1.jpg', vendor: 'A', amount: 1, expense_date: '2026-10-01' },
+      { id: 'i2', claim_id: 'c1', receipt_path: null, vendor: 'Mileage', amount: 2, expense_date: '2026-10-02' },
+      { id: 'i3', claim_id: 'c1', receipt_path: 'r/3.jpg', vendor: 'C', amount: 3, expense_date: '2026-10-03' },
+    ])
+    const r = await enqueueModule.enqueueFromFteExpenseClaim('c1')
+    expect(r).toEqual({ ok: true, queueIds: ['q1', 'q2', 'q3'] })
+    expect(queueInvoicePreparation).toHaveBeenCalledTimes(1)
+    expect(queueInvoicePreparation).toHaveBeenCalledWith(mockDb, ['q1', 'q3'])
+  })
+
+  it('expense claim with only receiptless items queues nothing', async () => {
+    expenseSetup([{ id: 'i2', claim_id: 'c1', receipt_path: null, vendor: 'Mileage', amount: 2, expense_date: '2026-10-02' }])
+    await enqueueModule.enqueueFromFteExpenseClaim('c1')
+    expect(queueInvoicePreparation).not.toHaveBeenCalled()
+  })
+
+  it('expense claim: a helper that rejects does not change the result', async () => {
+    expenseSetup([{ id: 'i1', claim_id: 'c1', receipt_path: 'r/1.jpg', vendor: 'A', amount: 1, expense_date: '2026-10-01' }])
+    queueInvoicePreparation.mockRejectedValue(new Error('qstash down'))
+    expect(await enqueueModule.enqueueFromFteExpenseClaim('c1')).toEqual({ ok: true, queueIds: ['q1'] })
   })
 })

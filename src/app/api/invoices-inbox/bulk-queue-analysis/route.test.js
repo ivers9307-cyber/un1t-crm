@@ -1,16 +1,9 @@
-// QSTASH.6 — the bulk-queue-analysis publish hook.
+// "Send for analysis" (bulk-queue-analysis).
 //
-// "Send for analysis" is the ONLY site that marks invoices_queue rows
-// for background analysis (sets analysis_queued_at — repo-sweep
-// verified: bulk-analyse and the cron only ever CLEAR it). After the
-// row updates land, each successfully-queued id is published to the
-// QStash `invoice-analysis` QUEUE (parallelism 2 — bounded OCR
-// concurrency; a 50-invoice bulk queue must NOT become 50 concurrent
-// worker invocations). Publishes are fire-and-forget: env-gated inside
-// publishQueuePush, dedup id DASH-ONLY (QStash 400s on colons — the
-// QSTASH.2 lesson), batched with allSettled after the loop, own
-// try/catch — a publish failure never changes the operator's response;
-// the cron sweeps whatever QStash misses.
+// INVOICEPREP.3 — the route no longer publishes itself: after its own row
+// updates (status, who vouched for quality, stale error cleared) it hands the
+// queued ids to queueInvoicePreparation, the one publisher. A helper failure
+// never changes the operator's response.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -27,21 +20,13 @@ vi.mock('../_bulk-helpers', async (importOriginal) => {
   }
 })
 
-vi.mock('@/lib/qstash', () => ({
-  publishQueuePush: vi.fn().mockResolvedValue({ ok: true, messageId: 'msg-test' }),
-  INVOICE_ANALYSIS_WORKER_PATH: '/api/webhooks/qstash/invoice-analysis',
-  INVOICE_ANALYSIS_QUEUE_NAME: 'invoice-analysis',
-  INVOICE_ANALYSIS_QUEUE_PARALLELISM: 2,
+vi.mock('@/lib/invoices-queue/queue-preparation', () => ({
+  queueInvoicePreparation: vi.fn().mockResolvedValue({ queued: [] }),
 }))
 
 import { POST } from './route.js'
 import { loadBookkeeper, loadAndScopeBulkRows } from '../_bulk-helpers'
-import {
-  publishQueuePush,
-  INVOICE_ANALYSIS_WORKER_PATH,
-  INVOICE_ANALYSIS_QUEUE_NAME,
-  INVOICE_ANALYSIS_QUEUE_PARALLELISM,
-} from '@/lib/qstash'
+import { queueInvoicePreparation } from '@/lib/invoices-queue/queue-preparation'
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -94,13 +79,13 @@ function makeDb({ updateErrorForIds = new Set() } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  publishQueuePush.mockResolvedValue({ ok: true, messageId: 'msg-test' })
+  queueInvoicePreparation.mockResolvedValue({ queued: [] })
 })
 
 // ─── publish hook ────────────────────────────────────────────────────────────
 
-describe('POST /api/invoices-inbox/bulk-queue-analysis — QStash publish hook', () => {
-  it('publishes one enqueue message per successfully-queued row, onto the bounded-parallelism queue', async () => {
+describe('POST /api/invoices-inbox/bulk-queue-analysis — preparation hand-off', () => {
+  it('hands every successfully-queued id to the preparation helper once, with the route client', async () => {
     const { db } = makeDb()
     loadBookkeeper.mockResolvedValue({ user: USER, db })
     loadAndScopeBulkRows.mockResolvedValue({
@@ -114,21 +99,8 @@ describe('POST /api/invoices-inbox/bulk-queue-analysis — QStash publish hook',
 
     expect(res.status).toBe(200)
     expect(json.data.counts).toEqual({ queued: 2 })
-    expect(publishQueuePush).toHaveBeenCalledTimes(2)
-    expect(publishQueuePush).toHaveBeenCalledWith({
-      path: INVOICE_ANALYSIS_WORKER_PATH,
-      body: { id: ID_1 },
-      deduplicationId: `invoice-analysis-${ID_1}`, // DASH-ONLY — QStash 400s on colons
-      queueName: INVOICE_ANALYSIS_QUEUE_NAME,
-      queueParallelism: INVOICE_ANALYSIS_QUEUE_PARALLELISM,
-    })
-    expect(publishQueuePush).toHaveBeenCalledWith({
-      path: INVOICE_ANALYSIS_WORKER_PATH,
-      body: { id: ID_2 },
-      deduplicationId: `invoice-analysis-${ID_2}`,
-      queueName: INVOICE_ANALYSIS_QUEUE_NAME,
-      queueParallelism: INVOICE_ANALYSIS_QUEUE_PARALLELISM,
-    })
+    expect(queueInvoicePreparation).toHaveBeenCalledTimes(1)
+    expect(queueInvoicePreparation).toHaveBeenCalledWith(db, [ID_1, ID_2])
   })
 
   it('does not publish for skipped rows (wrong status / no attachment / missing / forbidden)', async () => {
@@ -147,7 +119,7 @@ describe('POST /api/invoices-inbox/bulk-queue-analysis — QStash publish hook',
     const json = await res.json()
 
     expect(json.data.counts).toEqual({ skipped: 3 })
-    expect(publishQueuePush).not.toHaveBeenCalled()
+    expect(queueInvoicePreparation).not.toHaveBeenCalled()
   })
 
   it('does not publish for a row whose queue update was refused', async () => {
@@ -163,11 +135,11 @@ describe('POST /api/invoices-inbox/bulk-queue-analysis — QStash publish hook',
     const json = await res.json()
 
     expect(json.data.counts).toEqual({ failed: 1, queued: 1 })
-    expect(publishQueuePush).toHaveBeenCalledTimes(1)
-    expect(publishQueuePush.mock.calls[0][0].body).toEqual({ id: ID_2 })
+    expect(queueInvoicePreparation).toHaveBeenCalledTimes(1)
+    expect(queueInvoicePreparation).toHaveBeenCalledWith(db, [ID_2])
   })
 
-  it('a rejected publish never fails the operator response (belt-and-braces — the cron sweeps)', async () => {
+  it('a helper that rejects never fails the operator response (the sweeper cron picks the rows up)', async () => {
     const { db } = makeDb()
     loadBookkeeper.mockResolvedValue({ user: USER, db })
     loadAndScopeBulkRows.mockResolvedValue({
@@ -175,7 +147,7 @@ describe('POST /api/invoices-inbox/bulk-queue-analysis — QStash publish hook',
       missingIds: [],
       forbiddenIds: [],
     })
-    publishQueuePush.mockRejectedValue(new Error('qstash exploded'))
+    queueInvoicePreparation.mockRejectedValue(new Error('helper exploded'))
 
     const res = await POST(makeRequest([ID_1]))
     const json = await res.json()
@@ -192,6 +164,6 @@ describe('POST /api/invoices-inbox/bulk-queue-analysis — QStash publish hook',
 
     await POST(makeRequest([ID_1]))
 
-    expect(publishQueuePush).not.toHaveBeenCalled()
+    expect(queueInvoicePreparation).not.toHaveBeenCalled()
   })
 })

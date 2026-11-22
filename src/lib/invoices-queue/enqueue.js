@@ -26,9 +26,33 @@
 // specific gate and shouldn't apply to owner-approved sources.
 // PR 2 will introduce the unified state machine; for now this
 // keeps the existing /invoices UI working unchanged.
+//
+// INVOICEPREP.3 — a row inserted WITH a file is handed to
+// queueInvoicePreparation right after the insert, so it is read and checked
+// on arrival with no click. Receiptless expense rows are born 'extracted'
+// and are not queued; a row found by an idempotency check was queued when it
+// was created, so it is not queued again.
 
 import { createServerClient } from '@/lib/supabase'
 import { getLocationZone, todayStrIn } from '@/lib/location-time'
+import { queueInvoicePreparation } from '@/lib/invoices-queue/queue-preparation'
+import { logError } from '@/lib/log'
+
+/**
+ * Queue freshly inserted rows for preparation. The rows are already stored,
+ * so nothing here may change the caller's outcome: an unexpected throw is
+ * logged and the sweeper cron picks the rows up.
+ * @param {any} db
+ * @param {string[]} ids
+ */
+async function queueArrivals(db, ids) {
+  if (ids.length === 0) return
+  try {
+    await queueInvoicePreparation(db, ids)
+  } catch (err) {
+    logError('invoices-enqueue', 'could not queue rows for preparation', { err })
+  }
+}
 
 const STORAGE_BUCKETS = Object.freeze({
   supplier_email: 'inbound-invoices',
@@ -150,8 +174,8 @@ function syntheticFieldsForReceiptlessItem(item, todayStr) {
  * fte_expense_items row, regardless of whether the item has a
  * receipt:
  *   • Items WITH receipts land at status='quality_approved' with
- *     the attachment pointer set; bookkeeper clicks Analyse →
- *     Claude Vision → extracted_fields populated.
+ *     the attachment pointer set and are queued for preparation
+ *     on arrival (Claude Vision → extracted_fields populated).
  *   • Items WITHOUT receipts land at status='extracted' with
  *     synthetic extracted_fields built from the submitter's typed
  *     vendor + amount + date. No Analyse needed; bookkeeper just
@@ -231,7 +255,7 @@ export async function enqueueFromFteExpenseClaim(claimId) {
     }
     if (hasReceipt) {
       // Skip stage-1 quality review — owner has already approved.
-      // Bookkeeper picks the row up, clicks Analyse, Vision runs.
+      // Queued for preparation right after the insert; no click needed.
       return { ...base, status: 'quality_approved' }
     }
     // Receiptless: there's nothing to OCR. Skip straight to
@@ -260,8 +284,12 @@ export async function enqueueFromFteExpenseClaim(claimId) {
   const { data: inserted, error: insErr } = await db
     .from('invoices_queue')
     .insert(toInsert)
-    .select('id')
+    .select('id, source_fte_expense_item_id')
   if (insErr) return { ok: false, error: `Queue insert failed: ${insErr.message}` }
+
+  // Receiptless rows are already 'extracted'; only the ones with a file need reading.
+  const receipted = new Set(items.filter((it) => it.receipt_path).map((it) => it.id))
+  await queueArrivals(db, (inserted || []).filter((r) => receipted.has(r.source_fte_expense_item_id)).map((r) => r.id))
 
   return { ok: true, queueIds: [...(queuedRows || []).map((r) => r.id), ...(inserted || []).map((r) => r.id)] }
 }
@@ -327,6 +355,7 @@ export async function enqueueFromContractorInvoice(invoiceId) {
     .select('id')
     .single()
   if (insErr) return { ok: false, error: `Queue insert failed: ${insErr.message}` }
+  await queueArrivals(db, [inserted.id])
   return { ok: true, queueIds: [inserted.id] }
 }
 
@@ -378,6 +407,7 @@ export async function enqueueFromCarDocument(documentId) {
     .select('id')
     .single()
   if (insErr) return { ok: false, error: `Queue insert failed: ${insErr.message}` }
+  await queueArrivals(db, [inserted.id])
   return { ok: true, queueIds: [inserted.id] }
 }
 
@@ -385,8 +415,8 @@ export async function enqueueFromCarDocument(documentId) {
  * Enqueue a single company-card receipt (SPEND.P3.1). Card receipts
  * ride the emailed-invoice path: the submitter only provides the
  * receipt photo, so the row enters at status 'received' (like a
- * supplier email / car document) and the bookkeeper's Analyse (Claude
- * Vision OCR) fills the fields in /invoices, then reviews + sends to
+ * supplier email / car document) and preparation (Claude
+ * Vision OCR, queued on arrival) fills the fields in /invoices, then reviews + sends to
  * Xero. There is no owner-approval step — the bookkeeper's queue review
  * IS the approval.
  *
@@ -411,8 +441,8 @@ export async function enqueueFromCardReceipt(receiptId) {
     return { ok: false, error: 'Card receipt has no attachment.' }
   }
 
-  // No merchant/amount/date yet — those come from the bookkeeper's
-  // Analyse. The subject just identifies who submitted it (+ which card)
+  // No merchant/amount/date yet — those come from preparation
+  // (read on arrival). The subject just identifies who submitted it (+ which card)
   // for the queue's inbox display.
   const submitterName = rec.submitter?.full_name || 'staff member'
   const cardTag = rec.card_last4 ? ` · card ••${rec.card_last4}` : ''
@@ -429,12 +459,13 @@ export async function enqueueFromCardReceipt(receiptId) {
       attachment_mime_type: rec.receipt_mime_type || null,
       sender_email: rec.submitter?.email || null,
       subject: `Company-card receipt — ${submitterName}${cardTag}`,
-      // Raw inbound, exactly like a supplier email: needs Analyse.
+      // Raw inbound, exactly like a supplier email: read on arrival.
       status: 'received',
     })
     .select('id')
     .single()
   if (insErr) return { ok: false, error: `Queue insert failed: ${insErr.message}` }
+  await queueArrivals(db, [inserted.id])
   return { ok: true, queueIds: [inserted.id] }
 }
 
@@ -487,5 +518,6 @@ export async function enqueueFromHuntFind({
     .select('id')
     .single()
   if (insErr) return { ok: false, error: `Queue insert failed: ${insErr.message}` }
+  await queueArrivals(db, [inserted.id])
   return { ok: true, queueIds: [inserted.id], deduped: false }
 }

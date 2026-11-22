@@ -33,8 +33,9 @@
 //      the email a stray.
 //   6. ingestInboundEmail stores every supported attachment (one
 //      invoices_queue row each) or one empty row when nothing is usable.
-//   7. Return 200. The inbox UI then shows the row and the operator
-//      does quality review.
+//   7. Queue every row this delivery inserted (files, not-received and the
+//      empty-email row) for automatic preparation, then return 200. A queueing
+//      failure never changes the answer: the sweeper cron picks the rows up.
 //
 // Why we don't queue here like the outbound webhook does:
 //   • Inbound volume is single-digit per day — no burst risk.
@@ -65,6 +66,7 @@ import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/li
 import { parseInboundAddress } from '@/lib/inbound-invoices'
 import { ingestInboundEmail } from '@/lib/invoices-queue/ingest-email'
 import { recordInboundStray } from '@/lib/invoices-queue/strays'
+import { queueInvoicePreparation } from '@/lib/invoices-queue/queue-preparation'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -209,6 +211,15 @@ export async function POST(request, { params }) {
     if (!result.ok) {
       logError('invoices-inbound', 'ingest failed', { messageId, error: result.error })
       return await fail(result.error)
+    }
+    // The ingest stays free of QStash; queueing is ours. A repeat delivery
+    // inserted nothing, so rowIds is empty and nothing is queued twice.
+    if (result.rowIds.length > 0) {
+      try {
+        await queueInvoicePreparation(db, result.rowIds)
+      } catch (err) {
+        logError('invoices-inbound', 'could not queue rows for preparation', { messageId, error: err?.message })
+      }
     }
     return NextResponse.json({ success: true, ...repeat, created: result.created.length, ids: result.created, notReceived: result.notReceived })
   } catch (err) {

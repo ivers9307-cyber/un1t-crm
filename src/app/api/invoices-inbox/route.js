@@ -17,6 +17,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
+import { queueInvoicePreparation } from '@/lib/invoices-queue/queue-preparation'
+import { logError } from '@/lib/log'
 import {
   INBOUND_INVOICE_SUPPORTED_MIME,
   inboundInvoiceStoragePath,
@@ -233,6 +235,14 @@ export async function POST(request) {
     .eq('id', row.id)
   if (updErr) {
     return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+  }
+
+  // Read and checked on arrival, no click. A failure here never fails the
+  // upload: the file is stored and the sweeper cron picks the row up.
+  try {
+    await queueInvoicePreparation(db, [row.id])
+  } catch (err) {
+    logError('invoices-inbox', 'could not queue upload for preparation', { rowId: row.id, err })
   }
 
   return NextResponse.json({ success: true, data: { ...row, attachment_path: storagePath } }, { status: 201 })
