@@ -325,6 +325,47 @@ export function emptyWeekCopyPrompt(blocks, { isManager = false, viewType = 'wee
   return true
 }
 
+// ── USUALCOACH.1 ──
+
+const usualShifts = (c) => `${c} ${c === 1 ? 'shift' : 'shifts'}`
+const usualCoaches = (c) => `${c} ${c === 1 ? 'coach' : 'coaches'}`
+const USUAL_REASON_WORDS = {
+  already_staffed: (c) => `${usualShifts(c)} already had coaches`,
+  published: (c) => `${usualShifts(c)} on a published roster`,
+  not_at_studio: (c) => `${usualCoaches(c)} no longer active staff here`,
+  clash: (c) => `${usualCoaches(c)} already on another shift then`,
+  time_off: (c) => `${usualCoaches(c)} on approved leave`,
+  unavailable: (c) => `${usualCoaches(c)} marked as unable to work`,
+  at_capacity: (c) => `${usualCoaches(c)} over the shift's maximum`,
+  unchecked: (c) => `${usualCoaches(c)} who could not be checked`,
+  already_on: (c) => `${usualCoaches(c)} already on the shift`,
+  write_failed: (c) => `${usualCoaches(c)} who could not be saved`,
+}
+
+/**
+ * USUALCOACH.1 — the toast after "Fill usual coaches". Pure. The reasons are
+ * the ones src/lib/shift-usual-coaches.js reports (USUAL_SKIP_REASONS).
+ * @param {{ assigned?: number, counts?: Record<string, number> }} r
+ * @returns {{ kind: 'success'|'warning', message: string }}
+ */
+export function fillUsualResultToast({ assigned = 0, counts = {} } = {}) {
+  const n = Number(assigned) || 0
+  const parts = Object.entries(counts || {})
+    .filter(([, c]) => Number(c) > 0)
+    .map(([reason, c]) => (USUAL_REASON_WORDS[reason] ? USUAL_REASON_WORDS[reason](Number(c)) : `${c} ${reason}`))
+  const head = n === 0 ? 'No usual coaches were added.' : `Added ${n} usual ${n === 1 ? 'coach' : 'coaches'}.`
+  if (parts.length === 0) return { kind: n === 0 ? 'warning' : 'success', message: head }
+  return { kind: 'warning', message: `${head} Skipped: ${parts.join(', ')}.` }
+}
+
+/**
+ * USUALCOACH.1 — does any active template at this studio have usual coaches?
+ * The empty-week card offers "Fill usual coaches" only then. Pure.
+ */
+export function templatesHaveUsualCoaches(templates) {
+  return (templates || []).some((t) => t?.active !== false && Array.isArray(t?.usual_coach_ids) && t.usual_coach_ids.length > 0)
+}
+
 // How much a leave type says. When one person has two requests covering the
 // same day, the bar shows the one that says most: a named kind of leave beats
 // "Unavailable", which beats "Other", which beats a type this code never met.

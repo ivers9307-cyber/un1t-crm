@@ -9,9 +9,15 @@ vi.mock('./roster', async (importOriginal) => {
   return { ...actual, generateBlocksForTemplate: vi.fn() }
 })
 
+vi.mock('@/lib/shift-usual-coaches', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, readBlocksForFill: vi.fn(), fillUsualCoaches: vi.fn() }
+})
+
 import { extendRosterHorizon } from './roster-horizon'
 import { generateBlocksForTemplate, getMonday, formatDate } from './roster'
-import { logWarn } from '@/lib/log'
+import { readBlocksForFill, fillUsualCoaches } from '@/lib/shift-usual-coaches'
+import { logWarn, logInfo } from '@/lib/log'
 
 // Thenable select-builder: filters chain, awaiting resolves the envelope.
 function templatesBuilder(result) {
@@ -110,5 +116,52 @@ describe('extendRosterHorizon', () => {
     const db = dbWith({ data: [], error: null })
     expect(await extendRosterHorizon(db)).toMatchObject({ templates: 0, inserted: 0, failed: 0 })
     expect(generateBlocksForTemplate).not.toHaveBeenCalled()
+  })
+
+  // USUALCOACH.1 — usual coaches go onto the blocks this run created, only.
+  describe('usual coaches', () => {
+    const WITH_USUAL = { ...TPL_A, usual_coach_ids: ['p1', 'p2'] }
+
+    it('selects usual_coach_ids for the fill', async () => {
+      const db = dbWith({ data: [TPL_A], error: null })
+      await extendRosterHorizon(db)
+      const sel = builder.calls.find((c) => c[0] === 'select')[1]
+      expect(sel.split(',').map((c) => c.trim())).toContain('usual_coach_ids')
+    })
+
+    it('fills only the newly inserted blocks and totals the outcome, logging counts not names', async () => {
+      generateBlocksForTemplate.mockResolvedValueOnce({ inserted: 2, skipped: 5, insertedIds: ['b-new-1', 'b-new-2'] })
+      readBlocksForFill.mockResolvedValueOnce({ blocks: [{ id: 'b-new-1' }, { id: 'b-new-2' }], error: null })
+      fillUsualCoaches.mockResolvedValueOnce({
+        assigned: [{ block_id: 'b-new-1', profile_id: 'p1' }],
+        skipped: [{ block_id: 'b-new-1', profile_id: 'p2', reason: 'time_off' }],
+        counts: { time_off: 1 },
+      })
+      const db = dbWith({ data: [WITH_USUAL], error: null })
+      const out = await extendRosterHorizon(db)
+      expect(readBlocksForFill).toHaveBeenCalledWith(db, { blockIds: ['b-new-1', 'b-new-2'] })
+      expect(fillUsualCoaches).toHaveBeenCalledWith(db, [{ id: 'b-new-1' }, { id: 'b-new-2' }], { actorId: null })
+      expect(out).toMatchObject({ usualAssigned: 1, usualSkipped: 1, usualFillFailed: 0 })
+      expect(logInfo).toHaveBeenCalledWith('roster-horizon', expect.any(String), expect.objectContaining({ counts: { time_off: 1 } }))
+    })
+
+    it('does nothing when no block is new, or the template has no usual coaches', async () => {
+      generateBlocksForTemplate
+        .mockResolvedValueOnce({ inserted: 0, skipped: 7, insertedIds: [] })
+        .mockResolvedValueOnce({ inserted: 1, skipped: 0, insertedIds: ['b1'] })
+      const db = dbWith({ data: [WITH_USUAL, TPL_B], error: null })
+      await extendRosterHorizon(db)
+      expect(readBlocksForFill).not.toHaveBeenCalled()
+      expect(fillUsualCoaches).not.toHaveBeenCalled()
+    })
+
+    it('a failed fill never fails the sweep', async () => {
+      generateBlocksForTemplate.mockResolvedValueOnce({ inserted: 1, skipped: 0, insertedIds: ['b1'] })
+      readBlocksForFill.mockResolvedValueOnce({ blocks: [], error: { message: 'down' } })
+      const db = dbWith({ data: [WITH_USUAL], error: null })
+      const out = await extendRosterHorizon(db)
+      expect(out).toMatchObject({ inserted: 1, failed: 0, usualFillFailed: 1 })
+      expect(logWarn).toHaveBeenCalled()
+    })
   })
 })
