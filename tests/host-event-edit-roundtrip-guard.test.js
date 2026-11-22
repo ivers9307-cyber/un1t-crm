@@ -37,11 +37,9 @@ const code = (rel) => stripCommentsOfFile(path.join(ROOT, rel))
  * Columns the PUT route decides itself, never read from the form, each with
  * the reason. An entry the route no longer writes fails (stale).
  */
-export const ROUTE_DECIDED = {
-  status: 'the edit transition (computeEditTransition): a host never sets it',
-  submitted_at: 'stamped by a re-review',
-  reviewed_at: 'cleared by a re-review',
-}
+// HOSTAUTOPUB.1 — the PUT no longer writes status / submitted_at / reviewed_at
+// (no re-review), so no column is route-decided today.
+export const ROUTE_DECIDED = {}
 
 /** The object literal that opens at the first `{` after `marker` (braces matched). */
 export function objectLiteralAfter(source, marker) {

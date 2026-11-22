@@ -177,9 +177,12 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
   },
   {
     category: 'host_event_review',
-    label: 'Host event needs review',
-    description: 'A host submitted an event for review on the events platform. One push per submission to the org admins; the email notification remains as the durable record.',
-    trigger: { kind: 'event', source: 'POST /api/host/events/[id]/submit (status → pending_review)' },
+    // HOSTAUTOPUB.1 — the category key stays (its notify_host_event_review
+    // switch and push channel are shared with the phone); the push is now a
+    // notice that a host event went live, not a request to approve one.
+    label: 'Host event published',
+    description: 'A host published an event on the events platform. It is on sale straight away, with no approval step. One push per publish to the org admins; the email notification remains as the durable record.',
+    trigger: { kind: 'event', source: 'POST /api/host/events/[id]/submit (status → published)' },
     recipients: { kind: 'roles_at_location', detail: 'owner / manager across the host org (masters included)' },
     configurable: { leadTimes: false, roles: false },
     fallbackEmail: false, // the submit flow already sends its own richer email

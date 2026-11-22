@@ -95,6 +95,7 @@ function toApprovalRow(provider, item) {
   // specifically). Flagging it lets the queue UI badge it distinctly
   // instead of implying every row is local to the active studio — the same
   // decision the registry's own header docs make for that provider.
+  // (HOSTAUTOPUB.1: host_events left the registry; this line is inert.)
   if (provider.key === 'host_events') row.orgWide = true
   return row
 }

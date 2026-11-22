@@ -276,7 +276,11 @@ describe('registry per-category gating — bundle layer (BUNDLES.5 Task 2)', () 
 
   it('CATEGORY_BUNDLES covers every provider except the core-exempt "issues" category', () => {
     const categoryKeys = APPROVALS_PROVIDERS.map((p) => p.key)
-    const mapped = Object.keys(CATEGORY_BUNDLES)
+    // HOSTAUTOPUB.1 — host_events left the registry, but its CATEGORY_BUNDLES
+    // entry stays in shared/ (any shared/ change publishes a phone OTA; the
+    // entry is inert with no provider). Drop it from shared/ with the next
+    // real shared change.
+    const mapped = Object.keys(CATEGORY_BUNDLES).filter((k) => k !== 'host_events')
     expect(mapped.sort()).toEqual(categoryKeys.filter((k) => k !== 'issues').sort())
   })
 
@@ -325,9 +329,9 @@ describe('registry per-category gating — bundle layer (BUNDLES.5 Task 2)', () 
     expect(off.providers.map((p) => p.key)).not.toContain('hyrox_sessions')
   })
 
-  it('host_events follows bundle_members', async () => {
-    const off = await getPendingApprovals(db, user('owner', { features: { bundle_members: false } }))
-    expect(off.providers.map((p) => p.key)).not.toContain('host_events')
+  it('host_events is not a provider any more (HOSTAUTOPUB.1: hosts publish with no approval)', async () => {
+    const on = await getPendingApprovals(db, user('owner', { features: {} }))
+    expect(on.providers.map((p) => p.key)).not.toContain('host_events')
   })
 
   it('agent_requests — OR semantics across its two owning bundles (bundle_sales + bundle_members)', async () => {

@@ -2,6 +2,8 @@
 // by global role or by the role at the active studio (canReviewHostEvents, the
 // same rule the approvals provider shows the item by); the event's
 // host must be in the caller's org (IDOR guard). (HOST-PORTAL.3)
+// HOSTAUTOPUB.1 — hosts now publish with no review, so this only decides rows
+// left in pending_review from before (the /settings/hosts queue calls it).
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { canReviewHostEvents } from '@/lib/host-event-review-access'

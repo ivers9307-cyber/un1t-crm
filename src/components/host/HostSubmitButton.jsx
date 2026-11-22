@@ -1,7 +1,7 @@
 'use client'
 
-// HOST-PORTAL.3 — "Submit for review" action on the host dashboard. POSTs the
-// host-scoped submit route (draft/rejected → pending_review) then refreshes the
+// HOST-PORTAL.3 — the host's "Publish" action. POSTs the host-scoped submit
+// route (HOSTAUTOPUB.1: draft → published, no staff review) then refreshes the
 // server-rendered row so the new status chip shows immediately.
 
 import { useState } from 'react'
@@ -20,13 +20,13 @@ export default function HostSubmitButton({ eventId }) {
       const res = await fetch(`/api/host/events/${eventId}/submit`, { method: 'POST' })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) {
-        setError(json.error || 'Could not submit')
+        setError(json.error || 'Could not publish')
         setBusy(false)
         return
       }
       router.refresh()
     } catch {
-      setError('Could not submit')
+      setError('Could not publish')
       setBusy(false)
     }
   }
@@ -39,7 +39,7 @@ export default function HostSubmitButton({ eventId }) {
         disabled={busy}
         className="text-host-ok hover:opacity-80 disabled:opacity-60"
       >
-        {busy ? 'Submitting…' : 'Submit for review'}
+        {busy ? 'Publishing…' : 'Publish'}
       </button>
       {error && <span className="text-host-bad">{error}</span>}
     </span>

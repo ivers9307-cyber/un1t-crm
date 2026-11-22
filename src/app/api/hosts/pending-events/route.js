@@ -1,4 +1,6 @@
 // GET /api/hosts/pending-events — the org's host events awaiting review. ADMIN_ROLES.
+// HOSTAUTOPUB.1 — nothing new lands in pending_review; this lists the rows
+// left there from before, for the /settings/hosts queue.
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { ADMIN_ROLES } from '@/lib/schemas'

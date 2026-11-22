@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { TEAM_ACTIONS, TEAM_LINK_ONLY_KEYS } from '@/lib/approvals/team-actions'
 import { TEAM_CARDS, TeamLinkCard } from './team-cards'
 import TeamDecideCard from './TeamDecideCard'
-import HostEventCard from './HostEventCard'
 
 describe('TEAM_CARDS', () => {
   it('has a card for every decidable provider', () => {
@@ -15,7 +14,8 @@ describe('TEAM_CARDS', () => {
   it('maps the simple categories to the shared card and exports the link card', () => {
     expect(TEAM_CARDS.fte_expenses).toBe(TeamDecideCard)
     expect(TEAM_CARDS.time_off_cancellations).toBe(TeamDecideCard)
-    expect(TEAM_CARDS.host_events).toBe(HostEventCard)
+    // HOSTAUTOPUB.1 — host events publish with no approval: no card.
+    expect(TEAM_CARDS.host_events).toBeUndefined()
     expect(typeof TeamLinkCard).toBe('function')
   })
 })

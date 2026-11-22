@@ -116,14 +116,16 @@ describe('host events page', () => {
     expect(order).toEqual(['Needs action', 'Upcoming', 'Series', 'Past'])
   })
 
-  it('gives a draft row the submit button and a needs-changes row none', async () => {
-    state.events = [ev('d1', 'draft', '2026-12-01'), ev('r1', 'rejected', '2026-12-02')]
+  it('gives draft, needs-changes and in-review rows the Publish button, and a live row none (HOSTAUTOPUB.1)', async () => {
+    state.events = [ev('d1', 'draft', '2026-12-01'), ev('r1', 'rejected', '2026-12-02'), ev('p1', 'pending_review', '2026-12-03'), ev('l1', 'published', '2026-12-04')]
     const el = await Page()
     const rows = all(el, HostEventRow)
     const byId = Object.fromEntries(rows.map((r) => [r.props.event.id, r.props]))
     expect(byId.d1.action.type).toBe(HostSubmitButton)
     expect(byId.d1.action.props.eventId).toBe('d1')
-    expect(byId.r1.action).toBeFalsy()
+    expect(byId.r1.action.type).toBe(HostSubmitButton)
+    expect(byId.p1.action.type).toBe(HostSubmitButton)
+    expect(byId.l1.action).toBeFalsy()
   })
 
   it('renders the first-event line and no groups for a host with no events', async () => {
