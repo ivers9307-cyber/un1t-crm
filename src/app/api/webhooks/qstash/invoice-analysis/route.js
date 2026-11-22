@@ -100,7 +100,7 @@ export async function POST(request) {
   const db = createServerClient()
 
   // Same eligibility as the RPC's queue predicate: still queued only
-  // (quality_approved + analysis_queued_at set). An already-extracted,
+  // (received or quality_approved, with analysis_queued_at set). An already-extracted,
   // de-queued or rejected row is a clean 200 skip — QStash must not
   // redeliver it. Claimed-ness is deliberately NOT filtered here: that
   // is the claim CAS's job (fresh claim → skip; stale claim → crashed
@@ -110,7 +110,7 @@ export async function POST(request) {
     .from('invoices_queue')
     .select('*')
     .eq('id', id)
-    .eq('status', 'quality_approved')
+    .in('status', ['received', 'quality_approved'])
     .not('analysis_queued_at', 'is', null)
     .limit(1)
 
