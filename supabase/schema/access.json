@@ -1,7 +1,7 @@
 {
   "format": 1,
-  "through_migration": 868,
-  "latest_applied_version": "20261122141918",
+  "through_migration": 872,
+  "latest_applied_version": "20261122223601",
   "policies": [
     ["ac_sessions","no_anon_or_authenticated_access",false,["anon","authenticated"],"*","false","false"],
     ["achievement_rules","Anyone signed in reads active rules",true,["authenticated"],"r","(is_active OR private.auth_is_master())",null],
