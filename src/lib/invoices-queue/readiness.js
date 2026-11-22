@@ -14,6 +14,7 @@ export const REVIEW_REASONS = Object.freeze([
   'duplicate_number',
   'already_in_xero',
   'credit_note',
+  'not_an_invoice',
   'new_supplier',
   'no_account',
   'no_vat_rate',
@@ -29,6 +30,7 @@ export const REVIEW_REASON_LABELS = Object.freeze({
   duplicate_number: 'Possible duplicate',
   already_in_xero: 'Already in Xero',
   credit_note: 'Credit note',
+  not_an_invoice: 'May not be an invoice',
   new_supplier: 'New supplier',
   no_account: 'No account yet',
   no_vat_rate: 'No VAT rate',
@@ -54,6 +56,9 @@ export function fieldReasons(fields, ctx = {}) {
 
   // A credit note sent as a bill would be booked the wrong way round.
   if (fields.document_type === 'credit_note') out.push('credit_note')
+  // A statement or other document a person vouched for is read through, but
+  // must never come out Ready and be sent as a bill.
+  if (fields.document_type === 'statement' || fields.document_type === 'other') out.push('not_an_invoice')
 
   const hasContact = !!fields.xero_contact_ref
   if (!hasContact) out.push('new_supplier')

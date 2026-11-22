@@ -33,7 +33,7 @@ describe('constants', () => {
     expect(Object.isFrozen(REVIEW_REASON_LABELS)).toBe(true)
     expect(Object.keys(REVIEW_REASON_LABELS).sort()).toEqual([...REVIEW_REASONS].sort())
     expect(REVIEW_REASONS).toEqual([
-      'unreadable', 'duplicate_file', 'duplicate_number', 'already_in_xero', 'credit_note', 'new_supplier',
+      'unreadable', 'duplicate_file', 'duplicate_number', 'already_in_xero', 'credit_note', 'not_an_invoice', 'new_supplier',
       'no_account', 'no_vat_rate', 'vat_differs', 'totals_mismatch', 'missing_date', 'zero_total',
     ])
     expect(REVIEW_REASON_LABELS.vat_differs).toBe('VAT differs from last time')
@@ -137,6 +137,14 @@ describe('review round', () => {
       expect(run({ ...good(), document_type: t })).toEqual([])
     }
     expect(REVIEW_REASON_LABELS.credit_note).toBe('Credit note')
+  })
+  it('not_an_invoice for a statement or other document, never Ready', () => {
+    expect(run({ ...good(), document_type: 'statement' })).toEqual(['not_an_invoice'])
+    expect(run({ ...good(), document_type: 'other' })).toEqual(['not_an_invoice'])
+    for (const t of ['invoice', 'receipt', 'credit_note', null, undefined]) {
+      expect(run({ ...good(), document_type: t })).not.toContain('not_an_invoice')
+    }
+    expect(REVIEW_REASON_LABELS.not_an_invoice).toBe('May not be an invoice')
   })
   it('numeric strings, string rates, no taxRates, blank-space date', () => {
     expect(run({ ...good(), subtotal: '100', tax_amount: '23', total: '123.00' })).toEqual([])

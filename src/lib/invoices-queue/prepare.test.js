@@ -167,8 +167,8 @@ describe('prepareInvoiceRow', () => {
   it('a statement a person vouched for (quality_approved) is never set aside: it is prepared', async () => {
     setup({ tables: KNOWN, rows: [queueRow({ status: 'quality_approved' })] })
     extract.mockResolvedValueOnce({ ok: true, fields: read({ document_type: 'statement' }), raw_response: '{}' })
-    expect((await run()).outcome).toBe('prepared')
-    expect(stored('q2')).toMatchObject({ status: 'extracted', not_invoice_reason: null })
+    expect(await run()).toEqual({ outcome: 'prepared', reasons: ['not_an_invoice'] })
+    expect(stored('q2')).toMatchObject({ status: 'extracted', not_invoice_reason: null, review_reasons: ['not_an_invoice'] })
     expect(stored('q2').extracted_fields.document_type).toBe('statement')
   })
 
@@ -177,6 +177,7 @@ describe('prepareInvoiceRow', () => {
     extract.mockResolvedValueOnce({ ok: true, fields: read({ document_type: 'other' }), raw_response: '{}' })
     expect((await run()).outcome).toBe('prepared')
     expect(stored('q2').status).toBe('extracted')
+    expect(stored('q2').review_reasons).toContain('not_an_invoice')
   })
 
   it('a credit note is prepared as an invoice with the credit_note reason', async () => {

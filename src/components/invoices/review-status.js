@@ -4,7 +4,7 @@
 
 import { REVIEW_REASONS, REVIEW_REASON_LABELS } from '@/lib/invoices-queue/readiness'
 
-const RED_REASONS = new Set(['duplicate_file', 'duplicate_number', 'already_in_xero', 'credit_note', 'unreadable'])
+const RED_REASONS = new Set(['duplicate_file', 'duplicate_number', 'already_in_xero', 'credit_note', 'not_an_invoice', 'unreadable'])
 const CHIP_STATUSES = new Set(['received', 'quality_approved', 'extracted', 'data_approved'])
 const UNREAD_STATUSES = new Set(['received', 'quality_approved'])
 

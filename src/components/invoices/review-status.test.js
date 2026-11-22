@@ -29,13 +29,14 @@ describe('reasonChips', () => {
   it('colours the serious reasons red', () => {
     const chips = reasonChips({
       status: 'received',
-      review_reasons: ['unreadable', 'duplicate_number', 'already_in_xero', 'credit_note', 'no_account'],
+      review_reasons: ['unreadable', 'duplicate_number', 'already_in_xero', 'credit_note', 'not_an_invoice', 'no_account'],
     })
     expect(chips.map((c) => [c.key, c.tone])).toEqual([
       ['unreadable', 'red'],
       ['duplicate_number', 'red'],
       ['already_in_xero', 'red'],
       ['credit_note', 'red'],
+      ['not_an_invoice', 'red'],
       ['no_account', 'amber'],
     ])
   })
