@@ -120,4 +120,55 @@ describe('ingestInboundEmail', () => {
     expect(r).toEqual({ ok: true, created: [], alreadyStored: 1, skippedInline: 0 })
     expect(upload).not.toHaveBeenCalled()
   })
+  it('fails when the path update fails, and a retry leaves one row with a path', async () => {
+    db.errors.invoices_queue = { update: { message: 'down' } }
+    const one = { location: LOC, body: email([pdf()]) }
+    expect(await ingestInboundEmail(db, one)).toEqual({ ok: false, error: 'path_update_failed' })
+    delete db.errors.invoices_queue
+    expect(await ingestInboundEmail(db, one)).toMatchObject({ ok: true })
+    const rows = await all(db)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].attachment_path).toBeTruthy()
+  })
+
+  it('fails when the path update matches no row (removed by another delivery)', async () => {
+    const realFrom = db.from.bind(db)
+    db.from = (t) => {
+      const q = realFrom(t)
+      const realUpdate = q.update.bind(q)
+      q.update = (row, o) => {
+        // Simulate the row disappearing between insert and update.
+        db.tables.invoices_queue = []
+        return realUpdate(row, o)
+      }
+      return q
+    }
+    expect(await ingestInboundEmail(db, { location: LOC, body: email([pdf()]) })).toEqual({ ok: false, error: 'path_update_failed' })
+  })
+
+  it('after a failed upload whose rollback also failed, a retry leaves one row with a path', async () => {
+    upload.mockResolvedValueOnce({ error: { message: 'boom' } })
+    db.errors.invoices_queue = { delete: { message: 'down' } }
+    const one = { location: LOC, body: email([pdf()]) }
+    expect(await ingestInboundEmail(db, one)).toEqual({ ok: false, error: 'storage_upload_failed' })
+    expect(await all(db)).toHaveLength(1)
+    delete db.errors.invoices_queue
+    expect(await ingestInboundEmail(db, one)).toMatchObject({ ok: true })
+    const rows = await all(db)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].attachment_path).toBeTruthy()
+  })
+
+  it('never deletes a path-less row someone has already acted on', async () => {
+    await db.from('invoices_queue').insert({
+      location_id: LOC.id, email_message_id: 'm1', status: 'rejected',
+      source_type: 'supplier_email', attachment_bucket: 'inbound-invoices',
+    })
+    const r = await ingestInboundEmail(db, { location: LOC, body: email([pdf()]) })
+    expect(r).toEqual({ ok: true, created: [], alreadyStored: 1, skippedInline: 0 })
+    const rows = await all(db)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].status).toBe('rejected')
+    expect(upload).not.toHaveBeenCalled()
+  })
 })

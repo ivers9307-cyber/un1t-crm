@@ -154,19 +154,31 @@ export function safeInboundFilename(name) {
 
 export const INBOUND_BODY_MAX_CHARS = 20000
 
-const stripCid = (id) => String(id || '').trim().replace(/^<|>$/g, '').toLowerCase()
+// Signature logos are a few KB; a photographed receipt is far bigger.
+export const INLINE_IMAGE_SKIP_MAX_BYTES = 100 * 1024
+
+const stripCid = (id) => String(id || '').trim().replace(/^<|>$/g, '')
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** True when the HTML references exactly this ContentID (cid:a1 is not cid:a10). */
+function referencesCid(html, cid) {
+  if (!cid) return false
+  return new RegExp(`cid:${escapeRegExp(cid)}(?=["'\\s>)]|$)`, 'i').test(html)
+}
 
 /**
  * Sort a Postmark Attachments array into what we can store.
  *
- * An image whose ContentID the HTML body references (cid:...) is a
- * signature logo or similar, so it is skipped, unless nothing else
- * is usable (then it is probably a photo of a receipt). The type is
- * judged by the bytes first, because senders mislabel PDFs.
+ * An image is skipped as a signature logo or similar only when all hold:
+ * the HTML body references its ContentID (cid:...), it is under
+ * INLINE_IMAGE_SKIP_MAX_BYTES, and the email has something else usable.
+ * A phone can send a receipt photo inline beside a PDF, and that photo is
+ * large, so size keeps it. The type is judged by the bytes first, because
+ * senders mislabel PDFs.
  * `index` is the position in the original array (see attachmentMessageId).
  */
 export function classifyInboundAttachments(attachments, htmlBody) {
-  const html = String(htmlBody || '').toLowerCase()
+  const html = String(htmlBody || '')
   const candidates = []
   const unsupported = new Set()
   ;(Array.isArray(attachments) ? attachments : []).forEach((att, index) => {
@@ -180,7 +192,7 @@ export function classifyInboundAttachments(attachments, htmlBody) {
     // Empty or undecodable content is simply not usable.
     if (!bytes.length) return
     const cid = stripCid(att.ContentID)
-    const inline = mime.startsWith('image/') && cid !== '' && html.includes(`cid:${cid}`)
+    const inline = mime.startsWith('image/') && bytes.length < INLINE_IMAGE_SKIP_MAX_BYTES && referencesCid(html, cid)
     candidates.push({ name: att.Name, mime, bytes, index, inline })
   })
 

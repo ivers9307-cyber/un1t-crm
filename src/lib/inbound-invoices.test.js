@@ -16,6 +16,7 @@ import {
   inboundInvoiceStoragePath,
   safeInboundFilename,
   classifyInboundAttachments,
+  INLINE_IMAGE_SKIP_MAX_BYTES,
   inboundBodyText,
   attachmentMessageId,
   sha256Hex,
@@ -271,6 +272,31 @@ describe('classifyInboundAttachments', () => {
   })
   it('tolerates a missing attachment list', () => {
     expect(classifyInboundAttachments(undefined, undefined).usable).toEqual([])
+  })
+  const pngOf = (size) => Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.alloc(size - 8),
+  ]).toString('base64')
+  it('keeps a large inline image beside a PDF (a photographed receipt)', () => {
+    expect(INLINE_IMAGE_SKIP_MAX_BYTES).toBe(100 * 1024)
+    const r = classifyInboundAttachments([pdf(), logo({ Content: pngOf(150 * 1024) })], html)
+    expect(r.usable).toHaveLength(2)
+    expect(r.skippedInline).toBe(0)
+  })
+  it('skips a small inline image beside a PDF', () => {
+    const r = classifyInboundAttachments([pdf(), logo({ Content: pngOf(20 * 1024) })], html)
+    expect(r.usable.map((a) => a.name)).toEqual(['a.pdf'])
+    expect(r.skippedInline).toBe(1)
+  })
+  it('matches the ContentID exactly: a1 is not referenced by cid:a10', () => {
+    const r = classifyInboundAttachments([pdf(), logo({ ContentID: 'a1' })], '<img src="cid:a10">')
+    expect(r.skippedInline).toBe(0)
+    expect(r.usable).toHaveLength(2)
+  })
+  it('matches a ContentID at the end of the body or before a delimiter', () => {
+    expect(classifyInboundAttachments([pdf(), logo({ ContentID: 'a1' })], 'see cid:A1').skippedInline).toBe(1)
+    expect(classifyInboundAttachments([pdf(), logo({ ContentID: 'a.1' })], "<img src='cid:a.1'>").skippedInline).toBe(1)
+    expect(classifyInboundAttachments([pdf(), logo({ ContentID: 'a.1' })], '<img src="cid:aX1">').skippedInline).toBe(0)
   })
 })
 

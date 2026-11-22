@@ -102,12 +102,21 @@ describe('inbound invoice webhook', () => {
     expect(releaseWebhookEvent).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'inbound-invoice:m1' }))
   })
 
-  it('answers deduped for a delivery already claimed, without releasing', async () => {
+  it('still stores a delivery whose claim is already held, and says it was a repeat', async () => {
+    // A held claim may be left over from a failed release or a killed run, so it is not proof of storage.
     recordWebhookEvent.mockResolvedValue({ seen: true })
     const res = await POST(req(email()), ctx())
-    expect(await res.json()).toEqual({ success: true, deduped: true })
-    expect(ingestInboundEmail).not.toHaveBeenCalled()
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, deduped: true, created: 1, ids: ['r1'] })
+    expect(ingestInboundEmail).toHaveBeenCalledTimes(1)
     expect(releaseWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  it('records a stray for a repeat delivery too, marked deduped', async () => {
+    recordWebhookEvent.mockResolvedValue({ seen: true })
+    const res = await POST(req(email({ To: 'someone@example.com' })), ctx())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, deduped: true, ignored: 'unparseable_recipient' })
   })
 
   it('answers 404 on a wrong token and 400 without a MessageID, claiming nothing', async () => {

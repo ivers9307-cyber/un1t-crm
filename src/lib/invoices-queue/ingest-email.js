@@ -8,8 +8,10 @@
 // what makes "already stored?" a lookup.
 //
 // Order per attachment is insert, upload, path update: the row id is part of
-// the storage path. A failed upload deletes its own row so a retry does not
-// mistake it for stored.
+// the storage path. Only a row with attachment_path counts as stored. Any
+// failure on the way returns ok: false (the webhook answers 500 and is
+// retried), and the retry deletes a path-less row still in 'received' and
+// redoes it.
 
 import {
   classifyInboundAttachments,
@@ -19,7 +21,7 @@ import {
   inboundInvoiceStoragePath,
   safeInboundFilename,
 } from '@/lib/inbound-invoices'
-import { logWarn, logError } from '@/lib/log'
+import { logError } from '@/lib/log'
 
 const BUCKET = 'inbound-invoices'
 
@@ -28,7 +30,7 @@ const BUCKET = 'inbound-invoices'
  * @param {{ location: { id: string }, body: any }} input
  * @returns {Promise<
  *   { ok: true, created: string[], alreadyStored: number, skippedInline: number }
- *   | { ok: false, error: 'insert_failed' | 'storage_upload_failed' | 'lookup_failed' }
+ *   | { ok: false, error: 'insert_failed' | 'storage_upload_failed' | 'lookup_failed' | 'path_update_failed' }
  * >}
  */
 export async function ingestInboundEmail(db, { location, body }) {
@@ -90,11 +92,21 @@ export async function ingestInboundEmail(db, { location, body }) {
       continue
     }
     if (prior) {
-      // Inserted but never uploaded: clear it so the insert below can reuse the id.
-      const { error: delErr } = await db.from('invoices_queue').delete().eq('id', prior.id)
+      // Inserted but never finished: clear it so the insert below can reuse the id.
+      // Only while untouched: a row staff have already acted on is theirs.
+      const { data: removed, error: delErr } = await db
+        .from('invoices_queue')
+        .delete()
+        .eq('id', prior.id)
+        .eq('status', 'received')
+        .select('id')
       if (delErr) {
         logError('invoice-ingest', 'unfinished row cleanup failed', { err: delErr, rowId: prior.id })
         return { ok: false, error: 'insert_failed' }
+      }
+      if (!removed || removed.length === 0) {
+        alreadyStored++
+        continue
       }
     }
 
@@ -135,10 +147,17 @@ export async function ingestInboundEmail(db, { location, body }) {
       return { ok: false, error: 'storage_upload_failed' }
     }
 
-    const { error: updErr } = await db.from('invoices_queue').update({ attachment_path: storagePath }).eq('id', row.id)
-    if (updErr) {
-      // The file is uploaded; keep the row so staff can recover it from the inbox.
-      logWarn('invoice-ingest', 'attachment_path update failed', { err: updErr, rowId: row.id })
+    const { data: updated, error: updErr } = await db
+      .from('invoices_queue')
+      .update({ attachment_path: storagePath })
+      .eq('id', row.id)
+      .select('id')
+    // Zero rows is no error in supabase-js: another delivery removed the row.
+    if (updErr || !updated || updated.length === 0) {
+      // Without a path nobody can open the file, so fail and let the retry redo
+      // this attachment. The row stays: the retry deletes and replaces it.
+      logError('invoice-ingest', 'attachment_path update failed', { err: updErr, rowId: row.id })
+      return { ok: false, error: 'path_update_failed' }
     }
     created.push(row.id)
   }

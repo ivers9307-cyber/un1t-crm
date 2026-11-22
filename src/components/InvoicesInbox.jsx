@@ -713,19 +713,23 @@ function InboxDetail({ row, onChanged }) {
   const [attLoading, setAttLoading] = useState(false)
   const [busy, setBusy] = useState(null) // 'approve' | 'reject' | 'extract' | 'send' | 'delete'
   const [actionError, setActionError] = useState(null)
-  // The email text is not on the list row (it can be long); read it by id when a row opens.
-  const [bodyText, setBodyText] = useState(null)
+  // The email text is not on the list row (it can be long); read it by id when
+  // an emailed row opens. Kept with its row id so one row's text never shows
+  // under another while the next fetch is in flight.
+  const [body, setBody] = useState({ id: null, text: null })
+  const isEmailed = row?.source_type === 'supplier_email'
 
   useEffect(() => {
-    setBodyText(null)
-    if (!row?.id) return
+    if (!row?.id || !isEmailed) return
+    const id = row.id
     let cancelled = false
-    fetch(`/api/invoices-inbox/${row.id}`)
+    fetch(`/api/invoices-inbox/${id}`)
       .then((r) => r.json())
-      .then((j) => { if (!cancelled && j?.success) setBodyText(j.data?.email_body_text || null) })
+      .then((j) => { if (!cancelled && j?.success) setBody({ id, text: j.data?.email_body_text || null }) })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [row?.id])
+  }, [row?.id, isEmailed])
+  const bodyText = isEmailed && body.id === row?.id ? body.text : null
 
   // Load the signed URL whenever the selected row changes.
   useEffect(() => {

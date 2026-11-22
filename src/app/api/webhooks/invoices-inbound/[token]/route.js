@@ -24,7 +24,8 @@
 //   1. URL-token auth (above).
 //   2. Parse the payload — Postmark Inbound shape: { To, ToFull,
 //      From, FromFull, Subject, MessageID, Attachments[...] }.
-//   3. Claim the MessageID (webhook_events) so a duplicate delivery is a no-op.
+//   3. Claim the MessageID in webhook_events. The claim is an audit record
+//      and a hint ("deduped: true" in the answer), not a gate: see below.
 //   4. Find the slug from ToFull (preferred — array of { Email, Name })
 //      falling back to To, then OriginalRecipient.
 //   5. Resolve slug → location_id via `locations.invoices_inbound_slug`.
@@ -38,14 +39,20 @@
 //   • Each event creates a row regardless; deferring the write
 //     would just add a hop.
 //
-// Failure handling: Postmark retries only on non-2xx, but our own claim in
-// step 3 would turn that retry into a "duplicate". So every failure after the
-// claim (lookup, storing, stray write, or an unexpected throw) releases the
-// claim first and answers 500, and the retry is processed for real.
+// Failure handling: Postmark retries only on non-2xx. What makes a retry safe
+// is the store, not the claim: ingestInboundEmail and recordInboundStray are
+// idempotent per email, so a repeat delivery is processed again and a true
+// duplicate stores nothing new. A held claim is therefore never trusted to
+// mean "stored": a failed release or a run killed mid-ingest leaves it held,
+// and dropping the retry then would lose the email. Every failure after the
+// claim (lookup, storing, stray write, or an unexpected throw) still releases
+// the claim and answers 500, so the record stays accurate.
 //   • Mail that matches no studio (unparseable or unknown address) is
 //     recorded in invoice_inbound_strays and answered 200: retrying cannot
 //     help, but the email stays visible instead of vanishing into a log.
 //   • An email with nothing usable attached still gets an empty queue row.
+// Not covered: an email whose payload is larger than the platform's request
+// size limit is refused before this handler runs, so nothing here records it.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -58,6 +65,8 @@ import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// Several attachments are uploaded one after another; leave room for that.
+export const maxDuration = 60
 
 /**
  * Token-in-URL auth — Postmark inbound webhooks don't allow custom
@@ -121,16 +130,12 @@ export async function POST(request, { params }) {
 
   const db = createServerClient()
 
-  // Idempotency — Postmark retries on 5xx. Don't double-ingest.
-  const dedup = await recordWebhookEvent({
-    db, provider: WEBHOOK_PROVIDERS.POSTMARK,
-    eventId: `inbound-invoice:${messageId}`,
-  })
-  if (dedup.seen) {
-    return NextResponse.json({ success: true, deduped: true })
-  }
-
   const eventId = `inbound-invoice:${messageId}`
+  // A held claim is not proof the email was stored (see the header), so a
+  // repeat is processed like the first delivery; the idempotent store keeps it
+  // from adding rows. The answer only says it was a repeat.
+  const dedup = await recordWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.POSTMARK, eventId })
+  const repeat = dedup.seen ? { deduped: true } : {}
   const fail = async (error) => {
     // Release first: the provider's retry must not be mistaken for a duplicate.
     await releaseWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.POSTMARK, eventId })
@@ -172,8 +177,8 @@ export async function POST(request, { params }) {
       if (!ok) return fail('stray_insert_failed')
       return NextResponse.json(
         reason === 'unknown_slug'
-          ? { success: true, ignored: reason, slug: ignoredSlug }
-          : { success: true, ignored: reason },
+          ? { success: true, ...repeat, ignored: reason, slug: ignoredSlug }
+          : { success: true, ...repeat, ignored: reason },
       )
     }
 
@@ -195,7 +200,7 @@ export async function POST(request, { params }) {
       logError('invoices-inbound', 'ingest failed', { messageId, error: result.error })
       return await fail(result.error)
     }
-    return NextResponse.json({ success: true, created: result.created.length, ids: result.created })
+    return NextResponse.json({ success: true, ...repeat, created: result.created.length, ids: result.created })
   } catch (err) {
     logError('invoices-inbound', 'unexpected failure', { messageId, error: err?.message })
     return await fail('internal_error')
