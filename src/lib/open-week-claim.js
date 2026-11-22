@@ -3,22 +3,30 @@
 // lists, limited to the window), and record them on corp_promo_claim_classes.
 // Server-only by use (service-role client).
 import { readPublicClasses } from '@/lib/public-classes'
+import { readPromoCreditLastDay, withinCreditWindow } from '@/lib/glofox-credit-window'
 import { openWeekState, openWeekReadDays, openWeekStartMs, inOpenWeek, judgeOpenWeekPicks } from '@/lib/open-week'
 
 /**
  * The window's classes the studio lists now (the picker's read), or an error.
+ * CREDITWINDOW.1 — on a Glofox promo, also only the classes the plan's
+ * credits can book for a claim made now (the list and the claim's judge are
+ * this one read, so a class the page hides is refused as class_unavailable).
  * @returns {Promise<{ ok: true, classes: object[] } | { ok: false, code: 'over'|'timetable_unavailable' }>}
  */
 export async function readOpenWeekClasses(db, { locationId, blocks, promo, zone, now = new Date() }) {
   if (openWeekState(promo, zone, now) === 'over') return { ok: false, code: 'over' }
   let read
+  let lastDay
   try {
-    read = await readPublicClasses(db, locationId, openWeekReadDays(promo, zone, now), { blocks, fromMs: openWeekStartMs(promo, zone) })
+    ;[read, lastDay] = await Promise.all([
+      readPublicClasses(db, locationId, openWeekReadDays(promo, zone, now), { blocks, fromMs: openWeekStartMs(promo, zone) }),
+      readPromoCreditLastDay(db, { locationId, promo, zone, now }),
+    ])
   } catch {
     return { ok: false, code: 'timetable_unavailable' }
   }
   if (!read || read.error) return { ok: false, code: 'timetable_unavailable' }
-  return { ok: true, classes: (read.classes || []).filter((c) => inOpenWeek(c, promo)) }
+  return { ok: true, classes: (read.classes || []).filter((c) => inOpenWeek(c, promo) && withinCreditWindow(c, lastDay)) }
 }
 
 /**

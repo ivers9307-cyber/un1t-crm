@@ -19,6 +19,8 @@ describe('whyFlagged', () => {
   it('has plain-English copy for the no-credits Glofox code', () => {
     const out = whyFlagged({ kind: 'class_booking', details: { reason: 'booking_failed:YOU_HAVE_NO_CREDITS_LEFT' } })
     expect(out).toMatch(/no class credits/i)
+    // CREDITWINDOW.1 — credits that expire before the class get the same code.
+    expect(out).toMatch(/expire before the class date/i)
   })
 
   // PERSON-ACCT.7 — account_conflict must NOT fall through to the generic

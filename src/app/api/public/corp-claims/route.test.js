@@ -8,6 +8,7 @@ const m = vi.hoisted(() => ({
   rateLimit: vi.fn(), contact: vi.fn(), capi: vi.fn(), consent: vi.fn(), deal: vi.fn(), tag: vi.fn(),
   membership: vi.fn(), eligibility: vi.fn(), fulfil: vi.fn(), legal: vi.fn(), chosen: vi.fn(),
   reads: {}, readErrors: {}, inserted: vi.fn(), updates: [],
+  creditLast: vi.fn(),
   gElig: vi.fn(), gFulfil: vi.fn(), gPlan: vi.fn(), gCreds: vi.fn(), promoRead: vi.fn(), promoRows: [],
   owPicks: vi.fn(), owInsert: vi.fn(), promoList: vi.fn(),
 }))
@@ -27,6 +28,7 @@ vi.mock('@/lib/corp-promos-db', async (importOriginal) => ({ ...(await importOri
 // OPENWEEK.1 — the picks are judged by their own module (tested beside it).
 vi.mock('@/lib/open-week-claim', () => ({ resolveOpenWeekPicks: m.owPicks, insertClaimClasses: m.owInsert }))
 vi.mock('@/lib/corp-promo-glofox-plans', () => ({ glofoxPlanForPromo: m.gPlan }))
+vi.mock('@/lib/glofox-credit-window', () => ({ readPromoCreditLastDay: m.creditLast }))
 vi.mock('@/lib/corp-promo-eligibility-glofox', () => ({ glofoxCorpPromoEligibility: m.gElig }))
 vi.mock('@/lib/corp-promo-claim-glofox', () => ({ fulfilGlofoxCorpPromoClaim: m.gFulfil }))
 vi.mock('@/lib/glofox', async (importOriginal) => ({ ...(await importOriginal()), glofoxCredentialsForLocation: m.gCreds }))
@@ -102,6 +104,7 @@ beforeEach(() => {
   m.inserted.mockImplementation(async (table, row) => ({ data: { id: 'claim-1', ...row }, error: null }))
   m.gPlan.mockReturnValue({ membershipId: 'mem-1', planCode: 'plan-1', planName: 'New Start' })
   m.gCreds.mockResolvedValue({ branchId: 'b', apiKey: 'k', apiToken: 't' })
+  m.creditLast.mockResolvedValue(null)
   m.gElig.mockResolvedValue({ ok: true, eligible: true })
   m.gFulfil.mockResolvedValue({ kind: 'granted', credits: 3, expiresAt: null })
   m.fulfil.mockResolvedValue({ kind: 'granted', credits: 3, expiresAt: '2026-11-04T10:00:00.000Z' })
@@ -395,6 +398,30 @@ describe('POST /api/public/corp-claims — Glofox promo (NEWSTART.1)', () => {
     expect(row).not.toHaveProperty('terms_source')
     expect(row).not.toHaveProperty('terms_version')
     expect(m.gElig).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ promoKey: 'stillorgan-newstart', locationId: GLOC }))
+  })
+
+  // CREDITWINDOW.1 — the chosen class against the plan's credit expiry.
+  it('a class after the plan credits expire is class_unavailable, before the lead or the row', async () => {
+    m.creditLast.mockResolvedValue('2099-01-06')
+    const { status, json } = await call({ ...GBODY, event_id: 'ev-9' })
+    expect(status).toBe(400)
+    expect(json).toMatchObject({ success: false, code: 'class_unavailable' })
+    expect(m.creditLast).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: GLOC, zone: 'Europe/Dublin', promo: expect.objectContaining({ key: 'stillorgan-newstart' }) }))
+    expect(m.contact).not.toHaveBeenCalled()
+    expect(m.inserted).not.toHaveBeenCalled()
+    expect(m.gFulfil).not.toHaveBeenCalled()
+  })
+
+  it('a class on the last credit day, or an unknown window, is granted', async () => {
+    m.creditLast.mockResolvedValue('2099-01-07')
+    expect((await call({ ...GBODY, event_id: 'ev-9' })).status).toBe(200)
+    m.creditLast.mockResolvedValue(null)
+    expect((await call({ ...GBODY, event_id: 'ev-9' })).status).toBe(200)
+  })
+
+  it('no class chosen: the credit window is not read', async () => {
+    expect((await call(GBODY)).status).toBe(200)
+    expect(m.creditLast).not.toHaveBeenCalled()
   })
 
   it('no plan binding on the row: 409 glofox_plan_missing before any write or Glofox call', async () => {

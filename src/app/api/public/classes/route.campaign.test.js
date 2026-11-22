@@ -29,7 +29,8 @@ vi.mock('@/lib/landing-pages', async (importOriginal) => {
 })
 
 // OPENWEEK.1 — the promo row and the window's read have their own tests.
-const ow = vi.hoisted(() => ({ promoRead: vi.fn(), listOw: vi.fn() }))
+const ow = vi.hoisted(() => ({ promoRead: vi.fn(), listOw: vi.fn(), creditLast: vi.fn() }))
+vi.mock('@/lib/glofox-credit-window', async (importOriginal) => ({ ...(await importOriginal()), readPromoCreditLastDay: ow.creditLast }))
 vi.mock('@/lib/corp-promos-db', () => ({ readCorpPromo: ow.promoRead }))
 vi.mock('@/lib/open-week-claim', () => ({ readOpenWeekClasses: ow.listOw }))
 
@@ -254,5 +255,24 @@ describe('GET /api/public/classes — open week (OPENWEEK.1)', () => {
     fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: EVENTS })
     const body = await (await get('page=corp&studio=hatch-street')).json()
     expect(body.data).not.toHaveProperty('open_week')
+    expect(ow.creditLast).not.toHaveBeenCalled()
+  })
+
+  // CREDITWINDOW.1 — a Glofox promo lists only what its plan's credits can book.
+  it("a Glofox promo page leaves out classes after the plan's last credit day", async () => {
+    const GP = { key: 'stillorgan-newstart', live: true, kind: 'promo', platform: 'glofox', glofox: { membershipId: 'm', planCode: 'p', planName: null } }
+    const gPage = () => pageOk({ type: 'corp_promo', promo_key: 'stillorgan-newstart' }, { page: { id: 'p-g', slug: 'newstart', offer_type: 'promo_credits' } })
+    const list = async (lastDay) => {
+      resolvePublicPageRequest.mockResolvedValueOnce(gPage())
+      ow.promoRead.mockResolvedValueOnce({ ok: true, promo: GP })
+      ow.creditLast.mockResolvedValueOnce(lastDay)
+      fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: EVENTS })
+      return (await (await get('page=newstart&studio=stillorgan')).json()).data.classes.map((c) => c.event_id)
+    }
+    // Both classes are on 2100-01-01.
+    expect(await list('2099-12-31')).toEqual([])
+    expect(await list('2100-01-01')).toEqual(['a', 'b'])
+    expect(await list(null)).toEqual(['a', 'b'])
+    expect(ow.creditLast).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ promo: GP, zone: 'Europe/Dublin' }))
   })
 })
