@@ -1,4 +1,5 @@
 // EVENTTEAM.1 — the public signup never rewrites a team it does not own.
+// TEAMNAMES.1 — and a team name is unique per event, not per studio.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { fakeDb, eqOf } from '@/lib/event-waitlist.test-helpers'
 
@@ -35,13 +36,16 @@ const RACE = { id: 'e1', location_id: 'L1', name: 'Hatch Relay', slug: 'hatch-oc
 
 // The studio already holds a team called "Rockets" captained by someone else
 // (c-other), confirmed at this event. The caller (c1) types the same name.
-function registerDb({ captain = 'c-other', elsewhere = false, rosterFails = null } = {}) {
+// atOtherEvent (TEAMNAMES.1): the "Rockets" row belongs to another event, so
+// neither this event's read nor the legacy (event-less) read sees it.
+function registerDb({ captain = 'c-other', atOtherEvent = false, rosterFails = null } = {}) {
   return fakeDb((q) => {
     if (q.table === 'race_events') return { data: RACE, error: null }
     if (q.table === 'team_members' && q.action === rosterFails) return { data: null, error: { message: 'down' } }
     if (q.table === 'teams') {
       if (q.action === 'select') {
         const name = eqOf(q, 'name')
+        if (atOtherEvent) return { data: null, error: null }
         return { data: name === 'Rockets' ? { id: 't1', captain_contact_id: captain } : null, error: null }
       }
       if (q.action === 'insert') return { data: { id: 't-new' }, error: null }
@@ -50,7 +54,6 @@ function registerDb({ captain = 'c-other', elsewhere = false, rosterFails = null
     if (q.table === 'race_registrations') {
       if (q.action === 'insert') return { data: { id: 'reg1', registered_at: '2026-10-09T12:00:00Z', wave_id: W1, contact_id: 'c1' }, error: null }
       if (q.ops.some((o) => o[0] === 'select' && o[2]?.head)) return { data: null, count: 0, error: null }
-      if (q.ops.some((o) => o[0] === 'neq')) return { data: elsewhere ? [{ id: 'r-other' }] : [], error: null }
       if (eqOf(q, 'team_id') === 't1') return { data: { id: 'r-paid', status: 'confirmed', active_payment_id: null }, error: null }
       return { data: null, error: null }
     }
@@ -81,12 +84,27 @@ describe('register route: a typed team name never takes over a team (EVENTTEAM.1
     expect(touched('t1')).toHaveLength(0)
   })
 
-  it("the captain's own team entered at another event is left alone too", async () => {
-    db = registerDb({ captain: 'c1', elsewhere: true })
+  it("TEAMNAMES.1 — a returning captain keeps their team name at a second event, in a row of this event's own", async () => {
+    db = registerDb({ captain: 'c1', atOtherEvent: true })
     const res = await post(BODY)
     expect(res.status).toBe(200)
-    expect((await res.json()).data.team_id).toBe('t-new')
+    const json = await res.json()
+    expect(json.data.team_id).toBe('t-new')
+    expect(json.data.team_name).toBe('Rockets')
+    expect(db.queries.find((q) => q.table === 'teams' && q.action === 'insert').payload)
+      .toMatchObject({ location_id: 'L1', race_event_id: 'e1', name: 'Rockets' })
     expect(touched('t1')).toHaveLength(0)
+  })
+
+  it('every team read is scoped to this event or to legacy event-less rows', async () => {
+    db = registerDb()
+    await post(BODY)
+    const reads = db.queries.filter((q) => q.table === 'teams' && q.action === 'select')
+    expect(reads.length).toBeGreaterThan(0)
+    for (const q of reads) {
+      const scoped = eqOf(q, 'race_event_id') === 'e1' || q.ops.some((o) => o[0] === 'is' && o[1] === 'race_event_id' && o[2] === null)
+      expect(scoped).toBe(true)
+    }
   })
 
   it("the captain's own confirmed team here is refused 409 with nothing written to it", async () => {

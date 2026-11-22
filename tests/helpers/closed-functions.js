@@ -29,6 +29,8 @@ import { sqlCode, ident, splitTop } from './sql-code.js'
  * and does not tell overloads apart).
  */
 export const CLOSED_FUNCTIONS = [
+  { fn: 'public.teams_legacy_name_unique', args: '()', closedBy: 870,
+    why: 'TEAMNAMES.1: trigger function keeping an event-less team name unique across its studio, never called by a client' },
   { fn: 'public.raffle_mix_price', args: '(public.raffles, integer)', closedBy: 867,
     why: 'RAFFLE.4: prices a raffle quantity for sell_raffle_tickets, never called by a client' },
   { fn: 'public.issue_raffle_order_tickets', args: '(uuid)', closedBy: 866,

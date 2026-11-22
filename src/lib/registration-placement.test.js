@@ -311,7 +311,7 @@ describe('pairSolos — happy path', () => {
     expect(w.map((q) => `${q.table}.${q.write}`)).toEqual([
       'teams.insert', 'team_members.insert', 'race_registrations.insert', 'race_registrations.update', 'race_registrations.update',
     ])
-    expect(w[0].payload).toEqual({ location_id: 'L1', name: 'Team Solo', size: 2, captain_contact_id: 'c1' })
+    expect(w[0].payload).toEqual({ location_id: 'L1', race_event_id: 'e1', name: 'Team Solo', size: 2, captain_contact_id: 'c1' })
     expect(w[1].payload).toEqual([
       { team_id: 't-new', contact_id: 'c1', name: 'Solo 1', email: 's1@x.ie', role: 'captain', is_member: true, member_validation_status: 'verified', member_contact_id: null, member_validated_at: '2026-10-20T09:00:00Z', answers: null },
       { team_id: 't-new', contact_id: 'c2', name: 'Solo 2', email: 's2@x.ie', role: 'member', is_member: true, member_validation_status: 'verified', member_contact_id: null, member_validated_at: '2026-10-20T09:00:00Z', answers: null },
