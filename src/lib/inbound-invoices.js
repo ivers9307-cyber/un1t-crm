@@ -15,7 +15,8 @@
 // Also owns the pure helpers for storing a forwarded email
 // (classifyInboundAttachments, inboundBodyText, attachmentMessageId,
 // sha256Hex). They lean on sniffMimeFromBytes, htmlToPlainText and
-// sanitizeDbText, so this file is for server routes only.
+// sanitizeDbText, so this file is for server routes only. The classifier
+// also takes attachments whose bytes were read back from Storage (INVOICEPREP.2).
 //
 // No DB calls — those live in the API routes so they can be tested
 // without mocking Supabase.
@@ -166,6 +167,22 @@ function referencesCid(html, cid) {
   return new RegExp(`cid:${escapeRegExp(cid)}(?=["'\\s>)]|$)`, 'i').test(html)
 }
 
+/** The signature-logo test: a small image the HTML body shows by its ContentID. */
+function looksInline({ mime, sizeBytes, contentId }, html) {
+  return String(mime || '').startsWith('image/')
+    && sizeBytes < INLINE_IMAGE_SKIP_MAX_BYTES
+    && referencesCid(html, stripCid(contentId))
+}
+
+/** Bytes the caller already holds (read back from Storage), else the base64 Content. */
+function attachmentBytes(att) {
+  const held = att?.bytes
+  if (held instanceof Uint8Array && held.length > 0) {
+    return Buffer.isBuffer(held) ? held : Buffer.from(held.buffer, held.byteOffset, held.length)
+  }
+  return Buffer.from(String(att?.Content || ''), 'base64')
+}
+
 /**
  * Sort a Postmark Attachments array into what we can store.
  *
@@ -174,15 +191,27 @@ function referencesCid(html, cid) {
  * INLINE_IMAGE_SKIP_MAX_BYTES, and the email has something else usable.
  * A phone can send a receipt photo inline beside a PDF, and that photo is
  * large, so size keeps it. The type is judged by the bytes first, because
- * senders mislabel PDFs.
- * `index` is the position in the original array (see attachmentMessageId).
+ * senders mislabel PDFs. The bytes are `att.bytes` when the caller has
+ * already read them back from Storage, else the decoded `Content`.
+ * `index` is the position in the original array (see attachmentMessageId);
+ * a null entry is passed over and keeps its position.
+ *
+ * `alreadyStored` describes attachments of this email that an earlier
+ * delivery stored and the caller left out of `attachments`. One that is not
+ * itself a logo still counts as "something else usable", so a retry judges
+ * the logos the way the first delivery did. Unknown type or size counts as
+ * not a logo.
+ *
+ * @param {Array<any> | undefined} attachments
+ * @param {string | undefined | null} htmlBody
+ * @param {{ alreadyStored?: Array<{ mime?: string | null, sizeBytes?: number | null, contentId?: string | null }> }} [options]
  */
-export function classifyInboundAttachments(attachments, htmlBody) {
+export function classifyInboundAttachments(attachments, htmlBody, options = {}) {
   const html = String(htmlBody || '')
   const candidates = []
   const unsupported = new Set()
   ;(Array.isArray(attachments) ? attachments : []).forEach((att, index) => {
-    const bytes = Buffer.from(String(att?.Content || ''), 'base64')
+    const bytes = attachmentBytes(att)
     const mime = (bytes.length ? sniffMimeFromBytes(bytes) : null) || att?.ContentType || ''
     if (!INBOUND_INVOICE_SUPPORTED_MIME.has(mime)) {
       // Here the mime is always the declared type: a sniffed one is supported.
@@ -191,13 +220,15 @@ export function classifyInboundAttachments(attachments, htmlBody) {
     }
     // Empty or undecodable content is simply not usable.
     if (!bytes.length) return
-    const cid = stripCid(att.ContentID)
-    const inline = mime.startsWith('image/') && bytes.length < INLINE_IMAGE_SKIP_MAX_BYTES && referencesCid(html, cid)
+    const inline = looksInline({ mime, sizeBytes: bytes.length, contentId: att.ContentID }, html)
     candidates.push({ name: att.Name, mime, bytes, index, inline })
   })
 
+  const storedReal = (options.alreadyStored || []).filter((s) =>
+    !s || s.mime == null || s.sizeBytes == null || !looksInline({ mime: s.mime, sizeBytes: s.sizeBytes, contentId: s.contentId }, html),
+  ).length
   const real = candidates.filter((c) => !c.inline)
-  const keep = real.length > 0 ? real : candidates
+  const keep = real.length + storedReal > 0 ? real : candidates
   const skippedInline = candidates.length - keep.length
   const usable = keep.map(({ name, mime, bytes, index }) => ({ name, mime, bytes, index }))
   return { usable, skippedInline, unsupportedTypes: [...unsupported] }

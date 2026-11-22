@@ -867,6 +867,9 @@ function InboxDetail({ row, onChanged }) {
 
 function notInvoiceLine(reason) {
   if (reason === 'no_attachment') return 'Nothing usable was attached'
+  if (reason === 'attachment_not_received: too_large') return 'An attachment was too large to receive (over 25 MB)'
+  if (reason === 'attachment_not_received: too_many') return 'An attachment was not received (more than 25 files in one email)'
+  if (reason?.startsWith('attachment_not_received:')) return 'An attachment could not be received'
   if (reason?.startsWith('unsupported_type:')) return `The attachment type is not supported (${reason.slice('unsupported_type:'.length).trim()})`
   return null
 }
@@ -878,7 +881,12 @@ function ArrivalNotes({ row, bodyText }) {
   if (!line && !skipped && !bodyText) return null
   return (
     <div className="space-y-2 text-sm">
-      {line && <p className="text-un1t-text">{line}</p>}
+      {line && (
+        <p className="text-un1t-text break-words">
+          {line}
+          {row.not_invoice_reason?.startsWith('attachment_not_received:') && row.attachment_filename ? ` — ${row.attachment_filename}` : ''}
+        </p>
+      )}
       {skipped > 0 && (
         <p className="text-xs text-un1t-subtle">{skipped === 1 ? '1 email image skipped' : `${skipped} email images skipped`}</p>
       )}

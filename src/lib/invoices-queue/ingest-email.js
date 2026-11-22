@@ -12,6 +12,14 @@
 // failure on the way returns ok: false (the webhook answers 500 and is
 // retried), and the retry deletes a path-less row still in 'received' and
 // redoes it.
+//
+// INVOICEPREP.2 — the shim in front of the webhook may have parked an
+// attachment's bytes in Storage (staged-attachments.js). Those are read back
+// here, except for attachments already stored: an earlier delivery may have
+// removed their staged copy. Staged copies are removed only once the whole
+// email is stored, so a retry always finds the ones it still needs. An
+// attachment the shim could not move gets its own row ('-missing-<index>',
+// never treated as a half-written row) so staff can ask for a resend.
 
 import {
   classifyInboundAttachments,
@@ -21,22 +29,29 @@ import {
   inboundInvoiceStoragePath,
   safeInboundFilename,
 } from '@/lib/inbound-invoices'
+import {
+  INVOICE_STAGING_BUCKET,
+  resolveInboundAttachments,
+  removeStagedAttachments,
+} from '@/lib/invoices-queue/staged-attachments'
+import { stagedPathsIn } from '@/lib/email-attachment-staging'
 import { logError } from '@/lib/log'
 
-const BUCKET = 'inbound-invoices'
+// Stored files and staged copies share the bucket, under different prefixes.
+const BUCKET = INVOICE_STAGING_BUCKET
 
 /**
  * @param {import('@/lib/supabase').Db} db
  * @param {{ location: { id: string }, body: any }} input
  * @returns {Promise<
- *   { ok: true, created: string[], alreadyStored: number, skippedInline: number }
- *   | { ok: false, error: 'insert_failed' | 'storage_upload_failed' | 'lookup_failed' | 'path_update_failed' }
+ *   { ok: true, created: string[], alreadyStored: number, skippedInline: number, notReceived: number }
+ *   | { ok: false, error: 'insert_failed' | 'storage_upload_failed' | 'lookup_failed' | 'path_update_failed' | 'staged_download_failed' }
  * >}
  */
 export async function ingestInboundEmail(db, { location, body }) {
   const messageId = body.MessageID
+  /** @type {any[]} */
   const attachments = Array.isArray(body.Attachments) ? body.Attachments : []
-  const { usable, skippedInline, unsupportedTypes } = classifyInboundAttachments(attachments, body.HtmlBody)
   const emailBodyText = inboundBodyText(body)
   const common = {
     location_id: location.id,
@@ -47,14 +62,16 @@ export async function ingestInboundEmail(db, { location, body }) {
     attachment_bucket: BUCKET,
     email_body_text: emailBodyText,
   }
+  /** @param {number} index */
+  const missingMessageId = (index) => `${messageId}-missing-${index}`
 
   // What this email has already stored, by per-attachment id.
   /** @type {string[]} */
   const ids = [messageId]
-  for (let i = 0; i < attachments.length; i++) ids.push(attachmentMessageId(messageId, i))
+  for (let i = 0; i < attachments.length; i++) ids.push(attachmentMessageId(messageId, i), missingMessageId(i))
   const { data: existing, error: readErr } = await db
     .from('invoices_queue')
-    .select('id, email_message_id, attachment_path')
+    .select('id, email_message_id, attachment_path, attachment_mime_type, attachment_size_bytes')
     .eq('location_id', location.id)
     .in('email_message_id', [...new Set(ids)])
   if (readErr) {
@@ -64,9 +81,49 @@ export async function ingestInboundEmail(db, { location, body }) {
   const hadRows = (existing || []).length > 0
   const byMessageId = new Map((existing || []).map((r) => [r.email_message_id, r]))
 
-  if (usable.length === 0) {
+  // Already stored: not read back again, and described to the classifier so
+  // the logo rule judges the rest as the first delivery did.
+  /** @type {Set<number>} */
+  const storedIndexes = new Set()
+  /** @type {Array<{ mime: string | null, sizeBytes: number | null, contentId: string | null }>} */
+  const storedInfo = []
+  for (let i = 0; i < attachments.length; i++) {
+    const prior = byMessageId.get(attachmentMessageId(messageId, i))
+    if (!prior?.attachment_path) continue
+    storedIndexes.add(i)
+    storedInfo.push({
+      mime: prior.attachment_mime_type ?? null,
+      sizeBytes: prior.attachment_size_bytes ?? null,
+      contentId: attachments[i]?.ContentID ?? null,
+    })
+  }
+
+  const resolved = await resolveInboundAttachments(db, body, { skipIndexes: storedIndexes })
+  if (!resolved.ok) return { ok: false, error: 'staged_download_failed' }
+  const { usable, skippedInline, unsupportedTypes } = classifyInboundAttachments(
+    resolved.attachments, body.HtmlBody, { alreadyStored: storedInfo },
+  )
+  // The staged copies of already-stored attachments are spent too.
+  const stagedPaths = [
+    ...resolved.stagedPaths,
+    ...stagedPathsIn(attachments.map((a, i) => (storedIndexes.has(i) ? a : null)), { postmarkMessageId: messageId }),
+  ]
+
+  /**
+   * Every ok: true exit: the email is fully recorded, so its staged copies can go.
+   * @param {string[]} created
+   * @param {number} alreadyStored
+   * @param {number} notReceived
+   * @returns {Promise<{ ok: true, created: string[], alreadyStored: number, skippedInline: number, notReceived: number }>}
+   */
+  const succeed = async (created, alreadyStored, notReceived) => {
+    await removeStagedAttachments(db, stagedPaths)
+    return { ok: true, created, alreadyStored, skippedInline, notReceived }
+  }
+
+  if (usable.length === 0 && storedIndexes.size === 0 && resolved.failed.length === 0) {
     // Keep a row so staff can see the email arrived with nothing to ingest.
-    if (byMessageId.has(messageId)) return { ok: true, created: [], alreadyStored: 0, skippedInline }
+    if (byMessageId.has(messageId)) return succeed([], 0, 0)
     const reason = unsupportedTypes.length > 0 ? `unsupported_type: ${unsupportedTypes.join(', ')}` : 'no_attachment'
     const { data: row, error } = await db
       .from('invoices_queue')
@@ -74,16 +131,16 @@ export async function ingestInboundEmail(db, { location, body }) {
       .select('id')
       .single()
     if (error || !row) {
-      if (error?.code === '23505') return { ok: true, created: [], alreadyStored: 0, skippedInline }
+      if (error?.code === '23505') return succeed([], 0, 0)
       logError('invoice-ingest', 'empty-email row insert failed', { err: error })
       return { ok: false, error: 'insert_failed' }
     }
-    return { ok: true, created: [row.id], alreadyStored: 0, skippedInline }
+    return succeed([row.id], 0, 0)
   }
 
   /** @type {string[]} */
   const created = []
-  let alreadyStored = 0
+  let alreadyStored = storedIndexes.size
   for (const att of usable) {
     const emailMessageId = attachmentMessageId(messageId, att.index)
     const prior = byMessageId.get(emailMessageId)
@@ -162,5 +219,26 @@ export async function ingestInboundEmail(db, { location, body }) {
     created.push(row.id)
   }
 
-  return { ok: true, created, alreadyStored, skippedInline }
+  // Attachments that arrived without their bytes. Their ids are a separate
+  // family from attachmentMessageId, so the half-written-row cleanup above
+  // never deletes one.
+  let notReceived = 0
+  for (const miss of resolved.failed) {
+    const emailMessageId = missingMessageId(miss.index)
+    if (byMessageId.has(emailMessageId)) continue
+    const { error: missErr } = await db.from('invoices_queue').insert({
+      ...common,
+      email_message_id: emailMessageId,
+      attachment_filename: safeInboundFilename(miss.name) || `attachment-${miss.index + 1}`,
+      not_invoice_reason: `attachment_not_received: ${miss.reason}`,
+    })
+    if (missErr) {
+      if (missErr.code === '23505') continue
+      logError('invoice-ingest', 'not-received row insert failed', { err: missErr })
+      return { ok: false, error: 'insert_failed' }
+    }
+    notReceived++
+  }
+
+  return succeed(created, alreadyStored, notReceived)
 }
