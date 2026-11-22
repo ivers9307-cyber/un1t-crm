@@ -24,45 +24,40 @@
 //   1. URL-token auth (above).
 //   2. Parse the payload — Postmark Inbound shape: { To, ToFull,
 //      From, FromFull, Subject, MessageID, Attachments[...] }.
-//   3. Find the slug from ToFull (preferred — array of { Email, Name })
-//      falling back to To (comma-separated string).
-//   4. Resolve slug → location_id via `locations.invoices_inbound_slug`.
-//   5. Idempotency dedup keyed on Postmark MessageID.
-//   6. For each supported attachment, upload to storage + insert one
-//      inbound_invoices row in status='received'. Multiple attachments
-//      = multiple rows (one invoice per attachment is the operating
-//      assumption — multi-page PDFs are a single row).
-//   7. Return 200 fast. The inbox UI then shows the row and the
-//      operator does quality review.
+//   3. Claim the MessageID (webhook_events) so a duplicate delivery is a no-op.
+//   4. Find the slug from ToFull (preferred — array of { Email, Name })
+//      falling back to To, then OriginalRecipient.
+//   5. Resolve slug → location_id via `locations.invoices_inbound_slug`.
+//   6. ingestInboundEmail stores every supported attachment (one
+//      invoices_queue row each) or one empty row when nothing is usable.
+//   7. Return 200. The inbox UI then shows the row and the operator
+//      does quality review.
 //
 // Why we don't queue here like the outbound webhook does:
 //   • Inbound volume is single-digit per day — no burst risk.
 //   • Each event creates a row regardless; deferring the write
 //     would just add a hop.
 //
-// Failure modes that return 200 (with a warning logged) so Postmark
-// doesn't retry forever:
-//   • Slug not found → log + 200. Likely a typo'd address or a
-//     decommissioned location; retrying won't help.
-//   • Attachment missing/unsupported → 200, log; the inbound email
-//     was real but had nothing to ingest.
-// Storage / DB errors return 5xx so Postmark retries naturally.
+// Failure handling: Postmark retries only on non-2xx, but our own claim in
+// step 3 would turn that retry into a "duplicate". So every failure after the
+// claim (lookup, storing, stray write, or an unexpected throw) releases the
+// claim first and answers 500, and the retry is processed for real.
+//   • Mail that matches no studio (unparseable or unknown address) is
+//     recorded in invoice_inbound_strays and answered 200: retrying cannot
+//     help, but the email stays visible instead of vanishing into a log.
+//   • An email with nothing usable attached still gets an empty queue row.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifySharedSecret } from '@/lib/webhook-auth'
-import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
-import {
-  parseInboundAddress,
-  INBOUND_INVOICE_SUPPORTED_MIME,
-  inboundInvoiceStoragePath,
-  safeInboundFilename,
-} from '@/lib/inbound-invoices'
+import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { parseInboundAddress } from '@/lib/inbound-invoices'
+import { ingestInboundEmail } from '@/lib/invoices-queue/ingest-email'
+import { recordInboundStray } from '@/lib/invoices-queue/strays'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-const STORAGE_BUCKET = 'inbound-invoices'
 
 /**
  * Token-in-URL auth — Postmark inbound webhooks don't allow custom
@@ -100,17 +95,16 @@ export async function POST(request, { params }) {
   })
   if (!auth.ok) {
     if (auth.reason === 'missing_secret') {
-      console.error('[security] POSTMARK_INBOUND_WEBHOOK_TOKEN not set — refusing inbound invoice webhook.')
+      logError('invoices-inbound', 'POSTMARK_INBOUND_WEBHOOK_TOKEN not set — refusing inbound invoice webhook')
     } else {
-      console.warn(`[security] Inbound invoice webhook rejected: ${auth.reason}`)
+      logWarn('invoices-inbound', `inbound invoice webhook rejected: ${auth.reason}`)
     }
     return NextResponse.json({ success: false, error: auth.reason }, { status: auth.status })
   }
   if (auth.matched === 'previous') {
-    console.warn(
-      '[security] Inbound invoice webhook accepted via POSTMARK_INBOUND_WEBHOOK_TOKEN_PREVIOUS — ' +
-      'finish rotating the Postmark inbound URL to the new token, then unset PREVIOUS.'
-    )
+    logWarn('invoices-inbound',
+      'accepted via POSTMARK_INBOUND_WEBHOOK_TOKEN_PREVIOUS — ' +
+      'finish rotating the Postmark inbound URL to the new token, then unset PREVIOUS.')
   }
 
   let body
@@ -136,156 +130,74 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: true, deduped: true })
   }
 
-  // Resolve recipient → slug → location.
-  //
-  // Postmark gives us three places the slug might appear, in
-  // priority order:
-  //   1. ToFull[] — typed-recipient list (preferred — already
-  //      normalised by Postmark into { Email, Name, MailboxHash })
-  //   2. To — display string "Name <addr>, Name <addr>"
-  //   3. OriginalRecipient — the actual envelope RCPT TO from
-  //      the SMTP transaction. Per the Postmark spec, when an
-  //      email is CC'd or BCC'd or routed via a forwarding domain
-  //      that rewrote the visible To, this is the ground truth
-  //      of where Postmark received the mail.
-  //
-  // Falling back through all three avoids silently dropping
-  // legitimate invoices that were addressed to the slug via Cc/Bcc
-  // or a forwarding hop.
-  const slug =
-    parseInboundAddress(body.ToFull) ||
-    parseInboundAddress(body.To) ||
-    parseInboundAddress(body.OriginalRecipient)
-  if (!slug) {
-    console.warn('[invoices-inbound] could not parse slug from recipient', {
-      To: body.To, ToFull: body.ToFull, OriginalRecipient: body.OriginalRecipient,
-    })
-    return NextResponse.json({ success: true, ignored: 'unparseable_recipient' })
+  const eventId = `inbound-invoice:${messageId}`
+  const fail = async (error) => {
+    // Release first: the provider's retry must not be mistaken for a duplicate.
+    await releaseWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.POSTMARK, eventId })
+    return NextResponse.json({ success: false, error }, { status: 500 })
   }
 
-  const { data: location, error: locErr } = await db
-    .from('locations')
-    .select('id, name, invoices_inbound_slug')
-    .eq('invoices_inbound_slug', slug)
-    .maybeSingle()
-  if (locErr) {
-    console.error('[invoices-inbound] location lookup failed:', locErr.message)
-    return NextResponse.json({ success: false, error: 'location_lookup_failed' }, { status: 500 })
-  }
-  if (!location) {
-    console.warn('[invoices-inbound] unknown slug', { slug })
-    return NextResponse.json({ success: true, ignored: 'unknown_slug', slug })
-  }
+  try {
+    // Resolve recipient → slug → location.
+    //
+    // Postmark gives us three places the slug might appear, in
+    // priority order:
+    //   1. ToFull[] — typed-recipient list (preferred — already
+    //      normalised by Postmark into { Email, Name, MailboxHash })
+    //   2. To — display string "Name <addr>, Name <addr>"
+    //   3. OriginalRecipient — the actual envelope RCPT TO from
+    //      the SMTP transaction. Per the Postmark spec, when an
+    //      email is CC'd or BCC'd or routed via a forwarding domain
+    //      that rewrote the visible To, this is the ground truth
+    //      of where Postmark received the mail.
+    //
+    // Falling back through all three avoids silently dropping
+    // legitimate invoices that were addressed to the slug via Cc/Bcc
+    // or a forwarding hop.
+    const slug =
+      parseInboundAddress(body.ToFull) ||
+      parseInboundAddress(body.To) ||
+      parseInboundAddress(body.OriginalRecipient)
 
-  const attachments = Array.isArray(body.Attachments) ? body.Attachments : []
-  const supported = attachments.filter((a) => INBOUND_INVOICE_SUPPORTED_MIME.has(a?.ContentType))
-  if (supported.length === 0) {
-    console.warn('[invoices-inbound] no supported attachments', {
-      slug, messageId, total: attachments.length,
-      mimeTypes: attachments.map((a) => a?.ContentType),
-    })
-    // Still create a row so the operator can see the email arrived
-    // with no usable attachment — they can reject it manually.
-    const senderEmail = body.FromFull?.Email || body.From || null
-    const { error: insErr } = await db.from('invoices_queue').insert({
-      location_id: location.id,
-      sender_email: senderEmail,
-      subject: body.Subject || null,
-      email_message_id: messageId,
-      status: 'received',
-      // INVOICES-QUEUE.1 — supplier_email rows are their own
-      // source-of-record (no per-source FK is set). The bucket
-      // column points at the bucket the attachment lives in;
-      // even for the no-attachment empty-row case we set it
-      // because it's NOT NULL.
-      source_type: 'supplier_email',
-      attachment_bucket: STORAGE_BUCKET,
-    })
-    if (insErr) {
-      console.error('[invoices-inbound] empty-attachment row insert failed:', insErr.message)
-      return NextResponse.json({ success: false, error: 'insert_failed' }, { status: 500 })
-    }
-    return NextResponse.json({ success: true, created: 1, attachments: 0 })
-  }
-
-  const senderEmail = body.FromFull?.Email || body.From || null
-  const created = []
-
-  // For the multi-attachment case Postmark's MessageID is the SAME
-  // for every row we create from this email. The unique constraint
-  // on email_message_id would block N>1 rows. We salt the second+
-  // attachments with a "-<index>" suffix so each row gets its own
-  // unique value while still tracing back to the same email. The
-  // dedup at the top of the handler is keyed on the bare MessageID,
-  // so a Postmark retry still short-circuits before we land here.
-  for (let i = 0; i < supported.length; i++) {
-    const att = supported[i]
-    const filename = safeInboundFilename(att.Name) || `attachment-${i + 1}`
-    const content = att.Content // base64 string
-    let bytes
-    try {
-      bytes = Buffer.from(content, 'base64')
-    } catch {
-      console.warn('[invoices-inbound] skipping unparseable base64 attachment', { filename })
-      continue
-    }
-    if (!bytes.length) continue
-
-    // Insert the row FIRST (status='received', no attachment_path
-    // yet) so we have an id to use in the storage path. Then upload.
-    // On upload failure we delete the row to avoid orphans.
-    const { data: row, error: insErr } = await db
-      .from('invoices_queue')
-      .insert({
-        location_id: location.id,
-        sender_email: senderEmail,
+    const stray = async (reason, ignoredSlug) => {
+      logWarn('invoices-inbound', `recording stray: ${reason}`, { messageId, slug: ignoredSlug })
+      const { ok } = await recordInboundStray(db, {
+        messageId,
+        to: body.OriginalRecipient || body.To || null,
+        from: body.FromFull?.Email || body.From || null,
         subject: body.Subject || null,
-        email_message_id: i === 0 ? messageId : `${messageId}-${i}`,
-        attachment_filename: filename,
-        attachment_size_bytes: bytes.length,
-        attachment_mime_type: att.ContentType,
-        status: 'received',
-        source_type: 'supplier_email',
-        attachment_bucket: STORAGE_BUCKET,
+        reason,
+        slug: ignoredSlug,
       })
-      .select('id')
-      .single()
-    if (insErr || !row) {
-      console.error('[invoices-inbound] row insert failed:', insErr?.message)
-      return NextResponse.json({ success: false, error: 'insert_failed' }, { status: 500 })
+      if (!ok) return fail('stray_insert_failed')
+      return NextResponse.json(
+        reason === 'unknown_slug'
+          ? { success: true, ignored: reason, slug: ignoredSlug }
+          : { success: true, ignored: reason },
+      )
     }
 
-    const storagePath = inboundInvoiceStoragePath({
-      locationId: location.id,
-      invoiceId: row.id,
-      safeFilename: filename,
-    })
+    if (!slug) return await stray('unparseable_recipient', null)
 
-    const { error: upErr } = await db.storage
-      .from(STORAGE_BUCKET)
-      .upload(storagePath, bytes, {
-        contentType: att.ContentType,
-        upsert: false,
-      })
-    if (upErr) {
-      console.error('[invoices-inbound] storage upload failed:', upErr.message)
-      // Roll back the row so we don't leave a phantom inbox entry.
-      await db.from('invoices_queue').delete().eq('id', row.id)
-      return NextResponse.json({ success: false, error: 'storage_upload_failed' }, { status: 500 })
+    const { data: location, error: locErr } = await db
+      .from('locations')
+      .select('id, name, invoices_inbound_slug')
+      .eq('invoices_inbound_slug', slug)
+      .maybeSingle()
+    if (locErr) {
+      logError('invoices-inbound', 'location lookup failed', { messageId, error: locErr.message })
+      return await fail('location_lookup_failed')
     }
+    if (!location) return await stray('unknown_slug', slug)
 
-    const { error: updErr } = await db
-      .from('invoices_queue')
-      .update({ attachment_path: storagePath })
-      .eq('id', row.id)
-    if (updErr) {
-      console.error('[invoices-inbound] row update failed:', updErr.message)
-      // Don't delete — the file is uploaded; manual recovery from
-      // the inbox UI is easier than a dangling file.
+    const result = await ingestInboundEmail(db, { location: { id: location.id }, body })
+    if (!result.ok) {
+      logError('invoices-inbound', 'ingest failed', { messageId, error: result.error })
+      return await fail(result.error)
     }
-
-    created.push(row.id)
+    return NextResponse.json({ success: true, created: result.created.length, ids: result.created })
+  } catch (err) {
+    logError('invoices-inbound', 'unexpected failure', { messageId, error: err?.message })
+    return await fail('internal_error')
   }
-
-  return NextResponse.json({ success: true, created: created.length, ids: created })
 }
