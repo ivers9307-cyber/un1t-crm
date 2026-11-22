@@ -21,6 +21,7 @@ import {
   INBOUND_INVOICE_SUPPORTED_MIME,
   inboundInvoiceStoragePath,
   safeInboundFilename,
+  sha256Hex,
 } from '@/lib/inbound-invoices'
 
 export const runtime = 'nodejs'
@@ -201,6 +202,7 @@ export async function POST(request) {
       attachment_filename: filename,
       attachment_size_bytes: bytes.length,
       attachment_mime_type: file.type,
+      content_hash: sha256Hex(bytes),
       status: 'received',
       source_type: 'supplier_email',
       attachment_bucket: STORAGE_BUCKET,
