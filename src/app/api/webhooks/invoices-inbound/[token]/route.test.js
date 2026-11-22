@@ -101,6 +101,47 @@ describe('inbound invoice webhook', () => {
     expect(strays()).toEqual([expect.objectContaining({ reason: 'unparseable_recipient', slug: null, to_address: 'someone@example.com' })])
   })
 
+  describe('routing by any recipient field', () => {
+    const addr = (slug) => `${slug}-invoices@mail.un1tdublin.com`
+    const lookups = () => db.calls.filter((c) => c.table === 'locations')
+
+    it('routes by a later field when the first names no studio', async () => {
+      const res = await POST(req(email({
+        To: undefined, ToFull: [{ Email: addr('nowhere') }], OriginalRecipient: addr('north'),
+      })), ctx())
+      expect(res.status).toBe(200)
+      expect(ingestInboundEmail).toHaveBeenCalledWith(db, expect.objectContaining({ location: { id: 'loc1' } }))
+      expect(strays()).toEqual([])
+      expect(lookups()).toHaveLength(1)
+    })
+
+    it('uses the first field that names a studio and ignores later ones', async () => {
+      db.tables.locations.push({ id: 'loc2', name: 'South', invoices_inbound_slug: 'south' })
+      await POST(req(email({
+        ToFull: [{ Email: addr('south') }], To: addr('north'), OriginalRecipient: addr('north'),
+      })), ctx())
+      expect(ingestInboundEmail).toHaveBeenCalledWith(db, expect.objectContaining({ location: { id: 'loc2' } }))
+      expect(lookups()).toHaveLength(1)
+    })
+
+    it('records one stray with the first slug when no candidate names a studio', async () => {
+      const res = await POST(req(email({
+        ToFull: [{ Email: addr('one') }], To: addr('two'), OriginalRecipient: addr('three'),
+      })), ctx())
+      expect(await res.json()).toEqual({ success: true, ignored: 'unknown_slug', slug: 'one' })
+      expect(strays()).toEqual([expect.objectContaining({ reason: 'unknown_slug', slug: 'one' })])
+      expect(ingestInboundEmail).not.toHaveBeenCalled()
+      expect(lookups()).toHaveLength(1)
+    })
+
+    it('records unparseable_recipient when no field holds a studio address', async () => {
+      const res = await POST(req(email({ To: 'a@example.com', ToFull: [{ Email: 'b@example.com' }], OriginalRecipient: 'c@example.com' })), ctx())
+      expect(await res.json()).toEqual({ success: true, ignored: 'unparseable_recipient' })
+      expect(strays()).toHaveLength(1)
+      expect(lookups()).toHaveLength(0)
+    })
+  })
+
   it('releases the claim and answers 500 when the stray cannot be written', async () => {
     db = createFakeDb({ errors: { invoice_inbound_strays: { insert: { message: 'down' } } } })
     const res = await POST(req(email({ To: 'someone@example.com' })), ctx())

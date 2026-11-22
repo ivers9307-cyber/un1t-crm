@@ -150,12 +150,14 @@ export async function ingestInboundEmail(db, { location, body }) {
     }
     if (prior) {
       // Inserted but never finished: clear it so the insert below can reuse the id.
-      // Only while untouched: a row staff have already acted on is theirs.
+      // Only while untouched: a row staff have already acted on is theirs, and
+      // one a concurrent delivery finished since our read now has a path.
       const { data: removed, error: delErr } = await db
         .from('invoices_queue')
         .delete()
         .eq('id', prior.id)
         .eq('status', 'received')
+        .is('attachment_path', null)
         .select('id')
       if (delErr) {
         logError('invoice-ingest', 'unfinished row cleanup failed', { err: delErr, rowId: prior.id })

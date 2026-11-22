@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { logError, logWarn } from '@/lib/log'
+import { MAX_ATTACHMENTS_PER_MESSAGE } from '@/lib/email-attachment-quota'
 import {
   INVOICE_STAGING_BUCKET,
   SHIM_MAX_ATTACHMENTS_PER_MESSAGE,
@@ -136,6 +137,10 @@ describe('resolveInboundAttachments', () => {
 
   it('mirrors the shim cap of 25 attachments per message', () => {
     expect(SHIM_MAX_ATTACHMENTS_PER_MESSAGE).toBe(25)
+  })
+
+  it('is the same constant the quota module pins to the shim', () => {
+    expect(SHIM_MAX_ATTACHMENTS_PER_MESSAGE).toBe(MAX_ATTACHMENTS_PER_MESSAGE)
   })
 
   it('reports an attachment the shim emptied without a marker as rehost_failed', async () => {

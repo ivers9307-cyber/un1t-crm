@@ -197,6 +197,25 @@ describe('ingestInboundEmail', () => {
     expect(rows[0].status).toBe('rejected')
     expect(upload).not.toHaveBeenCalled()
   })
+  it('never deletes a row a concurrent delivery finished between our read and our delete', async () => {
+    await db.from('invoices_queue').insert({
+      location_id: LOC.id, email_message_id: 'm1', status: 'received',
+      source_type: 'supplier_email', attachment_bucket: 'inbound-invoices',
+    })
+    // The second query on the table is the delete: the other delivery's path lands just before it.
+    const realFrom = db.from.bind(db)
+    let n = 0
+    db.from = (table) => {
+      if (table === 'invoices_queue' && ++n === 2) db.tables.invoices_queue[0].attachment_path = 'loc/done.pdf'
+      return realFrom(table)
+    }
+    const r = await ingestInboundEmail(db, { location: LOC, body: email([pdf()]) })
+    expect(r).toEqual({ ok: true, created: [], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
+    expect(db.tables.invoices_queue).toHaveLength(1)
+    expect(db.tables.invoices_queue[0].attachment_path).toBe('loc/done.pdf')
+    expect(upload).not.toHaveBeenCalled()
+  })
+
   it('never creates an empty-email row on a retry where the only usable attachment is already stored', async () => {
     const a = { location: LOC, body: email([{ Name: 'a.docx', ContentType: 'application/msword', Content: 'AAAA' }, pdf()]) }
     expect(await ingestInboundEmail(db, a)).toMatchObject({ ok: true })
