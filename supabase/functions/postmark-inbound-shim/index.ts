@@ -1,6 +1,21 @@
 // EMAIL-INBOUND-SHIM.1 — the Supabase Edge Function that fronts the Postmark
 // inbound webhook so large attachments stop being rejected.
 //
+// ══ ONE FUNCTION, TWO TARGETS ═══════════════════════════════════════
+// INVOICEPREP.2: the invoices inbound webhook (/api/webhooks/invoices-inbound)
+// sits behind the same Vercel ~4.5 MB body ceiling and rejected large invoice
+// emails the same way, so this function now fronts it too. Which target a
+// request is for is decided by WHICH SECRET its URL token matches:
+//   • POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN  → the support inbox (the original
+//     target; bucket `email-attachments`, route /api/webhooks/postmark-inbound)
+//   • POSTMARK_INBOUND_WEBHOOK_TOKEN      → invoices (bucket `inbound-invoices`,
+//     route /api/webhooks/invoices-inbound)
+// The support target's token is required; the invoices target is optional and
+// simply cannot match until its token is set. Everything else — the path scheme,
+// the marker, the size limits, the failure reasons — is shared, not forked, and
+// the rest of this header describes either target. Invoices log lines are
+// prefixed `[postmark-shim:invoices]`; support's stay `[postmark-shim]`.
+//
 // Deploy:  supabase functions deploy postmark-inbound-shim --no-verify-jwt
 // Postmark inbound URL:
 //   https://<project-ref>.supabase.co/functions/v1/postmark-inbound-shim/<token>
@@ -92,6 +107,25 @@ const HTML_BODY_MAX_CHARS = 300_000
 // The route's own path. Stated here rather than made configurable so the
 // forward target cannot be pointed somewhere else by an env var alone.
 const FORWARD_PATH = '/api/webhooks/postmark-inbound'
+
+// The webhook targets this function fronts. First entry wins if two were ever
+// configured with the same secret (that is logged as a misconfiguration).
+const TARGETS = Object.freeze([
+  {
+    name: 'support',
+    tokenEnv: 'POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN',
+    previousEnv: 'POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN_PREVIOUS',
+    bucket: EMAIL_ATTACHMENT_BUCKET,
+    forwardPath: FORWARD_PATH,
+  },
+  {
+    name: 'invoices',
+    tokenEnv: 'POSTMARK_INBOUND_WEBHOOK_TOKEN',
+    previousEnv: 'POSTMARK_INBOUND_WEBHOOK_TOKEN_PREVIOUS',
+    bucket: 'inbound-invoices',
+    forwardPath: '/api/webhooks/invoices-inbound',
+  },
+] as const)
 
 // This function's own name, used only to recognise a request that stopped at
 // the function root and carries no token.
@@ -212,13 +246,14 @@ function decodeBase64(content: string): Uint8Array | null {
 async function uploadObject(
   supabaseUrl: string,
   serviceKey: string,
+  bucket: string,
   path: string,
   bytes: Uint8Array,
   contentType: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const res = await fetch(
-      `${supabaseUrl}/storage/v1/object/${EMAIL_ATTACHMENT_BUCKET}/${path}`,
+      `${supabaseUrl}/storage/v1/object/${bucket}/${path}`,
       {
         method: 'POST',
         headers: {
@@ -277,8 +312,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ success: false, error: 'method_not_allowed' }, 405)
   }
 
-  const primary = Deno.env.get('POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN')
-  const previous = Deno.env.get('POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN_PREVIOUS')
+  // Every target's secrets, read once. An unset (or empty) secret is ''.
+  const configured = TARGETS.map((target) => ({
+    target,
+    primary: Deno.env.get(target.tokenEnv) || '',
+    previous: Deno.env.get(target.previousEnv) || '',
+  }))
+  // The support target is the original one and stays REQUIRED.
+  const supportPrimary = configured[0].primary
   const crmBaseUrl = Deno.env.get('CRM_WEBHOOK_BASE_URL')
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
@@ -286,11 +327,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // Missing configuration is a 500, not a 404: a 404 would tell Postmark the
   // URL is wrong when the truth is that this deployment is unfinished, and the
   // difference is the whole triage.
-  if (!primary || !crmBaseUrl || !supabaseUrl || !serviceKey) {
+  if (!supportPrimary || !crmBaseUrl || !supabaseUrl || !serviceKey) {
     console.error(
       '[postmark-shim] refusing to run — missing config:',
       [
-        !primary && 'POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN',
+        !supportPrimary && 'POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN',
         !crmBaseUrl && 'CRM_WEBHOOK_BASE_URL',
         !supabaseUrl && 'SUPABASE_URL',
         !serviceKey && 'SUPABASE_SERVICE_ROLE_KEY',
@@ -311,26 +352,43 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const last = segments.length ? segments[segments.length - 1] : ''
   const urlToken = last === FUNCTION_NAME ? '' : last
 
-  const matched = urlToken && safeEqual(urlToken, primary)
-    ? 'primary'
-    : (urlToken && previous && safeEqual(urlToken, previous) ? 'previous' : null)
-  if (!matched) {
+  // Two targets sharing a secret could never be told apart: the first (support)
+  // would silently win. Say so, once per request, without naming any value.
+  const secrets = configured.flatMap((c) => [c.primary, c.previous]).filter(Boolean)
+  const duplicated = secrets.some((a, i) => secrets.slice(i + 1).some((b) => safeEqual(a, b)))
+  if (configured.length > 1 && duplicated) {
+    console.error('[postmark-shim] two webhook targets share an identical secret — fix the configuration; support wins')
+  }
+
+  // Compared against EVERY configured secret, with no early exit, so the work
+  // per request does not depend on which target (if any) the token belongs to.
+  let hit: { c: (typeof configured)[number]; via: 'primary' | 'previous' } | null = null
+  for (const c of configured) {
+    const isPrimary = !!urlToken && !!c.primary && safeEqual(urlToken, c.primary)
+    const isPrevious = !!urlToken && !!c.previous && safeEqual(urlToken, c.previous)
+    if (!hit && (isPrimary || isPrevious)) hit = { c, via: isPrimary ? 'primary' : 'previous' }
+  }
+  if (!hit) {
     // 404, never 403 — the URL pattern must not be probeable. Mirrors the
     // Vercel route exactly. The token itself is NEVER logged.
     console.warn('[postmark-shim] rejected: token mismatch or missing')
     return json({ success: false, error: 'not_found' }, 404)
   }
-  if (matched === 'previous') {
+  const target = hit.c.target
+  const primary = hit.c.primary
+  // Support lines keep the original prefix; the invoices target is told apart.
+  const logTag = target.name === 'support' ? '[postmark-shim]' : `[postmark-shim:${target.name}]`
+  if (hit.via === 'previous') {
     console.warn(
-      '[postmark-shim] accepted via POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN_PREVIOUS — ' +
+      `${logTag} accepted via ${target.previousEnv} — ` +
       'finish rotating the Postmark inbound URL, then unset PREVIOUS.',
     )
   }
 
-  // The forward ALWAYS carries this function's PRIMARY token, never the one
+  // The forward ALWAYS carries the MATCHED target's PRIMARY token, never the one
   // the caller sent.
-  const forwardUrl = `${crmBaseUrl.replace(/\/+$/, '')}${FORWARD_PATH}/${primary}`
-  const loggableForward = `${crmBaseUrl.replace(/\/+$/, '')}${FORWARD_PATH}/<token>`
+  const forwardUrl = `${crmBaseUrl.replace(/\/+$/, '')}${target.forwardPath}/${primary}`
+  const loggableForward = `${crmBaseUrl.replace(/\/+$/, '')}${target.forwardPath}/<token>`
 
   let body: PostmarkInbound
   try {
@@ -369,7 +427,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // `Missing MessageID` for exactly this input, which is what should happen.
   const canStage = PATH_SEGMENT.test(messageId)
   if (attachments.length > 0 && !canStage) {
-    console.warn('[postmark-shim] no usable MessageID — forwarding unmodified')
+    console.warn(`${logTag} no usable MessageID — forwarding unmodified`)
   }
 
   if (canStage) {
@@ -435,12 +493,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
         continue
       }
 
-      const uploaded = await uploadObject(supabaseUrl, serviceKey, path, bytes, mime)
+      const uploaded = await uploadObject(supabaseUrl, serviceKey, target.bucket, path, bytes, mime)
       if (!uploaded.ok) {
         // THE MESSAGE IS FORWARDED ANYWAY. The route records `rehost_failed`
         // and staff see "invoice.pdf — not stored, upload failed" instead of
         // the file (and possibly the email) disappearing.
-        console.error('[postmark-shim] upload failed for attachment', index, '—', uploaded.error)
+        console.error(`${logTag} upload failed for attachment`, index, '—', uploaded.error)
         att[STAGED_MARKER_KEY] = { v: STAGED_MARKER_VERSION, error: 'upload_failed' }
         failed += 1
         continue
@@ -459,7 +517,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     // is the honest answer. Logged because the cause is now a body field
     // (TextBody, Headers) rather than attachments, and nothing else would say so.
     console.error(
-      '[postmark-shim] payload is STILL over Vercel’s body limit after moving attachments:',
+      `${logTag} payload is STILL over Vercel’s body limit after moving attachments:`,
       `${forwardBody.length} bytes. Attachments are not the cause — check TextBody/Headers size.`,
     )
   }
@@ -481,7 +539,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     // 502, so Postmark retries. The staged objects are LEFT: the retry
     // re-uploads to the identical deterministic key and overwrites them, so a
     // retry cannot accumulate copies.
-    console.error('[postmark-shim] forward to', loggableForward, 'failed:', (err as Error)?.message)
+    console.error(`${logTag} forward to`, loggableForward, 'failed:', (err as Error)?.message)
     return json({ success: false, error: 'forward_failed' }, 502)
   }
 
@@ -489,7 +547,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   if (moved > 0 || failed > 0) {
     console.log(
-      `[postmark-shim] ${moved} attachment(s) staged (${movedBytes} bytes), ` +
+      `${logTag} ${moved} attachment(s) staged (${movedBytes} bytes), ` +
       `${failed} could not be moved; upstream ${upstream.status}`,
     )
   }

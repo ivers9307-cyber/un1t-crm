@@ -116,6 +116,30 @@ describe('the Edge Function keeps its deployment-critical properties', () => {
     expect(source).not.toMatch(/const forwardUrl = .*\$\{urlToken\}/)
   })
 
+  it('declares an invoices target with its own bucket, path and secrets', () => {
+    expect(source).toMatch(/bucket:\s*'inbound-invoices'/)
+    expect(source).toMatch(/forwardPath:\s*'\/api\/webhooks\/invoices-inbound'/)
+    expect(source).toMatch(/tokenEnv:\s*'POSTMARK_INBOUND_WEBHOOK_TOKEN'/)
+    expect(source).toMatch(/previousEnv:\s*'POSTMARK_INBOUND_WEBHOOK_TOKEN_PREVIOUS'/)
+  })
+
+  it('keeps the support target on the pinned constants', () => {
+    expect(source).toMatch(/bucket:\s*EMAIL_ATTACHMENT_BUCKET/)
+    expect(source).toMatch(/forwardPath:\s*FORWARD_PATH/)
+    expect(source).toMatch(/tokenEnv:\s*'POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN'/)
+    expect(source).toMatch(/previousEnv:\s*'POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN_PREVIOUS'/)
+  })
+
+  it('never builds the forward from the caller-supplied token', () => {
+    expect(source).not.toMatch(/\$\{urlToken\}/)
+  })
+
+  it('uploads into the matched target’s bucket, not a fixed one', () => {
+    // The only place the bucket constant may be interpolated is the target list.
+    expect(source).not.toMatch(/storage\/v1\/object\/\$\{EMAIL_ATTACHMENT_BUCKET\}/)
+    expect(source).toMatch(/storage\/v1\/object\/\$\{bucket\}/)
+  })
+
   it('upserts, because the key is deterministic across a Postmark retry', () => {
     expect(source).toMatch(/'x-upsert': 'true'/)
   })
