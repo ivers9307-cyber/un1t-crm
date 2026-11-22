@@ -2,14 +2,13 @@
 
 // HOST-PORTAL.10 — "Take off sale" / "Delete event" actions on the host event
 // detail page. Take off sale = POST unpublish (published → draft; attendees
-// keep their tickets, new sales stop, relisting needs re-approval). Delete is
+// keep their tickets, new sales stop; publishing again relists it, no approval). Delete is
 // only offered when the event is NOT published (take-off-sale is the path —
 // deleting a live event races incoming registrations) AND has ZERO
 // registrations — the API enforces both, this just hides buttons that would
 // always 409.
 
 import { useState } from 'react'
-import { PLATFORM_NAME } from '@/lib/brand-name'
 import { confirmLeave, setUnsaved } from '@/lib/unsaved-guard'
 import { HOST_BTN } from '@/components/host/host-ui'
 
@@ -20,15 +19,16 @@ export function hasHostEventActions({ status, hasRegistrations }) {
   return status === 'published' || !hasRegistrations
 }
 
-// brandName (W1.S1c): the host's organisation, resolved by the server page.
-export default function HostEventActions({ eventId, status, hasRegistrations, brandName = PLATFORM_NAME }) {
+// HOSTAUTOPUB.1 — callers still pass brandName; the copy no longer names the
+// organisation (relisting needs no approval).
+export default function HostEventActions({ eventId, status, hasRegistrations }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
   async function takeOffSale() {
     if (busy) return
     if (!confirmLeave()) return
-    if (!window.confirm(`Take this event off sale? Existing attendees keep their tickets; this only stops new sales. Putting it back on sale needs ${brandName} approval again.`)) return
+    if (!window.confirm(`Take this event off sale? Existing attendees keep their tickets; this only stops new sales. You can publish it again at any time.`)) return
     setBusy(true)
     setError(null)
     try {

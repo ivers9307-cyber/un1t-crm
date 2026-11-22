@@ -11,6 +11,7 @@ vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), l
 
 const { getCurrentUser } = await import('@/lib/auth')
 const { createServerClient } = await import('@/lib/supabase')
+const { logError } = await import('@/lib/log')
 const { GET, DELETE } = await import('./route.js')
 
 const CAR = 'ca000000-0000-4000-8000-000000000001'
@@ -86,4 +87,18 @@ describe('/api/cars/[id]/documents/[docId]', () => {
     expect(res.status).toBe(200)
     expect(db.tables.car_documents.map((d) => d.id)).toEqual([DOC_FAR])
   })
+
+  it('SECGAPS.1 — DELETE refuses when the invoice queue read fails: 500, fixed text, nothing removed', async () => {
+    getCurrentUser.mockResolvedValue(carsAt(true, true))
+    const remove = vi.fn(async () => ({ error: null }))
+    db.storage = { from: () => ({ createSignedUrl: async () => signed, remove }) }
+    db.errors = { invoices_queue: { select: { code: '57014', message: 'canceling statement due to statement timeout' } } }
+    const res = await call(DELETE, CAR, DOC)
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'Could not check the document before removing it. Try again.' })
+    expect(remove).not.toHaveBeenCalled()
+    expect(db.tables.car_documents.map((d) => d.id)).toEqual([DOC, DOC_FAR])
+    expect(logError).toHaveBeenCalledWith('car-documents', expect.any(String), expect.objectContaining({ docId: DOC }))
+  })
 })
+

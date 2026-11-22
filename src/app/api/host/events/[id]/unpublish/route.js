@@ -3,7 +3,7 @@
 // gate keys on (visibility + booking require active AND status='published'),
 // so NEW sales stop instantly. Existing attendees keep their tickets — refunds
 // are staff-only and this route never touches payments. To go live again the
-// host edits and submits for review as normal.
+// host publishes it again (HOSTAUTOPUB.1: no review).
 //
 // Tenancy mirrors every /api/host route: getCurrentHost() then
 // race.host_id === session.host.id, 404 otherwise (ids can't be enumerated).

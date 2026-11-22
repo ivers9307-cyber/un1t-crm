@@ -87,3 +87,23 @@ describe('PATCH /api/instagram/conversations/[id]', () => {
     expect(await res.json()).toEqual({ success: false, error: 'Could not update the conversation. Try again.' })
   })
 })
+
+describe('SECGAPS.1 — the inbox key is judged at the conversation\'s studio', () => {
+  const keyAtAOnly = person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: true } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: false } } }, LOC_A)
+  const keyAtBOnly = person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: true } } }, LOC_A)
+
+  it('403 at a member studio where the caller lacks the key, even with it at the active studio', async () => {
+    getCurrentUser.mockResolvedValue(keyAtAOnly)
+    expect((await get(CONV_B)).status).toBe(403)
+    expect((await patch(CONV_B)).status).toBe(403)
+    expect(db.tables.instagram_conversations[1].unread_count).toBe(2)
+    expect(db.tables.instagram_conversations[1].resolved_at).toBeNull()
+  })
+
+  it('passes at the thread\'s studio when the key is held there but not at the active studio', async () => {
+    getCurrentUser.mockResolvedValue(keyAtBOnly)
+    expect((await get(CONV_B)).status).toBe(200)
+    expect((await patch(CONV_B)).status).toBe(200)
+    expect((await get(CONV_A)).status).toBe(403)
+  })
+})

@@ -38,6 +38,7 @@ import { dayStrIn, todayStrIn, DAY_MS, DEFAULT_TZ, getLocationZones, LocationZon
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { contactMatchesSequenceAudience } from './audience.js'
 import { enrolContacts } from './enrol.js'
+import { findBlockedByCooldown } from './cooldown.js'
 import { buildEligibleAudienceQuery } from '@/lib/audience-eligibility'
 import { clampToSendWindow, hasSendWindow } from './scheduler.js'
 import { ANNIVERSARY_FROM_FIELDS, DEFAULT_ANNIVERSARY_FROM_FIELD } from './anniversary-fields.js'
@@ -544,7 +545,9 @@ export const AUDIENCE_SWEEP_ENROL_CAP = 50
 
 /**
  * Sweep every active `audience_match` sequence and enrol everyone who matches
- * its audience but has no enrolment row yet.
+ * its audience but has no enrolment row yet — and (COOLDOWN.1) everyone whose
+ * last run ended more than re_enrolment_cooldown_days ago and who still
+ * matches. With no cooldown set, a finished run is final, as before.
  *
  * Gated on THREE things, all of which must hold:
  *   1. `audience_seeded_at` is set — a human confirmed the headcount (mig 556).
@@ -570,7 +573,7 @@ export async function runAudienceMatchTriggers({ now = new Date() } = {}) {
 
   const { data: sequences, error } = await db
     .from('email_sequences')
-    .select('id, location_id, audience_filter, audience_seeded_at, send_window')
+    .select('id, location_id, audience_filter, audience_seeded_at, send_window, re_enrolment_cooldown_days')
     .eq('trigger_type', 'audience_match')
     .eq('status', 'active')
   if (error) throw new Error(`audience_match: sequence lookup failed: ${error.message}`)
@@ -608,15 +611,35 @@ export async function runAudienceMatchTriggers({ now = new Date() } = {}) {
 
       // "Already handled" is the enrolment table itself — one permanent row per
       // (sequence, contact), surviving every status transition. No snapshot needed.
+      // COOLDOWN.1 — a row whose run ended (completed / exited) outside the
+      // sequence's cooldown is handled no longer: that contact re-enters, and
+      // enrolContacts re-activates their row. A live row (active, paused)
+      // always counts as handled. The same helper decides here and inside
+      // enrolContacts, so the sweep never offers a contact enrol will refuse
+      // on cooldown grounds.
       const enrolled = await selectAll((from, to) => db
         .from('sequence_enrollments')
-        .select('contact_id')
+        .select('contact_id, status, completed_at, exited_at, last_processed_at, enrolled_at')
         .eq('sequence_id', seq.id)
         .order('contact_id')
         .range(from, to))
-      const seen = new Set(enrolled.map(r => r.contact_id))
+      const terminal = enrolled.filter(r => r.status === 'completed' || r.status === 'exited')
+      const blockedByCooldown = findBlockedByCooldown(terminal, seq.re_enrolment_cooldown_days, now.getTime())
+      const seen = new Set()
+      const reentering = new Set()
+      for (const r of enrolled) {
+        const isTerminal = r.status === 'completed' || r.status === 'exited'
+        if (isTerminal && !blockedByCooldown.has(r.contact_id)) reentering.add(r.contact_id)
+        else seen.add(r.contact_id)
+      }
 
-      const fresh = matching.map(c => c.id).filter(id => !seen.has(id))
+      // Never-enrolled people go first, so a cohort coming off its cooldown
+      // cannot crowd newcomers out of the per-tick cap.
+      const matchingIds = matching.map(c => c.id).filter(id => !seen.has(id))
+      const fresh = [
+        ...matchingIds.filter(id => !reentering.has(id)),
+        ...matchingIds.filter(id => reentering.has(id)),
+      ]
       if (fresh.length === 0) { continue }
 
       // Cap the WRITES, not the sends. Whatever is left is picked up next tick;

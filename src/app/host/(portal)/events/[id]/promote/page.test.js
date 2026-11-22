@@ -137,7 +137,7 @@ describe('host event Promote tab', () => {
       return r
     }
     expect(await reason({ status: 'draft' })).toBe('Publish this event before emailing your list about it.')
-    expect(await reason({ status: 'pending_review' })).toBe('This event is waiting for approval. You can email your list once it is on sale.')
+    expect(await reason({ status: 'pending_review' })).toBe('Publish this event before emailing your list about it.')
     expect(await reason({ status: 'published', active: false })).toBe('This event is off sale. Put it back on sale before emailing your list about it.')
     expect(await reason({ status: 'published', active: true }, '2026-12-02')).toBe('This event has already taken place.')
   })

@@ -443,10 +443,23 @@ describe('setEnrollmentStatus', () => {
       reason: 'unsubscribed',
     })
 
+    // COOLDOWN.1 — an exit stamps exited_at: the re-entry cooldown runs from it.
     expect(updateMock).toHaveBeenCalledWith({
       status: 'exited',
       last_error: 'unsubscribed',
+      exited_at: expect.any(String),
     })
+  })
+
+  it('stamps exited_at only on an exit (COOLDOWN.1)', async () => {
+    const eqMock = vi.fn().mockResolvedValue({ error: null })
+    const updateMock = vi.fn().mockReturnValue({ eq: eqMock })
+    const db = { from: vi.fn().mockReturnValue({ update: updateMock }) }
+    createServerClient.mockReturnValue(db)
+    await setEnrollmentStatus({ enrollmentId: 'e4', status: 'exited' })
+    expect(Number.isFinite(Date.parse(updateMock.mock.calls[0][0].exited_at))).toBe(true)
+    await setEnrollmentStatus({ enrollmentId: 'e4', status: 'active' })
+    expect(updateMock.mock.calls[1][0]).toEqual({ status: 'active' })
   })
 
   it('throws when supabase returns an error', async () => {

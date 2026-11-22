@@ -7,6 +7,10 @@
 // Manager+ approve (→ published) or reject (→ rejected + reason) each one via
 // POST /api/events/[id]/review. Built on the shared components/ui primitives;
 // the section header count doubles as the "pending review" badge.
+//
+// HOSTAUTOPUB.1 — hosts now publish with no approval, so nothing new lands
+// here: the queue only drains rows left in pending_review from before (the
+// host can also publish one themselves). With none left the card is hidden.
 
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
@@ -213,29 +217,32 @@ export default function HostEventReviewQueue() {
 
   const title = loading ? 'Pending review' : `Pending review (${events.length})`
 
+  // HOSTAUTOPUB.1 — nothing new arrives; hide the card once it is empty.
+  if (!loading && !loadError && events.length === 0) return null
+
   return (
-    <Card title={title}>
-      {loading ? (
-        <Loading label="Loading pending events…" />
-      ) : loadError ? (
-        <div className="py-4 text-center">
-          <p className="text-sm text-stage-lost flex items-center justify-center gap-1">
-            <AlertTriangle size={12} /> {loadError}
-          </p>
-          <Button variant="secondary" size="sm" onClick={load} className="mt-3">Retry</Button>
-        </div>
-      ) : events.length === 0 ? (
-        <p className="text-sm text-un1t-muted">No events awaiting review.</p>
-      ) : (
-        <div className="space-y-3">
-          <p className="text-xs text-un1t-subtle">
-            Host-submitted events waiting on your approval before they go live.
-          </p>
-          {events.map((e) => (
-            <ReviewItem key={e.id} event={e} onReviewed={removeEvent} />
-          ))}
-        </div>
-      )}
-    </Card>
+    <div className="mb-6">
+      <Card title={title}>
+        {loading ? (
+          <Loading label="Loading pending events…" />
+        ) : loadError ? (
+          <div className="py-4 text-center">
+            <p className="text-sm text-stage-lost flex items-center justify-center gap-1">
+              <AlertTriangle size={12} /> {loadError}
+            </p>
+            <Button variant="secondary" size="sm" onClick={load} className="mt-3">Retry</Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-xs text-un1t-subtle">
+              Submitted before hosts could publish their own events. Approve or reject each, or leave it: the host can publish it themselves.
+            </p>
+            {events.map((e) => (
+              <ReviewItem key={e.id} event={e} onReviewed={removeEvent} />
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
   )
 }

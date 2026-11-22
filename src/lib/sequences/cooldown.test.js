@@ -13,7 +13,7 @@
 // silently (campaign goal misses). Pin both directions.
 
 import { describe, it, expect } from 'vitest'
-import { findBlockedByCooldown, planReenrolments } from './cooldown.js'
+import { findBlockedByCooldown, planReenrolments, runEndedAt } from './cooldown.js'
 
 const DAY = 86_400_000
 
@@ -222,5 +222,37 @@ describe('ENROLFIX.1 — enrolled_at is the fallback end-time', () => {
       { id: 'e-new', contact_id: 'a', status: 'completed', last_processed_at: null, enrolled_at: newer, source_ref: 'y' },
     ], 14, 'z')
     expect(plan.get('a')?.row?.id).toBe('e-new')
+  })
+})
+
+describe('runEndedAt (COOLDOWN.1) — the cooldown starts when the run ended', () => {
+  it('takes the latest of completed_at, exited_at and last_processed_at', () => {
+    expect(runEndedAt({ exited_at: '2026-05-10T00:00:00Z', last_processed_at: '2026-05-01T00:00:00Z' })).toBe('2026-05-10T00:00:00Z')
+    expect(runEndedAt({ completed_at: '2026-05-01T00:00:00Z', last_processed_at: '2026-05-03T00:00:00Z' })).toBe('2026-05-03T00:00:00Z')
+  })
+
+  it('falls back to enrolled_at, then created_at, then null', () => {
+    expect(runEndedAt({ enrolled_at: '2026-04-01T00:00:00Z' })).toBe('2026-04-01T00:00:00Z')
+    expect(runEndedAt({ created_at: '2026-03-01T00:00:00Z' })).toBe('2026-03-01T00:00:00Z')
+    expect(runEndedAt({})).toBeNull()
+  })
+
+  it('a late exit keeps the contact blocked even when the last step was long ago', () => {
+    const NOW = new Date('2026-05-08T12:00:00Z').getTime()
+    const history = [{ contact_id: 'a', status: 'exited', last_processed_at: '2026-01-01T00:00:00Z', exited_at: '2026-05-05T00:00:00Z' }]
+    expect(findBlockedByCooldown(history, 7, NOW)).toEqual(new Set(['a']))
+  })
+})
+
+describe('planReenrolments includePreviousRuns (COOLDOWN.1)', () => {
+  const NOW = new Date('2026-05-08T12:00:00Z').getTime()
+  const row = { id: 'e', contact_id: 'a', status: 'completed', last_processed_at: '2026-01-01T00:00:00Z', source_ref: 'p2',
+    metadata: { previous_runs: [{ source_ref: 'p1' }] } }
+
+  it('refuses a ref an earlier run carried only when asked to', () => {
+    expect(planReenrolments([row], 30, 'p1', NOW).get('a').decision).toBe('reactivate')
+    expect(planReenrolments([row], 30, 'p1', NOW, { includePreviousRuns: true }).get('a').decision).toBe('same_source')
+    expect(planReenrolments([row], 30, 'p3', NOW, { includePreviousRuns: true }).get('a').decision).toBe('reactivate')
+    expect(planReenrolments([row], 30, null, NOW, { includePreviousRuns: true }).get('a').decision).toBe('reactivate')
   })
 })

@@ -12,8 +12,12 @@
 //   - The time is a wall-clock HH:MM on the shift's own date, at the studio's
 //     clock (locations.timezone), never the server's.
 //   - It may not be in the future: an arrival is something that happened.
-//   - A stamp the phone recorded (arrival_source 'geofence') is the device's
-//     record and is never overwritten here. A manual stamp may be corrected.
+//   - Any stamp may be corrected: a manual one, and (ARRIVALFIX.2) one the
+//     phone recorded (arrival_source 'geofence'), which until then could not
+//     be fixed when the phone fired late, early or at the wrong shift. The
+//     phone's own staff_attendance_events row is never touched, and the
+//     correction's event row keeps the previous time and source, so the
+//     device's record survives. A corrected stamp becomes 'manual'.
 //   - A cancelled assignment is not a shift (404, like a missing one).
 //
 // Pure: no IO.
@@ -35,9 +39,18 @@ export function manualArrivalAction(row) {
   // An inferred ("on site") arrival carries no stamp of its own; the coach's
   // earlier shift holds it. Nothing to correct on this row.
   if (row.arrival_inferred) return null
-  const sources = Array.isArray(row.sources) ? row.sources : []
-  if (sources.includes('geofence')) return null
-  return sources.includes(MANUAL_ARRIVAL_SOURCE) ? 'edit' : null
+  // ARRIVALFIX.2 — a phone (geofence) arrival is correctable too.
+  return 'edit'
+}
+
+/**
+ * Whether a report row's arrival was recorded by the coach's phone and not
+ * yet corrected by hand (the dialog says the phone's record is kept).
+ * @param {{ actual_start?: string|null, sources?: string[] }} row
+ */
+export function isPhoneArrival(row) {
+  const sources = Array.isArray(row?.sources) ? row.sources : []
+  return !!row?.actual_start && sources.includes('geofence') && !sources.includes(MANUAL_ARRIVAL_SOURCE)
 }
 
 /**
@@ -54,13 +67,6 @@ export function manualArrivalAction(row) {
 export function decideManualArrival({ assignment, time, zone, nowMs = Date.now() }) {
   if (!assignment || assignment.status === 'cancelled' || !assignment.block?.block_date) {
     return { ok: false, status: 404, error: 'Not found' }
-  }
-  if (assignment.arrived_at && assignment.arrival_source !== MANUAL_ARRIVAL_SOURCE) {
-    return {
-      ok: false,
-      status: 409,
-      error: "This arrival was recorded by the coach's phone and cannot be changed here.",
-    }
   }
   if (!HHMM.test(String(time ?? ''))) {
     return { ok: false, status: 400, error: 'Use a time as HH:MM (24h).' }

@@ -60,7 +60,6 @@ import { invoicesQueueProvider } from './providers/invoices-queue'
 import { issuesProvider } from './providers/issues'
 import { agentRequestsProvider } from './providers/agent-requests'
 import { hyroxSessionsProvider } from './providers/hyrox-sessions'
-import { hostEventsProvider } from './providers/host-events'
 import { offerPurchasesProvider } from './providers/offer-purchases'
 import { trialPurchasesProvider } from './providers/trial-purchases'
 import { corpPromoClaimsProvider } from './providers/corp-promo-claims'
@@ -92,8 +91,9 @@ export const APPROVALS_PROVIDERS = Object.freeze([
   // HYROX-TC.2 — coach review of AI-generated Hyrox Training Club
   // sessions before they publish to the studio TV.
   hyroxSessionsProvider,
-  // HOST-APPROVALS.1 — host events pending review (org-scoped).
-  hostEventsProvider,
+  // HOSTAUTOPUB.1 — host events (HOST-APPROVALS.1's org-scoped provider)
+  // are gone from the queue: a host publishes with no approval. Rows left in
+  // pending_review from before are decided on /settings/hosts.
   // OFFERS.6 — paid sale-offer purchases awaiting Glofox fulfilment.
   offerPurchasesProvider,
   // PAIDTRIAL.2 — paid trial purchases whose Glofox grant needs a hand

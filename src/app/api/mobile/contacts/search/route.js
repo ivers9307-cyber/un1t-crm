@@ -29,6 +29,7 @@ import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { hasMobilePermission } from '@/lib/permissions'
 import { logWarn } from '@/lib/log'
+import { escapeLikePattern } from '@/lib/like-escape'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -38,8 +39,11 @@ export const MOBILE_CONTACT_SEARCH_COLUMNS =
 export const MOBILE_CONTACT_SEARCH_DEFAULT = 40
 export const MOBILE_CONTACT_SEARCH_MAX = 100
 
-// Commas, parentheses and % are PostgREST or()/ilike control characters.
-const clean = (s) => String(s || '').replace(/[,%()]/g, '').trim()
+// Commas, parentheses and % are PostgREST or()/ilike control characters, and
+// PostgREST reads `*` in a like value as `%`, so it cannot be escaped: all are
+// stripped. SECGAPS.1 — what is left goes through escapeLikePattern() per
+// token, so `_` and `\` match literally; the only wildcards are ours.
+const clean = (s) => String(s || '').replace(/[,%()*]/g, '').trim()
 
 function parseLimit(raw) {
   const n = Number.parseInt(String(raw ?? ''), 10)
@@ -72,7 +76,8 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
     // "smith dean" finds "Dean Smith"; a token with ≥4 digits also matches the
     // phone columns.
     for (const token of term.split(/\s+/).filter(Boolean)) {
-      const ors = [`name.ilike.%${token}%`, `email.ilike.%${token}%`, `first_name.ilike.%${token}%`, `last_name.ilike.%${token}%`]
+      const lit = escapeLikePattern(token)
+      const ors = [`name.ilike.%${lit}%`, `email.ilike.%${lit}%`, `first_name.ilike.%${lit}%`, `last_name.ilike.%${lit}%`]
       const digits = token.replace(/\D/g, '')
       if (digits.length >= 4) ors.push(`phone.ilike.%${digits}%`, `wa_phone.ilike.%${digits}%`)
       q = q.or(ors.join(','))

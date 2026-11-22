@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
-import { assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { logError } from '@/lib/log'
 import { resolveRearmPatch } from '@/lib/agent/core'
 import { validateBody } from '@/lib/validate'
@@ -17,7 +17,10 @@ const PatchConversationBody = z.object({
 export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'ig')
+  // SECGAPS.1 — 'ig' rides the web `whatsapp` key: a coarse any-studio check
+  // here, the decision at the conversation's own studio once it is read (the
+  // WhatsApp thread routes' INBOXLOC.1 rule).
+  const perm = requireWebWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const { searchParams } = new URL(request.url)
@@ -35,6 +38,8 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
   // Caller must belong to the conversation's location.
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  const permHere = requireWebWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   // Newest rows first then reversed for display — ascending+limit returns
   // the OLDEST rows, which froze the thread pane once a conversation
@@ -68,7 +73,10 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
 export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'ig')
+  // SECGAPS.1 — 'ig' rides the web `whatsapp` key: a coarse any-studio check
+  // here, the decision at the conversation's own studio once it is read (the
+  // WhatsApp thread routes' INBOXLOC.1 rule).
+  const perm = requireWebWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, PatchConversationBody)
@@ -84,6 +92,8 @@ export const PATCH = withAuth({ permission: null, location: false }, async ({ us
   }
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  const permHere = requireWebWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   // AGENT-REARM.1 — resolving a handed-off thread hands it straight back
   // to the agent: the human engagement is closed, the agent is on duty
