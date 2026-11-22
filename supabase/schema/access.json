@@ -1,7 +1,7 @@
 {
   "format": 1,
-  "through_migration": 859,
-  "latest_applied_version": "20261119182844",
+  "through_migration": 868,
+  "latest_applied_version": "20261122141918",
   "policies": [
     ["ac_sessions","no_anon_or_authenticated_access",false,["anon","authenticated"],"*","false","false"],
     ["achievement_rules","Anyone signed in reads active rules",true,["authenticated"],"r","(is_active OR private.auth_is_master())",null],
@@ -1212,7 +1212,6 @@
     {"key":"invoices","bundle":"bundle_team"},
     {"key":"invoices_inbox","bundle":"bundle_money"},
     {"key":"landing_page","bundle":"bundle_marketing"},
-    {"key":"lead_radar","bundle":"bundle_sales"},
     {"key":"mcp_access","bundle":"bundle_sales"},
     {"key":"orders","bundle":"bundle_money"},
     {"key":"pipeline","bundle":"bundle_sales"},
