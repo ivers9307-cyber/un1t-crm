@@ -66,6 +66,12 @@ Changes to the inbound webhook:
   instead of failing on the unique constraint. This follows the rule in
   `docs/rules/crons-webhooks.md`: an event is never marked processed when it
   recorded nothing.
+- **A repeat delivery is processed again.** (Added at the whole-branch review.)
+  Storing is idempotent, so a delivery whose dedup key is already claimed is
+  not dropped: it runs the same steps and adds nothing if everything is
+  stored. This covers a release that itself failed and a request the platform
+  killed partway. A failed write of the file's path fails the call, so the
+  provider retries it.
 - **Keep the body.** Store the plain-text body (trimmed to 20,000 characters)
   on the row in a new `email_body_text` column, and show it on the open
   invoice.
@@ -77,7 +83,9 @@ Changes to the inbound webhook:
   attachment is stored, read once, and set aside by preparation as
   `document_type: other`. When an email has no other usable attachment its
   inline images are kept, because a phone sends a photographed receipt as an
-  inline image.
+  inline image. An inline image of 100 KB or more is always kept, for the
+  same reason when the photo arrives beside a PDF (added at the whole-branch
+  review; to confirm with Richard).
 - **Judge a file by its bytes.** An attachment declared as a generic type
   (`application/octet-stream`) is accepted when its bytes are a PDF or a
   supported image.
@@ -274,6 +282,12 @@ into the two piles. Nothing is sent to Xero by the clean-up.
    routes removed. Then the backlog clean-up.
 4. **Weekly email.**
 5. **Trusted suppliers**, only on request.
+
+Not yet covered by any phase: an email whose attachments total more than
+about 3.3 MB exceeds the platform's request limit and never reaches the
+webhook (no row, no stray). The support inbox solves the same problem with
+`postmark-inbound-shim`; the invoices webhook needs the same treatment in its
+own PR.
 
 Each phase is its own PR with its own changelog entry.
 
