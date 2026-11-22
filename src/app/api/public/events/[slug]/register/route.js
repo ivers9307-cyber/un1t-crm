@@ -9,7 +9,8 @@
 //   3. Validate team_size against allowed_team_sizes
 //   4. Wave validation (mig 083) + per-wave capacity check
 //   5. Find-or-create the captain contact
-//   6. Find-or-create the team by (location_id, name); update size. A
+//   6. Find-or-create the team by (event, name) (resolveEventTeam,
+//      TEAMNAMES.1); update size. A
 //      find_team solo is deduped by person instead and always gets a fresh
 //      team row of its own (FINDTEAM.8), which every later refusal discards
 //      again (FINDTEAM.9: discardSoloTeam), so attempts never pile up rows.
@@ -359,7 +360,7 @@ export async function POST(request, props) {
 
     // Synthetic 1-person team (team_id is NOT NULL on the registration).
     // Name includes the email so two leads with the same name don't
-    // collide on the (location_id, name) unique constraint.
+    // collide on the (race_event_id, name) unique index (mig 870).
     const leadTeamName = `${leadName || 'Lead'} \u2014 ${leadEmail}`
     // EVENTTEAM.1 — same team rule as every other signup.
     const leadTeam = await resolveEventTeam(db, {
@@ -639,7 +640,8 @@ export async function POST(request, props) {
       const name = attempt === 1 ? baseName : `${baseName} ${attempt}`
       const { data: soloTeam, error: soloTeamErr } = await db
         .from('teams')
-        .insert({ location_id: race.location_id, name, size: 1, captain_contact_id: captainContactId })
+        // TEAMNAMES.1 — a team row belongs to its event (mig 870).
+        .insert({ location_id: race.location_id, race_event_id: race.id, name, size: 1, captain_contact_id: captainContactId })
         .select('id')
         .single()
       if (soloTeamErr) {
@@ -682,8 +684,9 @@ export async function POST(request, props) {
 
   // ─── re-book handling (EVENTS-REBOOK) ─────────────────────────────
   // A team holds at most ONE registration per event (UNIQUE
-  // (race_event_id, team_id)); teams are keyed by name, so re-submitting
-  // the same team name lands on the same team. Instead of the old hard
+  // (race_event_id, team_id)); a team row belongs to one event and is keyed
+  // by name there (TEAMNAMES.1), so re-submitting the same team name lands on
+  // the same team. Instead of the old hard
   // "a registration already exists" error we:
   //   • pending_payment + a still-pending payment → RESUME it: return the
   //     existing payment so the buyer is sent back to their OWN

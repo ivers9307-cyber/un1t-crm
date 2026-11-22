@@ -19,6 +19,7 @@ import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { wouldFit } from '@/lib/event-signups'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { holdingPlaces } from '@/lib/entry-policy'
+import { resolveEventTeam } from '@/lib/event-team'
 
 /**
  * Register one person for an event when it's FREE for them.
@@ -107,35 +108,26 @@ export async function registerSoloEventEntry(db, { race, waveId, contact, member
     return { ok: false, reason: 'requires_payment', totalCents: pricing.total_cents }
   }
 
-  // Team find-or-create by (location_id, name) — the route's exact
-  // pattern including the UNIQUE-violation race.
-  let teamId
-  const { data: foundTeam } = await db.from('teams')
-    .select('id')
-    .eq('location_id', race.location_id)
-    .eq('name', fullName)
-    .maybeSingle()
-  if (foundTeam) {
-    teamId = foundTeam.id
-    await db.from('teams').update({ size: 1, captain_contact_id: contact.id }).eq('id', teamId)
-  } else {
-    const { data: insertedTeam, error: teamErr } = await db.from('teams')
-      .insert({ location_id: race.location_id, name: fullName, size: 1, captain_contact_id: contact.id })
-      .select('id')
-      .single()
-    if (teamErr) {
-      if (teamErr.code === '23505') {
-        // K8 — `.maybeSingle()`: the unique-violation refetch. 0 rows falls
-        // through to the `if (!teamId)` db_error return below, so it must not
-        // arrive as a discarded error. (location_id, name) is uniquely indexed.
-        const { data: again } = await db.from('teams')
-          .select('id').eq('location_id', race.location_id).eq('name', fullName).maybeSingle()
-        teamId = again?.id
-      }
-      if (!teamId) return { ok: false, reason: 'db_error', message: teamErr.message }
-    } else {
-      teamId = insertedTeam.id
-    }
+  // EVENTTEAM.1 + TEAMNAMES.1 — the same team rule as the public route: the
+  // person's own team at this event is reused, anyone else's name gets a fresh
+  // row under the next free suffix, never a takeover of another entry's team.
+  const resolved = await resolveEventTeam(db, {
+    locationId: race.location_id,
+    raceEventId: race.id,
+    name: fullName,
+    size: 1,
+    captainContactId: contact.id,
+  })
+  if (!resolved.ok) return { ok: false, reason: 'db_error', message: resolved.message || resolved.reason }
+  const teamId = resolved.teamId
+  if (resolved.reused) {
+    // Already entered here under this team: refuse before touching its roster.
+    const { data: here, error: hereErr } = await db.from('race_registrations')
+      .select('id').eq('race_event_id', race.id).eq('team_id', teamId).limit(1)
+    if (hereErr) return { ok: false, reason: 'db_error', message: hereErr.message }
+    if (here && here.length > 0) return { ok: false, reason: 'already_registered' }
+    const { error: sizeErr } = await db.from('teams').update({ size: 1 }).eq('id', teamId)
+    if (sizeErr) return { ok: false, reason: 'db_error', message: sizeErr.message }
   }
 
   // Roster row for the race-day UI.
