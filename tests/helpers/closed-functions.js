@@ -175,6 +175,10 @@ export const CLOSED_FUNCTIONS = [
     why: 'POLICYATOMIC.1 reading-time update for ANY profile id; the views route checks ownership and calls it as service_role' },
   { fn: 'public.reconcile_contact_studios_batch', args: '(uuid, integer)', closedBy: 846,
     why: 'RECONCILEBATCH.1: DEFINER batch of the nightly contact_studios reconcile over a contact-id range; only the service-role cron calls it' },
+  { fn: 'public.upsert_supplier_default', args: '(uuid, text, text, text, text, text, text)', closedBy: 872,
+    why: 'INVOICEPREP.3: writes supplier coding memory for any studio; only the service-role invoice routes call it' },
+  { fn: 'public.claim_invoice_analysis_batch', args: '(integer)', closedBy: 872,
+    why: 'INVOICEPREP.3: claims queued invoice rows across studios for reading; only the service-role cron calls it' },
 ]
 
 /** The client roles a closed function is closed to. */
