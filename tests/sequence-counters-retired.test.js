@@ -47,14 +47,18 @@ describe('sequence counters stay retired (SEQCOUNTERS.1)', () => {
     expect(hits.map((f) => path.relative(ROOT, f))).toEqual([])
   }, SCAN_TIMEOUT_MS)
 
-  // openapi.js is the measured case: its `// the /api/shelly/* request
-  // vocabulary` comment opened a "block comment" that a regex stripper closed
-  // thousands of lines later. Inject in the middle of the file (inside that
-  // span) and near the end; the guard's own matcher must see both.
+  // openapi.js was the measured case (its `// the /api/shelly/* request
+  // vocabulary` comment opened a "block comment" a regex stripper closed
+  // thousands of lines later) until RETIRE.2 cut it to the API-key routes.
+  // ScheduleCalendar.jsx has the same shape: line 20's `// … /shifts/* …`
+  // would open one that only closes at the first JSX comment, ~1,250 lines
+  // on. Inject inside that span and near the end; the guard's own matcher
+  // must see both.
   it('canary: reads injected into a big real file with /* in its comments are still seen', () => {
-    const real = readFileSync(path.join(ROOT, 'src/lib/openapi.js'), 'utf8')
+    const real = readFileSync(path.join(ROOT, 'src/components/ScheduleCalendar.jsx'), 'utf8')
     const lines = real.split('\n')
-    expect(lines.length).toBeGreaterThan(5000)
+    expect(lines.length).toBeGreaterThan(2000)
+    expect(lines.slice(0, 40).some((l) => /\/\/.*\/\*/.test(l))).toBe(true)
     for (const at of [Math.floor(lines.length / 4), lines.length - 5]) {
       const copy = [...lines]
       copy.splice(at, 0, "seq.total_enrolled; db.rpc('increment_sequence_completed')")

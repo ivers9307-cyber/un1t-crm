@@ -27,11 +27,10 @@ const GONE = {
   coachConflictsForBlock: [],
   isBlockUnstaffedFuture: [],
   fetchUnstaffedBlocksThisWeek: [],
-  // Two negative assertions stay: the web's proof that it never asks the old
-  // route, and the API reference's proof that it no longer documents it.
+  // One negative assertion stays: the web's proof that it never asks the old
+  // route. (The API reference stopped documenting session routes in RETIRE.2.)
   '/api/schedule/working-time': [
     'src/components/ScheduleCalendar.candidates.test.jsx',
-    'src/lib/openapi.test.js',
   ],
   // GLOFOXWRITEJUDGE.1 — master-only, no caller, and it sent the { user_id,
   // event_id } body Glofox's validation rejects ("The model field is

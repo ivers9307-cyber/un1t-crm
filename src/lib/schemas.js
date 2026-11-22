@@ -235,9 +235,6 @@ export const LEAD_SOURCE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,79}$/
 export const leadSourceSchema = z.string().trim().toLowerCase().min(1).max(80)
   .regex(LEAD_SOURCE_PATTERN, 'A lead source is letters, digits, _ or - (no spaces), at most 80 characters.')
 
-// Deal status — open/won/lost from migration 001.
-export const dealStatusSchema = z.enum(['open', 'won', 'lost'])
-
 // Activity / note types are open-ended in the DB; bound length only.
 export const activityTypeSchema = z.string().min(1).max(50)
 
@@ -323,8 +320,8 @@ export const passwordRequirements = Object.freeze([
 
 /**
  * Returns null when the password meets every requirement, or a short
- * human-readable message naming the first failing rule. Used both by
- * the Zod schema and by client-side form pre-flight.
+ * human-readable message naming the first failing rule. Used by the
+ * server routes and by client-side form pre-flight.
  */
 export function validatePasswordComplexity(password) {
   if (typeof password !== 'string') return 'Password must be a string'
@@ -333,14 +330,6 @@ export function validatePasswordComplexity(password) {
   }
   return null
 }
-
-export const passwordSchema = z.string()
-  .min(8, 'Password must be at least 8 characters')
-  .max(200, 'Password is too long')
-  .refine(v => /[a-z]/.test(v), 'Password must contain a lowercase letter')
-  .refine(v => /[A-Z]/.test(v), 'Password must contain an uppercase letter')
-  .refine(v => /\d/.test(v),    'Password must contain a digit')
-  .refine(v => /[^a-zA-Z0-9]/.test(v), 'Password must contain a symbol')
 
 // Audience filter: { logic: 'and'|'or', filters: [...] }. The actual
 // per-filter validation lives in src/lib/audience-filter.js (because it

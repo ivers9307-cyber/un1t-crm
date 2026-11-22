@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { authenticateApiKey, requireApiKeyOrManager, orgLocationIds } from '@/lib/api-auth'
+import { requireApiKeyOrManager, orgLocationIds } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
@@ -175,60 +175,6 @@ export async function POST(request) {
   }
 
   // Return in a shape similar to Pipedrive (the original integration contract)
-  return NextResponse.json({ success: true, data })
-}
-
-// GET /api/contacts — List contacts with optional filters
-// Query params: lead_status, lead_source, limit, offset
-// Replaces Pipedrive GET /v1/persons?filter_id=X
-export async function GET(request) {
-  const auth = await authenticateApiKey(request)
-  if (!auth.ok) return auth.response
-
-  const { searchParams } = new URL(request.url)
-  const db = createServerClient()
-
-  let query = db.from('contacts').select('*')
-
-  // APIKEYS.3 — per-org key: restrict to the org's own locations so a
-  // leaked key can't read another org's contacts. Only a cookie session
-  // has orgId null here.
-  if (auth.orgId) {
-    const locIds = await orgLocationIds(db, auth.orgId)
-    // Empty org → match nothing (sentinel uuid) rather than everything.
-    query = query.in('location_id', locIds.length ? locIds : ['00000000-0000-0000-0000-000000000000'])
-  }
-
-  // Location filter
-  const locationId = searchParams.get('location_id')
-  if (locationId) query = query.eq('location_id', locationId)
-
-  // Filters
-  // Accepts ?lead_status= or ?pipeline_stage_slug= for the canonical
-  // stage slug (CLASSIFY.2 — old name kept as alias for back-compat).
-  const status = searchParams.get('pipeline_stage_slug') || searchParams.get('lead_status')
-  if (status) query = query.eq('pipeline_stage_slug', status)
-
-  const source = searchParams.get('lead_source')
-  if (source) query = query.eq('lead_source', source)
-
-  // Credits filter (replaces Pipedrive saved filter for active trials)
-  const minCredits = searchParams.get('min_credits')
-  if (minCredits) query = query.gt('trial_credits_remaining', parseInt(minCredits))
-
-  // Pagination — default 50, hard cap at 200 to prevent a caller from
-  // pulling the whole table with ?limit=10000.
-  const requestedLimit = parseInt(searchParams.get('limit') || '50', 10)
-  const limit = Math.min(Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 50), 200)
-  const offset = Math.max(0, parseInt(searchParams.get('offset') || '0', 10) || 0)
-  query = query.range(offset, offset + limit - 1).order('created_at', { ascending: false })
-
-  const { data, error } = await query
-
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  }
-
   return NextResponse.json({ success: true, data })
 }
 
