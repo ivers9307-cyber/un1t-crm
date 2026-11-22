@@ -12,8 +12,19 @@
 //     consistent across the webhook + UI uploaders
 //   • SUPPORTED_MIME re-export for early rejection in the webhook
 //
-// Pure functions only. No DB calls — those live in the API routes
-// so they can be tested without mocking Supabase.
+// Also owns the pure helpers for storing a forwarded email
+// (classifyInboundAttachments, inboundBodyText, attachmentMessageId,
+// sha256Hex). They lean on sniffMimeFromBytes, htmlToPlainText and
+// sanitizeDbText, so this file is for server routes only. The classifier
+// also takes attachments whose bytes were read back from Storage (INVOICEPREP.2).
+//
+// No DB calls — those live in the API routes so they can be tested
+// without mocking Supabase.
+
+import { createHash } from 'node:crypto'
+import { sniffMimeFromBytes } from '@/lib/invoice-extraction'
+import { htmlToPlainText } from '@/lib/email-content'
+import { sanitizeDbText } from '@/lib/db-safe-text'
 
 // Inbound mail subdomain. The marketing site keeps un1tdublin.com's
 // MX records pointing at the public mailbox; mail.un1tdublin.com
@@ -140,4 +151,110 @@ export function safeInboundFilename(name) {
   const cleaned = name.replace(/[\x00-\x1f\x7f]/g, '').replace(/[\\/]/g, '_').trim()
   if (!cleaned) return null
   return cleaned.slice(0, 200)
+}
+
+export const INBOUND_BODY_MAX_CHARS = 20000
+
+// Signature logos are a few KB; a photographed receipt is far bigger.
+export const INLINE_IMAGE_SKIP_MAX_BYTES = 100 * 1024
+
+const stripCid = (id) => String(id || '').trim().replace(/^<|>$/g, '')
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** True when the HTML references exactly this ContentID (cid:a1 is not cid:a10). */
+function referencesCid(html, cid) {
+  if (!cid) return false
+  return new RegExp(`cid:${escapeRegExp(cid)}(?=["'\\s>)]|$)`, 'i').test(html)
+}
+
+/** The signature-logo test: a small image the HTML body shows by its ContentID. */
+function looksInline({ mime, sizeBytes, contentId }, html) {
+  return String(mime || '').startsWith('image/')
+    && sizeBytes < INLINE_IMAGE_SKIP_MAX_BYTES
+    && referencesCid(html, stripCid(contentId))
+}
+
+/** Bytes the caller already holds (read back from Storage), else the base64 Content. */
+function attachmentBytes(att) {
+  const held = att?.bytes
+  if (held instanceof Uint8Array && held.length > 0) {
+    return Buffer.isBuffer(held) ? held : Buffer.from(held.buffer, held.byteOffset, held.length)
+  }
+  return Buffer.from(String(att?.Content || ''), 'base64')
+}
+
+/**
+ * Sort a Postmark Attachments array into what we can store.
+ *
+ * An image is skipped as a signature logo or similar only when all hold:
+ * the HTML body references its ContentID (cid:...), it is under
+ * INLINE_IMAGE_SKIP_MAX_BYTES, and the email has something else usable.
+ * A phone can send a receipt photo inline beside a PDF, and that photo is
+ * large, so size keeps it. The type is judged by the bytes first, because
+ * senders mislabel PDFs. The bytes are `att.bytes` when the caller has
+ * already read them back from Storage, else the decoded `Content`.
+ * `index` is the position in the original array (see attachmentMessageId);
+ * a null entry is passed over and keeps its position.
+ *
+ * `alreadyStored` describes attachments of this email that an earlier
+ * delivery stored and the caller left out of `attachments`. One that is not
+ * itself a logo still counts as "something else usable", so a retry judges
+ * the logos the way the first delivery did. Unknown type or size counts as
+ * not a logo.
+ *
+ * @param {Array<any> | undefined} attachments
+ * @param {string | undefined | null} htmlBody
+ * @param {{ alreadyStored?: Array<{ mime?: string | null, sizeBytes?: number | null, contentId?: string | null }> }} [options]
+ */
+export function classifyInboundAttachments(attachments, htmlBody, options = {}) {
+  const html = String(htmlBody || '')
+  const candidates = []
+  const unsupported = new Set()
+  ;(Array.isArray(attachments) ? attachments : []).forEach((att, index) => {
+    const bytes = attachmentBytes(att)
+    const mime = (bytes.length ? sniffMimeFromBytes(bytes) : null) || att?.ContentType || ''
+    if (!INBOUND_INVOICE_SUPPORTED_MIME.has(mime)) {
+      // Here the mime is always the declared type: a sniffed one is supported.
+      if (mime) unsupported.add(mime)
+      return
+    }
+    // Empty or undecodable content is simply not usable.
+    if (!bytes.length) return
+    const inline = looksInline({ mime, sizeBytes: bytes.length, contentId: att.ContentID }, html)
+    candidates.push({ name: att.Name, mime, bytes, index, inline })
+  })
+
+  const storedReal = (options.alreadyStored || []).filter((s) =>
+    !s || s.mime == null || s.sizeBytes == null || !looksInline({ mime: s.mime, sizeBytes: s.sizeBytes, contentId: s.contentId }, html),
+  ).length
+  const real = candidates.filter((c) => !c.inline)
+  const keep = real.length + storedReal > 0 ? real : candidates
+  const skippedInline = candidates.length - keep.length
+  const usable = keep.map(({ name, mime, bytes, index }) => ({ name, mime, bytes, index }))
+  return { usable, skippedInline, unsupportedTypes: [...unsupported] }
+}
+
+/**
+ * Plain text of the email body for storage: TextBody, else HtmlBody
+ * flattened, trimmed and capped. Null when there is nothing.
+ */
+export function inboundBodyText(body) {
+  const text = typeof body?.TextBody === 'string' && body.TextBody.trim()
+    ? body.TextBody
+    : typeof body?.HtmlBody === 'string' ? htmlToPlainText(body.HtmlBody) : ''
+  // Sanitise after cutting so a split surrogate pair is cleaned up too.
+  const out = sanitizeDbText(String(text || '').trim().slice(0, INBOUND_BODY_MAX_CHARS))
+  return out || null
+}
+
+/**
+ * Per-attachment message id: the first keeps the bare id so rows
+ * written before multi-attachment support still match.
+ */
+export function attachmentMessageId(messageId, index) {
+  return index === 0 ? messageId : `${messageId}-${index}`
+}
+
+export function sha256Hex(bytes) {
+  return createHash('sha256').update(bytes).digest('hex')
 }

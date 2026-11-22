@@ -118,7 +118,11 @@ function creditUnreadLine(accounts) {
 // with plain English for the common case.
 function bookingFailedExplanation(code) {
   if (code === 'YOU_HAVE_NO_CREDITS_LEFT') {
-    return 'Glofox refused the automatic booking — no class credits left on their account. Grant a credit in Glofox, then approve to retry.'
+    // CREDITWINDOW.1 — Glofox gives this same code when the account HAS
+    // credits but they expire before the class date (22 Nov 2026), so the
+    // card says so: "grant a credit" alone sent staff looking for a balance
+    // problem on an account showing seven credits.
+    return 'Glofox refused the automatic booking: no class credits it can use for this class. If the account shows credits, they expire before the class date. Extend the expiry or add a credit in Glofox, then approve to retry.'
   }
   return `Glofox refused the automatic booking (${code}). Fix the issue in Glofox, then approve to retry.`
 }

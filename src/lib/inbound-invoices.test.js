@@ -15,6 +15,11 @@ import {
   canTransitionInboundInvoice,
   inboundInvoiceStoragePath,
   safeInboundFilename,
+  classifyInboundAttachments,
+  INLINE_IMAGE_SKIP_MAX_BYTES,
+  inboundBodyText,
+  attachmentMessageId,
+  sha256Hex,
 } from './inbound-invoices.js'
 
 describe('parseInboundAddress', () => {
@@ -217,5 +222,128 @@ describe('the permission hint names the address the parser accepts', () => {
 
   it('control — the apex (no mail. subdomain) is still rejected', () => {
     expect(parseInboundAddress('stillorgan-invoices@un1tdublin.com')).toBeNull()
+  })
+})
+
+const PDF_B64 = Buffer.from('%PDF-1.4 x').toString('base64')
+const PNG_B64 = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.alloc(8),
+]).toString('base64')
+const pdf = (over = {}) => ({ Name: 'a.pdf', ContentType: 'application/pdf', Content: PDF_B64, ...over })
+const logo = (over = {}) => ({ Name: 'logo.png', ContentType: 'image/png', Content: PNG_B64, ContentID: 'cid1', ...over })
+const html = '<p>See attached</p><img src="cid:cid1">'
+
+describe('classifyInboundAttachments', () => {
+  it('skips an inline image when the email also has a real attachment', () => {
+    const r = classifyInboundAttachments([pdf(), logo()], html)
+    expect(r.usable.map((a) => a.name)).toEqual(['a.pdf'])
+    expect(r.skippedInline).toBe(1)
+  })
+  it('keeps inline images when nothing else is usable (a phone photo of a receipt)', () => {
+    const r = classifyInboundAttachments([logo({ Name: 'IMG_1.png' })], html)
+    expect(r.usable).toHaveLength(1)
+    expect(r.skippedInline).toBe(0)
+  })
+  it('does not treat an image as inline when the body never references its ContentID', () => {
+    expect(classifyInboundAttachments([pdf(), logo()], '<p>hi</p>').usable).toHaveLength(2)
+  })
+  it('matches a ContentID wrapped in angle brackets, ignoring case', () => {
+    const r = classifyInboundAttachments([pdf(), logo({ ContentID: '<CID1>' })], html)
+    expect(r.skippedInline).toBe(1)
+  })
+  it('judges a mislabelled PDF by its bytes', () => {
+    const r = classifyInboundAttachments([pdf({ ContentType: 'application/octet-stream' })], '')
+    expect(r.usable[0].mime).toBe('application/pdf')
+  })
+  it('reports unsupported types and empty content', () => {
+    const r = classifyInboundAttachments([{ Name: 'a.docx', ContentType: 'application/msword', Content: 'AAAA' }, pdf({ Content: '' })], '')
+    expect(r.usable).toHaveLength(0)
+    expect(r.unsupportedTypes).toEqual(['application/msword'])
+  })
+  it('de-duplicates unsupported types', () => {
+    const doc = { Name: 'a.docx', ContentType: 'application/msword', Content: 'AAAA' }
+    expect(classifyInboundAttachments([doc, doc], '').unsupportedTypes).toEqual(['application/msword'])
+  })
+  it('keeps the original position as index and the raw bytes', () => {
+    const r = classifyInboundAttachments([logo(), pdf()], html)
+    expect(r.usable[0].index).toBe(1)
+    expect(Buffer.isBuffer(r.usable[0].bytes)).toBe(true)
+  })
+  it('tolerates a missing attachment list', () => {
+    expect(classifyInboundAttachments(undefined, undefined).usable).toEqual([])
+  })
+  const pngOf = (size) => Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.alloc(size - 8),
+  ]).toString('base64')
+  it('keeps a large inline image beside a PDF (a photographed receipt)', () => {
+    expect(INLINE_IMAGE_SKIP_MAX_BYTES).toBe(100 * 1024)
+    const r = classifyInboundAttachments([pdf(), logo({ Content: pngOf(150 * 1024) })], html)
+    expect(r.usable).toHaveLength(2)
+    expect(r.skippedInline).toBe(0)
+  })
+  it('skips a small inline image beside a PDF', () => {
+    const r = classifyInboundAttachments([pdf(), logo({ Content: pngOf(20 * 1024) })], html)
+    expect(r.usable.map((a) => a.name)).toEqual(['a.pdf'])
+    expect(r.skippedInline).toBe(1)
+  })
+  it('matches the ContentID exactly: a1 is not referenced by cid:a10', () => {
+    const r = classifyInboundAttachments([pdf(), logo({ ContentID: 'a1' })], '<img src="cid:a10">')
+    expect(r.skippedInline).toBe(0)
+    expect(r.usable).toHaveLength(2)
+  })
+  it('uses bytes already read from Storage when Content is empty', () => {
+    const doc = { Name: 'a.docx', ContentType: 'application/msword', Content: 'AAAA' }
+    const staged = { Name: 'big.pdf', ContentType: 'application/octet-stream', Content: '', bytes: Buffer.from('%PDF-1.4 x') }
+    const r = classifyInboundAttachments([doc, staged], '')
+    expect(r.usable).toHaveLength(1)
+    expect(r.usable[0]).toMatchObject({ name: 'big.pdf', mime: 'application/pdf', index: 1 })
+    expect(Buffer.isBuffer(r.usable[0].bytes)).toBe(true)
+  })
+  it('accepts a Uint8Array as the bytes', () => {
+    const r = classifyInboundAttachments([{ Name: 'a.pdf', Content: '', bytes: new Uint8Array(Buffer.from('%PDF-1.4 x')) }], '')
+    expect(r.usable[0]).toMatchObject({ mime: 'application/pdf', index: 0 })
+    expect(Buffer.isBuffer(r.usable[0].bytes)).toBe(true)
+  })
+  it('skips an inline logo when the only other attachment is already stored', () => {
+    const r = classifyInboundAttachments([null, logo()], html, { alreadyStored: [{ mime: 'application/pdf', sizeBytes: 5000 }] })
+    expect(r.usable).toEqual([])
+    expect(r.skippedInline).toBe(1)
+  })
+  it('counts a stored attachment with unknown type or size as a real one', () => {
+    const r = classifyInboundAttachments([null, logo()], html, { alreadyStored: [{ mime: null, sizeBytes: null }] })
+    expect(r.skippedInline).toBe(1)
+  })
+  it('keeps an inline image when the only stored one was itself an inline image', () => {
+    const r = classifyInboundAttachments([null, logo()], '<img src="cid:cid1"><img src="cid:cid0">', {
+      alreadyStored: [{ mime: 'image/png', sizeBytes: 16, contentId: 'cid0' }],
+    })
+    expect(r.usable).toHaveLength(1)
+    expect(r.skippedInline).toBe(0)
+  })
+  it('matches a ContentID at the end of the body or before a delimiter', () => {
+    expect(classifyInboundAttachments([pdf(), logo({ ContentID: 'a1' })], 'see cid:A1').skippedInline).toBe(1)
+    expect(classifyInboundAttachments([pdf(), logo({ ContentID: 'a.1' })], "<img src='cid:a.1'>").skippedInline).toBe(1)
+    expect(classifyInboundAttachments([pdf(), logo({ ContentID: 'a.1' })], '<img src="cid:aX1">').skippedInline).toBe(0)
+  })
+})
+
+describe('inboundBodyText', () => {
+  it('prefers TextBody, falls back to HtmlBody, trims to 20000', () => {
+    expect(inboundBodyText({ TextBody: ' hello ' })).toBe('hello')
+    expect(inboundBodyText({ HtmlBody: '<p>hello</p>' })).toBe('hello')
+    expect(inboundBodyText({ TextBody: 'x'.repeat(30000) })).toHaveLength(20000)
+    expect(inboundBodyText({})).toBeNull()
+  })
+})
+
+describe('attachmentMessageId and sha256Hex', () => {
+  it('numbers attachments the way existing rows are numbered', () => {
+    expect(attachmentMessageId('m', 0)).toBe('m')
+    expect(attachmentMessageId('m', 2)).toBe('m-2')
+  })
+  it('hashes bytes as lowercase hex sha256', () => {
+    expect(sha256Hex(Buffer.from('abc'))).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
   })
 })
