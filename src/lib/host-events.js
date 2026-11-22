@@ -22,6 +22,7 @@ import { z } from 'zod'
 import { uuidLike } from '@/lib/schemas'
 import { PricingTiersSchema } from '@/lib/pricing-tiers'
 import { RegistrationQuestionsSchema } from '@/lib/registration-questions'
+import { DEFAULT_EVENT_HOLD_MINUTES } from '@/lib/event-hold'
 
 // The four lifecycle states a host event moves through.
 export const HOST_EVENT_STATUSES = ['draft', 'pending_review', 'published', 'rejected']
@@ -75,6 +76,93 @@ export function hostEventDefaults() {
 // tier, session time, studio or studio-hours change on a published event sent
 // it back to pending_review) is gone with the staff approval step: the PUT
 // route writes the edit and leaves the status where it was.
+
+// HOSTSTUDIONOTICE.1 — the studio part of that rule comes back as a NOTICE,
+// never a check: staff are TOLD when a published host event starts to use a
+// studio, or uses its studio for longer (the link holds the studio's Shelly
+// timers on for the event: src/lib/shelly/studio-events.js). The save is never
+// blocked or changed by it. Same rules as SHELLYEVENTS.1/.2:
+//   'studio'       — linked INTO a studio, or moved to a different one. Moving
+//                    OUT (to "somewhere else", null) switches nothing on and
+//                    never counts. Judged only when `changes` carries the key.
+//   'studio_hours' — still linked, and a session now starts before the first
+//                    current start or after the last one, or the hold grows
+//                    (the studio's hold setting, or the event's own duration
+//                    when that is longer). A session inside the current hours,
+//                    a shorter duration and a removed session do not count.
+// An EXISTING session re-timed outside the current hours counts too (the old
+// session_time re-review caught that; it is gone).
+export const STUDIO_USE_REASONS = ['studio', 'studio_hours']
+
+const hhmm = (t) => String(t || '').slice(0, 5)
+const positiveMinutes = (v) => {
+  const n = Number(v)
+  return v != null && Number.isFinite(n) && n > 0 ? n : null
+}
+// Mirrors holdMinutes() in src/lib/shelly/studio-events.js (not imported:
+// this module also runs in the host's browser).
+const studioHold = (durationMinutes, studioHoldMinutes) =>
+  Math.max(positiveMinutes(studioHoldMinutes) ?? DEFAULT_EVENT_HOLD_MINUTES, positiveMinutes(durationMinutes) ?? 0)
+
+/**
+ * How a still-linked event's studio hours grow with an edit. Pure.
+ * @param {{ venue_location_id?: string|null, duration_minutes?: number|null, waves?: Array<{ start_time: string }> }} current
+ *   the row before the edit (waves: its sessions; HH:MM or HH:MM:SS)
+ * @param {{ venue_location_id?: string|null, duration_minutes?: number|null, session_times?: string[] }} changes
+ *   the edit: every session start time it leaves (new and existing)
+ * @param {{ studioHoldMinutes?: number|null }} [opts] the studio's hold setting
+ * @returns {{ earlier: string|null, later: string|null, longerHoldMinutes: number|null }}
+ *   the new first / last start time when it moved outward, the new hold when longer
+ */
+export function studioHoursGrowth(current, changes, { studioHoldMinutes = null } = {}) {
+  const none = { earlier: null, later: null, longerHoldMinutes: null }
+  const c = changes || {}
+  const linked = current?.venue_location_id != null
+    && !('venue_location_id' in c && c.venue_location_id == null)
+  if (!linked) return none
+  const before = (Array.isArray(current.waves) ? current.waves : []).map((w) => hhmm(w?.start_time)).filter(Boolean).sort()
+  const after = (Array.isArray(c.session_times) ? c.session_times : []).map(hhmm).filter(Boolean).sort()
+  const out = { ...none }
+  if (before.length > 0 && after.length > 0) {
+    if (after[0] < before[0]) out.earlier = after[0]
+    if (after[after.length - 1] > before[before.length - 1]) out.later = after[after.length - 1]
+  }
+  if ('duration_minutes' in c) {
+    const nextHold = studioHold(c.duration_minutes, studioHoldMinutes)
+    if (nextHold > studioHold(current.duration_minutes, studioHoldMinutes)) out.longerHoldMinutes = nextHold
+  }
+  return out
+}
+
+/**
+ * Which studio-use changes an edit to a host event makes, in
+ * STUDIO_USE_REASONS order; [] when nothing studio-related grew. Pure: the
+ * caller decides it only matters for a PUBLISHED event.
+ */
+export function studioUseGrew(current, changes, opts = {}) {
+  const c = changes || {}
+  const studio = 'venue_location_id' in c
+    && c.venue_location_id != null
+    && c.venue_location_id !== (current?.venue_location_id ?? null)
+  const g = studioHoursGrowth(current || {}, c, opts)
+  const hit = { studio, studio_hours: !!(g.earlier || g.later || g.longerHoldMinutes) }
+  return STUDIO_USE_REASONS.filter((r) => hit[r])
+}
+
+/**
+ * The `changes` studioUseGrew compares, from a HostEventSchema-shaped body.
+ * duration_minutes is ALWAYS present, as the PUT route writes it
+ * (`input.duration_minutes ?? null`): no duration means the default hold.
+ */
+export function studioChangesFromInput(input) {
+  const i = input || {}
+  const sessions = Array.isArray(i.sessions) ? i.sessions : []
+  return {
+    ...('venue_location_id' in i ? { venue_location_id: i.venue_location_id ?? null } : {}),
+    session_times: sessions.map((s) => s?.start_time).filter(Boolean),
+    duration_minutes: i.duration_minutes ?? null,
+  }
+}
 
 // Strict input schema for a host-submitted event. `.strict()` rejects
 // any extra keys so a host can't smuggle UN1T-only fields (member

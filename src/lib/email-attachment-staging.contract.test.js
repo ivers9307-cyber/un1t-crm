@@ -116,6 +116,46 @@ describe('the Edge Function keeps its deployment-critical properties', () => {
     expect(source).not.toMatch(/const forwardUrl = .*\$\{urlToken\}/)
   })
 
+  it('declares an invoices target with its own bucket, path and secrets', () => {
+    expect(source).toMatch(/bucket:\s*'inbound-invoices'/)
+    expect(source).toMatch(/forwardPath:\s*'\/api\/webhooks\/invoices-inbound'/)
+    expect(source).toMatch(/tokenEnv:\s*'POSTMARK_INBOUND_WEBHOOK_TOKEN'/)
+    expect(source).toMatch(/previousEnv:\s*'POSTMARK_INBOUND_WEBHOOK_TOKEN_PREVIOUS'/)
+  })
+
+  it('keeps the support target on the pinned constants', () => {
+    expect(source).toMatch(/bucket:\s*EMAIL_ATTACHMENT_BUCKET/)
+    expect(source).toMatch(/forwardPath:\s*FORWARD_PATH/)
+    expect(source).toMatch(/tokenEnv:\s*'POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN'/)
+    expect(source).toMatch(/previousEnv:\s*'POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN_PREVIOUS'/)
+  })
+
+  it('never builds the forward from the caller-supplied token', () => {
+    expect(source).not.toMatch(/\$\{urlToken\}/)
+  })
+
+  it('uploads into the matched target’s bucket, not a fixed one', () => {
+    // The only place the bucket constant may be interpolated is the target list.
+    expect(source).not.toMatch(/storage\/v1\/object\/\$\{EMAIL_ATTACHMENT_BUCKET\}/)
+    expect(source).toMatch(/storage\/v1\/object\/\$\{bucket\}/)
+  })
+
+  it('passes the matched target’s bucket to the upload and builds the forward from its path and primary', () => {
+    expect(source).toMatch(/uploadObject\([^)]*target\.bucket/)
+    expect(source).toMatch(/const forwardUrl = .*\$\{target\.forwardPath\}\/\$\{primary\}/)
+    expect(source).toMatch(/const primary = hit\.c\.primary/)
+  })
+
+  it('a target without a primary secret cannot match, not even through PREVIOUS', () => {
+    expect(source).toMatch(/previous: primary \? \(Deno\.env\.get\(target\.previousEnv\) \|\| ''\) : ''/)
+    expect(source).toMatch(/!!c\.primary && safeEqual\(urlToken, c\.primary\)/)
+  })
+
+  it('only compares secrets across different configured targets', () => {
+    expect(source).toMatch(/const active = configured\.filter\(\(c\) => c\.primary\)/)
+    expect(source).not.toMatch(/configured\.length > 1/)
+  })
+
   it('upserts, because the key is deterministic across a Postmark retry', () => {
     expect(source).toMatch(/'x-upsert': 'true'/)
   })

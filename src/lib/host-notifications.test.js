@@ -10,6 +10,8 @@ vi.mock('@/lib/push-dedup', async (importOriginal) => ({ ...(await importOrigina
 
 import { assembleHostRecipients, buildReviewedEmail, buildPublishedEmail, notifyHostEventReviewed, notifyAdminsEventPublished } from './host-notifications'
 import * as hostNotifications from './host-notifications'
+import { describeStudioChange, buildStudioChangeEmail, notifyAdminsEventStudioChange } from './host-notifications'
+import { createFakeDb } from '../../tests/helpers/fake-db.js'
 import { sendPushOnce } from '@/lib/push-dedup'
 import { getNotificationCategory } from '@/lib/notifications-registry'
 import { sendTransactionalEmail } from '@/lib/postmark'
@@ -129,6 +131,83 @@ describe('HOSTAUTOPUB.1 — notifyAdminsEventPublished is a notice, not an appro
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     await notifyAdminsEventPublished({ db: fakeDb(), event, host: { id: 'h1', name: 'Acme' }, orgId: 'o1' })
     expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+})
+
+describe('HOSTSTUDIONOTICE.1 — studio change notice', () => {
+  const ORG = 'o0000000-0000-4000-8000-000000000001'
+  const OTHER_ORG = 'o0000000-0000-4000-8000-000000000002'
+  const HATCH = 'l0000000-0000-4000-8000-000000000001'
+  const STILL = 'l0000000-0000-4000-8000-000000000002'
+  const FOREIGN = 'l0000000-0000-4000-8000-000000000003'
+  const event = { id: 'e1', name: 'Gala', location_id: HATCH }
+  const host = { id: 'h1', name: 'Acme' }
+  const db = () => createFakeDb({
+    tables: {
+      locations: [
+        { id: HATCH, name: 'Hatch Street', organization_id: ORG },
+        { id: STILL, name: 'Stillorgan', organization_id: ORG },
+        { id: FOREIGN, name: 'Elsewhere Gym', organization_id: OTHER_ORG },
+      ],
+      profile_locations: [
+        { profile_id: 'p1', location_id: HATCH, role: 'owner' },
+        { profile_id: 'p2', location_id: STILL, role: 'staff' },
+        { profile_id: 'p3', location_id: FOREIGN, role: 'owner' },
+      ],
+      profiles: [{ id: 'p1', email: 'Owner@X.ie' }, { id: 'p2', email: 'staff@x.ie' }, { id: 'p3', email: 'other@y.ie' }],
+    },
+  })
+
+  it('describes each change in words', () => {
+    expect(describeStudioChange({ reasons: ['studio'], studioName: 'Hatch Street' })).toBe('linked to Hatch Street')
+    expect(describeStudioChange({ reasons: ['studio'], studioName: 'Hatch Street', previousStudioName: 'Stillorgan' })).toBe('moved from Stillorgan to Hatch Street')
+    expect(describeStudioChange({ reasons: ['studio_hours'], growth: { later: '21:00' }, studioName: 'Hatch Street' })).toBe('now runs later (last session 21:00) at Hatch Street')
+    expect(describeStudioChange({ reasons: ['studio_hours'], growth: { earlier: '07:00', longerHoldMinutes: 150 }, studioName: 'Hatch Street' }))
+      .toBe('now starts earlier (first session 07:00) and holds the studio for longer (2 h 30 min) at Hatch Street')
+  })
+  it('the email names the event, the host and the change, asks nothing, and links the staff edit page', () => {
+    const m = buildStudioChangeEmail({ event, host: { name: 'A<b>' }, change: 'linked to Hatch Street', appUrl: 'https://crm.x.com' })
+    expect(m.subject).toBe('Host event studio change: Gala')
+    expect(m.htmlBody).toContain('A&lt;b&gt;')
+    expect(m.htmlBody).toContain('linked to Hatch Street')
+    expect(m.htmlBody).toContain('Nothing needs your approval')
+    expect(m.htmlBody).toContain('https://crm.x.com/events/e1/edit')
+  })
+  it("pushes and emails the org's admins only, in the registered category", async () => {
+    await notifyAdminsEventStudioChange({ db: db(), event, host, orgId: ORG, reasons: ['studio'], studioId: HATCH, sessionTimes: ['10:00', '12:00'] })
+    expect(sendPushOnce).toHaveBeenCalledTimes(1)
+    const [, key, recipients, payload] = sendPushOnce.mock.calls[0]
+    expect(key).toBe(`host_event_studio:e1:${HATCH}:10:00-12:00:`)
+    expect(recipients).toEqual(['p1'])
+    expect(payload).toEqual({
+      title: 'Host event studio change',
+      body: 'Acme changed "Gala": linked to Hatch Street.',
+      category: 'host_event_review',
+      data: { type: 'host_event_studio_change', event_id: 'e1' },
+    })
+    expect(getNotificationCategory(payload.category)).toBeTruthy()
+    expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
+    expect(sendTransactionalEmail.mock.calls[0][0]).toMatchObject({ to: 'owner@x.ie', subject: 'Host event studio change: Gala', tag: 'host-event-studio-change', locationId: HATCH })
+  })
+  it("names a move between the org's studios, and never reads another org's studio name", async () => {
+    await notifyAdminsEventStudioChange({ db: db(), event, host, orgId: ORG, reasons: ['studio'], studioId: HATCH, previousStudioId: STILL })
+    expect(sendPushOnce.mock.calls[0][3].body).toBe('Acme changed "Gala": moved from Stillorgan to Hatch Street.')
+    vi.clearAllMocks()
+    await notifyAdminsEventStudioChange({ db: db(), event, host, orgId: ORG, reasons: ['studio'], studioId: FOREIGN })
+    expect(sendPushOnce.mock.calls[0][3].body).toBe('Acme changed "Gala": linked to a studio.')
+  })
+  it('says nothing when there is no reason', async () => {
+    await notifyAdminsEventStudioChange({ db: db(), event, host, orgId: ORG, reasons: [], studioId: HATCH })
+    expect(sendPushOnce).not.toHaveBeenCalled()
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+  })
+  it('a push failure never blocks the email', async () => {
+    sendPushOnce.mockRejectedValueOnce(new Error('expo down'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await notifyAdminsEventStudioChange({ db: db(), event, host, orgId: ORG, reasons: ['studio_hours'], growth: { later: '21:00' }, studioId: HATCH, sessionTimes: ['10:00', '21:00'] })
+    expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
+    expect(sendTransactionalEmail.mock.calls[0][0].htmlBody).toContain('now runs later (last session 21:00) at Hatch Street')
     warn.mockRestore()
   })
 })

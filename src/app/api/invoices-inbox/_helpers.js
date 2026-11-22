@@ -24,6 +24,7 @@ export const ROW_SELECT = `
   xero_synced_at, xero_error,
   xero_bill_status, xero_bill_paid_at, xero_bill_amount_paid, xero_bill_amount_due, xero_bill_status_synced_at,
   xero_total_tax, xero_tax_mismatch,
+  email_body_text, not_invoice_reason, skipped_attachment_count,
   created_at, updated_at,
   location:location_id ( id, name ),
   quality_reviewer:quality_reviewed_by ( id, full_name ),

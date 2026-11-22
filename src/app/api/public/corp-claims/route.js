@@ -55,7 +55,8 @@ import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } fro
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
-import { zoneOfLocation } from '@/lib/location-time'
+import { zoneOfLocation, dayStrIn } from '@/lib/location-time'
+import { readPromoCreditLastDay } from '@/lib/glofox-credit-window'
 import { logWarn, logError } from '@/lib/log'
 import { resolvePublicPageRequest, pageRequestRefusal } from '@/lib/landing-pages'
 import { resolveChosenClass, classColumnsFor, chosenClassRefusal } from '@/lib/class-first-choice'
@@ -280,6 +281,18 @@ export async function POST(request) {
     if (!choice.ok) {
       const refusal = chosenClassRefusal(choice.code, { timetable_unavailable: classFirstStepCopy(promoBlock, 'corp_promo').timetable_unavailable_text })
       return NextResponse.json(refusal.body, { status: refusal.status })
+    }
+    // CREDITWINDOW.1 — a class the Glofox plan's credits expire before would
+    // be refused by Glofox after the grant (YOU_HAVE_NO_CREDITS_LEFT with
+    // credits showing). The page does not list it; refuse it here the same
+    // way, before the lead or the row. An unknown window refuses nothing.
+    if (isGlofox && choice.chosen?.starts_at) {
+      const zone = zoneOfLocation(location)
+      const lastDay = await readPromoCreditLastDay(db, { locationId, promo, zone })
+      if (lastDay && dayStrIn(new Date(choice.chosen.starts_at), zone) > lastDay) {
+        const refusal = chosenClassRefusal('class_unavailable')
+        return NextResponse.json(refusal.body, { status: refusal.status })
+      }
     }
   }
 

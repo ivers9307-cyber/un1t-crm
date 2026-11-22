@@ -1,8 +1,9 @@
 // OPENWEEK.1 — the server's judgement of an open week claim's picks. Never a database.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ read: vi.fn() }))
+const mocks = vi.hoisted(() => ({ read: vi.fn(), lastDay: vi.fn() }))
 vi.mock('@/lib/public-classes', () => ({ readPublicClasses: mocks.read }))
+vi.mock('@/lib/glofox-credit-window', async (orig) => ({ ...(await orig()), readPromoCreditLastDay: mocks.lastDay }))
 
 import { resolveOpenWeekPicks, insertClaimClasses } from './open-week-claim'
 
@@ -15,6 +16,7 @@ const CLASSES = [cls('early', '2026-11-22'), cls('a', '2026-11-24'), cls('b', '2
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.read.mockResolvedValue({ classes: CLASSES, error: null })
+  mocks.lastDay.mockResolvedValue(null)
 })
 
 const run = (eventIds, now = NOW) => resolveOpenWeekPicks({}, { locationId: 'L', blocks: [], promo: PROMO, zone: DUB, eventIds, now })
@@ -48,6 +50,20 @@ describe('resolveOpenWeekPicks', () => {
     expect(await run(['early'])).toEqual({ ok: false, code: 'class_unavailable', eventId: 'early' })
     expect(await run(['late'])).toEqual({ ok: false, code: 'class_unavailable', eventId: 'late' })
     expect(await run(['gone'])).toEqual({ ok: false, code: 'class_unavailable', eventId: 'gone' })
+  })
+})
+
+describe('the plan credit window (CREDITWINDOW.1)', () => {
+  it('refuses a class in the open week that the plan credits expire before', async () => {
+    mocks.lastDay.mockResolvedValue('2026-11-24')
+    expect(await run(['a'])).toMatchObject({ ok: true })
+    expect(await run(['b'])).toEqual({ ok: false, code: 'class_unavailable', eventId: 'b' })
+    expect(mocks.lastDay).toHaveBeenCalledWith({}, { locationId: 'L', promo: PROMO, zone: DUB, now: NOW })
+  })
+
+  it('an unknown window caps nothing', async () => {
+    mocks.lastDay.mockResolvedValue(null)
+    expect(await run(['a', 'b'])).toMatchObject({ ok: true })
   })
 })
 

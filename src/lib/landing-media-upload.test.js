@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { parseUploadResponse, captureVideoPoster, videoOutputCap, compressImageForUpload } from './landing-media-upload'
 
 // Fake Response factory — just the bits parseUploadResponse touches.
@@ -87,5 +87,16 @@ describe('compressImageForUpload', () => {
   })
   it('passes a missing file through untouched', async () => {
     await expect(compressImageForUpload(null)).resolves.toBeNull()
+  })
+  it('never re-encodes a GIF: a canvas would keep only its first frame (GIFLIB.1)', async () => {
+    const decode = vi.fn(async () => { throw new Error('a GIF must not be decoded') })
+    vi.stubGlobal('createImageBitmap', decode)
+    try {
+      const file = { type: 'image/gif', name: 'header.gif', size: 900 * 1024 }
+      await expect(compressImageForUpload(file)).resolves.toBe(file)
+      expect(decode).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

@@ -51,6 +51,10 @@ import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 import { BRANDING_BUCKET_MIME_TYPES, BRANDING_BUCKET_MAX_BYTES } from '../src/lib/branding-media.js'
 
+// GIFLIB.1: mig 869 added image/gif after this migration; at 675 the bucket
+// held mig 252's nine types.
+const MIMES_AT_675 = BRANDING_BUCKET_MIME_TYPES.filter((m) => m !== 'image/gif')
+
 const MIG_675 = readFileSync(
   path.resolve(import.meta.dirname, '../supabase/migrations/675_branding_bucket_client_writes_off.sql'), 'utf8')
 
@@ -269,7 +273,7 @@ describe('before 675 — the hole (prod on 30 Sep 2026)', () => {
     const b = await bucket()
     expect(b.public).toBe(true)
     expect(Number(b.file_size_limit)).toBe(BRANDING_BUCKET_MAX_BYTES)
-    expect([...b.allowed_mime_types].sort()).toEqual([...BRANDING_BUCKET_MIME_TYPES].sort())
+    expect([...b.allowed_mime_types].sort()).toEqual([...MIMES_AT_675].sort())
   })
 })
 
@@ -309,7 +313,7 @@ describe('after 675', () => {
         'image/vnd.microsoft.icon', 'video/mp4', 'video/webm', 'video/quicktime'],
     })
     expect(Number(b.file_size_limit)).toBe(BRANDING_BUCKET_MAX_BYTES)
-    expect([...b.allowed_mime_types].sort()).toEqual([...BRANDING_BUCKET_MIME_TYPES].sort())
+    expect([...b.allowed_mime_types].sort()).toEqual([...MIMES_AT_675].sort())
   })
 
   it('other buckets and their policies are untouched', async () => {

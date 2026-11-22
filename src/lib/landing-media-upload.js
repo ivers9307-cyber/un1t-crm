@@ -261,6 +261,9 @@ export async function captureVideoPoster(file) {
  */
 export async function compressImageForUpload(file) {
   if (!file || !(file.type || '').startsWith('image/')) return file
+  // GIFLIB.1: a GIF goes up as it is. Drawing it to a canvas keeps only the
+  // first frame, so compressing one would silently stop it moving.
+  if (file.type === 'image/gif') return file
   try {
     return await compressImageFile(file)
   } catch {

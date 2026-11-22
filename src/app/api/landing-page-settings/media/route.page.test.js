@@ -96,7 +96,8 @@ describe('POST /api/landing-page-settings/media with page_id', () => {
   it('the kind and size rules are unchanged on the page branch', async () => {
     getCurrentUser.mockResolvedValue(ORG_ADMIN)
     const form = new FormData()
-    form.set('file', new File([new Uint8Array([1])], 'a.gif', { type: 'image/gif' }))
+    // GIFLIB.1: a GIF is allowed now, so the refused example is an SVG.
+    form.set('file', new File([new Uint8Array([1])], 'a.svg', { type: 'image/svg+xml' }))
     form.set('page_id', PAGE.trial)
     const res = await POST(new Request('http://localhost/x', { method: 'POST', body: form }))
     expect(res.status).toBe(400)
@@ -118,6 +119,30 @@ describe('POST /api/landing-page-settings/media identity', () => {
     const res = await upload({ location_id: STILL, kind: 'image' })
     expect(res.status).toBe(200)
     expect(uploads[0].path).toMatch(new RegExp(`^landing-page/${STILL}/[0-9a-f-]{36}\\.png$`))
+  })
+
+  it('a GIF is stored as a .gif with its own content type (GIFLIB.1)', async () => {
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
+    const form = new FormData()
+    form.set('file', new File([new Uint8Array([71, 73, 70])], 'header.gif', { type: 'image/gif' }))
+    form.set('location_id', STILL)
+    form.set('kind', 'image')
+    const res = await POST(new Request('http://localhost/api/landing-page-settings/media', { method: 'POST', body: form }))
+    expect(res.status).toBe(200)
+    expect(uploads[0].path).toMatch(new RegExp(`^landing-page/${STILL}/[0-9a-f-]{36}\\.gif$`))
+    expect(uploads[0].opts.contentType).toBe('image/gif')
+  })
+
+  it('a type outside the list is still refused, and the message names GIF', async () => {
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
+    const form = new FormData()
+    form.set('file', new File([new Uint8Array([1])], 'a.svg', { type: 'image/svg+xml' }))
+    form.set('location_id', STILL)
+    form.set('kind', 'image')
+    const res = await POST(new Request('http://localhost/api/landing-page-settings/media', { method: 'POST', body: form }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Unsupported file type. Use PNG, JPEG, WebP or GIF.')
+    expect(uploads).toEqual([])
   })
 
   it('location_id branch unchanged: a non-member is refused as before', async () => {

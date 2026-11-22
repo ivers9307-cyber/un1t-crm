@@ -43,8 +43,11 @@
 //     the bucket.
 //  5. The LATEST migration that writes the bucket row sets file_size_limit
 //     to BRANDING_BUCKET_MAX_BYTES and allowed_mime_types to
-//     BRANDING_BUCKET_MIME_TYPES, and every migration from SCAN_FROM on, on
-//     its own, never makes the bucket private and sets no other limit.
+//     BRANDING_BUCKET_MIME_TYPES (mig 869 today, GIFLIB.1: it added
+//     image/gif), and every migration from SCAN_FROM on, on its own, never
+//     makes the bucket private and sets no other limit; a migration a later
+//     one superseded keeps exactly the list it was written with
+//     (SUPERSEDED_MIMES).
 //  The one exemption from 3-5 is a rollback migration named
 //  `<NNN>_brandingbucket1_rollback.sql`, and only for the three statements
 //  that re-create the 30 Sep policies with their exact prod text; anything
@@ -73,6 +76,9 @@ import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const BUCKET_MIGRATION = 675
+// GIFLIB.1: the migration that last set the bucket's limits (it added
+// image/gif). The latest bucket-row write must be this one.
+const LIMITS_MIGRATION = 869
 // Scanned from 631, not 675: migration numbers are reserved ahead of time and
 // a lower number can merge later (631 is the HELD #1774, 663 #1849, 674 C94
 // when 675 was written).
@@ -346,14 +352,21 @@ export function bucketLimits(stmt) {
   return { sizeLimit, mimes, makesPrivate: pub !== null && !/^true$/i.test(pub) }
 }
 
-/** Every way the bucket-row writes in `sql` break the bucket (private, or limits out of step with branding-media.js). */
-export function bucketRowProblems(sql) {
+// A migration that set the bucket's limits BEFORE a later one widened them
+// keeps the list it was written with, and only that list: mig 675 holds mig
+// 252's nine types, which mig 869 (GIFLIB.1) then widened with image/gif.
+const SUPERSEDED_MIMES = {
+  '675_branding_bucket_client_writes_off.sql': EXPECTED_MIMES.filter((m) => m !== 'image/gif'),
+}
+
+/** Every way the bucket-row writes in `sql` break the bucket (private, or limits out of step with `expectedMimes`: branding-media.js unless the file is superseded). */
+export function bucketRowProblems(sql, expectedMimes = EXPECTED_MIMES) {
   const problems = []
   for (const s of bucketRowWrites(sql)) {
     const l = bucketLimits(s)
     if (l.makesPrivate) problems.push(`makes the bucket private: ${s}`)
     if (l.sizeLimit !== undefined && l.sizeLimit !== EXPECTED_SIZE) problems.push(`file_size_limit ${l.sizeLimit}, expected ${EXPECTED_SIZE}: ${s}`)
-    if (l.mimes !== undefined && JSON.stringify(l.mimes) !== JSON.stringify(EXPECTED_MIMES)) problems.push(`allowed_mime_types ${JSON.stringify(l.mimes)}, expected ${JSON.stringify(EXPECTED_MIMES)}: ${s}`)
+    if (l.mimes !== undefined && JSON.stringify(l.mimes) !== JSON.stringify(expectedMimes)) problems.push(`allowed_mime_types ${JSON.stringify(l.mimes)}, expected ${JSON.stringify(expectedMimes)}: ${s}`)
   }
   return problems
 }
@@ -585,11 +598,11 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
       `${file} lets a client session write or list the branding bucket (mig 675). Upload through a service-role route instead`).toEqual([])
   })
 
-  it('the latest write to the bucket row is mig 675, keeps it public and matches src/lib/branding-media.js', () => {
+  it('the latest write to the bucket row is mig 869, keeps it public and matches src/lib/branding-media.js', () => {
     const writes = migrationFiles().flatMap((f) => bucketRowWrites(scanText(f)).map((s) => ({ f, s })))
-    expect(writes.length).toBeGreaterThan(4)   // mig 013's INSERT, 248, 250, 252, 675's UPDATE
+    expect(writes.length).toBeGreaterThan(5)   // mig 013's INSERT, 248, 250, 252, 675's and 869's UPDATE
     const last = writes.at(-1)
-    expect(last.f.startsWith(`${BUCKET_MIGRATION}_`), last.f).toBe(true)
+    expect(last.f.startsWith(`${LIMITS_MIGRATION}_`), last.f).toBe(true)
     expect(bucketLimits(last.s), `${last.f} must set the bucket's limits from src/lib/branding-media.js`).toEqual({
       sizeLimit: EXPECTED_SIZE,
       mimes: EXPECTED_MIMES,
@@ -600,7 +613,7 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
   it.each(later)('%s: never makes the bucket private, and any limit it sets matches branding-media.js', (file) => {
     // Per file, not only the latest write: a lower-numbered file that merges
     // after 675 runs on prod AFTER it, yet sorts before it here.
-    expect(bucketRowProblems(scanText(file)),
+    expect(bucketRowProblems(scanText(file), SUPERSEDED_MIMES[file]),
       `${file} breaks the branding bucket: keep it public (pages and emails load it by URL) and set its limits from src/lib/branding-media.js`).toEqual([])
   })
 
