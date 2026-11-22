@@ -73,3 +73,36 @@ describe('/api/campaigns/[id]/preview', () => {
     expect(await res.json()).toEqual({ success: false, error: 'Could not count the audience' })
   })
 })
+
+describe('SECGAPS.1 — email at the campaign\'s studio', () => {
+  const get = (id) => GET(new Request('http://localhost/x'), ctx(id))
+  const post = (id) => POST(new Request('http://localhost/x', { method: 'POST' }), ctx(id))
+
+  it('403 on both verbs without email at the campaign\'s studio, nothing counted', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { email: false } } }, LOC_A))
+    for (const res of [await get(CAMP_A), await post(CAMP_A)]) {
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ success: false, error: 'No email permission at this location' })
+    }
+    expect(buildAudienceQueryAsync).not.toHaveBeenCalled()
+  })
+
+  it('judged at the campaign\'s studio, not the active one', async () => {
+    const emailAtAOnly = person({ [LOC_A]: { role: 'staff', permissions: { email: true } }, [LOC_B]: { role: 'staff', permissions: { email: false } } }, LOC_A)
+    getCurrentUser.mockResolvedValue(emailAtAOnly)
+    expect((await get(CAMP_B)).status).toBe(403)
+    expect((await post(CAMP_B)).status).toBe(403)
+    expect(buildAudienceQueryAsync).not.toHaveBeenCalled()
+
+    const emailAtBOnly = person({ [LOC_A]: { role: 'staff', permissions: { email: false } }, [LOC_B]: { role: 'staff', permissions: { email: true } } }, LOC_A)
+    getCurrentUser.mockResolvedValue(emailAtBOnly)
+    expect(await (await get(CAMP_B)).json()).toEqual({ success: true, audience_count: 12 })
+  })
+
+  it('another studio\'s campaign stays a 404, even without email', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { email: false } } }, LOC_A))
+    expect((await get(CAMP_B)).status).toBe(404)
+    expect((await post(CAMP_B)).status).toBe(404)
+  })
+})
+

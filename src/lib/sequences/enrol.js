@@ -11,14 +11,17 @@
 //      stronger guarantee (one enrolment per contact per sequence EVER,
 //      not one active one), and the difference matters twice below: the
 //      insert can use ON CONFLICT DO NOTHING, which the imagined partial
-//      index would not have supported; and re_enrolment_cooldown_days
-//      cannot actually work against it (see the cooldown note in Tier 2).
+//      index would not have supported; and a re-entry after the cooldown
+//      cannot be a second row (see the cooldown note in Tier 2).
 //
 //   2. Re-enrolment cooldown (mig 090). If a sequence has
 //      re_enrolment_cooldown_days set, a contact who has a recent
 //      terminal (completed/exited) row is blocked until that row
 //      ages out. Without a cooldown set, ANY past terminal row
 //      blocks (preserves the old single-enrolment guarantee).
+//      COOLDOWN.1 — once the cooldown HAS passed, the contact re-enters:
+//      their one row is re-activated in place for a fresh run, and the
+//      run that ended is kept on metadata.previous_runs.
 //
 // The cooldown logic is in ./cooldown.js so the post-DB filter can
 // be tested in isolation.
@@ -38,6 +41,19 @@ import { findBlockedByCooldown, planReenrolments } from './cooldown.js'
 // auto-enrol, inbound webhook) is automatic and respects the flag.
 const MANUAL_LIKE_SOURCE_TYPES = new Set(['manual', 'churn_radar'])
 
+// COOLDOWN.1 — source types whose sourceRef names a KIND of event (the tag,
+// the segment, the stage move, 'created'), so the same ref firing again after
+// the cooldown is a genuinely new occurrence and may re-enter. Every other
+// source type's ref names ONE event (a booking, a purchase, an order, an
+// account, a webhook delivery, an anniversary year): the same ref again is
+// that event offered again — the purchase sweeps re-offer each purchase for
+// 48 hours — and never starts a second run. Unknown types land on the safe
+// side: a repeat of the same ref is refused.
+export const REPEATABLE_REF_SOURCE_TYPES = new Set([
+  'manual', 'audience_match', 'tag_added', 'segment_added', 'segment_removed',
+  'pipeline_stage_change', 'membership_state_change', 'contact_created',
+])
+
 /**
  * @param {object} args
  * @param {string} args.sequenceId
@@ -49,14 +65,16 @@ const MANUAL_LIKE_SOURCE_TYPES = new Set(['manual', 'churn_radar'])
  * @param {number} [args.startStepOrder=0]  UN1TWELCOME.2 — the `current_step_order`
  *   a FRESH insert starts at (a non-negative integer, else it throws), so a
  *   caller can skip step 1. The DUNNING re-activation path always restarts at 0.
- * @param {boolean} [args.allowReenrol=false]  DUNNING.2 — re-activate a
- *   contact's TERMINAL enrolment row (completed / exited) in place when the
- *   sequence's cooldown has passed and the sourceRef differs from the last
- *   run's. Only the dunning paths pass this: the full unique index on
- *   (sequence_id, contact_id) otherwise means one enrolment per contact EVER
- *   (ENROLDEDUP.1), and a member whose card fails again months later must be
- *   reminded again. Every other caller keeps the one-enrolment semantics —
- *   this is deliberately not a cohort-wide re-entry.
+ * @param {boolean} [args.allowReenrol=false]  DUNNING.2 — the dunning
+ *   paths' stricter re-entry: a TERMINAL row is re-activated only when the
+ *   cooldown has passed AND the sourceRef differs from the last run's
+ *   (Glofox re-sends PAST_DUE on every retry of ONE invoice). COOLDOWN.1 —
+ *   every other caller re-enters on the cooldown: once
+ *   re_enrolment_cooldown_days have passed since the last run ended, the row
+ *   is re-activated for a fresh run, as the setting promises — unless the
+ *   sourceRef names one event that already had a run (see
+ *   REPEATABLE_REF_SOURCE_TYPES). With no cooldown set (null/0) nobody ever
+ *   re-enters, on either path.
  * @param {object} [args.metadata=null]  PAYLINK.3 — per-run metadata written
  *   onto the enrolment row (e.g. the overdue reminder's `payment` object:
  *   `{ invoice_id, link, link_suffix, amount, ... }`). Written on a fresh
@@ -140,17 +158,15 @@ export async function enrolContacts({
   // configured cooldown + the contact's history, hand both to the
   // cooldown helper.
   //
-  // ENROLDEDUP.1 — KNOWN DEAD, LEFT AS-IS DELIBERATELY. Against the full
-  // unique index this tier can only ever subtract: once a cooldown elapses
-  // findBlockedByCooldown releases the contact, and the insert below then
-  // hits the index anyway. So a POSITIVE cooldown never grants re-entry —
-  // it only ever behaves like the no-cooldown case. Three live sequences
-  // carry cooldowns (365, 365, 30) configured as though it works.
-  // Not fixed here: the fix is swapping the index for a partial one, which
-  // changes enrolment semantics for every sequence in the estate and would
-  // let an unattended sweep re-mail a whole completed cohort the day a
-  // cooldown expires. That is a deliberate product decision, not a bug fix,
-  // and it does not belong in a PR about chunking and conflict handling.
+  // COOLDOWN.1 — this tier used to be dead (ENROLDEDUP.1 recorded it): once a
+  // cooldown elapsed findBlockedByCooldown released the contact, and the
+  // insert below then hit the full unique index, so a positive cooldown never
+  // granted re-entry. The owner decided (Nov 2026) that the setting means what
+  // it says. Re-entry is NOT a second row: the contact's terminal row is
+  // re-activated in place (the DUNNING.2 mechanism), so the full unique index
+  // keeps guaranteeing at most one enrolment — and so at most one live one —
+  // per person per sequence, and no reader has to choose between rows.
+  // Sequences with no cooldown (null/0) are unchanged: one run per person.
   const { data: seqRow } = await db
     .from('email_sequences')
     .select('re_enrolment_cooldown_days, send_window, location_id')
@@ -185,12 +201,23 @@ export async function enrolContacts({
     blockedFromHistory = findBlockedByCooldown(history, cooldownDays)
     // DUNNING.2 — with allowReenrol, a contact whose latest terminal row is
     // outside the cooldown AND carries a different source_ref is re-activated
-    // in place below. Everyone with history is removed from the INSERT path
-    // either way: an insert for them can only hit the index.
+    // in place below; a refused one counts as skipped.
+    // COOLDOWN.1 — without it, the cooldown decides, plus one guard: a
+    // sourceRef that names one event (REPEATABLE_REF_SOURCE_TYPES above) and
+    // already had a run is never run again. Only the re-activations join the
+    // plan, so a blocked contact keeps the old uncounted-skip quirk the tests
+    // pin.
+    // Everyone with history is removed from the INSERT path either way: an
+    // insert for them can only hit the index.
     if (allowReenrol) {
       reenrolPlan = planReenrolments(history, cooldownDays, sourceRef)
-      for (const cid of reenrolPlan.keys()) blockedFromHistory.add(cid)
+    } else {
+      const refGuard = REPEATABLE_REF_SOURCE_TYPES.has(sourceType) ? null : sourceRef
+      for (const [cid, plan] of planReenrolments(history, cooldownDays, refGuard, Date.now(), { includePreviousRuns: true })) {
+        if (plan.decision === 'reactivate') reenrolPlan.set(cid, plan)
+      }
     }
+    for (const cid of reenrolPlan.keys()) blockedFromHistory.add(cid)
   }
 
   let candidateIds = contactIds
@@ -201,15 +228,21 @@ export async function enrolContacts({
   // sourceType; the MANUAL_LIKE set is exclusively the operator-initiated
   // paths (and the default), which deliberately bypass this gate (manual
   // sends must include host leads — Richard's rule).
+  //
+  // COOLDOWN.1 — the gate covers re-activations too. A re-entry is an
+  // automatic enrolment like any other; before this it was checked only on
+  // the insert path, so a dunning re-run could reach an exempt contact.
   let exemptSkipped = 0
-  if (!MANUAL_LIKE_SOURCE_TYPES.has(sourceType) && candidateIds.length > 0) {
+  const reactivateIds = [...reenrolPlan].filter(([, p]) => p.decision === 'reactivate').map(([cid]) => cid)
+  const gateIds = [...candidateIds, ...reactivateIds]
+  if (!MANUAL_LIKE_SOURCE_TYPES.has(sourceType) && gateIds.length > 0) {
     const exempt = new Set()
     // Chunked .in() by 500 guards the 1k-row cap.
-    for (let i = 0; i < candidateIds.length; i += 500) {
+    for (let i = 0; i < gateIds.length; i += 500) {
       const { data: flags, error } = await db
         .from('contacts')
         .select('id')
-        .in('id', candidateIds.slice(i, i + 500))
+        .in('id', gateIds.slice(i, i + 500))
         .eq('automations_exempt', true)
       // FAIL CLOSED: a transient read failure must abort the enrolment,
       // not fall through to auto-enrolling exempt contacts (the exact
@@ -221,6 +254,7 @@ export async function enrolContacts({
     if (exempt.size > 0) {
       exemptSkipped = exempt.size
       candidateIds = candidateIds.filter(id => !exempt.has(id))
+      for (const id of exempt) reenrolPlan.delete(id)
     }
   }
 
@@ -233,7 +267,7 @@ export async function enrolContacts({
   // window to every windowed sequence's first step would change live behaviour
   // for triggers, dunning and campaigns that this feature does not own.
   let firstFireAt = new Date()
-  if (sourceType === 'un1t_account_created' && candidateIds.length > 0 && (startStepOrder > 0 || hasSendWindow(seqRow?.send_window))) {
+  if (sourceType === 'un1t_account_created' && (candidateIds.length > 0 || reenrolPlan.size > 0) && (startStepOrder > 0 || hasSendWindow(seqRow?.send_window))) {
     // Best-effort: a failed read must not lose the enrolment, so it falls back
     // to firing now (every other sequence's behaviour). Codes and names only.
     try {
@@ -272,25 +306,35 @@ export async function enrolContacts({
       ...(runMeta ? { metadata: runMeta } : {}),
     }))
 
-  // DUNNING.2 — re-activate in place. One UPDATE per contact (dunning is
-  // per-member, never a fan-out), guarded by id + the terminal status we
-  // read so a concurrent activation can never be clobbered. The previous
+  // DUNNING.2 — re-activate in place. One UPDATE per contact, guarded by id +
+  // the terminal status we read so a concurrent activation can never be
+  // clobbered (the loser updates 0 rows and counts as skipped). The previous
   // run is kept on metadata.previous_runs so run history stays honest.
+  // COOLDOWN.1 — every caller now reaches this (see Tier 2). The dunning path
+  // keeps its old shape exactly (step 0, now, old metadata merged under the
+  // new). The general path starts the run like a fresh insert would
+  // (startStepOrder, firstFireAt) and does NOT carry the old run's metadata
+  // forward — a stale template_wait or test flag belongs to the run that
+  // ended — only previous_runs survives. The audience sweep caps how many
+  // contacts it hands over per tick, so this loop stays small.
   let reactivated = 0
   let reenrolSkipped = 0
-  if (allowReenrol && reenrolPlan.size > 0) {
+  if (reenrolPlan.size > 0) {
     const nowIso = new Date().toISOString()
+    const runStartIso = allowReenrol ? nowIso : firstFireAt.toISOString()
+    const runStartStep = allowReenrol ? 0 : startStepOrder
     for (const [, plan] of reenrolPlan) {
       if (plan.decision !== 'reactivate') { reenrolSkipped++; continue }
       const row = plan.row
       const prevMeta = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata : {}
       const previousRuns = Array.isArray(prevMeta.previous_runs) ? prevMeta.previous_runs : []
+      const carriedMeta = allowReenrol ? prevMeta : {}
       const { data: updated, error: updErr } = await db
         .from('sequence_enrollments')
         .update({
           status: 'active',
-          current_step_order: 0,
-          next_step_at: nowIso,
+          current_step_order: runStartStep,
+          next_step_at: runStartIso,
           enrolled_at: nowIso,
           exit_reason: null,
           completed_at: null,
@@ -301,7 +345,7 @@ export async function enrolContacts({
           source_type: sourceType,
           source_ref: sourceRef,
           metadata: {
-            ...prevMeta,
+            ...carriedMeta,
             ...(runMeta || {}),
             previous_runs: [
               ...previousRuns,

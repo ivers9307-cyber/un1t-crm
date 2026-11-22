@@ -87,9 +87,12 @@ describe('AudienceMatchStart', () => {
   })
 })
 
-describe('Re-enrolment cooldown hint (SEQCOOLDOWN.1)', () => {
-  it('no longer promises re-entry', () => {
-    expect(COOLDOWN_HINT.toLowerCase()).not.toMatch(/can re-enter after/)
-    expect(COOLDOWN_HINT.toLowerCase()).toContain('once')
+describe('Re-enrolment cooldown hint (COOLDOWN.1)', () => {
+  it('says a cooldown lets people go through again, and that 0 means once', () => {
+    const hint = COOLDOWN_HINT.toLowerCase()
+    expect(hint).toMatch(/0 and each contact goes through this flow once/)
+    expect(hint).toMatch(/go through it again once that many days have passed since their last run ended/)
+    expect(hint).toMatch(/nobody is ever in the flow twice at the same time/)
+    expect(hint).not.toMatch(/does not let anyone re-enter/)
   })
 })

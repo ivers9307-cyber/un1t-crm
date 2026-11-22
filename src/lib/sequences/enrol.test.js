@@ -258,16 +258,19 @@ describe('enrolContacts — cooldown dedup (tier 2)', () => {
   })
 
   it('allows re-enrolment when cooldown has elapsed', async () => {
-    // 100 days ago, cooldown 30 → out of window, allowed.
+    // 100 days ago, cooldown 30 → out of window, allowed. COOLDOWN.1 — by
+    // re-activating the existing row (an insert could only hit the index).
     const longAgo = new Date(Date.now() - 100 * 86_400_000).toISOString()
-    const { db } = mockDb({
-      history: [{ contact_id: 'a', status: 'completed', last_processed_at: longAgo, created_at: longAgo }],
+    const { db, inserts, updates } = mockDb({
+      history: [{ id: 'e-a', contact_id: 'a', status: 'completed', last_processed_at: longAgo, created_at: longAgo }],
       cooldownDays: 30,
     })
     createServerClient.mockReturnValue(db)
     const out = await enrolContacts({ sequenceId: 's1', contactIds: ['a'] })
     expect(out.enrolled).toBe(1)
     expect(out.skipped).toBe(0)
+    expect(inserts).toHaveLength(0)
+    expect(updates.map((u) => u.filters)).toEqual([[['id', 'e-a'], ['status', 'completed']]])
   })
 
   it('blocks re-enrolment when cooldown has not elapsed', async () => {
@@ -488,12 +491,15 @@ describe('allowReenrol — re-activate a terminal enrolment (DUNNING.2)', () => 
     metadata: null, ...over,
   })
 
-  it('default path is untouched: a terminal row outside the cooldown still only hits the index (skipped, no update)', async () => {
-    const m = mockDb({ history: [old()], cooldownDays: 14, conflictedContactIds: ['a'] })
+  it('COOLDOWN.1 — the default path now re-activates too (a new ref outside the cooldown), with fresh metadata', async () => {
+    const m = mockDb({ history: [old({ metadata: { payment: { invoice_id: 'inv-old' } } })], cooldownDays: 14, conflictedContactIds: ['a'] })
     createServerClient.mockReturnValue(m.db)
     const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'invoice_past_due', sourceRef: 'inv-new' })
-    expect(res).toMatchObject({ enrolled: 0, skipped: 1 })
-    expect(m.updates).toHaveLength(0)
+    expect(res).toMatchObject({ enrolled: 1, reactivated: 1, skipped: 0 })
+    expect(m.inserts).toHaveLength(0)
+    expect(m.updates).toHaveLength(1)
+    // The general path does not carry the ended run's metadata forward.
+    expect(m.updates[0].payload.metadata).toEqual({ previous_runs: [expect.objectContaining({ source_ref: 'inv-old' })] })
   })
 
   it('re-activates the terminal row in place for a new source ref outside the cooldown', async () => {
@@ -585,6 +591,145 @@ describe('allowReenrol — re-activate a terminal enrolment (DUNNING.2)', () => 
     const upd = m.updates[0]
     expect(upd.payload.metadata.previous_runs).toHaveLength(1)
     expect(upd.payload.metadata.previous_runs[0]).toMatchObject({ source_ref: 'inv-old' })
+  })
+})
+
+// COOLDOWN.1 — the cooldown setting means what it says: once it has passed
+// since a contact's run ENDED, the next enrolment re-activates their one row
+// for a fresh run. The full unique index is untouched, so a second live
+// enrolment cannot exist; these pin who re-enters and who does not.
+describe('COOLDOWN.1 — re-entry after the cooldown', () => {
+  const NOW_ISO = '2026-11-22T12:00:00.000Z'
+  const DAY = 86_400_000
+  const ago = (days) => new Date(Date.parse(NOW_ISO) - days * DAY).toISOString()
+  beforeEach(() => { vi.useFakeTimers({ now: new Date(NOW_ISO), toFake: ['Date'] }) })
+  afterEach(() => { vi.useRealTimers() })
+  const ended = (over = {}) => ({
+    id: 'enr-a', contact_id: 'a', status: 'completed', source_type: 'tag_added', source_ref: 'vip',
+    enrolled_at: ago(60), completed_at: null, exited_at: null, last_processed_at: ago(40), exit_reason: null,
+    metadata: { template_wait: { template_id: 't1' }, test: true }, ...over,
+  })
+
+  it('re-enters after the cooldown: the row is re-activated in place, guarded by its status, never inserted', async () => {
+    const m = mockDb({ history: [ended()], cooldownDays: 30 })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'tag_added', sourceRef: 'vip' })
+    expect(res).toEqual({ enrolled: 1, skipped: 0, reactivated: 1 })
+    expect(m.inserts).toHaveLength(0)
+    expect(m.updates).toHaveLength(1)
+    const u = m.updates[0]
+    expect(u.filters).toEqual([['id', 'enr-a'], ['status', 'completed']])
+    expect(u.payload).toMatchObject({
+      status: 'active', current_step_order: 0, exit_reason: null, completed_at: null, exited_at: null,
+      last_processed_at: null, error_count: 0, source_type: 'tag_added', source_ref: 'vip', enrolled_at: NOW_ISO,
+    })
+    // The ended run's per-run state (a template wait, a test flag) stays with it.
+    expect(u.payload.metadata).toEqual({ previous_runs: [{
+      source_type: 'tag_added', source_ref: 'vip', status: 'completed',
+      enrolled_at: ago(60), ended_at: ago(40), exit_reason: null,
+    }] })
+  })
+
+  it('does not re-enter before the cooldown has passed', async () => {
+    const m = mockDb({ history: [ended({ last_processed_at: ago(10) })], cooldownDays: 30 })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'tag_added', sourceRef: 'vip' })
+    expect(res).toMatchObject({ enrolled: 0, reactivated: 0 })
+    expect(m.updates).toHaveLength(0)
+    expect(m.inserts).toHaveLength(0)
+  })
+
+  it('measures the cooldown from when the run ended (exited_at), not from its last step', async () => {
+    const m = mockDb({ history: [ended({ status: 'exited', last_processed_at: ago(60), exited_at: ago(10) })], cooldownDays: 30 })
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'tag_added', sourceRef: 'vip' })
+    expect(m.updates).toHaveLength(0)
+  })
+
+  it.each([null, 0])('with no cooldown (%s) a finished run is final', async (cooldownDays) => {
+    const m = mockDb({ history: [ended({ last_processed_at: ago(900) })], cooldownDays })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'tag_added', sourceRef: 'vip' })
+    expect(res).toMatchObject({ enrolled: 0, reactivated: 0 })
+    expect(m.updates).toHaveLength(0)
+    expect(m.inserts).toHaveLength(0)
+  })
+
+  it('never touches a live enrolment: an active contact is skipped before history is considered', async () => {
+    const m = mockDb({ activeContactIds: ['a'], history: [ended()], cooldownDays: 30 })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'tag_added', sourceRef: 'vip' })
+    expect(res).toEqual({ enrolled: 0, skipped: 1, reactivated: 0 })
+    expect(m.updates).toHaveLength(0)
+    expect(m.historySelects).toHaveLength(0)
+  })
+
+  it('a paused contact (no terminal row, not active) is never re-activated: its insert hits the index', async () => {
+    const m = mockDb({ history: [], cooldownDays: 30, conflictedContactIds: ['a'] })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'tag_added', sourceRef: 'vip' })
+    expect(res).toMatchObject({ enrolled: 0, skipped: 1, reactivated: 0 })
+    expect(m.updates).toHaveLength(0)
+    expect(m.upsertOpts[0]).toEqual({ onConflict: 'sequence_id,contact_id', ignoreDuplicates: true })
+  })
+
+  it('a one-event source (a purchase) is never run twice for the same ref, latest or earlier run', async () => {
+    const purchase = { source_type: 'paid_trial_checkout_purchased' }
+    const same = mockDb({ history: [ended({ ...purchase, source_ref: 'p1' })], cooldownDays: 1 })
+    createServerClient.mockReturnValue(same.db)
+    await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'paid_trial_checkout_purchased', sourceRef: 'p1' })
+    expect(same.updates).toHaveLength(0)
+
+    const earlier = mockDb({ history: [ended({ ...purchase, source_ref: 'p2', metadata: { previous_runs: [{ source_ref: 'p1' }] } })], cooldownDays: 1 })
+    createServerClient.mockReturnValue(earlier.db)
+    await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'paid_trial_checkout_purchased', sourceRef: 'p1' })
+    expect(earlier.updates).toHaveLength(0)
+
+    const fresh = mockDb({ history: [ended({ ...purchase, source_ref: 'p2', metadata: { previous_runs: [{ source_ref: 'p1' }] } })], cooldownDays: 1 })
+    createServerClient.mockReturnValue(fresh.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'paid_trial_checkout_purchased', sourceRef: 'p3' })
+    expect(res.reactivated).toBe(1)
+    expect(fresh.updates[0].payload.metadata.previous_runs.map((r) => r.source_ref)).toEqual(['p1', 'p2'])
+  })
+
+  it('the audience sweep (null ref) and kind-of-event refs re-enter on the cooldown alone', async () => {
+    for (const [sourceType, sourceRef] of [['audience_match', null], ['segment_added', 'seg-1'], ['pipeline_stage_change', 'a→b']]) {
+      const m = mockDb({ history: [ended({ source_type: sourceType, source_ref: sourceRef })], cooldownDays: 30 })
+      createServerClient.mockReturnValue(m.db)
+      const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType, sourceRef })
+      expect(res.reactivated).toBe(1)
+    }
+  })
+
+  it('automations_exempt applies to a re-entry from an automatic source', async () => {
+    const m = mockDb({ history: [ended()], cooldownDays: 30, exemptContactIds: ['a'] })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'tag_added', sourceRef: 'vip' })
+    expect(res).toEqual({ enrolled: 0, skipped: 1, reactivated: 0 })
+    expect(m.updates).toHaveLength(0)
+  })
+
+  it('a manual enrolment re-enters an exempt contact (operator paths bypass the flag)', async () => {
+    const m = mockDb({ history: [ended({ source_type: 'manual', source_ref: null })], cooldownDays: 30, exemptContactIds: ['a'] })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'] })
+    expect(res.reactivated).toBe(1)
+    expect(m.contactsQueries).toHaveLength(0)
+  })
+
+  it('a re-entry starts where a fresh enrolment would (startStepOrder)', async () => {
+    const m = mockDb({ history: [ended()], cooldownDays: 30 })
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'tag_added', sourceRef: 'vip', startStepOrder: 2 })
+    expect(m.updates[0].payload.current_step_order).toBe(2)
+  })
+
+  it('a batch mixes inserts and re-entries, and counts both as enrolled', async () => {
+    const m = mockDb({ history: [ended()], cooldownDays: 30 })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a', 'b'], sourceType: 'tag_added', sourceRef: 'vip' })
+    expect(res).toEqual({ enrolled: 2, skipped: 0, reactivated: 1 })
+    expect(m.inserts[0].map((r) => r.contact_id)).toEqual(['b'])
   })
 })
 
