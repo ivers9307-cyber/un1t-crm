@@ -64,11 +64,16 @@ export const DELETE = withAuth({ permission: null, location: false }, async ({ u
   // silently drop the local link to it. Other queue states (received
   // / quality_approved / extracted / data_approved / rejected) are
   // safe to cascade because nothing has been pushed to Xero yet.
-  const { data: queueRow } = await db
+  // SECGAPS.1 — a failed read is not "no queue row": refuse, delete nothing.
+  const { data: queueRow, error: queueErr } = await db
     .from('invoices_queue')
     .select('id, status, xero_bill_id, xero_bill_number, xero_deep_link_url')
     .eq('source_car_document_id', doc.id)
     .maybeSingle()
+  if (queueErr) {
+    logError('car-documents', 'invoice queue read failed before delete', { docId: doc.id, code: queueErr.code || null, err: queueErr.message })
+    return NextResponse.json({ success: false, error: 'Could not check the document before removing it. Try again.' }, { status: 500 })
+  }
   if (queueRow?.status === 'forwarded') {
     return NextResponse.json({
       success: false,

@@ -1,7 +1,8 @@
 // INBOXASSIGN.1 — POST/GET /api/instagram/conversations/[id]/assign. Same
 // code path as WhatsApp (src/lib/inbox-assignment.js); the gate is the other
-// Instagram thread routes' (requireInboxPermission 'ig', then membership of
-// the thread's studio as a 404). Instagram is disconnected in production, so
+// Instagram thread routes' (the web whatsapp key at any studio, membership of
+// the thread's studio as a 404, then the key AT the thread's studio as a 403 —
+// SECGAPS.1). Instagram is disconnected in production, so
 // these tests are the only place this route runs today.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -10,13 +11,14 @@ vi.mock('@/lib/auth', () => {
   return {
     getCurrentUser: vi.fn(),
     assertLocationAccessOr404: (user, loc) => ((user?.locations || []).some(l => l.id === loc) ? null : deny(404)),
-    requireInboxPermission: vi.fn((user, ch) => (ch === 'ig' && user?.ig ? null : deny(403))),
+    requireWebWhatsAppInboxAnywhere: vi.fn((user) => (user?.ig ? null : deny(403))),
+    requireWebWhatsAppInboxAt: vi.fn((user, loc) => ((user?.igAt || []).includes(loc) ? null : deny(403))),
   }
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
 import { GET, POST } from './route.js'
-import { getCurrentUser, requireInboxPermission } from '@/lib/auth'
+import { getCurrentUser, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import {
   memoryDb, staffWorld, LOC_A, LOC_B, ME, ALEX, BLAIR, CASEY, DREW,
@@ -24,7 +26,7 @@ import {
 
 const T_A = 'eeeeeeee-0000-4000-8000-00000000000a'
 const T_B = 'eeeeeeee-0000-4000-8000-00000000000b'
-const caller = { id: ME, role: 'manager', locations: [{ id: LOC_A }], ig: true }
+const caller = { id: ME, role: 'manager', locations: [{ id: LOC_A }], ig: true, igAt: [LOC_A] }
 
 let db
 function setup(opts) {
@@ -60,7 +62,15 @@ describe('POST /api/instagram/conversations/[id]/assign', () => {
     const res = await post(T_A, { assignee: 'me' })
     expect(res.status).toBe(200)
     expect(owner(T_A)).toBe(ME)
-    expect(requireInboxPermission).toHaveBeenCalledWith(caller, 'ig')
+    expect(requireWebWhatsAppInboxAnywhere).toHaveBeenCalledWith(caller)
+    expect(requireWebWhatsAppInboxAt).toHaveBeenCalledWith(caller, LOC_A)
+  })
+
+  it('SECGAPS.1 — a member of the thread\'s studio without the inbox key THERE is refused (403), nothing written', async () => {
+    getCurrentUser.mockResolvedValue({ ...caller, locations: [{ id: LOC_A }, { id: LOC_B }], igAt: [LOC_A] })
+    expect((await post(T_B, { assignee: 'me' })).status).toBe(403)
+    expect((await get(T_B)).status).toBe(403)
+    expect(wrote()).toBe(false)
   })
 
   it('a caller without the inbox permission is refused before any read', async () => {

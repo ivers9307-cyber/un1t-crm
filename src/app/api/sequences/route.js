@@ -48,6 +48,11 @@ const SequenceCreateSchema = z.object({
 // mig 663).
 const SEQUENCE_LIST_COLUMNS = 'id, location_id, name, description, status, trigger_type, created_at, updated_at, sequence_steps(count)'
 
+// SECGAPS.1 — the create answer is named columns too, never webhook_token /
+// webhook_secret. The one caller (NewSequenceButton) reads only the id and
+// opens the builder, whose page reads the token itself.
+const SEQUENCE_CREATE_COLUMNS = 'id, location_id, name, description, status, trigger_type, created_at, updated_at'
+
 // GET /api/sequences — list sequences
 // withAuth only signs the caller in (the same 401); the builder rule and the
 // studio checks stay by hand, in their old order.
@@ -114,7 +119,7 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
     status: 'draft',
     location_id: locationId,
     created_by: user.id,
-  }).select().single()
+  }).select(SEQUENCE_CREATE_COLUMNS).single()
 
   if (error) {
     logError('sequences', 'sequence insert failed', { locationId, code: error.code || null, err: error.message })
