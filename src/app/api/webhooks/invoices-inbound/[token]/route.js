@@ -35,7 +35,9 @@
 //      invoices_queue row each) or one empty row when nothing is usable.
 //   7. Queue every row this delivery inserted (files, not-received and the
 //      empty-email row) for automatic preparation, then return 200. A queueing
-//      failure never changes the answer: the sweeper cron picks the rows up.
+//      failure never changes the answer. A row whose stamp did land is swept
+//      by the cron if the QStash push fails; one whose stamp did not is not
+//      (the sweeper claims only stamped rows) and waits for a person's Extract.
 //
 // Why we don't queue here like the outbound webhook does:
 //   • Inbound volume is single-digit per day — no burst risk.

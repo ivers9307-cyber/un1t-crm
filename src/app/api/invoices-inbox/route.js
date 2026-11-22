@@ -239,7 +239,9 @@ export async function POST(request) {
   }
 
   // Read and checked on arrival, no click. A failure here never fails the
-  // upload: the file is stored and the sweeper cron picks the row up.
+  // upload: the file is stored. If the stamp did not land, the sweeper cron
+  // (which claims only rows stamped analysis_queued_at) will not see it, and
+  // the row waits in received for a person's Extract.
   try {
     await queueInvoicePreparation(db, [row.id])
   } catch (err) {

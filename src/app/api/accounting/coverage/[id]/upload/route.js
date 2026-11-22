@@ -5,11 +5,17 @@
 // every other source; the line flips to 'submitted' and its hunt
 // flags are cleared (load-bearing — a queued line would wedge the
 // weekly finalizer).
+//
+// INVOICEPREP.3 — a newly inserted row is handed to queueInvoicePreparation
+// so it is read and checked on arrival, like every other arrival path. That
+// call never fails the upload: the row is stored and a person can still read
+// it. A deduped upload links to a row that was queued when it was created.
 import { NextResponse } from 'next/server'
 import { sniffReceiptMime } from '@/lib/card-receipts'
 import { prepareManualUpload, findQueueRowByHash } from '@/lib/recon/manual-upload'
 import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
+import { queueInvoicePreparation } from '@/lib/invoices-queue/queue-preparation'
 import { loadLineForCaller } from '../_line'
 
 export const runtime = 'nodejs'
@@ -102,6 +108,11 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
         return NextResponse.json({ success: false, error: 'Queue insert failed.' }, { status: 500 })
       }
       queueId = inserted.id
+      try {
+        await queueInvoicePreparation(db, [queueId])
+      } catch (err) {
+        logError(MODULE, 'could not queue the upload for preparation', { lineId: line.id, queueId, err: err?.message || String(err) })
+      }
     }
 
     const { error: linkErr } = await db

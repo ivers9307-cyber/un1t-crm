@@ -8,9 +8,12 @@ import { person, LOC_A, LOC_B } from '../../../../../../../tests/helpers/role-sw
 vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', async (importOriginal) => ({ ...(await importOriginal()), createServerClient: vi.fn() }))
 vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
+vi.mock('@/lib/invoices-queue/queue-preparation', () => ({ queueInvoicePreparation: vi.fn() }))
 
 const { getCurrentUser } = await import('@/lib/auth')
 const { createServerClient } = await import('@/lib/supabase')
+const { queueInvoicePreparation } = await import('@/lib/invoices-queue/queue-preparation')
+const { logError } = await import('@/lib/log')
 const { POST } = await import('./route.js')
 
 const L1 = 'e1000000-0000-4000-8000-000000000011'
@@ -37,6 +40,7 @@ beforeEach(() => {
   upload = vi.fn(async () => ({ error: null }))
   db.storage = { from: () => ({ upload }) }
   createServerClient.mockReturnValue(db)
+  queueInvoicePreparation.mockResolvedValue({ queued: [] })
 })
 
 describe('POST /api/accounting/coverage/[id]/upload', () => {
@@ -70,6 +74,26 @@ describe('POST /api/accounting/coverage/[id]/upload', () => {
     expect(db.tables.invoices_queue).toHaveLength(1)
     expect(db.tables.invoices_queue[0]).toMatchObject({ location_id: LOC_A, status: 'received', attachment_mime_type: 'application/pdf' })
     expect(db.tables.recon_bank_lines[0]).toMatchObject({ status: 'submitted', invoices_queue_id: body.data.queueId, hunt_queued_at: null })
+    expect(queueInvoicePreparation).toHaveBeenCalledWith(db, [body.data.queueId])
+  })
+
+  it('a queueing failure is logged and never fails the upload', async () => {
+    getCurrentUser.mockResolvedValue(owner())
+    queueInvoicePreparation.mockRejectedValueOnce(new Error('down'))
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect(db.tables.recon_bank_lines[0].status).toBe('submitted')
+    expect(logError).toHaveBeenCalled()
+  })
+
+  it('a deduped upload is not queued again', async () => {
+    getCurrentUser.mockResolvedValue(owner())
+    await post()
+    queueInvoicePreparation.mockClear()
+    db.tables.recon_bank_lines[0].status = 'uncovered'
+    const body = await (await post()).json()
+    expect(body.data.deduped).toBe(true)
+    expect(queueInvoicePreparation).not.toHaveBeenCalled()
   })
 
   it("a storage failure is a 502 without storage's text", async () => {

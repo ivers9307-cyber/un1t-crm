@@ -1,47 +1,47 @@
 // INVOICES-QUEUE.1 — enqueue helpers.
 //
 // Called from the owner-approval routes (FTE expenses + contractor
-// invoices) and from the car-documents upload route to drop a row
-// (or N rows) into the central invoices_queue. The source row's
-// own status flips to 'awaiting_accountant_review' (or stays where
-// it is for car_documents which have no formal approval step).
+// invoices), the car-documents upload route, company-card receipts and the
+// email receipt hunt to drop a row (or N rows) into the central
+// invoices_queue. The source row's own status is the caller's business.
 //
-// All three functions follow the same shape:
+// Every function follows the same shape:
 //   • Validate that the source row exists + is in the right state.
-//   • Build one queue row per "OCR'able document" (1 per FTE
-//     receipt; 1 per contractor invoice; 1 per car document).
+//   • Build one queue row per document (1 per FTE expense item; 1 per
+//     contractor invoice, car document, card receipt or hunt find).
 //   • Insert into invoices_queue with the right source_type, the
 //     matching per-source FK, and the bucket where the attachment
 //     physically lives.
 //   • Return { ok: true, queueIds: [...] } or { ok: false, error }.
 //
-// We don't re-upload attachments — the queue references the
-// existing storage path in the source's own bucket. PR 2's bulk
-// download for OCR / Xero forward will read from
-// `attachment_bucket` per-row, so no copying is required.
+// We don't re-upload attachments — the queue references the existing
+// storage path in the source's own bucket, and preparation and the Xero
+// push read from `attachment_bucket` per row.
 //
-// Queue rows enter at status='quality_approved' (not 'received')
-// because the owner has already approved the source — stage-1
-// quality review (existing INVOICES.1 step) is the supplier-email-
-// specific gate and shouldn't apply to owner-approved sources.
-// PR 2 will introduce the unified state machine; for now this
-// keeps the existing /invoices UI working unchanged.
+// Rows from an owner-approved source (FTE receipts, contractor invoices)
+// enter at status='quality_approved': the owner has vouched for them, so
+// preparation never sets them aside as not_invoice. Car documents, card
+// receipts and hunt finds enter at 'received'.
 //
 // INVOICEPREP.3 — a row inserted WITH a file is handed to
-// queueInvoicePreparation right after the insert, so it is read and checked
-// on arrival with no click. Receiptless expense rows are born 'extracted'
-// and are not queued; a row found by an idempotency check was queued when it
-// was created, so it is not queued again.
+// queueInvoicePreparation right after the insert, which stamps
+// analysis_queued_at (the sweeper cron claims only stamped rows) and pushes
+// it to QStash, so it is read and checked on arrival with no click.
+// Receiptless expense rows are born 'extracted' with the review_reasons their
+// typed fields give, and are not queued; a row found by an idempotency check
+// was queued when it was created, so it is not queued again.
 
 import { createServerClient } from '@/lib/supabase'
 import { getLocationZone, todayStrIn } from '@/lib/location-time'
 import { queueInvoicePreparation } from '@/lib/invoices-queue/queue-preparation'
+import { fieldReasons } from '@/lib/invoices-queue/readiness'
 import { logError } from '@/lib/log'
 
 /**
  * Queue freshly inserted rows for preparation. The rows are already stored,
  * so nothing here may change the caller's outcome: an unexpected throw is
- * logged and the sweeper cron picks the rows up.
+ * logged. The sweeper cron claims only rows stamped with analysis_queued_at,
+ * so a row this failed to stamp waits for "Extract" or "Read again".
  * @param {any} db
  * @param {string[]} ids
  */
@@ -259,14 +259,18 @@ export async function enqueueFromFteExpenseClaim(claimId) {
       return { ...base, status: 'quality_approved' }
     }
     // Receiptless: there's nothing to OCR. Skip straight to
-    // 'extracted' with synthetic fields so the bookkeeper sees the
-    // row ready for review + send.
+    // 'extracted' with synthetic fields. INVOICEPREP.3: the row carries the
+    // reasons its fields give (at least new_supplier: nothing is coded yet),
+    // so it shows as "Needs a look", never Ready, until a person codes it and
+    // the fields re-check clears them.
+    const fields = syntheticFieldsForReceiptlessItem(it, todayStr)
     return {
       ...base,
       status: 'extracted',
       extracted_at: new Date().toISOString(),
       extraction_confidence: 'high', // it's not OCR'd, it's the submitter's typed data
-      extracted_fields: syntheticFieldsForReceiptlessItem(it, todayStr),
+      extracted_fields: fields,
+      review_reasons: fieldReasons(fields),
     }
   })
 

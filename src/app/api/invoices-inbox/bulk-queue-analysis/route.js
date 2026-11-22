@@ -19,7 +19,8 @@
 // INVOICEPREP.3: the route still writes status, who vouched for quality and
 // the cleared error itself (queueInvoicePreparation does none of those), and
 // it stamps analysis_queued_at in the same update so a per-id outcome of
-// 'queued' is exact. Publishing is the shared helper's job, so there is one
+// 'queued' is exact: a row is queued only when that update returned it. The
+// update never touches analysis_claimed_at, so a read in flight is not freed. Publishing is the shared helper's job, so there is one
 // publisher: it re-stamps and pushes each id to the QStash queue. A failure
 // there never changes the response; the sweeper cron picks the rows up.
 //
@@ -78,20 +79,29 @@ export async function POST(request) {
     }
     // received rows are auto-quality-approved (operator-vouched); already-
     // approved rows just get (re)queued with any stale error cleared.
-    const { error: updErr } = await db
+    // analysis_claimed_at is left alone: a live claim means a read is in
+    // flight (freeing it could start a second, paid read), and a stale one is
+    // already re-claimable by the sweeper.
+    const { data: updated, error: updErr } = await db
       .from('invoices_queue')
       .update({
         status: 'quality_approved',
         quality_reviewed_at: row.status === 'received' ? now : undefined,
         quality_reviewed_by: row.status === 'received' ? user.id : undefined,
         analysis_queued_at: now,
-        analysis_claimed_at: null,
         extraction_error: null,
       })
       .eq('id', id)
+      .eq('location_id', row.location_id)
       .in('status', ['received', 'quality_approved'])
+      .select('id')
     if (updErr) {
       results.push({ id, outcome: 'failed', error: updErr.message })
+      continue
+    }
+    if (!updated || updated.length === 0) {
+      // The row moved on (read, rejected) since it was loaded.
+      results.push({ id, outcome: 'skipped', reason: 'concurrent_change' })
       continue
     }
     results.push({ id, outcome: 'queued' })

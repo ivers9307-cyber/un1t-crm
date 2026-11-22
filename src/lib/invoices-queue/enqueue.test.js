@@ -128,6 +128,8 @@ describe('enqueueFromFteExpenseClaim', () => {
     expect(row.extracted_fields.invoice_number).toMatch(/^EXP-/)
     expect(row.extracted_fields.line_items).toHaveLength(1)
     expect(row.subject).toMatch(/no receipt/i)
+    // Uncoded (no Xero supplier or account yet): it needs a look, never Ready.
+    expect(row.review_reasons).toEqual(['new_supplier'])
   })
 
   it('returns error when claim not found', async () => {

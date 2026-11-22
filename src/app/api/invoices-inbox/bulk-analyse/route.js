@@ -1,43 +1,55 @@
-// INVOICES-QUEUE.1 PR 2 — bulk Claude Vision analyse.
+// INVOICES-QUEUE.1 PR 2 + INVOICEPREP.3 — bulk "Extract selected", now.
 //
-// Bookkeeper-gated. Accepts an array of queue row ids; for each:
-//   • Skip if not in 'quality_approved' or 'extracted' (the legal
-//     states for OCR re-run from the original single-row /extract
-//     route).
-//   • Skip if no attachment_path.
-//   • Skip if no attachment_bucket (defensive — mig 185 NOT NULL).
-//   • Download bytes from the row's bucket.
-//   • Run extractInvoiceFieldsFromBytes.
-//   • On success: row → 'extracted', extracted_fields populated,
-//     confidence stamped.
-//   • On failure: row stays where it is, extraction_error populated
-//     so the UI surfaces a retry.
+// Bookkeeper-gated. The web inbox and the phone app send the first few
+// selected rows here (the rest go to bulk-queue-analysis). Each row runs the
+// same preparation as the background queue, one at a time:
+//   • Only received and quality_approved rows are read; an extracted row is
+//     read again only through the single-row /extract route.
+//   • A row with no file is skipped.
+//   • Claim the row exactly as /extract does: a guarded update stamping
+//     analysis_claimed_at (and analysis_queued_at, so the sweeper can find
+//     it), refused while a fresh claim says the queue is reading it now. A
+//     claim older than CLAIM_STALE_MINUTES is a crashed reader, taken over.
+//   • prepareInvoiceRow (no force: a copy of another row's file is flagged,
+//     not read) records its own outcome and clears the claim.
+//   • If preparation throws, the claim is kept: the read may already have been
+//     paid for, and the sweeper retries the row once the claim goes stale.
 //
-// We run extractions SEQUENTIALLY rather than parallel — Claude
-// Vision is rate-limited; bursting 50 concurrent requests against
-// the Anthropic API courts 429s. Per-row time is ~5-15s, so a
-// 20-row batch takes 2-5 minutes. The route's Vercel function has
-// maxDuration 300s (5 min) which is enough for the realistic
-// batch sizes (operators won't analyse 100 rows in one click).
+// Sequential rather than parallel: the reader is rate-limited, and a 10-row
+// batch fits the 300 s budget.
+//
+// Response: { success, data: { results: [{ id, outcome, reason?, error? }], counts } }
+// with outcome ok | skipped | failed (the web inbox and mobile read counts.ok,
+// counts.failed and counts.skipped).
 
 import { NextResponse } from 'next/server'
-import { extractInvoiceFieldsFromBytes } from '@/lib/invoice-extraction'
 import {
   BulkIdsSchema,
   loadBookkeeper,
   loadAndScopeBulkRows,
 } from '../_bulk-helpers'
 import { validateBody } from '@/lib/validate'
-import { resolveExtractionDefaults } from '@/lib/invoices-queue/supplier-defaults'
+import { prepareInvoiceRow } from '@/lib/invoices-queue/prepare'
+import { CLAIM_STALE_MINUTES } from '@/lib/invoice-analysis-queue'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-// 'received' is analysable too — the operator selecting it IS the
-// quality decision (see INV-BULK; mirrors bulk-queue-analysis). It gets
-// auto-quality-approved on a successful extract below.
-const ANALYSABLE_STATUSES = ['received', 'quality_approved', 'extracted']
+const PREPARABLE = ['received', 'quality_approved']
+
+/**
+ * The per-row answer for each preparation outcome.
+ * @param {string} outcome
+ */
+function resultFor(outcome) {
+  if (outcome === 'prepared') return { outcome: 'ok' }
+  if (outcome === 'not_invoice') return { outcome: 'skipped', reason: 'not_invoice' }
+  if (outcome === 'duplicate') return { outcome: 'skipped', reason: 'duplicate_file' }
+  if (outcome === 'unreadable') return { outcome: 'failed', error: 'unreadable' }
+  return { outcome: 'skipped', reason: 'concurrent_change' }
+}
 
 export async function POST(request) {
   const ctx = await loadBookkeeper()
@@ -52,7 +64,7 @@ export async function POST(request) {
   try {
     scoped = await loadAndScopeBulkRows({
       db, user, ids,
-      select: 'id, location_id, status, source_type, attachment_bucket, attachment_path, attachment_mime_type',
+      select: 'id, location_id, status, attachment_path',
     })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message }, { status: 500 })
@@ -60,95 +72,50 @@ export async function POST(request) {
   const { rowsById, missingIds, forbiddenIds } = scoped
 
   const results = []
-
-  // Pre-record skip reasons for ids we can't act on.
   for (const id of missingIds) results.push({ id, outcome: 'skipped', reason: 'not_found' })
   for (const id of forbiddenIds) results.push({ id, outcome: 'skipped', reason: 'forbidden' })
 
-  // Sequential analysis. See module header for rationale.
   for (const id of ids) {
     const row = rowsById[id]
     if (!row) continue
-    if (!ANALYSABLE_STATUSES.includes(row.status)) {
+    if (!PREPARABLE.includes(row.status)) {
       results.push({ id, outcome: 'skipped', reason: `wrong_status:${row.status}` })
       continue
     }
-    if (!row.attachment_path || !row.attachment_bucket) {
+    if (!row.attachment_path) {
       results.push({ id, outcome: 'skipped', reason: 'no_attachment' })
       continue
     }
 
-    // Download bytes.
-    const { data: blob, error: dlErr } = await db.storage
-      .from(row.attachment_bucket)
-      .download(row.attachment_path)
-    if (dlErr || !blob) {
-      results.push({ id, outcome: 'failed', error: `download: ${dlErr?.message || 'unknown'}` })
-      continue
-    }
-    const ab = await blob.arrayBuffer()
-    const bytes = Buffer.from(ab)
-
-    const result = await extractInvoiceFieldsFromBytes(bytes, row.attachment_mime_type, { locationId: row.location_id })
-    if (!result.ok) {
-      // Persist the error; row stays at its current state so the UI
-      // can surface a retry.
-      await db
-        .from('invoices_queue')
-        .update({
-          extraction_error: result.error,
-          extracted_at: new Date().toISOString(),
-        })
-        .eq('id', id)
-      results.push({ id, outcome: 'failed', error: result.error })
-      continue
-    }
-
-    // XEROBULK.1 — supplier memory, as the single-row /extract route applies
-    // it: a known supplier opens with its Xero contact, account and category
-    // already picked. Best-effort: a memory miss never blocks the analysis.
-    let fields = result.fields
-    try {
-      const memory = await resolveExtractionDefaults(db, row.location_id, fields.supplier_name)
-      if (memory && Object.keys(memory).length > 0) fields = { ...fields, ...memory }
-    } catch (e) {
-      console.warn(`[bulk-analyse ${id}] supplier-memory resolve failed: ${e?.message || e}`)
-    }
-
-    // Confidence heuristic — same as the single-row /extract route.
-    const f = fields
-    const reconciles = Math.abs((Number(f.subtotal) + Number(f.tax_amount)) - Number(f.total)) <= 0.01
-    const allRequired = f.supplier_name && f.invoice_number && f.invoice_date && Number.isFinite(Number(f.total))
-    const confidence = allRequired && reconciles ? 'high' : 'medium'
-
     const nowIso = new Date().toISOString()
-    const patch = {
-      status: 'extracted',
-      extracted_at: nowIso,
-      extracted_fields: fields,
-      extraction_confidence: confidence,
-      extraction_error: null,
-      // clear any queue flags so a row can't be both extracted AND queued
-      analysis_queued_at: null,
-      analysis_claimed_at: null,
-    }
-    // Auto-quality-approve a 'received' row (operator selection = the
-    // quality decision) so it moves cleanly to 'extracted'.
-    if (row.status === 'received') {
-      patch.quality_reviewed_at = nowIso
-      patch.quality_reviewed_by = user.id
-    }
-    const { error: updErr } = await db
+    const staleBefore = new Date(Date.now() - CLAIM_STALE_MINUTES * 60_000).toISOString()
+    const { data: claimed, error: claimErr } = await db
       .from('invoices_queue')
-      .update(patch)
+      .update({ analysis_claimed_at: nowIso, analysis_queued_at: nowIso })
       .eq('id', id)
-      .in('status', ANALYSABLE_STATUSES)
-
-    if (updErr) {
-      results.push({ id, outcome: 'failed', error: updErr.message })
+      .eq('location_id', row.location_id)
+      .in('status', PREPARABLE)
+      .or(`analysis_claimed_at.is.null,analysis_claimed_at.lt.${staleBefore}`)
+      .select('*')
+    if (claimErr) {
+      logError('bulk-analyse', 'claim failed', { invoiceId: id, err: claimErr })
+      results.push({ id, outcome: 'failed', error: 'claim_failed' })
       continue
     }
-    results.push({ id, outcome: 'ok', confidence })
+    if (!claimed || claimed.length === 0) {
+      // A fresh claim (the queue is reading it now) or a row that moved on.
+      results.push({ id, outcome: 'skipped', reason: 'being_read' })
+      continue
+    }
+
+    try {
+      const { outcome } = await prepareInvoiceRow(db, claimed[0])
+      results.push({ id, ...resultFor(outcome) })
+    } catch (err) {
+      // The claim is kept on purpose (see the header).
+      logError('bulk-analyse', 'preparation threw; claim kept for the sweeper', { invoiceId: id, err })
+      results.push({ id, outcome: 'failed', error: 'prepare_failed' })
+    }
   }
 
   const counts = results.reduce((acc, r) => {
