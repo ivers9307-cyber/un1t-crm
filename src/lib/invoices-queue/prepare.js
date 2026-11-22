@@ -435,9 +435,9 @@ export async function recheckInvoiceRow(db, row) {
       duplicateOf ? ['duplicate_number'] : [],
     )
 
-    /** @type {Record<string, any>} */
-    const patch = { review_reasons: reasons, duplicate_of_id: duplicateOf }
-    if (vatChanged) patch.extracted_fields = fields
+    const patch = vatChanged
+      ? { review_reasons: reasons, duplicate_of_id: duplicateOf, extracted_fields: fields }
+      : { review_reasons: reasons, duplicate_of_id: duplicateOf }
     const { data, error } = await db
       .from('invoices_queue')
       .update(patch)
