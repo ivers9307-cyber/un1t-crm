@@ -312,12 +312,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ success: false, error: 'method_not_allowed' }, 405)
   }
 
-  // Every target's secrets, read once. An unset (or empty) secret is ''.
-  const configured = TARGETS.map((target) => ({
-    target,
-    primary: Deno.env.get(target.tokenEnv) || '',
-    previous: Deno.env.get(target.previousEnv) || '',
-  }))
+  // Every target's secrets, read once. An unset (or empty) secret is ''. A
+  // target with no PRIMARY is not configured at all: its PREVIOUS is ignored,
+  // so it cannot match (and the forward would have had no token to carry).
+  const configured = TARGETS.map((target) => {
+    const primary = Deno.env.get(target.tokenEnv) || ''
+    return {
+      target,
+      primary,
+      previous: primary ? (Deno.env.get(target.previousEnv) || '') : '',
+    }
+  })
   // The support target is the original one and stays REQUIRED.
   const supportPrimary = configured[0].primary
   const crmBaseUrl = Deno.env.get('CRM_WEBHOOK_BASE_URL')
@@ -352,11 +357,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const last = segments.length ? segments[segments.length - 1] : ''
   const urlToken = last === FUNCTION_NAME ? '' : last
 
-  // Two targets sharing a secret could never be told apart: the first (support)
-  // would silently win. Say so, once per request, without naming any value.
-  const secrets = configured.flatMap((c) => [c.primary, c.previous]).filter(Boolean)
-  const duplicated = secrets.some((a, i) => secrets.slice(i + 1).some((b) => safeEqual(a, b)))
-  if (configured.length > 1 && duplicated) {
+  // Two CONFIGURED targets sharing a secret could never be told apart: the
+  // first (support) would silently win. Say so, once per request, without
+  // naming any value. Only pairs from different targets count — a target's own
+  // primary equalling its own previous is not this problem.
+  const active = configured.filter((c) => c.primary)
+  const duplicated = active.some((a, i) => active.slice(i + 1).some((b) =>
+    [a.primary, a.previous].filter(Boolean).some((x) =>
+      [b.primary, b.previous].filter(Boolean).some((y) => safeEqual(x, y)))))
+  if (duplicated) {
     console.error('[postmark-shim] two webhook targets share an identical secret — fix the configuration; support wins')
   }
 

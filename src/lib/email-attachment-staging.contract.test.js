@@ -140,6 +140,22 @@ describe('the Edge Function keeps its deployment-critical properties', () => {
     expect(source).toMatch(/storage\/v1\/object\/\$\{bucket\}/)
   })
 
+  it('passes the matched target’s bucket to the upload and builds the forward from its path and primary', () => {
+    expect(source).toMatch(/uploadObject\([^)]*target\.bucket/)
+    expect(source).toMatch(/const forwardUrl = .*\$\{target\.forwardPath\}\/\$\{primary\}/)
+    expect(source).toMatch(/const primary = hit\.c\.primary/)
+  })
+
+  it('a target without a primary secret cannot match, not even through PREVIOUS', () => {
+    expect(source).toMatch(/previous: primary \? \(Deno\.env\.get\(target\.previousEnv\) \|\| ''\) : ''/)
+    expect(source).toMatch(/!!c\.primary && safeEqual\(urlToken, c\.primary\)/)
+  })
+
+  it('only compares secrets across different configured targets', () => {
+    expect(source).toMatch(/const active = configured\.filter\(\(c\) => c\.primary\)/)
+    expect(source).not.toMatch(/configured\.length > 1/)
+  })
+
   it('upserts, because the key is deterministic across a Postmark retry', () => {
     expect(source).toMatch(/'x-upsert': 'true'/)
   })
