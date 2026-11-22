@@ -41,11 +41,10 @@ export default async function HostsSettingsPage() {
         </p>
       </div>
 
-      {/* HOST-PORTAL.3 — host self-serve events land here for staff approval
-          before they publish. Self-fetches; renders above the hosts list. */}
-      <div className="mb-6">
-        <HostEventReviewQueue />
-      </div>
+      {/* HOST-PORTAL.3 — the staff review queue. HOSTAUTOPUB.1: hosts publish
+          with no approval, so it only shows rows left in pending_review from
+          before, and renders nothing once there are none. */}
+      <HostEventReviewQueue />
 
       <HostsManager />
     </div>

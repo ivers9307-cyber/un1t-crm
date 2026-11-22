@@ -68,7 +68,6 @@ const SHARED_DARK_PROP_FILES = [
 // Each entry must still match something in its file, or the test fails (stale).
 const ALLOWLIST = [
   { file: 'src/components/host/HostEmailPreviewModal.jsx', class: 'bg-black/60', reason: 'modal scrim stays black in both themes' },
-  { file: 'src/components/host/OffSaleConfirmDialog.jsx', class: 'bg-black/60', reason: 'modal scrim stays black in both themes' },
   { file: 'src/components/host/HostEmailPreviewModal.jsx', class: 'bg-[#f4f4f5]', reason: 'mat behind the rendered email: an email is white-backed by design, so the mat stays light in both themes' },
 ]
 

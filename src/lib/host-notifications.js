@@ -2,8 +2,13 @@
 //
 // Two directions: when staff approve/reject a submitted event, the HOST
 // hears about it (their event_hosts.email + every linked host_users login);
-// when a host submits an event for review, the ORG ADMINS hear about it
-// (every master/owner/manager profile across the org's locations).
+// when a host publishes an event, the ORG ADMINS hear about it (every
+// master/owner/manager profile across the org's locations).
+//
+// HOSTAUTOPUB.1 — hosts publish straight away, so the admins' message is a
+// NOTICE ("this went live"), not a request to approve. The approve/reject
+// email to the host stays for rows left in pending_review from before, which
+// staff can still decide on /settings/hosts.
 //
 // The build* helpers are pure (unit-tested); the notify* senders are thin
 // IO wrappers that do NOT swallow errors — callers run them fire-and-forget
@@ -64,21 +69,25 @@ export function buildReviewedEmail({ event, action, reason, baseUrl }) {
 }
 
 /**
- * Email to ORG ADMINS when a host submits an event for review. A STAFF link:
- * `appUrl` stays the CRM host (getAppUrl), untouched by W1.L3b.
- * @param {{ event: { name: string }, host: { name?: string|null }, appUrl: string }} args
+ * Email to ORG ADMINS when a host publishes an event (HOSTAUTOPUB.1): a
+ * notice, nothing to approve. A STAFF link: `appUrl` stays the CRM host
+ * (getAppUrl), untouched by W1.L3b. It opens the event's staff edit page,
+ * where its active switch takes it down.
+ * @param {{ event: { id: string, name: string, slug?: string|null }, host: { name?: string|null }, appUrl: string, publicBaseUrl?: string|null }} args
  * @returns {{ subject: string, htmlBody: string }}
  */
-export function buildSubmittedEmail({ event, host, appUrl }) {
+export function buildPublishedEmail({ event, host, appUrl, publicBaseUrl = null }) {
   const hostName = escapeHtml(host?.name || 'A host')
   const eventName = escapeHtml(event?.name || 'an event')
-  const reviewUrl = `${appUrl}/settings/hosts`
+  const staffUrl = `${appUrl}/events/${event?.id}/edit`
+  const publicUrl = publicBaseUrl && event?.slug ? `${publicBaseUrl}/event/${event.slug}` : null
   return {
-    subject: `Host event to review: ${event?.name || 'an event'}`,
+    subject: `Host event published: ${event?.name || 'an event'}`,
     htmlBody:
-      `<p><strong>${hostName}</strong> submitted <strong>${eventName}</strong> for review.</p>` +
-      `<p>Approve or reject it from the review queue: ` +
-      `<a href="${escapeHtml(reviewUrl)}">${escapeHtml(reviewUrl)}</a></p>`,
+      `<p><strong>${hostName}</strong> published <strong>${eventName}</strong>. It is on sale now; nothing needs your approval.</p>` +
+      (publicUrl ? `<p>Public page: <a href="${escapeHtml(publicUrl)}">${escapeHtml(publicUrl)}</a></p>` : '') +
+      `<p>To check it, or take it down, open it in the CRM: ` +
+      `<a href="${escapeHtml(staffUrl)}">${escapeHtml(staffUrl)}</a></p>`,
   }
 }
 
@@ -109,12 +118,12 @@ export async function notifyHostEventReviewed({ db, event, host, action, reason 
 }
 
 /**
- * Notify every org admin (master/owner/manager across the org's locations)
- * that a host submitted an event for review. Throws on failure — caller
- * wraps (fire-and-forget).
+ * Tell every org admin (master/owner/manager across the org's locations) that
+ * a host published an event (HOSTAUTOPUB.1). Informational: no approval item
+ * exists for it. Throws on failure — caller wraps (fire-and-forget).
  * @param {{ db: import('@supabase/supabase-js').SupabaseClient, event: object, host: object, orgId: string }} args
  */
-export async function notifyAdminsEventSubmitted({ db, event, host, orgId }) {
+export async function notifyAdminsEventPublished({ db, event, host, orgId }) {
   const { data: locs } = await db.from('locations').select('id').eq('organization_id', orgId)
   const locIds = (locs || []).map((l) => l.id)
   if (locIds.length === 0) return
@@ -126,34 +135,40 @@ export async function notifyAdminsEventSubmitted({ db, event, host, orgId }) {
   const profileIds = [...new Set((pls || []).map((r) => r.profile_id).filter(Boolean))]
   if (profileIds.length === 0) return
 
-  // HOST-APPROVALS.1 — push first (the email below predates the approvals
-  // integration and stays as the durable record). Keyed on event+submission
-  // so a resubmit after rejection pushes again; deduped per recipient.
-  // Best-effort — a push hiccup never blocks the emails.
+  // Push first, best-effort — a push hiccup never blocks the emails. The
+  // registered host_event_review category (and its notify_host_event_review
+  // switch and channel) is reused as is. Keyed on event+publish so a
+  // republish after "take off sale" tells staff again; deduped per recipient.
+  // data.type is NOT 'host_event_review': the phone opens the approvals inbox
+  // for that type, and there is no card to decide any more.
   try {
     const { sendPushOnce } = await import('@/lib/push-dedup')
-    await sendPushOnce(db, `host_event_review:${event.id}:${event.submitted_at || ''}`, profileIds, {
-      title: 'Approval needed · Host event',
-      body: `${host.name || 'A host'} submitted "${event.name}" for review.`,
+    await sendPushOnce(db, `host_event_published:${event.id}:${event.submitted_at || ''}`, profileIds, {
+      title: 'Host event published',
+      body: `${host.name || 'A host'} published "${event.name}". It is on sale now.`,
       category: 'host_event_review',
-      data: { type: 'host_event_review', event_id: event.id },
+      data: { type: 'host_event_published', event_id: event.id },
     })
   } catch (e) {
-    console.warn(`[host-notifications] submit push failed: ${e?.message || e}`)
+    console.warn(`[host-notifications] publish push failed: ${e?.message || e}`)
   }
 
   const { data: profiles } = await db.from('profiles').select('email').in('id', profileIds)
   // Reuse the tested dedupe/lowercase/skip-empty pass (no host email here).
   const recipients = assembleHostRecipients({ email: null }, profiles || [])
   if (recipients.length === 0) return
-  const msg = buildSubmittedEmail({ event, host, appUrl: getAppUrl() })
+  let publicBaseUrl = null
+  try {
+    publicBaseUrl = await resolveCustomerBaseUrl(db, host?.anchor_location_id || event?.location_id || null)
+  } catch { publicBaseUrl = null }
+  const msg = buildPublishedEmail({ event, host, appUrl: getAppUrl(), publicBaseUrl })
   for (const to of recipients) {
     await sendTransactionalEmail({
       to,
       subject: msg.subject,
       htmlBody: msg.htmlBody,
       locationId: event.location_id,
-      tag: 'host-event-submitted',
+      tag: 'host-event-published',
     })
   }
 }

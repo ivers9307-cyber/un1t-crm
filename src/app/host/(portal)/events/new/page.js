@@ -25,7 +25,7 @@ export default async function HostNewEventPage() {
       <GuardedLink href="/host/events" className="text-xs text-host-hint hover:text-host-text">← Back</GuardedLink>
       <h1 className={`mt-3 ${HOST_H1}`}>Create an event</h1>
       <p className="text-host-hint mt-1 text-sm">
-        Draft your event, then submit it to {brand.name} for review before it goes live.
+        Draft your event, then publish it when it is ready. It goes on sale as soon as you publish.
       </p>
 
       <div className="mt-8">

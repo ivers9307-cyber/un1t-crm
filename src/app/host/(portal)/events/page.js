@@ -8,7 +8,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { getHostRevenue } from '@/lib/host-revenue'
 import { createServerClient } from '@/lib/supabase'
-import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
+import { HOST_EVENT_STATUS_LABEL, HOST_PUBLISHABLE_STATUSES } from '@/lib/host-events'
 import { listHostSeries } from '@/lib/event-series'
 import { logWarn } from '@/lib/log'
 import {
@@ -95,7 +95,7 @@ export default async function HostEventsPage() {
               key={e.id}
               event={e}
               detail={detailFor(e, false)}
-              action={e.status === 'draft' ? <HostSubmitButton eventId={e.id} /> : null}
+              action={HOST_PUBLISHABLE_STATUSES.includes(e.status) ? <HostSubmitButton eventId={e.id} /> : null}
             />
           ))}
         </ul>
