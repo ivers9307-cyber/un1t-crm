@@ -11,6 +11,11 @@ import { logError, logWarn } from '@/lib/log'
 
 export const INVOICE_STAGING_BUCKET = 'inbound-invoices'
 
+// Mirrors MAX_ATTACHMENTS_PER_MESSAGE in the shim
+// (supabase/functions/postmark-inbound-shim/index.ts). Past it the shim empties
+// Content and writes no marker. Change the two together.
+export const SHIM_MAX_ATTACHMENTS_PER_MESSAGE = 25
+
 // The type checker here has no Node typings; Buffer is a global at runtime.
 const NodeBuffer = /** @type {any} */ (globalThis).Buffer
 
@@ -48,6 +53,15 @@ export async function resolveInboundAttachments(db, body, options = {}) {
     const marker = readStagedMarker(attachment, { postmarkMessageId, index })
 
     if (marker.kind === 'inline') {
+      // The shim empties Content with no marker past its cap and for a file it
+      // could not decode. Postmark's ContentLength survives, so a positive one
+      // beside no Content means the bytes were lost, not that the file was empty.
+      const emptied = typeof attachment.Content !== 'string' || attachment.Content === ''
+      if (emptied && Number(attachment.ContentLength) > 0) {
+        const reason = index >= SHIM_MAX_ATTACHMENTS_PER_MESSAGE ? 'too_many' : 'rehost_failed'
+        failed.push({ index, name, reason })
+        continue
+      }
       attachments[index] = attachment
       continue
     }
@@ -90,11 +104,14 @@ export async function resolveInboundAttachments(db, body, options = {}) {
  * @returns {Promise<void>}
  */
 export async function removeStagedAttachments(db, paths) {
-  if (!Array.isArray(paths) || paths.length === 0) return
+  if (!Array.isArray(paths)) return
+  // The bucket also holds the stored invoices; only staged copies may go.
+  const staged = paths.filter((p) => typeof p === 'string' && p.startsWith('inbound/'))
+  if (staged.length === 0) return
   try {
-    const { error } = await db.storage.from(INVOICE_STAGING_BUCKET).remove(paths)
-    if (error) logWarn('invoice-staged', 'staged remove failed', { err: error, count: paths.length })
+    const { error } = await db.storage.from(INVOICE_STAGING_BUCKET).remove(staged)
+    if (error) logWarn('invoice-staged', 'staged remove failed', { err: error, count: staged.length })
   } catch (err) {
-    logWarn('invoice-staged', 'staged remove threw', { err, count: paths.length })
+    logWarn('invoice-staged', 'staged remove threw', { err, count: staged.length })
   }
 }

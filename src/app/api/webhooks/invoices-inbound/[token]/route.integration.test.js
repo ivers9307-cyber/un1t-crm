@@ -120,7 +120,7 @@ describe('inbound invoice webhook, end to end over the fake database', () => {
   it('stores a staged attachment and removes the staged file', async () => {
     const res = await POST(req(email([stagedPdf('a.pdf', 0)])), ctx())
     expect(res.status).toBe(200)
-    expect(await res.json()).toMatchObject({ success: true, created: 1 })
+    expect(await res.json()).toMatchObject({ success: true, created: 1, notReceived: 0 })
     expect(queue()).toHaveLength(1)
     expect(queue()[0].attachment_path && queue()[0].content_hash).toBeTruthy()
     expect(remove).toHaveBeenCalledWith(['inbound/msg-1/0.pdf'])

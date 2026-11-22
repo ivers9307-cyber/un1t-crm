@@ -176,16 +176,25 @@ it('removeStagedAttachments never throws', async () => { /* remove rejects → r
 
 Not automated. Each step is confirmed before the next.
 
-- [ ] **Step 1: Richard sets the Edge Function secret** `POSTMARK_INBOUND_WEBHOOK_TOKEN` to the same value Vercel has (Supabase dashboard → Edge Functions → Secrets). The value is a secret; it is not pasted into chat.
-- [ ] **Step 2: Deploy the function** (`supabase functions deploy postmark-inbound-shim --no-verify-jwt`, or the Supabase MCP `deploy_edge_function`, with Richard's go-ahead at that moment because this function carries all support-inbox mail).
-- [ ] **Step 3: Probe both targets from outside** with a bogus token: expect 404 from the shim URL.
-- [ ] **Step 4: Confirm the support inbox still works**: send one ordinary email with an attachment to a support address and see it filed.
-- [ ] **Step 5: Richard repoints the invoices server's inbound webhook in Postmark** to the shim URL with the same token.
-- [ ] **Step 6: Live test**: forward one invoice with a file over 5 MB and one small one. Expected: both rows appear, each opens. Check the function log for "attachment(s) staged".
-- [ ] **Revert path**, if anything is wrong: paste the Vercel URL back into Postmark. Small invoices work at once; the size ceiling returns until the shim is fixed.
+- [ ] **Step 0: Preconditions.** This PR is merged and deployed on Vercel. The new CRM with the old function is safe: nothing sends markers yet.
+- [ ] **Step 1: Prepare the rollback first.** Save the function as it is deployed today (`git show 3fe67a2a0:supabase/functions/postmark-inbound-shim/index.ts`) to a scratch directory laid out as `supabase/functions/postmark-inbound-shim/index.ts`, and have the deploy command ready. Rollback is one deploy, about 30 seconds. While the function answers non-2xx, Postmark retries, so a short bad window delays support mail but does not lose it.
+- [ ] **Step 2: Canary.** Deploy the NEW `index.ts` under a second name, `postmark-inbound-shim-next`, with JWT verification off. POST a bogus token: expect 404. That proves it boots and loads in the real runtime. Delete the canary.
+- [ ] **Step 3: Check the bucket.** Confirm the `inbound-invoices` bucket has no `allowed_mime_types` restriction (it had none on 22 Nov 2026).
+- [ ] **Step 4: Richard sets the Edge Function secret** `POSTMARK_INBOUND_WEBHOOK_TOKEN` to the same value Vercel has. The value is never pasted into chat. He confirms it is NOT the same value as `POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN`. Setting it is harmless to the old function.
+- [ ] **Step 5: Deploy the real function**, with Richard's go-ahead at that moment, because this function carries all support mail. JWT verification must be explicitly off: `supabase functions deploy postmark-inbound-shim --no-verify-jwt --project-ref iyvtbjjxdggiadzwwvdj`, or the MCP tool with `verify_jwt: false`.
+- [ ] **Step 6: Probe at once.** A bogus token answers 404 when healthy. 401 means JWT verification is on: redeploy. 500 `missing_secret` means the support secret is lost. 503 or a boot error: roll back. Then Richard, from his own shell, POSTs the body `x` with the real invoices token and expects `400 invalid_json`; then the body `{}`, and expects a 400 relayed from Vercel about a missing MessageID. That proves the forward works and that both sides hold the same token. The function logs show no `two webhook targets share` line.
+- [ ] **Step 7: Check support mail.** Send one ordinary support email with an attachment; see it filed and the file open. The log shows `[postmark-shim] 1 attachment(s) staged`.
+- [ ] **Step 8: Richard repoints the invoices server's inbound webhook in Postmark** to `https://iyvtbjjxdggiadzwwvdj.supabase.co/functions/v1/postmark-inbound-shim/<token>`.
+- [ ] **Step 9: Live tests.** Send one small invoice, one over 5 MB and one near 20 MB. Each row opens. The log shows `[postmark-shim:invoices] … staged`. Afterwards `inbound/` in the bucket is empty.
+- [ ] **Revert, if invoices misbehave:** paste the Vercel URL back into Postmark. Small invoices work at once; the size ceiling returns.
+- [ ] **Revert, if support mail misbehaves:** redeploy the saved old function (Step 1).
 
 ---
 
 ## Not in this plan
 
 A sweep for staged files left behind when a delivery never completes (they sit under `inbound/` in `inbound-invoices`). Volume is tiny; add it with phase 2 if any accumulate.
+
+The staged files of stray emails (no studio matched) are kept, and nothing sweeps them yet.
+
+A test that runs the shim itself: transpile `index.ts`, stub `Deno` and `fetch`.

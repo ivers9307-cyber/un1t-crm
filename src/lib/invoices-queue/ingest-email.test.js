@@ -317,6 +317,37 @@ describe('ingestInboundEmail with attachments the shim parked in Storage', () =>
     expect(await all(db)).toHaveLength(2)
   })
 
+  it('records attachments past the shim cap as not received, once', async () => {
+    // The shim stages the first 25 and empties the rest with no marker.
+    const list = Array.from({ length: 25 }, (_, i) => staged(i))
+    list.push(
+      { Name: 'x25.pdf', ContentType: 'application/pdf', Content: '', ContentLength: 6 },
+      { Name: 'x26.pdf', ContentType: 'application/pdf', Content: '', ContentLength: 6 },
+    )
+    const body = email(list)
+    const r = await ingestInboundEmail(db, { location: LOC, body })
+    expect(r).toMatchObject({ ok: true, notReceived: 2 })
+    expect(r.created).toHaveLength(25)
+    const rows = await all(db)
+    expect(rows.filter((x) => x.attachment_path)).toHaveLength(25)
+    const missing = rows.filter((x) => x.email_message_id.includes('-missing-'))
+    expect(missing.map((x) => x.email_message_id).sort()).toEqual(['m1-missing-25', 'm1-missing-26'])
+    expect(missing.every((x) => x.not_invoice_reason === 'attachment_not_received: too_many')).toBe(true)
+    expect(await ingestInboundEmail(db, { location: LOC, body })).toMatchObject({ ok: true, created: [], notReceived: 0 })
+    expect(await all(db)).toHaveLength(27)
+  })
+
+  it('records a staged file of the wrong size as not received and keeps the staged file', async () => {
+    const body = email([staged(0, { _un1t_staged: { v: 1, path: 'inbound/m1/0.pdf', bytes: PDF_BYTES.length + 1 } })])
+    const r = await ingestInboundEmail(db, { location: LOC, body })
+    expect(r).toMatchObject({ ok: true, created: [], notReceived: 1 })
+    const rows = await all(db)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ email_message_id: 'm1-missing-0', not_invoice_reason: 'attachment_not_received: rehost_failed' })
+    expect(files.has('inbound/m1/0.pdf')).toBe(true)
+    expect(remove).not.toHaveBeenCalled()
+  })
+
   it('fails with staged_download_failed and writes nothing when a download fails', async () => {
     const body = email([staged(0), staged(1)])
     files.delete('inbound/m1/1.pdf')

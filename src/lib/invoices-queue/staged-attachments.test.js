@@ -5,6 +5,7 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.f
 import { logError, logWarn } from '@/lib/log'
 import {
   INVOICE_STAGING_BUCKET,
+  SHIM_MAX_ATTACHMENTS_PER_MESSAGE,
   resolveInboundAttachments,
   removeStagedAttachments,
 } from './staged-attachments'
@@ -133,6 +134,50 @@ describe('resolveInboundAttachments', () => {
     })
   })
 
+  it('mirrors the shim cap of 25 attachments per message', () => {
+    expect(SHIM_MAX_ATTACHMENTS_PER_MESSAGE).toBe(25)
+  })
+
+  it('reports an attachment the shim emptied without a marker as rehost_failed', async () => {
+    const list = [{ Content: 'x' }, { Content: 'x' }, { Content: 'x' }, { Name: 'bad.pdf', Content: '', ContentLength: 6 }]
+    const r = await resolveInboundAttachments(db, email(list))
+    expect(r.failed).toEqual([{ index: 3, name: 'bad.pdf', reason: 'rehost_failed' }])
+    expect(r.attachments[3]).toBeNull()
+    expect(download).not.toHaveBeenCalled()
+  })
+
+  it('reports an attachment past the shim cap as too_many', async () => {
+    const list = Array.from({ length: 25 }, () => ({ Content: 'x' }))
+    list.push({ Name: 'extra.pdf', Content: '', ContentLength: 6 })
+    const r = await resolveInboundAttachments(db, email(list))
+    expect(r.failed).toEqual([{ index: 25, name: 'extra.pdf', reason: 'too_many' }])
+    expect(r.attachments[25]).toBeNull()
+  })
+
+  it('passes a real empty file through untouched', async () => {
+    const empty = { Name: 'empty.pdf', Content: '', ContentLength: 0 }
+    const r = await resolveInboundAttachments(db, email([empty]))
+    expect(r.failed).toEqual([])
+    expect(r.attachments[0]).toBe(empty)
+  })
+
+  it('leaves an inline attachment with Content alone, whatever its ContentLength', async () => {
+    const inline = { Name: 'a.pdf', Content: 'QUJD', ContentLength: 3 }
+    const r = await resolveInboundAttachments(db, email([inline]))
+    expect(r.failed).toEqual([])
+    expect(r.attachments[0]).toBe(inline)
+  })
+
+  it('skips an already-stored index before checking for an emptied attachment', async () => {
+    const r = await resolveInboundAttachments(
+      db,
+      email([{ Name: 'done.pdf', Content: '', ContentLength: 6 }]),
+      { skipIndexes: new Set([0]) },
+    )
+    expect(r.failed).toEqual([])
+    expect(r.attachments).toEqual([null])
+  })
+
   it('downloads one at a time', async () => {
     let release
     const gate = new Promise((res) => { release = res })
@@ -162,6 +207,15 @@ describe('removeStagedAttachments', () => {
   it('removes the given paths', async () => {
     await removeStagedAttachments(db, ['inbound/m1/0.pdf'])
     expect(remove).toHaveBeenCalledWith(['inbound/m1/0.pdf'])
+  })
+
+  it('never removes a path outside inbound/', async () => {
+    const stored = '11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/invoice.pdf'
+    await removeStagedAttachments(db, [stored, 'inbound/m1/0.pdf', null])
+    expect(remove).toHaveBeenCalledTimes(1)
+    expect(remove).toHaveBeenCalledWith(['inbound/m1/0.pdf'])
+    await removeStagedAttachments(db, [stored])
+    expect(remove).toHaveBeenCalledTimes(1)
   })
 
   it('never throws', async () => {

@@ -51,8 +51,10 @@
 //     recorded in invoice_inbound_strays and answered 200: retrying cannot
 //     help, but the email stays visible instead of vanishing into a log.
 //   • An email with nothing usable attached still gets an empty queue row.
-// Not covered: an email whose payload is larger than the platform's request
-// size limit is refused before this handler runs, so nothing here records it.
+// Not covered: when the mail provider points straight at this URL, an email
+// whose payload is larger than the platform's request size limit is refused
+// before this handler runs, so nothing here records it. Behind the shim it
+// arrives staged.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -200,7 +202,7 @@ export async function POST(request, { params }) {
       logError('invoices-inbound', 'ingest failed', { messageId, error: result.error })
       return await fail(result.error)
     }
-    return NextResponse.json({ success: true, ...repeat, created: result.created.length, ids: result.created })
+    return NextResponse.json({ success: true, ...repeat, created: result.created.length, ids: result.created, notReceived: result.notReceived })
   } catch (err) {
     logError('invoices-inbound', 'unexpected failure', { messageId, error: err?.message })
     return await fail('internal_error')

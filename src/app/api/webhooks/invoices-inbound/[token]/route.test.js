@@ -32,7 +32,7 @@ const email = (extra = {}) => ({
   ...extra,
 })
 const strays = () => db.tables.invoice_inbound_strays || []
-const OK = { ok: true, created: ['r1'], alreadyStored: 0, skippedInline: 0 }
+const OK = { ok: true, created: ['r1'], alreadyStored: 0, skippedInline: 0, notReceived: 0 }
 
 let savedToken
 beforeEach(() => {
@@ -52,9 +52,15 @@ describe('inbound invoice webhook', () => {
   it('stores the email through ingestInboundEmail and does not release on success', async () => {
     const res = await POST(req(email()), ctx())
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, created: 1, ids: ['r1'] })
+    expect(await res.json()).toEqual({ success: true, created: 1, ids: ['r1'], notReceived: 0 })
     expect(ingestInboundEmail).toHaveBeenCalledWith(db, expect.objectContaining({ location: expect.objectContaining({ id: 'loc1' }) }))
     expect(releaseWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  it('reports how many attachments were not received', async () => {
+    ingestInboundEmail.mockResolvedValue({ ...OK, notReceived: 2 })
+    const res = await POST(req(email()), ctx())
+    expect(await res.json()).toEqual({ success: true, created: 1, ids: ['r1'], notReceived: 2 })
   })
 
   it('releases the dedup claim and answers 500 when storing fails', async () => {
@@ -107,7 +113,7 @@ describe('inbound invoice webhook', () => {
     recordWebhookEvent.mockResolvedValue({ seen: true })
     const res = await POST(req(email()), ctx())
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, deduped: true, created: 1, ids: ['r1'] })
+    expect(await res.json()).toEqual({ success: true, deduped: true, created: 1, ids: ['r1'], notReceived: 0 })
     expect(ingestInboundEmail).toHaveBeenCalledTimes(1)
     expect(releaseWebhookEvent).not.toHaveBeenCalled()
   })
