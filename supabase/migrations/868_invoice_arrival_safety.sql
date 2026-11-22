@@ -1,11 +1,13 @@
 -- INVOICEPREP.1 — make the invoice email ingest safe against lost emails.
 --
 -- Four additions:
---   1. invoices_queue keeps the email body text, so a row can be read and
---      prepared later without going back to the mail provider.
---   2. invoices_queue counts attachments the ingest skipped (unsupported
---      type, too large), so a skipped file is visible instead of silent.
---   3. invoices_queue records why a row was judged not to be an invoice.
+--   1. invoices_queue keeps the plain-text email body (at most 20,000
+--      characters), so a row can be read and prepared later without going
+--      back to the mail provider.
+--   2. invoices_queue counts the inline email images (signature logos) the
+--      ingest skipped for one message, so a skipped image is visible.
+--   3. invoices_queue records why an email had nothing usable: no_attachment
+--      or unsupported_type: <types>.
 --   4. invoice_inbound_strays records inbound emails that reach the ingest
 --      address but match no studio, so they are kept rather than dropped.
 --
@@ -23,6 +25,13 @@ alter table public.invoices_queue
   add column if not exists email_body_text text,
   add column if not exists skipped_attachment_count integer not null default 0,
   add column if not exists not_invoice_reason text;
+
+comment on column public.invoices_queue.email_body_text is
+  'INVOICEPREP.1: plain-text email body, at most 20,000 characters.';
+comment on column public.invoices_queue.skipped_attachment_count is
+  'INVOICEPREP.1: number of inline email images (signature logos) the ingest skipped for this message.';
+comment on column public.invoices_queue.not_invoice_reason is
+  'INVOICEPREP.1: set when an email had nothing usable; no_attachment or unsupported_type: <types>.';
 
 -- Duplicate check is per studio (content_hash alone is not scoped).
 create index if not exists invoices_queue_location_content_hash_idx

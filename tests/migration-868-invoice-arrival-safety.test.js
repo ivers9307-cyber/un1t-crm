@@ -18,7 +18,13 @@ describe('migration 868', () => {
   it('adds the three queue columns without dropping anything', () => {
     for (const c of ['email_body_text', 'skipped_attachment_count', 'not_invoice_reason']) expect(sql).toContain(c)
     expect(sql).toMatch(/skipped_attachment_count integer not null default 0/)
-    expect(sql).not.toMatch(/drop (column|table)/i)
+    expect(sql).not.toMatch(/\bdrop /i)
+  })
+
+  it('documents each new queue column', () => {
+    for (const c of ['email_body_text', 'skipped_attachment_count', 'not_invoice_reason']) {
+      expect(sql).toMatch(new RegExp(`comment on column public\\.invoices_queue\\.${c} is`))
+    }
   })
 
   it('limits stray reasons and keeps the email id unique', () => {
