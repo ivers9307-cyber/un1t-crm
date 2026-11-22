@@ -2481,6 +2481,21 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'get',
+  path: '/api/invoices-inbox/strays',
+  tags: ['Invoices'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Inbound invoice emails that matched no studio (masters only)',
+  description: 'Newest first, last 90 days, at most 50. Reason is unknown_slug or unparseable_recipient.',
+  responses: {
+    200: { description: 'Unmatched emails', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.array(z.object({ id: z.string(), to_address: z.string().nullable(), from_address: z.string().nullable(), subject: z.string().nullable(), reason: z.enum(['unparseable_recipient', 'unknown_slug']), slug: z.string().nullable(), received_at: z.string() })) }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Master only', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The unmatched emails could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'post',
   path: '/api/webhooks/qstash/invoice-analysis',
   tags: ['Webhooks (Inbound)'],

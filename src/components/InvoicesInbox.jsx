@@ -20,6 +20,7 @@
 //   • rejected          → read-only summary with reason + stage; Delete button
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
+import InboundStraysNotice from '@/components/invoices/InboundStraysNotice'
 import Link from 'next/link'
 // BOOKKEEPER-APPROVALS.1 — read `?focus=<id>` so the drill-in from
 // /approvals lands on the right row + correct tab.
@@ -381,6 +382,8 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
         </div>
       </div>
 
+      {isMaster && <InboundStraysNotice />}
+
       {error && (
         <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm">
           {error}
@@ -710,6 +713,19 @@ function InboxDetail({ row, onChanged }) {
   const [attLoading, setAttLoading] = useState(false)
   const [busy, setBusy] = useState(null) // 'approve' | 'reject' | 'extract' | 'send' | 'delete'
   const [actionError, setActionError] = useState(null)
+  // The email text is not on the list row (it can be long); read it by id when a row opens.
+  const [bodyText, setBodyText] = useState(null)
+
+  useEffect(() => {
+    setBodyText(null)
+    if (!row?.id) return
+    let cancelled = false
+    fetch(`/api/invoices-inbox/${row.id}`)
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled && j?.success) setBodyText(j.data?.email_body_text || null) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [row?.id])
 
   // Load the signed URL whenever the selected row changes.
   useEffect(() => {
@@ -798,6 +814,7 @@ function InboxDetail({ row, onChanged }) {
   return (
     <section className="border border-un1t-border rounded-lg p-5 space-y-5">
       <DetailHeader row={row} />
+      <ArrivalNotes row={row} bodyText={bodyText} />
 
       {actionError && (
         <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm">
@@ -841,6 +858,33 @@ function InboxDetail({ row, onChanged }) {
         <RejectedSummary row={row} busy={busy} onDelete={deleteRow} />
       )}
     </section>
+  )
+}
+
+function notInvoiceLine(reason) {
+  if (reason === 'no_attachment') return 'Nothing usable was attached'
+  if (reason?.startsWith('unsupported_type:')) return `The attachment type is not supported (${reason.slice('unsupported_type:'.length).trim()})`
+  return null
+}
+
+// INVOICEPREP.1 — why an email had nothing usable, and the email's own text.
+function ArrivalNotes({ row, bodyText }) {
+  const line = notInvoiceLine(row.not_invoice_reason)
+  const skipped = row.skipped_attachment_count || 0
+  if (!line && !skipped && !bodyText) return null
+  return (
+    <div className="space-y-2 text-sm">
+      {line && <p className="text-un1t-text">{line}</p>}
+      {skipped > 0 && (
+        <p className="text-xs text-un1t-subtle">{skipped === 1 ? '1 email image skipped' : `${skipped} email images skipped`}</p>
+      )}
+      {bodyText && (
+        <details className="border border-un1t-border rounded-lg">
+          <summary className="cursor-pointer px-3 py-2 text-xs text-un1t-subtle">Email text</summary>
+          <div className="px-3 pb-3 whitespace-pre-wrap break-words text-un1t-text">{bodyText}</div>
+        </details>
+      )}
+    </div>
   )
 }
 
