@@ -118,21 +118,31 @@ export async function notifyHostEventReviewed({ db, event, host, action, reason 
 }
 
 /**
+ * The org's locations (id, name) and every admin profile across them
+ * (master/owner/manager). Scoped to the org in code (service role).
+ * @returns {Promise<{ locations: Array<{ id: string, name: string|null }>, profileIds: string[] }>}
+ */
+async function loadOrgAdmins(db, orgId) {
+  const { data: locs } = await db.from('locations').select('id, name').eq('organization_id', orgId)
+  const locations = (locs || []).filter((l) => l?.id)
+  if (locations.length === 0) return { locations, profileIds: [] }
+  const { data: pls } = await db
+    .from('profile_locations')
+    .select('profile_id')
+    .in('location_id', locations.map((l) => l.id))
+    .in('role', ADMIN_ROLES)
+  const profileIds = [...new Set((pls || []).map((r) => r.profile_id).filter(Boolean))]
+  return { locations, profileIds }
+}
+
+/**
  * Tell every org admin (master/owner/manager across the org's locations) that
  * a host published an event (HOSTAUTOPUB.1). Informational: no approval item
  * exists for it. Throws on failure — caller wraps (fire-and-forget).
  * @param {{ db: import('@supabase/supabase-js').SupabaseClient, event: object, host: object, orgId: string }} args
  */
 export async function notifyAdminsEventPublished({ db, event, host, orgId }) {
-  const { data: locs } = await db.from('locations').select('id').eq('organization_id', orgId)
-  const locIds = (locs || []).map((l) => l.id)
-  if (locIds.length === 0) return
-  const { data: pls } = await db
-    .from('profile_locations')
-    .select('profile_id')
-    .in('location_id', locIds)
-    .in('role', ADMIN_ROLES)
-  const profileIds = [...new Set((pls || []).map((r) => r.profile_id).filter(Boolean))]
+  const { profileIds } = await loadOrgAdmins(db, orgId)
   if (profileIds.length === 0) return
 
   // Push first, best-effort — a push hiccup never blocks the emails. The
@@ -169,6 +179,115 @@ export async function notifyAdminsEventPublished({ db, event, host, orgId }) {
       htmlBody: msg.htmlBody,
       locationId: event.location_id,
       tag: 'host-event-published',
+    })
+  }
+}
+
+// HOSTSTUDIONOTICE.1 — a published host event that starts to use a studio, or
+// uses it for longer, is TOLD to staff (no check: the save already happened).
+// Reasons come from studioUseGrew / studioHoursGrowth (src/lib/host-events.js).
+
+const formatHold = (minutes) => {
+  const m = Number(minutes)
+  if (!Number.isFinite(m) || m <= 0) return ''
+  const h = Math.floor(m / 60)
+  const r = m % 60
+  return h && r ? `${h} h ${r} min` : h ? `${h} h` : `${r} min`
+}
+
+/**
+ * What changed, in words: "linked to Hatch Street", "moved from Stillorgan to
+ * Hatch Street", "now starts earlier (first session 07:00) at Hatch Street".
+ * Pure. Names only the event, the studios and times: no customer data.
+ * @param {{ reasons: string[], growth?: { earlier?: string|null, later?: string|null, longerHoldMinutes?: number|null }|null, studioName?: string|null, previousStudioName?: string|null }} args
+ * @returns {string}
+ */
+export function describeStudioChange({ reasons, growth, studioName, previousStudioName }) {
+  const studio = studioName || 'a studio'
+  const parts = []
+  if ((reasons || []).includes('studio')) {
+    parts.push(previousStudioName ? `moved from ${previousStudioName} to ${studio}` : `linked to ${studio}`)
+  }
+  if ((reasons || []).includes('studio_hours') && !(reasons || []).includes('studio')) {
+    const g = growth || {}
+    const hours = []
+    if (g.earlier) hours.push(`starts earlier (first session ${g.earlier})`)
+    if (g.later) hours.push(`runs later (last session ${g.later})`)
+    if (g.longerHoldMinutes) hours.push(`holds the studio for longer (${formatHold(g.longerHoldMinutes)})`)
+    const joined = hours.length > 1 ? `${hours.slice(0, -1).join(', ')} and ${hours[hours.length - 1]}` : (hours[0] || 'uses the studio for longer')
+    parts.push(`now ${joined} at ${studio}`)
+  }
+  return parts.join('; ')
+}
+
+/**
+ * Email to ORG ADMINS when a published host event's studio use grows. A
+ * notice, nothing to approve; links the staff edit page (CRM host).
+ * @param {{ event: { id: string, name: string }, host: { name?: string|null }, change: string, appUrl: string }} args
+ * @returns {{ subject: string, htmlBody: string }}
+ */
+export function buildStudioChangeEmail({ event, host, change, appUrl }) {
+  const hostName = escapeHtml(host?.name || 'A host')
+  const eventName = escapeHtml(event?.name || 'an event')
+  const staffUrl = `${appUrl}/events/${event?.id}/edit`
+  return {
+    subject: `Host event studio change: ${event?.name || 'an event'}`,
+    htmlBody:
+      `<p><strong>${hostName}</strong> changed <strong>${eventName}</strong>, which is on sale: it is ${escapeHtml(change)}.</p>` +
+      `<p>The studio link keeps that studio's timers on for the event's sessions. Nothing needs your approval.</p>` +
+      `<p>To check it, open it in the CRM: ` +
+      `<a href="${escapeHtml(staffUrl)}">${escapeHtml(staffUrl)}</a></p>`,
+  }
+}
+
+/**
+ * Tell every org admin that a published host event now uses a studio, or uses
+ * it for longer (HOSTSTUDIONOTICE.1). Informational. Studio names are read
+ * from the org's own locations only. Throws on failure — caller wraps
+ * (fire-and-forget).
+ * @param {{ db: import('@supabase/supabase-js').SupabaseClient, event: { id: string, name: string, location_id?: string|null }, host: { name?: string|null }, orgId: string, reasons: string[], growth?: object|null, studioId: string, previousStudioId?: string|null, sessionTimes?: string[] }} args
+ */
+export async function notifyAdminsEventStudioChange({ db, event, host, orgId, reasons, growth = null, studioId, previousStudioId = null, sessionTimes = [] }) {
+  if (!Array.isArray(reasons) || reasons.length === 0 || !studioId) return
+  const { locations, profileIds } = await loadOrgAdmins(db, orgId)
+  if (profileIds.length === 0) return
+  const nameOf = (id) => locations.find((l) => l.id === id)?.name || null
+  const change = describeStudioChange({
+    reasons,
+    growth,
+    studioName: nameOf(studioId),
+    previousStudioName: reasons.includes('studio') && previousStudioId ? nameOf(previousStudioId) || 'another studio' : null,
+  })
+
+  // Push first, best-effort, in the same registered category (and switch) as
+  // the published notice. Keyed on the studio use the edit LEFT (studio, first
+  // and last session, hold), so a replayed save does not push twice and a
+  // further change pushes again.
+  try {
+    const times = [...sessionTimes].map((t) => String(t || '').slice(0, 5)).filter(Boolean).sort()
+    const key = `host_event_studio:${event.id}:${studioId}:${times[0] || ''}-${times[times.length - 1] || ''}:${growth?.longerHoldMinutes || ''}`
+    const { sendPushOnce } = await import('@/lib/push-dedup')
+    await sendPushOnce(db, key, profileIds, {
+      title: 'Host event studio change',
+      body: `${host?.name || 'A host'} changed "${event.name}": ${change}.`,
+      category: 'host_event_review',
+      data: { type: 'host_event_studio_change', event_id: event.id },
+    })
+  } catch (e) {
+    console.warn(`[host-notifications] studio-change push failed: ${e?.message || e}`)
+  }
+
+  const { data: profiles } = await db.from('profiles').select('email').in('id', profileIds)
+  const recipients = assembleHostRecipients({ email: null }, profiles || [])
+  if (recipients.length === 0) return
+  const msg = buildStudioChangeEmail({ event, host, change, appUrl: getAppUrl() })
+  for (const to of recipients) {
+    await sendTransactionalEmail({
+      to,
+      subject: msg.subject,
+      htmlBody: msg.htmlBody,
+      locationId: event.location_id,
+      tag: 'host-event-studio-change',
     })
   }
 }
