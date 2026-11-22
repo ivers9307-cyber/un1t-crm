@@ -9,10 +9,13 @@
 // Body:     { request_id: uuid, scans: [ { datetimes: string, raw: object } ], error?: string }
 //           - scans present  → mark done (scans_found / scans_ingested)
 //           - error present  → mark error (e.g. GetDateTimes 401 / IP not whitelisted)
-// Response: { ok: true, found: n, ingested: m }
+// Response: { ok: true, found: n, ingested: m, duplicates: d }
 //
-// Idempotent: inbody_scans upserts on (source, external_id); re-running a
-// request just re-upserts the same rows.
+// Idempotent: inbody_scans upserts on its natural key (location_id,
+// matched_phone9, scanned_at — INBODYDEDUPE.1, mig 871), so a scan the webhook
+// already landed, or a second "Sync InBody" for the same member, updates the
+// one row in place. `ingested` counts every scan now on record (new or
+// already there); `duplicates` is how many of those were already there.
 //
 // Auth: bearer bridge token via verifyBridgeToken. Anything else → 401.
 
@@ -89,6 +92,7 @@ export async function POST(request) {
 
   const scans = Array.isArray(body.scans) ? body.scans.slice(0, MAX_SCANS) : []
   let ingested = 0
+  let duplicates = 0
   for (const s of scans) {
     try {
       const result = await ingestScan(db, {
@@ -98,6 +102,7 @@ export async function POST(request) {
         locationId: bridge.locationId,
       })
       if (result.ok) ingested += 1
+      if (result.ok && result.duplicate) duplicates += 1
     } catch (err) {
       logWarn('bridge-inbody-backfill-ingest', 'scan failed', { err: err?.message || err, requestId })
     }
@@ -115,5 +120,5 @@ export async function POST(request) {
     })
     .eq('id', requestId)
 
-  return NextResponse.json({ ok: true, found: scans.length, ingested })
+  return NextResponse.json({ ok: true, found: scans.length, ingested, duplicates })
 }
