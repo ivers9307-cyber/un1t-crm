@@ -51,33 +51,61 @@ async function organizationOfLocation(db, locationId) {
   return data.organization_id || null
 }
 
+// INBODYDEDUPE.1 (mig 871): a scan is one person at one studio at one second.
+// The key is (location_id, matched_phone9, scanned_at); matched_phone9 is a
+// generated column (last nine digits of matched_phone, the normalisePhone9
+// rule), so the webhook's 0871234567 and a backfill's +353871234567 are the
+// same scan. external_id (`${telHp}_${testDatetime}`) is still written but no
+// longer decides identity: its spelling of the phone varies by road.
+export const SCAN_CONFLICT_TARGET = 'location_id,matched_phone9,scanned_at'
+
+// Is this scan already recorded? true / false, or null when the read failed
+// (the upsert below stays safe either way: the index decides, not this read).
+async function scanExists(db, { locationId, phone9, scannedAt }) {
+  const { data, error } = await db
+    .from('inbody_scans')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('matched_phone9', phone9)
+    .eq('scanned_at', scannedAt)
+    .limit(1)
+  if (error) return null
+  return (data || []).length > 0
+}
+
 // Map + match + upsert one scan. `db` is a service-role client (caller may pass
-// one to share across a batch). Idempotent on (source, external_id) where
-// external_id = `${telHp}_${testDatetime}`. Returns { ok, linked, contactId }.
-// Skips (ok:false, reason) when the datetime is unparseable or the phone is
-// missing — without those we can't form a stable, idempotent scan row.
+// one to share across a batch). Idempotent on SCAN_CONFLICT_TARGET: a repeat
+// delivery by any road updates the one row in place (same measurements, and a
+// re-sync can link a scan that landed unlinked) and never adds a second.
+// Returns { ok, linked, contactId, duplicate } where duplicate = the scan was
+// already recorded before this call.
+// Skips (ok:false, reason:'bad_input') when the datetime is unparseable, the
+// phone has under nine digits or there is no studio: without those there is
+// no key, and a keyless row could be doubled.
 export async function ingestScan(db, { telHp, testDatetime, raw, locationId }) {
   const client = db || createServerClient()
   const scannedAt = inbodyDatetimeToIso(testDatetime)
-  if (!scannedAt || !telHp) return { ok: false, reason: 'bad_input' }
+  const phone9 = normalisePhone9(telHp)
+  if (!scannedAt || !phone9 || !locationId) return { ok: false, reason: 'bad_input' }
 
   const externalId = `${telHp}_${testDatetime}`
   const measurements = parseFullInBodyData(raw)
   const organizationId = await organizationOfLocation(client, locationId)
   const contactId = await matchContactId(client, telHp, organizationId)
+  const duplicate = (await scanExists(client, { locationId, phone9, scannedAt })) === true
 
   const { error } = await client
     .from('inbody_scans')
     .upsert({
       source: SOURCE,
       external_id: externalId,
-      location_id: locationId ?? null,
+      location_id: locationId,
       contact_id: contactId,
       matched_phone: telHp,
       scanned_at: scannedAt,
       ...measurements,
       raw: raw ?? null,
-    }, { onConflict: 'source,external_id' })
+    }, { onConflict: SCAN_CONFLICT_TARGET })
 
   if (error) return { ok: false, reason: 'upsert_failed', error: error.message }
 
@@ -88,5 +116,5 @@ export async function ingestScan(db, { telHp, testDatetime, raw, locationId }) {
     })
   }
 
-  return { ok: true, linked: !!contactId, contactId }
+  return { ok: true, linked: !!contactId, contactId, duplicate }
 }

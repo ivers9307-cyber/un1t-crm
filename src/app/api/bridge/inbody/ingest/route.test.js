@@ -102,3 +102,29 @@ describe('POST /api/bridge/inbody/ingest — cross-location guard', () => {
     expect(res.status).toBe(401)
   })
 })
+
+// INBODYDEDUPE.1 — an event whose scan was already on record recorded nothing
+// new, but it is HANDLED: marked processed and counted as a duplicate, never
+// left pending for the Pi to fetch again.
+describe('POST /api/bridge/inbody/ingest — duplicate scans', () => {
+  it('marks a duplicate event processed and counts it', async () => {
+    ingestScan.mockResolvedValue({ ok: true, linked: true, contactId: 'c-1', duplicate: true })
+    const json = await (await POST(reqWith({ results: [{ event_id: 'e-A1', raw: {} }] }))).json()
+    expect(json).toMatchObject({ processed: 1, duplicates: 1, rejected: 0 })
+    expect(db._updates).toHaveLength(1)
+    expect(db._updates[0]).toMatchObject({ id: 'e-A1', payload: { processed: true, matched_contact_id: 'c-1', location_id: 'loc-A' } })
+  })
+
+  it('a new scan is not counted as a duplicate', async () => {
+    ingestScan.mockResolvedValue({ ok: true, linked: false, contactId: null, duplicate: false })
+    const json = await (await POST(reqWith({ results: [{ event_id: 'e-A1', raw: {} }] }))).json()
+    expect(json).toMatchObject({ processed: 1, duplicates: 0 })
+  })
+
+  it('a failed scan write leaves the event unprocessed', async () => {
+    ingestScan.mockResolvedValue({ ok: false, reason: 'upsert_failed', error: 'boom' })
+    const json = await (await POST(reqWith({ results: [{ event_id: 'e-A1', raw: {} }] }))).json()
+    expect(json).toMatchObject({ processed: 0, duplicates: 0 })
+    expect(db._updates).toHaveLength(0)
+  })
+})

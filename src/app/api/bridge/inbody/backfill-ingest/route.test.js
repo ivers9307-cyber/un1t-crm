@@ -83,3 +83,19 @@ describe('POST /api/bridge/inbody/backfill-ingest — cross-location guard', () 
     expect(res.status).toBe(401)
   })
 })
+
+// INBODYDEDUPE.1 — a scan already on record counts as ingested (it is there)
+// and is reported in `duplicates`.
+describe('POST /api/bridge/inbody/backfill-ingest — duplicate scans', () => {
+  it('counts scans already on record as ingested and as duplicates', async () => {
+    ingestScan
+      .mockResolvedValueOnce({ ok: true, duplicate: true })
+      .mockResolvedValueOnce({ ok: true, duplicate: false })
+    const json = await (await POST(reqWith({
+      request_id: 'r-A',
+      scans: [{ datetimes: '20260101100000', raw: {} }, { datetimes: '20260108100000', raw: {} }],
+    }))).json()
+    expect(json).toMatchObject({ ok: true, found: 2, ingested: 2, duplicates: 1 })
+    expect(db._updates.find((u) => u.payload.status === 'done').payload).toMatchObject({ scans_found: 2, scans_ingested: 2 })
+  })
+})

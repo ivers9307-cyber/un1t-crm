@@ -7,10 +7,14 @@
 // webhook event processed. The Pi never touches the DB or the matching logic.
 //
 // Body:     { results: [ { event_id: uuid, raw: object } ] }   (cap 50)
-// Response: { ok: true, processed: n, linked: m, rejected: k }
+// Response: { ok: true, processed: n, linked: m, rejected: k, duplicates: d }
 //
-// Idempotent: inbody_scans upserts on (source, external_id) and an already-
-// processed event is skipped, so a re-sent batch is a no-op.
+// Idempotent: inbody_scans upserts on its natural key (location_id,
+// matched_phone9, scanned_at — INBODYDEDUPE.1, mig 871) and an already-
+// processed event is skipped, so a re-sent batch is a no-op. An event whose
+// scan was already recorded (a second notification for the same scan, or a
+// backfill got there first) is HANDLED: it is marked processed and counted in
+// `duplicates` as well as `processed`, never left to be fetched again.
 //
 // LOCATION SCOPING (security audit W2-H / M1): each event's `account` must map
 // to THIS bridge's location (locations.settings.inbody.accounts) — a bridge for
@@ -51,6 +55,7 @@ export async function POST(request) {
   let processed = 0
   let linked = 0
   let rejected = 0
+  let duplicates = 0
 
   for (const item of results) {
     const eventId = item?.event_id
@@ -93,7 +98,7 @@ export async function POST(request) {
         continue // bad_input / upsert_failed → leave unprocessed for a later retry
       }
 
-      await db
+      const { error: markErr } = await db
         .from('inbody_webhook_events')
         .update({
           processed: true,
@@ -102,13 +107,20 @@ export async function POST(request) {
           location_id: bridge.locationId,
         })
         .eq('id', eventId)
+      if (markErr) {
+        // The scan is stored; the event stays pending and its retry lands on
+        // the same row (a duplicate), so nothing is doubled.
+        logWarn('bridge-inbody-ingest', 'mark processed failed', { err: markErr, eventId })
+        continue
+      }
 
       processed += 1
       if (result.linked) linked += 1
+      if (result.duplicate) duplicates += 1
     } catch (err) {
       logWarn('bridge-inbody-ingest', 'item failed', { err: err?.message || err, eventId })
     }
   }
 
-  return NextResponse.json({ ok: true, processed, linked, rejected })
+  return NextResponse.json({ ok: true, processed, linked, rejected, duplicates })
 }

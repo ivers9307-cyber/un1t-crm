@@ -38,7 +38,13 @@ import { applyWeightObservation } from '@/lib/body-metrics'
  * by the contacts query regardless of the filter (we test the normalisation
  * logic, not PostgREST filtering).
  */
-function makeDb({ contacts = [], upsertError = null, locationOrg = 'org-1' } = {}) {
+// mig 871's generated column, in JS: last nine digits, NULL under nine.
+function phone9Generated(phone) {
+  const d = String(phone ?? '').replace(/[^0-9]/g, '')
+  return d.length >= 9 ? d.slice(-9) : null
+}
+
+function makeDb({ contacts = [], upsertError = null, locationOrg = 'org-1', scans = [] } = {}) {
   const upserted = []
   const contactFilters = []
 
@@ -67,15 +73,36 @@ function makeDb({ contacts = [], upsertError = null, locationOrg = 'org-1' } = {
       }
       if (table === 'inbody_scans') {
         return {
+          // scanExists: .select('id').eq(...).eq(...).eq(...).limit(1)
+          select: () => {
+            const filters = []
+            const q = {
+              eq: (col, val) => { filters.push([col, val]); return q },
+              limit: () => Promise.resolve({
+                data: scans.filter((r) => filters.every(([c, v]) => r[c] === v)).map((r) => ({ id: r.id })),
+                error: null,
+              }),
+            }
+            return q
+          },
           upsert(row, opts) {
             upserted.push({ row, opts })
-            return Promise.resolve({ error: upsertError })
+            if (upsertError) return Promise.resolve({ error: upsertError })
+            // Model the conflict target the way Postgres does: a matching row
+            // is updated in place, anything else is a new row.
+            const withKey = { ...row, matched_phone9: phone9Generated(row.matched_phone) }
+            const keys = String(opts?.onConflict || 'id').split(',')
+            const hit = scans.find((r) => keys.every((k) => r[k] != null && r[k] === withKey[k]))
+            if (hit) Object.assign(hit, withKey)
+            else scans.push({ id: `scan-${scans.length + 1}`, ...withKey })
+            return Promise.resolve({ error: null })
           },
         }
       }
       return {}
     },
     _upserted: upserted,
+    _scans: scans,
     _contactFilters: contactFilters,
   }
 }
@@ -138,7 +165,7 @@ describe('matchContactId', () => {
 // ─── ingestScan ───────────────────────────────────────────────────────────────
 
 describe('ingestScan — idempotency + attribution', () => {
-  it('upserts with the correct conflict target (source,external_id)', async () => {
+  it('upserts on the natural key (location_id,matched_phone9,scanned_at)', async () => {
     const db = makeDb({
       contacts: [{ id: 'c-1', phone: '+353851234567', wa_phone: null }],
     })
@@ -151,9 +178,11 @@ describe('ingestScan — idempotency + attribution', () => {
     expect(result.ok).toBe(true)
     expect(db._upserted).toHaveLength(1)
     const { opts } = db._upserted[0]
-    // The conflict target MUST be 'source,external_id' — anything else
-    // (e.g. just 'external_id') silently allows cross-source dupes.
-    expect(opts.onConflict).toBe('source,external_id')
+    // INBODYDEDUPE.1: the conflict target MUST be mig 871's unique index. The
+    // old (source,external_id) target keyed on the phone as spelled, so one
+    // scan arriving as 0851234567 and +353851234567 made two rows.
+    expect(opts.onConflict).toBe('location_id,matched_phone9,scanned_at')
+    expect(opts.ignoreDuplicates).toBeFalsy()
   })
 
   it('assigns the right contactId when a phone matches', async () => {
@@ -339,9 +368,13 @@ describe('InBody matching is scoped to the scanning studio\'s organisation', () 
     expect(applyWeightObservation).not.toHaveBeenCalled()
   })
 
-  it('a scan with no studio at all is stored unlinked', async () => {
+  it('a scan with no studio at all has no key, so it is refused and nothing is written', async () => {
+    // INBODYDEDUPE.1: location_id is NOT NULL and part of the scan's key; the
+    // insert could never have landed, and now it is not attempted.
     const db = makeDb({ contacts: [{ id: 'c1', phone: '+353851234567', wa_phone: null }] })
     const r = await ingestScan(db, { telHp: '0851234567', testDatetime: '20260115120000', raw: rawScan, locationId: null })
-    expect(r.linked).toBe(false)
+    expect(r).toEqual({ ok: false, reason: 'bad_input' })
+    expect(db._upserted).toHaveLength(0)
+    expect(db._contactFilters).toHaveLength(0)
   })
 })
