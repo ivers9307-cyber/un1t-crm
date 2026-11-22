@@ -3,7 +3,8 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { todayStrIn, getLocationZone } from '@/lib/location-time'
-import { validateBody } from '@/lib/validate'
+import { validateBody, uuidLike } from '@/lib/validate'
+import { checkUsualCoaches, MAX_USUAL_COACHES } from '@/lib/shift-usual-coaches'
 import { timeOfDay, hexColor , MANAGER_ROLES} from '@/lib/schemas'
 import { WEEKDAY_CODES, generateBlocksForTemplate, liveAssignments } from '@/lib/roster'
 import { logRosterChange } from '@/lib/roster-change-log'
@@ -31,6 +32,10 @@ const TemplateUpdateSchema = z.object({
   min_coaches: z.number().int().min(0).max(50).optional(),
   // SHIFTTYPE.1 (mig 628) — see resolveTemplateKindWrite for the rule.
   kind: z.enum(SHIFT_KINDS).optional(),
+  // USUALCOACH.1 (mig 869) — replaces the list; each must be active staff at
+  // the TEMPLATE's studio. Saving it changes no existing shift: the nightly
+  // horizon fills new ones, "Fill usual coaches" fills an empty week.
+  usual_coach_ids: z.array(uuidLike).max(MAX_USUAL_COACHES).optional(),
 })
 
 // PUT /api/schedule/templates/:id
@@ -124,6 +129,12 @@ export async function PUT(request, props) {
   const kindWrite = resolveTemplateKindWrite({ prior: priorTemplate, body: validation.data })
   if (!kindWrite.ok) return NextResponse.json(kindWrite.body, { status: kindWrite.status })
   Object.assign(updates, kindWrite.patch)
+  // USUALCOACH.1 — only staff of the template's studio, before any write.
+  if (Object.prototype.hasOwnProperty.call(updates, 'usual_coach_ids')) {
+    const usual = await checkUsualCoaches(db, { locationId, profileIds: updates.usual_coach_ids })
+    if (!usual.ok) return NextResponse.json({ success: false, error: usual.error }, { status: usual.status })
+    updates.usual_coach_ids = usual.ids
+  }
   const priorDays = new Set(priorTemplate.days_of_week || [])
 
   // TZ.8a — "future" is the studio's day (the template's location zone).

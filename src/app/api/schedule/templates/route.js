@@ -8,6 +8,7 @@ import { MANAGER_ROLES, timeOfDay, hexColor, DEFAULT_COLOR } from '@/lib/schemas
 import { WEEKDAY_CODES, generateBlocksForTemplate } from '@/lib/roster'
 import { SHIFT_KINDS } from '@shared/shift-kind'
 import { resolveTemplateKindWrite } from '@/lib/shift-template-kind'
+import { checkUsualCoaches, MAX_USUAL_COACHES } from '@/lib/shift-usual-coaches'
 
 // days_of_week + max_coaches landed in mig 067 (Roster v2 phase 1).
 // When a template is saved with non-empty days_of_week, we auto-
@@ -32,6 +33,9 @@ const CreateTemplateSchema = z.object({
   // no minimum: min_coaches > 0 with kind admin is refused (400), and the
   // database CHECKs it too (shift_templates_admin_no_minimum).
   kind: z.enum(SHIFT_KINDS).optional(),
+  // USUALCOACH.1 (mig 869) — who usually works this shift, in fill order. Each
+  // must be active staff at body.location_id (checkUsualCoaches).
+  usual_coach_ids: z.array(uuidLike).max(MAX_USUAL_COACHES).optional(),
 })
 
 // GET /api/schedule/templates?location_id=xxx
@@ -85,6 +89,10 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
   const kindWrite = resolveTemplateKindWrite({ prior: null, body })
   if (!kindWrite.ok) return NextResponse.json(kindWrite.body, { status: kindWrite.status })
 
+  // USUALCOACH.1 — only staff of THIS studio, decided before any write.
+  const usual = await checkUsualCoaches(db, { locationId: body.location_id, profileIds: body.usual_coach_ids || [] })
+  if (!usual.ok) return NextResponse.json({ success: false, error: usual.error }, { status: usual.status })
+
   const { data: template, error } = await db.from('shift_templates').insert({
     location_id: body.location_id,
     name: body.name,
@@ -100,6 +108,7 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
     // decides both.
     kind: kindWrite.patch.kind,
     min_coaches: kindWrite.patch.min_coaches,
+    usual_coach_ids: usual.ids,
   }).select().single()
 
   if (error) {

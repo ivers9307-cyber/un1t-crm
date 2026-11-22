@@ -147,6 +147,23 @@ export default function ShiftTemplateManager({ user }) {
   }, [locationId])
   useEffect(() => { fetchQuals() }, [fetchQuals])
 
+  // USUALCOACH.1 — the studio's active staff, for the usual-coaches field.
+  // null = not loaded or refused: the editor then shows no field and the save
+  // carries no usual_coach_ids (the server keeps what it has). The pay-free
+  // picker shape, narrowed to this studio.
+  const [studioStaff, setStudioStaff] = useState(null)
+  useEffect(() => {
+    if (!locationId) return undefined
+    let live = true
+    readJson(`/api/staff?fields=picker&location_id=${locationId}`)
+      .then((data) => { if (live) setStudioStaff(usualCoachOptions(data?.data, locationId)) })
+      .catch(() => { if (live) setStudioStaff(null) })
+    return () => { live = false }
+  }, [locationId])
+  const usualNamesFor = (t) => (t?.usual_coach_ids || [])
+    .map((id) => studioStaff?.find((p) => p.id === id)?.full_name)
+    .filter(Boolean)
+
   const requiredIdsFor = (templateId) => (templateId && quals?.requirements?.[templateId]) || []
   // The list chip names ACTIVE types only: the picker does not advise on an
   // archived one, so the chip would promise a check that never happens.
@@ -474,6 +491,14 @@ export default function ShiftTemplateManager({ user }) {
                           Requires {requiredNamesFor(t.id).join(', ')}
                         </span>
                       )}
+                      {usualNamesFor(t).length > 0 && (
+                        <span
+                          className="text-xs px-1.5 py-0.5 rounded font-medium bg-emerald-500/10 text-emerald-700"
+                          title="Put on new shifts each night, unless on leave, unable to work or already on another shift."
+                        >
+                          Usually {usualNamesFor(t).join(', ')}
+                        </span>
+                      )}
                       {oneOff ? (
                         <span
                           className="text-xs px-1.5 py-0.5 rounded font-medium bg-slate-500/10 text-slate-700"
@@ -590,6 +615,7 @@ export default function ShiftTemplateManager({ user }) {
           onClose={() => setShowForm(false)}
           qualificationTypes={editorTypesFor(typeof showForm === 'object' ? showForm.id : null)}
           requiredIds={requiredIdsFor(typeof showForm === 'object' ? showForm.id : null)}
+          staffOptions={studioStaff}
         />
       )}
 
@@ -605,7 +631,7 @@ export default function ShiftTemplateManager({ user }) {
   )
 }
 
-function TemplateFormModal({ template, onSave, onClose, qualificationTypes = null, requiredIds = [] }) {
+function TemplateFormModal({ template, onSave, onClose, qualificationTypes = null, requiredIds = [], staffOptions = null }) {
   const [name, setName] = useState(template?.name || '')
   const [startTime, setStartTime] = useState(template?.start_time?.slice(0, 5) || '06:00')
   const [endTime, setEndTime] = useState(template?.end_time?.slice(0, 5) || '14:00')
@@ -637,6 +663,20 @@ function TemplateFormModal({ template, onSave, onClose, qualificationTypes = nul
     ? { types: qualificationTypes, before: [...(requiredIds || [])] }
     : null))
   const [requiredQuals, setRequiredQuals] = useState(() => qualSnapshot?.before || [])
+  // USUALCOACH.1 — the same snapshot rule as the requirements: staff not
+  // loaded when the form opened = no field and no usual_coach_ids in the save.
+  // A saved coach who is no longer active staff here is dropped from the
+  // starting selection, so the next save cleans the list up.
+  // An EMPTY list is treated as not loaded: opening on [] would read every
+  // saved coach as "no longer here" and the save would wipe the list.
+  const [usualSnapshot] = useState(() => (Array.isArray(staffOptions) && staffOptions.length > 0
+    ? { staff: staffOptions, saved: template?.usual_coach_ids || [] }
+    : null))
+  const [usualCoaches, setUsualCoaches] = useState(() => (usualSnapshot
+    ? usualSnapshot.saved.filter((id) => usualSnapshot.staff.some((p) => p.id === id))
+    : []))
+  const usualChanged = usualSnapshot
+    && (usualCoaches.length !== usualSnapshot.saved.length || usualCoaches.some((id, i) => usualSnapshot.saved[i] !== id))
 
   function chooseKind(next) {
     if (next === kind) return
@@ -830,6 +870,8 @@ function TemplateFormModal({ template, onSave, onClose, qualificationTypes = nul
 
           <TemplateQualificationsField types={qualSnapshot?.types || null} selected={requiredQuals} onChange={setRequiredQuals} />
 
+          <UsualCoachesField staff={usualSnapshot?.staff || null} selected={usualCoaches} onChange={setUsualCoaches} />
+
           <div>
             <label className="block text-xs text-un1t-subtle mb-2">Colour</label>
             <div className="flex gap-2 flex-wrap">
@@ -868,6 +910,7 @@ function TemplateFormModal({ template, onSave, onClose, qualificationTypes = nul
               ...(qualSnapshot
                 ? { required_qualification_type_ids: requiredQuals, required_qualification_type_ids_before: qualSnapshot.before }
                 : {}),
+              ...(usualChanged ? { usual_coach_ids: usualCoaches } : {}),
             })
           }
           disabled={!name || !startTime || !endTime}
@@ -909,6 +952,53 @@ function TemplateQualificationsField({ types, selected, onChange }) {
       </div>
       <p className="text-[11px] text-un1t-subtle mt-1.5">
         The coach picker flags anyone without a current record on the day. It never stops you assigning them. Up to {MAX_TEMPLATE_REQUIREMENTS}.
+      </p>
+    </fieldset>
+  )
+}
+
+/**
+ * USUALCOACH.1 — who can be a usual coach here: active staff linked to this
+ * studio, A to Z. The server checks the same rule on save. Pure, exported for
+ * tests.
+ */
+export function usualCoachOptions(staff, locationId) {
+  return (Array.isArray(staff) ? staff : [])
+    .filter((p) => p?.id && p.active !== false
+      && (p.profile_locations || []).some((l) => l?.location_id === locationId))
+    .map((p) => ({ id: p.id, full_name: p.full_name || 'Unnamed' }))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name))
+}
+
+// USUALCOACH.1 — the coaches who usually work this shift. Ticked order is fill
+// order (the fill stops at the shift's maximum).
+function UsualCoachesField({ staff, selected, onChange }) {
+  if (!staff || staff.length === 0) return null
+  const nameOf = (id) => staff.find((p) => p.id === id)?.full_name
+  return (
+    <fieldset>
+      <legend className="block text-xs text-un1t-subtle mb-2">Usual coaches</legend>
+      <div className="flex flex-wrap gap-2">
+        {staff.map((p) => {
+          const on = selected.includes(p.id)
+          return (
+            <label
+              key={p.id}
+              className={`flex items-center gap-1.5 text-sm px-2 py-1 rounded-md border ${on ? 'border-un1t-text' : 'border-un1t-border'}`}
+            >
+              <input
+                type="checkbox"
+                checked={on}
+                onChange={() => onChange(on ? selected.filter((id) => id !== p.id) : [...selected, p.id])}
+              />
+              {p.full_name}
+            </label>
+          )
+        })}
+      </div>
+      <p className="text-[11px] text-un1t-subtle mt-1.5">
+        Put on each new shift every night, and on an empty week with &ldquo;Fill usual coaches&rdquo;. Skipped when on leave, unable to work or already on another shift.
+        {selected.length > 1 && <> Order: {selected.map(nameOf).filter(Boolean).join(', ')}.</>}
       </p>
     </fieldset>
   )

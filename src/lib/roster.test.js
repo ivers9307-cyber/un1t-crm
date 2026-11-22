@@ -367,7 +367,7 @@ describe('generateBlocksForTemplate', () => {
       const result = await generateBlocksForTemplate(db, tpl, '2026-05-04', 2)
       const dates = upsertMock.mock.calls[0][0].map((r) => r.block_date)
       expect(dates).toEqual(['2026-05-04', '2026-05-11', '2026-05-13'])
-      expect(result).toEqual({ inserted: 3, skipped: 0, removed: 1 })
+      expect(result).toEqual({ inserted: 3, skipped: 0, removed: 1, insertedIds: ['a', 'b', 'c'] })
     })
 
     it('reads removals once, scoped to the location, template and window', async () => {

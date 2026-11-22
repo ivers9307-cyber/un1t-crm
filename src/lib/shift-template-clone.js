@@ -45,7 +45,7 @@ export const TEMPLATE_CLONE_COLUMNS = Object.freeze([
   'kind',
 ])
 
-/** Never copied: identity, or set by the copy (active = true, display_order = after the target's). */
+/** Never copied: identity, or set by the copy (active = true, display_order = after the target's), or studio-bound (usual_coach_ids). */
 export const TEMPLATE_CLONE_MANAGED_COLUMNS = Object.freeze([
   'id',
   'location_id',
@@ -53,6 +53,9 @@ export const TEMPLATE_CLONE_MANAGED_COLUMNS = Object.freeze([
   'updated_at',
   'active',
   'display_order',
+  // USUALCOACH.1 (mig 869) — never copied: the usual coaches are THIS studio's
+  // staff; the copy lands with none (the column default).
+  'usual_coach_ids',
 ])
 
 export const CLONE_SKIP_REASONS = Object.freeze({

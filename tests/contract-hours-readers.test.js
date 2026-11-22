@@ -129,6 +129,7 @@ const REVIEWED = {
   'src/lib/report-generator.js': 'writes staff_cost and utilisation, both admin-only report types',
   'src/lib/wrc-pack.js': 'the WRC inspection pack (WRCPACK.1): every person\'s contracted hours and rate for the whole organisation, served only by /api/schedule/reports/wrc-pack to canDownloadWrcPack — master, an org admin of the organisation, or an owner at one of its studios',
   'src/lib/roster-grid-data.js': 'reads the column only when showContract',
+  'src/lib/shift-usual-coaches.js': 'USUALCOACH.1: calls loadBlockCandidates without withContract (so no contract is read) and returns only block ids, profile ids and skip reasons',
   'src/lib/roster-grid-model.js': 'pure; the key exists only when the grid route sent it',
   'src/lib/roster-publish.js': 'publish gate: loadHolderPay on the server for the budget check; returns euro totals and advisories, never a person\'s contract',
   'src/lib/roster-summary-server.js': 'server-only contractor spend aggregates via loadHolderPay; the response is pinned to an exact key list with no per-person pay, and its one salary-derived key (fteImplicitCostEur) is classified so the route withholds it below ADMIN_ROLES (FTECOSTVIS.1)',

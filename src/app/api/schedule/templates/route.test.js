@@ -163,3 +163,87 @@ describe('/api/schedule/templates — signed out', () => {
     expect(res.status).toBe(401)
   })
 })
+
+// USUALCOACH.1 — usual coaches on create: only active staff of THIS studio.
+describe('POST /api/schedule/templates — usual coaches (USUALCOACH.1)', () => {
+  const MGR = { id: 'm', role: 'manager', profileRole: 'manager', activeLocation: { id: LOC_A }, locations: [{ id: LOC_A }], rolesByLocation: { [LOC_A]: 'manager' } }
+  const P1 = 'c0000000-0000-4000-8000-000000000001'
+  const P2 = 'c0000000-0000-4000-8000-000000000002'
+  const P_OTHER = 'c0000000-0000-4000-8000-000000000003'
+  const P_OFF = 'c0000000-0000-4000-8000-000000000004'
+  // profile_locations rows by studio; P_OFF is linked but deactivated.
+  const LINKS = {
+    [LOC_A]: [
+      { profile_id: P1, role: 'staff', profiles: { id: P1, full_name: 'One', active: true, deleted_at: null, employment_type: 'employee' } },
+      { profile_id: P2, role: 'staff', profiles: { id: P2, full_name: 'Two', active: null, deleted_at: null, employment_type: 'contractor' } },
+      { profile_id: P_OFF, role: 'staff', profiles: { id: P_OFF, full_name: 'Off', active: false, deleted_at: null, employment_type: 'employee' } },
+    ],
+    [LOC_B]: [
+      { profile_id: P_OTHER, role: 'staff', profiles: { id: P_OTHER, full_name: 'Other', active: true, deleted_at: null, employment_type: 'employee' } },
+    ],
+  }
+
+  function dbWithMembers() {
+    const base = buildDb()
+    const memberReads = []
+    const from = (table) => {
+      if (table !== 'profile_locations') return base.db.from(table)
+      let loc = null
+      const q = {
+        select: () => q,
+        eq: (col, v) => { if (col === 'location_id') loc = v; return q },
+        order: () => q,
+        range: () => q,
+        then: (ok, bad) => { memberReads.push(loc); return Promise.resolve({ data: LINKS[loc] || [], error: null }).then(ok, bad) },
+      }
+      return q
+    }
+    return { ...base, memberReads, db: { from } }
+  }
+
+  it('saves the coaches in the order picked, repeats dropped', async () => {
+    getCurrentUser.mockResolvedValue(MGR)
+    const { db, insertSpy, memberReads } = dbWithMembers()
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ ...body(LOC_A), usual_coach_ids: [P2, P1, P2] }))).status).toBe(201)
+    expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({ usual_coach_ids: [P2, P1] }))
+    expect(memberReads).toEqual([LOC_A])
+  })
+
+  it('defaults to none', async () => {
+    getCurrentUser.mockResolvedValue(MGR)
+    const { db, insertSpy } = dbWithMembers()
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req(body(LOC_A)))).status).toBe(201)
+    expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({ usual_coach_ids: [] }))
+  })
+
+  it('refuses staff of another studio and deactivated staff, and inserts nothing', async () => {
+    getCurrentUser.mockResolvedValue(MGR)
+    for (const id of [P_OTHER, P_OFF]) {
+      const { db, insertSpy } = dbWithMembers()
+      createServerClient.mockReturnValue(db)
+      const res = await POST(req({ ...body(LOC_A), usual_coach_ids: [P1, id] }))
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toMatch(/not active staff at this studio/)
+      expect(insertSpy).not.toHaveBeenCalled()
+    }
+  })
+
+  it('refuses a malformed id', async () => {
+    getCurrentUser.mockResolvedValue(MGR)
+    const { db, insertSpy } = dbWithMembers()
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ ...body(LOC_A), usual_coach_ids: ['nope'] }))).status).toBe(400)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('a staff member at the studio cannot set them (template permission)', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC_A))
+    const { db, insertSpy, memberReads } = dbWithMembers()
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ ...body(LOC_B), usual_coach_ids: [P_OTHER] }))).status).toBe(403)
+    expect(insertSpy).not.toHaveBeenCalled()
+    expect(memberReads).toEqual([])
+  })
+})

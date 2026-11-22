@@ -342,9 +342,10 @@ export async function fetchSlotRemovalKeys(db, { locationId, templateIds = null,
  *                               start of current week)
  * @param {number} weeks         how many weeks to project forward
  *                               from fromDate (default 8)
- * @returns {Promise<{ inserted: number, skipped: number, removed?: number }>}
+ * @returns {Promise<{ inserted: number, skipped: number, removed?: number, insertedIds?: string[] }>}
  *   `removed` counts dates skipped because a manager deleted that slot
  *   (SLOTREMOVAL.1); they are in neither `inserted` nor `skipped`.
+ *   `insertedIds` (USUALCOACH.1) — ids of the blocks this call created.
  */
 export async function generateBlocksForTemplate(db, template, fromDate = null, weeks = 8) {
   const days = template.days_of_week || []
@@ -412,7 +413,11 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
   if (error) throw new Error(`Failed to generate blocks: ${error.message}`)
 
   const inserted = (data || []).length
-  return { inserted, skipped: dates.length - inserted, removed: removedCount }
+  // USUALCOACH.1 — the ids of the blocks THIS call created (ignoreDuplicates
+  // returns only those), so the nightly horizon fills its usual coaches onto
+  // new shifts only, never onto one a manager has already seen.
+  const insertedIds = (data || []).map((r) => r.id).filter(Boolean)
+  return { inserted, skipped: dates.length - inserted, removed: removedCount, insertedIds }
 }
 
 /**
