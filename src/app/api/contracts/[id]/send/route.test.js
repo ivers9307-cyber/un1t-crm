@@ -216,3 +216,34 @@ describe('POST /api/contracts/[id]/send', () => {
     expect(res.status).toBe(500)
   })
 })
+
+// SECGAPS.1 — through the shared schema-checked fake: the answer carries
+// named columns only, never the rendered body, variables or signatures.
+describe('POST /api/contracts/[id]/send — response columns (SECGAPS.1)', () => {
+  it('answers id, status and issued_at only; the row is still issued in full', async () => {
+    const { createFakeDb } = await import('../../../../../../tests/helpers/fake-db.js')
+    const CID = 'c5000000-0000-4000-8000-000000000001'
+    const db = createFakeDb({ tables: {
+      contracts: [{
+        id: CID, status: 'draft', organization_id: ORG_A, location_id: LOC_A1, profile_id: 'recipient-1', template_id: 'tpl-1',
+        body_rendered: 'Dear Jane, your salary is …', variables_data: { salary: 40000 }, issuer_signature: 'sig-data',
+        issued_at: '2026-07-01T00:00:00.000Z',
+      }],
+      profiles: [{ id: 'recipient-1', full_name: 'Jane Doe', email: 'jane@example.com' }],
+      contract_templates: [{ id: 'tpl-1', name: 'FTE Contract' }],
+    } })
+    getCurrentUser.mockResolvedValue(ownerOfAUser)
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(FAKE_REQUEST, { params: { id: CID } })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(Object.keys(body.data).sort()).toEqual(['id', 'issued_at', 'status'])
+    expect(body.data).toMatchObject({ id: CID, status: 'issued' })
+    expect(JSON.stringify(body)).not.toMatch(/salary|sig-data/)
+    expect(db.tables.contracts[0].status).toBe('issued')
+    // What is sent is unchanged: the notifier still gets the full updated row.
+    expect(notifyContractIssued.mock.calls[0][0].contract).toMatchObject({ id: CID, body_rendered: expect.any(String), profile: { full_name: 'Jane Doe' } })
+  })
+})
+

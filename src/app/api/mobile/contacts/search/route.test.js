@@ -16,6 +16,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 import { getCurrentUser } from '@/lib/auth'
 import { hasMobilePermission } from '@/lib/permissions'
 import { GET, MOBILE_CONTACT_SEARCH_COLUMNS, MOBILE_CONTACT_SEARCH_MAX } from './route.js'
+import { createFakeDb } from '../../../../../../tests/helpers/fake-db.js'
 
 const HATCH = { id: 'loc-hatch', name: 'Hatch Street' }
 const user = (over = {}) => ({ id: 'u1', role: 'staff', locations: [HATCH], activeLocation: HATCH, ...over })
@@ -105,3 +106,25 @@ describe('GET /api/mobile/contacts/search', () => {
     expect(JSON.stringify(body)).not.toMatch(/permission denied/)
   })
 })
+
+describe('SECGAPS.1 — search tokens are literal', () => {
+  it('escapes _ and \\ in every name/email clause; * is stripped like %', async () => {
+    await GET(req('?q=' + encodeURIComponent('a_b c\\d e*f')))
+    const [call] = db.calls
+    expect(call.or).toHaveLength(3)
+    expect(call.or[0]).toBe('name.ilike.%a\\_b%,email.ilike.%a\\_b%,first_name.ilike.%a\\_b%,last_name.ilike.%a\\_b%')
+    expect(call.or[1]).toBe('name.ilike.%c\\\\d%,email.ilike.%c\\\\d%,first_name.ilike.%c\\\\d%,last_name.ilike.%c\\\\d%')
+    expect(call.or[2]).toBe('name.ilike.%ef%,email.ilike.%ef%,first_name.ilike.%ef%,last_name.ilike.%ef%')
+  })
+
+  it('against real ILIKE semantics, `_` no longer matches any character', async () => {
+    db = createFakeDb({ tables: { studio_contacts: [
+      { id: 'c-1', name: 'Jo_Ann', studio_location_id: 'loc-hatch', is_primary_contact: true },
+      { id: 'c-2', name: 'JoXAnn', studio_location_id: 'loc-hatch', is_primary_contact: true },
+    ] } })
+    const res = await GET(req('?q=' + encodeURIComponent('o_a')))
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.contacts.map((c) => c.id)).toEqual(['c-1'])
+  })
+})
+

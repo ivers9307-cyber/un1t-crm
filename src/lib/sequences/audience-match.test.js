@@ -39,7 +39,7 @@ function pageable(rows) {
   return q
 }
 
-function mockDb({ sequences = [], enrolledContactIds = [] } = {}) {
+function mockDb({ sequences = [], enrolledContactIds = [], enrolledRows = null } = {}) {
   return {
     from: vi.fn((table) => {
       if (table === 'email_sequences') {
@@ -51,7 +51,7 @@ function mockDb({ sequences = [], enrolledContactIds = [] } = {}) {
         }
       }
       if (table === 'sequence_enrollments') {
-        return { select: vi.fn(() => pageable(enrolledContactIds.map(id => ({ contact_id: id })))) }
+        return { select: vi.fn(() => pageable(enrolledRows || enrolledContactIds.map(id => ({ contact_id: id })))) }
       }
       // TZ.4 — the sweep reads every sequence's studio zone once per run;
       // "no rows" puts each studio on the Europe/Dublin floor, as before.
@@ -205,5 +205,48 @@ describe('isInsideSendWindow', () => {
     expect(isInsideSendWindow(new Date('2026-08-20T13:00:00.000Z'), w)).toBe(true)   // 14:00 Dublin
     expect(isInsideSendWindow(new Date('2026-08-20T02:00:00.000Z'), w)).toBe(false)  // 03:00 Dublin
     expect(isInsideSendWindow(new Date('2026-08-20T21:00:00.000Z'), w)).toBe(false)  // 22:00 Dublin
+  })
+})
+
+// COOLDOWN.1 — a finished run is no longer "handled forever" when the sequence
+// has a cooldown: once it has passed since the run ended, a contact who still
+// matches is offered to enrolContacts again (which re-activates their row).
+describe('runAudienceMatchTriggers — re-entry after the cooldown (COOLDOWN.1)', () => {
+  const DAY = 86_400_000
+  const ago = (days) => new Date(INSIDE.getTime() - days * DAY).toISOString()
+  const rows = [
+    { contact_id: 'old-done', status: 'completed', last_processed_at: ago(40), enrolled_at: ago(45) },
+    { contact_id: 'old-exit', status: 'exited', exited_at: ago(31), last_processed_at: ago(35), enrolled_at: ago(50) },
+    { contact_id: 'recent', status: 'completed', last_processed_at: ago(5), enrolled_at: ago(10) },
+    { contact_id: 'live', status: 'active', last_processed_at: ago(90), enrolled_at: ago(90) },
+    { contact_id: 'held', status: 'paused', last_processed_at: ago(90), enrolled_at: ago(90) },
+  ]
+  const everyone = ['old-done', 'old-exit', 'recent', 'live', 'held', 'new'].map(id => ({ id }))
+
+  it('offers people whose run ended longer ago than the cooldown, never live or recent ones, newcomers first', async () => {
+    createServerClient.mockReturnValue(mockDb({ sequences: [seq({ re_enrolment_cooldown_days: 30 })], enrolledRows: rows }))
+    buildEligibleAudienceQuery.mockResolvedValue({ query: pageable(everyone) })
+    enrolContacts.mockResolvedValue({ enrolled: 3, skipped: 0 })
+    await runAudienceMatchTriggers({ now: INSIDE })
+    expect(enrolContacts).toHaveBeenCalledTimes(1)
+    expect(enrolContacts.mock.calls[0][0].contactIds).toEqual(['new', 'old-done', 'old-exit'])
+  })
+
+  it('measures from when the run ended: an exit 25 days ago blocks a 30-day cooldown even if the last step was earlier', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      sequences: [seq({ re_enrolment_cooldown_days: 30 })],
+      enrolledRows: [{ contact_id: 'x', status: 'exited', exited_at: ago(25), last_processed_at: ago(60), enrolled_at: ago(70) }],
+    }))
+    buildEligibleAudienceQuery.mockResolvedValue({ query: pageable([{ id: 'x' }]) })
+    await runAudienceMatchTriggers({ now: INSIDE })
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it.each([null, 0])('with no cooldown (%s) a finished run stays final', async (cooldown) => {
+    createServerClient.mockReturnValue(mockDb({ sequences: [seq({ re_enrolment_cooldown_days: cooldown })], enrolledRows: rows }))
+    buildEligibleAudienceQuery.mockResolvedValue({ query: pageable(everyone) })
+    enrolContacts.mockResolvedValue({ enrolled: 1, skipped: 0 })
+    await runAudienceMatchTriggers({ now: INSIDE })
+    expect(enrolContacts.mock.calls[0][0].contactIds).toEqual(['new'])
   })
 })

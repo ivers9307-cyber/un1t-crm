@@ -66,3 +66,17 @@ describe('PATCH /api/instagram/conversations/[id]/agent', () => {
     expect((await res.json()).error).not.toMatch(/instagram_conversations/)
   })
 })
+
+describe('SECGAPS.1 — the inbox key is judged at the thread\'s studio', () => {
+  it('403 at a member studio without the key, nothing changed', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: true } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: false } } }, LOC_A))
+    expect((await patch(T_B)).status).toBe(403)
+    expect(thread(T_B).agent_active).toBe(true)
+  })
+
+  it('changes the thread at a studio where the key is held but not at the active studio', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: true } } }, LOC_A))
+    expect((await patch(T_B)).status).toBe(200)
+    expect(thread(T_B).agent_active).toBe(false)
+  })
+})
