@@ -48,6 +48,15 @@ export async function POST(request, { params }) {
     }, { status: 400 })
   }
 
+  // INVOICEPREP.3 — a credit note sent as a bill would be booked the wrong
+  // way round. Refused before any write or Xero call, on either hop.
+  if (row.extracted_fields.document_type === 'credit_note') {
+    return NextResponse.json({
+      success: false,
+      error: 'This is a credit note. It cannot be sent as a bill.',
+    }, { status: 422 })
+  }
+
   // XERO-BILL-VAT.2 — never send a bill whose VAT rate is undetermined.
   // A confirmed tax_type is required, EXCEPT a genuine 0%-VAT bill, which
   // push resolves to 'NONE' deterministically. Same gate as bulk-send.

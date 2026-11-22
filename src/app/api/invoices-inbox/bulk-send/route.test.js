@@ -100,5 +100,11 @@ describe('POST /api/invoices-inbox/bulk-send', () => {
     expect(pushQueueRowToXero).toHaveBeenCalledWith(A)
     expect(pushQueueRowToXero).toHaveBeenCalledWith(B)
   })
-})
 
+  it.each([[null], [[]]])('a credit note is never sent, whatever its reasons (%j)', async (reasons) => {
+    rows = { [A]: ROW(A, { review_reasons: reasons, extracted_fields: { ...ROW(A).extracted_fields, document_type: 'credit_note' } }) }
+    const { data } = await (await send([A])).json()
+    expect(data.results).toEqual([{ id: A, outcome: 'skipped', reason: 'credit_note' }])
+    expect(pushQueueRowToXero).not.toHaveBeenCalled()
+  })
+})

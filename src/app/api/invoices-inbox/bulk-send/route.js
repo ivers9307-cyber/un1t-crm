@@ -85,6 +85,13 @@ export async function POST(request) {
       results.push({ id, outcome: 'skipped', reason: 'no_extracted_fields' })
       continue
     }
+    // INVOICEPREP.3 — a credit note is never sent as a bill. Prepared rows
+    // already carry the credit_note reason; this also stops a row from before
+    // preparation (no reasons recorded) and a data_approved retry.
+    if (row.extracted_fields.document_type === 'credit_note') {
+      results.push({ id, outcome: 'skipped', reason: 'credit_note' })
+      continue
+    }
     // XERO-BILL-VAT.2 — never send a bill whose VAT rate is undetermined.
     // Skip it while still 'extracted' (don't flip to data_approved) so the
     // bookkeeper can pick a rate and retry. A genuine 0%-VAT bill resolves

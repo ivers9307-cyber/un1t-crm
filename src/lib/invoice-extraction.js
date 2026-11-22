@@ -51,6 +51,12 @@ import { createServerClient } from '@/lib/supabase'
 import { INVOICE_CATEGORIES } from './invoice-categories'
 import { anthropicMessages } from '@/lib/anthropic'
 
+// INVOICEPREP.3 — the reader call's deadline. A read that never answers would
+// otherwise hold the preparation worker until the platform kills it, leaving
+// the row claimed after a paid read. 90 s is well past a normal read (5-15 s)
+// and inside every caller's maxDuration (120 s for /extract).
+export const EXTRACTION_TIMEOUT_MS = 90_000
+
 /**
  * Convert a HEIC/HEIF image (HEVC-encoded — the iPhone default) to JPEG so
  * Claude vision can read it. sharp's prebuilt libvips has NO HEVC decoder
@@ -467,9 +473,13 @@ export async function extractInvoiceFieldsFromBytes(bytes, mime, meta = {}) {
           },
         ],
       },
-      { apiKey, locationId: meta.locationId ?? null, source: 'invoice_ocr' }
+      { apiKey, locationId: meta.locationId ?? null, source: 'invoice_ocr', signal: AbortSignal.timeout(EXTRACTION_TIMEOUT_MS) }
     ))
   } catch (e) {
+    // Returned like every other reader failure: preparation records it as unreadable.
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+      return { ok: false, error: `Anthropic API request timed out after ${EXTRACTION_TIMEOUT_MS / 1000} s` }
+    }
     return { ok: false, error: `Anthropic API request failed: ${e.message || String(e)}` }
   }
 
