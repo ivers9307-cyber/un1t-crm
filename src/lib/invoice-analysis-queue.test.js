@@ -111,14 +111,41 @@ describe.each([
     expect(await run(db, { ...stored(db) })).toEqual(expected)
   })
 
-  it('a throwing prepare clears the claim, keeps the row queued, and reports prepare_threw', async () => {
+  it('a throwing prepare leaves the row untouched (claim and queue kept) and reports prepare_threw', async () => {
     prepareInvoiceRow.mockRejectedValue(new Error('kaboom'))
     const db = seed()
-    const result = await run(db, { ...stored(db) })
+    const row = { ...stored(db) }
+    const result = await run(db, row)
+    const writes = db.calls.filter((c) => c.op === 'update').length
     expect(result).toEqual({ status: 'processed', extractionError: 'prepare_threw' })
-    expect(stored(db).analysis_claimed_at).toBeNull()
-    expect(stored(db).analysis_queued_at).toEqual(expect.any(String))
     expect(logError).toHaveBeenCalled()
+    expect(stored(db).analysis_queued_at).toEqual(expect.any(String))
+    // run() via the claiming entry point wrote exactly the claim; the bare one wrote nothing
+    expect(writes).toBe(_name.startsWith('claim') ? 1 : 0)
+    if (_name.startsWith('claim')) expect(stored(db).analysis_claimed_at).toEqual(expect.any(String))
+    else expect(stored(db).analysis_claimed_at).toBeNull()
+  })
+})
+
+describe('failure pacing', () => {
+  it('after a throw the claim stays fresh: an immediate second claim is skipped, prepare not called again', async () => {
+    prepareInvoiceRow.mockRejectedValue(new Error('kaboom'))
+    const db = seed()
+    const row = { ...stored(db) }
+    await claimAndProcessInvoiceAnalysisRow(db, row)
+    expect(stored(db).analysis_claimed_at).toEqual(expect.any(String))
+    expect(await claimAndProcessInvoiceAnalysisRow(db, row)).toEqual({ status: 'skipped' })
+    expect(prepareInvoiceRow).toHaveBeenCalledTimes(1)
+  })
+
+  it('a claim-update error is logged and skipped without preparing', async () => {
+    const db = createFakeDb({
+      tables: { invoices_queue: [dbRow()] },
+      errors: { invoices_queue: { update: { message: 'boom' } } },
+    })
+    expect(await claimAndProcessInvoiceAnalysisRow(db, { ...stored(db) })).toEqual({ status: 'skipped' })
+    expect(logError).toHaveBeenCalled()
+    expect(prepareInvoiceRow).not.toHaveBeenCalled()
   })
 })
 

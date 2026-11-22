@@ -24,11 +24,14 @@ export async function queueInvoicePreparation(db, ids, { publish = publishQueueP
   if (!Array.isArray(ids) || ids.length === 0) return { queued: [] }
 
   try {
+    // analysis_claimed_at is deliberately left alone: a live claim means a
+    // read is in flight, a stale one is already re-claimable, and a finished
+    // preparation clears its own claim.
     // Rows without a file are included: preparation is what moves them to
     // not_invoice.
     const { data, error } = await db
       .from('invoices_queue')
-      .update({ analysis_queued_at: new Date().toISOString(), analysis_claimed_at: null })
+      .update({ analysis_queued_at: new Date().toISOString() })
       .in('id', ids)
       .in('status', ['received', 'quality_approved'])
       .select('id')

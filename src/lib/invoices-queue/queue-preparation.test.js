@@ -38,11 +38,29 @@ describe('queueInvoicePreparation', () => {
     expect(result).toEqual({ queued: [A, B] })
     const byId = Object.fromEntries(db.tables.invoices_queue.map((r) => [r.id, r]))
     expect(byId[A].analysis_queued_at).toEqual(expect.any(String))
-    expect(byId[A].analysis_claimed_at).toBeNull()
+    expect(byId[A].analysis_claimed_at).toBe('2026-11-22T10:00:00.000Z')
     expect(byId[B].analysis_queued_at).toEqual(expect.any(String))
     expect(byId[C].analysis_queued_at).toBeNull()
     expect(byId[C].analysis_claimed_at).not.toBeNull()
     expect(publish).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps a fresh claim on a stamped row, and stamps a row with no claim', async () => {
+    const fresh = new Date().toISOString()
+    const db = createFakeDb({ tables: { invoices_queue: [row(A, 'received', { analysis_claimed_at: fresh }), row(B, 'received', { analysis_claimed_at: null })] } })
+    const result = await queueInvoicePreparation(db, [A, B], { publish })
+    expect(result).toEqual({ queued: [A, B] })
+    const byId = Object.fromEntries(db.tables.invoices_queue.map((r) => [r.id, r]))
+    expect(byId[A].analysis_claimed_at).toBe(fresh)
+    expect(byId[A].analysis_queued_at).toEqual(expect.any(String))
+    expect(byId[B].analysis_queued_at).toEqual(expect.any(String))
+    expect(publish).toHaveBeenCalledTimes(2)
+  })
+
+  it('resolves { queued: [] } without throwing when the client itself throws', async () => {
+    const db = { from() { throw new Error('client down') } }
+    await expect(queueInvoicePreparation(db, [A], { publish })).resolves.toEqual({ queued: [] })
+    expect(logError).toHaveBeenCalled()
   })
 
   it('publishes exactly as the bulk route does', async () => {

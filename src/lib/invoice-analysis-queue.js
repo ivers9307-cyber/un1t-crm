@@ -20,8 +20,8 @@
 // prepareInvoiceRow and de-queued, so a bad file is never retried forever.
 // That is a *processed* outcome carrying extractionError 'unreadable', NOT
 // a retryable failure: the worker must 200 it so QStash does not re-deliver.
-// An unexpected throw clears the claim but leaves the row queued, so the
-// sweeper retries it.
+// An unexpected throw leaves the claim and the row as they are, so the
+// sweeper retries it only once the claim goes stale (10 minutes).
 
 import { prepareInvoiceRow } from '@/lib/invoices-queue/prepare'
 import { logError } from '@/lib/log'
@@ -49,14 +49,10 @@ export async function processInvoiceAnalysisRow(db, row) {
     if (outcome === 'skipped') return { status: 'skipped' }
     return { status: 'processed' }
   } catch (err) {
-    logError('invoice-analysis-queue', 'prepareInvoiceRow threw; claim cleared, row stays queued', { id: row?.id, err })
-    // Free the claim so the sweeper does not wait out the stale window.
-    const { error } = await db
-      .from('invoices_queue')
-      .update({ analysis_claimed_at: null })
-      .eq('id', row.id)
-      .in('status', PREPARABLE)
-    if (error) logError('invoice-analysis-queue', 'could not clear the claim', { id: row?.id, err: error })
+    logError('invoice-analysis-queue', 'prepareInvoiceRow threw; claim kept, row retried after the stale window', { id: row?.id, err })
+    // The row is left untouched on purpose: a throw can come after the
+    // paid read, so the claim stays fresh and the row waits out
+    // CLAIM_STALE_MINUTES. Clearing it would retry (and pay) every sweep.
     return { status: 'processed', extractionError: 'prepare_threw' }
   }
 }
