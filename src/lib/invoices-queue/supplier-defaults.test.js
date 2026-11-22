@@ -8,6 +8,9 @@
 // shape, and the use_count increment — the bits route code relies on.
 
 import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+import { logWarn } from '@/lib/log'
 import {
   matchSupplier,
   getSupplierDefault,
@@ -156,6 +159,7 @@ describe('recordSupplierDefault', () => {
         p_account_code: '420',
         p_xero_account_id: 'acc-1',
         p_category: 'utilities',
+        p_tax_type: null,
       },
     })
   })
@@ -175,7 +179,38 @@ describe('recordSupplierDefault', () => {
         p_account_code: '400',
         p_xero_account_id: 'acc-9',
         p_category: null,
+        p_tax_type: null,
       },
     })
+  })
+
+  it('passes the tax type through as p_tax_type', async () => {
+    const rpcCalls = []
+    const db = makeDb({ rpcCalls })
+    await recordSupplierDefault(db, {
+      locationId: 'loc1', xeroContactId: 'c1', xeroAccountId: 'acc-1', taxType: 'INPUT2',
+    })
+    expect(rpcCalls[0].args.p_tax_type).toBe('INPUT2')
+  })
+
+  it('logs and does not throw when the rpc reports an error', async () => {
+    const db = {
+      rpc: () => Promise.resolve({ data: null, error: { message: 'boom' } }),
+    }
+    await expect(recordSupplierDefault(db, {
+      locationId: 'loc1', xeroContactId: 'c1', xeroAccountId: 'acc-1',
+    })).resolves.toBeUndefined()
+    expect(logWarn).toHaveBeenCalled()
+  })
+})
+
+describe('remembered tax type', () => {
+  it('is not put into the extraction patch', async () => {
+    const db = makeDb({
+      contacts: [{ xero_contact_id: 'c1', name: 'Acme Ltd', email: null }],
+      defaultRow: { default_xero_account_id: 'acc-1', default_tax_type: 'INPUT2' },
+    })
+    const patch = await resolveExtractionDefaults(db, 'loc1', 'Acme Ltd')
+    expect(patch).not.toHaveProperty('tax_type')
   })
 })

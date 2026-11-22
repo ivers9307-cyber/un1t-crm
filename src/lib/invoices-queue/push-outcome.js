@@ -66,6 +66,11 @@ export async function rememberSupplierCoding(db, row) {
   const ef = row?.extracted_fields || {}
   const ref = ef.xero_contact_ref
   if (!(ref?.kind === 'existing' && ref.xero_contact_id && ef.xero_account_id)) return false
+  // A stated zero total tax is worth remembering as 'NONE'; a missing amount is
+  // not (null keeps the stored rate).
+  const rawTax = ef.tax_amount
+  const statedZero = rawTax !== null && rawTax !== undefined && String(rawTax).trim() !== '' && Number(rawTax) === 0
+  const taxType = typeof ef.tax_type === 'string' && ef.tax_type.trim() ? ef.tax_type : (statedZero ? 'NONE' : null)
   await recordSupplierDefault(db, {
     locationId: row.location_id,
     xeroContactId: ref.xero_contact_id,
@@ -73,6 +78,7 @@ export async function rememberSupplierCoding(db, row) {
     accountCode: ef.account_code || null,
     xeroAccountId: ef.xero_account_id,
     category: ef.category || null,
+    taxType,
   })
   return true
 }
