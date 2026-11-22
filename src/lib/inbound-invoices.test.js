@@ -293,6 +293,35 @@ describe('classifyInboundAttachments', () => {
     expect(r.skippedInline).toBe(0)
     expect(r.usable).toHaveLength(2)
   })
+  it('uses bytes already read from Storage when Content is empty', () => {
+    const doc = { Name: 'a.docx', ContentType: 'application/msword', Content: 'AAAA' }
+    const staged = { Name: 'big.pdf', ContentType: 'application/octet-stream', Content: '', bytes: Buffer.from('%PDF-1.4 x') }
+    const r = classifyInboundAttachments([doc, staged], '')
+    expect(r.usable).toHaveLength(1)
+    expect(r.usable[0]).toMatchObject({ name: 'big.pdf', mime: 'application/pdf', index: 1 })
+    expect(Buffer.isBuffer(r.usable[0].bytes)).toBe(true)
+  })
+  it('accepts a Uint8Array as the bytes', () => {
+    const r = classifyInboundAttachments([{ Name: 'a.pdf', Content: '', bytes: new Uint8Array(Buffer.from('%PDF-1.4 x')) }], '')
+    expect(r.usable[0]).toMatchObject({ mime: 'application/pdf', index: 0 })
+    expect(Buffer.isBuffer(r.usable[0].bytes)).toBe(true)
+  })
+  it('skips an inline logo when the only other attachment is already stored', () => {
+    const r = classifyInboundAttachments([null, logo()], html, { alreadyStored: [{ mime: 'application/pdf', sizeBytes: 5000 }] })
+    expect(r.usable).toEqual([])
+    expect(r.skippedInline).toBe(1)
+  })
+  it('counts a stored attachment with unknown type or size as a real one', () => {
+    const r = classifyInboundAttachments([null, logo()], html, { alreadyStored: [{ mime: null, sizeBytes: null }] })
+    expect(r.skippedInline).toBe(1)
+  })
+  it('keeps an inline image when the only stored one was itself an inline image', () => {
+    const r = classifyInboundAttachments([null, logo()], '<img src="cid:cid1"><img src="cid:cid0">', {
+      alreadyStored: [{ mime: 'image/png', sizeBytes: 16, contentId: 'cid0' }],
+    })
+    expect(r.usable).toHaveLength(1)
+    expect(r.skippedInline).toBe(0)
+  })
   it('matches a ContentID at the end of the body or before a delimiter', () => {
     expect(classifyInboundAttachments([pdf(), logo({ ContentID: 'a1' })], 'see cid:A1').skippedInline).toBe(1)
     expect(classifyInboundAttachments([pdf(), logo({ ContentID: 'a.1' })], "<img src='cid:a.1'>").skippedInline).toBe(1)

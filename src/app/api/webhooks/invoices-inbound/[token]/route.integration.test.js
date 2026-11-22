@@ -28,7 +28,15 @@ const pdf = (Name) => ({ Name, ContentType: 'application/pdf', Content: PDF })
 const claims = () => (db.tables.webhook_events || []).filter((r) => r.event_id === 'inbound-invoice:msg-1')
 const queue = () => db.tables.invoices_queue || []
 
-let upload, savedToken
+// The shim's shape: bytes parked at inbound/<MessageID>/<index>.<ext>, Content emptied.
+const PDF_BYTES = Buffer.from(PDF, 'base64')
+const stagedPdf = (Name, index) => {
+  const path = `inbound/msg-1/${index}.pdf`
+  files.set(path, PDF_BYTES)
+  return { Name, ContentType: 'application/pdf', Content: '', _un1t_staged: { v: 1, path, bytes: PDF_BYTES.length } }
+}
+
+let upload, download, remove, files, buckets, savedToken
 function makeDb(opts = {}) {
   const fake = createFakeDb({
     tables: { locations: [{ id: LOC, name: 'North', invoices_inbound_slug: 'north' }], invoices_queue: [], webhook_events: [] },
@@ -48,7 +56,12 @@ function makeDb(opts = {}) {
     }
     return q
   }
-  fake.storage = { from: () => ({ upload }) }
+  fake.storage = {
+    from: (bucket) => {
+      buckets.push(bucket)
+      return { upload, download, remove }
+    },
+  }
   return fake
 }
 
@@ -56,6 +69,15 @@ beforeEach(() => {
   savedToken = process.env.POSTMARK_INBOUND_WEBHOOK_TOKEN
   process.env.POSTMARK_INBOUND_WEBHOOK_TOKEN = TOKEN
   upload = vi.fn(async () => ({ error: null }))
+  files = new Map()
+  buckets = []
+  download = vi.fn(async (path) => (files.has(path)
+    ? { data: new Blob([files.get(path)]), error: null }
+    : { data: null, error: { message: 'Object not found' } }))
+  remove = vi.fn(async (paths) => {
+    for (const p of paths) files.delete(p)
+    return { data: [], error: null }
+  })
   db = makeDb()
 })
 afterEach(() => {
@@ -91,6 +113,33 @@ describe('inbound invoice webhook, end to end over the fake database', () => {
     db = makeDb({ errors: { webhook_events: { insert: { message: 'down' } } } })
     const res = await POST(req(email([pdf('a.pdf')])), ctx())
     expect(res.status).toBe(200)
+    expect(queue()).toHaveLength(1)
+    expect(queue()[0].attachment_path).toBeTruthy()
+  })
+
+  it('stores a staged attachment and removes the staged file', async () => {
+    const res = await POST(req(email([stagedPdf('a.pdf', 0)])), ctx())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, created: 1 })
+    expect(queue()).toHaveLength(1)
+    expect(queue()[0].attachment_path && queue()[0].content_hash).toBeTruthy()
+    expect(remove).toHaveBeenCalledWith(['inbound/msg-1/0.pdf'])
+    expect(files.size).toBe(0)
+    expect(new Set(buckets)).toEqual(new Set(['inbound-invoices']))
+  })
+
+  it('a failed staged download answers 500 and frees the claim; the retry stores it', async () => {
+    const body = email([stagedPdf('a.pdf', 0)])
+    files.clear()
+    const first = await POST(req(body), ctx())
+    expect(first.status).toBe(500)
+    expect(await first.json()).toMatchObject({ success: false, error: 'staged_download_failed' })
+    expect(claims()).toHaveLength(0)
+    expect(queue()).toHaveLength(0)
+
+    files.set('inbound/msg-1/0.pdf', PDF_BYTES)
+    const again = await POST(req(body), ctx())
+    expect(again.status).toBe(200)
     expect(queue()).toHaveLength(1)
     expect(queue()[0].attachment_path).toBeTruthy()
   })
