@@ -8,7 +8,7 @@ Shift arrivals auto-stamp from an OS-level geofence around the gym,
 registered by the CRM mobile app. Owner / manager / master see the
 report at `/schedule/attendance`; staff do not (gated by the
 `attendance_reports` permission, default off for `staff` and
-`head_coach`). Manual entry is the other way a shift gets stamped: a manager with `attendance_reports` enters the time on the attendance report (Enter / Edit on a row), saved by `PUT /api/attendance/arrival` with `arrival_source = 'manual'` (ARRIVALFIX.1). A phone (geofence) arrival is never overwritten there.
+`head_coach`). Manual entry is the other way a shift gets stamped: a manager with `attendance_reports` enters the time on the attendance report (Enter / Edit on a row), saved by `PUT /api/attendance/arrival` with `arrival_source = 'manual'` (ARRIVALFIX.1). A phone (geofence) arrival can be corrected there too (ARRIVALFIX.2): the stamp becomes `manual`, the phone's own `staff_attendance_events` row is left as it was, and the correction's event row keeps the previous time and source. The geofence check-in only stamps an empty `arrived_at`, so it never undoes a correction.
 
 ### Historical note — the UniFi pipelines (removed 2026-07-31)
 
