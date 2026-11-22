@@ -186,7 +186,7 @@ const blankToNull = (schema) =>
 // INVOICEPREP.3 — what kind of document the reader saw, so statements and
 // non-invoices can be set aside automatically. Optional everywhere: rows
 // extracted before this field existed, and editor saves, carry none.
-export const INVOICE_DOCUMENT_TYPES = Object.freeze(['invoice', 'receipt', 'statement', 'other'])
+export const INVOICE_DOCUMENT_TYPES = Object.freeze(['invoice', 'receipt', 'credit_note', 'statement', 'other'])
 
 const lineItem = z.object({
   description: z.string().min(1).max(500),
@@ -298,7 +298,7 @@ Required fields:
 - tax_amount (number) — VAT / GST / sales tax total
 - total (number) — invoice total including tax. Must equal subtotal + tax_amount within 0.01.
 - category (string | null) — one of: utilities, cleaning, equipment, marketing, insurance, rent, maintenance, professional_services, staff_training, office_supplies, software, bank_fees, other. Pick the SINGLE best match for the whole invoice based on the supplier name and what the invoice is for. Use null only if genuinely unclear.
-- document_type (string) — one of: invoice, receipt, statement, other. "invoice" is a bill asking for payment for goods or services. "receipt" is proof of a payment already made (a till or card receipt). "statement" lists several invoices or a running balance and is not itself a bill. "other" is anything else: a logo, a signature image, a photo, a letter, a quote, a delivery note, a remittance advice.
+- document_type (string) — one of: invoice, receipt, credit_note, statement, other. Never null. "invoice" is any bill asking for payment for goods or services, including a utility bill and a pro-forma invoice. "receipt" is proof of a payment already made: a till or card receipt, an invoice marked paid, a subscription or online payment receipt. "credit_note" is a document from a supplier that reduces what is owed (a credit note, a refund note). "statement" lists several invoices or a running balance and is not itself a bill. "other" is something that is clearly not a bill, a credit note or proof of payment: a logo, a signature image, a photo of something else, a letter, a quote, a delivery note, a remittance advice. When unsure between invoice and other, choose invoice.
 - account_code (string | null) — only suggest a value if the supplier matches an obvious accounting category (e.g. an electric utility → "Utilities" account code if visible on the invoice). Otherwise null and let the operator decide.
 
 Category guidance:
@@ -321,7 +321,8 @@ Rules:
 - Numbers must be JSON numbers, not strings. Strip currency symbols, commas, and any other formatting.
 - Dates must be ISO format. If the invoice shows "12/03/2026" or "12 March 2026", convert to "2026-03-12".
 - If a field is genuinely absent, use null (for optional fields) or your best inference from context (for required fields). Never invent supplier names or invoice numbers.
-- For a document_type of statement or other, still return the JSON object, with supplier_name as best read (or "Unknown"), total 0, and the other fields null.
+- For a document_type of statement or other ONLY: still return the JSON object, with supplier_name as best read (or "Unknown"), total 0 (do not put a statement's balance in total), and the other fields null.
+- For an invoice, receipt or credit_note, never return 0 for a total you could not read. If the total cannot be read, return null for total. For a credit_note, return the amounts as positive numbers.
 - Return ONLY the JSON object, starting with { and ending with }. No markdown fences. No "Here is the JSON:" preamble.`
 
 /**

@@ -430,11 +430,11 @@ describe('invoiceFieldsSchema — document_type', () => {
   }
 
   it('lists the four kinds, frozen', () => {
-    expect([...INVOICE_DOCUMENT_TYPES]).toEqual(['invoice', 'receipt', 'statement', 'other'])
+    expect([...INVOICE_DOCUMENT_TYPES]).toEqual(['invoice', 'receipt', 'credit_note', 'statement', 'other'])
     expect(Object.isFrozen(INVOICE_DOCUMENT_TYPES)).toBe(true)
   })
 
-  it.each(['invoice', 'receipt', 'statement', 'other'])('accepts %s', (document_type) => {
+  it.each(['invoice', 'receipt', 'credit_note', 'statement', 'other'])('accepts %s', (document_type) => {
     const r = invoiceFieldsSchema.safeParse({ ...base, document_type })
     expect(r.success).toBe(true)
     expect(r.data.document_type).toBe(document_type)
