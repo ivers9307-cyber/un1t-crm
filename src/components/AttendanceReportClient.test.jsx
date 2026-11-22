@@ -149,12 +149,27 @@ describe('AttendanceReportClient (ATTENDREPORT.1)', () => {
 describe('AttendanceReportClient — manual arrival (ARRIVALFIX.1)', () => {
   const NO_ARRIVAL = { ...ROW, assignment_id: 'a2', actual_start: null, arrival_at: null, status: 'no_show', minutes_late: null, sources: [] }
 
-  it('offers Enter on a row with no arrival, and none on a phone arrival', async () => {
+  it('offers Enter on a row with no arrival, and Edit on a phone arrival (ARRIVALFIX.2)', async () => {
     fetchMock.mockReturnValue(ok({ rows: [ROW, NO_ARRIVAL] }))
     render(<AttendanceReportClient activeLocationName="Studio One" />)
     await screen.findAllByText('Coach A')
     expect(screen.getAllByRole('button', { name: /^Enter arrival for Coach A/ })).toHaveLength(1)
-    expect(screen.queryByRole('button', { name: /^Edit arrival/ })).toBeNull()
+    expect(screen.getAllByRole('button', { name: /^Edit arrival for Coach A/ })).toHaveLength(1)
+  })
+
+  it('ARRIVALFIX.2 — corrects a phone arrival: starts at what the phone recorded, says it is kept, saves through PUT', async () => {
+    fetchMock.mockImplementation((url, init) => (init?.method === 'PUT'
+      ? Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) })
+      : ok({ rows: [ROW] })))
+    render(<AttendanceReportClient activeLocationName="Studio One" />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Edit arrival for Coach A/ }))
+    expect(screen.getByLabelText('Arrived at').value).toBe('07:50')
+    expect(screen.getByText(/phone recorded 07:50/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Arrived at'), { target: { value: '08:10' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save arrival' })) })
+    const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')
+    expect(JSON.parse(putCall[1].body)).toEqual({ assignment_id: 'a1', time: '08:10' })
+    expect(await screen.findByText(/saved as 08:10/)).toBeTruthy()
   })
 
   it('saves the time through PUT /api/attendance/arrival and reloads', async () => {
