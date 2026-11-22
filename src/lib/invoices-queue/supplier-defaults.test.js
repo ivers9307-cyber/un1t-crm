@@ -204,6 +204,17 @@ describe('recordSupplierDefault', () => {
   })
 })
 
+describe('recordSupplierDefault rejection', () => {
+  it('logs and does not throw when the rpc rejects', async () => {
+    logWarn.mockClear()
+    const db = { rpc: () => Promise.reject(new Error('network')) }
+    await expect(recordSupplierDefault(db, {
+      locationId: 'loc1', xeroContactId: 'c1', xeroAccountId: 'acc-1',
+    })).resolves.toBeUndefined()
+    expect(logWarn).toHaveBeenCalled()
+  })
+})
+
 describe('remembered tax type', () => {
   it('is not put into the extraction patch', async () => {
     const db = makeDb({

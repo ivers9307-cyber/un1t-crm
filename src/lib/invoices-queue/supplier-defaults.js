@@ -84,7 +84,9 @@ export async function recordSupplierDefault(db, {
   if (!locationId || !xeroContactId || !xeroAccountId) return
 
   // Best-effort: a memory write must never fail an approval, so log and move on.
-  const { error } = await db.rpc('upsert_supplier_default', {
+  let error = null
+  try {
+    ;({ error } = await db.rpc('upsert_supplier_default', {
     p_location_id: locationId,
     p_xero_contact_id: xeroContactId,
     p_supplier_name: supplierName || null,
@@ -93,7 +95,10 @@ export async function recordSupplierDefault(db, {
     p_category: category || null,
     // null leaves the stored rate unchanged (see the RPC).
     p_tax_type: taxType || null,
-  })
+    }))
+  } catch (e) {
+    error = e
+  }
   if (error) {
     logWarn('supplier-defaults', 'could not remember supplier coding', {
       location_id: locationId, xero_contact_id: xeroContactId, error: error.message,

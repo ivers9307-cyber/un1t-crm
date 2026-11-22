@@ -66,11 +66,20 @@ export async function rememberSupplierCoding(db, row) {
   const ef = row?.extracted_fields || {}
   const ref = ef.xero_contact_ref
   if (!(ref?.kind === 'existing' && ref.xero_contact_id && ef.xero_account_id)) return false
-  // A stated zero total tax is worth remembering as 'NONE'; a missing amount is
-  // not (null keeps the stored rate).
-  const rawTax = ef.tax_amount
-  const statedZero = rawTax !== null && rawTax !== undefined && String(rawTax).trim() !== '' && Number(rawTax) === 0
-  const taxType = typeof ef.tax_type === 'string' && ef.tax_type.trim() ? ef.tax_type : (statedZero ? 'NONE' : null)
+  // Remember a rate only when it is a person's pick or backed by a stated
+  // subtotal and tax; a guess (e.g. a till receipt with no VAT breakdown) must
+  // never overwrite the supplier's real rate or silence the "VAT differs" check.
+  const blank = (v) => v === null || v === undefined || String(v).trim() === ''
+  const hasBreakdown = Number(ef.subtotal) > 0 && !blank(ef.tax_amount) && Number.isFinite(Number(ef.tax_amount))
+  const hasType = typeof ef.tax_type === 'string' && ef.tax_type.trim() !== ''
+  let taxType = null
+  if (hasType) {
+    const src = ef.tax_type_source
+    if (src === 'manual' || src === null || src === undefined) taxType = ef.tax_type
+    else if (src === 'derived' && hasBreakdown) taxType = ef.tax_type
+  } else if (hasBreakdown && Number(ef.tax_amount) === 0) {
+    taxType = 'NONE'
+  }
   await recordSupplierDefault(db, {
     locationId: row.location_id,
     xeroContactId: ref.xero_contact_id,

@@ -60,22 +60,19 @@ describe('rememberSupplierCoding', () => {
   const base = (ef) => ({ location_id: 'loc1', extracted_fields: { xero_contact_ref: { kind: 'existing', xero_contact_id: 'c1' }, xero_account_id: 'a1', ...ef } })
   const taxTypeSent = () => recordSupplierDefault.mock.calls[0][1].taxType
 
-  it('passes the extracted tax type', async () => {
-    await rememberSupplierCoding({}, base({ tax_type: 'INPUT2', tax_amount: 23 }))
-    expect(taxTypeSent()).toBe('INPUT2')
-  })
-  it('passes NONE for a stated zero tax amount with no type', async () => {
-    await rememberSupplierCoding({}, base({ tax_amount: 0 }))
-    expect(taxTypeSent()).toBe('NONE')
-  })
-  it('passes null when tax is non-zero and no type is set', async () => {
-    await rememberSupplierCoding({}, base({ tax_amount: 23 }))
-    expect(taxTypeSent()).toBeNull()
-  })
-  it('passes null when tax_amount is missing or blank', async () => {
-    await rememberSupplierCoding({}, base({}))
-    await rememberSupplierCoding({}, base({ tax_amount: null }))
-    await rememberSupplierCoding({}, base({ tax_amount: '' }))
-    expect(recordSupplierDefault.mock.calls.map((c) => c[1].taxType)).toEqual([null, null, null])
+  const cases = [
+    ['manual pick', { tax_type: 'INPUT2', tax_type_source: 'manual' }, 'INPUT2'],
+    ['source-less type', { tax_type: 'INPUT2' }, 'INPUT2'],
+    ['derived with a breakdown', { tax_type: 'INPUT2', tax_type_source: 'derived', subtotal: 100, tax_amount: 23, total: 123 }, 'INPUT2'],
+    ['derived NONE on a no-breakdown receipt', { tax_type: 'NONE', tax_type_source: 'derived', subtotal: 0, tax_amount: 0, total: 96 }, null],
+    ['derived NONE with a stated subtotal', { tax_type: 'NONE', tax_type_source: 'derived', subtotal: 96, tax_amount: 0, total: 96 }, 'NONE'],
+    ['no type, subtotal shown, zero tax', { subtotal: 96, tax_amount: 0 }, 'NONE'],
+    ['no type, subtotal 0, zero tax', { subtotal: 0, tax_amount: 0 }, null],
+    ['no type, subtotal blank, zero tax', { subtotal: '', tax_amount: 0 }, null],
+    ['no type, null tax_amount', { subtotal: 96, tax_amount: null }, null],
+  ]
+  it.each(cases)('%s', async (_n, ef, expected) => {
+    await rememberSupplierCoding({}, base(ef))
+    expect(taxTypeSent()).toBe(expected)
   })
 })
