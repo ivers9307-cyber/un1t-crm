@@ -5,7 +5,7 @@ import { ingestInboundEmail } from './ingest-email.js'
 vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logError: vi.fn() }))
 
 const LOC = { id: '11111111-1111-4111-8111-111111111111' }
-const seed = { invoices_queue: [] }
+const seed = () => ({ invoices_queue: [] })
 const b64 = (s) => Buffer.from(s, 'latin1').toString('base64')
 const PDF = b64('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n')
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('logo-bytes-here')]).toString('base64')
@@ -26,7 +26,7 @@ const all = async (db) => (await db.from('invoices_queue').select('*').order('em
 
 let db, upload, args
 beforeEach(() => {
-  db = createFakeDb({ tables: seed })
+  db = createFakeDb({ tables: seed() })
   upload = vi.fn(async () => ({ error: null }))
   db.storage = { from: () => ({ upload }) }
   args = { location: LOC, body: email([pdf(), pdf({ Name: 'b.pdf' })]) }
@@ -90,8 +90,34 @@ describe('ingestInboundEmail', () => {
   })
 
   it('reports an insert failure', async () => {
-    const bad = createFakeDb({ tables: seed, errors: { invoices_queue: { insert: { message: 'x' } } } })
+    const bad = createFakeDb({ tables: seed(), errors: { invoices_queue: { insert: { message: 'x' } } } })
     bad.storage = db.storage
     expect(await ingestInboundEmail(bad, args)).toEqual({ ok: false, error: 'insert_failed' })
+  })
+
+  it('counts skipped logos once, even across a retry', async () => {
+    const a = { location: LOC, body: email([pdf(), logo(), pdf({ Name: 'b.pdf' })], { HtmlBody: html }) }
+    upload.mockResolvedValueOnce({ error: null }).mockResolvedValueOnce({ error: { message: 'boom' } })
+    expect((await ingestInboundEmail(db, a)).ok).toBe(false)
+    expect((await ingestInboundEmail(db, a)).ok).toBe(true)
+    const rows = await all(db)
+    expect(rows).toHaveLength(2)
+    expect(rows.filter((r) => r.skipped_attachment_count > 0)).toHaveLength(1)
+  })
+
+  it('fails with lookup_failed and writes nothing when the pre-read fails', async () => {
+    const bad = createFakeDb({ tables: seed(), errors: { invoices_queue: { select: { message: 'x' } } } })
+    bad.storage = db.storage
+    expect(await ingestInboundEmail(bad, args)).toEqual({ ok: false, error: 'lookup_failed' })
+    expect(bad.tables.invoices_queue).toHaveLength(0)
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it('treats a duplicate-key insert as already stored', async () => {
+    const dup = createFakeDb({ tables: seed(), errors: { invoices_queue: { insert: { code: '23505', message: 'dup' } } } })
+    dup.storage = db.storage
+    const r = await ingestInboundEmail(dup, { location: LOC, body: email([pdf()]) })
+    expect(r).toEqual({ ok: true, created: [], alreadyStored: 1, skippedInline: 0 })
+    expect(upload).not.toHaveBeenCalled()
   })
 })

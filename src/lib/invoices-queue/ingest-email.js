@@ -59,6 +59,7 @@ export async function ingestInboundEmail(db, { location, body }) {
     logError('invoice-ingest', 'existing rows lookup failed', { err: readErr })
     return { ok: false, error: 'lookup_failed' }
   }
+  const hadRows = (existing || []).length > 0
   const byMessageId = new Map((existing || []).map((r) => [r.email_message_id, r]))
 
   if (usable.length === 0) {
@@ -67,7 +68,7 @@ export async function ingestInboundEmail(db, { location, body }) {
     const reason = unsupportedTypes.length > 0 ? `unsupported_type: ${unsupportedTypes.join(', ')}` : 'no_attachment'
     const { data: row, error } = await db
       .from('invoices_queue')
-      .insert({ ...common, email_message_id: messageId, not_invoice_reason: reason })
+      .insert({ ...common, email_message_id: messageId, not_invoice_reason: reason, skipped_attachment_count: skippedInline })
       .select('id')
       .single()
     if (error || !row) {
@@ -107,8 +108,9 @@ export async function ingestInboundEmail(db, { location, body }) {
         attachment_size_bytes: att.bytes.length,
         attachment_mime_type: att.mime,
         content_hash: sha256Hex(att.bytes),
-        // Set once per email, on the first row this call writes.
-        ...(created.length === 0 ? { skipped_attachment_count: skippedInline } : {}),
+        // Once per email: only the first row of the first attempt, so a retry
+        // after a partial failure does not count the logos twice.
+        ...(created.length === 0 && !hadRows ? { skipped_attachment_count: skippedInline } : {}),
       })
       .select('id')
       .single()
