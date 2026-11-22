@@ -114,4 +114,48 @@ describe('PATCH /api/invoices-inbox/[id]/fields', () => {
     expect(db.tables.invoices_queue[0].extracted_fields.supplier_name).toBe('Acme Supplies')
     expect(recheckInvoiceRow).not.toHaveBeenCalled()
   })
+
+  it('answers the fields as stored after the re-check', async () => {
+    getCurrentUser.mockResolvedValue(owner())
+    recheckInvoiceRow.mockResolvedValue({ reasons: [], fields: { ...FIELDS, tax_type: 'INPUT2', tax_type_source: 'derived' } })
+    const body = await (await patch()).json()
+    expect(body.data.extracted_fields).toMatchObject({ supplier_name: 'Acme Supplies', tax_type: 'INPUT2', tax_type_source: 'derived' })
+  })
+
+  it('a failed fresh read after the save answers the reasons the row was loaded with', async () => {
+    getCurrentUser.mockResolvedValue(owner())
+    db.tables.invoices_queue[0].review_reasons = ['no_account']
+    // Fail only the third invoices_queue query: gate read, update, then the fresh read.
+    const realFrom = db.from.bind(db)
+    let n = 0
+    db.from = (t) => {
+      if (t === 'invoices_queue' && ++n === 3) {
+        const b = realFrom(t)
+        b.then = (res) => Promise.resolve({ data: null, error: { message: 'timeout' } }).then(res)
+        return b
+      }
+      return realFrom(t)
+    }
+    const res = await patch()
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.review_reasons).toEqual(['no_account'])
+    expect(recheckInvoiceRow).not.toHaveBeenCalled()
+  })
+
+  it('a row that moved on before the save answers 409, not 500', async () => {
+    getCurrentUser.mockResolvedValue(owner())
+    const realFrom = db.from.bind(db)
+    let n = 0
+    db.from = (t) => {
+      const b = realFrom(t)
+      if (t === 'invoices_queue' && ++n === 1) {
+        const orig = b.then.bind(b)
+        b.then = (res, rej) => orig((r) => { db.tables.invoices_queue[0].status = 'data_approved'; return res(r) }, rej)
+      }
+      return b
+    }
+    const res = await patch()
+    expect(res.status).toBe(409)
+    expect(db.tables.invoices_queue[0].extracted_fields).toEqual({})
+  })
 })

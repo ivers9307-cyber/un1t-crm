@@ -137,7 +137,8 @@ describe('canTransitionInboundInvoice', () => {
   it('sets a non-invoice aside and brings it back only to received', () => {
     expect(canTransitionInboundInvoice('received', 'not_invoice')).toBe(true)
     expect(canTransitionInboundInvoice('quality_approved', 'not_invoice')).toBe(true)
-    expect(canTransitionInboundInvoice('not_invoice', 'received')).toBe(true)
+    expect(canTransitionInboundInvoice('not_invoice', 'quality_approved')).toBe(true)
+    expect(canTransitionInboundInvoice('not_invoice', 'received')).toBe(false)
     expect(canTransitionInboundInvoice('not_invoice', 'extracted')).toBe(false)
     expect(canTransitionInboundInvoice('extracted', 'not_invoice')).toBe(false)
   })
@@ -150,7 +151,7 @@ describe('canTransitionInboundInvoice', () => {
       data_approved: ['forwarded', 'rejected'],
       forwarded: [],
       rejected: [],
-      not_invoice: ['received'],
+      not_invoice: ['quality_approved'],
     })
   })
 

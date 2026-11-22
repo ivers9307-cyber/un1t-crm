@@ -103,8 +103,8 @@ export function parseInboundAddress(toAddress) {
 //
 // INVOICEPREP.3: preparation on arrival reads a received row straight to
 // extracted, and sets a row with nothing to read aside as not_invoice. A
-// person can bring a not_invoice row back to received (the restore route),
-// which queues it to be read again.
+// person can bring a not_invoice row back to quality_approved (the restore
+// route: the person has vouched for it), which queues it to be read again.
 export const INBOUND_INVOICE_TRANSITIONS = {
   received:         ['quality_approved', 'extracted', 'not_invoice', 'rejected'],
   quality_approved: ['extracted', 'not_invoice', 'rejected'],
@@ -112,7 +112,7 @@ export const INBOUND_INVOICE_TRANSITIONS = {
   data_approved:    ['forwarded', 'rejected'],
   forwarded:        [],
   rejected:         [],
-  not_invoice:      ['received'],
+  not_invoice:      ['quality_approved'],
 }
 
 export const INBOUND_INVOICE_STATUSES = Object.keys(INBOUND_INVOICE_TRANSITIONS)

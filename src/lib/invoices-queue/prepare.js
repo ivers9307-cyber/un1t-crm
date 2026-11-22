@@ -16,8 +16,9 @@
 // is the read-only bill lookup, tried once; any failure there is logged and
 // raises nothing.
 //
-// recheckInvoiceRow recomputes the reasons after a person edits an extracted
-// row's fields, without downloading or reading the file again.
+// recheckInvoiceRow recomputes the reasons (and the duplicate link) after a
+// person edits an extracted row's fields, without downloading or reading the
+// file again.
 
 import { extractInvoiceFieldsFromBytes, scoreExtractionConfidence } from '@/lib/invoice-extraction'
 import { sha256Hex } from '@/lib/inbound-invoices'
@@ -341,8 +342,11 @@ async function prepare(db, row, deps, { write, unreadable, hashPatch, nowIso }) 
   /** @type {any} */
   let fields = readFields
 
+  // Only the reader's say-so on an unvouched row sets it aside. A row a person
+  // vouched for (quality_approved, e.g. restored or sent for analysis) is
+  // prepared whatever the reader calls it, with the reasons the checks give.
   const documentType = fields.document_type
-  if (NOT_INVOICE_TYPES.has(documentType)) {
+  if (NOT_INVOICE_TYPES.has(documentType) && row.status === 'received') {
     const ok = await write({
       status: 'not_invoice',
       not_invoice_reason: `document_type: ${documentType}`,
@@ -403,13 +407,15 @@ async function prepare(db, row, deps, { write, unreadable, hashPatch, nowIso }) 
  *
  * @param {import('@/lib/supabase').Db} db  service-role client
  * @param {any} row  the invoices_queue row, with the edited extracted_fields
- * @returns {Promise<{ reasons: string[] }>}
+ * @returns {Promise<{ reasons: string[], fields: any }>} the reasons and the
+ *   extracted_fields as stored afterwards (the row's own when nothing was written)
  */
 export async function recheckInvoiceRow(db, row) {
   /** @type {string[]} */
   const existing = Array.isArray(row?.review_reasons) ? row.review_reasons : []
+  const unchanged = () => ({ reasons: existing, fields: row?.extracted_fields ?? null })
   try {
-    if (!row || row.status !== 'extracted') return { reasons: existing }
+    if (!row || row.status !== 'extracted') return unchanged()
     const locationId = row.location_id
     const fields = { ...(row.extracted_fields || {}) }
     const taxRates = await loadTaxRates(db, locationId)
@@ -429,22 +435,25 @@ export async function recheckInvoiceRow(db, row) {
       duplicateOf ? ['duplicate_number'] : [],
     )
 
+    /** @type {Record<string, any>} */
+    const patch = { review_reasons: reasons, duplicate_of_id: duplicateOf }
+    if (vatChanged) patch.extracted_fields = fields
     const { data, error } = await db
       .from('invoices_queue')
-      .update(vatChanged ? { review_reasons: reasons, extracted_fields: fields } : { review_reasons: reasons })
+      .update(patch)
       .eq('id', row.id)
       .eq('location_id', locationId)
       .eq('status', 'extracted')
       .select('id')
     if (error) {
       logError(MODULE, 'could not save rechecked reasons', { queue_id: row.id, error: error.message })
-      return { reasons: existing }
+      return unchanged()
     }
     // The row moved on before the write: what is stored still stands.
-    if (!Array.isArray(data) || data.length === 0) return { reasons: existing }
-    return { reasons }
+    if (!Array.isArray(data) || data.length === 0) return unchanged()
+    return { reasons, fields: vatChanged ? fields : row.extracted_fields ?? null }
   } catch (e) {
     logError(MODULE, 'recheck failed', { queue_id: row?.id, error: messageOf(e) })
-    return { reasons: existing }
+    return unchanged()
   }
 }

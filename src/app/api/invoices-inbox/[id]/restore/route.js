@@ -1,12 +1,16 @@
 // INVOICEPREP.3 — bring a set-aside row back.
 //
 // Preparation sets a row aside as not_invoice when it finds nothing to read
-// (or a person marks it so). This route moves it back to received, clears
-// what preparation left on it, and queues it to be read again. The read runs
-// with the duplicate-by-file check on, as for any new arrival.
+// or the reader calls it a statement (or a person marks it so). This route
+// moves it to quality_approved: the person restoring it has vouched for it,
+// so preparation will not set it aside again on the reader's say-so. It
+// clears what preparation left on it and queues it to be read again. The read
+// runs with the duplicate-by-file check on, as for any new arrival.
 //
-// The claim is cleared here: queueInvoicePreparation never clears one, and a
-// leftover claim would keep the queue off the row.
+// The same write clears the claim (queueInvoicePreparation never clears one,
+// and a leftover claim would keep the queue off the row) and stamps
+// analysis_queued_at, so the sweeper is sure to see the row even if the
+// queueing call afterwards does nothing. That call is only for speed.
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
@@ -36,16 +40,20 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
     return NextResponse.json({ success: false, error: 'This row has no attachment to read.' }, { status: 400 })
   }
 
+  const nowIso = new Date().toISOString()
   const { data: restored, error } = await db
     .from('invoices_queue')
     .update({
-      status: 'received',
+      status: 'quality_approved',
+      quality_reviewed_at: nowIso,
+      quality_reviewed_by: caller.id,
       not_invoice_reason: null,
       review_reasons: [],
       prepared_at: null,
       duplicate_of_id: null,
       extraction_error: null,
       analysis_claimed_at: null,
+      analysis_queued_at: nowIso,
     })
     .eq('id', id)
     .eq('status', 'not_invoice')
@@ -58,8 +66,8 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
     return NextResponse.json({ success: false, error: 'Row was modified concurrently — refresh and retry.' }, { status: 409 })
   }
 
-  // The restore stands even if queueing fails: the row is back in received
-  // and a person can still read it with "Read again".
+  // The restore stands even if queueing fails: the row is stamped above, so
+  // the sweeper reads it, and a person can still read it with "Read again".
   try {
     await queueInvoicePreparation(db, [id])
   } catch (err) {

@@ -21,10 +21,10 @@ const call = (mod, reason = 'Not an invoice') => mod.POST(
   { params: Promise.resolve({ id: INV }) },
 )
 const owner = (loc) => person({ [loc]: { role: 'owner', permissions: { invoices_inbox: true } } }, loc)
-const seed = (status, location_id = LOC_A) => {
+const seed = (status, location_id = LOC_A, extra = {}) => {
   db = createFakeDb({ tables: {
     locations: [{ id: LOC_A, name: 'A' }, { id: LOC_B, name: 'B' }],
-    invoices_queue: [{ id: INV, location_id, status }],
+    invoices_queue: [{ id: INV, location_id, status, ...extra }],
   } })
   createServerClient.mockReturnValue(db)
 }
@@ -69,5 +69,49 @@ describe.each([
     const res = await call(mod)
     expect(res.status).toBe(500)
     expect(JSON.stringify(await res.json())).not.toContain('secret detail')
+  })
+})
+
+describe('POST /api/invoices-inbox/[id]/quality-reject — flagged rows a person cannot otherwise clear', () => {
+  beforeEach(() => getCurrentUser.mockResolvedValue(owner(LOC_A)))
+
+  it.each([['unreadable'], ['duplicate_file']])('rejects a quality_approved row flagged %s', async (reason) => {
+    seed('quality_approved', LOC_A, { review_reasons: [reason], analysis_queued_at: '2026-11-22T10:00:00Z', analysis_claimed_at: '2026-11-22T10:00:01Z' })
+    const res = await call(quality)
+    expect(res.status).toBe(200)
+    expect(db.tables.invoices_queue[0]).toMatchObject({
+      status: 'rejected', rejected_stage: 'quality', analysis_queued_at: null, analysis_claimed_at: null,
+    })
+  })
+
+  it('refuses a quality_approved row with no such flag', async () => {
+    seed('quality_approved', LOC_A, { review_reasons: [] })
+    const res = await call(quality)
+    expect(res.status).toBe(409)
+    expect(db.tables.invoices_queue[0].status).toBe('quality_approved')
+  })
+
+  it('a received reject clears the queue columns too', async () => {
+    seed('received', LOC_A, { analysis_queued_at: '2026-11-22T10:00:00Z', analysis_claimed_at: '2026-11-22T10:00:01Z' })
+    expect((await call(quality)).status).toBe(200)
+    expect(db.tables.invoices_queue[0]).toMatchObject({ status: 'rejected', analysis_queued_at: null, analysis_claimed_at: null })
+  })
+
+  it('a row that moved on after it was read answers 409, not 500', async () => {
+    seed('quality_approved', LOC_A, { review_reasons: ['unreadable'] })
+    // The gate reads quality_approved; by the write the row has been read.
+    const realFrom = db.from.bind(db)
+    let reads = 0
+    db.from = (t) => {
+      const b = realFrom(t)
+      if (t === 'invoices_queue' && reads++ === 0) {
+        const orig = b.then.bind(b)
+        b.then = (res, rej) => orig((r) => { db.tables.invoices_queue[0].status = 'extracted'; return res(r) }, rej)
+      }
+      return b
+    }
+    const res = await call(quality)
+    expect(res.status).toBe(409)
+    expect(db.tables.invoices_queue[0].status).toBe('extracted')
   })
 })

@@ -1,6 +1,6 @@
 // INVOICEPREP.3 — POST /api/invoices-inbox/[id]/restore through the real
-// withAuth wrapper: a set-aside (not_invoice) row goes back to received and
-// onto the preparation queue. Every refusal of the caller is a 404.
+// withAuth wrapper: a set-aside (not_invoice) row goes back to quality_approved
+// (a person vouched for it) and onto the preparation queue. Every refusal of the caller is a 404.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createFakeDb } from '../../../../../../tests/helpers/fake-db.js'
 import { person, LOC_A, LOC_B } from '../../../../../../tests/helpers/role-sweep-callers.js'
@@ -43,16 +43,25 @@ beforeEach(() => {
 })
 
 describe('POST /api/invoices-inbox/[id]/restore', () => {
-  it('brings a set-aside row back to received, clears what preparation left, and queues it', async () => {
+  it('brings a set-aside row back as person-vouched (quality_approved), stamped for the sweeper, and queues it', async () => {
     const res = await post()
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body).toMatchObject({ success: true, data: { id: INV, status: 'received' } })
+    expect(body).toMatchObject({ success: true, data: { id: INV, status: 'quality_approved' } })
     expect(mine()).toMatchObject({
-      status: 'received', not_invoice_reason: null, review_reasons: [], prepared_at: null,
+      status: 'quality_approved', not_invoice_reason: null, review_reasons: [], prepared_at: null,
       duplicate_of_id: null, extraction_error: null, analysis_claimed_at: null,
     })
+    expect(mine().analysis_queued_at).toBeTruthy()
+    expect(mine().quality_reviewed_at).toBeTruthy()
+    expect(mine().quality_reviewed_by).toBeTruthy()
     expect(queueInvoicePreparation).toHaveBeenCalledWith(db, [INV])
+  })
+
+  it('the stamp is in the restore write itself, so a queue call that does nothing still leaves it queued', async () => {
+    queueInvoicePreparation.mockResolvedValueOnce({ queued: [] })
+    expect((await post()).status).toBe(200)
+    expect(mine().analysis_queued_at).toBeTruthy()
   })
 
   it('400 for a row with no file, nothing changed', async () => {
@@ -94,7 +103,7 @@ describe('POST /api/invoices-inbox/[id]/restore', () => {
     queueInvoicePreparation.mockRejectedValueOnce(new Error('down'))
     const res = await post()
     expect(res.status).toBe(200)
-    expect(mine().status).toBe('received')
+    expect(mine().status).toBe('quality_approved')
     expect(logError).toHaveBeenCalled()
   })
 

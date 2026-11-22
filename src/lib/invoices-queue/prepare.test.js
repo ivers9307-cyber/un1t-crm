@@ -164,6 +164,21 @@ describe('prepareInvoiceRow', () => {
     expect(stored('q2').not_invoice_reason).toBe('document_type: other')
   })
 
+  it('a statement a person vouched for (quality_approved) is never set aside: it is prepared', async () => {
+    setup({ tables: KNOWN, rows: [queueRow({ status: 'quality_approved' })] })
+    extract.mockResolvedValueOnce({ ok: true, fields: read({ document_type: 'statement' }), raw_response: '{}' })
+    expect((await run()).outcome).toBe('prepared')
+    expect(stored('q2')).toMatchObject({ status: 'extracted', not_invoice_reason: null })
+    expect(stored('q2').extracted_fields.document_type).toBe('statement')
+  })
+
+  it('"other" on a quality_approved row is prepared too', async () => {
+    setup({ rows: [queueRow({ status: 'quality_approved' })] })
+    extract.mockResolvedValueOnce({ ok: true, fields: read({ document_type: 'other' }), raw_response: '{}' })
+    expect((await run()).outcome).toBe('prepared')
+    expect(stored('q2').status).toBe('extracted')
+  })
+
   it('a credit note is prepared as an invoice with the credit_note reason', async () => {
     setup({ tables: KNOWN })
     extract.mockResolvedValueOnce({ ok: true, fields: read({ document_type: 'credit_note' }), raw_response: '{}' })
@@ -363,7 +378,7 @@ describe('recheckInvoiceRow', () => {
   it('setting the supplier and account on a new-supplier row clears the reason', async () => {
     const fields = read({ xero_contact_ref: contactRef, xero_account_id: ACCOUNT, tax_type: 'INPUT2', tax_type_source: 'derived' })
     setup({ tables: KNOWN, rows: [extractedRow(fields, { review_reasons: ['new_supplier'] })] })
-    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toEqual({ reasons: [] })
+    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toMatchObject({ reasons: [] })
     expect(stored('q2').review_reasons).toEqual([])
   })
 
@@ -385,14 +400,14 @@ describe('recheckInvoiceRow', () => {
   it('re-derives a derived tax type after the amounts change', async () => {
     const fields = read({ xero_contact_ref: contactRef, xero_account_id: ACCOUNT, subtotal: 100, tax_amount: 13.5, total: 113.5, tax_type: 'INPUT2', tax_type_source: 'derived' })
     setup({ tables: KNOWN, rows: [extractedRow(fields)] })
-    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toEqual({ reasons: [] })
+    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toMatchObject({ reasons: [] })
     expect(stored('q2').extracted_fields).toMatchObject({ tax_type: 'INPUT3', tax_type_source: 'derived' })
   })
 
   it('removes a derived tax type that no longer matches the amounts, and asks for a rate', async () => {
     const fields = read({ xero_contact_ref: contactRef, xero_account_id: ACCOUNT, subtotal: 100, tax_amount: 9, total: 109, tax_type: 'INPUT2', tax_type_source: 'derived' })
     setup({ tables: KNOWN, rows: [extractedRow(fields)] })
-    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toEqual({ reasons: ['no_vat_rate'] })
+    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toMatchObject({ reasons: ['no_vat_rate'] })
     expect(stored('q2').extracted_fields.tax_type).toBeUndefined()
     expect(stored('q2').extracted_fields.tax_type_source).toBeUndefined()
     expect(stored('q2').review_reasons).toEqual(['no_vat_rate'])
@@ -401,7 +416,7 @@ describe('recheckInvoiceRow', () => {
   it('carries over already_in_xero and duplicate_file without calling Xero', async () => {
     const fields = read({ xero_contact_ref: contactRef, xero_account_id: ACCOUNT, tax_type: 'INPUT2', tax_type_source: 'derived' })
     setup({ tables: KNOWN, rows: [extractedRow(fields, { review_reasons: ['duplicate_file', 'already_in_xero', 'new_supplier'] })] })
-    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toEqual({ reasons: ['duplicate_file', 'already_in_xero'] })
+    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toMatchObject({ reasons: ['duplicate_file', 'already_in_xero'] })
   })
 
   it('recomputes duplicate_number', async () => {
@@ -410,7 +425,28 @@ describe('recheckInvoiceRow', () => {
       queueRow({ id: 'q0', status: 'forwarded', content_hash: 'z', extracted_fields: read({ xero_contact_ref: contactRef }) }),
       extractedRow(fields),
     ] })
-    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toEqual({ reasons: ['duplicate_number'] })
+    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toMatchObject({ reasons: ['duplicate_number'] })
+  })
+
+  it('writes the duplicate it finds, and clears a stale one', async () => {
+    const fields = read({ xero_contact_ref: contactRef, xero_account_id: ACCOUNT, tax_type: 'INPUT2', tax_type_source: 'derived' })
+    setup({ tables: KNOWN, rows: [
+      queueRow({ id: 'q0', status: 'forwarded', content_hash: 'z', extracted_fields: read({ xero_contact_ref: contactRef }) }),
+      extractedRow(fields),
+    ] })
+    await recheckInvoiceRow(db, { ...stored('q2') })
+    expect(stored('q2').duplicate_of_id).toBe('q0')
+
+    setup({ tables: KNOWN, rows: [extractedRow({ ...fields, invoice_number: 'INV-200' }, { review_reasons: ['duplicate_number'], duplicate_of_id: 'q0' })] })
+    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toMatchObject({ reasons: [] })
+    expect(stored('q2').duplicate_of_id).toBeNull()
+  })
+
+  it('returns the fields as stored after the recheck', async () => {
+    const fields = read({ xero_contact_ref: contactRef, xero_account_id: ACCOUNT, subtotal: 100, tax_amount: 13.5, total: 113.5, tax_type: 'INPUT2', tax_type_source: 'derived' })
+    setup({ tables: KNOWN, rows: [extractedRow(fields)] })
+    const out = await recheckInvoiceRow(db, { ...stored('q2') })
+    expect(out.fields).toMatchObject({ tax_type: 'INPUT3', tax_type_source: 'derived' })
   })
 
   it('leaves a row that is no longer extracted alone', async () => {
@@ -422,7 +458,7 @@ describe('recheckInvoiceRow', () => {
 
   it('never throws: a failed write returns the existing reasons', async () => {
     db = createFakeDb({ tables: { invoices_queue: [extractedRow(read(), { review_reasons: ['no_account'] })], xero_tax_rates: RATES }, errors: { invoices_queue: { update: { message: 'boom' } } } })
-    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toEqual({ reasons: ['no_account'] })
-    expect(await recheckInvoiceRow(db, /** @type {any} */ (null))).toEqual({ reasons: [] })
+    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toMatchObject({ reasons: ['no_account'] })
+    expect(await recheckInvoiceRow(db, /** @type {any} */ (null))).toMatchObject({ reasons: [] })
   })
 })

@@ -11,8 +11,10 @@
 //
 // INVOICEPREP.3: after an 'extracted' row is saved, recheckInvoiceRow
 // recomputes its review reasons from the edited fields, and the response
-// carries them as review_reasons. A failed re-check is logged and never
-// undoes the save.
+// carries them as review_reasons, with extracted_fields as stored after the
+// re-check (it may re-derive the tax type). A failed re-check is logged and
+// never undoes the save: the response then carries the reasons the row was
+// loaded with. A row that moved on before the save answers 409.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -59,13 +61,15 @@ export const PATCH = withAuth({ permission: null, location: false }, async ({ re
   if (!validation.ok) return validation.response
   const { extracted_fields } = validation.data
 
-  const { data: updated, error } = await db
+  // No .single(): a guarded update that matched nothing is a concurrent
+  // change (409), not an error.
+  const { data: rows, error } = await db
     .from('invoices_queue')
     .update({ extracted_fields })
     .eq('id', id)
     .eq('status', row.status)   // concurrency guard for the state we loaded
     .select('id, status, extracted_fields, updated_at')
-    .single()
+  const updated = Array.isArray(rows) ? rows[0] : null
   if (error) {
     logError('invoices-inbox', 'fields update failed', { id, err: error })
     return NextResponse.json({ success: false, error: 'Could not save the fields. Try again.' }, { status: 500 })
@@ -79,12 +83,14 @@ export const PATCH = withAuth({ permission: null, location: false }, async ({ re
   if (updated.status !== 'extracted') {
     return NextResponse.json({ success: true, data: updated })
   }
-  return NextResponse.json({ success: true, data: { ...updated, ...(await recheckAfterSave(db, id)) } })
+  return NextResponse.json({ success: true, data: { ...updated, ...(await recheckAfterSave(db, id, row)) } })
 })
 
 // The re-check needs the whole row (fields, reasons, studio). A failure here
-// answers whatever reasons the row holds, or none when even that is unknown.
-async function recheckAfterSave(db, id) {
+// answers the reasons the row holds: the fresh row's if it was read, else the
+// ones it was loaded with.
+async function recheckAfterSave(db, id, loaded) {
+  const fallback = (r) => (Array.isArray(r?.review_reasons) ? { review_reasons: r.review_reasons } : {})
   let fresh = null
   try {
     const { data, error } = await db
@@ -94,13 +100,13 @@ async function recheckAfterSave(db, id) {
       .maybeSingle()
     if (error || !data) {
       logError('invoices-inbox', 'fields re-check read failed', { id, err: error })
-      return {}
+      return fallback(loaded)
     }
     fresh = data
-    const { reasons } = await recheckInvoiceRow(db, fresh)
-    return { review_reasons: reasons }
+    const { reasons, fields } = await recheckInvoiceRow(db, fresh)
+    return fields ? { review_reasons: reasons, extracted_fields: fields } : { review_reasons: reasons }
   } catch (err) {
     logError('invoices-inbox', 'fields re-check failed', { id, err })
-    return Array.isArray(fresh?.review_reasons) ? { review_reasons: fresh.review_reasons } : {}
+    return fallback(fresh || loaded)
   }
 }
