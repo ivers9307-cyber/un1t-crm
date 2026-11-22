@@ -181,8 +181,10 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     // switch and push channel are shared with the phone); the push is now a
     // notice that a host event went live, not a request to approve one.
     label: 'Host event published',
-    description: 'A host published an event on the events platform. It is on sale straight away, with no approval step. One push per publish to the org admins; the email notification remains as the durable record.',
-    trigger: { kind: 'event', source: 'POST /api/host/events/[id]/submit (status → published)' },
+    // HOSTSTUDIONOTICE.1 — also a notice when a published host event is
+    // linked to a studio, moved to another, or uses its studio for longer.
+    description: 'A host published an event on the events platform. It is on sale straight away, with no approval step. One push per publish to the org admins, and one when a published event is linked to a studio or uses its studio for longer; the email notification remains as the durable record.',
+    trigger: { kind: 'event', source: 'POST /api/host/events/[id]/submit (status → published); PUT /api/host/events/[id] (published event: studio linked, moved or hours grew)' },
     recipients: { kind: 'roles_at_location', detail: 'owner / manager across the host org (masters included)' },
     configurable: { leadTimes: false, roles: false },
     fallbackEmail: false, // the submit flow already sends its own richer email
