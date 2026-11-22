@@ -283,11 +283,16 @@ into the two piles. Nothing is sent to Xero by the clean-up.
 4. **Weekly email.**
 5. **Trusted suppliers**, only on request.
 
-Not yet covered by any phase: an email whose attachments total more than
-about 3.3 MB exceeds the platform's request limit and never reaches the
-webhook (no row, no stray). The support inbox solves the same problem with
-`postmark-inbound-shim`; the invoices webhook needs the same treatment in its
-own PR.
+**Phase 1b: large emails (INVOICEPREP.2).** An email whose attachments total
+more than about 3.3 MB exceeds the platform's request limit and never reached
+the webhook. The existing `postmark-inbound-shim` Edge Function now has a
+second target for invoices. It uploads each attachment to the `inbound-invoices`
+bucket under `inbound/<MessageID>/<index>.<ext>` and forwards a small JSON body
+to the webhook, which reads the files from Storage. An attachment the function
+could not move (over 25 MB, or an upload failure) becomes a visible row with
+`attachment_not_received: too_large` or `attachment_not_received: rehost_failed`.
+The plan is `docs/superpowers/plans/2026-11-22-invoice-large-email-shim.md`.
+It is live only after the cutover steps in that plan's Task 5.
 
 Each phase is its own PR with its own changelog entry.
 
