@@ -98,7 +98,7 @@ import BlockEditForm from './schedule/BlockEditForm'
 import { blockEditNoticeText } from '@/lib/block-edit'
 import { briefingOf } from '@shared/shift-briefing'
 import MonthCell from './schedule/MonthCell'
-import { rosterToolbarModel, emptyWeekCopyPrompt, dayHeaderStatus, shiftCardModel, monthCellLines, dayLeaveBars, dayUnavailableBars } from '@/lib/roster-card-model'
+import { rosterToolbarModel, emptyWeekCopyPrompt, fillUsualResultToast, templatesHaveUsualCoaches, dayHeaderStatus, shiftCardModel, monthCellLines, dayLeaveBars, dayUnavailableBars } from '@/lib/roster-card-model'
 // GRID.1 — the Coaches layout: the coach-by-day grid, its read, and its pure model.
 import RosterGrid from './schedule/RosterGrid'
 import { useRosterGrid, browserStorage } from './schedule/useRosterGrid'
@@ -1162,6 +1162,33 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     }
   }
 
+  // USUALCOACH.1 — the empty-week card's third button: each template's usual
+  // coaches onto this week's shifts (from today), skipping leave, cannot-work
+  // days and clashes. Shares the copy's busy flag so the two never overlap.
+  async function runFillUsual() {
+    if (copying) return
+    setCopying(true)
+    try {
+      const res = await fetch('/api/schedule/shifts/fill-usual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: locationId, week_start: formatDate(weekStart) }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'Could not fill the usual coaches')
+        return
+      }
+      const result = fillUsualResultToast({ assigned: data.assigned, counts: data.counts })
+      showToast(result.message, result.kind)
+      refreshAfterMutation()
+    } catch {
+      showToast('Network error, please try again')
+    } finally {
+      setCopying(false)
+    }
+  }
+
   async function handleSwapRequest(shiftId, reason) {
     try {
       const res = await fetch('/api/schedule/swaps', {
@@ -1365,6 +1392,17 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
             >
               Use template times
             </Button>
+            {templatesHaveUsualCoaches(templates) && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={copying}
+                onClick={runFillUsual}
+                title="Put each shift's usual coaches on it. Anyone on leave, unable to work or already on another shift is skipped."
+              >
+                Fill usual coaches
+              </Button>
+            )}
           </div>
         </div>
       )}

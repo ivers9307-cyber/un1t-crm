@@ -3,7 +3,7 @@
 // and toolbar make is made HERE, in pure functions, because jsdom cannot see
 // layout and a component test can only say "this text is present".
 import { describe, it, expect } from 'vitest'
-import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines, rosterToolbarModel, emptyWeekCopyPrompt, dayLeaveBars, dayUnavailableBars, dayAvailabilityRules } from './roster-card-model'
+import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines, rosterToolbarModel, emptyWeekCopyPrompt, dayLeaveBars, dayUnavailableBars, dayAvailabilityRules, fillUsualResultToast, templatesHaveUsualCoaches } from './roster-card-model'
 
 const TODAY = '2026-09-21'
 const block = (over = {}) => ({
@@ -556,5 +556,23 @@ describe('emptyWeekCopyPrompt', () => {
 
   it('shows nothing when a date is missing', () => {
     expect(emptyWeekCopyPrompt([], opts({ thisWeekStart: undefined }))).toBe(false)
+  })
+})
+
+// USUALCOACH.1
+describe('fillUsualResultToast (USUALCOACH.1)', () => {
+  it('says what was added and why anyone was skipped', () => {
+    expect(fillUsualResultToast({ assigned: 2, counts: {} })).toEqual({ kind: 'success', message: 'Added 2 usual coaches.' })
+    expect(fillUsualResultToast({ assigned: 1, counts: { time_off: 1, already_staffed: 2 } }).message)
+      .toBe('Added 1 usual coach. Skipped: 1 coach on approved leave, 2 shifts already had coaches.')
+    expect(fillUsualResultToast({ assigned: 0 }).kind).toBe('warning')
+  })
+})
+
+describe('templatesHaveUsualCoaches (USUALCOACH.1)', () => {
+  it('is true only for an active template with at least one usual coach', () => {
+    expect(templatesHaveUsualCoaches([{ active: true, usual_coach_ids: ['p'] }])).toBe(true)
+    expect(templatesHaveUsualCoaches([{ active: false, usual_coach_ids: ['p'] }, { active: true, usual_coach_ids: [] }, { active: true }])).toBe(false)
+    expect(templatesHaveUsualCoaches(null)).toBe(false)
   })
 })

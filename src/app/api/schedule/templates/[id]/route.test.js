@@ -1047,3 +1047,61 @@ describe('PUT /api/schedule/templates/[id] — time and minimum together (third 
   })
 })
 
+
+// USUALCOACH.1 — usual coaches are saved on the template, only staff of the
+// TEMPLATE's studio, and saving them changes no existing shift.
+describe('PUT /api/schedule/templates/[id] — usual coaches (USUALCOACH.1)', () => {
+  const P1 = 'c0000000-0000-4000-8000-000000000001'
+  const P2 = 'c0000000-0000-4000-8000-000000000002'
+  const P_B = 'c0000000-0000-4000-8000-000000000003'
+  const P_GONE = 'c0000000-0000-4000-8000-000000000004'
+  const link = (profileId, locationId, over = {}) => ({
+    profile_id: profileId, location_id: locationId, role: 'staff',
+    profiles: { id: profileId, full_name: 'Coach', active: true, deleted_at: null, employment_type: 'employee', ...over },
+  })
+  const fixtures = () => ({
+    shift_templates: templates(),
+    shift_blocks: [],
+    profile_locations: [
+      link(P1, 'loc-a'), link(P2, 'loc-a'), link(P_B, 'loc-b'),
+      link(P_GONE, 'loc-a', { deleted_at: '2026-10-01T00:00:00Z' }),
+    ],
+  })
+  const templateWrite = (db) => db._writes.find((w) => w.table === 'shift_templates' && w.op === 'update')
+
+  it('saves the list in the order picked', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb(fixtures())
+    const res = await PUT(req({ usual_coach_ids: [P2, P1] }), { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(200)
+    expect(templateWrite(db).payload).toEqual({ usual_coach_ids: [P2, P1] })
+    // Saving the list assigns nobody to an existing shift.
+    expect(db._writes.filter((w) => w.table === 'shift_assignments')).toEqual([])
+  })
+
+  it('clears the list with []', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb(fixtures())
+    expect((await PUT(req({ usual_coach_ids: [] }), { params: { id: 'tmpl-a' } })).status).toBe(200)
+    expect(templateWrite(db).payload).toEqual({ usual_coach_ids: [] })
+  })
+
+  it.each([['staff of another studio', P_B], ['a permanently deleted coach', P_GONE]])('refuses %s, writing nothing', async (_label, id) => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = useDb(fixtures())
+    const res = await PUT(req({ usual_coach_ids: [P1, id] }), { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(400)
+    expect(db._writes).toHaveLength(0)
+  })
+
+  it('is judged at the template\'s studio: staff there cannot set them; another studio\'s template is 404', async () => {
+    getCurrentUser.mockResolvedValue(MIXED('loc-a'))
+    let db = useDb(fixtures())
+    expect((await PUT(req({ usual_coach_ids: [P_B] }), { params: { id: 'tmpl-b' } })).status).toBe(403)
+    expect(db._writes).toHaveLength(0)
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    db = useDb(fixtures())
+    expect((await PUT(req({ usual_coach_ids: [P_B] }), { params: { id: 'tmpl-b' } })).status).toBe(404)
+    expect(db._writes).toHaveLength(0)
+  })
+})
