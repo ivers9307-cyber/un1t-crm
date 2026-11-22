@@ -5,9 +5,14 @@
 // inbox UI; the corrected values get persisted to extracted_fields
 // before /data-approve fires the Xero forward.
 //
-// Only legal while the row is in 'extracted' state. After
-// data_approved or forwarded the fields are frozen — re-extract
-// from scratch if a correction is needed.
+// Legal while the row is in 'extracted' state (and on a data_approved
+// row whose Xero send failed). After forwarded the fields are frozen —
+// read the file again if a correction is needed.
+//
+// INVOICEPREP.3: after an 'extracted' row is saved, recheckInvoiceRow
+// recomputes its review reasons from the edited fields, and the response
+// carries them as review_reasons. A failed re-check is logged and never
+// undoes the save.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -16,6 +21,7 @@ import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
 import { loadInvoiceForUser } from '../../_helpers'
 import { invoiceFieldsSchema } from '@/lib/invoice-extraction'
+import { recheckInvoiceRow } from '@/lib/invoices-queue/prepare'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -70,5 +76,31 @@ export const PATCH = withAuth({ permission: null, location: false }, async ({ re
       error: 'Row was modified concurrently — refresh and retry.',
     }, { status: 409 })
   }
-  return NextResponse.json({ success: true, data: updated })
+  if (updated.status !== 'extracted') {
+    return NextResponse.json({ success: true, data: updated })
+  }
+  return NextResponse.json({ success: true, data: { ...updated, ...(await recheckAfterSave(db, id)) } })
 })
+
+// The re-check needs the whole row (fields, reasons, studio). A failure here
+// answers whatever reasons the row holds, or none when even that is unknown.
+async function recheckAfterSave(db, id) {
+  let fresh = null
+  try {
+    const { data, error } = await db
+      .from('invoices_queue')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle()
+    if (error || !data) {
+      logError('invoices-inbox', 'fields re-check read failed', { id, err: error })
+      return {}
+    }
+    fresh = data
+    const { reasons } = await recheckInvoiceRow(db, fresh)
+    return { review_reasons: reasons }
+  } catch (err) {
+    logError('invoices-inbox', 'fields re-check failed', { id, err })
+    return Array.isArray(fresh?.review_reasons) ? { review_reasons: fresh.review_reasons } : {}
+  }
+}

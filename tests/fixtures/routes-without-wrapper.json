@@ -211,7 +211,6 @@
  "instagram/conversations/[id]/send/route.js",
  "integrations/health/route.js",
  "invoices-inbox/[id]/data-approve/route.js",
- "invoices-inbox/[id]/extract/route.js",
  "invoices-inbox/bulk-analyse/route.js",
  "invoices-inbox/bulk-mark-in-xero/route.js",
  "invoices-inbox/bulk-queue-analysis/route.js",

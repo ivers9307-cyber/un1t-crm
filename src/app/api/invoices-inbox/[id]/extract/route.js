@@ -1,140 +1,130 @@
-// INVOICES.1 — Claude Vision extraction.
+// INVOICES.1 + INVOICEPREP.3 — "Read again".
 //
-// Manual trigger from the inbox UI after a stage-1 quality approve.
-// The /quality-approve route puts the row in quality_approved; this
-// route downloads the attachment, calls Claude Vision via the shared
-// invoice-extraction.js helper, and on success advances the row to
-// 'extracted'. On failure the row STAYS in quality_approved so the
-// UI can surface a retry button.
+// Rows are read and checked on arrival by the preparation queue
+// (prepareInvoiceRow). This route is a person asking for a fresh read of one
+// row, from received, quality_approved or extracted. It runs the same
+// preparation as the queue, with force: a person who asks for a read gets one
+// even when the file matches another row's file.
 //
-// Why manual rather than auto-firing on quality-approve:
-//   • Cost protection. The operator chose to extract. A bad-quality
-//     attachment that slipped through stage 1 gets caught before
-//     Claude is billed.
-//   • Matches the FTE expense + contractor invoice OCR pattern that
-//     was just converted from auto to manual.
-//
-// Idempotency: if the row already has extracted_fields and the
-// caller hits /extract again, we re-run — useful when the operator
-// updates the attachment (future feature) or wants a fresh pass.
-// The xero forward step downstream is the one that's protected
-// against double-fire.
+// Order of writes, each guarded on status so a concurrent action wins:
+//   1. From extracted only: back to quality_approved, clearing the previous
+//      read's reasons, duplicate link and error.
+//   2. Claim the row (analysis_claimed_at, the queue's own claim), unless a
+//      fresh claim says the queue is reading it right now. A claim older than
+//      CLAIM_STALE_MINUTES is a crashed reader and is taken over.
+//   3. prepareInvoiceRow downloads, reads, applies supplier memory and VAT,
+//      records the reasons and clears the claim in its own guarded writes.
+// If preparation throws, the claim taken here is let go, so the row is not
+// left claimed until the stale window runs out.
 
 import { NextResponse } from 'next/server'
-import { loadInvoiceForUser } from '../../_helpers'
-import { extractInvoiceFieldsFromBytes } from '@/lib/invoice-extraction'
-import { canTransitionInboundInvoice } from '@/lib/inbound-invoices'
-import { resolveExtractionDefaults } from '@/lib/invoices-queue/supplier-defaults'
+import { withAuth } from '@/lib/with-auth'
+import { logError } from '@/lib/log'
+import { loadInvoiceForCaller, ROW_SELECT } from '../../_helpers'
+import { prepareInvoiceRow } from '@/lib/invoices-queue/prepare'
+import { CLAIM_STALE_MINUTES } from '@/lib/invoice-analysis-queue'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// A read of a long PDF can take a while.
+export const maxDuration = 120
 
-const STORAGE_BUCKET = 'inbound-invoices'
+const READABLE = ['received', 'quality_approved', 'extracted']
+const PREPARABLE = ['received', 'quality_approved']
+const CONCURRENT = 'Row was modified concurrently — refresh and retry.'
+const FAILED = 'Could not read the invoice. Try again.'
 
-export async function POST(_request, { params }) {
-  const { id } = await params
-  const ctx = await loadInvoiceForUser(id)
+// withAuth only signs the caller in; loadInvoiceForCaller keeps the
+// hand-written gate (row read, invoices_inbox and master-or-owner at the
+// invoice's studio, every refusal a 404) exactly as the sibling routes run it.
+export const POST = withAuth({ permission: null, location: false }, async ({ user: caller, params }) => {
+  const id = params?.id
+  const ctx = await loadInvoiceForCaller(caller, id)
   if (ctx.response) return ctx.response
   const { db, row } = ctx
 
-  // Legal states: quality_approved (first run) or extracted (re-run).
-  if (row.status !== 'quality_approved' && row.status !== 'extracted') {
+  if (!READABLE.includes(row.status)) {
     return NextResponse.json({
       success: false,
-      error: `Cannot extract from '${row.status}' state. Quality-approve first.`,
+      error: `Cannot extract from '${row.status}' state.`,
     }, { status: 409 })
-  }
-  // We're going to land in 'extracted' regardless of whether the
-  // current state is quality_approved or extracted; transition
-  // map sanity check just for the first hop.
-  if (row.status === 'quality_approved' && !canTransitionInboundInvoice(row.status, 'extracted')) {
-    return NextResponse.json({ success: false, error: 'Illegal transition.' }, { status: 409 })
   }
   if (!row.attachment_path) {
     return NextResponse.json({ success: false, error: 'Row has no attachment.' }, { status: 400 })
   }
 
-  // Pull the bytes from the row's OWN bucket — each source type lives in a
-  // different one (supplier_email → inbound-invoices, contractor_invoice →
-  // contractor-invoices, fte_expense_item → fte-expense-receipts,
-  // card_receipt → company-card-receipts, …). mig 185 set attachment_bucket
-  // NOT NULL, so it's always present; the constant is only a legacy fallback.
-  // (Was hardcoded to STORAGE_BUCKET, which 404'd Analyse for every
-  // non-supplier source — bulk-analyse + the cron already read the per-row
-  // bucket.) Service-role bypasses RLS.
-  const { data: blob, error: dlErr } = await db.storage
-    .from(row.attachment_bucket || STORAGE_BUCKET)
-    .download(row.attachment_path)
-  if (dlErr || !blob) {
-    return NextResponse.json({
-      success: false,
-      error: `Could not download attachment: ${dlErr?.message || 'unknown error'}`,
-    }, { status: 500 })
-  }
-  const ab = await blob.arrayBuffer()
-  const bytes = Buffer.from(ab)
-
-  const result = await extractInvoiceFieldsFromBytes(bytes, row.attachment_mime_type, { locationId: row.location_id })
-  if (!result.ok) {
-    // Persist the error so the inbox shows it; keep the row in
-    // quality_approved so the operator can retry without re-doing
-    // the legibility approve.
-    await db
+  // 1. Preparation only reads rows that have not been read yet.
+  if (row.status === 'extracted') {
+    const { data: reset, error: resetErr } = await db
       .from('invoices_queue')
-      .update({
-        extraction_error: result.error,
-        extracted_at: new Date().toISOString(),
-      })
+      .update({ status: 'quality_approved', review_reasons: [], duplicate_of_id: null, extraction_error: null })
       .eq('id', id)
-    return NextResponse.json({ success: false, error: result.error }, { status: 422 })
-  }
-
-  // SUPPLIER-MEMORY.1 — enrich the extracted fields from supplier
-  // memory. If the extracted supplier name resolves to a known Xero
-  // contact, attach it (so the review screen opens with the supplier
-  // already picked); if that supplier has a remembered account +
-  // category, apply them too. The remembered coding wins over
-  // Claude's per-invoice guess — it's a human's past decision.
-  // Best-effort: a memory miss must never block the extraction.
-  let fields = result.fields
-  try {
-    const patch = await resolveExtractionDefaults(db, row.location_id, fields.supplier_name)
-    if (patch && Object.keys(patch).length > 0) {
-      fields = { ...fields, ...patch }
+      .eq('status', 'extracted')
+      .select('id')
+    if (resetErr) {
+      logError('invoices-inbox', 'read again: reset failed', { invoiceId: id, err: resetErr })
+      return NextResponse.json({ success: false, error: FAILED }, { status: 500 })
     }
-  } catch (e) {
-    console.warn(`[extract ${id}] supplier-memory resolve failed: ${e?.message || e}`)
+    if (!reset || reset.length === 0) {
+      return NextResponse.json({ success: false, error: CONCURRENT }, { status: 409 })
+    }
   }
 
-  // Confidence — coarse heuristic. The Claude prompt asks for
-  // canonical fields; if everything required is present we call it
-  // high. If subtotal+tax doesn't reconcile to total within €0.01
-  // OR a required field is missing we call it medium. Operator
-  // always reviews regardless, so this is just a UI hint.
-  const f = fields
-  const reconciles = Math.abs((Number(f.subtotal) + Number(f.tax_amount)) - Number(f.total)) <= 0.01
-  const allRequired = f.supplier_name && f.invoice_number && f.invoice_date && Number.isFinite(Number(f.total))
-  const confidence = allRequired && reconciles ? 'high' : 'medium'
-
-  const { data: updated, error: updErr } = await db
+  // 2. Claim, so the queue cannot read the same row at the same time.
+  const nowIso = new Date().toISOString()
+  const staleBefore = new Date(Date.now() - CLAIM_STALE_MINUTES * 60_000).toISOString()
+  const { data: claimed, error: claimErr } = await db
     .from('invoices_queue')
-    .update({
-      status: 'extracted',
-      extracted_at: new Date().toISOString(),
-      extracted_fields: fields,
-      extraction_confidence: confidence,
-      extraction_error: null,
-    })
+    .update({ analysis_claimed_at: nowIso, analysis_queued_at: nowIso })
     .eq('id', id)
-    .in('status', ['quality_approved', 'extracted'])
-    .select('id, status, extracted_at, extracted_fields, extraction_confidence')
-    .single()
-  if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
-  if (!updated) {
+    .in('status', PREPARABLE)
+    .or(`analysis_claimed_at.is.null,analysis_claimed_at.lt.${staleBefore}`)
+    .select('*')
+  if (claimErr) {
+    logError('invoices-inbox', 'read again: claim failed', { invoiceId: id, err: claimErr })
+    return NextResponse.json({ success: false, error: FAILED }, { status: 500 })
+  }
+  if (!claimed || claimed.length === 0) {
     return NextResponse.json({
       success: false,
-      error: 'Row was modified concurrently — refresh and retry.',
+      error: 'This invoice is being read right now. Try again in a moment.',
     }, { status: 409 })
   }
-  return NextResponse.json({ success: true, data: updated })
-}
+
+  // 3. Preparation records its own outcome on the row.
+  let outcome
+  try {
+    ;({ outcome } = await prepareInvoiceRow(db, claimed[0], { force: true }))
+  } catch (err) {
+    logError('invoices-inbox', 'read again: preparation threw', { invoiceId: id, err })
+    const { error: releaseErr } = await db
+      .from('invoices_queue')
+      .update({ analysis_claimed_at: null, analysis_queued_at: null })
+      .eq('id', id)
+      .in('status', PREPARABLE)
+    if (releaseErr) logError('invoices-inbox', 'read again: could not release the claim', { invoiceId: id, err: releaseErr })
+    return NextResponse.json({ success: false, error: FAILED }, { status: 500 })
+  }
+
+  if (outcome === 'skipped') {
+    return NextResponse.json({ success: false, error: CONCURRENT }, { status: 409 })
+  }
+
+  const { data: fresh, error: readErr } = await db
+    .from('invoices_queue')
+    .select(ROW_SELECT)
+    .eq('id', id)
+    .maybeSingle()
+  if (readErr) logError('invoices-inbox', 'read again: reload failed', { invoiceId: id, err: readErr })
+  const data = readErr ? null : fresh
+
+  // 422 is what the screen shows a retry for.
+  if (outcome === 'unreadable') {
+    return NextResponse.json({
+      success: false,
+      error: data?.extraction_error || 'Could not read this document.',
+      data,
+    }, { status: 422 })
+  }
+  return NextResponse.json({ success: true, data, outcome })
+})
