@@ -16,7 +16,8 @@
 // Pure on its inputs (db passed in) so it unit-tests with the standard mock.
 
 import { generateBlocksForTemplate, getMonday } from '@/lib/roster'
-import { logWarn } from '@/lib/log'
+import { readBlocksForFill, fillUsualCoaches, normaliseUsualCoachIds } from '@/lib/shift-usual-coaches'
+import { logInfo, logWarn } from '@/lib/log'
 
 /**
  * Extend the block horizon for every active shift template.
@@ -24,7 +25,14 @@ import { logWarn } from '@/lib/log'
  * @param {SupabaseClient} db   server-role client
  * @param {object} [opts]
  * @param {number} [opts.weeks=8]  weeks to keep materialised from this Monday
- * @returns {Promise<{ templates: number, inserted: number, skipped: number, removed: number, failed: number }>}
+ * USUALCOACH.1 — a template's usual coaches go onto the blocks THIS run
+ * created (never a block that already existed: a manager may have emptied it
+ * on purpose), through fillUsualCoaches, which skips leave, cannot-work days,
+ * clashes and anyone no longer at the studio. A failed fill never fails the
+ * sweep: the shifts exist, a manager can still staff them.
+ *
+ * @returns {Promise<{ templates: number, inserted: number, skipped: number, removed: number, failed: number,
+ *   usualAssigned: number, usualSkipped: number, usualFillFailed: number }>}
  *   `removed` — dates not generated because a manager deleted that slot
  *   (SLOTREMOVAL.1; the generator reads shift_block_removals once per template).
  * @throws when the template query itself fails — the cron must NOT stamp a
@@ -33,7 +41,7 @@ import { logWarn } from '@/lib/log'
 export async function extendRosterHorizon(db, { weeks = 8 } = {}) {
   const { data, error } = await db
     .from('shift_templates')
-    .select('id, location_id, start_time, end_time, days_of_week, min_coaches, max_coaches')
+    .select('id, location_id, start_time, end_time, days_of_week, min_coaches, max_coaches, usual_coach_ids')
     .eq('active', true)
 
   if (error) throw new Error(`Failed to load shift templates: ${error.message}`)
@@ -48,10 +56,14 @@ export async function extendRosterHorizon(db, { weeks = 8 } = {}) {
   let skipped = 0
   let failed = 0
   let removed = 0
+  let usualAssigned = 0
+  let usualSkipped = 0
+  let usualFillFailed = 0
 
   for (const template of templates) {
+    let res
     try {
-      const res = await generateBlocksForTemplate(db, template, from, weeks)
+      res = await generateBlocksForTemplate(db, template, from, weeks)
       inserted += res.inserted
       skipped += res.skipped
       removed += res.removed || 0
@@ -62,8 +74,30 @@ export async function extendRosterHorizon(db, { weeks = 8 } = {}) {
       logWarn('roster-horizon', 'template generation failed', {
         templateId: template.id, locationId: template.location_id, err,
       })
+      continue
+    }
+
+    const newIds = res?.insertedIds || []
+    if (newIds.length === 0 || normaliseUsualCoachIds(template.usual_coach_ids).length === 0) continue
+    try {
+      const { blocks, error } = await readBlocksForFill(db, { blockIds: newIds })
+      if (error) throw new Error(error.message)
+      const fill = await fillUsualCoaches(db, blocks, { actorId: null })
+      usualAssigned += fill.assigned.length
+      usualSkipped += fill.skipped.length
+      if (fill.skipped.length > 0) {
+        // Counts by reason only: no names in logs.
+        logInfo('roster-horizon', 'usual coaches skipped on new shifts', {
+          templateId: template.id, locationId: template.location_id, counts: fill.counts,
+        })
+      }
+    } catch (err) {
+      usualFillFailed += 1
+      logWarn('roster-horizon', 'usual coach fill failed; shifts left empty', {
+        templateId: template.id, locationId: template.location_id, err: err?.message || String(err),
+      })
     }
   }
 
-  return { templates: templates.length, inserted, skipped, removed, failed }
+  return { templates: templates.length, inserted, skipped, removed, failed, usualAssigned, usualSkipped, usualFillFailed }
 }
