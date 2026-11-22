@@ -119,6 +119,23 @@ describe('agent email blocks', () => {
     expect(render([{ type: 'divider' }])).toContain('<img')
   })
 
+  it('draws a black bar with the email logo when the studio has one (EMAILBAR.1)', () => {
+    const html = render([{ type: 'divider' }], { companyName: 'Acme Gym', logoUrl: 'https://cdn.example.com/logo.png', emailLogoUrl: 'https://cdn.example.com/logo-white.png' })
+    expect(html).toContain('bgcolor="#000000"')
+    expect(html).toContain('src="https://cdn.example.com/logo-white.png"')
+    expect(html).not.toContain('src="https://cdn.example.com/logo.png"')   // the dark logo is not drawn on black
+    expect(html).toContain('color:#ffffff;')
+    expect(html).toContain('Acme Gym')
+  })
+
+  it('keeps the plain header without an email logo, and for one that is not https', () => {
+    for (const emailLogoUrl of [null, undefined, '', 'http://cdn.example.com/x.png', 'javascript:alert(1)']) {
+      const html = render([{ type: 'divider' }], { companyName: 'Acme Gym', logoUrl: 'https://cdn.example.com/logo.png', emailLogoUrl })
+      expect(html).not.toContain('bgcolor="#000000"')
+      expect(html).toContain('src="https://cdn.example.com/logo.png"')
+    }
+  })
+
   it('adds no footer, unsubscribe or preheader', () => {
     const html = render([{ type: 'paragraph', text: 'x' }])
     expect(html).not.toMatch(/unsubscribe|display:none/i)
