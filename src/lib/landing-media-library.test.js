@@ -12,6 +12,7 @@ describe('mediaKindOf', () => {
     expect(mediaKindOf('a.jpeg')).toBe('image')
     expect(mediaKindOf('a.png')).toBe('image')
     expect(mediaKindOf('a.webp')).toBe('image')
+    expect(mediaKindOf('a.gif')).toBe('image')   // GIFLIB.1
     expect(mediaKindOf('noext', 'video/mp4')).toBe('video')
     expect(mediaKindOf('noext', 'image/png')).toBe('image')
     expect(mediaKindOf('a.svg')).toBeNull()
