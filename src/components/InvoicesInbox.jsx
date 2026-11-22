@@ -23,7 +23,7 @@
 // INVOICEPREP.3 — rows are read and checked on arrival; review_reasons
 // show as chips (see invoices/review-status.js).
 
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import InboundStraysNotice from '@/components/invoices/InboundStraysNotice'
 import Link from 'next/link'
 // BOOKKEEPER-APPROVALS.1 — read `?focus=<id>` so the drill-in from
@@ -38,6 +38,7 @@ import BulkUploadPanel from '@/components/invoices/BulkUploadPanel'
 import { describeApiError } from '@/lib/api-error'
 import {
   reasonChips, isReadyToSend, pillFor, notInvoiceText, unreadPanel, needsALookSkipped,
+  isBeingRead, canRejectOne,
 } from '@/components/invoices/review-status'
 
 // INVOICES.3 — friendly labels for the category dropdown. Keys
@@ -160,6 +161,12 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   const [bulkBusy, setBulkBusy] = useState(null)
   const [bulkError, setBulkError] = useState(null)
   const [bulkSummary, setBulkSummary] = useState(null)
+  // INVOICEPREP.3 — "Open the earlier one": the earlier row, read by id, is
+  // held here until the list contains it, so the selection never falls back
+  // to the top row; missingEarlierId marks one that could not be found.
+  const [pinnedRow, setPinnedRow] = useState(null)
+  const pinnedIdRef = useRef(null)
+  const [missingEarlierId, setMissingEarlierId] = useState(null)
 
   const activeStatuses = useMemo(
     () => STATUS_FILTERS.find((s) => s.key === statusFilter)?.statuses,
@@ -188,6 +195,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
         // still visible; otherwise default to the top row.
         const desired = prev || focusId
         if (desired && (j.data || []).some((r) => r.id === desired)) return desired
+        if (desired && desired === pinnedIdRef.current) return desired
         return (j.data || [])[0]?.id || null
       })
     } catch (e) {
@@ -217,21 +225,55 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId, loading])
 
-  const selected = rows.find((r) => r.id === selectedId) || null
+  const selected = rows.find((r) => r.id === selectedId)
+    || (pinnedRow && pinnedRow.id === selectedId ? pinnedRow : null)
 
-  // INVOICEPREP.3 — "Open the earlier one" on a possible duplicate. If the
-  // earlier row is not in the loaded list, widen the status filter once so
-  // it can be found; when it still is not there, nothing changes.
-  function openRow(id) {
+  function selectRow(id) {
+    pinnedIdRef.current = null
+    setPinnedRow(null)
+    setMissingEarlierId(null)
+    setSelectedId(id)
+  }
+
+  // INVOICEPREP.3 — "Open the earlier one" on a possible duplicate. A row in
+  // the loaded list is selected directly; otherwise it is read by id and the
+  // filters are widened so the list can show it. If it cannot be read, the
+  // current selection stays and the panel says so.
+  async function openRow(id) {
     if (!id) return
-    if (rows.some((r) => r.id === id)) { setSelectedId(id); return }
-    if (statusFilter !== 'all') { setStatusFilter('all'); setSelectedId(id) }
+    setMissingEarlierId(null)
+    if (rows.some((r) => r.id === id)) { selectRow(id); return }
+    const fromId = selectedId
+    try {
+      const res = await fetch(`/api/invoices-inbox/${id}`)
+      const j = await res.json()
+      if (!j?.success || !j.data) throw new Error('not found')
+      pinnedIdRef.current = id
+      setPinnedRow(j.data)
+      setSelectedId(id)
+      setStatusFilter('all')
+      setSourceTab('all')
+      setLocationFilter('all')
+    } catch {
+      setMissingEarlierId(fromId)
+    }
+  }
+
+  // INVOICEPREP.3 — a restored row is back in Awaiting action; show it there.
+  function onRestored(id) {
+    setSelectedId(id)
+    if (statusFilter === 'pending') loadRows()
+    else setStatusFilter('pending')
   }
 
   // INV-BULK.3 — while any visible row is queued or mid-analysis,
   // poll silently every 5s so the operator watches the queue drain
   // (received/quality_approved → extracted) without manual refresh.
-  const queueActive = useMemo(() => rows.some((r) => r.analysis_queued_at), [rows])
+  // INVOICEPREP.3 — only rows still waiting to be read keep the poll going.
+  const queueActive = useMemo(
+    () => rows.some((r) => r.analysis_queued_at && ['received', 'quality_approved'].includes(r.status)),
+    [rows],
+  )
   useEffect(() => {
     if (!queueActive) return
     const t = setInterval(() => { loadRows({ silent: true }) }, 5000)
@@ -412,7 +454,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
           rows={rows}
           loading={loading}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          onSelect={selectRow}
           isMaster={isMaster}
           isBookkeeper={isBookkeeper}
           bulkSelection={bulkSelection}
@@ -424,6 +466,8 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
           row={selected}
           onChanged={loadRows}
           onOpenRow={openRow}
+          onRestored={onRestored}
+          earlierMissing={!!selectedId && missingEarlierId === selectedId}
           isMaster={isMaster}
         />
       </div>
@@ -759,7 +803,7 @@ function ReasonChips({ row, compact = false }) {
   ))
 }
 
-function InboxDetail({ row, onChanged, onOpenRow }) {
+function InboxDetail({ row, onChanged, onOpenRow, onRestored, earlierMissing = false }) {
   const [attachment, setAttachment] = useState(null)
   const [attLoading, setAttLoading] = useState(false)
   const [busy, setBusy] = useState(null) // 'approve' | 'reject' | 'extract' | 'send' | 'delete'
@@ -815,10 +859,12 @@ function InboxDetail({ row, onChanged, onOpenRow }) {
       if (!j.success) {
         // INVOICEPREP.3 — a read that failed (422) still saved its error
         // on the row; reload so the panel shows it.
-        if (res.status === 422) onChanged()
+        // A 409 on restore means the row moved on; reload to show where.
+        if (res.status === 422 || (path === 'restore' && res.status === 409)) onChanged()
         throw new Error(describeApiError(j, 'Action failed'))
       }
-      onChanged()
+      if (path === 'restore' && onRestored) onRestored(row.id)
+      else onChanged()
     } catch (e) {
       setActionError(e.message)
     } finally {
@@ -884,7 +930,7 @@ function InboxDetail({ row, onChanged, onOpenRow }) {
 
       <AttachmentPreview attachment={attachment} loading={attLoading} mime={row.attachment_mime_type} />
 
-      <DuplicatePointer row={row} onOpenRow={onOpenRow} />
+      <DuplicatePointer row={row} onOpenRow={onOpenRow} missing={earlierMissing} />
 
       {row.status === 'not_invoice' && (
         <NotInvoiceActions
@@ -894,18 +940,19 @@ function InboxDetail({ row, onChanged, onOpenRow }) {
         />
       )}
 
-      {(row.status === 'received' || (row.status === 'quality_approved' && unreadPanel(row))) && (
+      {(row.status === 'received' || isBeingRead(row) || (row.status === 'quality_approved' && unreadPanel(row))) && (
         <StageOneActions
           busy={busy}
           panel={unreadPanel(row)}
+          reading={isBeingRead(row)}
           extractionError={row.extraction_error}
           onApprove={() => postAction('quality-approve')}
           onReadAgain={() => postAction('extract')}
-          onReject={row.status === 'received' ? (reason) => postAction('quality-reject', { reason }) : null}
+          onReject={canRejectOne(row) ? (reason) => postAction('quality-reject', { reason }) : null}
         />
       )}
 
-      {row.status === 'quality_approved' && !unreadPanel(row) && (
+      {row.status === 'quality_approved' && !unreadPanel(row) && !isBeingRead(row) && (
         <ExtractAction
           busy={busy}
           extractionError={row.extraction_error}
@@ -1034,7 +1081,8 @@ function AttachmentPreview({ attachment, loading, mime }) {
 
 // INVOICEPREP.3 — `panel` (from unreadPanel) retitles this for a row the
 // reader gave up on; without it, today's quality review shows unchanged.
-function StageOneActions({ busy, panel = null, extractionError = null, onApprove, onReadAgain, onReject }) {
+// `reading` (a row queued to be read) shows only a short line and Reject.
+function StageOneActions({ busy, panel = null, reading = false, extractionError = null, onApprove, onReadAgain, onReject }) {
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [reason, setReason] = useState('')
   const primaryCls = 'px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50'
@@ -1051,7 +1099,12 @@ function StageOneActions({ busy, panel = null, extractionError = null, onApprove
   )
   return (
     <div className="space-y-3">
-      {panel ? (
+      {reading ? (
+        <>
+          <p className="text-sm text-un1t-subtle">Being read. This takes a moment.</p>
+          {onReject && <div className="flex gap-2 flex-wrap">{rejectButton(secondaryCls)}</div>}
+        </>
+      ) : panel ? (
         <div className="space-y-1">
           <p className="text-sm font-medium text-un1t-text">{panel.title}</p>
           {extractionError && <p className="text-xs text-un1t-subtle break-words">{extractionError}</p>}
@@ -1062,10 +1115,10 @@ function StageOneActions({ busy, panel = null, extractionError = null, onApprove
         Approving runs Claude Vision next (which costs API tokens), so reject anything that isn't an invoice or isn't readable.
       </p>
       )}
-      {panel ? (
+      {reading ? null : panel ? (
         <div className="flex gap-2 flex-wrap">
-          {/* quality-reject accepts only a 'received' row, so a
-              quality_approved row is offered the read alone. */}
+          {/* onReject is null when quality-reject would refuse the row
+              (canRejectOne); the read is then offered alone. */}
           {!onReject
             ? readButton(primaryCls)
             : panel.primary === 'reject'
@@ -1092,7 +1145,7 @@ function StageOneActions({ busy, panel = null, extractionError = null, onApprove
         </button>
       </div>
       )}
-      {showRejectForm && (
+      {showRejectForm && onReject && (
         <div className="space-y-2 border border-un1t-border rounded-md p-3">
           <label className="text-xs uppercase tracking-wide text-un1t-subtle">Reason</label>
           <textarea
@@ -1137,7 +1190,7 @@ function NotInvoiceActions({ row, busy, onRestore }) {
 }
 
 // INVOICEPREP.3 — points a possible duplicate at the earlier row.
-function DuplicatePointer({ row, onOpenRow }) {
+function DuplicatePointer({ row, onOpenRow, missing = false }) {
   const reasons = Array.isArray(row.review_reasons) ? row.review_reasons : []
   if (!row.duplicate_of_id) return null
   if (!reasons.includes('duplicate_file') && !reasons.includes('duplicate_number')) return null
@@ -1151,6 +1204,7 @@ function DuplicatePointer({ row, onOpenRow }) {
       >
         Open the earlier one
       </button>
+      {missing && <span className="text-un1t-subtle">The earlier invoice is no longer in the list.</span>}
     </div>
   )
 }

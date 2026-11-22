@@ -6,7 +6,11 @@ import {
   notInvoiceText,
   unreadPanel,
   needsALookSkipped,
+  isBeingRead,
+  canRejectOne,
 } from './review-status'
+
+const P = '2026-11-22T09:00:00Z'
 
 describe('reasonChips', () => {
   it('gives one chip per known reason, in display order', () => {
@@ -41,15 +45,27 @@ describe('reasonChips', () => {
     expect(chips).toEqual([{ key: 'no_vat_rate', label: 'No VAT rate', tone: 'amber' }])
   })
 
-  it('shows Ready for an extracted row with no reasons', () => {
+  it('shows Ready for a checked extracted row with no reasons', () => {
     const ready = [{ key: 'ready', label: 'Ready', tone: 'green' }]
-    expect(reasonChips({ status: 'extracted', review_reasons: [] })).toEqual(ready)
-    expect(reasonChips({ status: 'extracted', review_reasons: null })).toEqual(ready)
-    expect(reasonChips({ status: 'extracted' })).toEqual(ready)
+    expect(reasonChips({ status: 'extracted', prepared_at: P, review_reasons: [] })).toEqual(ready)
+    expect(reasonChips({ status: 'extracted', prepared_at: P, review_reasons: null })).toEqual(ready)
+    expect(reasonChips({ status: 'extracted', prepared_at: P })).toEqual(ready)
+  })
+
+  it('shows no Ready for an extracted row that was never checked', () => {
+    expect(reasonChips({ status: 'extracted', prepared_at: null, review_reasons: [] })).toEqual([])
+    expect(reasonChips({ status: 'extracted' })).toEqual([])
+  })
+
+  it('shows reasons on an approved row, never Ready', () => {
+    expect(reasonChips({ status: 'data_approved', prepared_at: P, review_reasons: ['no_account'] })).toEqual([
+      { key: 'no_account', label: 'No account yet', tone: 'amber' },
+    ])
+    expect(reasonChips({ status: 'data_approved', prepared_at: P, review_reasons: [] })).toEqual([])
   })
 
   it('shows Ready when every reason is unknown', () => {
-    expect(reasonChips({ status: 'extracted', review_reasons: ['nonsense'] })).toEqual([
+    expect(reasonChips({ status: 'extracted', prepared_at: P, review_reasons: ['nonsense'] })).toEqual([
       { key: 'ready', label: 'Ready', tone: 'green' },
     ])
   })
@@ -60,7 +76,7 @@ describe('reasonChips', () => {
   })
 
   it('shows nothing for any other status, even with reasons', () => {
-    for (const status of ['data_approved', 'forwarded', 'rejected', 'not_invoice', 'something_new']) {
+    for (const status of ['forwarded', 'rejected', 'not_invoice', 'something_new']) {
       expect(reasonChips({ status, review_reasons: ['new_supplier'] })).toEqual([])
     }
   })
@@ -77,6 +93,9 @@ describe('isReadyToSend', () => {
     expect(isReadyToSend({ status: 'extracted', extracted_fields: fields, review_reasons: [] })).toBe(true)
     expect(isReadyToSend({ status: 'data_approved', extracted_fields: fields, review_reasons: null })).toBe(true)
     expect(isReadyToSend({ status: 'extracted', extracted_fields: fields })).toBe(true)
+  })
+  it('keeps an old, never-checked extracted row sendable', () => {
+    expect(isReadyToSend({ status: 'extracted', extracted_fields: fields, prepared_at: null, review_reasons: null })).toBe(true)
   })
   it('is false when the row has any reason', () => {
     expect(isReadyToSend({ status: 'extracted', extracted_fields: fields, review_reasons: ['no_account'] })).toBe(false)
@@ -176,5 +195,34 @@ describe('needsALookSkipped', () => {
   it('is 0 for no results', () => {
     expect(needsALookSkipped(undefined)).toBe(0)
     expect(needsALookSkipped([])).toBe(0)
+  })
+})
+
+describe('isBeingRead', () => {
+  it('is true for a queued unread row', () => {
+    expect(isBeingRead({ status: 'received', analysis_queued_at: P })).toBe(true)
+    expect(isBeingRead({ status: 'quality_approved', analysis_queued_at: P })).toBe(true)
+  })
+  it('is false otherwise', () => {
+    expect(isBeingRead({ status: 'received', analysis_queued_at: null })).toBe(false)
+    expect(isBeingRead({ status: 'extracted', analysis_queued_at: P })).toBe(false)
+    expect(isBeingRead({ status: 'not_invoice' })).toBe(false)
+    expect(isBeingRead(null)).toBe(false)
+  })
+})
+
+describe('canRejectOne', () => {
+  it('allows any received row', () => {
+    expect(canRejectOne({ status: 'received', review_reasons: [] })).toBe(true)
+  })
+  it('allows a quality_approved row only when unreadable or a duplicate file', () => {
+    expect(canRejectOne({ status: 'quality_approved', review_reasons: ['unreadable'] })).toBe(true)
+    expect(canRejectOne({ status: 'quality_approved', review_reasons: ['duplicate_file'] })).toBe(true)
+    expect(canRejectOne({ status: 'quality_approved', review_reasons: ['duplicate_number'] })).toBe(false)
+    expect(canRejectOne({ status: 'quality_approved', review_reasons: null })).toBe(false)
+  })
+  it('is false for other statuses', () => {
+    expect(canRejectOne({ status: 'extracted', review_reasons: ['unreadable'] })).toBe(false)
+    expect(canRejectOne(null)).toBe(false)
   })
 })

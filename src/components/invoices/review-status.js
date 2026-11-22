@@ -5,14 +5,18 @@
 import { REVIEW_REASONS, REVIEW_REASON_LABELS } from '@/lib/invoices-queue/readiness'
 
 const RED_REASONS = new Set(['duplicate_file', 'duplicate_number', 'already_in_xero', 'credit_note', 'unreadable'])
-const CHIP_STATUSES = new Set(['received', 'quality_approved', 'extracted'])
+const CHIP_STATUSES = new Set(['received', 'quality_approved', 'extracted', 'data_approved'])
 const UNREAD_STATUSES = new Set(['received', 'quality_approved'])
 
 function reasonsOf(row) {
   return Array.isArray(row?.review_reasons) ? row.review_reasons : []
 }
 
-/** One chip per known reason (by label), or a green Ready chip. */
+/**
+ * One chip per known reason (by label), or a green Ready chip for an
+ * extracted row that was checked (prepared_at) and flagged nothing. A row
+ * from before the checks has no prepared_at and gets no Ready.
+ */
 export function reasonChips(row) {
   if (!row || !CHIP_STATUSES.has(row.status)) return []
   const have = new Set(reasonsOf(row))
@@ -25,13 +29,16 @@ export function reasonChips(row) {
     seen.add(label)
     chips.push({ key, label, tone: RED_REASONS.has(key) ? 'red' : 'amber' })
   }
-  if (chips.length === 0 && row.status === 'extracted') {
+  if (chips.length === 0 && row.status === 'extracted' && row.prepared_at) {
     return [{ key: 'ready', label: 'Ready', tone: 'green' }]
   }
   return chips
 }
 
-/** A row the bulk send would accept: read, coded and nothing flagged. */
+/**
+ * A row the bulk send would accept: read, coded and nothing flagged. It
+ * does not ask for prepared_at, so an old row stays sendable as before.
+ */
 export function isReadyToSend(row) {
   if (!row) return false
   if (row.status !== 'extracted' && row.status !== 'data_approved') return false
@@ -74,4 +81,22 @@ export function unreadPanel(row) {
 export function needsALookSkipped(results) {
   if (!Array.isArray(results)) return 0
   return results.filter((r) => r?.outcome === 'skipped' && r?.reason === 'needs_a_look').length
+}
+
+/** A row queued to be read (shows "Reading…"). */
+export function isBeingRead(row) {
+  return pillFor(row)?.tone === 'blue'
+}
+
+/**
+ * Whether the single-row reject (quality-reject) accepts this row: any
+ * received row, or a quality_approved one the reader flagged unreadable
+ * or as a duplicate file.
+ */
+export function canRejectOne(row) {
+  if (!row) return false
+  if (row.status === 'received') return true
+  if (row.status !== 'quality_approved') return false
+  const reasons = reasonsOf(row)
+  return reasons.includes('unreadable') || reasons.includes('duplicate_file')
 }
