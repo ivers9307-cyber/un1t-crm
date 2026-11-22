@@ -8,6 +8,7 @@ import {
   HostEventSchema,
 } from './host-events'
 import { ensureAnchorLocation, resolveMasterLocationId, resolveMasterLocationIdStrict } from './host-events'
+import { studioUseGrew, studioHoursGrowth, studioChangesFromInput, STUDIO_USE_REASONS } from './host-events'
 
 function fakeDb() {
   const calls = { inserted: null, updatedHost: null }
@@ -231,5 +232,59 @@ describe('HOSTAUTOPUB.1 — publishing with no review', () => {
     expect(eventIsPublic({ status: 'published', active: false })).toBe(false)
     expect(eventIsPublic({ status: 'pending_review', active: true })).toBe(false)
     expect(eventIsPublic({ status: 'draft', active: true })).toBe(false)
+  })
+})
+
+describe('HOSTSTUDIONOTICE.1 — studioUseGrew (a notice, never a check)', () => {
+  const HATCH = 'aaaaaaaa-0000-4000-8000-000000000001'
+  const STILL = 'aaaaaaaa-0000-4000-8000-000000000002'
+  const linked = { venue_location_id: HATCH, duration_minutes: null, waves: [{ start_time: '10:00:00' }, { start_time: '12:00:00' }] }
+  const same = (over = {}) => ({ venue_location_id: HATCH, session_times: ['10:00', '12:00'], duration_minutes: null, ...over })
+
+  it('reasons come in one order', () => {
+    expect(STUDIO_USE_REASONS).toEqual(['studio', 'studio_hours'])
+  })
+  it('linking an unlinked event to a studio is a studio change', () => {
+    expect(studioUseGrew({ venue_location_id: null, waves: [{ start_time: '10:00' }] }, { venue_location_id: HATCH, session_times: ['10:00'], duration_minutes: null })).toEqual(['studio'])
+  })
+  it('moving to a different studio is a studio change', () => {
+    expect(studioUseGrew(linked, same({ venue_location_id: STILL }))).toContain('studio')
+  })
+  it('moving OUT of a studio never counts, whatever else changes', () => {
+    expect(studioUseGrew(linked, same({ venue_location_id: null, session_times: ['06:00', '23:00'], duration_minutes: 600 }))).toEqual([])
+  })
+  it('a body without the studio key judges no studio change but still the hours', () => {
+    expect(studioUseGrew(linked, { session_times: ['10:00', '12:00'], duration_minutes: null })).toEqual([])
+    expect(studioUseGrew(linked, { session_times: ['10:00', '14:00'], duration_minutes: null })).toEqual(['studio_hours'])
+  })
+  it('a session later than the last, or earlier than the first, grows the hours', () => {
+    expect(studioHoursGrowth(linked, same({ session_times: ['10:00', '12:00', '18:30'] }))).toEqual({ earlier: null, later: '18:30', longerHoldMinutes: null })
+    expect(studioHoursGrowth(linked, same({ session_times: ['07:00', '10:00', '12:00'] }))).toEqual({ earlier: '07:00', later: null, longerHoldMinutes: null })
+    expect(studioUseGrew(linked, same({ session_times: ['07:00', '10:00', '12:00'] }))).toEqual(['studio_hours'])
+  })
+  it('an existing session re-timed outside the hours counts too', () => {
+    expect(studioUseGrew(linked, same({ session_times: ['10:00', '15:00'] }))).toEqual(['studio_hours'])
+  })
+  it('a session inside the current hours, or a removed one, does not count', () => {
+    expect(studioUseGrew(linked, same({ session_times: ['10:00', '11:00', '12:00'] }))).toEqual([])
+    expect(studioUseGrew(linked, same({ session_times: ['10:00'] }))).toEqual([])
+  })
+  it('a longer hold counts; a shorter duration or one under the hold does not', () => {
+    expect(studioHoursGrowth(linked, same({ duration_minutes: 180 })).longerHoldMinutes).toBe(180)
+    expect(studioUseGrew(linked, same({ duration_minutes: 90 }))).toEqual([]) // under the 2 h default hold
+    expect(studioUseGrew({ ...linked, duration_minutes: 240 }, same({ duration_minutes: 180 }))).toEqual([])
+  })
+  it("measures the hold against the studio's own setting", () => {
+    expect(studioUseGrew(linked, same({ duration_minutes: 180 }), { studioHoldMinutes: 240 })).toEqual([])
+    expect(studioUseGrew(linked, same({ duration_minutes: 300 }), { studioHoldMinutes: 240 })).toEqual(['studio_hours'])
+  })
+  it('an unlinked event that stays unlinked never counts', () => {
+    expect(studioUseGrew({ venue_location_id: null, waves: [{ start_time: '10:00' }] }, { venue_location_id: null, session_times: ['06:00'], duration_minutes: 600 })).toEqual([])
+  })
+  it('studioChangesFromInput carries every session time, the studio only when sent, and always the duration', () => {
+    expect(studioChangesFromInput({ sessions: [{ id: 'w', start_time: '10:00' }, { start_time: '18:00' }] }))
+      .toEqual({ session_times: ['10:00', '18:00'], duration_minutes: null })
+    expect(studioChangesFromInput({ sessions: [], venue_location_id: null, duration_minutes: 60 }))
+      .toEqual({ venue_location_id: null, session_times: [], duration_minutes: 60 })
   })
 })
