@@ -61,7 +61,7 @@ export default async function InvoicesInboxPage() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-un1t-text">Invoices</h1>
         <p className="text-sm text-un1t-subtle mt-1">
-          Forward supplier invoices to the per-location email address below. Each invoice gets a two-step review — quality, then extracted data — before forwarding to Xero.
+          Forward supplier invoices to the address below. Each one is read and checked as it arrives.
         </p>
       </header>
       <InvoicesInbox
