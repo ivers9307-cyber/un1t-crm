@@ -183,6 +183,11 @@ const optionalMoney = z.coerce.number().optional().transform((v) => v ?? 0)
 const blankToNull = (schema) =>
   z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? null : v), schema)
 
+// INVOICEPREP.3 — what kind of document the reader saw, so statements and
+// non-invoices can be set aside automatically. Optional everywhere: rows
+// extracted before this field existed, and editor saves, carry none.
+export const INVOICE_DOCUMENT_TYPES = Object.freeze(['invoice', 'receipt', 'statement', 'other'])
+
 const lineItem = z.object({
   description: z.string().min(1).max(500),
   quantity: z.coerce.number().nonnegative(),
@@ -234,6 +239,7 @@ const invoiceFields = z.object({
   // the prompt instruction for the inbound_invoices path). Validated
   // against the enum so the inbox UI can rely on the value if set.
   category: blankToNull(z.enum(INVOICE_CATEGORIES).nullable().optional()),
+  document_type: blankToNull(z.enum(INVOICE_DOCUMENT_TYPES).nullable().optional()),
   // INVOICES.3 — operator-editable account code free-text field.
   // Claude can suggest one if the supplier maps obviously to a
   // standard chart-of-accounts entry; otherwise this stays null and
@@ -292,6 +298,7 @@ Required fields:
 - tax_amount (number) — VAT / GST / sales tax total
 - total (number) — invoice total including tax. Must equal subtotal + tax_amount within 0.01.
 - category (string | null) — one of: utilities, cleaning, equipment, marketing, insurance, rent, maintenance, professional_services, staff_training, office_supplies, software, bank_fees, other. Pick the SINGLE best match for the whole invoice based on the supplier name and what the invoice is for. Use null only if genuinely unclear.
+- document_type (string) — one of: invoice, receipt, statement, other. "invoice" is a bill asking for payment for goods or services. "receipt" is proof of a payment already made (a till or card receipt). "statement" lists several invoices or a running balance and is not itself a bill. "other" is anything else: a logo, a signature image, a photo, a letter, a quote, a delivery note, a remittance advice.
 - account_code (string | null) — only suggest a value if the supplier matches an obvious accounting category (e.g. an electric utility → "Utilities" account code if visible on the invoice). Otherwise null and let the operator decide.
 
 Category guidance:
@@ -314,6 +321,7 @@ Rules:
 - Numbers must be JSON numbers, not strings. Strip currency symbols, commas, and any other formatting.
 - Dates must be ISO format. If the invoice shows "12/03/2026" or "12 March 2026", convert to "2026-03-12".
 - If a field is genuinely absent, use null (for optional fields) or your best inference from context (for required fields). Never invent supplier names or invoice numbers.
+- For a document_type of statement or other, still return the JSON object, with supplier_name as best read (or "Unknown"), total 0, and the other fields null.
 - Return ONLY the JSON object, starting with { and ending with }. No markdown fences. No "Here is the JSON:" preamble.`
 
 /**
