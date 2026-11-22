@@ -189,7 +189,14 @@ export function renderAgentEmail({ blocks, branding }) {
   const logo = branding?.logoUrl && /^https:\/\//i.test(branding.logoUrl)
     ? `<img src="${esc(branding.logoUrl)}" alt="${name}" height="48" style="display:block; margin:0 auto 8px auto; height:48px; width:auto; border:0;">`
     : ''
-  const header = `<tr><td align="center" style="padding:28px 24px 20px 24px; border-bottom:1px solid #eeeeee; font-family:${FONT}; font-size:18px; font-weight:bold; color:#111111;">${logo}${name}</td></tr>`
+  // EMAILBAR.1: with an email logo (light artwork, company_settings.email_logo_url)
+  // the header is a black bar. A dark-mode inbox darkens a white header behind
+  // the everyday dark logo until it cannot be read; a black bar with a light
+  // logo looks the same in both modes. Without one, the plain header stays.
+  const barLogo = branding?.emailLogoUrl && /^https:\/\//i.test(branding.emailLogoUrl) ? branding.emailLogoUrl : null
+  const header = barLogo
+    ? `<tr><td align="center" bgcolor="#000000" style="background-color:#000000; padding:26px 24px 22px 24px; font-family:${FONT}; font-size:14px; font-weight:bold; letter-spacing:1px; color:#ffffff;"><img src="${esc(barLogo)}" alt="${name}" height="56" style="display:block; margin:0 auto 10px auto; height:56px; width:auto; border:0;">${name}</td></tr>`
+    : `<tr><td align="center" style="padding:28px 24px 20px 24px; border-bottom:1px solid #eeeeee; font-family:${FONT}; font-size:18px; font-weight:bold; color:#111111;">${logo}${name}</td></tr>`
   const body = blocks.map(renderBlock).join('\n')
   return `<!DOCTYPE html>
 <html lang="en">

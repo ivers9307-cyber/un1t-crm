@@ -338,10 +338,11 @@ export async function pairSolos(db, { raceEventId, registrationIds, teamName, wa
     }
   }
 
-  // 1. The team. teams is UNIQUE (location_id, name): one retry with " (2)".
+  // 1. The team. teams is UNIQUE (race_event_id, name) (TEAMNAMES.1, mig 870):
+  // one retry with " (2)".
   const insertTeam = (teamNameToUse) => db
     .from('teams')
-    .insert({ location_id: event.location_id, name: teamNameToUse, size: solos.length, captain_contact_id: solos[0].contact_id || people[0].contact_id || null })
+    .insert({ location_id: event.location_id, race_event_id: raceEventId, name: teamNameToUse, size: solos.length, captain_contact_id: solos[0].contact_id || people[0].contact_id || null })
     .select('id')
     .single()
   let { data: team, error: teamErr } = await insertTeam(name)

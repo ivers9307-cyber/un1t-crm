@@ -4,6 +4,7 @@
 import { z } from 'zod'
 import { ToolRefusal } from './registry.js'
 import { EmailBlocksSchema, validateBlocks, renderAgentEmail, unknownMergeTags } from '@/lib/agent-email-blocks'
+import { getEmailLogoUrl } from '@/lib/email-logo'
 import { RESEND_MIN_WAIT_HOURS, RESEND_MAX_WAIT_HOURS } from '@/lib/campaign-resend'
 import { getLocationBranding } from '@/lib/location-branding'
 import { describeFromAddress } from '@/lib/from-address'
@@ -50,7 +51,8 @@ export async function buildBody(db, user, studio, blocks) {
   const problem = validateBlocks(blocks, { allowedImageUrls: await allowedImageUrls(db, user, studio) })
   if (problem) throw new ToolRefusal('invalid_input', problem)
   const b = await getLocationBranding(db, studio.id)
-  const html = renderAgentEmail({ blocks, branding: { companyName: b?.companyName ?? '', logoUrl: b?.logoUrl ?? null } })
+  const emailLogoUrl = await getEmailLogoUrl(db, studio.id)
+  const html = renderAgentEmail({ blocks, branding: { companyName: b?.companyName ?? '', logoUrl: b?.logoUrl ?? null, emailLogoUrl } })
   return { html_content: html, agent_blocks: { v: 1, blocks, html_sha256: htmlSha256(html) } }
 }
 
