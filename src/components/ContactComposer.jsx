@@ -7,8 +7,7 @@
 // (Richard, 2026-07-13):
 //   Note     — staff-visible note; POSTs /api/contacts/[id]/notes so
 //              the server attributes the author and pushes the note to
-//              Glofox (the ContactActions path — NOT the /api/notes
-//              import path, which deliberately skips the push).
+//              Glofox (the ContactActions path).
 //   WhatsApp — free text while the 24h customer-service window is
 //              open; a utility-template picker once it's closed.
 //   Email    — ad-hoc one-off from the company sender

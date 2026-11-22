@@ -1,10 +1,33 @@
 import { describe, it, expect, beforeAll } from 'vitest'
+import { readFileSync, existsSync } from 'node:fs'
+import path from 'node:path'
 import { getOpenApiSpec } from './openapi.js'
 
+// RETIRE.2 — the spec documents exactly the routes that accept a
+// per-organisation `unitk_` API key. This table is that surface; a route that
+// gains or loses the API-key path changes it, its openapi.js entry and the
+// route file together.
+const API_KEY_SURFACE = {
+  '/api/contacts': ['post'],
+  '/api/contacts/{id}': ['get', 'put'],
+  '/api/stages': ['get'],
+  '/api/tasks': ['get', 'post'],
+  '/api/tasks/{id}': ['delete', 'get', 'patch'],
+  '/api/bookings': ['get'],
+  '/api/bookings/{id}': ['put'],
+  '/api/bookings/event-types': ['get', 'post'],
+  '/api/bookings/event-types/{id}': ['delete', 'get', 'put'],
+  '/api/campaigns': ['get', 'post'],
+  '/api/campaigns/{id}': ['delete', 'get', 'put'],
+  '/api/locations': ['get'],
+  '/api/locations/{id}/integrations': ['get', 'put'],
+}
+
+const ROOT = process.cwd()
+const routeFile = (p) => path.join(ROOT, 'src/app', p.replace(/\{(\w+)\}/g, '[$1]'), 'route.js')
+const HTTP = ['get', 'post', 'put', 'patch', 'delete']
+
 describe('getOpenApiSpec', () => {
-  // getOpenApiSpec became async (mig of May 2026 wraps it in
-  // unstable_cache so the spec survives lambda cold starts). The shape
-  // of the resolved object hasn't changed.
   let spec
   beforeAll(async () => {
     spec = await getOpenApiSpec()
@@ -23,96 +46,55 @@ describe('getOpenApiSpec', () => {
     expect(spec.servers.map((s) => s.url)).toContain('https://crm.un1tdublin.com')
   })
 
-  it('documents coach availability (AVAIL.1): own GET/PUT and the manager range read, cookie or Bearer', () => {
-    const path = spec.paths['/api/schedule/availability']
-    expect(path).toHaveProperty('get')
-    expect(path).toHaveProperty('put')
-    expect(path.put.requestBody).toBeDefined()
-    expect(path.get.security).toEqual([{ CookieAuth: [] }, { BearerAuth: [] }])
-    // Owner's decision: managers see a coach's note, and the contract says so.
-    expect(path.get.description).toMatch(/shown to managers/)
-    expect(path.put.description).toMatch(/managers/)
-    // The started-rule contract (shared/availability.js carryStartedRules).
-    expect(path.put.description).toMatch(/only its end date moved/)
-  })
-
-  it('documents contractor spend and who gets the FTE labour total (FTECOSTVIS.1)', () => {
-    const get = spec.paths['/api/schedule/contractor-spend']?.get
-    expect(get).toBeDefined()
-    expect(get.security).toEqual([{ CookieAuth: [] }])
-    expect(get.description).toMatch(/fteImplicitCostEur/)
-    expect(get.description).toMatch(/owner, manager or master AT location_id/)
-    expect(get.responses).toHaveProperty('404')
-  })
-
-  it('no longer documents the retired working-time route (D1 DEADCODE.1)', () => {
-    expect(spec.paths['/api/schedule/working-time']).toBeUndefined()
-    // CANDIDATES.1's replacement is still documented.
-    expect(spec.paths['/api/schedule/blocks/{id}/candidates']).toHaveProperty('get')
-  })
-
-  it('documents staff qualifications (QUALS.1): records, the catalogue and template requirements', () => {
-    expect(spec.paths['/api/qualifications']).toHaveProperty('get')
-    expect(spec.paths['/api/qualifications']).toHaveProperty('post')
-    expect(spec.paths['/api/qualifications/{id}']).toHaveProperty('patch')
-    expect(spec.paths['/api/qualifications/{id}']).toHaveProperty('delete')
-    expect(spec.paths['/api/qualifications/types']).toHaveProperty('post')
-    expect(spec.paths['/api/qualifications/types/{id}']).toHaveProperty('patch')
-    expect(spec.paths['/api/schedule/template-qualifications']).toHaveProperty('get')
-    expect(spec.paths['/api/schedule/template-qualifications']).toHaveProperty('put')
-    expect(spec.paths['/api/qualifications'].post.requestBody).toBeDefined()
-    // The contract says what the brief decided: advisory, and who may write.
-    expect(spec.paths['/api/schedule/template-qualifications'].put.description).toMatch(/advisory/i)
-    expect(spec.paths['/api/qualifications'].post.description).toMatch(/owner or manager/i)
-  })
-
-  it('declares the pre-existing browser/integration auth schemes', () => {
+  it('declares the API-key and session auth schemes', () => {
     expect(spec.components.securitySchemes).toHaveProperty('BearerAuth')
     expect(spec.components.securitySchemes).toHaveProperty('CookieAuth')
   })
 
-  it('registers the high-traffic paths', () => {
-    expect(spec.paths).toHaveProperty('/api/contacts')
-    expect(spec.paths['/api/contacts']).toHaveProperty('get')
-    expect(spec.paths['/api/contacts']).toHaveProperty('post')
-    expect(spec.paths).toHaveProperty('/api/contacts/{id}')
-    expect(spec.paths).toHaveProperty('/api/deals')
-    expect(spec.paths).toHaveProperty('/api/staff')
-    expect(spec.paths).toHaveProperty('/api/schedule/shifts')
-    expect(spec.paths).toHaveProperty('/api/public/book')
+  it('documents exactly the API-key surface', () => {
+    const documented = Object.fromEntries(
+      Object.entries(spec.paths).map(([p, ops]) => [p, Object.keys(ops).filter((k) => HTTP.includes(k)).sort()]),
+    )
+    expect(documented).toEqual(API_KEY_SURFACE)
   })
 
-  it('public booking endpoint has no security requirement', () => {
-    const op = spec.paths['/api/public/book'].post
-    // No `security` key OR empty array means anonymous.
-    expect(op.security ?? []).toHaveLength(0)
-  })
-
-  it('staff endpoints require cookie auth (browser-only)', () => {
-    const op = spec.paths['/api/staff'].post
-    expect(op.security).toContainEqual({ CookieAuth: [] })
-  })
-
-  it('captures every component schema we registered', () => {
-    const schemas = spec.components.schemas
-    for (const name of [
-      'ContactCreate', 'ContactUpdate', 'Contact',
-      'DealCreate', 'DealUpdate',
-      'BookingCreate',
-      'StaffCreate', 'StaffUpdate',
-      'TimeOffRequest', 'TimeOffReview',
-      'SwapCreate', 'SwapReview',
-      'CampaignCreate',
-      'ScheduledReport',
-      'ErrorResponse',
-      'LeadCapture',
-    ]) {
-      expect(schemas, `missing schema: ${name}`).toHaveProperty(name)
+  it('every documented operation accepts a Bearer API key', () => {
+    for (const [p, ops] of Object.entries(spec.paths)) {
+      for (const [verb, op] of Object.entries(ops)) {
+        expect(op.security, `${verb} ${p}`).toContainEqual({ BearerAuth: [] })
+      }
     }
   })
 
-  // SEQGAPS.1 — the manual exit is irreversible and 409s on the second
-  // call; both facts belong in the spec, not just in the route header.
+  it('every documented operation is a live handler that takes an API key', () => {
+    for (const [p, verbs] of Object.entries(API_KEY_SURFACE)) {
+      const file = routeFile(p)
+      expect(existsSync(file), file).toBe(true)
+      const src = readFileSync(file, 'utf8')
+      expect(src, file).toMatch(/(authenticateApiKey|requireApiKeyOrManager)\(/)
+      for (const v of verbs) {
+        expect(src, `${v.toUpperCase()} in ${file}`).toMatch(new RegExp(`export async function ${v.toUpperCase()}\\b`))
+      }
+    }
+  })
+
+  it('no longer documents the retired Pipedrive-era routes', () => {
+    for (const p of ['/api/activities', '/api/notes', '/api/deals', '/api/deals/{id}', '/api/deals/search', '/api/contacts/search']) {
+      expect(spec.paths, p).not.toHaveProperty(p)
+    }
+    expect(spec.paths['/api/contacts']).not.toHaveProperty('get')
+  })
+
+  it('captures the component schemas the routes use', () => {
+    for (const name of [
+      'ErrorResponse', 'Contact', 'ContactCreate', 'ContactUpdate',
+      'TaskCreate', 'TaskUpdate', 'BookingUpdate', 'EventTypeCreate', 'EventTypeUpdate',
+      'CampaignCreate', 'CampaignUpdate', 'IntegrationsUpdate',
+    ]) {
+      expect(spec.components.schemas, `missing schema: ${name}`).toHaveProperty(name)
+    }
+  })
+
   // REVIEWNITS.1 (D5): contact create refuses a location outside the key's
   // organisation, or one a cookie caller is not a member of (403); update
   // answers 404 for an unknown id and 503 when the contact could not be read.
@@ -122,608 +104,11 @@ describe('getOpenApiSpec', () => {
     for (const code of ['401', '404', '503']) expect(put, code).toHaveProperty(code)
   })
 
-  it('documents the manual enrolment exit, including its 409', () => {
-    const p = '/api/sequences/{id}/enrollments/{enrollmentId}/exit'
-    expect(spec.paths, `missing ${p}`).toHaveProperty(p)
-    const op = spec.paths[p].post
-    expect(op.tags).toContain('Automations')
-    expect(op.security).toContainEqual({ CookieAuth: [] })
-    expect(op.responses).toHaveProperty('409')
-    expect(op.responses).toHaveProperty('404')
-  })
-
-  // FILTER-C.4 — the two audience routes an operator's whole pre-send check
-  // runs on. audience-count predates the spec and audience-preview (FILTER-B.6)
-  // never got registered, so /api-docs documented neither — the one place an
-  // integrator would look to learn that a preview exists at all.
-  it('documents the audience count and preview routes', () => {
-    for (const p of ['/api/communications/audience-count', '/api/communications/audience-preview']) {
-      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
-      const op = spec.paths[p].post
-      expect(op, `${p} is not registered as POST`).toBeTruthy()
-      expect(op.tags).toContain('Marketing')
-      expect(op.security).toContainEqual({ CookieAuth: [] })
-      expect(op.responses).toHaveProperty('200')
-      expect(op.responses).toHaveProperty('400')
-      expect(op.responses).toHaveProperty('401')
-    }
-    // The preview returns customer PII, so its tenant guard 404s rather than
-    // 403s (ids must not be enumerable) — that is a documented response, not
-    // an implementation detail.
-    expect(spec.paths['/api/communications/audience-preview'].post.responses).toHaveProperty('404')
-  })
-
-  // SHELLY-UI.9 — the whole /api/shelly surface, and the three status codes
-  // whose MEANING is not guessable from the verb: adopt's 404 (the anti-oracle
-  // answer, identical for "no such device" and "another tenant's"), the
-  // toggle's 429 (a SUCCESS body — the override is saved and the cron will
-  // apply it; the status only tells the client to stop re-pressing) and
-  // run-now's 409 vocabulary.
-  it('documents all thirteen Shelly routes under Automations', () => {
-    const expected = {
-      '/api/shelly/connection': ['get', 'put', 'delete'],
-      '/api/shelly/discover': ['get'],
-      '/api/shelly/devices': ['get', 'post'],
-      '/api/shelly/devices/{id}': ['patch', 'delete'],
-      '/api/shelly/devices/{id}/toggle': ['post'],
-      '/api/shelly/devices/{id}/run-now': ['post'],
-      '/api/shelly/devices/{id}/energy': ['get'],
-      '/api/shelly/refresh': ['post'],
-      '/api/shelly/sync-names': ['post'],
-    }
-    let registered = 0
-    for (const [p, methods] of Object.entries(expected)) {
-      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
-      for (const m of methods) {
-        const op = spec.paths[p][m]
-        expect(op, `${p} is not registered as ${m.toUpperCase()}`).toBeTruthy()
-        expect(op.tags).toContain('Automations')
-        expect(op.security).toContainEqual({ CookieAuth: [] })
-        expect(op.responses, `${m} ${p} must document its 403`).toHaveProperty('403')
-        registered += 1
-      }
-    }
-    expect(registered).toBe(13)
-
-    // SHELLY-NAMES.1 — the sync's 502 is a PARTIAL success in an error
-    // envelope: it writes the names it resolved before reporting the failure,
-    // so a client that renders only `error` hides work that actually landed.
-    const sync = spec.paths['/api/shelly/sync-names'].post
-    expect(sync.responses['502'].description).toMatch(/partial: true/)
-    expect(sync.responses['429'].description).toMatch(/rate_limited/)
-    expect(spec.components.schemas.ShellySyncNamesBody.properties.overwrite.default).toBe(false)
-
-    // Adopt: 404 is the ownership gate, and it is documented as such.
-    const adopt = spec.paths['/api/shelly/devices'].post
-    expect(adopt.responses).toHaveProperty('404')
-    expect(adopt.responses['404'].description).toMatch(/not_on_account/)
-    expect(adopt.responses['429'].description).toMatch(/rate_limited/)
-    // The four 409 codes adopt can answer.
-    for (const code of ['not_connected', 'key_rejected', 'device_cap', 'adopted_here']) {
-      expect(adopt.responses['409'].description, `adopt 409 must name ${code}`).toContain(code)
-    }
-
-    // Toggle: the 429 carries success:true, which a client MUST NOT read as a
-    // failed request — pinned so the sentence cannot quietly disappear.
-    const toggle = spec.paths['/api/shelly/devices/{id}/toggle'].post
-    expect(toggle.responses['429'].description).toMatch(/success:true/)
-
-    // Run-now: no_schedule is checked BEFORE disabled, and the spec says so.
-    const runNow = spec.paths['/api/shelly/devices/{id}/run-now'].post
-    expect(runNow.responses['409'].description).toMatch(/no_schedule/)
-    expect(runNow.responses['409'].description).toMatch(/disabled/)
-
-    // Devices GET: the third connection state lives in the response schema.
-    expect(spec.components.schemas.ShellyDeviceListResponse.description).toMatch(/connected: NULL/)
-
-    // The connection view is the allowlist — no key, no fingerprint.
-    const conn = spec.components.schemas.ShellyConnectionPublic
-    expect(Object.keys(conn.properties).sort()).toEqual(
-      ['has_auth_key', 'host', 'last_error', 'last_error_at', 'last_ok_at', 'status'],
-    )
-  })
-
-  // SHELLYGROUPS.5 — the group routes and the day preview.
-  it('documents the Shelly group routes and the day preview', () => {
-    const expected = {
-      '/api/shelly/groups': ['get', 'post'],
-      '/api/shelly/groups/{id}': ['patch', 'delete'],
-      '/api/shelly/groups/{id}/devices': ['put'],
-      '/api/shelly/groups/{id}/toggle': ['post'],
-      '/api/shelly/preview': ['get'],
-    }
-    for (const [p, methods] of Object.entries(expected)) {
-      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
-      for (const m of methods) {
-        const op = spec.paths[p][m]
-        expect(op, `${p} is not registered as ${m.toUpperCase()}`).toBeTruthy()
-        expect(op.tags).toContain('Automations')
-        expect(op.responses, `${m} ${p} must document its 403`).toHaveProperty('403')
-      }
-    }
-    expect(spec.paths['/api/shelly/groups'].post.responses['409'].description).toMatch(/name_taken/)
-    expect(spec.paths['/api/shelly/groups/{id}/toggle'].post.responses['200'].description).toMatch(/partial/)
-    expect(spec.components.schemas.ShellyGroupToggle.properties).toHaveProperty('until')
-    expect(spec.components.schemas.ShellyDevice.properties).toHaveProperty('group_id')
-    const codes = spec.components.schemas.ShellyErrorResponse.allOf[1].properties.code.enum
-    for (const c of ['name_taken', 'group_limit', 'group_unavailable', 'member_overrides_not_cleared']) expect(codes).toContain(c)
-    expect(spec.paths['/api/shelly/devices/{id}/run-now'].post.responses['409'].description).toMatch(/group_unavailable/)
-  })
-
-  // SHELLY-UI.9b — three contract facts that are only visible in the
-  // GENERATED document. Asserting them on the zod schema instead would pass
-  // while the published JSON-Schema said something else, which is exactly how
-  // the `/i` bug below survived review.
-  it('publishes a device-id pattern a real MAC can actually match', () => {
-    const pattern = spec.components.schemas.ShellyAdoptBody.properties.device_id.pattern
-    // A JS regex with the `i` flag serialises as source + flags, so the old
-    // /^[0-9a-f]{6,32}$/i became the literal '^[0-9a-f]{6,32}$/i' — a pattern
-    // ending in a stray '/i' that NO device id can satisfy. Every generated
-    // client would have rejected a valid MAC before sending it.
-    expect(pattern).not.toMatch(/\/i$/)
-    expect(new RegExp(pattern).test('aa11bb22cc31')).toBe(true)
-    expect(new RegExp(pattern).test('AA11BB22CC31')).toBe(true)
-    expect(new RegExp(pattern).test('nothex!')).toBe(false)
-  })
-
-  it('documents the third connection state as a member of the enum', () => {
-    const listed = spec.components.schemas.ShellyDeviceListResponse
-    expect(listed.properties.connection_status.enum ?? listed.properties.connection_status.anyOf?.flatMap((a) => a.enum ?? []))
-      .toContain('unknown')
-  })
-
-  it('gives every Shelly error body the coded envelope, not the bare one', () => {
-    // `.extend()` on a NAMED schema renders as allOf[$ref(base), {own props}],
-    // the same shape SonosControlErrorResponse produces — so the codes live on
-    // the second member, not at the top level.
-    const envelope = spec.components.schemas.ShellyErrorResponse
-    expect(envelope.allOf[0].$ref).toBe('#/components/schemas/ErrorResponse')
-    const codes = envelope.allOf[1].properties.code.enum
-    // The four an operator's UI actually branches on, plus the one added when
-    // the dead "already correct" arm was replaced by a loud failure.
-    for (const c of ['not_connected', 'key_rejected', 'device_cap', 'not_on_account', 'unexpected_noop']) {
-      expect(codes, `ShellyErrorResponse must document ${c}`).toContain(c)
-    }
-    // Every Shelly error response references it — a bare ErrorResponse here
-    // would document "there will be a string" and nothing a client can switch on.
-    const shellyOps = Object.entries(spec.paths)
-      .filter(([p]) => p.startsWith('/api/shelly'))
-      .flatMap(([, ops]) => Object.values(ops))
-    let checked = 0
-    for (const op of shellyOps) {
-      for (const [status, res] of Object.entries(op.responses)) {
-        if (Number(status) < 400) continue
-        const schema = res.content?.['application/json']?.schema
-        const ref = JSON.stringify(schema ?? {})
-        expect(ref, `${status} must not use the bare ErrorResponse`).not.toContain('"#/components/schemas/ErrorResponse"')
-        checked += 1
-      }
-    }
-    expect(checked).toBeGreaterThan(40)
-  })
-
-  // WATPLPUT.1 — the six /api/whatsapp/templates* route files (8 operations)
-  // were never registered. The PUT documents that Meta's fields are refused
-  // (400) and a submitted template's content, header media included, is
-  // locked (409).
-  it('documents the six WhatsApp template routes (WATPLPUT.1)', () => {
-    const expected = {
-      '/api/whatsapp/templates': ['get', 'post'],
-      '/api/whatsapp/templates/{id}': ['get', 'put', 'delete'],
-      '/api/whatsapp/templates/{id}/resubmit': ['post'],
-      '/api/whatsapp/templates/upload-media/sign': ['post'],
-      '/api/whatsapp/templates/upload-media': ['post'],
-    }
-    let registered = 0
-    for (const [p, methods] of Object.entries(expected)) {
-      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
-      for (const m of methods) {
-        const op = spec.paths[p][m]
-        expect(op, `${p} is not registered as ${m.toUpperCase()}`).toBeTruthy()
-        expect(op.tags).toContain('WhatsApp')
-        expect(op.security).toContainEqual({ CookieAuth: [] })
-        expect(op.responses, `${m} ${p} must document its 401`).toHaveProperty('401')
-        registered += 1
-      }
-    }
-    expect(registered).toBe(8)
-
-    const put = spec.paths['/api/whatsapp/templates/{id}'].put
-    expect(put.responses).toHaveProperty('400')
-    expect(put.responses).toHaveProperty('403')
-    expect(put.responses).toHaveProperty('409')
-    expect(put.responses['400'].description).toMatch(/status/)
-    expect(put.responses['409'].description).toMatch(/resubmit/i)
-    expect(put.description).not.toMatch(/replaced/)
-    expect(put.responses['409'].description).toMatch(/header media/)
-    expect(put.responses['409'].description).not.toMatch(/replaced/)
-    const putBody = spec.components.schemas.WaTemplateUpdate
-    expect(Object.keys(putBody.properties)).not.toContain('status')
-    for (const m of ['post', 'delete']) {
-      const op = m === 'post' ? spec.paths['/api/whatsapp/templates'].post : spec.paths['/api/whatsapp/templates/{id}'].delete
-      expect(op.responses).toHaveProperty('403')
-    }
-    expect(spec.paths['/api/whatsapp/templates/{id}/resubmit'].post.responses).toHaveProperty('403')
-  })
-
-  it('documents the two web task writes (C148 ACTWRITEGATEWEB.1), cookie only', () => {
-    const create = spec.paths['/api/activities/tasks']?.post
-    const status = spec.paths['/api/activities/tasks/{id}/status']?.post
-    for (const [name, op, codes] of [
-      ['create', create, ['200', '400', '401', '403', '404', '500']],
-      ['status', status, ['200', '400', '401', '403', '404', '500']],
-    ]) {
-      expect(op, `${name} is not registered`).toBeTruthy()
-      expect(op.tags).toContain('Tasks')
-      expect(op.security).toEqual([{ CookieAuth: [] }])
-      for (const c of codes) expect(op.responses, `${name} must document its ${c}`).toHaveProperty(c)
-    }
-  })
-
   it('caches the spec object across calls (same reference)', async () => {
     expect(await getOpenApiSpec()).toBe(spec)
   })
 
   it('serialises to valid JSON without circular refs', () => {
     expect(() => JSON.stringify(spec)).not.toThrow()
-  })
-
-  it('documents the public surface anonymously', () => {
-    for (const p of [
-      '/api/public/leads',
-      '/api/public/branding',
-      '/api/public/events/{slug}/register',
-      '/api/public/bookings/{slug}/slots',
-    ]) {
-      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
-    }
-    const op = spec.paths['/api/public/leads'].post
-    expect(op.security ?? []).toHaveLength(0)
-    expect(op.tags).toContain('Public')
-  })
-
-  it('documents inbound webhooks with provider auth', () => {
-    for (const p of ['/api/webhooks/glofox', '/api/webhooks/whatsapp', '/api/webhooks/postmark']) {
-      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
-    }
-    // TWILIO-RETIRE.1 — the SMS delivery-status webhook is gone.
-    expect(spec.paths).not.toHaveProperty('/api/webhooks/twilio/status')
-    const glofox = spec.paths['/api/webhooks/glofox'].post
-    expect(glofox.tags).toContain('Webhooks (Inbound)')
-    expect(glofox.security).toContainEqual({ GlofoxHmac: [] })
-    // Not gated by the browser/integration schemes:
-    expect(glofox.security).not.toContainEqual({ CookieAuth: [] })
-  })
-
-  it('documents the bridge device API', () => {
-    expect(spec.paths).toHaveProperty('/api/bridge/scan')
-    const op = spec.paths['/api/bridge/scan'].post
-    expect(op.tags).toContain('Bridge')
-    expect(op.security).toContainEqual({ BridgeAuth: [] })
-  })
-
-  it('documents the staff mobile API', () => {
-    expect(spec.paths).toHaveProperty('/api/mobile/today-feed')
-    const op = spec.paths['/api/mobile/today-feed'].get
-    expect(op.tags).toContain('Mobile')
-    expect(op.security).toContainEqual({ CookieAuth: [] })
-  })
-
-  // HOME.3 — the needs-attention triage queue (approvals + tickets + inbox).
-  it('documents the home-queue routes, including the tickets-visibility 500', () => {
-    expect(spec.paths).toHaveProperty('/api/home-queue')
-    expect(spec.paths).toHaveProperty('/api/home-queue/count')
-
-    const queue = spec.paths['/api/home-queue'].get
-    expect(queue.tags).toContain('Dashboard')
-    expect(queue.security).toContainEqual({ CookieAuth: [] })
-    expect(queue.responses).toHaveProperty('200')
-    expect(queue.responses).toHaveProperty('401')
-
-    const count = spec.paths['/api/home-queue/count'].get
-    expect(count.tags).toContain('Dashboard')
-    expect(count.security).toContainEqual({ CookieAuth: [] })
-    expect(count.responses).toHaveProperty('200')
-    // EMAIL-TICKET-CLEANUP.2 — the count endpoint 500s rather than
-    // answering a confident 0 when the tickets mailbox-visibility lookup
-    // itself fails; that has to be a documented response, not just an
-    // implementation detail (mirrors /api/email/tickets/count's own spec).
-    expect(count.responses).toHaveProperty('500')
-  })
-
-  it('includes an outbound webhooks stub', () => {
-    expect(spec).toHaveProperty('webhooks')
-    expect(spec.webhooks).toHaveProperty('lead.created')
-    expect(spec.webhooks['lead.created'].post.description).toMatch(/planned/i)
-  })
-
-  // ROSTER-FIX.3 (D2, D3) — the assignment detail route is where a shift's
-  // PAID window is set, and Richard's call is that only a manager sets it.
-  // Documenting it manager-only is the only signal an integrator gets.
-  it('documents the assignment detail route as manager-only', () => {
-    const path = spec.paths['/api/schedule/assignments/{id}']
-    expect(path).toBeDefined()
-    expect(path.put.description).toMatch(/manager/i)
-    expect(path.delete.description).toMatch(/manager/i)
-    // A coach's route out of a shift is a swap, and the docs say so.
-    expect(path.delete.description).toMatch(/swap/i)
-  })
-
-  it('REPLACE.1a — documents POST /api/schedule/assignments/{id}/replace', () => {
-    const path = spec.paths['/api/schedule/assignments/{id}/replace']
-    expect(path?.post?.responses).toHaveProperty('409')
-    expect(path.post.description).toMatch(/swap_conflicts/)
-    expect(path.post.description).toMatch(/manager/i)
-  })
-
-  it('REPLACE.1b — documents the four offer paths', () => {
-    expect(spec.paths['/api/schedule/blocks/{id}/offer']?.post?.responses).toHaveProperty('409')
-    expect(spec.paths['/api/schedule/offers']?.get).toBeTruthy()
-    expect(spec.paths['/api/schedule/offers/{id}/claim']?.post?.responses).toHaveProperty('503')
-    expect(spec.paths['/api/schedule/offers/{id}']?.delete).toBeTruthy()
-  })
-
-  // DATECHECK.1 — every schedule read that now refuses an impossible date
-  // says so in its 400.
-  it('documents the schedule date refusals on the list reads', () => {
-    for (const [p, method] of [
-      ['/api/schedule/blocks', 'get'],
-      ['/api/schedule/overview', 'get'],
-      ['/api/schedule/time-off', 'get'],
-      ['/api/schedule/shifts', 'get'],
-      ['/api/schedule/week-cost', 'get'],
-    ]) {
-      expect(spec.paths[p]?.[method]?.responses?.['400']?.description, `${method} ${p}`).toMatch(/real calendar date/)
-    }
-  })
-
-  // TPLCLONE.1
-  it('documents the template copy, including the one-organisation rule and the weekdays default', () => {
-    const op = spec.paths['/api/schedule/templates/clone']?.post
-    expect(op).toBeDefined()
-    expect(op.security).toContainEqual({ CookieAuth: [] })
-    expect(op.description).toMatch(/same organisation/i)
-    expect(op.description).toMatch(/both/i)
-    expect(op.description).toMatch(/copy_weekdays/)
-    expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(['200', '201', '400', '403', '404', '500']))
-    expect(spec.components.schemas).toHaveProperty('TemplateCloneRequest')
-    expect(spec.components.schemas.TemplateCloneRequest.properties).toHaveProperty('copy_weekdays')
-    expect(spec.components.schemas).toHaveProperty('TemplateCloneResponse')
-  })
-
-  // GRID.1
-  it('documents the coach grid read as manager-only, hours only, one organisation', () => {
-    const op = spec.paths['/api/schedule/grid']?.get
-    expect(op).toBeDefined()
-    expect(op.security).toContainEqual({ CookieAuth: [] })
-    expect(op.description).toMatch(/manager-only/i)
-    expect(op.description).toMatch(/no rate/i)
-    expect(op.description).toMatch(/same organisation/i)
-    // GRID.1 review 1 — who sees contracted hours.
-    expect(op.description).toMatch(/contract_visible is true for owner, manager and master/)
-    expect(op.description).toMatch(/head coach it is false/)
-    expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(['200', '400', '403', '500']))
-    expect(op.responses['400'].description).toMatch(/real calendar date/)
-  })
-
-  // CANDIDATES.1 — the ranked picker list. Its two audiences and its
-  // hours-only promise are the contract, so they are pinned in the document.
-  it('documents the block candidates route', () => {
-    const op = spec.paths['/api/schedule/blocks/{id}/candidates']?.get
-    expect(op).toBeDefined()
-    expect(op.tags).toContain('Schedule')
-    expect(op.security).toContainEqual({ CookieAuth: [] })
-    expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(['200', '400', '401', '403', '404', '500']))
-    expect(op.description).toMatch(/colleague/)
-    expect(op.description).toMatch(/never a rate/i)
-  })
-
-  it('declares webhook + bridge auth schemes', () => {
-    const s = spec.components.securitySchemes
-    expect(s).toHaveProperty('GlofoxHmac')
-    expect(s).toHaveProperty('MetaSignature')
-    expect(s).toHaveProperty('WebhookToken')
-    expect(s).toHaveProperty('BridgeAuth')
-  })
-
-  it('documents PUT /api/schedule/blocks/{id} (BLOCKEDIT.1), its 400/409 codes and the briefing', () => {
-    const op = spec.paths['/api/schedule/blocks/{id}'].put
-    expect(op.tags).toContain('Schedule')
-    expect(op.security).toContainEqual({ CookieAuth: [] })
-    for (const code of ['200', '400', '403', '404', '409', '503']) expect(op.responses).toHaveProperty(code)
-    expect(op.description).toMatch(/briefing/)
-    expect(op.description).toMatch(/quiet hours/)
-    // Third check 4 — every notice.when value, and what too_late means.
-    expect(op.description).toMatch(/'past'/)
-    expect(op.description).toMatch(/too_late.*before 07:30/)
-    // The DELETE on the same path is still there.
-    expect(spec.paths['/api/schedule/blocks/{id}'].delete).toBeTruthy()
-  })
-
-  // ICSFEED.1 — an anonymous token feed and the session-only management route.
-  it('documents the calendar feed and its self-service management', () => {
-    const feed = spec.paths['/api/calendar-feed/{file}']?.get
-    expect(feed, 'missing GET /api/calendar-feed/{file}').toBeTruthy()
-    expect(feed.security ?? []).toHaveLength(0)
-    expect(feed.tags).toContain('Public')
-    expect(Object.keys(feed.responses['200'].content)).toEqual(['text/calendar'])
-    expect(Object.keys(feed.responses)).toEqual(expect.arrayContaining(['200', '404', '429', '503']))
-    // Scope is the PERSON across organisations, stated so nobody "fixes" it into a tenant filter.
-    expect(feed.description).toMatch(/across organisations/)
-    for (const m of ['get', 'post', 'delete']) {
-      const op = spec.paths['/api/me/calendar-feed']?.[m]
-      expect(op, `missing ${m.toUpperCase()} /api/me/calendar-feed`).toBeTruthy()
-      expect(op.security).toContainEqual({ CookieAuth: [] })
-      expect(op.tags).toContain('Me')
-    }
-    expect(Object.keys(spec.paths['/api/me/calendar-feed'].post.responses)).toEqual(expect.arrayContaining(['200', '403', '409']))
-  })
-
-  // SNAPSHOT.1 — published vs now vs arrived, manager-only.
-  it('documents the roster comparison', () => {
-    const op = spec.paths['/api/schedule/rosters/{id}/compare']?.get
-    expect(op, 'missing GET /api/schedule/rosters/{id}/compare').toBeTruthy()
-    expect(op.tags).toContain('Schedule')
-    expect(op.security).toContainEqual({ CookieAuth: [] })
-    expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(['200', '400', '403', '404', '409', '500']))
-    expect(op.description).toMatch(/advisory/i)
-    expect(op.description).toMatch(/never a rate or a cost/i)
-  })
-
-  it('says the roster comparison carries the briefing as a kind of change, never its text', () => {
-    const op = spec.paths['/api/schedule/rosters/{id}/compare'].get
-    expect(op.description).toMatch(/briefing_change/)
-    expect(op.description).toMatch(/never the text/i)
-  })
-
-  it('says a baseline of other dates is refused and one outside the window is its own state (review 3)', () => {
-    const op = spec.paths['/api/schedule/rosters/{id}/compare'].get
-    expect(op.description).toMatch(/outside_window/)
-    expect(op.responses['409'].description).toMatch(/against snapshot covers none/)
-  })
-
-  // TRAINERSROLE.1 — the /api/locations/{id} lookup routes judge the role AT
-  // the path location, and a non-member gets a 404 (not a 403).
-  it.each([
-    '/api/locations/{id}/glofox-trainers',
-    '/api/locations/{id}/glofox-memberships',
-    '/api/locations/{id}/unifi-users',
-    '/api/locations/{id}/unifi-doors',
-  ])('documents %s as owner/manager at the path location, 404 for a non-member', (p) => {
-    const op = spec.paths[p]?.get
-    expect(op).toBeDefined()
-    expect(op.description).toMatch(/owner\/manager AT this location/)
-    expect(op.responses['403'].description).toMatch(/at this location/)
-    expect(op.responses['404'].description).toMatch(/Not a member/)
-    expect(op.responses['401'].description).toMatch(/unauthenticated/)
-  })
-
-  it('documents the glofox-trainers class_occurrences read failure as a 500', () => {
-    const op = spec.paths['/api/locations/{id}/glofox-trainers'].get
-    expect(op.responses['500'].description).toMatch(/class_occurrences_read_failed/)
-  })
-
-  it.each([
-    '/api/locations/{id}/unifi-users',
-    '/api/locations/{id}/unifi-doors',
-  ])('documents %s: a failed location read is a 500, a missing row a 404', (p) => {
-    const op = spec.paths[p].get
-    expect(op.responses['500'].description).toMatch(/location_read_failed/)
-    expect(op.responses['404'].description).toMatch(/location_not_found/)
-  })
-
-  // SEQROUTEGATE.1 — every sequence BUILDER route now answers 403 when the
-  // caller lacks email or WhatsApp at the sequence's studio (and POST
-  // /api/sequences 400s with no location). The enrolment routes (enrol, clone,
-  // exit, resume, audience/seed) keep their own email rule and are excluded.
-  it('documents the builder permission 403 on every sequence builder path', () => {
-    const ENROLMENT = /^\/api\/sequences\/\{id\}\/(enrol|clone|enrollments|audience)(\/|$)/
-    const builderPaths = Object.keys(spec.paths).filter((p) => p.startsWith('/api/sequences') && !ENROLMENT.test(p))
-    expect(builderPaths.length).toBeGreaterThan(0)
-    for (const p of builderPaths) {
-      for (const [method, op] of Object.entries(spec.paths[p])) {
-        expect(op.responses?.['403']?.description, `${method.toUpperCase()} ${p}`).toBe('Email or WhatsApp permission required')
-      }
-    }
-    const create = spec.paths['/api/sequences']?.post
-    if (create) expect(create.responses['400'].description).toMatch(/location_id required/)
-  })
-
-  it('documents the car Documents signed upload (CARDOCUPLOAD.1)', () => {
-    expect(spec.paths['/api/cars/{id}/documents/sign']).toHaveProperty('post')
-    expect(spec.paths['/api/cars/{id}/documents/finalise']).toHaveProperty('post')
-    expect(spec.paths['/api/cars/{id}/documents/finalise'].post.responses).toHaveProperty('409')
-  })
-
-  it('documents the un1t.online connect, disconnect and sync-now routes (UN1TSYNC.7)', () => {
-    const conn = spec.paths['/api/locations/{id}/un1t-online']
-    expect(conn).toHaveProperty('get')
-    expect(conn).toHaveProperty('put')
-    expect(conn).toHaveProperty('delete')
-    expect(conn.put.requestBody).toBeDefined()
-    expect(conn.put.description).toMatch(/never echoed/)
-    expect(conn.put.responses).toHaveProperty('502')
-    expect(spec.paths['/api/locations/{id}/un1t-online/sync']).toHaveProperty('post')
-  })
-
-  // MIAHATCH.6 — the chip's read route is documented, cookie only.
-  it('documents the mia-purchase-intents read as cookie-only with a 404 for a hidden contact (MIAHATCH.6)', () => {
-    const op = spec.paths['/api/contacts/{id}/mia-purchase-intents'].get
-    expect(op.security).toContainEqual({ CookieAuth: [] })
-    expect(op.responses).toHaveProperty('404')
-    expect(JSON.stringify(op)).not.toContain('checkout_url')
-  })
-
-  // OPENAPI-EVENTS.1 — the event save routes were never registered (noted by
-  // ENTRYPOLICY.1). The bodies are the handlers' own objects, so a field the
-  // handler accepts is a field the spec shows.
-  it('documents the event list/create/read/update/retire routes (OPENAPI-EVENTS.1)', () => {
-    const list = spec.paths['/api/events']
-    expect(list).toHaveProperty('get')
-    expect(list).toHaveProperty('post')
-    expect(list.get.tags).toEqual(['Races'])
-    expect(list.post.security).toEqual([{ CookieAuth: [] }, { BearerAuth: [] }])
-    expect(list.post.requestBody).toBeDefined()
-    expect(list.post.responses).toHaveProperty('201')
-    expect(list.post.responses).toHaveProperty('403')
-    expect(list.post.responses).toHaveProperty('409')
-    expect(list.post.description).toMatch(/`races`/)
-    expect(list.post.description).toMatch(/ADMIN_ROLES \(master, owner, manager\)/)
-
-    const one = spec.paths['/api/events/{id}']
-    expect(one).toHaveProperty('get')
-    expect(one).toHaveProperty('put')
-    expect(one).toHaveProperty('delete')
-    expect(one.put.requestBody).toBeDefined()
-    for (const m of ['get', 'put', 'delete']) {
-      expect(one[m].tags, m).toEqual(['Races'])
-      expect(one[m].security, m).toEqual([{ CookieAuth: [] }, { BearerAuth: [] }])
-      expect(one[m].responses, m).toHaveProperty('404')
-    }
-    expect(one.put.responses).toHaveProperty('409')
-    expect(one.delete.description).toMatch(/MANAGER_ROLES \(master, owner, manager, head_coach\)/)
-    expect(one.delete.description).toMatch(/active/)
-
-    // The body components are the handlers' Zod objects (src/lib/event-save-schemas.js).
-    const create = spec.components.schemas.EventCreate
-    const update = spec.components.schemas.EventUpdate
-    for (const [name, body] of [['EventCreate', create], ['EventUpdate', update]]) {
-      expect(Object.keys(body.properties), name).toEqual(expect.arrayContaining(['waves', 'charity_enabled', 'charity', 'find_team', 'entry_policy']))
-    }
-    expect(create.required).toEqual(expect.arrayContaining(['location_id', 'name']))
-    expect(update.required).toBeUndefined()
-    expect(create.properties.waves.items.properties).not.toHaveProperty('id')
-    expect(update.properties.waves.items.properties).toHaveProperty('id')
-    // entry_policy's keys and defaults are in the description (ENTRYPOLICY.1).
-    expect(create.description).toMatch(/cutoff_hours \(0\.\.720, default 48/)
-    expect(create.description).toMatch(/unpaid_hold_hours \(1\.\.720, default 48/)
-  })
-
-  // PAGES.1 — every public form route documents the page fields and the page refusals.
-  it('documents page and studio on the six public page routes, with the 404 / 400 / 503 page refusals', () => {
-    const bodyProps = (op) => {
-      const ref = op?.requestBody?.content?.['application/json']?.schema?.$ref
-      return ref ? Object.keys(spec.components.schemas[ref.split('/').pop()].properties) : []
-    }
-    const classes = spec.paths['/api/public/classes'].get
-    expect(classes.parameters.map((p) => p.name)).toEqual(expect.arrayContaining(['page', 'studio']))
-    for (const path of ['/api/public/class-booking', '/api/public/trial-purchases', '/api/public/trial-purchases/help', '/api/public/corp-claims', '/api/public/leads']) {
-      const op = spec.paths[path].post
-      expect(bodyProps(op), path).toEqual(expect.arrayContaining(['page', 'studio']))
-      expect(Object.keys(op.responses), path).toEqual(expect.arrayContaining(['400', '404', '503']))
-    }
-    expect(bodyProps(spec.paths['/api/public/funnel-event'].post)).toEqual(expect.arrayContaining(['page', 'studio']))
-    expect(spec.components.schemas.CorpPromoClaim.required).not.toContain('promo')
-    expect(spec.components.schemas.TrialPurchaseStart.properties.studio.enum).toBeUndefined()
-  })
-
-  it('documents the landing pages API (PAGES.1)', () => {
-    expect(spec.paths['/api/landing-pages']).toHaveProperty('get')
-    expect(spec.paths['/api/landing-pages'].post.responses).toHaveProperty('409')
-    expect(spec.paths['/api/landing-pages/{id}']).toHaveProperty('put')
-    expect(spec.paths['/api/landing-pages/{id}/publish']).toHaveProperty('post')
-    expect(spec.paths['/api/landing-pages/{id}/studios/{locationId}']).toHaveProperty('put')
-    expect(spec.paths['/api/landing-pages/slug-check']).toHaveProperty('get')
-    expect(spec.components.schemas.LandingPageUpdate.properties).not.toHaveProperty('offer_type')
   })
 })

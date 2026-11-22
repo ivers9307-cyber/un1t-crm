@@ -89,7 +89,6 @@ const SWEPT = [
   'src/app/account/contracts/page.js',
   'src/app/account/page.js',
   'src/app/api/account/pending-contracts/route.js',
-  'src/app/api/email/conversations/_gone.js',
   'src/app/login/page.js',
   'src/app/reset-password/page.js',
   'src/app/settings/hosts/page.jsx',

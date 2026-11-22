@@ -69,8 +69,7 @@ import {
   makeWorld, makeTenantDb, makeReq, jsonOf, propsOf, idsOf,
   RETIRED_SHARED_KEY, ORG_A_KEY, ORG_B_KEY,
   LOC_A1, LOC_B1,
-  C_A1, C_A2, C_B1, C_B2,
-  D_A1, D_B1,
+  C_A1, C_B1,
   BK_A1, BK_A2, BK_B1, BK_B2,
   CAM_A1, CAM_A2, CAM_B1, CAM_B2,
   TASK_A1, TASK_A2, TASK_B1, TASK_B2,
@@ -82,18 +81,12 @@ import {
 
 import * as contactsRoute from '@/app/api/contacts/route.js'
 import * as contactDetailRoute from '@/app/api/contacts/[id]/route.js'
-import * as contactsSearchRoute from '@/app/api/contacts/search/route.js'
-import * as dealsRoute from '@/app/api/deals/route.js'
-import * as dealDetailRoute from '@/app/api/deals/[id]/route.js'
-import * as dealsSearchRoute from '@/app/api/deals/search/route.js'
 import * as bookingsRoute from '@/app/api/bookings/route.js'
 import * as bookingDetailRoute from '@/app/api/bookings/[id]/route.js'
 import * as campaignsRoute from '@/app/api/campaigns/route.js'
 import * as campaignDetailRoute from '@/app/api/campaigns/[id]/route.js'
 import * as tasksRoute from '@/app/api/tasks/route.js'
 import * as taskDetailRoute from '@/app/api/tasks/[id]/route.js'
-import * as activitiesRoute from '@/app/api/activities/route.js'
-import * as notesRoute from '@/app/api/notes/route.js'
 import * as stagesRoute from '@/app/api/stages/route.js'
 import * as eventTypesRoute from '@/app/api/bookings/event-types/route.js'
 
@@ -112,28 +105,9 @@ beforeEach(() => {
 })
 
 const dataIds = (json) => idsOf(json?.data)
-const itemIds = (json) => idsOf((json?.data?.items || []).map((i) => i.item))
 
 // ─── spec table: LIST routes ─────────────────────────────────────────
 const LIST_SPECS = [
-  {
-    name: 'GET /api/contacts (contacts list)',
-    call: () => contactsRoute.GET(makeReq('/api/contacts', { bearer: currentKey })),
-    ids: dataIds,
-    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2],
-  },
-  {
-    name: 'GET /api/contacts/search?fields=email (contacts search, email path)',
-    call: () => contactsSearchRoute.GET(makeReq('/api/contacts/search?term=lead&fields=email', { bearer: currentKey })),
-    ids: itemIds,
-    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2],
-  },
-  {
-    name: 'GET /api/contacts/search?fields=all (contacts search, or() path)',
-    call: () => contactsSearchRoute.GET(makeReq('/api/contacts/search?term=Lead&fields=all', { bearer: currentKey })),
-    ids: itemIds,
-    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2],
-  },
   {
     name: 'GET /api/bookings (bookings list)',
     call: () => bookingsRoute.GET(makeReq('/api/bookings', { bearer: currentKey })),
@@ -242,11 +216,6 @@ const MUTATION_SPECS = [
     table: 'contacts', aId: C_A1, bId: C_B1, changed: (row) => row.name === 'Hacked Name',
   },
   {
-    name: 'PUT /api/deals/[id] (deal update)',
-    call: (id) => dealDetailRoute.PUT(makeReq(`/api/deals/${id}`, { method: 'PUT', bearer: currentKey, body: { title: 'Hacked Deal' } }), propsOf({ id })),
-    table: 'deals', aId: D_A1, bId: D_B1, changed: (row) => row.title === 'Hacked Deal',
-  },
-  {
     name: 'PUT /api/bookings/[id] (booking update)',
     call: (id) => bookingDetailRoute.PUT(makeReq(`/api/bookings/${id}`, { method: 'PUT', bearer: currentKey, body: { status: 'cancelled' } }), propsOf({ id })),
     table: 'bookings', aId: BK_A1, bId: BK_B1, changed: (row) => row.status === 'cancelled',
@@ -313,28 +282,10 @@ const CREATE_SPECS = [
     stamped: (row) => row.location_id === LOC_A1,
   },
   {
-    name: 'POST /api/deals (deal create, anchored on contact)',
-    call: (target) => dealsRoute.POST(makeReq('/api/deals', { method: 'POST', bearer: currentKey, body: { title: 'New Deal', contact_id: target } })),
-    table: 'deals', aTarget: C_A1, bTarget: C_B1,
-    stamped: (row) => row.contact_id === C_A1,
-  },
-  {
     name: 'POST /api/tasks (task create)',
     call: (target) => tasksRoute.POST(makeReq('/api/tasks', { method: 'POST', bearer: currentKey, body: { location_id: target, subject: 'New Task' } })),
     table: 'activities', aTarget: LOC_A1, bTarget: LOC_B1,
     stamped: (row) => row.location_id === LOC_A1,
-  },
-  {
-    name: 'POST /api/activities (activity create, anchored on contact)',
-    call: (target) => activitiesRoute.POST(makeReq('/api/activities', { method: 'POST', bearer: currentKey, body: { subject: 'New Activity', contact_id: target } })),
-    table: 'activities', aTarget: C_A1, bTarget: C_B1,
-    stamped: (row) => row.contact_id === C_A1,
-  },
-  {
-    name: 'POST /api/notes (note create, anchored on contact)',
-    call: (target) => notesRoute.POST(makeReq('/api/notes', { method: 'POST', bearer: currentKey, body: { contact_id: target, content: 'A note' } })),
-    table: 'notes', aTarget: C_A1, bTarget: C_B1,
-    stamped: (row) => row.contact_id === C_A1,
   },
   {
     name: 'POST /api/campaigns (campaign create)',
@@ -400,16 +351,6 @@ const REFERENCE_SPECS = [
     table: 'activities', aRef: P_STAFF_A1, bRef: P_STAFF_B1, creates: true,
   },
   {
-    name: 'POST /api/activities (location_id in A, contact_id →)',
-    call: (ref) => activitiesRoute.POST(makeReq('/api/activities', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, subject: 'Ref Activity', contact_id: ref } })),
-    table: 'activities', aRef: C_A1, bRef: C_B1, creates: true,
-  },
-  {
-    name: 'POST /api/notes (location_id in A, contact_id →)',
-    call: (ref) => notesRoute.POST(makeReq('/api/notes', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, content: 'Ref note', contact_id: ref } })),
-    table: 'notes', aRef: C_A1, bRef: C_B1, creates: true,
-  },
-  {
     name: 'POST /api/campaigns (location_id in A, template_id →)',
     call: (ref) => campaignsRoute.POST(makeReq('/api/campaigns', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, name: 'Ref Campaign', template_id: ref } })),
     table: 'campaigns', aRef: EMT_A1, bRef: EMT_B1, creates: true,
@@ -471,40 +412,8 @@ describe.each(REFERENCE_SPECS)('$name — cross-org reference (W0.1b)', (spec) =
   })
 })
 
-// ─── deals/search — bespoke shape (contact-email pivot) ──────────────
-describe('GET /api/deals/search — org boundary (bespoke: resolves contact by email first)', () => {
-  it('org-A key searching a B-tenant email finds nothing (contact resolution is org-scoped)', async () => {
-    const { status, json } = await jsonOf(await dealsSearchRoute.GET(
-      makeReq('/api/deals/search?term=lead.b1@', { bearer: ORG_A_KEY })
-    ))
-    expect(status).toBe(200)
-    expect(json.data.items).toEqual([])
-  })
-
-  it('org-A key searching its own contact email finds the deal', async () => {
-    const { json } = await jsonOf(await dealsSearchRoute.GET(
-      makeReq('/api/deals/search?term=lead.a1@', { bearer: ORG_A_KEY })
-    ))
-    expect(idsOf(json.data.items.map((i) => i.item))).toEqual([D_A1])
-  })
-
-  it('the retired shared key → 401, nothing found (APIKEYS.4)', async () => {
-    const { status, json } = await jsonOf(await dealsSearchRoute.GET(
-      makeReq('/api/deals/search?term=lead.a1@', { bearer: RETIRED_SHARED_KEY })
-    ))
-    expect(status).toBe(401)
-    expect(json?.data).toBeUndefined()
-  })
-})
-
 // ─── routes that don't fit the pattern (kept honest here) ────────────
-// - GET  /api/deals            — no list handler exists (POST-only surface;
-//                                deal lists render from server components).
-// - GET  /api/deals/[id]       — no detail GET (PUT covered above).
 // - GET  /api/bookings/[id]    — no detail GET (PUT covered above).
-// - GET  /api/notes, /api/notes/[id] — POST-only surface, no read handlers.
-// - GET  /api/activities       — POST-only; task reads live at /api/tasks
-//                                (covered above).
 describe('spec-table completeness', () => {
   it('documents the deliberately-skipped routes', () => {
     expect(true).toBe(true)

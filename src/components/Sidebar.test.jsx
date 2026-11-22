@@ -119,16 +119,9 @@ describe('Sidebar — active state', () => {
   })
 })
 
-// FU-PLATFORM-LINK — the master-only "Platform" link used to point ONLY
-// at the external https://platform.un1tdublin.com (the old, separately-
-// deployed un1t-platform app — see docs/INFRA_BACKLOG.md #5, tagged for
-// retirement). The in-app Platform console (8 pages, src/lib/platform-
-// nav.js) has since shipped at /admin/tenants with no sidebar entry of
-// its own, so masters had no persistent link to their own console. Fix:
-// repoint the primary link internally, keep the old one as a smaller
-// secondary "Legacy platform" link so nothing already relying on it
-// (whatever docs/INFRA_BACKLOG.md #5's "confirm/port the surfaces" step
-// hasn't resolved yet) gets stranded.
+// FU-PLATFORM-LINK — the master-only "Platform console" link points at the
+// in-app console (/admin/tenants). The old external "Legacy platform" link to
+// the separately deployed un1t-platform app was removed in RETIRE.2.
 describe('Sidebar — Platform links (FU-PLATFORM-LINK)', () => {
   const MASTER = { role: 'master', full_name: 'Test Master' }
 
@@ -141,13 +134,11 @@ describe('Sidebar — Platform links (FU-PLATFORM-LINK)', () => {
     expect(link.getAttribute('target')).toBeNull()
   })
 
-  it('keeps a secondary external "Legacy platform" link to the old un1t-platform app', () => {
+  it('no longer links to the old external platform app', () => {
     mockPathname.mockReturnValue('/dashboard')
     render(<Sidebar user={MASTER} />)
-    const link = screen.getByRole('link', { name: /Legacy platform/ })
-    expect(link.getAttribute('href')).toBe('https://platform.un1tdublin.com')
-    expect(link.getAttribute('target')).toBe('_blank')
-    expect(link.getAttribute('rel')).toContain('noreferrer')
+    expect(screen.queryByRole('link', { name: /Legacy platform/ })).toBeNull()
+    expect(document.querySelector('a[href*="platform.un1tdublin.com"]')).toBeNull()
   })
 
   it('renders neither Platform link for a non-master (owner)', () => {

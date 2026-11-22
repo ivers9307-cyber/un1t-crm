@@ -124,7 +124,6 @@ const REVIEWED = {
   'src/lib/assistant-prompt.js': 'prompt text only',
   'src/lib/candidates-data.js': 'reads contracts only when withContract (ADMIN_ROLES at the block\'s studio)',
   'src/lib/contracts.js': 'contract template variables, issued by owner/master',
-  'src/lib/openapi.js': 'API documentation',
   'src/lib/payroll.js': 'server-side arithmetic',
   'src/lib/profile-compensation.js': 'server reader of the canonical pay table',
   'src/lib/report-generator.js': 'writes staff_cost and utilisation, both admin-only report types',
