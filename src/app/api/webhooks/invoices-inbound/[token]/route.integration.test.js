@@ -113,11 +113,27 @@ describe('inbound invoice webhook, end to end over the fake database', () => {
     expect([...ids].sort()).toEqual(queue().map((r) => r.id).sort())
     expect(queue().some((r) => r.not_invoice_reason?.startsWith('attachment_not_received'))).toBe(true)
 
+    // The real helper stamps what it queues; the mocked one does not.
+    for (const r of queue()) r.analysis_queued_at = '2026-11-22T09:00:00Z'
     queueInvoicePreparation.mockClear()
     const again = await POST(req(body), ctx())
     expect(again.status).toBe(200)
     expect(queue()).toHaveLength(2)
     expect(queueInvoicePreparation).not.toHaveBeenCalled()
+  })
+
+  it('a retry after a failed second upload queues the row stored by the first attempt too', async () => {
+    const body = email([pdf('a.pdf'), pdf('b.pdf')])
+    upload.mockResolvedValueOnce({ error: null }).mockResolvedValueOnce({ error: { message: 'boom' } })
+    expect((await POST(req(body), ctx())).status).toBe(500)
+    expect(queueInvoicePreparation).not.toHaveBeenCalled()
+
+    expect((await POST(req(body), ctx())).status).toBe(200)
+    expect(queue()).toHaveLength(2)
+    expect(queueInvoicePreparation).toHaveBeenCalledTimes(1)
+    const [calledDb, ids] = queueInvoicePreparation.mock.calls[0]
+    expect(calledDb).toBe(db)
+    expect([...ids].sort()).toEqual(queue().map((r) => r.id).sort())
   })
 
   it('stores the email when a claim was left held with nothing stored', async () => {

@@ -23,6 +23,8 @@ const email = (Attachments, over = {}) => ({
   Attachments,
   ...over,
 })
+// What the real queueInvoicePreparation does to the rows it queues.
+const stampAll = (d) => { for (const r of d.tables.invoices_queue) r.analysis_queued_at = '2026-11-22T09:00:00Z' }
 const all = async (db) => (await db.from('invoices_queue').select('*').order('email_message_id')).data
 
 const PDF_BYTES = Buffer.from(PDF, 'base64')
@@ -210,7 +212,8 @@ describe('ingestInboundEmail', () => {
       return realFrom(table)
     }
     const r = await ingestInboundEmail(db, { location: LOC, body: email([pdf()]) })
-    expect(r).toEqual({ ok: true, created: [], rowIds: [], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
+    // The row is still unqueued, so it is returned for queueing (not deleted or redone).
+    expect(r).toEqual({ ok: true, created: [], rowIds: [db.tables.invoices_queue[0].id], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
     expect(db.tables.invoices_queue).toHaveLength(1)
     expect(db.tables.invoices_queue[0].attachment_path).toBe('loc/done.pdf')
     expect(upload).not.toHaveBeenCalled()
@@ -270,6 +273,7 @@ describe('ingestInboundEmail with attachments the shim parked in Storage', () =>
     expect((await ingestInboundEmail(db, { location: LOC, body })).ok).toBe(true)
     expect(files.size).toBe(0)
     download.mockClear()
+    stampAll(db)
     const again = await ingestInboundEmail(db, { location: LOC, body })
     expect(again).toEqual({ ok: true, created: [], rowIds: [], alreadyStored: 1, skippedInline: 0, notReceived: 0 })
     expect(download).not.toHaveBeenCalled()
@@ -421,6 +425,7 @@ describe('ingestInboundEmail with attachments the shim parked in Storage', () =>
       const rows = await all(db)
       expect(r.created).toHaveLength(2)
       expect(r.rowIds.slice().sort()).toEqual(rows.map((x) => x.id).sort())
+      stampAll(db)
       const again = await ingestInboundEmail(db, args)
       expect(again.rowIds).toEqual([])
     })
@@ -438,7 +443,62 @@ describe('ingestInboundEmail with attachments the shim parked in Storage', () =>
       const r = await ingestInboundEmail(db, { location: LOC, body: email([]) })
       const rows = await all(db)
       expect(r.rowIds).toEqual([rows[0].id])
+      stampAll(db)
       expect((await ingestInboundEmail(db, { location: LOC, body: email([]) })).rowIds).toEqual([])
+    })
+  })
+
+  // INVOICEPREP.3 — a retry also returns earlier rows that were never queued.
+  describe('rowIds after a partial failure', () => {
+    const stamp = async (patch) => {
+      for (const r of await all(db)) await db.from('invoices_queue').update(patch).eq('id', r.id)
+    }
+
+    it('a retry returns the row stored by the failed attempt as well as the new one', async () => {
+      upload.mockResolvedValueOnce({ error: null }).mockResolvedValueOnce({ error: { message: 'boom' } })
+      expect((await ingestInboundEmail(db, args)).ok).toBe(false)
+      const [a] = (await all(db)).filter((x) => x.attachment_path)
+      const r = await ingestInboundEmail(db, args)
+      const rows = await all(db)
+      expect(r.ok).toBe(true)
+      expect(r.alreadyStored).toBe(1)
+      expect(r.created).toHaveLength(1)
+      expect(r.created).not.toContain(a.id)
+      expect(r.rowIds).toEqual([r.created[0], a.id])
+      expect(rows).toHaveLength(2)
+    })
+
+    it('a repeat after full success queues nothing once the rows are stamped, prepared or past received', async () => {
+      await ingestInboundEmail(db, args)
+      expect((await ingestInboundEmail(db, args)).rowIds).toHaveLength(2) // never queued: still owed
+      await stamp({ analysis_queued_at: '2026-11-22T10:00:00Z' })
+      expect((await ingestInboundEmail(db, args)).rowIds).toEqual([])
+      await stamp({ analysis_queued_at: null, prepared_at: '2026-11-22T10:01:00Z' })
+      expect((await ingestInboundEmail(db, args)).rowIds).toEqual([])
+      await stamp({ prepared_at: null, status: 'extracted' })
+      expect((await ingestInboundEmail(db, args)).rowIds).toEqual([])
+    })
+
+    it('a retry returns a not-received row that an earlier attempt never queued', async () => {
+      const bad = createFakeDb({ tables: seed() })
+      bad.storage = fakeStorage()
+      const r1 = await ingestInboundEmail(bad, { location: LOC, body: email([notMoved('too_large'), notMoved('rehost_failed')]) })
+      expect(r1.ok).toBe(true)
+      const missing = (await all(bad)).filter((x) => x.email_message_id.includes('-missing-')).map((x) => x.id)
+      const r2 = await ingestInboundEmail(bad, { location: LOC, body: email([notMoved('too_large'), notMoved('rehost_failed')]) })
+      expect(r2.notReceived).toBe(0)
+      expect(r2.rowIds.slice().sort()).toEqual(missing.slice().sort())
+    })
+
+    it('does not list the old id of a path-less row it deleted and redid', async () => {
+      await db.from('invoices_queue').insert({
+        location_id: LOC, email_message_id: 'm1-0', status: 'received', source_type: 'supplier_email', attachment_bucket: 'inbound-invoices',
+      })
+      const old = (await all(db))[0].id
+      const r = await ingestInboundEmail(db, { location: LOC, body: email([pdf()]) })
+      expect(r.created).toHaveLength(1)
+      expect(r.rowIds).toEqual([r.created[0]])
+      expect(r.rowIds).not.toContain(old)
     })
   })
 })

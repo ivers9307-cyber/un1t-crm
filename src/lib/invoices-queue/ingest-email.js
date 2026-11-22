@@ -43,9 +43,12 @@ const BUCKET = INVOICE_STAGING_BUCKET
 /**
  * @param {import('@/lib/supabase').Db} db
  * @param {{ location: { id: string }, body: any }} input
- * `rowIds` lists every row THIS call inserted (stored, not-received and the
- * empty-email row), so the caller can queue them for preparation; `created`
- * stays the stored-with-a-file subset.
+ * `rowIds`: rows of this message that still need queueing for preparation.
+ * That is every row THIS call inserted (stored, not-received, empty-email),
+ * then any earlier row of the message still in 'received' that was never
+ * queued and never prepared (left by an attempt that failed part-way: only
+ * stamped rows are swept, so nobody else would pick it up). `created` stays
+ * the stored-with-a-file subset.
  * @returns {Promise<
  *   { ok: true, created: string[], rowIds: string[], alreadyStored: number, skippedInline: number, notReceived: number }
  *   | { ok: false, error: 'insert_failed' | 'storage_upload_failed' | 'lookup_failed' | 'path_update_failed' | 'staged_download_failed' }
@@ -74,7 +77,7 @@ export async function ingestInboundEmail(db, { location, body }) {
   for (let i = 0; i < attachments.length; i++) ids.push(attachmentMessageId(messageId, i), missingMessageId(i))
   const { data: existing, error: readErr } = await db
     .from('invoices_queue')
-    .select('id, email_message_id, attachment_path, attachment_mime_type, attachment_size_bytes')
+    .select('id, email_message_id, status, analysis_queued_at, prepared_at, attachment_path, attachment_mime_type, attachment_size_bytes')
     .eq('location_id', location.id)
     .in('email_message_id', [...new Set(ids)])
   if (readErr) {
@@ -101,6 +104,9 @@ export async function ingestInboundEmail(db, { location, body }) {
     })
   }
 
+  /** @type {Set<string>} */
+  const replacedIds = new Set()
+
   const resolved = await resolveInboundAttachments(db, body, { skipIndexes: storedIndexes })
   if (!resolved.ok) return { ok: false, error: 'staged_download_failed' }
   const { usable, skippedInline, unsupportedTypes } = classifyInboundAttachments(
@@ -117,11 +123,16 @@ export async function ingestInboundEmail(db, { location, body }) {
    * @param {string[]} created
    * @param {number} alreadyStored
    * @param {number} notReceived
-   * @param {string[]} rowIds every row this call inserted
+   * @param {string[]} inserted every row this call inserted
    * @returns {Promise<{ ok: true, created: string[], rowIds: string[], alreadyStored: number, skippedInline: number, notReceived: number }>}
    */
-  const succeed = async (created, alreadyStored, notReceived, rowIds) => {
+  const succeed = async (created, alreadyStored, notReceived, inserted) => {
     await removeStagedAttachments(db, stagedPaths)
+    // A row this call deleted and redid is represented by its new id only.
+    const leftovers = (existing || [])
+      .filter((r) => r.status === 'received' && !r.analysis_queued_at && !r.prepared_at && !replacedIds.has(r.id))
+      .map((r) => r.id)
+    const rowIds = [...new Set([...inserted, ...leftovers])]
     return { ok: true, created, rowIds, alreadyStored, skippedInline, notReceived }
   }
 
@@ -171,6 +182,7 @@ export async function ingestInboundEmail(db, { location, body }) {
         alreadyStored++
         continue
       }
+      replacedIds.add(prior.id)
     }
 
     const filename = safeInboundFilename(att.name) || `attachment-${att.index + 1}`
