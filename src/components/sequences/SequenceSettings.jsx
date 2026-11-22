@@ -30,13 +30,12 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 // SEQEXIT.1 — the audience stopped being an entry gate and became a
 // continuing condition. The field looks identical, so the new meaning has
 // to be stated next to it; operators cannot infer it from an unchanged UI.
-// SEQCOOLDOWN.1 (15 Nov feature audit, area 4) — the old hint promised
-// "they can re-enter after N days", but sequence_enrollments allows one row per
-// person per flow (a full unique index), so nobody ever re-enters, whatever the
-// number. The hint now says what happens; making re-entry possible is a
-// product decision (it would let a sweep re-mail a whole finished cohort).
+// SEQCOOLDOWN.1 (15 Nov feature audit, area 4) said nobody re-enters, which
+// was true until COOLDOWN.1: a contact whose run has ended now re-enters once
+// the cooldown has passed (enrol.js re-activates their row), so the hint says
+// so again. Empty or 0 keeps the old rule: one run per person, ever.
 export const COOLDOWN_HINT =
-  'Each contact goes through this flow once. A cooldown does not let anyone re-enter after it ends; it only stops them being enrolled while it lasts.'
+  'Leave empty or 0 and each contact goes through this flow once. Set a number of days and a contact can go through it again once that many days have passed since their last run ended — they re-enter the next time they match. Nobody is ever in the flow twice at the same time.'
 
 export const AUDIENCE_CONTINUOUS_HINT =
   'These conditions are checked again before every step, not just at enrolment — a contact who stops matching leaves the sequence.'
