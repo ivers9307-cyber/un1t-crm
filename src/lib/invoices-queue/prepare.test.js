@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createHash } from 'node:crypto'
 import { createFakeDb } from '../../../tests/helpers/fake-db.js'
-import { prepareInvoiceRow, recheckInvoiceRow } from './prepare.js'
+import { prepareInvoiceRow, recheckInvoiceRow, XERO_LOOKUP_TIMEOUT_MS } from './prepare.js'
 
 vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logError: vi.fn() }))
 // The default Xero lookup must never run in a test: every test injects deps.xero.
@@ -294,6 +294,63 @@ describe('prepareInvoiceRow', () => {
     }
   })
 
+  it('a Xero lookup that never answers times out: logged, no reason, row still extracted', async () => {
+    expect(XERO_LOOKUP_TIMEOUT_MS).toBe(10_000)
+    setup({ tables: KNOWN })
+    findBill.mockImplementationOnce(() => new Promise(() => {}))
+    expect(await run('q2', { xeroTimeoutMs: 5 })).toEqual({ outcome: 'prepared', reasons: [] })
+    expect(stored('q2').status).toBe('extracted')
+  })
+
+  it('a hanging lookup still keeps the row\'s other reasons', async () => {
+    findBill.mockImplementationOnce(() => new Promise(() => {}))
+    expect(await run('q2', { xeroTimeoutMs: 5 })).toEqual({ outcome: 'prepared', reasons: ['new_supplier'] })
+  })
+
+  it('an empty file is unreadable, never hashed and never read', async () => {
+    files.set('inbound/q2.pdf', Buffer.alloc(0))
+    setup({ rows: [queueRow({ id: 'q1', content_hash: createHash('sha256').update('').digest('hex'), received_at: '2026-11-19T10:00:00.000Z' }), queueRow({ content_hash: null })] })
+    expect(await run()).toEqual({ outcome: 'unreadable', reasons: ['unreadable'] })
+    expect(stored('q2')).toMatchObject({ status: 'received', review_reasons: ['unreadable'], extraction_error: 'download: empty file', content_hash: null, analysis_queued_at: null })
+    expect(extract).not.toHaveBeenCalled()
+  })
+
+  it('a row rejected before the read is skipped: no paid read, row untouched', async () => {
+    const row = { ...stored('q2') }
+    stored('q2').status = 'rejected'
+    const before = { ...stored('q2') }
+    expect(await prepareInvoiceRow(db, row, { extract, xero: { findBill }, now: () => NOW })).toEqual({ outcome: 'skipped', reasons: [] })
+    expect(extract).not.toHaveBeenCalled()
+    expect(stored('q2')).toEqual(before)
+  })
+
+  it('a failed status re-check does not block preparation', async () => {
+    db = createFakeDb({ tables: { invoices_queue: [queueRow()], xero_tax_rates: RATES }, errors: { invoices_queue: { select: { message: 'boom' } } } })
+    db.storage = { from: () => ({ download: async () => ({ data: new Blob([BYTES]), error: null }) }) }
+    expect((await run()).outcome).toBe('prepared')
+    expect(extract).toHaveBeenCalledTimes(1)
+    expect(stored('q2').status).toBe('extracted')
+  })
+
+  it('a failed final write leaves the row unreadable with the database message', async () => {
+    // Only the final write (status: extracted) fails; the fallback write succeeds.
+    const from = db.from.bind(db)
+    db.from = (table) => {
+      const builder = from(table)
+      if (table !== 'invoices_queue') return builder
+      const update = builder.update.bind(builder)
+      builder.update = (payload, options) => {
+        if (payload.status === 'extracted') db.errors.invoices_queue = { update: { message: 'deadlock detected' } }
+        else delete db.errors.invoices_queue
+        return update(payload, options)
+      }
+      return builder
+    }
+    expect(await run()).toEqual({ outcome: 'unreadable', reasons: ['unreadable'] })
+    expect(stored('q2')).toMatchObject({ status: 'received', review_reasons: ['unreadable'], prepared_at: NOW.toISOString(), analysis_queued_at: null, analysis_claimed_at: null })
+    expect(stored('q2').extraction_error).toMatch(/deadlock detected/)
+  })
+
   it('a row at another studio never counts as a duplicate', async () => {
     setup({ rows: [queueRow({ id: 'q1', location_id: '22222222-2222-4222-8222-222222222222', received_at: '2026-11-19T10:00:00.000Z' }), queueRow()] })
     expect((await run()).outcome).toBe('prepared')
@@ -330,6 +387,15 @@ describe('recheckInvoiceRow', () => {
     setup({ tables: KNOWN, rows: [extractedRow(fields)] })
     expect(await recheckInvoiceRow(db, { ...stored('q2') })).toEqual({ reasons: [] })
     expect(stored('q2').extracted_fields).toMatchObject({ tax_type: 'INPUT3', tax_type_source: 'derived' })
+  })
+
+  it('removes a derived tax type that no longer matches the amounts, and asks for a rate', async () => {
+    const fields = read({ xero_contact_ref: contactRef, xero_account_id: ACCOUNT, subtotal: 100, tax_amount: 9, total: 109, tax_type: 'INPUT2', tax_type_source: 'derived' })
+    setup({ tables: KNOWN, rows: [extractedRow(fields)] })
+    expect(await recheckInvoiceRow(db, { ...stored('q2') })).toEqual({ reasons: ['no_vat_rate'] })
+    expect(stored('q2').extracted_fields.tax_type).toBeUndefined()
+    expect(stored('q2').extracted_fields.tax_type_source).toBeUndefined()
+    expect(stored('q2').review_reasons).toEqual(['no_vat_rate'])
   })
 
   it('carries over already_in_xero and duplicate_file without calling Xero', async () => {

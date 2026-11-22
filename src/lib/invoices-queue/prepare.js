@@ -42,6 +42,9 @@ const NOT_INVOICE_TYPES = new Set(['statement', 'other'])
 const CARRIED_ON_RECHECK = new Set(['already_in_xero', 'duplicate_file'])
 // A select returns at most 1,000 rows; the most recent 500 candidates are plenty.
 const CANDIDATE_LIMIT = 500
+// The Xero lookup is advisory: a hanging Xero must not hold the worker past
+// this, or the row is killed after its paid read and read again by the sweep.
+export const XERO_LOOKUP_TIMEOUT_MS = 10_000
 
 /**
  * @typedef {{ findBill: (locationId: string, invoiceNumber: string) => Promise<any> }} XeroLookup
@@ -50,6 +53,7 @@ const CANDIDATE_LIMIT = 500
  *   xero?: XeroLookup,
  *   force?: boolean,
  *   now?: () => Date,
+ *   xeroTimeoutMs?: number,
  * }} PrepareDeps
  * @typedef {'prepared'|'not_invoice'|'duplicate'|'unreadable'|'skipped'} PrepareOutcome
  * @typedef {{ outcome: PrepareOutcome, reasons: string[] }} PrepareResult
@@ -61,6 +65,26 @@ const defaultXero = {
     const { xfetch } = await withFreshToken(locationId)
     return findXeroBillByNumber(xfetch, invoiceNumber)
   },
+}
+
+/**
+ * Race a promise against a timer that rejects; the timer is always cleared.
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @returns {Promise<T>}
+ */
+async function withTimeout(promise, ms) {
+  /** @type {any} */
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms`)), ms)
+  })
+  try {
+    return await Promise.race([promise, /** @type {Promise<never>} */ (timeout)])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** @param {any} v */
@@ -279,6 +303,8 @@ async function prepare(db, row, deps, { write, unreadable, hashPatch, nowIso }) 
   const { data: blob, error: dlErr } = await db.storage.from(row.attachment_bucket).download(row.attachment_path)
   if (dlErr || !blob) return unreadable(`download: ${dlErr?.message || 'unknown'}`)
   const bytes = NodeBuffer.from(await blob.arrayBuffer())
+  // Every empty file has the same hash, so it must stop before the duplicate check.
+  if (bytes.length === 0) return unreadable('download: empty file')
 
   // 3. Hash: backlog rows have none.
   const hash = row.content_hash || sha256Hex(bytes)
@@ -293,7 +319,19 @@ async function prepare(db, row, deps, { write, unreadable, hashPatch, nowIso }) 
     }
   }
 
-  // 5. Read.
+  // 5. Read. The read is paid for, so first make sure no one has acted on the
+  // row meanwhile. A failed re-check never blocks: the final write is guarded anyway.
+  const { data: current, error: statusErr } = await db
+    .from('invoices_queue')
+    .select('status')
+    .eq('id', row.id)
+    .eq('location_id', locationId)
+    .maybeSingle()
+  if (statusErr) {
+    logWarn(MODULE, 'could not re-check the status before reading', { queue_id: row.id, error: statusErr.message })
+  } else if (!current || !PREPARABLE.includes(String(current.status))) {
+    return skipped
+  }
   const extract = deps.extract || extractInvoiceFieldsFromBytes
   /** @type {{ ok: boolean, fields?: any, error?: string }} */
   const result = await extract(bytes, row.attachment_mime_type, { locationId })
@@ -335,10 +373,11 @@ async function prepare(db, row, deps, { write, unreadable, hashPatch, nowIso }) 
   if (duplicateOf) duplicateReasons.push('duplicate_number')
   if (!blank(fields.invoice_number)) {
     try {
-      const bill = await (deps.xero || defaultXero).findBill(locationId, String(fields.invoice_number).trim())
+      const lookup = (deps.xero || defaultXero).findBill(locationId, String(fields.invoice_number).trim())
+      const bill = await withTimeout(lookup, deps.xeroTimeoutMs ?? XERO_LOOKUP_TIMEOUT_MS)
       if (bill) duplicateReasons.push('already_in_xero')
     } catch (e) {
-      // No connection, a token failure or a network error: tried once, no reason raised.
+      // No connection, a token failure, a network error or a timeout: tried once, no reason raised.
       logWarn(MODULE, 'could not look the bill up in Xero', { queue_id: row.id, error: messageOf(e) })
     }
   }
