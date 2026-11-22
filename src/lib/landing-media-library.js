@@ -34,7 +34,7 @@ import { adminOrganizationIds } from '@/lib/org-admin'
 export const MEDIA_KINDS = Object.freeze(['video', 'image'])
 
 const VIDEO_EXT = new Set(['mp4', 'webm', 'mov'])
-const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp'])
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
 // A folder can hold at most this many objects per list call; a page's media
 // folder holds a few dozen at most, and the legacy studio folders under 200.
 const LIST_LIMIT = 1000

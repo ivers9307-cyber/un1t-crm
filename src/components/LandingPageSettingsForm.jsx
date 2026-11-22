@@ -459,7 +459,7 @@ export default function LandingPageSettingsForm({
             onPickExisting={(item) => setLogoUrl(item.url)}
             uploading={!!uploading['site-logo']}
             error={uploadErr['site-logo']}
-            accept="image/png,image/jpeg,image/webp"
+            accept="image/png,image/jpeg,image/webp,image/gif"
             label="Add logo"
             kind="image"
           />
@@ -909,7 +909,7 @@ function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress
           onPickExisting={(item) => onUpdate({ image_url: item.url })}
           uploading={!!uploading[k('image')]}
           error={uploadErr[k('image')]}
-          accept="image/png,image/jpeg,image/webp"
+          accept="image/png,image/jpeg,image/webp,image/gif"
           label="Add image"
           kind="image"
         />
@@ -1468,7 +1468,7 @@ function HeroMediaFields({ block, onUpdate, uploadMedia, uploading = {}, uploadE
           onPickExisting={(item) => onUpdate({ poster_url: item.url })}
           uploading={!!uploading[k('poster')]}
           error={uploadErr[k('poster')]}
-          accept="image/png,image/jpeg,image/webp"
+          accept="image/png,image/jpeg,image/webp,image/gif"
           label="Add image"
           kind="image"
         />
@@ -1593,7 +1593,7 @@ function PillarsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
                 onPickExisting={(item) => setItem(i, { photo_url: item.url })}
                 uploading={!!uploading[k('photo')]}
                 error={uploadErr[k('photo')]}
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,image/gif"
                 label="Add photo"
                 kind="image"
               />
@@ -1743,7 +1743,7 @@ function GalleryEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
               <span className="text-[10px] mt-2">{uploading[k] ? 'Uploading…' : 'Add photo'}</span>
               <input
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,image/gif"
                 className="hidden"
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) addPhoto(f); e.target.value = '' }}
               />

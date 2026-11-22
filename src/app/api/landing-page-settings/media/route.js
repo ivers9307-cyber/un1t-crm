@@ -42,12 +42,15 @@ import { logError } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+// GIFLIB.1: image/gif too, so an animated image can sit in the library (the
+// email tools only place library images). The bucket allows it since mig 869.
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const VIDEO_TYPES = new Set(['video/mp4', 'video/webm'])
 const EXT_BY_TYPE = {
   'image/png':  'png',
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
+  'image/gif':  'gif',
   'video/mp4':  'mp4',
   'video/webm': 'webm',
 }
@@ -118,7 +121,7 @@ export async function POST(request) {
       success: false,
       error: kind === 'video'
         ? 'Unsupported file type. Use MP4 or WebM.'
-        : 'Unsupported file type. Use PNG, JPEG, or WebP.',
+        : 'Unsupported file type. Use PNG, JPEG, WebP or GIF.',
     }, { status: 400 })
   }
   const cap = MAX_BYTES[kind]
