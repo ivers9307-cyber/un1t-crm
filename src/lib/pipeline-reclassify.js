@@ -773,7 +773,7 @@ export async function reclassifyAllContacts(db, args) {
   //     The classifier itself has never removed a deal: a contact who stops
   //     qualifying for the funnel moves to an off-funnel pile, still on the
   //     board. Leaving uses the one way a deal already leaves a board, the
-  //     staff close (deals.status 'lost', PUT /api/deals/[id], the phone's
+  //     staff close (deals.status 'lost', the phone's
   //     Mark lost): the row and its history stay, every board reads open deals
   //     only, and if the membership elsewhere ends a NEW deal is created at the
   //     classifier's stage on a later run. Never a delete.

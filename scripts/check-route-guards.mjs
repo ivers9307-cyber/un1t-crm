@@ -164,13 +164,11 @@ const INBOX_ROUTE_PREFIXES = [
   'src/app/api/whatsapp/conversations',
   'src/app/api/instagram/conversations',
   'src/app/api/instagram/media',
-  'src/app/api/email/conversations',
-  // EMAIL-TICKET.4 — the ticket routes are the same class: service-role, no
+  // EMAIL-TICKET.4 — the email routes are the same class: service-role, no
   // RLS, so the `email_inbox` check IS the channel gate (the per-account
-  // email_mailbox_access gate sits behind it).
-  'src/app/api/email/tickets',
-  // MAIL-RENAME.1 — the ticket routes moved here (mail is the same surface,
-  // same gate); the tickets prefix above stays for the deprecated shims.
+  // email_mailbox_access gate sits behind it). MAIL-RENAME.1 moved them from
+  // /api/email/tickets to /api/email/mail; RETIRE.2 deleted the old shims and
+  // the retired /api/email/conversations stubs.
   'src/app/api/email/mail',
 ]
 
@@ -190,7 +188,7 @@ const INBOX_ROUTE_PREFIXES = [
 //                              tests/strip-comments.test.js), so a token that
 //                              survives only in a comment no longer satisfies
 //                              this lint.
-//   loadTicketForUser(         src/app/api/email/tickets/_helpers.js. VERIFIED:
+//   loadTicketForUser(         src/app/api/email/mail/_conversation.js. VERIFIED:
 //                              it calls hasPermissionForLocation(user,
 //                              ticket.location_id, 'email_inbox') and returns a
 //                              404 response when it fails, before any caller
@@ -201,7 +199,7 @@ const INBOX_ROUTE_PREFIXES = [
 //                              list's other entries do.
 //
 // EMAIL-ATTACH-PREVIEW.1 —
-//   loadAttachmentForTicket(   src/app/api/email/tickets/[id]/attachments/_helpers.js.
+//   loadAttachmentForTicket(   src/app/api/email/mail/_conversation.js.
 //                              VERIFIED: its FIRST statement is
 //                              `await loadTicketForUser(db, user, ticketId)` and
 //                              it returns that helper's refusal response
@@ -213,7 +211,7 @@ const INBOX_ROUTE_PREFIXES = [
 //                              and two copies of that resolution would be two
 //                              definitions of who may read `accounts@`.
 // EMAIL-MOPUP.5 —
-//   loadSendingMailbox(        src/app/api/email/tickets/_helpers.js. VERIFIED:
+//   loadSendingMailbox(        src/app/api/email/mail/_conversation.js. VERIFIED:
 //                              it runs assertLocationAccessOr404, then
 //                              hasPermissionForLocation(user, location,
 //                              'email_inbox') refusing with 404, then the

@@ -167,7 +167,7 @@ const SCOPING_HELPERS = [
   'assertCreateInOrg(',
   'orgScopeLocationIds(',
   'orgLocationIds(',
-  // src/app/api/email/tickets/_helpers.js — EMAIL-TICKET.4's two-level gate.
+  // src/app/api/email/mail/_conversation.js (was tickets/_helpers.js) — EMAIL-TICKET.4's two-level gate.
   // loadTicketForUser runs assertLocationAccessOr404 on the ticket's own
   // location AND requires the ticket's mailbox to be in the caller's visible
   // set; loadVisibleMailboxes builds that set with .eq('location_id', …) plus
@@ -181,7 +181,7 @@ const SCOPING_HELPERS = [
   // until the identifier sweep (Task 9) removes every caller of it.
   'loadConversationForUser(',
   'loadVisibleMailboxes(',
-  // src/app/api/email/tickets/_helpers.js — the SEND-AS gate (EMAIL-OUTBOUND
+  // src/app/api/email/mail/_conversation.js (was tickets/_helpers.js) — the SEND-AS gate (EMAIL-OUTBOUND
   // -ATTACH.1), extracted verbatim from the compose route. Reads the named
   // mailbox row, then runs assertLocationAccessOr404 at THAT mailbox's
   // location, then hasPermissionForLocation('email_inbox') there, then requires

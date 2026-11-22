@@ -199,7 +199,7 @@ describe('what publishes an OTA', () => {
     'the env example': ['mobile/.env.example'],
     'mobile gitignore': ['mobile/.gitignore'],
     // Web-side pushes.
-    'a web-only change': ['src/app/api/deals/route.js'],
+    'a web-only change': ['src/app/api/deals/[id]/stage/route.js'],
     'a migration': ['supabase/migrations/999_x.sql'],
     'root docs': ['docs/CHANGELOG.md', 'CLAUDE.md'],
     'the root package.json (NOT mobile/package.json)': ['package.json', 'package-lock.json'],

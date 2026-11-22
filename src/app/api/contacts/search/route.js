@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { authenticateApiKey, orgScopeLocationIds } from '@/lib/api-auth'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { applyAudienceFilterAsync, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { audienceFilterSchema } from '@/lib/schemas'
@@ -19,47 +18,6 @@ export const dynamic = 'force-dynamic'
 // a name / email / phone substring search anyway.
 function escapePostgrestOr(s) {
   return String(s || '').replace(/[(),]/g, '')
-}
-
-// GET /api/contacts/search?term=email@example.com&fields=email
-// Replaces Pipedrive GET /v1/persons/search
-export async function GET(request) {
-  const auth = await authenticateApiKey(request)
-  if (!auth.ok) return auth.response
-
-  const { searchParams } = new URL(request.url)
-  const term = searchParams.get('term') || ''
-  const fields = searchParams.get('fields') || 'email'
-  const limit = parseInt(searchParams.get('limit') || '10')
-  const db = createServerClient()
-
-  let query = db.from('contacts').select('*')
-
-  const locationId = searchParams.get('location_id')
-  if (locationId) query = query.eq('location_id', locationId)
-  // APIKEYS.3 — per-org key: restrict to the org's locations.
-  const orgLocs = await orgScopeLocationIds(db, auth.orgId)
-  if (orgLocs) query = query.in('location_id', orgLocs)
-
-  if (fields === 'email') {
-    query = query.ilike('email', `%${term}%`)
-  } else {
-    query = query.or(`name.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%`)
-  }
-
-  const { data, error } = await query.limit(limit)
-
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  }
-
-  // Match Pipedrive's response shape (the original integration contract)
-  return NextResponse.json({
-    success: true,
-    data: {
-      items: (data || []).map(item => ({ item }))
-    }
-  })
 }
 
 // POST /api/contacts/search

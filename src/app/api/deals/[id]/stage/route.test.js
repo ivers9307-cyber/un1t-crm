@@ -1,10 +1,8 @@
 // WAITLIST.2 — POST /api/deals/[id]/stage, the session-authed manual move.
 //
-// PUT /api/deals/[id] already resolves a location-scoped stage and fires the
-// STAGETRIG.1 sequence trigger, but it is gated by authenticateApiKey() — a
-// Bearer per-org API key, the integration path. A browser cannot call it, so it
-// cannot back drag-drop. This is its session-authed sibling, modelled on the
-// Cold button's route (/api/contacts/[id]/pipeline-status).
+// The session-authed move behind drag-drop (its API-key sibling, PUT
+// /api/deals/[id], was retired in RETIRE.2), modelled on the Cold button's
+// route (/api/contacts/[id]/pipeline-status).
 //
 // Coverage:
 //   - no session                        → 401
