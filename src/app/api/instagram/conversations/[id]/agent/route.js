@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
@@ -14,7 +14,10 @@ const ToggleSchema = z.object({ active: z.boolean() })
 // thread's studio (404) are judged below in their old order.
 export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'ig')
+  // SECGAPS.1 — 'ig' rides the web `whatsapp` key: a coarse any-studio check
+  // here, the decision at the conversation's own studio once it is read (the
+  // WhatsApp thread routes' INBOXLOC.1 rule).
+  const perm = requireWebWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, ToggleSchema)
@@ -31,6 +34,8 @@ export const PATCH = withAuth({ permission: null, location: false }, async ({ us
 
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  const permHere = requireWebWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   const now = new Date().toISOString()
   const update = { agent_active: active, updated_at: now }
