@@ -132,7 +132,7 @@ describe('LandingPageSettingsForm (page mode)', () => {
     media.upload.mockClear()
     // scope='all': no primary location at all, so pageId alone must be enough.
     const { container } = renderForm({ page: basePage({ scope: 'all', primary_location_id: null }) })
-    const input = container.querySelector('input[type=file][accept="image/png,image/jpeg,image/webp"]')
+    const input = container.querySelector('input[type=file][accept="image/png,image/jpeg,image/webp,image/gif"]')
     expect(input).toBeTruthy()
     await act(async () => { fireEvent.change(input, { target: { files: [new File(['x'], 'a.png', { type: 'image/png' })] } }) })
     expect(media.upload).toHaveBeenCalledTimes(1)

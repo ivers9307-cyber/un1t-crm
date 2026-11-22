@@ -56,7 +56,7 @@ export default function EditableImage({
 
   const accept = kind === 'video'
     ? 'video/mp4,video/webm'
-    : 'image/png,image/jpeg,image/webp'
+    : 'image/png,image/jpeg,image/webp,image/gif'
 
   function openPicker(e) {
     e?.stopPropagation()

@@ -83,7 +83,7 @@ export default function HeroMediaTools({
       <input
         ref={imgInput}
         type="file"
-        accept="image/png,image/jpeg,image/webp"
+        accept="image/png,image/jpeg,image/webp,image/gif"
         className="hidden"
         onChange={(e) => uploadAndApply(e, 'image', { locationId, pageId }, onChangeImage)}
       />

@@ -1,6 +1,7 @@
 // BRANDINGBUCKET.1 — what the public 'branding' storage bucket accepts.
 //
-// The bucket's OWN limits (mig 252 set them; mig 675 re-asserts them and
+// The bucket's OWN limits (mig 252 set them; mig 675 re-asserted them; mig 869
+// added image/gif for animated email and page images; and
 // tests/branding-bucket-guard.test.js pins them). Every route that writes the
 // bucket with the service role (logo/favicon, landing-page media, chooser
 // tile, event heroes and logos, signature photos) validates a narrower list
@@ -15,9 +16,9 @@
 // Change a value here only together with a migration that sets the bucket to
 // it, in the same PR. Plain data, no imports: the guard test imports this file.
 
-/** Every type any branding writer accepts (mig 252's list, same order). */
+/** Every type any branding writer accepts (mig 252's list, plus mig 869's image/gif). */
 export const BRANDING_BUCKET_MIME_TYPES = Object.freeze([
-  'image/png', 'image/jpeg', 'image/webp', 'image/svg+xml',
+  'image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/svg+xml',
   'image/x-icon', 'image/vnd.microsoft.icon',
   'video/mp4', 'video/webm', 'video/quicktime',
 ])
