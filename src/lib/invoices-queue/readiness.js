@@ -13,6 +13,7 @@ export const REVIEW_REASONS = Object.freeze([
   'duplicate_file',
   'duplicate_number',
   'already_in_xero',
+  'credit_note',
   'new_supplier',
   'no_account',
   'no_vat_rate',
@@ -27,6 +28,7 @@ export const REVIEW_REASON_LABELS = Object.freeze({
   duplicate_file: 'Possible duplicate',
   duplicate_number: 'Possible duplicate',
   already_in_xero: 'Already in Xero',
+  credit_note: 'Credit note',
   new_supplier: 'New supplier',
   no_account: 'No account yet',
   no_vat_rate: 'No VAT rate',
@@ -50,12 +52,27 @@ export function fieldReasons(fields, ctx = {}) {
   const { vat, rememberedTaxType, taxRates } = ctx || {}
   const out = []
 
+  // A credit note sent as a bill would be booked the wrong way round.
+  if (fields.document_type === 'credit_note') out.push('credit_note')
+
   const hasContact = !!fields.xero_contact_ref
   if (!hasContact) out.push('new_supplier')
   else if (blank(fields.xero_account_id)) out.push('no_account')
 
-  const status = vat?.status ?? (num(fields.tax_amount) === 0 ? 'zero' : 'unmatched')
-  if (blank(fields.tax_type) && (status === 'unmatched' || status === 'ambiguous')) {
+  const subtotal = num(fields.subtotal)
+  const tax = num(fields.tax_amount)
+  const total = num(fields.total)
+  const status = vat?.status ?? (tax === 0 ? 'zero' : 'unmatched')
+  const hasType = !blank(fields.tax_type)
+  // A person's choice (or a legacy row with a type and no source) always stands.
+  const manual = fields.tax_type_source === 'manual' || (hasType && !fields.tax_type_source)
+  const breakdown = Number.isFinite(subtotal) && subtotal > 0 && Number.isFinite(tax)
+  const receiptNoVat =
+    Number.isFinite(total) && total > 0 && !(subtotal > 0) && (tax === 0 || !Number.isFinite(tax))
+  if (
+    (!hasType && (status === 'unmatched' || status === 'ambiguous')) ||
+    (!manual && (!Number.isFinite(tax) || receiptNoVat || (hasType && !breakdown)))
+  ) {
     out.push('no_vat_rate')
   }
 
@@ -69,9 +86,6 @@ export function fieldReasons(fields, ctx = {}) {
     if (Number.isFinite(rate) && rate > 0) out.push('vat_differs')
   }
 
-  const subtotal = num(fields.subtotal)
-  const tax = num(fields.tax_amount)
-  const total = num(fields.total)
   if (
     Number.isFinite(subtotal) && Number.isFinite(tax) && Number.isFinite(total) &&
     subtotal > 0 &&
@@ -81,7 +95,8 @@ export function fieldReasons(fields, ctx = {}) {
   }
 
   if (blank(fields.invoice_date)) out.push('missing_date')
-  if (!blank(fields.total) && total === 0) out.push('zero_total')
+  // An unread total must never come out Ready.
+  if (!Number.isFinite(total) || total === 0) out.push('zero_total')
 
   return out
 }

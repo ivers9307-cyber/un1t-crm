@@ -33,7 +33,7 @@ describe('constants', () => {
     expect(Object.isFrozen(REVIEW_REASON_LABELS)).toBe(true)
     expect(Object.keys(REVIEW_REASON_LABELS).sort()).toEqual([...REVIEW_REASONS].sort())
     expect(REVIEW_REASONS).toEqual([
-      'unreadable', 'duplicate_file', 'duplicate_number', 'already_in_xero', 'new_supplier',
+      'unreadable', 'duplicate_file', 'duplicate_number', 'already_in_xero', 'credit_note', 'new_supplier',
       'no_account', 'no_vat_rate', 'vat_differs', 'totals_mismatch', 'missing_date', 'zero_total',
     ])
     expect(REVIEW_REASON_LABELS.vat_differs).toBe('VAT differs from last time')
@@ -104,6 +104,47 @@ describe('fieldReasons', () => {
   it('never returns caller-owned reasons and keeps REVIEW_REASONS order', () => {
     const r = run({ ...good(), xero_contact_ref: null, invoice_date: '', total: 0, subtotal: 0, tax_amount: 0 })
     expect(r).toEqual(['new_supplier', 'missing_date', 'zero_total'])
+  })
+})
+
+describe('review round', () => {
+  it('zero_total whenever total is unread or zero', () => {
+    for (const total of [null, '', 'abc', '0', 0]) {
+      expect(run({ ...good(), subtotal: 0, tax_amount: 0, total })).toContain('zero_total')
+    }
+    expect(run({ ...good(), total: undefined })).toContain('zero_total')
+    expect(run({ ...good(), total: 96, subtotal: 96, tax_amount: 0 })).toEqual([])
+    expect(run({ ...good(), total: '96.00', subtotal: 96, tax_amount: 0 })).toEqual([])
+  })
+  it('blank tax_amount raises no_vat_rate even when vat says zero', () => {
+    const f = { ...good(), tax_amount: null, total: 100, tax_type: 'NONE', tax_type_source: 'derived' }
+    expect(run(f, { vat: { status: 'zero' } })).toContain('no_vat_rate')
+    expect(run({ ...f, tax_amount: 'abc' }, { vat: { status: 'zero' } })).toContain('no_vat_rate')
+    expect(run({ ...f, tax_type_source: 'manual' }, { vat: { status: 'zero' } })).not.toContain('no_vat_rate')
+  })
+  it('a receipt with no VAT breakdown is not zero VAT', () => {
+    const r = { ...good(), subtotal: 0, tax_amount: 0, total: 96, tax_type: 'NONE' }
+    const z = { vat: { status: 'zero' } }
+    expect(run({ ...r, tax_type_source: 'derived' }, z)).toEqual(['no_vat_rate'])
+    expect(run({ ...r, tax_type_source: 'manual' }, z)).toEqual([])
+    expect(run({ ...r, tax_type_source: undefined }, z)).toEqual([])
+    expect(run({ ...r, subtotal: 96, tax_type_source: 'derived' }, z)).toEqual([])
+    expect(run({ ...good(), tax_type_source: 'derived' })).toEqual([])
+  })
+  it('credit_note', () => {
+    expect(run({ ...good(), document_type: 'credit_note' })).toEqual(['credit_note'])
+    for (const t of ['invoice', 'receipt', null, undefined]) {
+      expect(run({ ...good(), document_type: t })).toEqual([])
+    }
+    expect(REVIEW_REASON_LABELS.credit_note).toBe('Credit note')
+  })
+  it('numeric strings, string rates, no taxRates, blank-space date', () => {
+    expect(run({ ...good(), subtotal: '100', tax_amount: '23', total: '123.00' })).toEqual([])
+    const f = { ...good(), tax_type: '', tax_amount: 0, total: 100 }
+    const rs = [{ tax_type: 'INPUT23', effective_rate: '23.0000' }]
+    expect(run(f, { vat: { status: 'zero' }, rememberedTaxType: 'INPUT23', taxRates: rs })).toEqual(['vat_differs'])
+    expect(() => run(f, { vat: { status: 'zero' }, rememberedTaxType: 'INPUT23', taxRates: undefined })).not.toThrow()
+    expect(run({ ...good(), invoice_date: '   ' })).toEqual(['missing_date'])
   })
 })
 
