@@ -429,7 +429,7 @@ describe('invoiceFieldsSchema — document_type', () => {
     total: 10,
   }
 
-  it('lists the four kinds, frozen', () => {
+  it('lists the five kinds, frozen', () => {
     expect([...INVOICE_DOCUMENT_TYPES]).toEqual(['invoice', 'receipt', 'credit_note', 'statement', 'other'])
     expect(Object.isFrozen(INVOICE_DOCUMENT_TYPES)).toBe(true)
   })
@@ -479,5 +479,41 @@ describe('invoiceFieldsSchema — document_type', () => {
       total: 0,
     })
     expect(r.success).toBe(true)
+  })
+})
+
+describe('invoiceFieldsSchema — currency and a null-filled non-invoice', () => {
+  const base = { supplier_name: 'Acme Supplies', invoice_number: 'INV-1', invoice_date: '2026-05-01', total: 10 }
+
+  it.each([[null], [''], ['   '], [undefined]])('currency %j falls back to EUR', (currency) => {
+    const r = invoiceFieldsSchema.safeParse({ ...base, currency })
+    expect(r.success).toBe(true)
+    expect(r.data.currency).toBe('EUR')
+  })
+
+  it('keeps a given currency and rejects one that is not three characters', () => {
+    expect(invoiceFieldsSchema.parse({ ...base, currency: 'GBP' }).currency).toBe('GBP')
+    expect(invoiceFieldsSchema.safeParse({ ...base, currency: 'EURO' }).success).toBe(false)
+  })
+
+  it('validates the exact payload the statement/other rule describes', () => {
+    const r = invoiceFieldsSchema.safeParse({
+      document_type: 'other',
+      supplier_name: 'Unknown',
+      total: 0,
+      currency: null,
+      supplier_address: null,
+      invoice_number: null,
+      invoice_date: null,
+      due_date: null,
+      subtotal: null,
+      tax_amount: null,
+      category: null,
+      account_code: null,
+    })
+    expect(r.success).toBe(true)
+    expect(r.data.subtotal).toBe(0)
+    expect(r.data.tax_amount).toBe(0)
+    expect(r.data.currency).toBe('EUR')
   })
 })

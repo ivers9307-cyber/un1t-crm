@@ -228,7 +228,12 @@ const invoiceFields = z.object({
   invoice_number: blankToNull(z.string().trim().min(1).max(100).nullable()),
   invoice_date: blankToNull(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invoice_date must be YYYY-MM-DD').nullable()),
   due_date: blankToNull(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'due_date must be YYYY-MM-DD').nullable().optional()),
-  currency: z.string().length(3).default('EUR'),
+  // A statement or non-invoice carries no currency; null, '' and blanks mean
+  // "not given" and fall back to EUR. A present value must still be 3 chars.
+  currency: z.preprocess(
+    (v) => (v === null || (typeof v === 'string' && v.trim() === '') ? undefined : v),
+    z.string().length(3).default('EUR'),
+  ),
   // ZERO-TOTAL.1 — see requiredMoney/optionalMoney above. The total is the
   // one number the document must actually state; the breakdown may be absent.
   subtotal: optionalMoney,
@@ -321,7 +326,7 @@ Rules:
 - Numbers must be JSON numbers, not strings. Strip currency symbols, commas, and any other formatting.
 - Dates must be ISO format. If the invoice shows "12/03/2026" or "12 March 2026", convert to "2026-03-12".
 - If a field is genuinely absent, use null (for optional fields) or your best inference from context (for required fields). Never invent supplier names or invoice numbers.
-- For a document_type of statement or other ONLY: still return the JSON object, with supplier_name as best read (or "Unknown"), total 0 (do not put a statement's balance in total), and the other fields null.
+- For a document_type of statement or other ONLY: still return the JSON object, with supplier_name as best read (or "Unknown"), total 0 (do not put a statement's balance in total), currency "EUR" unless another is shown, and every other field except document_type null.
 - For an invoice, receipt or credit_note, never return 0 for a total you could not read. If the total cannot be read, return null for total. For a credit_note, return the amounts as positive numbers.
 - Return ONLY the JSON object, starting with { and ending with }. No markdown fences. No "Here is the JSON:" preamble.`
 
