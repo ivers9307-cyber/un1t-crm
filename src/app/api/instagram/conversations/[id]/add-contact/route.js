@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
-import { assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { email as emailSchema, phone as phoneSchema } from '@/lib/schemas'
@@ -24,7 +24,10 @@ const AddContactSchema = z.object({
 export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'ig')
+  // SECGAPS.1 — 'ig' rides the web `whatsapp` key: a coarse any-studio check
+  // here, the decision at the conversation's own studio once it is read (the
+  // WhatsApp thread routes' INBOXLOC.1 rule).
+  const perm = requireWebWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, AddContactSchema)
@@ -41,6 +44,8 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
 
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  const permHere = requireWebWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   if (conversation.contact_id) {
     return NextResponse.json({ success: true, contact_id: conversation.contact_id, already_linked: true })

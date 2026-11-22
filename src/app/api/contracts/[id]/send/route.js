@@ -122,9 +122,12 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
 
   // The provider's own text stays in the log; the banner gets a fixed line.
   if (!emailResult.ok) logError('contracts', 'send email failed', { contractId: updated.id, err: emailResult.error })
+  // SECGAPS.1 — named columns only. The one caller (ContractDraftActions)
+  // reads success / error and refreshes the page; the full row (the rendered
+  // body, variables, signatures) stays server-side.
   return NextResponse.json({
     success: true,
-    data: updated,
+    data: { id: updated.id, status: updated.status, issued_at: updated.issued_at },
     warning: emailResult.ok ? undefined : `Contract sent but email could not be sent: ${emailProblem(emailResult.error)}`,
   })
 })

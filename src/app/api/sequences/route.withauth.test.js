@@ -65,4 +65,17 @@ describe('/api/sequences', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).sequence).toMatchObject({ name: 'Welcome', location_id: LOC_A, status: 'draft' })
   })
+
+  it('SECGAPS.1 — a webhook sequence is created with a token, but the answer never carries it', async () => {
+    getCurrentUser.mockResolvedValue(builderAt(true, false))
+    const res = await post({ name: 'Hook', trigger_type: 'webhook' })
+    expect(res.status).toBe(200)
+    const { sequence } = await res.json()
+    expect(sequence.id).toBeTruthy()
+    expect(sequence).not.toHaveProperty('webhook_token')
+    expect(sequence).not.toHaveProperty('webhook_secret')
+    expect(sequence).not.toHaveProperty('created_by')
+    const stored = db.tables.email_sequences.find((r) => r.id === sequence.id)
+    expect(stored.webhook_token).toMatch(/^[0-9a-f]{32}$/)
+  })
 })

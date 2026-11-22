@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { buildAudienceQueryAsync, consentFieldForStream } from '@/lib/postmark'
 import { assertLocationAccessOr404 } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
@@ -16,6 +17,12 @@ const CampaignPreviewSchema = z.object({
 export const dynamic = 'force-dynamic'
 
 const COUNT_FAILED = 'Could not count the audience'
+
+// SECGAPS.1 — the same gate as the campaign's editor routes (loadCampaignForUser)
+// and /send: email at the CAMPAIGN's studio, after membership (404).
+const noEmailHere = (user, locationId) => (hasPermissionForLocation(user, locationId, 'email')
+  ? null
+  : NextResponse.json({ success: false, error: 'No email permission at this location' }, { status: 403 }))
 
 // CLASSIFY.1 — count now goes through buildAudienceQueryAsync which
 // uses denormalised contacts.email_marketing instead of an inner-join
@@ -55,8 +62,8 @@ async function computeCount(db, filter, locationId, consentField) {
   return { ok: true, count: count || 0 }
 }
 
-// withAuth only signs the caller in (the same 401); the campaign (404) and its
-// studio (404) keep their order on both verbs.
+// withAuth only signs the caller in (the same 401); the campaign (404), its
+// studio (404) and email there (403) keep their order on both verbs.
 
 // GET /api/campaigns/[id]/preview — Audience count for the SAVED filter.
 export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
@@ -70,6 +77,8 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
   }
   const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
+  const perm = noEmailHere(user, campaign.location_id)
+  if (perm) return perm
 
   const r = await computeCount(db, campaign.audience_filter, campaign.location_id, consentFieldForStream(campaign.postmark_stream))
   if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
@@ -94,6 +103,8 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
   }
   const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
+  const perm = noEmailHere(user, campaign.location_id)
+  if (perm) return perm
 
   // Use the filter the operator is editing, fall back to the saved one.
   const v = await validateBody(request, CampaignPreviewSchema, { allowEmpty: true })

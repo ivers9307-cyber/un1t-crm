@@ -933,7 +933,9 @@ export function assertLocationAccessOr404(user, locationId) {
 // `ig` deliberately still rides `whatsapp`: there is no Instagram
 // WEB_PERMISSIONS key to point it at, and inventing a mapping to a key
 // that does not exist would fail closed for everyone. When one is
-// added, change it here and every IG conversation route follows.
+// added, change it here — and in the /api/instagram/conversations/[id]
+// thread routes, which since SECGAPS.1 judge the web `whatsapp` key at
+// the thread's own studio (requireWebWhatsAppInboxAnywhere / ...At).
 const INBOX_CHANNEL_PERMISSION_KEYS = Object.freeze({
   wa: 'whatsapp',
   ig: 'whatsapp',
