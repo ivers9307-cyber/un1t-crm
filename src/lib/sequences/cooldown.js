@@ -7,6 +7,10 @@
 // Two regimes:
 //   • cooldownDays > 0 → the most recent terminal end per contact
 //     must be older than cooldownDays for re-enrolment to be allowed.
+//     COOLDOWN.1 — the clock starts when the run ENDED (completed or
+//     exited): the latest of completed_at, exited_at and last_processed_at
+//     (writers stamp different ones; every runner exit stamps the last),
+//     else enrolled_at.
 //   • cooldownDays null/0 → any prior terminal enrolment blocks
 //     (legacy single-enrolment behaviour, preserved so locations
 //     that haven't opted into cooldown keep the old guarantees).
@@ -55,7 +59,7 @@ export function findBlockedByCooldown(history, cooldownDays, nowMs = Date.now())
     if (!h?.contact_id) continue
     // ENROLFIX.1 — the real row carries enrolled_at (there is no created_at
     // on sequence_enrollments); created_at is kept only for older callers.
-    const end = h.last_processed_at || h.enrolled_at || h.created_at
+    const end = runEndedAt(h)
     if (!end) continue
     const prior = lastEndByContact.get(h.contact_id)
     if (!prior || end > prior) lastEndByContact.set(h.contact_id, end)
@@ -72,10 +76,26 @@ export function findBlockedByCooldown(history, cooldownDays, nowMs = Date.now())
 }
 
 /**
+ * When a terminal run ended — the instant the cooldown is measured from.
+ * @param {{ completed_at?: string|null, exited_at?: string|null, last_processed_at?: string|null, enrolled_at?: string|null, created_at?: string|null }} h
+ * @returns {string|null}
+ */
+export function runEndedAt(h) {
+  let latest = null
+  let latestMs = -Infinity
+  for (const v of [h?.completed_at, h?.exited_at, h?.last_processed_at]) {
+    const ms = v ? new Date(v).getTime() : NaN
+    if (Number.isFinite(ms) && ms > latestMs) { latest = v; latestMs = ms }
+  }
+  return latest || h?.enrolled_at || h?.created_at || null
+}
+
+/**
  * DUNNING.2 — decide, per contact, whether a TERMINAL enrolment row may be
- * re-activated for a fresh run. Used only by callers that pass
- * `allowReenrol` to enrolContacts (the dunning paths); every other caller
- * keeps the one-enrolment-ever semantics the full unique index enforces.
+ * re-activated for a fresh run. COOLDOWN.1 — every enrolContacts caller uses
+ * it: the dunning paths (`allowReenrol`) pass their sourceRef so a repeat of
+ * the same invoice is refused; everyone else passes null, so the cooldown
+ * alone decides.
  *
  *   'blocked'      — inside the cooldown, or no cooldown configured
  *   'same_source'  — the new sourceRef equals the latest run's source_ref
@@ -89,25 +109,41 @@ export function findBlockedByCooldown(history, cooldownDays, nowMs = Date.now())
  * @param {number|null|undefined} cooldownDays
  * @param {string|null} sourceRef   the new run's source ref
  * @param {number} [nowMs]
+ * @param {{ includePreviousRuns?: boolean }} [opts]  COOLDOWN.1 — also refuse
+ *   a sourceRef that any EARLIER run (metadata.previous_runs) carried, not
+ *   just the latest one. The general re-entry path sets it: a sweep that
+ *   re-offers the same purchase for 48 hours must never start a second run
+ *   for it, however the runs in between went. Dunning keeps its own rule.
  * @returns {Map<string, { decision: 'blocked'|'same_source'|'reactivate', row: object }>}
  */
-export function planReenrolments(history, cooldownDays, sourceRef, nowMs = Date.now()) {
+export function planReenrolments(history, cooldownDays, sourceRef, nowMs = Date.now(), { includePreviousRuns = false } = {}) {
   const out = new Map()
   if (!Array.isArray(history) || history.length === 0) return out
   // Latest terminal row per contact (the one a re-run would revive).
   const latest = new Map()
   for (const h of history) {
     if (!h?.contact_id) continue
-    const end = h.last_processed_at || h.enrolled_at || h.created_at || ''
+    const end = runEndedAt(h) || ''
     const prior = latest.get(h.contact_id)
-    if (!prior || end > (prior.last_processed_at || prior.enrolled_at || prior.created_at || '')) latest.set(h.contact_id, h)
+    if (!prior || end > (runEndedAt(prior) || '')) latest.set(h.contact_id, h)
   }
   const blocked = findBlockedByCooldown(history, cooldownDays, nowMs)
   for (const [cid, row] of latest) {
     let decision = 'reactivate'
     if (blocked.has(cid)) decision = 'blocked'
     else if (sourceRef != null && row.source_ref != null && String(row.source_ref) === String(sourceRef)) decision = 'same_source'
+    else if (sourceRef != null && includePreviousRuns && previousRunRefs(row).has(String(sourceRef))) decision = 'same_source'
     out.set(cid, { decision, row })
   }
   return out
+}
+
+/** Source refs of the runs recorded on a row's metadata.previous_runs. */
+function previousRunRefs(row) {
+  const runs = row?.metadata && typeof row.metadata === 'object' && Array.isArray(row.metadata.previous_runs)
+    ? row.metadata.previous_runs
+    : []
+  const refs = new Set()
+  for (const r of runs) if (r && r.source_ref != null) refs.add(String(r.source_ref))
+  return refs
 }
