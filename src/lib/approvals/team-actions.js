@@ -51,17 +51,6 @@ export const TEAM_ACTIONS = {
     declinedText: 'Declined. They can submit a new claim.',
     pageLabel: 'Expenses',
   },
-  host_events: {
-    approveLabel: 'Approve',
-    declineLabel: 'Decline',
-    reasonLabel: 'Reason for declining (the host is told)',
-    reasonRequired: true,
-    approve: (item) => call(item, `/api/events/${item.id}/review`, { body: { action: 'approve' } }),
-    decline: (item, reason) => call(item, `/api/events/${item.id}/review`, { body: { action: 'reject', reason: orNull(reason) } }),
-    approvedText: 'Approved. The event is published and the host has been told.',
-    declinedText: 'Declined. The host has been told.',
-    pageLabel: 'Hosts',
-  },
   time_off_cancellations: {
     approveLabel: 'Cancel their leave',
     declineLabel: 'Keep their leave',

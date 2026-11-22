@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { AssignBodySchema, assignThread, assignPickerFor } from '@/lib/inbox-assignment'
@@ -8,15 +8,15 @@ import { AssignBodySchema, assignThread, assignPickerFor } from '@/lib/inbox-ass
 //   GET  → { assigned_to, assignee_name, viewer_id, staff: [{ id, full_name }] }
 //   POST { assignee: 'me' | null | <profile id> } → { assigned_to, assignee_name }
 //
-// The gate is every other Instagram thread route's (INBOX-PERM.1):
-// requireInboxPermission(user, 'ig') — which rides the `whatsapp` key, as
-// Instagram has none of its own — then membership of the thread's studio
-// (404). Who may be NAMED is judged at the thread's studio in
+// The gate is every other Instagram thread route's (INBOX-PERM.1): the web
+// `whatsapp` key (Instagram has none of its own), checked coarsely at any
+// studio, then membership of the thread's studio (404), then the key AT the
+// thread's studio (SECGAPS.1, the WhatsApp routes' INBOXLOC.1 rule). Who may be NAMED is judged at the thread's studio in
 // src/lib/inbox-assignment.js, the same code path as WhatsApp and mail.
 // The Instagram agent pages only the owner of an assigned thread.
 
 async function loadGatedThread(db, user, id) {
-  const perm = requireInboxPermission(user, 'ig')
+  const perm = requireWebWhatsAppInboxAnywhere(user)
   if (perm) return { response: perm }
   const { data: thread, error } = await db.from('instagram_conversations')
     .select('id, location_id, assigned_to')
@@ -27,6 +27,8 @@ async function loadGatedThread(db, user, id) {
   }
   const guard = assertLocationAccessOr404(user, thread.location_id)
   if (guard) return { response: guard }
+  const permHere = requireWebWhatsAppInboxAt(user, thread.location_id)
+  if (permHere) return { response: permHere }
   return { db, thread }
 }
 
@@ -40,7 +42,7 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
 })
 
 export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
-  const pre = requireInboxPermission(user, 'ig')
+  const pre = requireWebWhatsAppInboxAnywhere(user)
   if (pre) return pre
   const validation = await validateBody(request, AssignBodySchema)
   if (!validation.ok) return validation.response

@@ -4,7 +4,7 @@
 // "Make this a series": a name (default the event's), a list of dates (add /
 // remove, with weekly ×4 / fortnightly ×4 / monthly ×3 helpers counted from
 // the event's date), posted to /api/host/events/<id>/series. Each date
-// becomes a draft copy; the host submits them for review as usual.
+// becomes a draft copy; the host publishes each one as usual.
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -69,7 +69,7 @@ export default function HostSeriesActions({ eventId, eventName, raceDate, series
   if (done) {
     return (
       <div className={`${HOST_NOTICE} ${HOST_NOTICE_TONE.ok}`}>
-        Series created: {done.count} {done.count === 1 ? 'date' : 'dates'} created as drafts. Submit each one for review when it is ready.{' '}
+        Series created: {done.count} {done.count === 1 ? 'date' : 'dates'} created as drafts. Publish each one when it is ready.{' '}
         <a href={`/event/series/${done.slug}`} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:opacity-80">Open the series page →</a>
       </div>
     )

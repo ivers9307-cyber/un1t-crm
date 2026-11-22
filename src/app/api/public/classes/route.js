@@ -33,6 +33,7 @@ import { readCorpPromo } from '@/lib/corp-promos-db'
 import { isOpenWeek } from '@/lib/open-week'
 import { readOpenWeekClasses } from '@/lib/open-week-claim'
 import { zoneOfLocation } from '@/lib/location-time'
+import { readPromoCreditLastDay, withinCreditWindow } from '@/lib/glofox-credit-window'
 
 // UN1TWRITE.18 — does this studio's funnel need the terms and waiver tick
 // (un1t.online with the funnel on), and in the operator's words. An
@@ -118,11 +119,17 @@ async function pageGET(db, request, ip, params) {
     // OPENWEEK.1 — a promo page whose promo is a live open week lists only
     // the window's classes (the claim route judges picks on the same read)
     // and tells the picker its limits.
+    // CREDITWINDOW.1 — a Glofox promo also lists only the classes its plan's
+    // credits can book for a claim made now (null: unknown, nothing capped).
+    let creditLast = null
     if (offerType === 'promo_credits') {
       const block = r.blocks.find((b) => b && typeof b === 'object' && b.type === 'corp_promo') || null
       const key = typeof block?.promo_key === 'string' ? block.promo_key.trim() : ''
       const read = key ? await readCorpPromo(db, { locationId: r.locationId, key }) : { ok: true, promo: null }
       const promo = read.ok ? read.promo : null
+      if (promo && promo.live && !isOpenWeek(promo) && promo.platform === 'glofox') {
+        creditLast = await readPromoCreditLastDay(db, { locationId: r.locationId, promo, zone: zoneOfLocation(await locationZoneRow(db, r.locationId)) })
+      }
       if (promo && promo.live && isOpenWeek(promo)) {
         const zone = zoneOfLocation(await locationZoneRow(db, r.locationId))
         const [listed, terms] = await Promise.all([
@@ -141,7 +148,8 @@ async function pageGET(db, request, ip, params) {
         readPublicClasses(db, r.locationId, CAMPAIGN_DAYS, { blocks: r.blocks }),
         termsFor(db, studio),
       ])
-      return NextResponse.json({ success: true, data: { classes: read.classes, terms, campaign: { configured: true, timetable_unavailable: Boolean(read.error) } } })
+      const classes = (read.classes || []).filter((c) => withinCreditWindow(c, creditLast))
+      return NextResponse.json({ success: true, data: { classes, terms, campaign: { configured: true, timetable_unavailable: Boolean(read.error) } } })
     }
     // A page whose offer is not a class: nothing to list here.
     return NextResponse.json({ success: true, data: { classes: [], campaign: NOT_OPEN } })

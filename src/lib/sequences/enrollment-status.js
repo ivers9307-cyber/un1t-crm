@@ -23,6 +23,10 @@ export async function setEnrollmentStatus({ enrollmentId, status, reason }) {
   const db = createServerClient()
   const updates = { status }
   if (reason) updates.last_error = reason
+  // COOLDOWN.1 — a re-entry cooldown is measured from when the run ended;
+  // stamp it, or an exit here (dunning settled, manual tools) would date the
+  // end to the last step the runner processed.
+  if (status === 'exited') updates.exited_at = new Date().toISOString()
   const { error } = await db.from('sequence_enrollments').update(updates).eq('id', enrollmentId)
   if (error) throw error
 }

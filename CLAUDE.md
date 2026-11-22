@@ -158,4 +158,4 @@ Full list in [`docs/rules/conventions.md`](docs/rules/conventions.md).
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | Do-not-build decisions and design-doc pointers |
 | [`docs/changelog/entries/`](docs/changelog/entries/README.md) + [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | What shipped; `npm run changelog` prints both |
 
-The OpenAPI spec is generated from the Zod schemas (`src/lib/openapi.js`) at `/api/openapi.json` and `/api-docs`; register new routes there.
+The OpenAPI spec (`src/lib/openapi.js`, served at `/api/openapi.json` and `/api-docs`) documents only the routes that accept a `unitk_` API key; register a route there when it gains the API-key path.

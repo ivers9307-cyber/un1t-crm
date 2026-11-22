@@ -2,24 +2,35 @@
 //
 // Spec: docs/superpowers/specs/2026-07-08-host-self-serve-events-design.md
 //
-// A 3rd-party event host drafts their own events and submits them for
-// UN1T approval before they go public. The lifecycle is:
-//   draft → pending_review → published (or → rejected → back to draft)
+// A 3rd-party event host drafts their own events and publishes them.
+// HOSTAUTOPUB.1 — there is no staff approval step any more: the lifecycle is
+//   draft → published (the host's Publish button, POST .../submit)
+//   published → draft (the host's "Take off sale", POST .../unpublish)
+// Staff are told when an event goes live (host-notifications.js) and take one
+// down with the event's active switch (DELETE /api/events/[id] soft-deletes).
+// 'pending_review' and 'rejected' stay valid statuses for rows written before
+// HOSTAUTOPUB.1: such a row is not public, the host can publish it, and the
+// /settings/hosts queue still lets staff approve or reject it.
 //
 // This module holds the *pure* parts of that machine — the status
 // constants, the public-visibility predicate, the safe field defaults
 // (host events must never touch UN1T-only levers like Glofox sync or
-// member pricing), the edit-diff that decides whether a published
-// event needs re-review, and the strict input schema. Keeping these
+// member pricing) and the strict input schema. Keeping these
 // pure keeps the routes slim and the state logic testable without a DB.
 
 import { z } from 'zod'
 import { uuidLike } from '@/lib/schemas'
-import { PricingTiersSchema, canonicalTiers } from '@/lib/pricing-tiers'
+import { PricingTiersSchema } from '@/lib/pricing-tiers'
 import { RegistrationQuestionsSchema } from '@/lib/registration-questions'
+import { DEFAULT_EVENT_HOLD_MINUTES } from '@/lib/event-hold'
 
 // The four lifecycle states a host event moves through.
 export const HOST_EVENT_STATUSES = ['draft', 'pending_review', 'published', 'rejected']
+
+// HOSTAUTOPUB.1 — the statuses a host may publish from (POST .../submit).
+// 'pending_review' and 'rejected' are only ever rows written before
+// HOSTAUTOPUB.1; publishing one is the host's go-live, as for a draft.
+export const HOST_PUBLISHABLE_STATUSES = ['draft', 'rejected', 'pending_review']
 
 // Event kinds a host may create. Deliberately EXCLUDES 'lead_gen',
 // which is a UN1T-only acquisition surface — hosts must not be able
@@ -35,7 +46,7 @@ export const HOST_EVENT_STATUS_LABEL = {
 }
 
 // A host event is only publicly visible when it has been both
-// approved (status=published) AND left active. Defensive against a
+// published (status=published) AND left active. Defensive against a
 // missing/undefined status or a null event.
 export function eventIsPublic(event) {
   return !!event && event.active === true && event.status === 'published'
@@ -60,128 +71,97 @@ export function hostEventDefaults() {
 // EVENT-SLUG.1 — slugs come from `@/lib/event-slug` (place-date-time);
 // the name-based deriveSlug that lived here is gone.
 
-export const RE_REVIEW_REASONS = ['date', 'price', 'tiers', 'session_time', 'studio', 'studio_hours']
+// HOSTAUTOPUB.1 — an edit never changes a host event's status. The re-review
+// rule that lived here (reReviewReasons / computeEditTransition: a date, price,
+// tier, session time, studio or studio-hours change on a published event sent
+// it back to pending_review) is gone with the staff approval step: the PUT
+// route writes the edit and leaves the status where it was.
 
-export const RE_REVIEW_REASON_LABEL = {
-  date: 'the date',
-  price: 'the standard price',
-  tiers: 'a pricing tier',
-  session_time: "an existing session's start time",
-  studio: 'the studio it is held at',
-  studio_hours: 'how long it needs the studio',
+// HOSTSTUDIONOTICE.1 — the studio part of that rule comes back as a NOTICE,
+// never a check: staff are TOLD when a published host event starts to use a
+// studio, or uses its studio for longer (the link holds the studio's Shelly
+// timers on for the event: src/lib/shelly/studio-events.js). The save is never
+// blocked or changed by it. Same rules as SHELLYEVENTS.1/.2:
+//   'studio'       — linked INTO a studio, or moved to a different one. Moving
+//                    OUT (to "somewhere else", null) switches nothing on and
+//                    never counts. Judged only when `changes` carries the key.
+//   'studio_hours' — still linked, and a session now starts before the first
+//                    current start or after the last one, or the hold grows
+//                    (the studio's hold setting, or the event's own duration
+//                    when that is longer). A session inside the current hours,
+//                    a shorter duration and a removed session do not count.
+// An EXISTING session re-timed outside the current hours counts too (the old
+// session_time re-review caught that; it is gone).
+export const STUDIO_USE_REASONS = ['studio', 'studio_hours']
+
+const hhmm = (t) => String(t || '').slice(0, 5)
+const positiveMinutes = (v) => {
+  const n = Number(v)
+  return v != null && Number.isFinite(n) && n > 0 ? n : null
+}
+// Mirrors holdMinutes() in src/lib/shelly/studio-events.js (not imported:
+// this module also runs in the host's browser).
+const studioHold = (durationMinutes, studioHoldMinutes) =>
+  Math.max(positiveMinutes(studioHoldMinutes) ?? DEFAULT_EVENT_HOLD_MINUTES, positiveMinutes(durationMinutes) ?? 0)
+
+/**
+ * How a still-linked event's studio hours grow with an edit. Pure.
+ * @param {{ venue_location_id?: string|null, duration_minutes?: number|null, waves?: Array<{ start_time: string }> }} current
+ *   the row before the edit (waves: its sessions; HH:MM or HH:MM:SS)
+ * @param {{ venue_location_id?: string|null, duration_minutes?: number|null, session_times?: string[] }} changes
+ *   the edit: every session start time it leaves (new and existing)
+ * @param {{ studioHoldMinutes?: number|null }} [opts] the studio's hold setting
+ * @returns {{ earlier: string|null, later: string|null, longerHoldMinutes: number|null }}
+ *   the new first / last start time when it moved outward, the new hold when longer
+ */
+export function studioHoursGrowth(current, changes, { studioHoldMinutes = null } = {}) {
+  const none = { earlier: null, later: null, longerHoldMinutes: null }
+  const c = changes || {}
+  const linked = current?.venue_location_id != null
+    && !('venue_location_id' in c && c.venue_location_id == null)
+  if (!linked) return none
+  const before = (Array.isArray(current.waves) ? current.waves : []).map((w) => hhmm(w?.start_time)).filter(Boolean).sort()
+  const after = (Array.isArray(c.session_times) ? c.session_times : []).map(hhmm).filter(Boolean).sort()
+  const out = { ...none }
+  if (before.length > 0 && after.length > 0) {
+    if (after[0] < before[0]) out.earlier = after[0]
+    if (after[after.length - 1] > before[before.length - 1]) out.later = after[after.length - 1]
+  }
+  if ('duration_minutes' in c) {
+    const nextHold = studioHold(c.duration_minutes, studioHoldMinutes)
+    if (nextHold > studioHold(current.duration_minutes, studioHoldMinutes)) out.longerHoldMinutes = nextHold
+  }
+  return out
 }
 
-// SHELLYEVENTS.3 — an event holds its studio on for the studio's setting, or
-// for its own duration when that is longer (src/lib/shelly/studio-events.js).
-// The studio's setting is not known here (this module also runs in the host's
-// browser), so the rule below measures against the DEFAULT: a duration that
-// grows past the default hold and past what was approved can lengthen the
-// hold. Where the studio's setting is higher that asks for a review the hold
-// did not strictly need, which is the safe direction.
-const DEFAULT_STUDIO_HOLD_MINUTES = 120
-const studioHold = ({ duration_minutes: duration }) => {
-  const d = duration != null && Number(duration) > 0 ? Number(duration) : 0
-  return Math.max(DEFAULT_STUDIO_HOLD_MINUTES, d)
+/**
+ * Which studio-use changes an edit to a host event makes, in
+ * STUDIO_USE_REASONS order; [] when nothing studio-related grew. Pure: the
+ * caller decides it only matters for a PUBLISHED event.
+ */
+export function studioUseGrew(current, changes, opts = {}) {
+  const c = changes || {}
+  const studio = 'venue_location_id' in c
+    && c.venue_location_id != null
+    && c.venue_location_id !== (current?.venue_location_id ?? null)
+  const g = studioHoursGrowth(current || {}, c, opts)
+  const hit = { studio, studio_hours: !!(g.earlier || g.later || g.longerHoldMinutes) }
+  return STUDIO_USE_REASONS.filter((r) => hit[r])
 }
 
-// HOSTPORTAL.2 — the ONE rule for "this edit takes a published event off
-// sale", shared by the PUT route and the edit form's warning. Returns the
-// reasons, in RE_REVIEW_REASONS order; [] for anything that is not a
-// published event or not a customer-material edit.
-export function reReviewReasons(current, changes) {
-  if (current.status !== 'published') return []
-
-  const priceChanged =
-    'non_member_fee_cents' in changes &&
-    Number(changes.non_member_fee_cents) !== Number(current.non_member_fee_cents)
-
-  const dateChanged =
-    'race_date' in changes &&
-    String(changes.race_date || '') !== String(current.race_date || '')
-
-  // HOSTSERIES.1 — only an EXISTING session whose start time changes is
-  // customer-material: adding a session or removing one (a removal with live
-  // entries is refused by the sync, 409) harms no booking, so neither
-  // re-reviews. Waves are matched by id; a new one (no id) is ignored here.
-  const byId = (waves) => new Map((Array.isArray(waves) ? waves : []).filter((w) => w?.id).map((w) => [w.id, String(w.start_time || '').slice(0, 5)]))
-  const waveTimeChanged = 'waves' in changes && (() => {
-    const before = byId(current.waves)
-    for (const [id, time] of byId(changes.waves)) {
-      if (before.has(id) && before.get(id) !== time) return true
-    }
-    return false
-  })()
-
-  // TIERS.1 — a tier change is a price change.
-  // Compared in one key order: jsonb reorders object keys on the way back.
-  const tiersChanged = 'pricing_tiers' in changes
-    && JSON.stringify(canonicalTiers(changes.pricing_tiers)) !== JSON.stringify(canonicalTiers(current.pricing_tiers))
-
-  // SHELLYEVENTS.1 — moving a published event INTO a studio (or to a different
-  // one) is staff's to approve: the link holds that studio's Shelly timers on
-  // for the event (src/lib/shelly/studio-events.js), and the first review
-  // approved a different place. Moving it OUT to "somewhere else" switches
-  // nothing on, so it does not re-review. Judged only when the body carries
-  // the key (a form loaded before the picker existed sends none).
-  const studioChanged = 'venue_location_id' in changes
-    && changes.venue_location_id != null
-    && changes.venue_location_id !== (current.venue_location_id ?? null)
-
-  // SHELLYEVENTS.2 — an event already approved at a studio that now needs the
-  // studio for LONGER is staff's to approve too: a new session before the
-  // first or after the last one, or a duration longer than the default hold
-  // and longer than what was approved. A new session inside the approved
-  // hours, a shorter duration and a removed session do not.
-  const linked = current.venue_location_id != null
-    && !('venue_location_id' in changes && changes.venue_location_id == null)
-  const hhmm = (t) => String(t || '').slice(0, 5)
-  const approvedTimes = (Array.isArray(current.waves) ? current.waves : []).map((w) => hhmm(w?.start_time)).filter(Boolean).sort()
-  const outsideHours = approvedTimes.length > 0
-    && (Array.isArray(changes.new_session_times) ? changes.new_session_times : [])
-      .map(hhmm).filter(Boolean)
-      .some((t) => t < approvedTimes[0] || t > approvedTimes[approvedTimes.length - 1])
-  const longerHold = 'duration_minutes' in changes
-    && studioHold({ duration_minutes: changes.duration_minutes }) > studioHold(current)
-  const studioHoursChanged = linked && (outsideHours || longerHold)
-
-  const hit = { date: dateChanged, price: priceChanged, tiers: tiersChanged, session_time: waveTimeChanged, studio: studioChanged, studio_hours: studioHoursChanged }
-  return RE_REVIEW_REASONS.filter((r) => hit[r])
-}
-
-// The `changes` object computeEditTransition / reReviewReasons compare,
-// built from a HostEventSchema-shaped body (the validated input on the
-// server, the body about to be sent in the form): DB-column names, existing
-// sessions only (by id, HH:MM), a new session has no id and never re-reviews.
-export function editChangesFromInput(input) {
-  const sessions = Array.isArray(input.sessions) ? input.sessions : []
+/**
+ * The `changes` studioUseGrew compares, from a HostEventSchema-shaped body.
+ * duration_minutes is ALWAYS present, as the PUT route writes it
+ * (`input.duration_minutes ?? null`): no duration means the default hold.
+ */
+export function studioChangesFromInput(input) {
+  const i = input || {}
+  const sessions = Array.isArray(i.sessions) ? i.sessions : []
   return {
-    race_date: input.race_date,
-    non_member_fee_cents: input.ticket_price_cents,
-    pricing_tiers: input.pricing_tiers ?? null,
-    waves: sessions.filter((s) => s.id).map((s) => ({ id: s.id, start_time: s.start_time })),
-    ...('venue_location_id' in input ? { venue_location_id: input.venue_location_id ?? null } : {}),
-    // SHELLYEVENTS.2 — what the studio-hours rule reads.
-    new_session_times: sessions.filter((s) => !s.id).map((s) => s.start_time),
-    // ALWAYS present, as the PUT route writes it (`input.duration_minutes ??
-    // null`): a body that leaves the key out is written as "no duration",
-    // which is the 2 hour default hold and can be LONGER than what was approved.
-    duration_minutes: input.duration_minutes ?? null,
+    ...('venue_location_id' in i ? { venue_location_id: i.venue_location_id ?? null } : {}),
+    session_times: sessions.map((s) => s?.start_time).filter(Boolean),
+    duration_minutes: i.duration_minutes ?? null,
   }
-}
-
-// Decide what an edit does to a host event's status.
-//
-// Edits to a draft or rejected event never change status and never
-// need review — the host is still working on it. Only a *published*
-// event can be knocked back into review, and only when a
-// customer-material field changes: price, date, or a wave start time.
-// Cosmetic edits (description, copy, images) leave it published.
-export function computeEditTransition(current, changes) {
-  if (current.status !== 'published') {
-    return { status: current.status, reReview: false }
-  }
-  const reReview = reReviewReasons(current, changes).length > 0
-  return { status: reReview ? 'pending_review' : 'published', reReview }
 }
 
 // Strict input schema for a host-submitted event. `.strict()` rejects

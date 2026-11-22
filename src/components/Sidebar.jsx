@@ -441,22 +441,12 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
         </Link>
       )}
 
-      {/* FU-PLATFORM-LINK — master-only Platform console link.
-          Used to point ONLY at the external platform.un1tdublin.com
-          (the comment here previously mislabelled it "Sentinel ops
-          dashboard" / un1t-sentinel — it's actually the OLD, separate
-          un1t-platform app: a stale deployment holding the prod
-          service-role key, tagged for retirement in
-          docs/INFRA_BACKLOG.md #5). The in-app Platform console (8
-          pages — tenants/plans/domains/health/matrix/bridges/studio-
-          devices/webhook-dead-letter — src/lib/platform-nav.js) has
-          shipped at /admin/tenants since, but never got a sidebar
-          entry of its own, so masters had no persistent path to their
-          own console. Repointed internally; the legacy app keeps a
-          smaller secondary link below rather than being stranded,
-          since docs/INFRA_BACKLOG.md #5's "confirm nobody relies on
-          /cost, /alerts, /balances" step hasn't run yet. No feature
-          gate, no permission key, role-only, same as before. */}
+      {/* FU-PLATFORM-LINK — master-only link to the in-app Platform
+          console (tenants/plans/domains/health/matrix/bridges/studio-
+          devices/webhook-dead-letter, src/lib/platform-nav.js). The
+          secondary "Legacy platform" link to the old external
+          un1t-platform app was removed in RETIRE.2. Role-only, no
+          feature gate or permission key. */}
       {user?.role === 'master' && (
         <Link
           href="/admin/tenants"
@@ -466,18 +456,6 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
           <Activity size={18} />
           Platform console
         </Link>
-      )}
-      {user?.role === 'master' && (
-        <a
-          href="https://platform.un1tdublin.com"
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center gap-3 px-5 py-1.5 text-xs transition-colors text-un1t-muted hover:text-un1t-subtle hover:bg-un1t-border/30 border-l-2 border-transparent"
-          title="Legacy standalone ops app — pending retirement, see docs/INFRA_BACKLOG.md #5 (master-only, opens in new tab)"
-        >
-          <ExternalLink size={13} />
-          Legacy platform
-        </a>
       )}
 
       {/* Master-only impersonation picker. Visible while a real

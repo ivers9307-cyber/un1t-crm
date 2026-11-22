@@ -100,9 +100,9 @@ describe('announceBlockedReason', () => {
       expect(announceBlockedReason({ ...OK, status }, '2026-11-01')).toBe('Publish this event before emailing your list about it.')
     }
   })
-  it('says it is waiting for approval when pending review', () => {
+  it('asks a leftover pending_review event to be published (HOSTAUTOPUB.1)', () => {
     expect(announceBlockedReason({ ...OK, status: 'pending_review' }, '2026-11-01'))
-      .toBe('This event is waiting for approval. You can email your list once it is on sale.')
+      .toBe('Publish this event before emailing your list about it.')
   })
   it('says it is off sale when published but not active', () => {
     expect(announceBlockedReason({ ...OK, active: false }, '2026-11-01'))

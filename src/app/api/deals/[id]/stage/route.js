@@ -1,10 +1,9 @@
 // POST /api/deals/[id]/stage — manual stage move on a MANUAL board.
 //
-// WAITLIST.2. PUT /api/deals/[id] already resolves a location-scoped stage and
-// fires the STAGETRIG.1 sequence trigger, but it is gated by
-// authenticateApiKey() (src/lib/api-auth.js) — a Bearer per-org API key, the
-// integration path. A browser cannot call it, so it cannot back drag-drop.
-// This is its session-authed sibling.
+// WAITLIST.2. The session-authed move behind drag-drop on the web board and
+// the phone. (Its API-key sibling, PUT /api/deals/[id], was retired in
+// RETIRE.2.) It resolves a location-scoped stage and fires the STAGETRIG.1
+// sequence trigger.
 //
 // Authorization: session + the `pipeline` permission (the same gate as the
 // board), THEN an explicit in-location check on the deal. The service-role

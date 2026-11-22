@@ -217,7 +217,7 @@ const WEB_ONLY_OK = {
   equipment_admin: 'Register + checklist + interval setup is a desktop task; the mobile counterpart is equipment_inspect (the walk-round), which is matched via webEquivalent.',
   // email_inbox (EMAIL-TICKET-M.1 parity inversion): dropped from this list.
   // The mobile UI it was waiting on now exists — the Messages tab's email
-  // channel and the ticket thread ride /api/email/tickets*, and those routes
+  // channel and the ticket thread ride /api/email/mail* (was /api/email/tickets*), and those routes
   // gate on the TOP-LEVEL `email_inbox` key. Mobile therefore reads the same
   // top-level key via CROSS_PLATFORM_KEYS (like `bookkeeper`) rather than a
   // `.mobile`-namespaced counterpart, so the UI gate and the server gate

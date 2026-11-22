@@ -4,12 +4,11 @@ import {
   money, hours, days,
   roleSchema, locationRoleSchema, assignmentSchema,
   employmentTypeSchema,
-  dealStatusSchema,
   reportFrequencySchema,
   permissionsSchema, audienceFilterSchema,
   ADMIN_ROLES, MANAGER_ROLES, DEFAULT_COLOR,
   MASTER_ASSIGNABLE_ROLES, OWNER_ASSIGNABLE_ROLES,
-  passwordSchema, passwordRequirements, validatePasswordComplexity,
+  passwordRequirements, validatePasswordComplexity,
   corpPromoCreateSchema, corpPromoPatchSchema,
 } from './schemas.js'
 
@@ -78,11 +77,6 @@ describe('enum schemas', () => {
     expect(employmentTypeSchema.safeParse('fte').success).toBe(true)
     expect(employmentTypeSchema.safeParse('contractor').success).toBe(true)
     expect(employmentTypeSchema.safeParse('parttime').success).toBe(false)
-  })
-
-  it('dealStatusSchema only allows open/won/lost', () => {
-    expect(dealStatusSchema.safeParse('open').success).toBe(true)
-    expect(dealStatusSchema.safeParse('pending').success).toBe(false)
   })
 
   // ROSTER-FIX.5 — this enum, scheduled_reports' CHECK (mig 601) and the UI's
@@ -234,37 +228,27 @@ describe('password complexity', () => {
   // them past what the auth provider accepts.
 
   it('accepts a strong password', () => {
-    const r = passwordSchema.safeParse('Strong!Pass1')
-    expect(r.success).toBe(true)
+    expect(validatePasswordComplexity('Strong!Pass1')).toBeNull()
   })
 
   it('rejects too short', () => {
-    const r = passwordSchema.safeParse('Aa1!')
-    expect(r.success).toBe(false)
+    expect(validatePasswordComplexity('Aa1!')).toMatch(/8 characters/)
   })
 
   it('rejects without lowercase', () => {
-    const r = passwordSchema.safeParse('STRONG!PASS1')
-    expect(r.success).toBe(false)
-    expect(r.error?.issues.some(i => /lowercase/i.test(i.message))).toBe(true)
+    expect(validatePasswordComplexity('STRONG!PASS1')).toMatch(/lowercase/i)
   })
 
   it('rejects without uppercase', () => {
-    const r = passwordSchema.safeParse('strong!pass1')
-    expect(r.success).toBe(false)
-    expect(r.error?.issues.some(i => /uppercase/i.test(i.message))).toBe(true)
+    expect(validatePasswordComplexity('strong!pass1')).toMatch(/uppercase/i)
   })
 
   it('rejects without digit', () => {
-    const r = passwordSchema.safeParse('Strong!Pass!')
-    expect(r.success).toBe(false)
-    expect(r.error?.issues.some(i => /digit/i.test(i.message))).toBe(true)
+    expect(validatePasswordComplexity('Strong!Pass!')).toMatch(/digit/i)
   })
 
   it('rejects without symbol', () => {
-    const r = passwordSchema.safeParse('StrongPass123')
-    expect(r.success).toBe(false)
-    expect(r.error?.issues.some(i => /symbol/i.test(i.message))).toBe(true)
+    expect(validatePasswordComplexity('StrongPass123')).toMatch(/symbol/i)
   })
 
   it('passwordRequirements list lines up with the schema', () => {
@@ -288,7 +272,7 @@ describe('password complexity', () => {
 
   it('treats spaces and accented characters as valid symbols/letters', () => {
     // Defensive: don't break for non-ASCII users
-    expect(passwordSchema.safeParse('Café!2024').success).toBe(true)
+    expect(validatePasswordComplexity('Café!2024')).toBeNull()
   })
 })
 

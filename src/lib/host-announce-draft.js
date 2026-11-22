@@ -43,7 +43,6 @@ function joinTimes(times) {
 export function announceBlockedReason(event, today) {
   if (event?.race_date && today && String(event.race_date).slice(0, 10) < today) return 'This event has already taken place.'
   const status = event?.status
-  if (status === 'pending_review') return 'This event is waiting for approval. You can email your list once it is on sale.'
   if (status === 'published') {
     return event?.active === true ? null : 'This event is off sale. Put it back on sale before emailing your list about it.'
   }

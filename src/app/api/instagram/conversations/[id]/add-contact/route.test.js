@@ -75,3 +75,18 @@ describe('POST /api/instagram/conversations/[id]/add-contact', () => {
     expect(linkThreadToContact).not.toHaveBeenCalled()
   })
 })
+
+describe('SECGAPS.1 — the inbox key is judged at the conversation\'s studio', () => {
+  it('403 at a member studio without the key, nothing created', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: true } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: false } } }, LOC_A))
+    expect((await add(CONV_B)).status).toBe(403)
+    expect(db.tables.contacts).toEqual([])
+  })
+
+  it('creates at the thread\'s studio when the key is held there but not at the active studio', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: true } } }, LOC_A))
+    expect((await add(CONV_B)).status).toBe(200)
+    expect(db.tables.contacts).toHaveLength(1)
+    expect(db.tables.contacts[0].location_id).toBe(LOC_B)
+  })
+})

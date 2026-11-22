@@ -66,7 +66,7 @@ describe('POST /api/host/events/[id]/announce-draft', () => {
     const cases = [
       [{ status: 'draft' }, 'Publish this event before emailing your list about it.'],
       [{ status: 'rejected' }, 'Publish this event before emailing your list about it.'],
-      [{ status: 'pending_review' }, 'This event is waiting for approval. You can email your list once it is on sale.'],
+      [{ status: 'pending_review' }, 'Publish this event before emailing your list about it.'],
       [{ active: false }, 'This event is off sale. Put it back on sale before emailing your list about it.'],
     ]
     for (const [patch, error] of cases) {

@@ -12,12 +12,13 @@
 // Body: { assignment_id, time: 'HH:MM' }  (the studio's wall clock, on the
 //        shift's own date)
 //
-// The rules (future refused, a phone stamp never overwritten, a manual one
-// correctable) are src/lib/manual-arrival.js. The write is compare-and-set on
-// the stamp that was read, so a geofence arrival landing in between is never
-// overwritten. A staff_attendance_events row (source 'manual') records who
-// entered it; that row is bookkeeping, so its failure is logged and the
-// arrival still stands.
+// The rules (future refused; a manual stamp and, since ARRIVALFIX.2, a phone
+// (geofence) stamp both correctable) are src/lib/manual-arrival.js. The write
+// is compare-and-set on the stamp that was read (time and source), so an
+// arrival landing or changing in between is never overwritten. A
+// staff_attendance_events row (source 'manual') records who entered it and
+// the stamp it replaced; that row is bookkeeping, so its failure is logged
+// and the arrival still stands.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -69,15 +70,20 @@ export const PUT = withAuth(
     if (!decision.ok) return NextResponse.json({ success: false, error: decision.error }, { status: decision.status })
 
     // Compare-and-set on what was read: unstamped stays unstamped until now,
-    // a manual stamp is still the same manual stamp.
+    // a stamp (manual or phone) is still the same stamp from the same source.
     let write = db
       .from('shift_assignments')
       .update({ arrived_at: decision.arrivedAt, arrival_source: MANUAL_ARRIVAL_SOURCE })
       .eq('id', assignment.id)
       .neq('status', 'cancelled')
-    write = assignment.arrived_at
-      ? write.eq('arrived_at', assignment.arrived_at).eq('arrival_source', MANUAL_ARRIVAL_SOURCE)
-      : write.is('arrived_at', null)
+    if (assignment.arrived_at) {
+      write = write.eq('arrived_at', assignment.arrived_at)
+      write = assignment.arrival_source
+        ? write.eq('arrival_source', assignment.arrival_source)
+        : write.is('arrival_source', null)
+    } else {
+      write = write.is('arrived_at', null)
+    }
     const { data: updated, error: writeError } = await write.select('id')
     if (writeError) {
       logError('attendance', 'manual arrival write failed', { assignment_id, error: writeError.message })

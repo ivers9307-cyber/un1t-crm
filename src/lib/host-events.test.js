@@ -2,15 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   eventIsPublic,
   hostEventDefaults,
-  computeEditTransition,
-  reReviewReasons,
-  editChangesFromInput,
-  RE_REVIEW_REASONS,
-  RE_REVIEW_REASON_LABEL,
+  HOST_PUBLISHABLE_STATUSES,
+  HOST_EVENT_STATUSES,
   HOST_EVENT_KINDS,
   HostEventSchema,
 } from './host-events'
 import { ensureAnchorLocation, resolveMasterLocationId, resolveMasterLocationIdStrict } from './host-events'
+import { studioUseGrew, studioHoursGrowth, studioChangesFromInput, STUDIO_USE_REASONS } from './host-events'
 
 function fakeDb() {
   const calls = { inserted: null, updatedHost: null }
@@ -61,68 +59,6 @@ describe('hostEventDefaults', () => {
       payment_currency: 'EUR',
       capacity_mode: 'people',
     })
-  })
-})
-
-describe('computeEditTransition', () => {
-  const published = { status: 'published', race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }] }
-  it('keeps published + no re-review for a cosmetic-only edit', () => {
-    const t = computeEditTransition(published, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], description: 'new copy' })
-    expect(t).toEqual({ status: 'published', reReview: false })
-  })
-  it('re-reviews when price changes on a published event', () => {
-    const t = computeEditTransition(published, { race_date: '2026-09-01', non_member_fee_cents: 3000, waves: [{ id: 'w1', start_time: '10:00' }] })
-    expect(t).toEqual({ status: 'pending_review', reReview: true })
-  })
-  it('re-reviews when date changes on a published event', () => {
-    const t = computeEditTransition(published, { race_date: '2026-09-08', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }] })
-    expect(t).toEqual({ status: 'pending_review', reReview: true })
-  })
-  it('re-reviews when a wave start_time changes on a published event', () => {
-    const t = computeEditTransition(published, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '11:00' }] })
-    expect(t).toEqual({ status: 'pending_review', reReview: true })
-  })
-  // HOSTSERIES.1 — only an EXISTING session's time change re-reviews; adding
-  // or removing a session is additive and harms no booking.
-  it('adding a session to a published event keeps it published', () => {
-    const t = computeEditTransition(published, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }, { start_time: '14:00' }] })
-    expect(t).toEqual({ status: 'published', reReview: false })
-  })
-  it('removing a session from a published event keeps it published', () => {
-    const two = { ...published, waves: [{ id: 'w1', start_time: '10:00' }, { id: 'w2', start_time: '14:00' }] }
-    const t = computeEditTransition(two, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }] })
-    expect(t).toEqual({ status: 'published', reReview: false })
-  })
-  it('changing one existing session among several re-reviews', () => {
-    const two = { ...published, waves: [{ id: 'w1', start_time: '10:00' }, { id: 'w2', start_time: '14:00' }] }
-    const t = computeEditTransition(two, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }, { id: 'w2', start_time: '15:00' }] })
-    expect(t).toEqual({ status: 'pending_review', reReview: true })
-  })
-  // TIERS.1 — a tier change is a price change.
-  it('re-reviews when the pricing tiers change, not when they are the same list', () => {
-    const tiers = [{ id: 'a', name: 'Early', price_cents: 2500, capacity: 20 }]
-    const withTiers = { ...published, pricing_tiers: tiers }
-    const same = computeEditTransition(withTiers, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], pricing_tiers: [{ ...tiers[0] }] })
-    expect(same).toEqual({ status: 'published', reReview: false })
-    const changed = computeEditTransition(withTiers, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], pricing_tiers: [{ ...tiers[0], price_cents: 2000 }] })
-    expect(changed).toEqual({ status: 'pending_review', reReview: true })
-    const cleared = computeEditTransition(withTiers, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], pricing_tiers: null })
-    expect(cleared).toEqual({ status: 'pending_review', reReview: true })
-  })
-  it('the same tiers in jsonb\'s key order are not a change', () => {
-    const fromDb = [{ id: 'a', name: 'Early', ends_at: null, capacity: 20, starts_at: null, min_people: null, price_cents: 2500 }]
-    const fromForm = [{ id: 'a', name: 'Early', price_cents: 2500, capacity: 20, starts_at: null, ends_at: null, min_people: null }]
-    const t = computeEditTransition({ ...published, pricing_tiers: fromDb }, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], pricing_tiers: fromForm })
-    expect(t).toEqual({ status: 'published', reReview: false })
-  })
-  // QUESTIONS.1 — a questions change is not price or time: never a re-review.
-  it('changing the registration questions never re-reviews', () => {
-    const t = computeEditTransition({ ...published, registration_questions: null }, { race_date: '2026-09-01', non_member_fee_cents: 2500, waves: [{ id: 'w1', start_time: '10:00' }], registration_questions: [{ id: 'q-1', label: 'Size', type: 'text', required: false, per: 'entry' }] })
-    expect(t).toEqual({ status: 'published', reReview: false })
-  })
-  it('draft/rejected edits never trigger re-review and keep their status', () => {
-    expect(computeEditTransition({ status: 'draft', non_member_fee_cents: 2500 }, { non_member_fee_cents: 9999 })).toEqual({ status: 'draft', reReview: false })
-    expect(computeEditTransition({ status: 'rejected', non_member_fee_cents: 2500 }, { non_member_fee_cents: 9999 })).toEqual({ status: 'rejected', reReview: false })
   })
 })
 
@@ -276,150 +212,79 @@ describe('HostEventSchema sessions', () => {
   })
 })
 
-describe('reReviewReasons', () => {
-  const tiersA = [{ label: 'Early', price_cents: 2000, ends_at: '2026-08-01T10:00:00.000Z' }]
-  const tiersB = [{ label: 'Early', price_cents: 2200, ends_at: '2026-08-01T10:00:00.000Z' }]
-  const published = { status: 'published', race_date: '2026-09-01', non_member_fee_cents: 2500, pricing_tiers: tiersA, waves: [{ id: 'w1', start_time: '10:00:00' }] }
-  const same = { race_date: '2026-09-01', non_member_fee_cents: 2500, pricing_tiers: tiersA, waves: [{ id: 'w1', start_time: '10:00' }] }
-  const cases = [
-    ['date', { ...same, race_date: '2026-09-08' }],
-    ['price', { ...same, non_member_fee_cents: 3000 }],
-    ['tiers', { ...same, pricing_tiers: tiersB }],
-    ['session_time', { ...same, waves: [{ id: 'w1', start_time: '11:00' }] }],
-  ]
-  const quiet = [
-    ['cosmetic', { ...same, description: 'new copy' }],
-    ['added session', { ...same, waves: [...same.waves, { start_time: '14:00' }] }],
-    ['removed session', { ...same, waves: [] }],
-  ]
-
-  it('returns each reason alone for each of the four edits', () => {
-    for (const [reason, changes] of cases) expect(reReviewReasons(published, changes)).toEqual([reason])
+// HOSTAUTOPUB.1 — no approval step and no re-review.
+describe('HOSTAUTOPUB.1 — publishing with no review', () => {
+  it('a host publishes from draft, and from rows left rejected or pending_review', () => {
+    expect(HOST_PUBLISHABLE_STATUSES).toEqual(['draft', 'rejected', 'pending_review'])
+    expect(HOST_PUBLISHABLE_STATUSES).not.toContain('published')
   })
-  it('returns every reason in RE_REVIEW_REASONS order when all of them change', () => {
-    // studio_hours needs an event already linked to a studio, so the linked
-    // event moves to ANOTHER studio and takes a longer duration.
-    const linked = { ...published, venue_location_id: 'old-studio' }
-    const all = { race_date: '2026-09-08', non_member_fee_cents: 3000, pricing_tiers: tiersB, waves: [{ id: 'w1', start_time: '11:00' }], venue_location_id: 'a-studio', duration_minutes: 300 }
-    expect(reReviewReasons(linked, all)).toEqual(['date', 'price', 'tiers', 'session_time', 'studio', 'studio_hours'])
-    expect(reReviewReasons(linked, all)).toEqual(RE_REVIEW_REASONS)
+  it('keeps the four statuses valid (old rows stay readable; no migration)', () => {
+    expect(HOST_EVENT_STATUSES).toEqual(['draft', 'pending_review', 'published', 'rejected'])
   })
-  it('returns [] for a cosmetic edit, an added session and a removed session', () => {
-    for (const [, changes] of quiet) expect(reReviewReasons(published, changes)).toEqual([])
-  })
-  it('returns [] for any edit to a draft, in-review or rejected event', () => {
-    for (const status of ['draft', 'pending_review', 'rejected']) {
-      for (const [, changes] of cases) expect(reReviewReasons({ ...published, status }, changes)).toEqual([])
+  it('the re-review rule is gone from the module', async () => {
+    const mod = await import('./host-events')
+    for (const name of ['computeEditTransition', 'reReviewReasons', 'editChangesFromInput', 'RE_REVIEW_REASONS']) {
+      expect(mod[name], name).toBeUndefined()
     }
   })
-  it('agrees with computeEditTransition on every case above', () => {
-    for (const [, changes] of [...cases, ...quiet]) {
-      expect(computeEditTransition(published, changes).reReview).toBe(reReviewReasons(published, changes).length > 0)
-    }
-  })
-  it('has a label for every reason and no label without a reason', () => {
-    expect(Object.keys(RE_REVIEW_REASON_LABEL).sort()).toEqual([...RE_REVIEW_REASONS].sort())
-    expect(RE_REVIEW_REASON_LABEL.session_time).toBe("an existing session's start time")
+  it('public visibility is unchanged: published AND active only', () => {
+    expect(eventIsPublic({ status: 'published', active: true })).toBe(true)
+    expect(eventIsPublic({ status: 'published', active: false })).toBe(false)
+    expect(eventIsPublic({ status: 'pending_review', active: true })).toBe(false)
+    expect(eventIsPublic({ status: 'draft', active: true })).toBe(false)
   })
 })
 
-describe('editChangesFromInput', () => {
-  it('maps a validated body to the DB-column shape the transition compares', () => {
-    const input = {
-      race_date: '2026-09-01',
-      ticket_price_cents: 2500,
-      pricing_tiers: undefined,
-      sessions: [{ id: 'w1', start_time: '10:00', capacity: 5 }, { start_time: '14:00', capacity: 5 }],
-      description: 'ignored',
-    }
-    expect(editChangesFromInput(input)).toEqual({
-      race_date: '2026-09-01',
-      non_member_fee_cents: 2500,
-      pricing_tiers: null,
-      waves: [{ id: 'w1', start_time: '10:00' }],
-      // SHELLYEVENTS.2 — the sessions with no id yet, for the studio-hours rule.
-      new_session_times: ['14:00'],
-      // Always present, null when the body leaves it out (as the route writes it).
-      duration_minutes: null,
-    })
+describe('HOSTSTUDIONOTICE.1 — studioUseGrew (a notice, never a check)', () => {
+  const HATCH = 'aaaaaaaa-0000-4000-8000-000000000001'
+  const STILL = 'aaaaaaaa-0000-4000-8000-000000000002'
+  const linked = { venue_location_id: HATCH, duration_minutes: null, waves: [{ start_time: '10:00:00' }, { start_time: '12:00:00' }] }
+  const same = (over = {}) => ({ venue_location_id: HATCH, session_times: ['10:00', '12:00'], duration_minutes: null, ...over })
+
+  it('reasons come in one order', () => {
+    expect(STUDIO_USE_REASONS).toEqual(['studio', 'studio_hours'])
   })
-  it('tolerates a body with no sessions array', () => {
-    expect(editChangesFromInput({ race_date: '2026-09-01', ticket_price_cents: 0 }).waves).toEqual([])
+  it('linking an unlinked event to a studio is a studio change', () => {
+    expect(studioUseGrew({ venue_location_id: null, waves: [{ start_time: '10:00' }] }, { venue_location_id: HATCH, session_times: ['10:00'], duration_minutes: null })).toEqual(['studio'])
   })
-})
-
-describe('reReviewReasons — the studio an event is held at (SHELLYEVENTS.1)', () => {
-  const published = { status: 'published', race_date: '2026-12-05', non_member_fee_cents: 1000, pricing_tiers: null, waves: [], venue_location_id: null }
-  const same = { race_date: '2026-12-05', non_member_fee_cents: 1000, pricing_tiers: null, waves: [] }
-
-  it('moving a published event into a studio, or to another studio, goes back to review', () => {
-    expect(reReviewReasons(published, { ...same, venue_location_id: 'hatch' })).toEqual(['studio'])
-    expect(reReviewReasons({ ...published, venue_location_id: 'hatch' }, { ...same, venue_location_id: 'stillorgan' })).toEqual(['studio'])
-    expect(computeEditTransition(published, { ...same, venue_location_id: 'hatch' })).toEqual({ status: 'pending_review', reReview: true })
+  it('moving to a different studio is a studio change', () => {
+    expect(studioUseGrew(linked, same({ venue_location_id: STILL }))).toContain('studio')
   })
-
-  it('an unchanged studio, a move out to somewhere else, and a body without the key do not', () => {
-    expect(reReviewReasons({ ...published, venue_location_id: 'hatch' }, { ...same, venue_location_id: 'hatch' })).toEqual([])
-    expect(reReviewReasons({ ...published, venue_location_id: 'hatch' }, { ...same, venue_location_id: null })).toEqual([])
-    expect(reReviewReasons({ ...published, venue_location_id: 'hatch' }, same)).toEqual([])
+  it('moving OUT of a studio never counts, whatever else changes', () => {
+    expect(studioUseGrew(linked, same({ venue_location_id: null, session_times: ['06:00', '23:00'], duration_minutes: 600 }))).toEqual([])
   })
-
-  it('a draft never re-reviews', () => {
-    expect(reReviewReasons({ ...published, status: 'draft' }, { ...same, venue_location_id: 'hatch' })).toEqual([])
+  it('a body without the studio key judges no studio change but still the hours', () => {
+    expect(studioUseGrew(linked, { session_times: ['10:00', '12:00'], duration_minutes: null })).toEqual([])
+    expect(studioUseGrew(linked, { session_times: ['10:00', '14:00'], duration_minutes: null })).toEqual(['studio_hours'])
   })
-
-  it('editChangesFromInput carries the studio only when the body does', () => {
-    expect('venue_location_id' in editChangesFromInput({ sessions: [] })).toBe(false)
-    expect(editChangesFromInput({ sessions: [], venue_location_id: 'hatch' }).venue_location_id).toBe('hatch')
+  it('a session later than the last, or earlier than the first, grows the hours', () => {
+    expect(studioHoursGrowth(linked, same({ session_times: ['10:00', '12:00', '18:30'] }))).toEqual({ earlier: null, later: '18:30', longerHoldMinutes: null })
+    expect(studioHoursGrowth(linked, same({ session_times: ['07:00', '10:00', '12:00'] }))).toEqual({ earlier: '07:00', later: null, longerHoldMinutes: null })
+    expect(studioUseGrew(linked, same({ session_times: ['07:00', '10:00', '12:00'] }))).toEqual(['studio_hours'])
   })
-})
-
-describe('reReviewReasons — longer studio hours on a linked event (SHELLYEVENTS.2)', () => {
-  const linked = {
-    status: 'published', race_date: '2026-12-05', non_member_fee_cents: 1000, pricing_tiers: null,
-    venue_location_id: 'hatch', duration_minutes: 60,
-    waves: [{ id: 'w1', start_time: '10:30:00' }, { id: 'w2', start_time: '12:15:00' }],
-  }
-  const same = { race_date: '2026-12-05', non_member_fee_cents: 1000, pricing_tiers: null, waves: [{ id: 'w1', start_time: '10:30' }, { id: 'w2', start_time: '12:15' }] }
-
-  it('a new session before the first or after the last goes back to review', () => {
-    expect(reReviewReasons(linked, { ...same, new_session_times: ['14:00'] })).toEqual(['studio_hours'])
-    expect(reReviewReasons(linked, { ...same, new_session_times: ['09:00'] })).toEqual(['studio_hours'])
+  it('an existing session re-timed outside the hours counts too', () => {
+    expect(studioUseGrew(linked, same({ session_times: ['10:00', '15:00'] }))).toEqual(['studio_hours'])
   })
-
-  it('a new session inside the approved hours does not', () => {
-    expect(reReviewReasons(linked, { ...same, new_session_times: ['11:30'] })).toEqual([])
+  it('a session inside the current hours, or a removed one, does not count', () => {
+    expect(studioUseGrew(linked, same({ session_times: ['10:00', '11:00', '12:00'] }))).toEqual([])
+    expect(studioUseGrew(linked, same({ session_times: ['10:00'] }))).toEqual([])
   })
-
-  // SHELLYEVENTS.3 — the studio is held for its own setting, or for the
-  // event's duration when that is longer. The setting is not known here, so
-  // the rule measures against the 120 minute default.
-  it('a duration that grows past the default hold and past what was approved does; anything else does not', () => {
-    expect(reReviewReasons(linked, { ...same, duration_minutes: 180 })).toEqual(['studio_hours'])
-    expect(reReviewReasons(linked, { ...same, duration_minutes: 60 })).toEqual([])
-    expect(reReviewReasons(linked, { ...same, duration_minutes: 30 })).toEqual([])
-    // 60 -> 90 stays under the default hold, so the studio is on no longer.
-    expect(reReviewReasons(linked, { ...same, duration_minutes: 90 })).toEqual([])
-    expect(reReviewReasons({ ...linked, duration_minutes: null }, { ...same, duration_minutes: 150 })).toEqual(['studio_hours'])
-    // Approved at 240: 200 is shorter, 300 is longer.
-    expect(reReviewReasons({ ...linked, duration_minutes: 240 }, { ...same, duration_minutes: 200 })).toEqual([])
-    expect(reReviewReasons({ ...linked, duration_minutes: 240 }, { ...same, duration_minutes: 300 })).toEqual(['studio_hours'])
+  it('a longer hold counts; a shorter duration or one under the hold does not', () => {
+    expect(studioHoursGrowth(linked, same({ duration_minutes: 180 })).longerHoldMinutes).toBe(180)
+    expect(studioUseGrew(linked, same({ duration_minutes: 90 }))).toEqual([]) // under the 2 h default hold
+    expect(studioUseGrew({ ...linked, duration_minutes: 240 }, same({ duration_minutes: 180 }))).toEqual([])
   })
-
-  it('a body that leaves the duration out is judged as "no duration", which is never longer', () => {
-    expect(editChangesFromInput({ sessions: [] }).duration_minutes).toBeNull()
-    expect(reReviewReasons(linked, { ...same, duration_minutes: null })).toEqual([])
-    expect(reReviewReasons({ ...linked, duration_minutes: 240 }, { ...same, duration_minutes: null })).toEqual([])
+  it("measures the hold against the studio's own setting", () => {
+    expect(studioUseGrew(linked, same({ duration_minutes: 180 }), { studioHoldMinutes: 240 })).toEqual([])
+    expect(studioUseGrew(linked, same({ duration_minutes: 300 }), { studioHoldMinutes: 240 })).toEqual(['studio_hours'])
   })
-
-  it('an event held somewhere else, or moved out in the same save, never does', () => {
-    expect(reReviewReasons({ ...linked, venue_location_id: null }, { ...same, duration_minutes: 600, new_session_times: ['20:00'] })).toEqual([])
-    expect(reReviewReasons(linked, { ...same, venue_location_id: null, duration_minutes: 600 })).toEqual([])
+  it('an unlinked event that stays unlinked never counts', () => {
+    expect(studioUseGrew({ venue_location_id: null, waves: [{ start_time: '10:00' }] }, { venue_location_id: null, session_times: ['06:00'], duration_minutes: 600 })).toEqual([])
   })
-
-  it('editChangesFromInput carries the new session times and the duration', () => {
-    const changes = editChangesFromInput({ sessions: [{ id: 'w1', start_time: '10:30' }, { start_time: '14:00' }], duration_minutes: 90 })
-    expect(changes.new_session_times).toEqual(['14:00'])
-    expect(changes.duration_minutes).toBe(90)
+  it('studioChangesFromInput carries every session time, the studio only when sent, and always the duration', () => {
+    expect(studioChangesFromInput({ sessions: [{ id: 'w', start_time: '10:00' }, { start_time: '18:00' }] }))
+      .toEqual({ session_times: ['10:00', '18:00'], duration_minutes: null })
+    expect(studioChangesFromInput({ sessions: [], venue_location_id: null, duration_minutes: 60 }))
+      .toEqual({ venue_location_id: null, session_times: [], duration_minutes: 60 })
   })
 })

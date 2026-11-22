@@ -10,13 +10,14 @@
 // no-show is judged on it.
 // ARRIVALFIX.1 — a row with no arrival offers "Enter" (and a hand-entered one
 // "Edit"): a manager types the time the coach arrived, which is saved through
-// PUT /api/attendance/arrival. A phone (geofence) arrival is never editable.
+// PUT /api/attendance/arrival. ARRIVALFIX.2 — a phone (geofence) arrival
+// offers "Edit" too; the dialog says the phone's own record is kept.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Download, RefreshCw } from 'lucide-react'
 import { todayStrIn } from '@/lib/location-time'
 import { defaultAttendancePeriod, attendanceCsv } from '@/lib/attendance-report'
-import { manualArrivalAction } from '@/lib/manual-arrival'
+import { manualArrivalAction, isPhoneArrival } from '@/lib/manual-arrival'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 
@@ -257,7 +258,8 @@ export default function AttendanceReportClient({ activeLocationName, timeZone })
 }
 
 // ARRIVALFIX.1 — enter the time a coach arrived, at the studio's clock, on the
-// shift's own date. The server refuses a future time and a phone arrival.
+// shift's own date. The server refuses a future time. ARRIVALFIX.2 — a phone
+// arrival may be corrected; the dialog shows what the phone recorded.
 function ManualArrivalModal({ row, onClose, onSaved }) {
   const [time, setTime] = useState(() => (row.actual_start || row.effective_start || row.scheduled_start || '').slice(0, 5))
   const [saving, setSaving] = useState(false)
@@ -302,6 +304,11 @@ function ManualArrivalModal({ row, onClose, onSaved }) {
           className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
         />
         <p className="mt-2 text-xs text-un1t-subtle">Studio time. Shown on the report as a manual arrival.</p>
+        {isPhoneArrival(row) && (
+          <p className="mt-2 text-xs text-un1t-subtle">
+            The coach&apos;s phone recorded {row.actual_start.slice(0, 5)}. Saving replaces it on the report; the phone&apos;s own record is kept in the history.
+          </p>
+        )}
         {err && <p role="alert" className="mt-3 text-sm text-red-700">{err}</p>}
         <div className="mt-4 flex justify-end gap-2">
           <Button type="button" variant="secondary" size="sm" onClick={onClose}>Cancel</Button>

@@ -1,17 +1,26 @@
-// GET loads the host's own event for the edit form; PUT applies edits and the
-// price/date re-review transition. host_id === session.host.id or 404. (HOST-PORTAL.3)
+// GET loads the host's own event for the edit form; PUT applies edits.
+// host_id === session.host.id or 404. (HOST-PORTAL.3)
+// HOSTAUTOPUB.1 — an edit never changes the status: a published event stays
+// published whatever changes (the re-review transition is gone).
+// HOSTSTUDIONOTICE.1 — after a saved edit to a PUBLISHED event that links it to
+// a studio, moves it to another, or makes it use its studio for longer, the
+// org's admins are TOLD (push + email). Never a check: fire-and-forget, after
+// the save, and a failed notice never changes the response.
 // DELETE hard-deletes the host's own event, but ONLY when it is not published
 // (unpublish first — closes the register-vs-delete race) AND has zero
 // registrations — paid registrations mean money, and refunds are staff-only. (HOST-PORTAL.10)
 import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
-import { HostEventSchema, computeEditTransition, editChangesFromInput } from '@/lib/host-events'
+import { HostEventSchema, studioUseGrew, studioHoursGrowth, studioChangesFromInput } from '@/lib/host-events'
 import { eventSlug, uniqueEventSlug, shouldRederiveSlug } from '@/lib/event-slug'
 import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import { syncEventSessions, judgeSessions, sessionsFromWaves } from '@/lib/event-sessions'
 import { hostOwnsSeries } from '@/lib/event-series'
 import { judgeVenueStudio } from '@/lib/event-venue-studio'
+import { notifyAdminsEventStudioChange } from '@/lib/host-notifications'
+import { loadEventHoldMinutes } from '@/lib/event-hold'
+import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -19,7 +28,7 @@ export const dynamic = 'force-dynamic'
 async function loadOwn(db, session, id) {
   const { data } = await db
     .from('race_events')
-    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, venue_location_id, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, rating_email_subject, rating_email_intro, series_id, pricing_tiers, registration_questions, duration_minutes, race_waves ( id, start_time, capacity, label, display_order )')
+    .select('id, host_id, location_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, venue_location_id, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, rating_email_subject, rating_email_intro, series_id, pricing_tiers, registration_questions, duration_minutes, race_waves ( id, start_time, capacity, label, display_order )')
     .eq('id', id)
     .maybeSingle()
   if (!data || data.host_id !== session.host.id) return null
@@ -34,7 +43,7 @@ export async function GET(_request, props) {
   const event = await loadOwn(db, session, params.id)
   if (!event) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   // HOSTSERIES.1 — the form reads sessions (HH:MM), not raw waves.
-  const { race_waves: waves, ...rest } = event
+  const { race_waves: waves, location_id: _locationId, ...rest } = event
   return NextResponse.json({ success: true, data: { ...rest, sessions: sessionsFromWaves(waves) } })
 }
 
@@ -72,25 +81,8 @@ export async function PUT(request, props) {
     venuePatch = { venue_location_id: venue.venueLocationId }
   }
 
-  // HOSTSERIES.1 — normalise to DB-column names so computeEditTransition
-  // compares like-for-like: existing sessions by id (HH:MM on both sides;
-  // race_waves.start_time is a Postgres TIME, "HH:MM:SS" from PostgREST), a
-  // new session has no id and never re-reviews.
-  const changes = editChangesFromInput(input)
-  const currentForDiff = {
-    status: current.status,
-    race_date: current.race_date,
-    non_member_fee_cents: current.non_member_fee_cents,
-    pricing_tiers: current.pricing_tiers ?? null,
-    venue_location_id: current.venue_location_id ?? null,
-    duration_minutes: current.duration_minutes ?? null,
-    waves: sessionsFromWaves(current.race_waves).map((s) => ({ id: s.id, start_time: s.start_time })),
-  }
-  const transition = computeEditTransition(currentForDiff, changes)
-
   // HOSTSERIES.1 — judge the session change BEFORE the event row is written:
-  // a refused swap or removal must not leave a published event stamped back
-  // to review with its times unchanged.
+  // a refused swap or removal must not leave the event row half-edited.
   const judged = await judgeSessions(db, { eventId: current.id, sessions: input.sessions, currentWaves: current.race_waves || [] })
   if (!judged.ok) {
     const status = judged.error === 'write_failed' ? 500 : 409
@@ -128,8 +120,6 @@ export async function PUT(request, props) {
     rating_email_subject: input.rating_email_subject ?? null,
     rating_email_intro: input.rating_email_intro ?? null,
     ...('series_id' in input ? { series_id: input.series_id ?? null } : {}),
-    status: transition.status,
-    ...(transition.reReview ? { submitted_at: new Date().toISOString(), reviewed_at: null } : {}),
   }).eq('id', current.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
@@ -140,7 +130,51 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: synced.error, message: synced.message, session_time: synced.session_time ?? null }, { status })
   }
 
-  return NextResponse.json({ success: true, data: { id: current.id, status: transition.status, reReview: transition.reReview } })
+  // HOSTSTUDIONOTICE.1 — tell staff when a published event's studio use grew.
+  if (current.status === 'published') {
+    await noticeStudioChange(db, { session, current, input, venuePatch })
+  }
+
+  return NextResponse.json({ success: true, data: { id: current.id, status: current.status } })
+}
+
+// Fire-and-forget: never throws, never changes the save.
+async function noticeStudioChange(db, { session, current, input, venuePatch }) {
+  try {
+    const changes = studioChangesFromInput(input)
+    // The judged studio, not the raw body (same value when judged ok).
+    if ('venue_location_id' in venuePatch) changes.venue_location_id = venuePatch.venue_location_id
+    const before = {
+      venue_location_id: current.venue_location_id ?? null,
+      duration_minutes: current.duration_minutes ?? null,
+      waves: current.race_waves || [],
+    }
+    // The hold is the studio's own setting; an unread setting falls back to
+    // the default (a notice, so the default's direction is harmless).
+    let studioHoldMinutes = null
+    if (before.venue_location_id && !('venue_location_id' in changes && changes.venue_location_id !== before.venue_location_id)) {
+      const hold = await loadEventHoldMinutes(db, before.venue_location_id)
+      if (hold.ok) studioHoldMinutes = hold.minutes
+      else logWarn('host-event-studio-notice', 'hold read failed; using the default', { err: hold.error })
+    }
+    const reasons = studioUseGrew(before, changes, { studioHoldMinutes })
+    if (reasons.length === 0) return
+    const growth = studioHoursGrowth(before, changes, { studioHoldMinutes })
+    const studioId = changes.venue_location_id ?? before.venue_location_id
+    await notifyAdminsEventStudioChange({
+      db,
+      event: { id: current.id, name: input.name || current.name, location_id: current.location_id ?? null },
+      host: session.host,
+      orgId: session.host.organization_id,
+      reasons,
+      growth,
+      studioId,
+      previousStudioId: reasons.includes('studio') ? before.venue_location_id : null,
+      sessionTimes: changes.session_times,
+    })
+  } catch (e) {
+    logError('host-event-studio-notice', 'notify admins failed', { err: e })
+  }
 }
 
 export async function DELETE(_request, props) {
