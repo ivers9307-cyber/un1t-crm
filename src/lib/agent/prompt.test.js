@@ -1191,6 +1191,11 @@ describe('what is on offer right now (MIAPAGES.1)', () => {
     expect(GIVING_RULE).toContain('here or at another studio')
     expect(GIVING_RULE).toContain('when')
     expect(EVENT_FACTS_RULE).toContain('Never guess')
+    // MIAEVENTREREAD.1 — a tool result is not kept between messages: she answered
+    // "what was done for charity?" from nothing while the description held the answer.
+    expect(EVENT_FACTS_RULE).toMatch(/^- Call list_upcoming_events before you answer anything about an event/)
+    expect(EVENT_FACTS_RULE).toContain('even when you used it earlier in this conversation')
+    expect(EVENT_FACTS_RULE).toContain('answer from its description')
     expect(EVENT_FACTS_RULE).toContain('raffle_tickets')
     expect(EVENT_FACTS_RULE).toContain('raffle_closes_label is when the raffle closes, not when donations close')
     expect(EVENT_FACTS_RULE).toContain('raffles_unreadable')
