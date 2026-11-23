@@ -67,7 +67,7 @@ export const EVENT_TOOLS = [
       'whose online raffle or donation page is open and which are not in the events list. Each has the url of its page, which is the link to send. ' +
       'Copy raffle_closes_label exactly as written. ' +
       'Every event carries what its own page says: its description and, for a charity event, charity, donations_open and, ' +
-      'when a raffle is selling, raffle_tickets (the ticket prices) and raffle_closes_label. That is all there is to say about an event.',
+      'when a raffle is selling, raffle_tickets (the ticket prices) and raffle_closes_label. That is all there is to say about an event. Call this before you answer any question about an event, a charity day, a raffle or donating, every time: its result is not kept between messages.',
     input_schema: { type: 'object', properties: {} },
   },
   {

@@ -446,3 +446,11 @@ describe('list_upcoming_events · honest about sign-up and failed reads (MIAEVEN
     expect(db.eqs).toContainEqual(['status', 'published'])
   })
 })
+
+describe('list_upcoming_events description (MIAEVENTREREAD.1)', () => {
+  it('tells Mia to call it again for every question about an event', () => {
+    const d = EVENT_TOOLS.find((t) => t.name === 'list_upcoming_events').description
+    expect(d).toContain('Call this before you answer any question about an event')
+    expect(d).toContain('its result is not kept between messages')
+  })
+})
