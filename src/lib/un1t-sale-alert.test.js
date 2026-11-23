@@ -55,7 +55,7 @@ describe('un1tTransactionIsNewSale', () => {
 function stub(result) {
   const calls = []
   const q = { calls }
-  for (const m of ['select', 'eq', 'in', 'gte', 'order', 'range']) q[m] = (...a) => { calls.push([m, ...a]); return q }
+  for (const m of ['select', 'eq', 'in', 'gt', 'gte', 'order', 'range']) q[m] = (...a) => { calls.push([m, ...a]); return q }
   q.then = (res, rej) => Promise.resolve(result).then(res, rej)
   return q
 }
@@ -77,6 +77,8 @@ describe('alertUn1tSales', () => {
     expect(calls).toContainEqual(['eq', 'location_id', 'hatch'])
     expect(calls).toContainEqual(['gte', 'remote_created_at', '2026-11-24T12:00:00.000Z'])
     expect(calls.some((c) => c[0] === 'order')).toBe(true)
+    expect(calls).toContainEqual(['in', 'type', ['one_time', 'sub_initial']])
+    expect(calls).toContainEqual(['gt', 'amount_cents', 0])
     expect(calls).toContainEqual(['range', 0, 199])
   })
 

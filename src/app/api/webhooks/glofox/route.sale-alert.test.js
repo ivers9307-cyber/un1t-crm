@@ -1,9 +1,4 @@
-// SALEALERT.1 — the Glofox webhook hands each INVOICE_UPDATED to the sale alert
-// (matched or not) without changing its answer.
-// GLOFOXSIBLING.1 — a Glofox member whose one CRM contact lives at a sibling
-// studio of the same organisation. Before: the studio-scoped lookup missed,
-// every event was contact_not_found, and a MEMBER_CREATED whose insert the
-// org email index refused was ALSO contact_not_found, with nothing logged.
+// SALEALERT.1 — the Glofox webhook hands each INVOICE_UPDATED to the sale alert (matched or not) without changing its answer.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))

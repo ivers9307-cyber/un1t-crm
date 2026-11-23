@@ -8,6 +8,7 @@ vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() 
 
 import { notifyNewSale } from './sale-alert'
 import { logError } from './log'
+import { parseInvoicePayload } from './glofox-invoices'
 import { glofoxInvoiceIsNewSale, glofoxInvoiceItemName, alertGlofoxInvoiceSale } from './glofox-sale-alert'
 
 const item = (sub_type, name, unit_price = 5000, type = 'MEMBERSHIPS') => ({ name, type, quantity: 1, sub_type, unit_price, gross_amount: unit_price, applied_taxes: [], applied_discounts: [] })
@@ -23,12 +24,7 @@ const invoice = (over = {}) => ({
   },
 })
 
-const parsedOf = (payload) => {
-  const p = payload.Payload
-  const subs = [...new Set((p.line_items || []).map((l) => l.sub_type))].sort().join(',') || null
-  return { id: p.id, status: p.status, amount_cents: p.total, payment_method: p.payment_method, line_item_subtypes: subs }
-}
-const ringsFor = (over) => glofoxInvoiceIsNewSale(parsedOf(invoice(over)))
+const ringsFor = (over) => glofoxInvoiceIsNewSale(parseInvoicePayload(invoice(over)))
 
 describe('glofoxInvoiceIsNewSale', () => {
   it('a paid class pack (UPFRONT_PAYMENT, card) rings', () => {

@@ -11,7 +11,7 @@
 // NSF recoveries are none of those, so they never ring. A CRM trial or promo
 // grant is bought as complimentary at €0, which both checks reject. The grant
 // stores its Glofox invoice id only inside a jsonb column with no index, so no
-// extra lookup is made (see the report).
+// lookup against CRM rows is made; the complimentary and amount checks cover it.
 
 import { notifyNewSale } from './sale-alert'
 import { parseInvoicePayload } from './glofox-invoices'

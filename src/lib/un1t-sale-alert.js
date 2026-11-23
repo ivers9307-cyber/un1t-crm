@@ -62,6 +62,8 @@ export async function alertUn1tSales(db, { locationId, locationName, nowMs = Dat
     const { data, error } = await db.from('un1t_transactions').select(TX_COLS)
       .eq('location_id', locationId)
       .gte('remote_created_at', new Date(fromMs).toISOString())
+      .in('type', SALE_TYPES)
+      .gt('amount_cents', 0)
       .order('remote_created_at', { ascending: true })
       .order('un1t_id', { ascending: true })
       .range(0, CANDIDATE_CAP - 1)
