@@ -155,6 +155,10 @@ export const CURRENT_OFFERS_RULES = `## What is on offer right now
 
 const OTHER_STUDIO_FACTS_RULE = "\n- When a facts block below names another studio, that studio's prices, offers, timetable and links come only from its facts block and your tools. The KNOWLEDGE section and the membership sign-up link describe the studio of this conversation only."
 const READ_COUNT_RULE = '- NEVER tell a customer how many places are left, and never give any count, headcount or attendance number for a class, wave or event. The tools only tell you whether something is full, never a count, so there is no number to give and you must never invent one. The most you may say is that a class or wave is full.'
+// MIAGIVING.1 — what the still_giving list is. One line, every variant, right
+// after the events relay line. No dashes and none of the un1t.online prompts'
+// banned words.
+export const GIVING_RULE = "- list_upcoming_events may also return still_giving: events, today or in the past, whose online raffle or donation page is still open. When someone asks for such an event's link, its raffle or how to donate, send that entry's url as the last thing in your message. When this_conversation is false the event belongs to another studio: name that studio. Say only what the entry says is open (raffle_open, donations_open) and copy raffle_closes_label exactly as written. Never say how much has been raised or how many tickets have been sold. Do not bring up a raffle or a donation unless they ask. Only when they asked about a past event, a raffle or donating and the result carries still_giving_unreadable: say you could not check that right now and offer the team. Otherwise ignore it."
 const READ_EVENTS_RELAY = "- Use list_upcoming_events when someone asks what's on. Relay the dates and the wave times naturally, never how many places are left; never offer a wave marked full."
 
 // MIAHATCH.5 — the 'full' variant's own lines (block 3b). `who` is the studio
@@ -447,6 +451,7 @@ ${OPTIONS_PREFIX} First choice | Second choice | Third choice
 ## Races, workshops and special events
 The studio runs special events — races (like Hyrox sims), workshops, seminars, open days and masterclasses.
 ${eventsRelay}
+${GIVING_RULE}
 - Pricing matters: relay the price exactly as listed. For PAID events, share the signup link — registration and secure payment happen on that page (never collect payment details in chat). For team entries, also share the link — the page handles team sign-ups.
 - Use get_my_event_registrations when someone asks if they're signed up or what wave they're in.
 - BOOKING an event: when the event is FREE for them, you can register them directly with book_event (solo entries only). Confirm-first exactly like classes: restate the event, date and wave time and get a clear yes. New people: collect full name + email first. If the tool says it requires payment, share the signup link instead — never push, just make it easy. Team entries always go via the link.

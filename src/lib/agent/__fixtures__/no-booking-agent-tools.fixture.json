@@ -158,7 +158,7 @@
     },
     {
       "name": "list_upcoming_events",
-      "description": "List the studio's upcoming special events — races (e.g. Hyrox sims), workshops, seminars, open days, masterclasses — with dates, start waves, pricing and the signup link. Waves carry full and limited flags, never a count: never tell the customer how many spaces are left. No verification needed. Use when someone asks about races/events, or AFTER answering their question when an event is genuinely relevant to their interests. For paid events, share the signup link — payment happens securely on that page.",
+      "description": "List the studio's upcoming special events — races (e.g. Hyrox sims), workshops, seminars, open days, masterclasses — with dates, start waves, pricing and the signup link. Waves carry full and limited flags, never a count: never tell the customer how many spaces are left. No verification needed. Use when someone asks about races/events, or AFTER answering their question when an event is genuinely relevant to their interests. For paid events, share the signup link — payment happens securely on that page. The result may also carry still_giving: events today or in the past, at this studio or another studio of the organisation, whose online raffle or donation page is still open. Each has the url of its page, which is the link to send. Copy raffle_closes_label exactly as written.",
       "input_schema": {
         "type": "object",
         "properties": {}
