@@ -121,10 +121,14 @@ export const PILES = Object.freeze([
   { key: 'review', label: 'To review' },
   { key: 'ready', label: 'Ready' },
   { key: 'aside', label: 'Duplicates and unreadable' },
+  // INVSCREEN.2 — what the reader set aside as not being a bill at all.
+  { key: 'not_invoice', label: 'Not an invoice' },
 ])
 
-/** Whether a row belongs in a pile. 'review' is everything not set aside; 'ready' is part of it. */
+/** Whether a row belongs in a pile. 'review' is every bill not set aside; 'ready' is part of it. */
 export function inPile(row, pile) {
+  if (pile === 'not_invoice') return row?.status === 'not_invoice'
+  if (row?.status === 'not_invoice') return false
   if (pile === 'aside') return isSetAside(row)
   if (pile === 'ready') return isReady(row)
   return !isSetAside(row)
@@ -137,5 +141,16 @@ export function pileCounts(rows) {
     review: list.filter((r) => inPile(r, 'review')).length,
     ready: list.filter((r) => inPile(r, 'ready')).length,
     aside: list.filter((r) => inPile(r, 'aside')).length,
+    not_invoice: list.filter((r) => inPile(r, 'not_invoice')).length,
   }
+}
+
+/**
+ * INVSCREEN.2 — what to offer on a row nobody has read yet and that is not
+ * queued: it is waiting for the reader (the sweeper picks it up), and a person
+ * can read it now. There is no separate quality approval any more.
+ */
+export function isWaitingToBeRead(row) {
+  if (!row || !UNREAD_STATUSES.has(row.status)) return false
+  return !row.analysis_queued_at && !unreadPanel(row)
 }
