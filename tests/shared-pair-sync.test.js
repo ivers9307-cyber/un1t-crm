@@ -174,7 +174,7 @@ const PAIRS = {
     mode: 'reexport',
     shared: 'shared/agent-request-failure.js',
     web: 'src/lib/approvals/agent-request-why.js',
-    webOnly: ['whyFlagged', 'approvalGrantsTrialCredit', 'accountSummaryLine', 'accountMismatchWarning', 'customerWords'],
+    webOnly: ['whyFlagged', 'approvalGrantsTrialCredit', 'accountSummaryLine', 'accountMismatchWarning', 'customerWords', 'lookupLabel', 'accountLineFor'],
     why:
       'C85 (c) moved failureExplanation (a failed approval\'s code in the operator\'s words) to shared/ so the phone\'s ' +
       'post-approve alert and thread approval card stop printing the raw code; agent-request-why.js re-exports it for ' +
