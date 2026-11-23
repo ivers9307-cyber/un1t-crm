@@ -109,12 +109,27 @@ describe('rematchUnmatchedSuppliers', () => {
   it('leaves alone rows checked after the last change, rows with no new-supplier flag, rows never prepared and other statuses', async () => {
     const db = make([
       row('fresh', { prepared_at: '2026-11-23T09:30:00.000Z' }),
-      row('known', { review_reasons: ['no_vat_rate'] }),
+      row('known', { review_reasons: ['totals_mismatch'] }),
       row('legacy', { prepared_at: null }),
       row('approved', { status: 'data_approved' }),
     ])
     expect(await rematchUnmatchedSuppliers(db)).toEqual({ checked: 0, matched: 0 })
     for (const id of ['fresh', 'known', 'legacy', 'approved']) expect(get(db, id).extracted_fields.xero_contact_ref).toBeUndefined()
+  })
+
+  it('VATRATE.1: a row flagged only for its VAT rate is looked at again and its rate derived', async () => {
+    const rates = [
+      { location_id: A, tax_type: 'TAX004', name: 'Sales tax - 23%', effective_rate: 23, status: 'ACTIVE', can_apply_to_expenses: true },
+      { location_id: A, tax_type: 'TAX001', name: 'Purchases tax - 23%', effective_rate: 23, status: 'ACTIVE', can_apply_to_expenses: true },
+    ]
+    const fields = { ...row('q1').extracted_fields, subtotal: 100, tax_amount: 23, total: 123, xero_contact_ref: { kind: 'existing', xero_contact_id: 'c1', name: 'Acme Supplies' }, xero_account_id: 'acc-1' }
+    const db = createFakeDb({ tables: {
+      xero_connections: [conn(A, SYNCED)], xero_contacts: [contact], xero_tax_rates: rates, xero_supplier_defaults: [],
+      invoices_queue: [row('q1', { review_reasons: ['no_vat_rate'], extracted_fields: fields })],
+    } })
+    expect(await rematchUnmatchedSuppliers(db)).toEqual({ checked: 1, matched: 1 })
+    expect(get(db, 'q1').extracted_fields).toMatchObject({ tax_type: 'TAX001', tax_type_source: 'derived' })
+    expect(get(db, 'q1').review_reasons).toEqual([])
   })
 
   it('does nothing for a studio with no Xero connection', async () => {

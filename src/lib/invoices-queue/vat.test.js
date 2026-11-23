@@ -98,3 +98,39 @@ describe('hasResolvedVatRate', () => {
     expect(hasResolvedVatRate(null)).toBe(false)
   })
 })
+
+describe('VATRATE.1 — a sales and a purchases rate at the same percentage', () => {
+  const r = (tax_type, name, effective_rate, over = {}) => ({ tax_type, name, effective_rate, status: 'ACTIVE', can_apply_to_expenses: true, ...over })
+  const bill = { subtotal: 100, tax_amount: 23, total: 123 }
+
+  it('takes the one rate named as a purchases rate', () => {
+    const rates = [r('OUTPUT', 'Standard 23%', 23), r('INPUT', 'Purchases Standard 23%', 23), r('TAX001', 'Sales Standard 23.00%', 23)]
+    const out = resolveBillTaxType(bill, rates)
+    expect(out).toMatchObject({ taxType: 'INPUT', status: 'matched' })
+    expect(out.candidates).toHaveLength(3)
+  })
+
+  it('reads "Purchases tax - 23%" and a singular "Purchase" the same way', () => {
+    expect(resolveBillTaxType(bill, [r('TAX004', 'Sales tax - 23%', 23), r('TAX001', 'Purchases tax - 23%', 23)])).toMatchObject({ taxType: 'TAX001', status: 'matched' })
+    expect(resolveBillTaxType(bill, [r('A', 'Sale 23', 23), r('B', 'purchase 23', 23)])).toMatchObject({ taxType: 'B', status: 'matched' })
+  })
+
+  it('stays ambiguous with two purchases rates, with none, or with a name that says both', () => {
+    expect(resolveBillTaxType(bill, [r('A', 'Purchases 23%', 23), r('B', 'Purchases (EU) 23%', 23)])).toMatchObject({ taxType: null, status: 'ambiguous' })
+    expect(resolveBillTaxType(bill, [r('A', 'Standard 23%', 23), r('B', 'Other 23%', 23)])).toMatchObject({ taxType: null, status: 'ambiguous' })
+    expect(resolveBillTaxType(bill, [r('A', 'Purchases 23%', 23), r('B', 'Imports 23%', 23)])).toMatchObject({ taxType: null, status: 'ambiguous' })
+    expect(resolveBillTaxType(bill, [r('A', 'Purchases 23%', 23), r('B', 'Sales 23%', 23), r('C', 'Reverse charge 23%', 23)])).toMatchObject({ taxType: null, status: 'ambiguous' })
+    expect(resolveBillTaxType(bill, [r('A', 'Sales and Purchases 23%', 23), r('B', 'Standard 23%', 23)])).toMatchObject({ taxType: null, status: 'ambiguous' })
+  })
+
+  it('never reaches for an archived or non-expense purchases rate', () => {
+    const rates = [r('A', 'Sales 23%', 23), r('B', 'Standard 23%', 23), r('C', 'Purchases 23%', 23, { status: 'ARCHIVED' }), r('D', 'Purchases 23%', 23, { can_apply_to_expenses: false })]
+    expect(resolveBillTaxType(bill, rates)).toMatchObject({ taxType: null, status: 'ambiguous' })
+  })
+
+  it('a mixed-rate bill still matches nothing', () => {
+    const rates = [r('A', 'Sales 23%', 23), r('B', 'Purchases 23%', 23)]
+    expect(resolveBillTaxType({ subtotal: 100, tax_amount: 16.3, total: 116.3 }, rates)).toMatchObject({ taxType: null, status: 'unmatched' })
+  })
+})
+

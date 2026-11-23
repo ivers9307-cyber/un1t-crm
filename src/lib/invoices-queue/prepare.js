@@ -116,7 +116,7 @@ function isEarlier(candidate, row) {
 async function loadTaxRates(db, locationId) {
   const { data, error } = await db
     .from('xero_tax_rates')
-    .select('tax_type, effective_rate, status, can_apply_to_expenses')
+    .select('tax_type, name, effective_rate, status, can_apply_to_expenses')
     .eq('location_id', locationId)
   if (error) {
     logWarn(MODULE, 'could not load tax rates', { location_id: locationId, error: error.message })
