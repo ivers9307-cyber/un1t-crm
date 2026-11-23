@@ -48,6 +48,8 @@ import {
   triggerSequencesForMembershipStateChange,
 } from '@/lib/sequences/triggers'
 import { applyInvoiceWebhook } from '@/lib/glofox-invoices'
+import { alertGlofoxInvoiceSale } from '@/lib/glofox-sale-alert'
+import { ringSaleAfterResponse } from '@/lib/sale-alert'
 import { applyServiceWebhook } from '@/lib/glofox-services'
 import { applyMembershipPauseWindow } from '@/lib/glofox-membership'
 import { maybeEnrolDunning, exitDunningForContact, dunningActionFor } from '@/lib/dunning'
@@ -358,6 +360,11 @@ export async function POST(request) {
     }
 
     if (!contact) {
+      // SALEALERT.1 — a purchase by a member we hold no contact for is still a
+      // sale; ring for it, after the response, with no contact.
+      if (String(parsed.eventType || '').toUpperCase() === 'INVOICE_UPDATED') {
+        ringSaleAfterResponse(() => alertGlofoxInvoiceSale(db, { locationId: creds.locationId, payload, contact: null }))
+      }
       await markEvent(db, attemptCtx, 'contact_not_found', null, null)
       return NextResponse.json({
         success: true,
@@ -382,6 +389,9 @@ export async function POST(request) {
         })
         ltvResult = { ok: false, reason: 'threw', error: e?.message }
       }
+      // SALEALERT.1 — ring for a new purchase after the response; a repeat
+      // delivery is absorbed by the sale:glofox:<invoice id> dedup key.
+      ringSaleAfterResponse(() => alertGlofoxInvoiceSale(db, { locationId: creds.locationId, payload, contact }))
     }
 
     // 7b. GLOFOX-REACTIVE / DUNNING.1 — event-driven dunning off the invoice
