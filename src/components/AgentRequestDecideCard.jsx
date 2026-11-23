@@ -12,12 +12,12 @@
 // said, and the contact's email/phone for a quick Glofox lookup.
 
 import { useRef, useState } from 'react'
-import { Sparkles, Copy, Check } from 'lucide-react'
+import { Sparkles, Globe, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui'
 import StudioLink from '@/components/approvals/StudioLink'
 import CustomerCardShell from '@/components/approvals/CustomerCardShell'
 import { DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
-import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
+import { whyFlagged, customerWords, lookupLabel } from '@/lib/approvals/agent-request-why'
 // EVENT-MOVE.7 — label, failure line and done line prefer the web-only
 // event_move module and fall through to the shared helpers for other kinds.
 import { approvalKindLabel, explainFailure, eventMoveDoneLine, EVENT_MOVE_KIND_CHIP } from '@/lib/approvals/event-move-card'
@@ -70,6 +70,13 @@ function notifiedSentence(notified) {
   return ' The member may NOT have been told. Please follow up.'
 }
 
+// CARDHATCH.1 — a booking the customer made on a public page (details.source
+// 'start_funnel': /start, a /trial or promo claim) is not Mia's, so its badge
+// must not say so. Mia's own cards carry origin 'mia'.
+export function isWebsiteRequest(item) {
+  return item?.details?.source === 'start_funnel' && item?.details?.origin !== 'mia'
+}
+
 // What actually happened, in the operator's terms, once the PATCH returns.
 export function outcomeLine(status, item, executed, notified = null, plannedEndDate = null) {
   const hasThread = !!item.conversationId
@@ -88,6 +95,13 @@ export function outcomeLine(status, item, executed, notified = null, plannedEndD
     if (notified?.reason === 'no_email') return { tone: 'ok', text: 'Recorded as booked. The customer has NOT been emailed (no email address), so make sure they know.' }
     if (notified?.reason === 'email_blocked') return { tone: 'ok', text: 'Recorded as booked. The customer has NOT been emailed (their address bounced or they opted out), so make sure they know.' }
     return { tone: 'ok', text: 'Recorded as booked. The customer has NOT been emailed, so make sure they know.' }
+  }
+  // CARDHATCH.1 — a un1t.online card runs on un1t.online, never Glofox. A
+  // record-only approval (staff did it by hand) sent nothing there.
+  if (status === 'actioned' && item.details?.provider === 'un1t_online' && (item.kind === 'class_booking' || item.kind === 'class_cancellation')) {
+    if (executed?.record_only) return { tone: 'ok', text: 'Recorded as booked. Nothing was sent to un1t.online.' }
+    const did = item.kind === 'class_cancellation' ? 'Cancelled' : item.details?.move_from_booking_id ? 'Moved' : 'Booked'
+    return { tone: 'ok', text: `Done. ${did} in un1t.online${hasThread ? ' and the customer was told in-thread' : ''}.` }
   }
   // EVENT-MOVE.7 — an event move runs on our own events, not Glofox.
   if (status === 'actioned' && item.kind === 'event_move') {
@@ -159,6 +173,7 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
 
   const kindLabel = approvalKindLabel(item.kind) || 'Agent request'
   const why = whyFlagged(item)
+  const fromWebsite = isWebsiteRequest(item)
   const said = customerWords(item)
   // AGENT-RETRY.2 — the provider ships failed-retryable rows as their own
   // queue: the card opens in fix-&-retry mode (retry is the only decision;
@@ -342,8 +357,8 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
       ) : undefined}
       source={(
         <span className="inline-flex items-center gap-1">
-          <Sparkles size={11} />
-          MIA
+          {fromWebsite ? <Globe size={11} /> : <Sparkles size={11} />}
+          {fromWebsite ? 'WEBSITE' : 'MIA'}
         </span>
       )}
       kind={kindLabel}
@@ -359,7 +374,7 @@ export default function AgentRequestDecideCard({ item, onDecided, onUndone, sele
       summaryClassName="text-sm text-un1t-text"
       contact={(item.contactEmail || item.contactPhone) ? (
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[10px] uppercase tracking-wide text-un1t-subtle">Glofox lookup</span>
+          <span className="text-[10px] uppercase tracking-wide text-un1t-subtle">{item.lookupLabel || lookupLabel(item)}</span>
           <CopyValue value={item.contactEmail} />
           <CopyValue value={item.contactPhone} />
         </div>
