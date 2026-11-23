@@ -38,6 +38,7 @@ import BulkUploadPanel from '@/components/invoices/BulkUploadPanel'
 import { describeApiError } from '@/lib/api-error'
 import {
   reasonChips, isReadyToSend, pillFor, notInvoiceText, unreadPanel, needsALookSkipped,
+  PILES, inPile, pileCounts,
   isBeingRead, canRejectOne,
 } from '@/components/invoices/review-status'
 
@@ -140,6 +141,10 @@ function formatDateTime(s) {
   } catch { return s }
 }
 
+// INVSCREEN.1 — the list route's own maximum. It used to be left at the
+// default 100, which silently hid the oldest rows of a long queue.
+const LIST_LIMIT = 500
+
 export default function InvoicesInbox({ locations, isMaster, isBookkeeper = false }) {
   // BOOKKEEPER-APPROVALS.1 — `?focus=<id>` arrives when the user
   // clicked a row in /approvals. We seed selectedId from it and
@@ -154,6 +159,8 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   const [error, setError] = useState(null)
   const [selectedId, setSelectedId] = useState(focusId)
   const [locationFilter, setLocationFilter] = useState('all')
+  // INVSCREEN.1 — which pile of the Awaiting action list is shown.
+  const [pile, setPile] = useState('review')
   // INVOICES-QUEUE.1 PR 2 — multi-select state for bulk actions.
   // Selection persists across tab switches (Set tracks ids; rows
   // not in the current filter just don't render their checkbox).
@@ -184,7 +191,9 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
       const params = new URLSearchParams()
       if (activeStatuses) params.set('status', activeStatuses.join(','))
       if (activeSourceTypes) params.set('source_type', activeSourceTypes.join(','))
-      if (locationFilter !== 'all') params.set('location_id', locationFilter)
+      // 'all' is sent as such: leaving it out means "the active studio only".
+      params.set('location_id', locationFilter)
+      params.set('limit', String(LIST_LIMIT))
       const res = await fetch(`/api/invoices-inbox?${params.toString()}`)
       const j = await res.json()
       if (!j.success) throw new Error(describeApiError(j, 'Failed to load'))
@@ -196,7 +205,9 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
         const desired = prev || focusId
         if (desired && (j.data || []).some((r) => r.id === desired)) return desired
         if (desired && desired === pinnedIdRef.current) return desired
-        return (j.data || [])[0]?.id || null
+        // Default to the first row that is not a set-aside duplicate or unreadable file.
+        const list = j.data || []
+        return (list.find((r) => inPile(r, 'review')) || list[0])?.id || null
       })
     } catch (e) {
       setError(e.message)
@@ -227,6 +238,28 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
 
   const selected = rows.find((r) => r.id === selectedId)
     || (pinnedRow && pinnedRow.id === selectedId ? pinnedRow : null)
+
+  // INVSCREEN.1 — the piles apply to Awaiting action only.
+  const piled = statusFilter === 'pending'
+  const counts = useMemo(() => pileCounts(rows), [rows])
+  const visibleRows = useMemo(
+    () => (piled ? rows.filter((r) => inPile(r, pile)) : rows),
+    [rows, piled, pile],
+  )
+  // A row opened from elsewhere (a focus link, "Open the earlier one") may sit
+  // in the other pile: show the pile that holds it.
+  useEffect(() => {
+    if (!piled) return
+    const row = rows.find((r) => r.id === selectedId)
+    if (row && !inPile(row, pile)) setPile(inPile(row, 'aside') ? 'aside' : 'review')
+  // Only a change of selection or of the loaded rows moves the pile.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, rows, piled])
+  function choosePile(next) {
+    setPile(next)
+    const first = rows.find((r) => inPile(r, next))
+    if (first && !(selected && inPile(selected, next))) selectRow(first.id)
+  }
 
   function selectRow(id) {
     pinnedIdRef.current = null
@@ -305,7 +338,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   function clearSelection() { setBulkSelection(new Set()); setBulkSummary(null) }
   function selectAllVisible() {
     const next = new Set(bulkSelection)
-    for (const r of rows) next.add(r.id)
+    for (const r of visibleRows) next.add(r.id)
     setBulkSelection(next)
   }
   async function runBulk(action, body) {
@@ -451,11 +484,13 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,360px)_1fr] gap-6">
         <InboxList
-          rows={rows}
+          rows={visibleRows}
+          piles={piled ? { active: pile, counts, onChoose: choosePile } : null}
+          capped={rows.length >= LIST_LIMIT}
+          showLocation={locationFilter === 'all' && locations.length > 1}
           loading={loading}
           selectedId={selectedId}
           onSelect={selectRow}
-          isMaster={isMaster}
           isBookkeeper={isBookkeeper}
           bulkSelection={bulkSelection}
           onToggleSelect={toggleSelection}
@@ -517,8 +552,9 @@ function ForwardingAddresses({ locations }) {
 }
 
 function InboxList({
-  rows, loading, selectedId, onSelect, isMaster, isBookkeeper,
+  rows, loading, selectedId, onSelect, isBookkeeper,
   bulkSelection, onToggleSelect, onSelectAll, onClearSelection,
+  piles = null, capped = false, showLocation = false,
 }) {
   const allVisibleSelected = rows.length > 0 && rows.every((r) => bulkSelection.has(r.id))
   // INV-BULK.3 — live queue progress across the visible list.
@@ -533,7 +569,27 @@ function InboxList({
     { total: 0, queued: 0, analysing: 0 },
   )
   return (
-    <aside className="border border-un1t-border rounded-lg overflow-hidden">
+    <aside className="border border-un1t-border rounded-lg overflow-hidden min-w-0">
+      {piles && (
+        <div className="px-2 py-2 border-b border-un1t-border flex items-center gap-1 flex-wrap">
+          {PILES.map((p) => {
+            const on = piles.active === p.key
+            return (
+              <button
+                key={p.key}
+                type="button"
+                aria-pressed={on}
+                onClick={() => piles.onChoose(p.key)}
+                className={`px-2 py-1 text-xs rounded-md transition-colors ${
+                  on ? 'bg-un1t-text text-un1t-bg font-medium' : 'text-un1t-subtle hover:text-un1t-text'
+                }`}
+              >
+                {p.label} <span className="tabular-nums">{piles.counts[p.key]}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
       <header className="px-3 py-2 border-b border-un1t-border flex items-center justify-between gap-2">
         <span className="text-xs uppercase tracking-wide text-un1t-subtle">
           {loading ? 'Loading…' : `${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}
@@ -558,6 +614,11 @@ function InboxList({
         {rows.length === 0 && !loading && (
           <li className="p-4 text-sm text-un1t-subtle">Nothing here.</li>
         )}
+        {capped && !loading && (
+          <li className="px-3 py-2 text-xs text-amber-700 bg-amber-500/10">
+            Showing the newest {LIST_LIMIT}. Older ones appear as these are cleared, or pick one studio.
+          </li>
+        )}
         {rows.map((r) => {
           const active = r.id === selectedId
           const checked = bulkSelection.has(r.id)
@@ -580,17 +641,21 @@ function InboxList({
                 <button
                   type="button"
                   onClick={() => onSelect(r.id)}
-                  className={`flex-1 text-left p-3 transition-colors ${
+                  className={`flex-1 min-w-0 text-left p-3 transition-colors ${
                     active ? 'bg-un1t-text/10' : 'hover:bg-un1t-text/5'
                   }`}
                 >
                   <div className="flex justify-between items-start gap-2">
-                    <div className="text-sm font-medium text-un1t-text truncate">
+                    <div className="text-sm font-medium text-un1t-text truncate min-w-0">
                       {r.extracted_fields?.supplier_name || r.sender_email || '(no sender)'}
                     </div>
-                    <span className="flex items-center gap-1 flex-wrap justify-end shrink-0">
+                    {/* The chips say what the row needs; the stage pill is kept
+                        only for a row that has none, so the chips are never cut off. */}
+                    <span className="flex items-center gap-1 flex-wrap justify-end shrink-0 max-w-[60%]">
                       <ReasonChips row={r} compact />
-                      <StatusPill status={r.status} stage={r.rejected_stage} queuedAt={r.analysis_queued_at} claimedAt={r.analysis_claimed_at} />
+                      {reasonChips(r).length === 0 && (
+                        <StatusPill status={r.status} stage={r.rejected_stage} queuedAt={r.analysis_queued_at} claimedAt={r.analysis_claimed_at} />
+                      )}
                     </span>
                   </div>
                   <div className="text-xs text-un1t-subtle truncate mt-1">
@@ -601,7 +666,7 @@ function InboxList({
                       <SourceTypePill source={r.source_type} />
                       <span className="truncate">{formatDateTime(r.received_at)}</span>
                     </span>
-                    {isMaster && <span className="shrink-0">{r.location?.name}</span>}
+                    {showLocation && <span className="shrink-0">{r.location?.name}</span>}
                   </div>
                 </button>
               </div>
