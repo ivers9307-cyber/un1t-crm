@@ -62,7 +62,7 @@ import PageHeaderCard from '@/components/landing-pages/PageHeaderCard'
 import OfferBlockEditor from '@/components/landing-pages/OfferBlockEditor'
 import { OFFER_BLOCK_TYPE, isStudioOwnedPath } from '@/lib/landing-page-offers'
 import { Field, Input, Textarea } from '@/components/landing-pages/fields'
-import { pageSaveBody, logoWidthForSave, pageEditSnapshot, pageSaveMessage } from '@/components/landing-pages/page-save'
+import { pageSaveBody, logoWidthForSave, pageEditSnapshot, pageSaveMessage, MIA_PRIORITY_OPTIONS, MIA_NOTE_MAX } from '@/components/landing-pages/page-save'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -144,6 +144,11 @@ export default function LandingPageSettingsForm({
   // Absent → default ON; only an explicit false hides the events-page IG strip.
   const [showInstagramFeed, setShowInstagramFeed] = useState(seed?.show_instagram_feed !== false)
 
+  // MIAPAGES.1 — what Mia reads about this page: who to suggest it to, and
+  // its place in her order ('' = Automatic).
+  const [miaNote, setMiaNote] = useState(seed?.mia_note || '')
+  const [miaPriority, setMiaPriority] = useState(seed?.mia_priority || '')
+
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState(null)
   const [savedAt, setSavedAt] = useState(null)
@@ -151,7 +156,7 @@ export default function LandingPageSettingsForm({
   // Unsaved edits: everything Save sends, against what was last saved (the
   // first render's values until a save lands). The header card holds the
   // publish buttons back while it differs.
-  const editSnapshot = pageEditSnapshot({ title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms })
+  const editSnapshot = pageEditSnapshot({ title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms, miaNote, miaPriority })
   const [savedSnapshot, setSavedSnapshot] = useState(editSnapshot)
   const dirty = editSnapshot !== savedSnapshot
 
@@ -385,7 +390,7 @@ export default function LandingPageSettingsForm({
     setSaving(true)
     try {
       const sent = editSnapshot
-      const body = pageSaveBody({ page: currentPage, title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms })
+      const body = pageSaveBody({ page: currentPage, title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms, miaNote, miaPriority })
       if (!body.title) throw new Error('Give the page a title.')
       const r = await fetch(`/api/landing-pages/${currentPage.id}`, {
         method: 'PUT',
@@ -501,6 +506,27 @@ export default function LandingPageSettingsForm({
             <span className="block text-[11px] text-un1t-muted mt-0.5">Latest posts from your connected Instagram account. Turn off to hide the strip.</span>
           </span>
         </label>
+      </section>
+
+      {/* MIAPAGES.1 — what Mia (the customer agent) reads about this page. */}
+      <section className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Mia</h3>
+          <p className="text-[11px] text-un1t-muted mt-1">Mia reads this page live once it is switched on, with its current price and dates.</p>
+        </div>
+        <Field label="Who is this for? (Mia reads this)" hint="Optional. One line telling Mia who to suggest this page to. Left blank, she works it out from the page.">
+          <Input value={miaNote} onChange={setMiaNote} maxLength={MIA_NOTE_MAX} placeholder="For example: people new to the studio" ariaLabel="Who is this for? (Mia reads this)" />
+        </Field>
+        <Field label="Mia's priority" hint="Automatic: an offer with an end date leads while it runs, then the trial leads again.">
+          <select
+            aria-label="Mia's priority"
+            value={miaPriority}
+            onChange={(e) => setMiaPriority(e.target.value)}
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+          >
+            {MIA_PRIORITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </Field>
       </section>
 
       {/* The pinned offer block, above the sortable list. */}

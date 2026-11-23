@@ -10,6 +10,19 @@ describe('landing page schemas', () => {
     expect(landingPageChromeSchema.safeParse({ logo_alt: 'a'.repeat(201) }).success).toBe(false)
   })
 
+  // MIAPAGES.1 — what Mia reads about a page.
+  it('mia_note takes up to 200 characters or null', () => {
+    expect(landingPageChromeSchema.safeParse({ mia_note: 'People over 50.' }).success).toBe(true)
+    expect(landingPageChromeSchema.safeParse({ mia_note: null }).success).toBe(true)
+    expect(landingPageChromeSchema.safeParse({ mia_note: 'a'.repeat(200) }).success).toBe(true)
+    expect(landingPageChromeSchema.safeParse({ mia_note: 'a'.repeat(201) }).success).toBe(false)
+  })
+
+  it("mia_priority is lead, ask_only or null (automatic)", () => {
+    for (const ok of ['lead', 'ask_only', null]) expect(landingPageChromeSchema.safeParse({ mia_priority: ok }).success).toBe(true)
+    for (const bad of ['high', 'normal', '', 1]) expect(landingPageChromeSchema.safeParse({ mia_priority: bad }).success).toBe(false)
+  })
+
   it('redirect_to is a path on this site', () => {
     const ok = (redirect_to) => landingPagePublishSchema.safeParse({ publish_state: 'retired', redirect_to }).success
     expect(ok('/trial')).toBe(true)
