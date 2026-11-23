@@ -22,10 +22,17 @@
 //
 // Scoping: the organisation is read from the thread's studio, then every read
 // is by a location id that belongs to it. Nothing internal leaves this file:
-// no id, total, ticket number, price or buyer.
+// no id, total, ticket number or buyer.
+//
+// MIAEVENTFACTS.1 — an entry also carries what the event says about itself
+// (its description, the charity, the raffle's ticket prices as the public page
+// sells them), and the same details ride on upcoming events (givingDetails).
+// Mia made up how a raffle worked when all she had was "a raffle is open":
+// what the page shows is what she is given, and nothing else is hers to say.
 //
 // A failed read is "unknown", never "nothing open": `unreadable` is true.
-import { onlineSalesState } from '@/lib/raffle-online'
+import { onlineSalesState, ONLINE_MAX_TICKETS } from '@/lib/raffle-online'
+import { pricingUnits, optionLabel } from '@/lib/raffle-format'
 import { RAFFLE_COLS } from '@/lib/raffle'
 import { zoneOfLocation, todayStrIn, addDaysISO } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
@@ -33,14 +40,85 @@ import { dateLabel } from './event-date-label'
 import { dateTimeLabel } from './offer-view'
 
 export const GIVING_WINDOW_DAYS = 30
+// An event's own description as Mia reads it. Real ones run to about 1,400
+// characters; the first 200 left out what an entry includes.
+export const MAX_EVENT_DESCRIPTION = 1500
 const MAX_ENTRIES = 6
 // One .in() of event ids follows this read: 150 is the house cap for one.
 const MAX_EVENTS_READ = 150
 const LOG_MODULE = 'mia-giving'
-const EVENT_COLUMNS = 'id, name, slug, race_date, location_id, host_id, active, status, charity_enabled, charity, registration_closes_at'
+const EVENT_COLUMNS = 'id, name, slug, description, race_date, location_id, host_id, active, status, charity_enabled, charity, registration_closes_at'
 const LOCATION_COLUMNS = 'id, name, timezone, active, is_host_anchor'
 
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+
+/** The event's own description on one line, at most MAX_EVENT_DESCRIPTION characters, or null. Pure. */
+export function eventDescription(text) {
+  const flat = str(String(text ?? '').replace(/\s+/g, ' '))
+  if (!flat) return null
+  return flat.length > MAX_EVENT_DESCRIPTION ? `${flat.slice(0, MAX_EVENT_DESCRIPTION - 1).trimEnd()}…` : flat
+}
+
+/**
+ * What a raffle ticket costs, as the public card sells it: the single price,
+ * then each bundle the card offers online ("1 for €1", "20 for €10"). Pure.
+ */
+export function raffleTicketLabels(raffle) {
+  if (!raffle || !(Number(raffle.ticket_price_cents) > 0)) return []
+  // optionLabel writes euro: another currency is never quoted as euro.
+  if ((raffle.currency || 'EUR') !== 'EUR') return []
+  return pricingUnits(raffle)
+    .filter((u) => u.tickets <= ONLINE_MAX_TICKETS)
+    .map((u) => optionLabel(u.tickets, u.price_cents))
+}
+
+/** The raffle part of an entry, or {} when the page sells no raffle for this event right now. */
+function raffleFields(event, raffle, zone, nowMs) {
+  // The page's raffle is the one filed under the event's own studio (loadRaffleForEvent).
+  const open = Boolean(raffle) && raffle.location_id === event.location_id && onlineSalesState(raffle, nowMs).open
+  if (!open) return {}
+  return {
+    raffle_open: true,
+    raffle_tickets: raffleTicketLabels(raffle),
+    raffle_closes_label: raffle.online_closes_at ? dateTimeLabel(raffle.online_closes_at, zone) : null,
+  }
+}
+
+/**
+ * The giving details of an UPCOMING event, as its public page shows them, or
+ * null when the page shows neither the donate card nor the raffle card (a
+ * host event, or charity switched off). Pure.
+ * @param {{ event: object, raffle: object|null, zone: string, nowMs?: number }} args
+ */
+export function givingDetails({ event, raffle = null, zone, nowMs = Date.now() }) {
+  if (!event || event.host_id || event.charity_enabled !== true) return null
+  return { charity: str(event.charity?.name), donations_open: true, ...raffleFields(event, raffle, zone, nowMs) }
+}
+
+/**
+ * The raffles of these events, by event id. Scoped to the events' own studios.
+ * Never throws; a failed read is `unreadable`, never "no raffle".
+ * @returns {Promise<{ byEvent: Map<string, object>, unreadable: boolean }>}
+ */
+export async function readEventRaffles(db, events) {
+  const byEvent = new Map()
+  const list = (Array.isArray(events) ? events : []).filter((e) => e?.id && e.location_id).slice(0, MAX_EVENTS_READ)
+  if (!db || list.length === 0) return { byEvent, unreadable: false }
+  try {
+    const { data, error } = await db.from('raffles').select(RAFFLE_COLS)
+      .in('race_event_id', list.map((e) => e.id))
+      .in('location_id', [...new Set(list.map((e) => e.location_id))])
+    if (error) {
+      logWarn(LOG_MODULE, 'raffles unreadable', { code: error.code ?? null })
+      return { byEvent, unreadable: true }
+    }
+    for (const r of data || []) byEvent.set(r.race_event_id, r)
+    return { byEvent, unreadable: false }
+  } catch (err) {
+    logWarn(LOG_MODULE, 'raffle read threw', { errClass: err?.name })
+    return { byEvent, unreadable: true }
+  }
+}
 
 /** Would the public page still take an entry for this event? Its own rule: the closing time or the charity's sign-up switch. */
 function signupClosed(event, nowMs) {
@@ -61,20 +139,26 @@ export function givingEntry({ event, raffle = null, location, threadLocationId, 
   if (!date || !str(event.slug)) return null
   const zone = zoneOfLocation(location)
   const today = todayStrIn(zone, nowMs)
-  if (date > today) return null
+  // An event still to come is listed too: another studio's is in no one's
+  // upcoming list, and this studio's is left out of it once sign-up is closed
+  // or switched off. The caller excludes what it already lists.
   if (date < today && !signupClosed(event, nowMs)) return null
-  // The page's raffle is the one filed under the event's own studio (loadRaffleForEvent).
-  const raffleOpen = Boolean(raffle) && raffle.location_id === event.location_id && onlineSalesState(raffle, nowMs).open
+  const raffleNow = raffleFields(event, raffle, zone, nowMs)
+  const raffleOpen = raffleNow.raffle_open === true
   const donationsOpen = date >= addDaysISO(today, -GIVING_WINDOW_DAYS)
+  const when = date > today ? 'upcoming' : date === today ? 'today' : 'past'
   if (!raffleOpen && !donationsOpen) return null
   return {
     name: str(event.name) || 'Event',
     studio: location?.name || '',
     this_conversation: event.location_id === threadLocationId,
     date: dateLabel(date),
+    when,
+    description: eventDescription(event.description),
     charity: str(event.charity?.name),
     raffle_open: raffleOpen,
-    raffle_closes_label: raffleOpen && raffle.online_closes_at ? dateTimeLabel(raffle.online_closes_at, zone) : null,
+    raffle_tickets: raffleNow.raffle_tickets || [],
+    raffle_closes_label: raffleNow.raffle_closes_label || null,
     donations_open: donationsOpen,
     url: `${baseUrl}/event/${event.slug}`,
   }
@@ -107,16 +191,12 @@ export async function readStillGiving(db, { threadLocationId, nowMs = Date.now()
     const locations = new Map((locs || []).filter((l) => l.active !== false && l.is_host_anchor !== true).map((l) => [l.id, l]))
     if (locations.size === 0) return { entries: [], unreadable: false }
 
-    // The latest "today" across the studios bounds the read; givingEntry
-    // judges each event on its own studio's clock.
-    const latestToday = [...locations.values()].map((l) => todayStrIn(zoneOfLocation(l), nowMs)).sort().pop()
     const { data: events, error: evErr } = await db.from('race_events').select(EVENT_COLUMNS)
       .in('location_id', [...locations.keys()])
       .is('host_id', null)
       .eq('active', true)
       .eq('status', 'published')
       .eq('charity_enabled', true)
-      .lte('race_date', latestToday)
       .order('race_date', { ascending: false })
       .limit(MAX_EVENTS_READ)
     if (evErr) {
@@ -125,18 +205,9 @@ export async function readStillGiving(db, { threadLocationId, nowMs = Date.now()
     }
     if (!events?.length) return { entries: [], unreadable: false }
 
-    let unreadable = false
-    const raffleByEvent = new Map()
-    const { data: raffles, error: rafErr } = await db.from('raffles').select(RAFFLE_COLS)
-      .in('race_event_id', events.map((e) => e.id))
-      .in('location_id', [...locations.keys()])
-    if (rafErr) {
-      // Donations still qualify an event; what a raffle would add is unknown.
-      unreadable = true
-      logWarn(LOG_MODULE, 'raffles unreadable', { code: rafErr.code ?? null })
-    } else {
-      for (const r of raffles || []) raffleByEvent.set(r.race_event_id, r)
-    }
+    // Donations still qualify an event when the raffle read fails; what a
+    // raffle would add is then unknown.
+    const { byEvent: raffleByEvent, unreadable } = await readEventRaffles(db, events)
 
     const resolveBase = baseUrlFor || (async (d, id) => (await import('@/lib/tenant-host')).resolveCustomerBaseUrl(d, id))
     const bases = new Map()
