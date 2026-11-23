@@ -313,7 +313,7 @@ export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
 // here must be listed there. iOS plays the default chime when a binary does
 // not carry the file, so a name can go out before every phone has updated.
 // Android ignores a per-message sound: its sound belongs to the channel.
-export const PUSH_CUSTOM_SOUNDS = Object.freeze(['cha-ching.wav'])
+export const PUSH_CUSTOM_SOUNDS = Object.freeze(['cha_ching.wav'])
 
 /** The Expo `sound` for a payload: null stays silent, a listed file passes, anything else is 'default'. */
 export function resolvePushSound(sound) {

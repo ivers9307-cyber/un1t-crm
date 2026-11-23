@@ -604,8 +604,8 @@ describe('readRoleRecipientIds — the same answer, with the read error', () => 
 
 describe('resolvePushSound — SALEALERT.2 custom sounds', () => {
   it('passes a listed sound file through', () => {
-    expect(PUSH_CUSTOM_SOUNDS).toContain('cha-ching.wav')
-    expect(resolvePushSound('cha-ching.wav')).toBe('cha-ching.wav')
+    expect(PUSH_CUSTOM_SOUNDS).toContain('cha_ching.wav')
+    expect(resolvePushSound('cha_ching.wav')).toBe('cha_ching.wav')
   })
   it('keeps null silent', () => {
     expect(resolvePushSound(null)).toBeNull()

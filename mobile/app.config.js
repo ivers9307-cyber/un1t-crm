@@ -119,7 +119,7 @@ export default ({ config }) => ({
   // in lockstep (see the runtimeVersion log below). 🔴 The two-build rule
   // applies: build AND submit both `production` and `production-legacy`,
   // or the legacy record's installed base silently stops receiving OTAs.
-  version: '2.4.1',
+  version: '2.4.0',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
@@ -296,8 +296,10 @@ export default ({ config }) => ({
         // runtime lane: no JS depends on it. Android keeps the default
         // sound until a channel with this sound is added (see
         // shared/push-channels.js), which must wait for a binary that
-        // carries the file.
-        sounds: ['./assets/sounds/cha-ching.wav'],
+        // carries the file. The file NAME must be a valid Android resource
+        // name ([a-z0-9_] only): the plugin copies it into res/raw as is, and
+        // a hyphen fails the Android build.
+        sounds: ['./assets/sounds/cha_ching.wav'],
       },
     ],
     // PHASE2 — registered BEFORE the HealthKit plugin so Expo composes

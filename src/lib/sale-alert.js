@@ -33,7 +33,7 @@ export function saleAlertKey(source, saleId) {
 // SALEALERT.2 — the cash-register sound, bundled in the app binary and
 // allowed by PUSH_CUSTOM_SOUNDS (src/lib/push.js). A phone on an older
 // binary plays the default chime.
-export const SALE_ALERT_SOUND = 'cha-ching.wav'
+export const SALE_ALERT_SOUND = 'cha_ching.wav'
 
 export function buildSaleAlertPayload({ itemName, amountCents, buyerFirstName, locationName, contactId }) {
   const item = oneLine(itemName) || 'Purchase'

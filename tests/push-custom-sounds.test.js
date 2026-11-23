@@ -26,6 +26,11 @@ describe('custom push sounds', () => {
     // sanity bound, not a duration check.
     expect(statSync(file).size).toBeGreaterThan(1000)
     expect(statSync(file).size).toBeLessThan(2_000_000)
-    expect(appConfig).toContain(`'./assets/sounds/${name}'`)
+    // Listed in the plugin's `sounds` array itself, not merely mentioned.
+    const list = appConfig.match(/sounds:\s*\[([^\]]*)\]/)?.[1] ?? ''
+    expect(list).toContain(`'./assets/sounds/${name}'`)
+    // The Android half of the plugin copies the file into res/raw under its
+    // own name, and Android resource names allow only [a-z0-9_].
+    expect(name).toMatch(/^[a-z0-9_]+\.(wav|caf|aiff)$/)
   })
 })
