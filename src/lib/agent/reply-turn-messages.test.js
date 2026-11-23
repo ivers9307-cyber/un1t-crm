@@ -153,5 +153,6 @@ describe('buildReplyTurnMessages · zone (MIAHISTORYDATES.1)', () => {
     ]
     const { messages } = buildReplyTurnMessages(rows, { zone: 'Europe/Dublin', nowMs: Date.parse('2026-11-23T18:50:10Z') })
     expect(messages[0].content).toContain('[sent Sun 22 Nov] tomorrow · 07:00 · FORCE')
+    expect(messages[0].content).toContain('[sent today] can I switch')
   })
 })

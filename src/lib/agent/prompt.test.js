@@ -1184,10 +1184,17 @@ describe('what is on offer right now (MIAPAGES.1)', () => {
     for (const [name, prompt] of Object.entries(VARIANTS)) {
       expect(prompt.split(HISTORY_DATES_RULE), name).toHaveLength(2)
     }
-    expect(HISTORY_DATES_RULE).toContain('[sent ')
+    expect(HISTORY_DATES_RULE).toContain('[sent today]')
+    expect(HISTORY_DATES_RULE).toContain('each line')
     expect(HISTORY_DATES_RULE).toContain('the day after that date')
     expect(HISTORY_DATES_RULE).toContain('Never write a [sent')
     expect(HISTORY_DATES_RULE).toContain('never from an earlier message or reminder')
+    expect(HISTORY_DATES_RULE).toContain('If you have no tool that lists their bookings, do not name a booking')
+    // It sits with the line about earlier studio messages, not under events.
+    for (const [name, prompt] of Object.entries(VARIANTS)) {
+      expect(prompt.indexOf(HISTORY_DATES_RULE), name).toBeLessThan(prompt.indexOf('## Races, workshops and special events'))
+      expect(prompt.indexOf(HISTORY_DATES_RULE), name).toBeGreaterThan(prompt.indexOf('Earlier messages the studio sent this person'))
+    }
     expect(HISTORY_DATES_RULE).not.toMatch(/[—–]|limited|spaces|capacity|at this studio/i)
   })
 

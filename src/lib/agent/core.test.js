@@ -1039,13 +1039,21 @@ describe('formatHistoryForClaude · earlier days carry their date', () => {
     { direction: 'inbound', message_type: 'text', body: 'Hi can I switch to the 7pm class if possible', created_at: '2026-11-23T18:50:46Z' },
   ]
 
-  it('a message from an earlier day is stamped; today\'s are not', () => {
+  it('the incident: yesterday\'s reminder and today\'s are told apart, line by line', () => {
     const out = formatHistoryForClaude(rows, { zone: 'Europe/Dublin', nowMs: NOW })
-    const text = out.map((m) => m.content).join('\n')
-    expect(text).toContain('[sent Sun 22 Nov] Stephen · tomorrow · 07:00 · FORCE - STRENGTH')
-    expect(text).toContain('Stephen · tomorrow · 07:00 · RECLA1M. - CONDITIONING')
-    expect(text).not.toContain('[sent Mon 23 Nov]')
-    expect(text.match(/\[sent /g)).toHaveLength(1)
+    expect(out).toHaveLength(1)
+    expect(out[0].content).toContain('"[sent Sun 22 Nov] Stephen · tomorrow · 07:00 · FORCE - STRENGTH\n[sent today] Stephen · tomorrow · 07:00 · RECLA1M. - CONDITIONING"')
+    expect(out[0].content.endsWith('[sent today] Hi can I switch to the 7pm class if possible')).toBe(true)
+  })
+
+  it('a conversation that is all today carries no stamps at all', () => {
+    const out = formatHistoryForClaude(rows.slice(1), { zone: 'Europe/Dublin', nowMs: NOW })
+    expect(out.map((m) => m.content).join('\n')).not.toContain('[sent ')
+  })
+
+  it('another year is named', () => {
+    const old = [{ direction: 'inbound', message_type: 'text', body: 'hello', created_at: '2025-11-22T10:00:00Z' }]
+    expect(formatHistoryForClaude(old, { zone: 'Europe/Dublin', nowMs: NOW })[0].content).toBe('[sent Sat 22 Nov 2025] hello')
   })
 
   it('the day is the studio\'s, not UTC', () => {
@@ -1082,6 +1090,9 @@ describe('parseAgentResponse · a copied date stamp never reaches the customer',
   it('strips a leading stamp, on any line', () => {
     expect(parseAgentResponse('[sent Sun 22 Nov] You are booked for 7am.').text).toBe('You are booked for 7am.')
     expect(parseAgentResponse('Sure.\n[sent Mon 23 Nov] See you then.').text).toBe('Sure.\nSee you then.')
+    expect(parseAgentResponse('[sent today] See you at 7.').text).toBe('See you at 7.')
     expect(parseAgentResponse('The reminder was sent Sunday.').text).toBe('The reminder was sent Sunday.')
+    // Only a stamp at the start of a line is ours: a link's own words stay.
+    expect(parseAgentResponse('Here: [sent you the form](https://x.test/f)').text).toBe('Here: [sent you the form](https://x.test/f)')
   })
 })
