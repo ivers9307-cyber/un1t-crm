@@ -229,6 +229,21 @@ export async function POST(request) {
   // provider. The inner try/catch blocks below (invoice, tag, sequences,
   // member-sync) are best-effort guards for known failure modes; this outer
   // catch is the safety net for anything else.
+  // SALEALERT.1 — every INVOICE_UPDATED delivery reaches the sale alert exactly
+  // once, whichever way processing exits below (a repeat delivery is absorbed
+  // by the sale:glofox:<invoice id> dedup key). Scheduled once, up front; the
+  // thunk waits for `saleContactSettled`, which the `finally` below resolves
+  // with the contact the processing found (null when it found none or exited
+  // early), so it rings with the contact whenever there is one.
+  let saleContact = null
+  let settleSaleContact = () => {}
+  if (String(parsed.eventType || '').toUpperCase() === 'INVOICE_UPDATED') {
+    const saleContactSettled = new Promise((resolve) => { settleSaleContact = resolve })
+    ringSaleAfterResponse(async () => {
+      await saleContactSettled
+      return alertGlofoxInvoiceSale(db, { locationId: creds.locationId, payload, contact: saleContact })
+    })
+  }
   try {
     // 5. Map event type → tag list. Unknown events get marked but
     // not failed — Glofox might send domains we haven't mapped yet.
@@ -360,11 +375,6 @@ export async function POST(request) {
     }
 
     if (!contact) {
-      // SALEALERT.1 — a purchase by a member we hold no contact for is still a
-      // sale; ring for it, after the response, with no contact.
-      if (String(parsed.eventType || '').toUpperCase() === 'INVOICE_UPDATED') {
-        ringSaleAfterResponse(() => alertGlofoxInvoiceSale(db, { locationId: creds.locationId, payload, contact: null }))
-      }
       await markEvent(db, attemptCtx, 'contact_not_found', null, null)
       return NextResponse.json({
         success: true,
@@ -373,6 +383,8 @@ export async function POST(request) {
         user_id: parsed.userId,
       })
     }
+
+    saleContact = contact
 
     // 7a. GLOFOX2.1.20 — INVOICE_UPDATED side-effect. Mirror the
     // Glofox invoice into glofox_invoices + recompute the contact's
@@ -389,9 +401,6 @@ export async function POST(request) {
         })
         ltvResult = { ok: false, reason: 'threw', error: e?.message }
       }
-      // SALEALERT.1 — ring for a new purchase after the response; a repeat
-      // delivery is absorbed by the sale:glofox:<invoice id> dedup key.
-      ringSaleAfterResponse(() => alertGlofoxInvoiceSale(db, { locationId: creds.locationId, payload, contact }))
     }
 
     // 7b. GLOFOX-REACTIVE / DUNNING.1 — event-driven dunning off the invoice
@@ -639,6 +648,8 @@ export async function POST(request) {
     ])
     // Always 200 Glofox — we have the raw payload in dead_letter for replay.
     return NextResponse.json({ success: true, status: 'processing_failed_dead_lettered' })
+  } finally {
+    settleSaleContact()
   }
 }
 

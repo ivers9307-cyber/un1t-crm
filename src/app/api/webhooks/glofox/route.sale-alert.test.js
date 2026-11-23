@@ -32,10 +32,11 @@ import { alertGlofoxInvoiceSale } from '@/lib/glofox-sale-alert'
 
 // Records every write; contacts reads at the studio find nothing.
 let matched = false
-function makeFakeDb() {
+function makeFakeDb({ contactsError = false } = {}) {
   const calls = []
   const answer = (q) => {
     if (q.table === 'glofox_webhook_events' && q.op === 'upsert') return { data: { id: 'row-1', status: 'received' }, error: null }
+    if (q.table === 'contacts' && contactsError) return { data: null, error: { message: 'boom' } }
     if (q.table === 'contacts') return { data: matched ? [{ id: 'c-1', last_booked_at: null }] : [], error: null }
     if (q.table === 'contact_tags' && q.op === 'select') return { data: [], error: null }
     return { data: null, error: null }
@@ -55,10 +56,10 @@ function makeFakeDb() {
 }
 
 const PAYLOAD = { id: 'inv-1', status: 'PAID', total: 5000, payment_method: 'CARD', user: { id: 'member-1', email: 'sam@example.test', first_name: 'Sam' }, line_items: [{ name: 'Sample Class Pack', sub_type: 'UPFRONT_PAYMENT', unit_price: 5000 }] }
-const deliver = (type = 'INVOICE_UPDATED') => POST(new Request('http://localhost/api/webhooks/glofox', {
+const deliver = (type = 'INVOICE_UPDATED', pay = PAYLOAD) => POST(new Request('http://localhost/api/webhooks/glofox', {
   method: 'POST',
   headers: { 'content-type': 'application/json', signature: 'sig' },
-  body: JSON.stringify({ Type: type, Metadata: { location_id: 'branch-1', trace_id: 't', version: 'v1' }, Payload: PAYLOAD, Timestamp: '2026-11-23T08:15:02.876Z' }),
+  body: JSON.stringify({ Type: type, Metadata: { location_id: 'branch-1', trace_id: 't', version: 'v1' }, Payload: pay, Timestamp: '2026-11-23T08:15:02.876Z' }),
 }))
 
 beforeEach(() => {
@@ -89,6 +90,29 @@ describe('POST /api/webhooks/glofox — new sale alert (SALEALERT.1)', () => {
     expect((await res.json()).status).toBe('contact_not_found')
     expect(alertGlofoxInvoiceSale).toHaveBeenCalledTimes(1)
     expect(alertGlofoxInvoiceSale.mock.calls[0][1]).toMatchObject({ locationId: 'loc-stillorgan', contact: null })
+  })
+
+  it('a contact lookup error still rings once, with no contact, and answers lookup_error', async () => {
+    createServerClient.mockReturnValue(makeFakeDb({ contactsError: true }))
+    const res = await deliver()
+    expect((await res.json()).status).toBe('lookup_error')
+    expect(alertGlofoxInvoiceSale).toHaveBeenCalledTimes(1)
+    expect(alertGlofoxInvoiceSale.mock.calls[0][1]).toMatchObject({ locationId: 'loc-stillorgan', contact: null })
+  })
+
+  it('an ambiguous contact still rings once, with no contact, and answers contact_ambiguous', async () => {
+    findGlofoxCrossoverContact.mockResolvedValue({ conflict: { reason: 'two', contact_ids: ['a', 'b'] } })
+    const res = await deliver()
+    expect((await res.json()).status).toBe('contact_ambiguous')
+    expect(alertGlofoxInvoiceSale).toHaveBeenCalledTimes(1)
+    expect(alertGlofoxInvoiceSale.mock.calls[0][1]).toMatchObject({ contact: null })
+  })
+
+  it('a delivery with no email or user id still rings once, with no contact, and answers no_email', async () => {
+    const res = await deliver('INVOICE_UPDATED', { ...PAYLOAD, id: undefined, user: {} })
+    expect((await res.json()).status).toBe('no_email')
+    expect(alertGlofoxInvoiceSale).toHaveBeenCalledTimes(1)
+    expect(alertGlofoxInvoiceSale.mock.calls[0][1]).toMatchObject({ contact: null })
   })
 
   it('an alert that throws changes nothing about the answer', async () => {
