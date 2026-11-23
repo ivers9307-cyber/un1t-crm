@@ -1,12 +1,12 @@
 // INV-M.1 — mobile bookkeeper-queue API. Wraps the SAME
 // /api/invoices-inbox routes the web /invoices inbox uses (list +
-// the INV-BULK.4 hybrid extract pair). All calls go through api()
+// the queue-to-be-read call). All calls go through api()
 // so Bearer auth, x-active-location, and the x-impersonate-target
 // "View as user" header can't drift — do NOT hand-roll headers here.
 //
 // Server gates (unchanged by this file):
 //   • GET list        — invoices_inbox permission at the location.
-//   • bulk-analyse / bulk-queue-analysis — bookkeeper permission
+//   • bulk-queue-analysis — bookkeeper permission
 //     (top-level web key; mobile mirrors it via CROSS_PLATFORM_KEYS).
 
 import { api } from './api'
@@ -24,17 +24,10 @@ export function listInvoicesQueue({ locationId } = {}) {
 }
 
 /**
- * POST /api/invoices-inbox/bulk-analyse — synchronous Claude Vision
- * extraction. Keep batches small on mobile (MOBILE_EXTRACT_SYNC_CAP)
- * — each row is ~5-15s and iOS times fetches out at ~60s.
- */
-export function bulkAnalyse(ids) {
-  return api('/api/invoices-inbox/bulk-analyse', { method: 'POST', body: { ids } })
-}
-
-/**
- * POST /api/invoices-inbox/bulk-queue-analysis — instant enqueue for
- * the background drainer cron (the no-timeout leg of the hybrid).
+ * POST /api/invoices-inbox/bulk-queue-analysis — queue rows to be read.
+ * Instant: the read happens in the background, so the request cannot run
+ * into the phone's ~60 s fetch limit. INVMOBILE.1: the only extract call;
+ * the synchronous bulk-analyse leg is gone.
  */
 export function bulkQueueAnalysis(ids) {
   return api('/api/invoices-inbox/bulk-queue-analysis', { method: 'POST', body: { ids } })
