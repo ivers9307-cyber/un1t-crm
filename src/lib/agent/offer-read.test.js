@@ -231,6 +231,14 @@ describe('readCurrentOffers: a failed read is unknown, never empty', () => {
     expect(s.pages.map((p) => p.title)).toEqual(['14 Day Reset', 'UN1T Stillorgan'])
   })
 
+  it("another studio's failed store read is still reported, never dropped", async () => {
+    vi.mocked(sellableSaleOffers).mockImplementation(async (_db, id) => (id === HATCH ? { ok: false } : { ok: true, studioKey: null, offers: [] }))
+    const db = seed()
+    db.tables.landing_page_studios = db.tables.landing_page_studios.filter((r) => r.location_id !== HATCH)
+    const hatch = studioOf(await read(db), 'UN1T Hatch Street')
+    expect(hatch).toMatchObject({ this_conversation: false, pages: [], store: [], store_unreadable: true })
+  })
+
   it('everything unreadable is not ok', async () => {
     vi.mocked(sellableSaleOffers).mockResolvedValue({ ok: false })
     expect(await read(seed({ errors: { landing_pages: { select: { message: 'boom' } } } }))).toEqual({ ok: false })

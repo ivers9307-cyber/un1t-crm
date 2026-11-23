@@ -1209,4 +1209,22 @@ describe('what is on offer right now (MIAPAGES.1)', () => {
     expect(VARIANTS.un1t_full).toContain('When list_current_offers has a live store entry that matches what they asked for, mention it with its url alongside the options from list_purchase_options')
     expect(VARIANTS.glofox).not.toContain('alongside the options from list_purchase_options')
   })
+
+  // Final review fixes.
+  it('tells Mia what an unreadable part, a not yet open offer and a sold out yes mean', () => {
+    expect(CURRENT_OFFERS_RULES).toContain('pages_unreadable')
+    expect(CURRENT_OFFERS_RULES).toContain('store_unreadable')
+    expect(CURRENT_OFFERS_RULES).toContain('opens_label')
+    expect(CURRENT_OFFERS_RULES).toContain('starts_label')
+  })
+
+  it('the membership sign-up block defers to the live list for prices', () => {
+    const parts = buildCustomerSystemPrompt({ businessName: 'B', locationName: 'L', membershipUrl: 'https://join.test', knowledge: [] })
+    expect(parts).not.toContain('Answer pricing questions only from the studio knowledge')
+    expect(parts).toContain('For what is on offer and its price, use list_current_offers')
+  })
+
+  it('where Mia sells in chat, the rules say which read wins', () => {
+    expect(VARIANTS.un1t_full).toContain('ORDER: a free trial a tool reports as trial_available for this verified person comes first')
+  })
 })

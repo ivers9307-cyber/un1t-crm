@@ -113,7 +113,7 @@ async function studioPages(db, { location, pages, rowsByPage, publicPath, baseUr
       endsOn: withOffer ? offer.endsOn : null,
       entry: pageEntry({
         page, mergedOffer: offer?.mergedOffer || null, promo: offer?.promo || null, zone,
-        url: pageUrl(baseUrl, page, publicPath), withOffer, studioName: location.name,
+        url: pageUrl(baseUrl, page, publicPath), withOffer, studioName: location.name, now,
       }),
     }
   })
@@ -223,9 +223,9 @@ export async function readCurrentOffers(db, { organizationId, threadLocationId, 
       else logWarn(LOG_MODULE, 'studio store unreadable', { locationId: location.id })
       const mine = location.id === threadLocationId
       const hasContent = pages.pages.length > 0 || store.store.length > 0
-      // A studio with nothing to show is left out, except the conversation's
-      // own when a read failed: "unknown" must reach Mia, never silence.
-      if (!hasContent && !(mine && (pages.unreadable || store.unreadable))) continue
+      // A studio with nothing to show is left out, unless a read failed for
+      // it: "unknown" must reach Mia, never silence, for any studio.
+      if (!hasContent && !pages.unreadable && !store.unreadable) continue
       studios.push({
         studio: location.name,
         this_conversation: mine,

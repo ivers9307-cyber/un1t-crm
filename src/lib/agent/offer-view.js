@@ -9,7 +9,7 @@
 import { formatTrialPrice, trialTicks } from '@/lib/paid-trial'
 import { campaignFunnelCopy } from '@/lib/campaign-funnel'
 import { corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
-import { dateKeyIn, timeLabelIn } from '@/lib/location-time'
+import { dateKeyIn, timeLabelIn, dayStrIn } from '@/lib/location-time'
 import { dateLabel } from './event-date-label'
 
 const SUMMARY_MAX = 200
@@ -73,7 +73,7 @@ function summaryFor({ page, mergedOffer, promo, withOffer, studioName }) {
     const tokens = { studio_name: studioName || 'the studio', credits: promo?.credits ?? '', max_classes: promo?.maxClasses ?? '' }
     const heading = fillCorpPromoTokens(copy.heading, tokens)
     const subhead = fillCorpPromoTokens(copy.subhead, tokens)
-    const lead = count ? `${count} free classes. ` : ''
+    const lead = count ? `${count} free ${count === 1 ? 'class' : 'classes'}. ` : ''
     return oneLine(`${lead}${heading}. ${subhead}`)
   }
   return fallback
@@ -93,16 +93,21 @@ function priceFor({ page, mergedOffer, promo }) {
  * the title, a summary and the link, and no price or end date.
  * `priority` is 'normal' here; rankPages sets the real one.
  */
-export function pageEntry({ page, mergedOffer = null, promo = null, zone, url, withOffer, studioName = '' }) {
+export function pageEntry({ page, mergedOffer = null, promo = null, zone, url, withOffer, studioName = '', now = new Date() }) {
   const summary = summaryFor({ page, mergedOffer, promo, withOffer, studioName })
-  const ends = withOffer && page.offer_type === 'promo_credits' && str(promo?.windowEndsOn)
+  const windowed = withOffer && page.offer_type === 'promo_credits' && promo?.kind === 'open_week'
+  const ends = windowed && str(promo?.windowEndsOn)
+  // An open week takes sign-ups before its first day: say when it starts.
+  const startsOn = windowed && str(promo?.windowStartsOn)
+  const starts = startsOn && dayStrIn(now, zone) < startsOn ? startsOn : null
   return {
     title: str(page.title) || '',
     kind: page.offer_type,
     for: forLine(page, summary),
     summary,
     price_label: withOffer ? priceFor({ page, mergedOffer, promo }) : null,
-    ends_label: ends ? dayLabel(ends, zone) : null,
+    starts_label: starts ? dayLabel(starts) : null,
+    ends_label: ends ? dayLabel(ends) : null,
     priority: 'normal',
     url,
   }

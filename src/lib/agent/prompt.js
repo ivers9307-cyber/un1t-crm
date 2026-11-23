@@ -148,7 +148,9 @@ export const CURRENT_OFFERS_RULES = `## What is on offer right now
 - When an entry is flagged while_stocks_last you may say it is only there while stocks last. When it is sold_out, say it has sold out and never share its url. Never give a number.
 - An entry listed under another studio is that studio's offer: name the studio.
 - When they say yes to an entry on the list, or ask how to buy it, send that entry's url as the last thing in your message. Use request_membership_purchase only for a yes to something that is not on the list.
-- If the tool cannot read the offers, say you cannot check right now and offer the team. Never say there are no offers.
+- If the tool cannot read the offers, say you cannot check right now and offer the team. Never say there are no offers. When a studio carries pages_unreadable or store_unreadable, that part of its list is unknown, not empty: say you cannot check it right now and offer the team.
+- An entry with a starts_label has not started yet: say when it starts. A store entry with an opens_label is not on sale yet: say when it opens and do not present it as available today.
+- When they want an entry that is sold_out, say it has gone and offer the nearest entry that fits them, or the team.
 - Do not open a conversation with an offer. Suggest one only when their message makes it relevant.`
 
 const OTHER_STUDIO_FACTS_RULE = "\n- When a facts block below names another studio, that studio's prices, offers, timetable and links come only from its facts block and your tools. The KNOWLEDGE section and the membership sign-up link describe the studio of this conversation only."
@@ -173,6 +175,7 @@ function un1tUpsellLines({ name, multiStudio }) {
     `## Buying classes or a membership${at}`,
     `- When book_class says needs_purchase, or a verified member asks to buy classes or a membership${at}, show the offers from that result or from list_purchase_options. Introduce them with the tool's wording. Give each offer's title and price_label exactly as the tool gives them, and its blurb when it helps. Never invent, round or change a price, and never offer anything the tool did not list.`,
     '- FREE TRIAL: offer the free trial first, before the paid offers, only when book_class or list_purchase_options says trial_available is true. Never say "free trial" or offer one otherwise. When they want it, get a clear yes, then call send_purchase_link with offer_id "trial" (and the class, when they wanted one). Say the trial is on their account, or that a class is booked, only when that tool says so. When it says trial_used, send its text and then its offers.',
+    '- ORDER: a free trial a tool reports as trial_available for this verified person comes first. Otherwise, for someone who wants to try the studio, offer the lead entry from list_current_offers. For a verified member buying classes or a membership, show the options from list_purchase_options.',
     '- When list_current_offers has a live store entry that matches what they asked for, mention it with its url alongside the options from list_purchase_options, so a sale price is never hidden.',
     '- With 3 or fewer offers, offer them as tap choices, one per offer. With more, list them in your message. Never show more offers than the tool gave you.',
     '- MEMBERSHIP: when they ask to join, for "the membership" or for a membership payment link without naming a product, they mean the monthly membership: call list_purchase_options and use its monthly membership offer. When they have already asked you for that link (for example their earlier link expired and they want it resent), that request is their yes: call send_purchase_link with that offer now, without asking again.',
@@ -636,7 +639,7 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   if (membershipUrl) {
     stableParts.push(
       '## Joining the studio (membership sign-up link)\n' +
-      `When someone wants to JOIN or asks how to become a member, share the membership sign-up link: ${membershipUrl} — sign-up and payment happen securely there. Answer pricing questions only from the studio knowledge; if the knowledge doesn't cover it, share the link and offer the team. Never invent prices.`,
+      `When someone wants to JOIN or asks how to become a member, share the membership sign-up link: ${membershipUrl} — sign-up and payment happen securely there. For what is on offer and its price, use list_current_offers; answer other pricing questions only from the studio knowledge, and if neither covers it, share the link and offer the team. Never invent prices.`,
     )
   }
   if (tone && tone.trim()) stableParts.push('## Tone & voice (from the studio)\n' + tone.trim())

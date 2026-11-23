@@ -29,6 +29,17 @@ describe('pageEntry', () => {
     expect(JSON.stringify(e)).not.toContain('secret')
   })
 
+  it('an open week that has not started yet says when it starts; one class is "1 free class"', () => {
+    const args = (promo, now) => ({
+      page: { title: 'Open Week', offer_type: 'promo_credits', chrome: {} }, mergedOffer: { type: 'corp_promo', promo_key: 'k' },
+      promo: { key: 'k', kind: 'open_week', platform: 'glofox', credits: 1, maxClasses: 1, windowStartsOn: '2026-11-23', windowEndsOn: '2026-11-29', live: true, ...promo },
+      zone: ZONE, url: 'u', withOffer: true, studioName: 'S', now,
+    })
+    expect(pageEntry(args({}, new Date('2026-11-20T12:00:00Z'))).starts_label).toBe('Mon 23 Nov')
+    expect(pageEntry(args({}, new Date('2026-11-23T08:00:00Z'))).starts_label).toBeNull()
+    expect(pageEntry(args({}, new Date('2026-11-20T12:00:00Z'))).summary).toMatch(/^1 free class\./)
+  })
+
   it('a plain promo counts its credits and has no end date', () => {
     const e = pageEntry({
       page: { title: 'Corporate promo', offer_type: 'promo_credits', chrome: {} },
