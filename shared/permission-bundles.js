@@ -395,6 +395,7 @@ export const EXEMPT_KEYS = Object.freeze([
   'notify_schedule',
   'notify_swap',
   'notify_lead',
+  'notify_sale',
   'notify_whatsapp',
   'notify_instagram',
   'notify_email',

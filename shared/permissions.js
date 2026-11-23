@@ -715,6 +715,7 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'notify_schedule',    label: '… Schedule published',     hint: 'Notify when a new week is published',                           mobileOnly: true, isNotify: true },
   { key: 'notify_swap',        label: '… Swap requests',          hint: 'Notify on inbound swap requests and responses',                 mobileOnly: true, isNotify: true },
   { key: 'notify_lead',        label: '… New leads assigned',     hint: 'Notify when a new contact is created at your location',         mobileOnly: true, isNotify: true },
+  { key: 'notify_sale',        label: '… New sales',              hint: 'Notify when someone buys something new at your location (owners and managers)', mobileOnly: true, isNotify: true, onlyRoles: ['master', 'owner', 'manager'] },
   { key: 'notify_whatsapp',    label: '… WhatsApp messages',      hint: 'Notify on inbound WhatsApp (subject to inbox permission)',      mobileOnly: true, isNotify: true },
   { key: 'notify_instagram',   label: '… Instagram messages',     hint: 'Notify on inbound Instagram DMs (subject to inbox permission)', mobileOnly: true, isNotify: true },
   // EMAIL-INBOUND-PUSH.1 — recipients are already narrowed server-side to
@@ -831,6 +832,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
+    notify_sale: true,
     notify_agent_requests: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -871,6 +873,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: false, notify_instagram: false, notify_email: false, notify_agent_activity: false,
+    notify_sale: false,
     notify_agent_requests: false,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -918,6 +921,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: true, notify_instagram: false, notify_email: false, notify_agent_activity: true,
+    notify_sale: false,
     notify_agent_requests: false,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -955,6 +959,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: false, notify_agent_activity: true,
+    notify_sale: false,
     notify_agent_requests: true,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -998,6 +1003,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
+    notify_sale: true,
     notify_agent_requests: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -1043,6 +1049,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
+    notify_sale: true,
     notify_agent_requests: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -1216,6 +1223,12 @@ export const CROSS_PLATFORM_KEYS = Object.freeze([
 // is the set we exempt; isFeatureGatedByLocation() answers the
 // gating question for any given key.
 // ============================================================
+
+// SALEALERT.1 — a permission can be offered to some roles only (`onlyRoles`).
+// Display rule only: never use it to drop a saved value or to gate a send.
+export function permissionOfferedToRole(entry, role) {
+  return !Array.isArray(entry?.onlyRoles) || entry.onlyRoles.includes(role)
+}
 
 export const NOTIFY_KEYS = Object.freeze(
   MOBILE_PERMISSIONS.filter(p => p.isNotify).map(p => p.key)
