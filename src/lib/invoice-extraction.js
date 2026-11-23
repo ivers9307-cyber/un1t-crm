@@ -551,7 +551,7 @@ export async function extractInvoiceFields(documentId) {
  * field is present AND subtotal + tax reconciles to total within €0.01,
  * else 'medium'. Pure; the operator always reviews regardless, so this
  * only drives a UI badge. Single source of truth for the heuristic that
- * the /extract, bulk-analyse, and cron drainer paths all use.
+ * the /extract and queue paths both use.
  *
  * @param {object} f  extracted fields
  * @returns {'high'|'medium'}
