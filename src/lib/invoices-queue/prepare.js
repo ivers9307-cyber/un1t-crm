@@ -24,7 +24,7 @@ import { extractInvoiceFieldsFromBytes, scoreExtractionConfidence } from '@/lib/
 import { sha256Hex } from '@/lib/inbound-invoices'
 import { fieldReasons, mergeReasons } from '@/lib/invoices-queue/readiness'
 import { resolveBillTaxType } from '@/lib/invoices-queue/vat'
-import { defaultsForContact, resolveExtractionDefaults, getSupplierDefault } from '@/lib/invoices-queue/supplier-defaults'
+import { contactFromXeroBill, defaultsForContact, resolveExtractionDefaults, getSupplierDefault } from '@/lib/invoices-queue/supplier-defaults'
 import { findXeroBillByNumber } from '@/lib/invoices-queue/push-xero'
 import { withFreshToken } from '@/lib/xero/client'
 import { logWarn, logError } from '@/lib/log'
@@ -389,11 +389,13 @@ async function prepare(db, row, deps, { write, unreadable, hashPatch, nowIso }) 
       logWarn(MODULE, 'could not look the bill up in Xero', { queue_id: row.id, error: messageOf(e) })
     }
   }
-  // The bill in Xero names its supplier: when no rule matched one, that is it.
+  // The bill in Xero names its supplier. When no rule matched one, it is used
+  // only if it is an active contact here whose name agrees with the document:
+  // two suppliers can share an invoice number.
   if (billContact && !fields.xero_contact_ref) {
     try {
-      const contact = { xero_contact_id: String(billContact.ContactID), name: billContact.Name || fields.supplier_name }
-      fields = { ...fields, ...(await defaultsForContact(db, locationId, contact)) }
+      const contact = await contactFromXeroBill(db, locationId, fields.supplier_name, billContact)
+      if (contact) fields = { ...fields, ...(await defaultsForContact(db, locationId, contact)) }
     } catch (e) {
       logWarn(MODULE, 'could not take the supplier from the Xero bill', { queue_id: row.id, error: messageOf(e) })
     }

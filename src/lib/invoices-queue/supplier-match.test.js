@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { createFakeDb } from '../../../tests/helpers/fake-db.js'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
-import { matchSupplier, tidySupplierName } from './supplier-defaults'
+import { matchSupplier, tidySupplierName, supplierNamesAgree } from './supplier-defaults'
 
 const LOC = '11111111-1111-4111-8111-111111111111'
 const OTHER = '22222222-2222-4222-8222-222222222222'
@@ -126,4 +126,20 @@ describe('matchSupplier — failure', () => {
     const db = createFakeDb({ tables: { xero_contacts: [], invoices_queue: [] }, errors: { invoices_queue: { select: { message: 'boom' } } } })
     expect(await matchSupplier(db, LOC, 'Acme Supplies Ltd')).toBeNull()
   })
+})
+
+describe('supplierNamesAgree — supporting evidence for a contact a Xero bill names', () => {
+  it.each([
+    ['Acme Supplies Ltd.', 'Acme Supplies'],
+    ['Acme Funds ICAV on behalf of Acme Fund VIII (c/o Agent)', 'Acme Fund VIII'],
+    ['Event Thing TA Driving Sales Limited', 'Driving Sales'],
+  ])('%s agrees with %s', (read, contact) => expect(supplierNamesAgree(read, contact)).toBe(true))
+
+  it.each([
+    ['Zenith Timber', 'Acme Supplies'],
+    ['Acme Printing Ltd', 'Acme Print'],
+    ['Big Orn Trading', 'Orn'],
+    ['Acme Supplies', ''],
+    ['', 'Acme Supplies'],
+  ])('%s does not agree with %s', (read, contact) => expect(supplierNamesAgree(read, contact)).toBe(false))
 })

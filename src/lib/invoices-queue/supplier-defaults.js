@@ -66,6 +66,56 @@ export function tidySupplierName(name) {
   return key.length >= 2 ? key : ''
 }
 
+/** Lower case, no accents, punctuation to spaces: every word kept, in order. */
+function plainWords(name) {
+  return String(name ?? '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/\./g, '').replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+/**
+ * Does the name read off a document agree with a Xero contact's name? True
+ * when they tidy to the same name, or when the contact's tidied name (at least
+ * five characters) appears as whole words inside the document's name. This is
+ * supporting evidence only, for a contact something else already points at (a
+ * bill found in Xero by its number); it is never used to search for a supplier.
+ *
+ * @param {unknown} readName
+ * @param {unknown} contactName
+ */
+export function supplierNamesAgree(readName, contactName) {
+  const contactKey = tidySupplierName(contactName)
+  if (!contactKey) return false
+  if (tidySupplierName(readName) === contactKey) return true
+  if (contactKey.length < 5) return false
+  return ` ${plainWords(readName)} `.includes(` ${contactKey} `)
+}
+
+/**
+ * The contact a bill found in Xero names, if it can be trusted for this
+ * document: an active contact of this studio whose name agrees with the name
+ * read off the document. An invoice number alone is not enough, because two
+ * suppliers can use the same number.
+ *
+ * @param {any} db
+ * @param {string} locationId
+ * @param {unknown} readName
+ * @param {{ ContactID?: string, Name?: string }|null|undefined} billContact
+ * @returns {Promise<{ xero_contact_id: string, name: string, email: string|null } | null>}
+ */
+export async function contactFromXeroBill(db, locationId, readName, billContact) {
+  const id = billContact?.ContactID
+  if (!locationId || !id) return null
+  const { data, error } = await db
+    .from('xero_contacts')
+    .select('xero_contact_id, name, email')
+    .eq('location_id', locationId)
+    .eq('status', 'ACTIVE')
+    .eq('xero_contact_id', String(id))
+    .limit(2)
+  if (error || !data || data.length !== 1) return null
+  return supplierNamesAgree(readName, data[0].name) ? data[0] : null
+}
+
 async function matchExact(db, locationId, name) {
   const { data, error } = await db
     .from('xero_contacts')

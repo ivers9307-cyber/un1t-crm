@@ -471,8 +471,23 @@ describe('SUPPLIERMATCH.1 — the supplier of a bill found in Xero', () => {
     setup({ tables: KNOWN })
     const out = await run()
     expect(out.reasons).toEqual(['already_in_xero'])
-    expect(stored('q2').extracted_fields.xero_contact_ref).toEqual({ kind: 'existing', xero_contact_id: CONTACT, name: 'Acme Supplies' })
+    expect(stored('q2').extracted_fields.xero_contact_ref).toEqual({ kind: 'existing', xero_contact_id: CONTACT, name: 'Acme Supplies', email: 'accounts@example.com' })
     expect(stored('q2').extracted_fields.xero_account_id).toBe(ACCOUNT)
+  })
+
+  it('ignores the Xero bill\'s supplier when its name does not agree with the document (a shared invoice number)', async () => {
+    extract = vi.fn(async () => ({ ok: true, fields: read({ supplier_name: 'Zenith Timber' }), raw_response: '{}' }))
+    findBill = vi.fn(async () => ({ InvoiceID: 'x1', InvoiceNumber: 'INV-100', Contact: { ContactID: CONTACT, Name: 'Acme Supplies' } }))
+    setup({ tables: KNOWN })
+    expect((await run()).reasons).toEqual(['already_in_xero', 'new_supplier'])
+    expect(stored('q2').extracted_fields.xero_contact_ref).toBeUndefined()
+  })
+
+  it('ignores a Xero bill supplier that is not an active contact of this studio', async () => {
+    extract = vi.fn(async () => ({ ok: true, fields: read({ supplier_name: 'Acme Supplies Holdings (Head Office)' }), raw_response: '{}' }))
+    findBill = vi.fn(async () => ({ InvoiceID: 'x1', InvoiceNumber: 'INV-100', Contact: { ContactID: 'not-in-the-list', Name: 'Acme Supplies' } }))
+    setup({ tables: KNOWN })
+    expect((await run()).reasons).toEqual(['already_in_xero', 'new_supplier'])
   })
 
   it('keeps a supplier the rules matched, whatever the Xero bill says', async () => {
