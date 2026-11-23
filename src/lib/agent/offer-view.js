@@ -112,7 +112,7 @@ export function pageEntry({ page, mergedOffer = null, promo = null, zone, url, w
  * Order a studio's pages and say which leads.
  *   1. operator "Lead with this" (chrome.mia_priority 'lead'), by title
  *   2. an offer with an end date, soonest first
- *   3. an open-ended offer
+ *   3. an open-ended offer, the paid trial first (it is the baseline)
  *   4. pages with no offer of their own
  *   5. operator "Only if asked" (chrome.mia_priority 'ask_only')
  * 'lead' goes to every page in group 1, or with none there, to the first
@@ -128,12 +128,16 @@ export function rankPages(items) {
     if (!it.withOffer) return 4
     return it.endsOn ? 2 : 3
   }
+  const isTrial = (it) => it.page?.offer_type === 'paid_trial'
   const byTitle = (a, b) => String(a.entry.title).localeCompare(String(b.entry.title))
   const sorted = list
     .map((it, index) => ({ it, g: group(it), index }))
     .sort((a, b) => a.g - b.g
       || (a.g === 2 ? String(a.it.endsOn).localeCompare(String(b.it.endsOn)) : 0)
       || (a.g === 1 || a.g === 2 ? byTitle(a.it, b.it) : 0)
+      // The paid trial is the baseline for someone new: it leads the other
+      // open-ended offers (a standing free promo, a one-class page).
+      || (a.g === 3 ? Number(isTrial(b.it)) - Number(isTrial(a.it)) : 0)
       || a.index - b.index)
   const operatorLeads = sorted.some((s) => s.g === 1)
   const autoLead = operatorLeads ? null : sorted.find((s) => s.g === 2 || s.g === 3)

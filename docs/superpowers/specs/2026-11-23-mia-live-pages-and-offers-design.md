@@ -184,8 +184,9 @@ The rank is automatic, with an override (Richard chose both, 23 Nov 2026):
 1. Pages the operator set to "Lead with this", in title order.
 2. Pages with an offer that has an end date and is open now, soonest end
    first. This is what puts Open Week above the paid trial for its week.
-3. Every other page with an offer (the open-ended baseline, such as the
-   14 Day Reset).
+3. Every other page with an offer, the paid trial first: it is the baseline,
+   and leads a standing free promo or a one-class page (New Start, the 50+
+   Club) that has no end date.
 4. Pages without an offer of their own (studio pages, the sale page).
 5. Pages the operator set to "Only if asked", flagged `only_if_asked`.
 

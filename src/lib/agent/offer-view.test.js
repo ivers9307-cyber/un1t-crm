@@ -106,6 +106,16 @@ describe('rankPages', () => {
     expect(ranked([item('Z', { priority: 'lead' }), item('A', { priority: 'lead' })])).toEqual([['A', 'lead'], ['Z', 'lead']])
   })
 
+  it('the paid trial is the baseline: it leads the other open-ended offers, whatever their order', () => {
+    const typed = (title, offer_type, extra) => { const it = item(title, extra); it.page.offer_type = offer_type; return it }
+    const club = typed('50+ Club', 'one_class')
+    const fresh = typed('New Start', 'promo_credits')
+    const trial = typed('14 Day Reset', 'paid_trial')
+    const week = typed('Open Week', 'promo_credits', { endsOn: '2026-11-29' })
+    expect(ranked([club, fresh, trial])).toEqual([['14 Day Reset', 'lead'], ['50+ Club', 'normal'], ['New Start', 'normal']])
+    expect(ranked([club, fresh, week, trial])).toEqual([['Open Week', 'lead'], ['14 Day Reset', 'normal'], ['50+ Club', 'normal'], ['New Start', 'normal']])
+  })
+
   it('no page with an offer means no lead; an empty list is an empty list', () => {
     expect(ranked([item('Home', { withOffer: false }), item('Corp', { priority: 'ask_only' })])).toEqual([['Home', 'normal'], ['Corp', 'only_if_asked']])
     expect(rankPages([])).toEqual([])
