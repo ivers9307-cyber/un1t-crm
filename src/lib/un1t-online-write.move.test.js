@@ -1,7 +1,7 @@
 // UN1TMOVE.1 — moveBooking: one POST /bookings/{id}/move { eventId } instead
 // of a cancel then a book (which leaves a window where the credit or the spot
 // is lost). Fakes only: never the live API, never a database.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest'
 
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('./error-events', () => ({ recordErrorEvent: vi.fn(async () => {}) }))
@@ -370,6 +370,12 @@ describe('the late-window rule', () => {
 
   it("the real quote reads the studio's window through the writer (fees on, a pack member)", async () => {
     const settings = { un1t_online: { writes_enabled: true, fees: { enabled: true, late_cancel_fee_cents: 1000 } } }
+    // MOVECLOCK.1 — the two classes must fall on one day in the studio's zone
+    // (UTC here). Built from the real clock they straddled midnight for one
+    // minute a day (CI at 21:59 UTC, 23 Nov 2026) and the move was refused as
+    // another day. Only Date is faked, so the awaits run as usual.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-23T10:00:00Z') })
+    onTestFinished(() => { vi.useRealTimers() })
     const soonFrom = new Date(Date.now() + 2 * 3_600_000)
     const sameDayLater = new Date(soonFrom.getTime() + 60_000)
     const t = await setup({
