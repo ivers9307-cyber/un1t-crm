@@ -367,38 +367,25 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
     [rows, bulkSelection],
   )
 
-  // INV-BULK.4 — "Extract selected": hybrid. Synchronously extract the
-  // first EXTRACT_SYNC_CAP right now (visible in ~1–2 min, well under the
-  // route's 300s cap) and queue the rest to the background drainer cron.
-  // Clears the selection after so you never re-send the same rows.
-  const EXTRACT_SYNC_CAP = 10
+  // INVHARDEN.1 — "Extract selected" queues every chosen row for reading. It
+  // used to read the first ten in the request itself, which could run past the
+  // route's time limit on slow files and applied a different rule to those ten.
+  // The queue reads within seconds and the list polls while it drains.
   async function extractSelected() {
     const ids = selectedRows
       .filter((r) => ['received', 'quality_approved'].includes(r.status) && !r.analysis_claimed_at)
       .map((r) => r.id)
     if (!ids.length) return
-    const syncIds = ids.slice(0, EXTRACT_SYNC_CAP)
-    const queueIds = ids.slice(EXTRACT_SYNC_CAP)
     setBulkBusy('extract')
     setBulkError(null)
     setBulkSummary(null)
     try {
-      const post = (path, body) =>
-        fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json())
-      const syncJson = await post('/api/invoices-inbox/bulk-analyse', { ids: syncIds })
-      if (!syncJson.success) throw new Error(describeApiError(syncJson, 'Extract failed'))
-      let queueJson = null
-      if (queueIds.length) {
-        queueJson = await post('/api/invoices-inbox/bulk-queue-analysis', { ids: queueIds })
-        if (!queueJson.success) throw new Error(describeApiError(queueJson, 'Queue failed'))
-      }
-      const counts = {}
-      const add = (k, n) => { if (n) counts[k] = (counts[k] || 0) + n }
-      add('extracted', syncJson.data?.counts?.ok || 0)
-      add('failed', syncJson.data?.counts?.failed || 0)
-      add('skipped', syncJson.data?.counts?.skipped || 0)
-      add('queued', queueJson?.data?.counts?.queued || 0)
-      setBulkSummary({ action: 'Extract', counts })
+      const res = await fetch('/api/invoices-inbox/bulk-queue-analysis', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }),
+      })
+      const j = await res.json()
+      if (!j.success) throw new Error(describeApiError(j, 'Queue failed'))
+      setBulkSummary({ action: 'Extract', counts: j.data?.counts || {} })
       setBulkSelection(new Set()) // clear so the same rows aren't re-sent
       await loadRows()
     } catch (e) {
@@ -737,7 +724,7 @@ function BulkActionBar({
             disabled={queueableCount === 0 || !!busy}
             onClick={onExtract}
             className="px-3 py-1.5 text-sm rounded-md border border-un1t-border text-un1t-text disabled:opacity-40"
-            title={queueableCount === 0 ? 'No selected rows are eligible for extraction' : 'Extracts the first 10 now; queues the rest for background extraction'}
+            title={queueableCount === 0 ? 'No selected rows are eligible for extraction' : 'Queues the selected rows to be read; each appears as it is read'}
           >
             {busy === 'extract' ? 'Extracting…' : `Extract selected (${queueableCount})`}
           </button>

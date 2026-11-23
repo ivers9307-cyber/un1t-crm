@@ -33,6 +33,7 @@ const READABLE = ['received', 'quality_approved', 'extracted']
 const PREPARABLE = ['received', 'quality_approved']
 const CONCURRENT = 'Row was modified concurrently — refresh and retry.'
 const FAILED = 'Could not read the invoice. Try again.'
+const KEPT = 'Could not read it again just now. The earlier reading is kept.'
 
 // withAuth only signs the caller in; loadInvoiceForCaller keeps the
 // hand-written gate (row read, invoices_inbox and master-or-owner at the
@@ -51,6 +52,28 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
   }
   if (!row.attachment_path) {
     return NextResponse.json({ success: false, error: 'Row has no attachment.' }, { status: 400 })
+  }
+
+  // INVHARDEN.1 — a row that was already read keeps that reading if reading it
+  // again fails: a reader hiccup must not turn a good row into an unreadable one.
+  const earlier = row.status === 'extracted'
+    ? {
+        review_reasons: Array.isArray(row.review_reasons) ? row.review_reasons : [],
+        duplicate_of_id: row.duplicate_of_id ?? null,
+        extraction_error: row.extraction_error ?? null,
+        prepared_at: row.prepared_at ?? null,
+      }
+    : null
+  const keepEarlierReading = async () => {
+    if (!earlier) return false
+    const { data: kept, error: keepErr } = await db
+      .from('invoices_queue')
+      .update({ status: 'extracted', ...earlier, analysis_claimed_at: null, analysis_queued_at: null })
+      .eq('id', id)
+      .eq('status', 'quality_approved')
+      .select('id')
+    if (keepErr) logError('invoices-inbox', 'read again: could not keep the earlier reading', { invoiceId: id, err: keepErr })
+    return !keepErr && Array.isArray(kept) && kept.length > 0
   }
 
   // 1. Preparation only reads rows that have not been read yet.
@@ -97,6 +120,9 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
     ;({ outcome } = await prepareInvoiceRow(db, claimed[0], { force: true }))
   } catch (err) {
     logError('invoices-inbox', 'read again: preparation threw', { invoiceId: id, err })
+    if (await keepEarlierReading()) {
+      return NextResponse.json({ success: false, error: KEPT }, { status: 500 })
+    }
     const { error: releaseErr } = await db
       .from('invoices_queue')
       .update({ analysis_claimed_at: null, analysis_queued_at: null })
@@ -109,6 +135,7 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
   if (outcome === 'skipped') {
     return NextResponse.json({ success: false, error: CONCURRENT }, { status: 409 })
   }
+  const keptEarlier = outcome === 'unreadable' && await keepEarlierReading()
 
   const { data: fresh, error: readErr } = await db
     .from('invoices_queue')
@@ -122,7 +149,7 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
   if (outcome === 'unreadable') {
     return NextResponse.json({
       success: false,
-      error: data?.extraction_error || 'Could not read this document.',
+      error: keptEarlier ? KEPT : (data?.extraction_error || 'Could not read this document.'),
       data,
     }, { status: 422 })
   }

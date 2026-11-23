@@ -60,3 +60,45 @@ export async function queueInvoicePreparation(db, ids, { publish = publishQueueP
     return { queued: [] }
   }
 }
+
+// INVHARDEN.1 — the safety net. Every arrival path is meant to call
+// queueInvoicePreparation, and the sweeper claims only stamped rows, so a path
+// that forgets (or a stamp that fails) leaves a row unread forever. This finds
+// rows that arrived a while ago and were never queued or prepared, and queues
+// them. Rows the reader already stopped on (a duplicate, an unreadable file)
+// have prepared_at set and are left alone.
+export const MISSED_AFTER_MINUTES = 10
+export const MISSED_LIMIT = 20
+
+/**
+ * @param {import('@/lib/supabase').Db} db
+ * @param {{ now?: () => Date, limit?: number, publish?: typeof publishQueuePush }} [opts]
+ * @returns {Promise<{ queued: string[] }>}
+ */
+export async function queueMissedInvoices(db, opts = {}) {
+  try {
+    const now = (opts.now || (() => new Date()))()
+    const before = new Date(now.getTime() - MISSED_AFTER_MINUTES * 60_000).toISOString()
+    const { data, error } = await db
+      .from('invoices_queue')
+      .select('id')
+      .eq('status', 'received')
+      .is('analysis_queued_at', null)
+      .is('prepared_at', null)
+      .lt('created_at', before)
+      .order('created_at', { ascending: true })
+      .limit(opts.limit ?? MISSED_LIMIT)
+    if (error) {
+      logWarn(MODULE, 'could not look for missed invoices', { err: error })
+      return { queued: [] }
+    }
+    const ids = (data || []).map((r) => r.id)
+    if (ids.length === 0) return { queued: [] }
+    logWarn(MODULE, 'found invoices that were never queued for reading; queueing them now', { count: ids.length })
+    return queueInvoicePreparation(db, ids, opts.publish ? { publish: opts.publish } : undefined)
+  } catch (err) {
+    logError(MODULE, 'unexpected failure looking for missed invoices', { err })
+    return { queued: [] }
+  }
+}
+
