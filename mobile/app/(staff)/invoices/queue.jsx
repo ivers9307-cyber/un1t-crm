@@ -1,11 +1,10 @@
 // INV-M.1 — mobile bookkeeper queue. Lean counterpart of the web
 // /invoices inbox for the two things worth doing from a phone:
 //
-//   • Multi-select + "Extract selected" (INV-BULK.4 parity) — tap
-//     rows still awaiting extraction to select them, then run the
-//     same hybrid the web uses: the first few synchronously via
-//     /api/invoices-inbox/bulk-analyse, the rest queued to the
-//     background drainer via /bulk-queue-analysis.
+//   • Multi-select + "Extract selected" — tap rows that have not been
+//     read to select them, then queue them all to be read via
+//     /bulk-queue-analysis, as the web does (INVMOBILE.1). Invoices are
+//     read on arrival, so this is only for a row the reader stopped on.
 //   • A red "Not in Xero" chip (XERO-CONTACT-RED.1 parity) on rows
 //     whose Xero supplier contact is unresolved — read-only here;
 //     matching/creating the supplier stays a web-inbox job.
@@ -19,12 +18,11 @@ import { Stack, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
-import { listInvoicesQueue, bulkAnalyse, bulkQueueAnalysis } from '../../../lib/invoices-queue-api'
+import { listInvoicesQueue, bulkQueueAnalysis } from '../../../lib/invoices-queue-api'
 import {
   isExtractable,
-  splitExtractIds,
   xeroSupplierUnresolved,
-  mergeExtractCounts,
+  queueCounts,
   queueStatusMeta,
   SOURCE_LABEL,
 } from '../../../lib/invoices-queue'
@@ -121,21 +119,10 @@ export default function BookkeeperQueue() {
     setBusy(true)
     setError(null)
     setSummary(null)
-    // Queue the overflow FIRST (instant, no-timeout), then run the small
-    // sync leg — if the sync call dies mid-flight (iOS ~60s fetch cap)
-    // the rest is already safely queued, and the poll above will pick up
-    // whatever the server finished anyway.
-    const { syncIds, queueIds } = splitExtractIds(ids)
     try {
-      let queueData = null
-      if (queueIds.length) {
-        const qr = await bulkQueueAnalysis(queueIds)
-        if (qr.success === false) throw new Error(qr.error || 'Queue failed')
-        queueData = qr.data
-      }
-      const sr = await bulkAnalyse(syncIds)
-      if (sr.success === false) throw new Error(sr.error || 'Extract failed')
-      setSummary(mergeExtractCounts(sr.data, queueData))
+      const qr = await bulkQueueAnalysis(ids)
+      if (qr.success === false) throw new Error(qr.error || 'Queue failed')
+      setSummary(queueCounts(qr.data))
       setSelected(new Set()) // never re-send the same rows
       await load()
     } catch (e) {
