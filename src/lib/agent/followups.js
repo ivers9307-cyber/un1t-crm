@@ -430,7 +430,8 @@ export async function composeAgentText({ location, settings, historyRows, instru
     today: todayStrIn(zone),
   })
   const messages = [
-    ...formatHistoryForClaude(historyRows || []),
+    // MIAHISTORYDATES.1 — a follow-up runs days after the history: date it.
+    ...formatHistoryForClaude(historyRows || [], { zone }),
     { role: 'user', content: instruction },
   ]
   try {

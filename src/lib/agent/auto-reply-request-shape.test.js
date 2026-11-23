@@ -173,7 +173,8 @@ describe('MIAPREFILL.1 — every request Mia sends ends on a user turn', () => {
       expect(body.messages.at(-1).role).toBe('user')
     }
     const rerun = bodies[1].messages
-    expect(rerun.at(-2)).toMatchObject({ role: 'assistant', content: R.body })
+    // MIAHISTORYDATES.1 — the fixture's rows are dated 25 Sep, an earlier day, so each carries its date stamp.
+    expect(rerun.at(-2)).toMatchObject({ role: 'assistant', content: `[sent Fri 25 Sept] ${R.body}` })
     expect(rerun.at(-1).content).toContain(B.body)
     expect(recordErrorEvent).not.toHaveBeenCalled()
     expect(adapter.send).toHaveBeenCalledTimes(2)

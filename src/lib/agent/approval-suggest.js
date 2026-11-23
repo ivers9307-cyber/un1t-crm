@@ -163,7 +163,8 @@ export async function composeAgentText(location, settings, historyRows, instruct
     today: zonedDateString(Date.now(), zoneOfLocation(location)),
   })
   const messages = [
-    ...formatHistoryForClaude(historyRows || []),
+    // MIAHISTORYDATES.1 — the same dated history the customer reply reads.
+    ...formatHistoryForClaude(historyRows || [], { zone: zoneOfLocation(location) }),
     { role: 'user', content: instruction },
   ]
   try {
