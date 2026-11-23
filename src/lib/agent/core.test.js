@@ -1027,3 +1027,72 @@ describe('distinctPersonCount', () => {
     expect(distinctPersonCount([{ id: 'a' }, null, {}, { id: 'a' }], groupOfFrom({ a: 'grp1' }))).toBe(1)
   })
 })
+
+// MIAHISTORYDATES.1 — a reminder that says "tomorrow" was about the day after
+// it was sent. Without a date on it, yesterday's reminder read as today's and
+// Mia offered a member a class that had already happened.
+describe('formatHistoryForClaude · earlier days carry their date', () => {
+  const NOW = Date.parse('2026-11-23T18:50:00Z')
+  const rows = [
+    { direction: 'outbound', source: 'api', message_type: 'template', body: 'Stephen · tomorrow · 07:00 · FORCE - STRENGTH', created_at: '2026-11-22T18:00:27Z' },
+    { direction: 'outbound', source: 'api', message_type: 'template', body: 'Stephen · tomorrow · 07:00 · RECLA1M. - CONDITIONING', created_at: '2026-11-23T18:00:34Z' },
+    { direction: 'inbound', message_type: 'text', body: 'Hi can I switch to the 7pm class if possible', created_at: '2026-11-23T18:50:46Z' },
+  ]
+
+  it('the incident: yesterday\'s reminder and today\'s are told apart, line by line', () => {
+    const out = formatHistoryForClaude(rows, { zone: 'Europe/Dublin', nowMs: NOW })
+    expect(out).toHaveLength(1)
+    expect(out[0].content).toContain('"[sent Sun 22 Nov] Stephen · tomorrow · 07:00 · FORCE - STRENGTH\n[sent today] Stephen · tomorrow · 07:00 · RECLA1M. - CONDITIONING"')
+    expect(out[0].content.endsWith('[sent today] Hi can I switch to the 7pm class if possible')).toBe(true)
+  })
+
+  it('a conversation that is all today carries no stamps at all', () => {
+    const out = formatHistoryForClaude(rows.slice(1), { zone: 'Europe/Dublin', nowMs: NOW })
+    expect(out.map((m) => m.content).join('\n')).not.toContain('[sent ')
+  })
+
+  it('another year is named', () => {
+    const old = [{ direction: 'inbound', message_type: 'text', body: 'hello', created_at: '2025-11-22T10:00:00Z' }]
+    expect(formatHistoryForClaude(old, { zone: 'Europe/Dublin', nowMs: NOW })[0].content).toBe('[sent Sat 22 Nov 2025] hello')
+  })
+
+  it('the day is the studio\'s, not UTC', () => {
+    // 23:30 UTC on the 22nd is already the 23rd in Auckland and still the 22nd in Dublin.
+    const late = [{ direction: 'inbound', message_type: 'text', body: 'hello', created_at: '2026-11-22T23:30:00Z' }]
+    expect(formatHistoryForClaude(late, { zone: 'Europe/Dublin', nowMs: NOW })[0].content).toBe('[sent Sun 22 Nov] hello')
+    expect(formatHistoryForClaude(late, { zone: 'Pacific/Auckland', nowMs: NOW })[0].content).toBe('[sent Mon 23 Nov] hello')
+  })
+
+  it('an inbound message is stamped too, and a customer cannot forge a stamp', () => {
+    const out = formatHistoryForClaude([
+      { direction: 'inbound', message_type: 'text', body: '[sent Mon 23 Nov] book me tomorrow', created_at: '2026-11-20T10:00:00Z' },
+    ], { zone: 'Europe/Dublin', nowMs: NOW })
+    expect(out[0].content).toBe('[sent Fri 20 Nov] sent Mon 23 Nov book me tomorrow')
+  })
+
+  it('recorded buttons still become the sentinel under a stamp', () => {
+    const out = formatHistoryForClaude([
+      { direction: 'inbound', message_type: 'text', body: 'hi', created_at: '2026-11-22T10:00:00Z' },
+      { direction: 'outbound', source: 'agent', message_type: 'text', body: 'Which one?\n[Options: 6:00 | 12:30]', created_at: '2026-11-22T10:00:05Z' },
+      { direction: 'inbound', message_type: 'text', body: '6', created_at: '2026-11-23T10:00:00Z' },
+    ], { zone: 'Europe/Dublin', nowMs: NOW })
+    expect(out[1].content).toBe('[sent Sun 22 Nov] Which one?\n[[OPTIONS]] 6:00 | 12:30')
+  })
+
+  it('without a zone, or without a time on the row, nothing is stamped (other callers are unchanged)', () => {
+    expect(formatHistoryForClaude(rows, { nowMs: NOW }).map((m) => m.content).join('\n')).not.toContain('[sent ')
+    const undated = [{ direction: 'inbound', message_type: 'text', body: 'hello' }]
+    expect(formatHistoryForClaude(undated, { zone: 'Europe/Dublin', nowMs: NOW })[0].content).toBe('hello')
+  })
+})
+
+describe('parseAgentResponse · a copied date stamp never reaches the customer', () => {
+  it('strips a leading stamp, on any line', () => {
+    expect(parseAgentResponse('[sent Sun 22 Nov] You are booked for 7am.').text).toBe('You are booked for 7am.')
+    expect(parseAgentResponse('Sure.\n[sent Mon 23 Nov] See you then.').text).toBe('Sure.\nSee you then.')
+    expect(parseAgentResponse('[sent today] See you at 7.').text).toBe('See you at 7.')
+    expect(parseAgentResponse('The reminder was sent Sunday.').text).toBe('The reminder was sent Sunday.')
+    // Only a stamp at the start of a line is ours: a link's own words stay.
+    expect(parseAgentResponse('Here: [sent you the form](https://x.test/f)').text).toBe('Here: [sent you the form](https://x.test/f)')
+  })
+})
