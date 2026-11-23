@@ -28,12 +28,15 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'contract_issued', contract_id: 'k1' })).toBe('/contracts/k1')
     expect(routeForNotification({ type: 'issue_submitted', issue_id: 'is1' })).toBe('/issues/inbox/is1')
     expect(routeForNotification({ type: 'issue_resolved', issue_id: 'is2' })).toBe('/issues/is2')
+    // SALEALERT.1 — a new sale opens the buyer's contact.
+    expect(routeForNotification({ type: 'sale_new', contact_id: 'c2' })).toBe('/contacts/c2')
   })
 
   it('falls back to the relevant list when the id is missing', () => {
     expect(routeForNotification({ type: 'task_reminder' })).toBe('/tasks')
     expect(routeForNotification({ type: 'booking_reminder' })).toBe('/(tabs)/bookings')
     expect(routeForNotification({ type: 'lead_new' })).toBe('/contacts')
+    expect(routeForNotification({ type: 'sale_new' })).toBe('/contacts')
     expect(routeForNotification({ type: 'whatsapp_inbound' })).toBe('/(tabs)/whatsapp')
     expect(routeForNotification({ type: 'instagram_inbound' })).toBe('/(tabs)/whatsapp')
     expect(routeForNotification({ type: 'email_inbound' })).toBe('/(tabs)/email')
