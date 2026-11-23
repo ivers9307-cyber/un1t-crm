@@ -561,7 +561,14 @@ function InboxList({
     { total: 0, queued: 0, analysing: 0 },
   )
   return (
-    <aside className="border border-un1t-border rounded-lg overflow-hidden min-w-0">
+    // INVLIST.1 — beside the detail panel (lg and up) the list fills the panel's
+    // full height and scrolls inside it. It used to stop at 70% of the screen
+    // height while its box stretched to the taller detail panel, leaving a
+    // blank half that looked like a list that had not finished loading. The
+    // inner wrapper is absolutely placed so the list's own length never sets
+    // the row height; the detail panel does, with a floor for a short one.
+    <aside className="border border-un1t-border rounded-lg overflow-hidden min-w-0 lg:relative lg:min-h-[70vh]">
+      <div className="flex flex-col lg:absolute lg:inset-0">
       {piles && (
         <div className="px-2 py-2 border-b border-un1t-border flex items-center gap-1 flex-wrap">
           {PILES.map((p) => {
@@ -602,7 +609,7 @@ function InboxList({
           </button>
         )}
       </header>
-      <ul className="divide-y divide-un1t-border/50 max-h-[70vh] overflow-y-auto">
+      <ul className="divide-y divide-un1t-border/50 max-h-[70vh] overflow-y-auto lg:max-h-none lg:flex-1 lg:min-h-0">
         {rows.length === 0 && !loading && (
           <li className="p-4 text-sm text-un1t-subtle">Nothing here.</li>
         )}
@@ -666,6 +673,7 @@ function InboxList({
           )
         })}
       </ul>
+      </div>
     </aside>
   )
 }
