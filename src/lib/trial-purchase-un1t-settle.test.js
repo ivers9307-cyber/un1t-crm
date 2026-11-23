@@ -192,6 +192,9 @@ describe('settleUn1tTrialPurchases', () => {
     // SALEALERT.1 — the matched stamp rings the sale push once, keyed on the transaction.
     expect(mocks.sale).toHaveBeenCalledTimes(1)
     expect(mocks.sale).toHaveBeenCalledWith(db, expect.objectContaining({ id: 'tp1', location_id: 'loc2', payment_provider: 'un1t_online', payment_provider_ref: 'tx1' }), { paidAmountCents: 3900 })
+    // The push never delays the buyer: it follows the conversion and set-password steps.
+    const saleAt = mocks.sale.mock.invocationCallOrder[0]
+    for (const step of [mocks.capi, mocks.setPassword]) expect(saleAt).toBeGreaterThan(step.mock.invocationCallOrder[0])
 
     // The next sweep (or a re-run after a crash) finds nothing open: no second Purchase.
     const again = await settleUn1tTrialPurchases(db, { now })

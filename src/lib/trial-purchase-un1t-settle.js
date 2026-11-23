@@ -240,12 +240,6 @@ async function settleRow(db, row, tx, nowMs, out) {
     return false
   }
 
-  // SALEALERT.1 — the stamp matched, so this run is the first paid transition:
-  // ring the studio's owners and managers, keyed on the un1t.online transaction
-  // (the row as read has no payment_provider_ref yet; the stamp just set it).
-  // Awaited: this is a cron, and a frozen function would drop a floating push.
-  await alertTrialSale(db, { ...row, payment_provider: 'un1t_online', payment_provider_ref: tx.un1t_id }, { paidAmountCents: Number(tx.amount_cents) })
-
   // CLASSFIRST.1 — the class they picked before paying: queued now, booked
   // against the trial's credits by the class-booking worker (the un1t.online
   // processor, which reads the live ledger). Best-effort: the row is settled.
@@ -308,5 +302,13 @@ async function settleRow(db, row, tx, nowMs, out) {
       logWarn(LOG, 'set-password verdict not recorded on the row', { ...ids, errClass: err?.name })
     }
   }
+  // SALEALERT.1 — the stamp matched, so this run is the first paid transition:
+  // ring the studio's owners and managers, keyed on the un1t.online transaction
+  // (the row as read has no payment_provider_ref yet; the stamp just set it).
+  // Last, after the booking, conversion and set-password steps, so the push
+  // never delays the buyer. Awaited: this is a cron, and a frozen function
+  // would drop a floating push.
+  await alertTrialSale(db, { ...row, payment_provider: 'un1t_online', payment_provider_ref: tx.un1t_id }, { paidAmountCents: Number(tx.amount_cents) })
+
   return true
 }
