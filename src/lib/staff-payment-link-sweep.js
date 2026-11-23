@@ -30,6 +30,7 @@ import { runSetPasswordStep } from '@/lib/un1t-online-account'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { sendUn1tAccountEmail } from '@/lib/un1t-online-funnel-emails'
 import { clockMs } from '@/lib/un1t-offer-purchases'
+import { alertPayLinkSale } from '@/lib/sale-alert-sources'
 import { logError, logWarn } from '@/lib/log'
 
 const LOG = 'paylink-sweep'
@@ -194,6 +195,7 @@ async function settleLink(db, link, t, nowMs, out, emailCopy) {
   out.paid++
 
   let verdict
+  let buyerFirstName = ''
   try {
     if (!link.contact_id) throw Object.assign(new Error('no contact on the link'), { code: 'no_contact' })
     const { settings } = await readUn1tWriteSettings(db, link.location_id)
@@ -201,6 +203,7 @@ async function settleLink(db, link, t, nowMs, out, emailCopy) {
       .select('id, email, first_name, last_name, name').eq('id', link.contact_id).maybeSingle()
     if (contactErr) throw Object.assign(new Error('contact unreadable'), { code: contactErr.code ?? null })
     if (!contact) throw Object.assign(new Error('contact missing'), { code: 'contact_missing' })
+    buyerFirstName = contact.first_name || ''
     const res = await runSetPasswordStep(db, {
       locationId: link.location_id, contact, un1tUserId: String(link.un1t_user_id), request: null,
       settings, origin: ORIGIN,
@@ -215,6 +218,11 @@ async function settleLink(db, link, t, nowMs, out, emailCopy) {
     verdict = 'error'
     logError(LOG, 'set-password step failed after settling', { ...ids, code: err?.code ?? null, errClass: err?.name })
   }
+  // SALEALERT.1 — the CAS above matched, so this run is the first paid
+  // transition: ring the studio's owners and managers, keyed on the
+  // un1t.online transaction. Awaited: this is a cron, and a frozen function
+  // would drop a floating push. It never throws.
+  await alertPayLinkSale(db, { ...link, paid_transaction_id: String(t.un1t_id), first_name: buyerFirstName }, { paidAmountCents: Number(t.amount_cents) })
   if (verdict !== 'done' && !String(verdict).startsWith('skipped_')) {
     out.passwordPending++
     try {

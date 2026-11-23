@@ -19,6 +19,10 @@ vi.mock('@/lib/qstash', () => ({
   publishClassBookingJob: vi.fn(async () => {}),
   TRIAL_PURCHASES_WORKER_PATH: '/w/trial',
 }))
+vi.mock('@/lib/sale-alert-sources', () => ({
+  alertTrialSale: vi.fn(async () => ({ sent: true })),
+  alertClassBookingSale: vi.fn(async () => ({ sent: true })),
+}))
 vi.mock('@/lib/webhook-events', () => ({
   recordWebhookEvent: vi.fn(),
   releaseWebhookEvent: vi.fn(async () => {}),
@@ -31,6 +35,7 @@ import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '
 import { resolveTrialPurchaseByRef, markTrialPurchasePaymentStatus } from '@/lib/trial-purchase-payments'
 import { publishQueuePush, publishClassBookingJob } from '@/lib/qstash'
 import { recordWebhookEvent, releaseWebhookEvent } from '@/lib/webhook-events'
+import { alertTrialSale, alertClassBookingSale } from '@/lib/sale-alert-sources'
 
 function makeRequest(body = JSON.stringify({ event: 'ORDER_COMPLETED', order_id: 'ord-1' })) {
   return {
@@ -97,6 +102,14 @@ describe('POST /api/webhooks/revolut/class-bookings', () => {
       expect((await res.json()).released).toBe(true)
       expect(publishClassBookingJob).toHaveBeenCalledWith('cb1')
       expect(releaseWebhookEvent).not.toHaveBeenCalled()
+      expect(alertClassBookingSale).toHaveBeenCalledTimes(1)
+      expect(alertClassBookingSale).toHaveBeenCalledWith(expect.anything(), ROW, { paidAmountCents: 1500 })
+    })
+
+    it('a mark that released nothing rings no sale push', async () => {
+      markClassBookingPaymentStatus.mockResolvedValue({ released: false })
+      await POST(makeRequest())
+      expect(alertClassBookingSale).not.toHaveBeenCalled()
     })
 
     it('getOrder failure → deferred, claim released, no mark', async () => {
@@ -142,6 +155,14 @@ describe('POST /api/webhooks/revolut/class-bookings', () => {
       expect(json).toMatchObject({ released: true, domain: 'trial_purchase' })
       expect(publishQueuePush).toHaveBeenCalledWith(expect.objectContaining({ path: '/w/trial', body: { id: 'tp1' } }))
       expect(releaseWebhookEvent).not.toHaveBeenCalled()
+      expect(alertTrialSale).toHaveBeenCalledTimes(1)
+      expect(alertTrialSale).toHaveBeenCalledWith(expect.anything(), TRIAL, { paidAmountCents: 1500 })
+    })
+
+    it('a mark that released nothing rings no sale push', async () => {
+      markTrialPurchasePaymentStatus.mockResolvedValue({ released: false })
+      await POST(makeRequest())
+      expect(alertTrialSale).not.toHaveBeenCalled()
     })
 
     it('getOrder failure → deferred, claim released', async () => {

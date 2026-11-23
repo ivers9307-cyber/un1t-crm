@@ -11,12 +11,13 @@
 // changes the row, so a second sweep sees what the first one wrote.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ capi: vi.fn(), setPassword: vi.fn(), settings: vi.fn(), warn: vi.fn(), emailCopy: vi.fn(), sendAccountEmail: vi.fn(), queue: vi.fn() }))
+const mocks = vi.hoisted(() => ({ sale: vi.fn(async () => ({ sent: true })), capi: vi.fn(), setPassword: vi.fn(), settings: vi.fn(), warn: vi.fn(), emailCopy: vi.fn(), sendAccountEmail: vi.fn(), queue: vi.fn() }))
 vi.mock('@/lib/trial-studios', () => ({ readPaidTrialAccountEmailCopy: mocks.emailCopy }))
 vi.mock('@/lib/un1t-online-funnel-emails', () => ({ sendUn1tAccountEmail: mocks.sendAccountEmail }))
 vi.mock('@/lib/meta-capi', () => ({ sendWebsiteConversion: mocks.capi }))
 vi.mock('@/lib/un1t-online-account', () => ({ runSetPasswordStep: mocks.setPassword }))
 vi.mock('@/lib/un1t-online-settings', () => ({ readUn1tWriteSettings: mocks.settings }))
+vi.mock('@/lib/sale-alert-sources', () => ({ alertTrialSale: mocks.sale }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: mocks.warn, logInfo: vi.fn() }))
 // CLASSFIRST.1 — the funded booking after the settle (its own tests beside it).
 vi.mock('@/lib/class-first-booking', async (importOriginal) => ({ ...(await importOriginal()), queueFundedClassBooking: mocks.queue }))
@@ -188,11 +189,15 @@ describe('settleUn1tTrialPurchases', () => {
     expect(mocks.setPassword.mock.calls[0][2].sendUn1tAccountEmail).toBe(mocks.sendAccountEmail)
     expect(mocks.emailCopy).toHaveBeenCalledWith(db, 'loc2')
     expect(rows[0].status).toBe('granted')
+    // SALEALERT.1 — the matched stamp rings the sale push once, keyed on the transaction.
+    expect(mocks.sale).toHaveBeenCalledTimes(1)
+    expect(mocks.sale).toHaveBeenCalledWith(db, expect.objectContaining({ id: 'tp1', location_id: 'loc2', payment_provider: 'un1t_online', payment_provider_ref: 'tx1' }), { paidAmountCents: 3900 })
 
     // The next sweep (or a re-run after a crash) finds nothing open: no second Purchase.
     const again = await settleUn1tTrialPurchases(db, { now })
     expect(again).toMatchObject({ settled: 0, expired: 0, errors: 0 })
     expect(mocks.capi).toHaveBeenCalledTimes(1)
+    expect(mocks.sale).toHaveBeenCalledTimes(1)
     expect(mocks.setPassword).toHaveBeenCalledTimes(1)
   })
 
@@ -371,6 +376,7 @@ describe('settleUn1tTrialPurchases', () => {
     guardedBy(trialUpdates(updates)[0], 'tp1')
     expect(mocks.capi).not.toHaveBeenCalled()
     expect(mocks.setPassword).not.toHaveBeenCalled()
+    expect(mocks.sale).not.toHaveBeenCalled()
   })
 
   it('one payment settles exactly one of two open rows (product match, then newest)', async () => {

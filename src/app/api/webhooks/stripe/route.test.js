@@ -22,7 +22,8 @@ vi.mock('@/lib/donation-payments', () => ({
   runPaidDonationSideEffects: vi.fn(),
 }))
 vi.mock('@/lib/charity-donations', () => ({ resolveCharitySettings: vi.fn(() => ({ match_multiplier: 2 })) }))
-vi.mock('@/lib/qstash', () => ({ publishQueuePush: vi.fn(), CLASS_BOOKINGS_WORKER_PATH: '/x' }))
+vi.mock('@/lib/qstash', () => ({ publishQueuePush: vi.fn(), publishClassBookingJob: vi.fn(async () => {}), CLASS_BOOKINGS_WORKER_PATH: '/x' }))
+vi.mock('@/lib/sale-alert-sources', () => ({ alertClassBookingSale: vi.fn(async () => ({ sent: true })) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/payments/apple-pay-domains', () => ({
   registerCheckoutDomainsForAccount: vi.fn(async () => ({ ok: true, results: [] })),
@@ -34,6 +35,8 @@ const { createServerClient } = await import('@/lib/supabase')
 const { resolveRacePaymentByProviderRef, markRacePaymentStatus } = await import('@/lib/race-payments')
 const { sendRaceConfirmations, sendGapPaidEmail } = await import('@/lib/race-confirmations')
 const { logWarn } = await import('@/lib/log')
+const { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } = await import('@/lib/class-booking-payments')
+const { alertClassBookingSale } = await import('@/lib/sale-alert-sources')
 const { registerCheckoutDomainsForAccount } = await import('@/lib/payments/apple-pay-domains')
 const { resolveDonationByRef, markDonationPaymentStatus, markDonationRefunded, runPaidDonationSideEffects } = await import('@/lib/donation-payments')
 
@@ -216,5 +219,28 @@ describe('POST /api/webhooks/stripe — account.updated (HOSTAPPLEPAY.1)', () =>
     const res = await POST(req())
     expect(res.status).toBe(200)
     expect(registerCheckoutDomainsForAccount).not.toHaveBeenCalled()
+  })
+})
+
+// SALEALERT.1 — a paid class-funnel intro rings the sale push on its first release only.
+describe('POST /api/webhooks/stripe — class booking sale push', () => {
+  const ROW = { id: 'cb1', location_id: 'loc-1', status: 'awaiting_payment', payment_status: 'pending' }
+  const bookingEvent = { type: 'checkout.session.completed', data: { object: { id: 'cs_cb', amount_total: 1500, metadata: { domain: 'un1t_class_booking' } } } }
+  beforeEach(() => {
+    verifyStripeWebhook.mockReturnValue(bookingEvent)
+    resolveClassBookingPaymentByRef.mockResolvedValue(ROW)
+  })
+
+  it('a first release rings once with the amount Stripe took', async () => {
+    markClassBookingPaymentStatus.mockResolvedValue({ released: true })
+    expect((await POST(req())).status).toBe(200)
+    expect(alertClassBookingSale).toHaveBeenCalledTimes(1)
+    expect(alertClassBookingSale).toHaveBeenCalledWith(expect.anything(), ROW, { paidAmountCents: 1500 })
+  })
+
+  it('a replay that released nothing rings nothing', async () => {
+    markClassBookingPaymentStatus.mockResolvedValue({ released: false })
+    await POST(req())
+    expect(alertClassBookingSale).not.toHaveBeenCalled()
   })
 })

@@ -35,6 +35,7 @@ import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
 import { resolveTrialPurchaseByRef, markTrialPurchasePaymentStatus } from '@/lib/trial-purchase-payments'
+import { alertTrialSale, alertClassBookingSale } from '@/lib/sale-alert-sources'
 import { publishQueuePush, publishClassBookingJob, TRIAL_PURCHASES_WORKER_PATH } from '@/lib/qstash'
 import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { logWarn, logError } from '@/lib/log'
@@ -130,6 +131,8 @@ export async function POST(request) {
     }
     if (released) {
       try { await publishQueuePush({ path: TRIAL_PURCHASES_WORKER_PATH, body: { id: trial.id }, deduplicationId: `trial-purchase-${trial.id}` }) } catch { /* queue is the guarantee */ }
+      // SALEALERT.1 — the first paid transition: ring the studio's owners and managers.
+      void alertTrialSale(db, trial, { paidAmountCents: providerAmount }).catch(() => {})
     }
     return NextResponse.json({ success: true, released, domain: 'trial_purchase' })
   }
@@ -159,6 +162,8 @@ export async function POST(request) {
     } catch {
       // publishClassBookingJob swallows its own errors; belt-and-braces only.
     }
+    // SALEALERT.1 — the first paid transition: ring the studio's owners and managers.
+    void alertClassBookingSale(db, row, { paidAmountCents: providerAmount }).catch(() => {})
   }
 
   return NextResponse.json({ success: true, released })

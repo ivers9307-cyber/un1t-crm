@@ -20,6 +20,7 @@ import { syncOrderFromRacePayment } from '@/lib/orders'
 import { sendRaceConfirmations, sendGapPaidEmail } from '@/lib/race-confirmations'
 import { refundPatchFromCharge } from '@/lib/stripe-refund-sync'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
+import { alertClassBookingSale } from '@/lib/sale-alert-sources'
 import {
   DONATION_COLS,
   resolveDonationByRef,
@@ -141,6 +142,8 @@ export async function POST(request) {
               // in the DB, which is the durable guarantee; a drain/poll path
               // still picks it up. Never let a queue hiccup fail the webhook.
             }
+            // SALEALERT.1 — the first paid transition: ring the studio's owners and managers.
+            void alertClassBookingSale(db, row, { paidAmountCents: Number.isFinite(session.amount_total) ? session.amount_total : null }).catch(() => {})
           }
         }
         return NextResponse.json({ received: true })

@@ -4,13 +4,14 @@
 // Stillorgan (Revolut) row still re-checks while pending.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ rateLimit: vi.fn(), getPayment: vi.fn(), paymentsFor: vi.fn(), mark: vi.fn(), push: vi.fn(), row: null, selects: [], gate: vi.fn() }))
+const mocks = vi.hoisted(() => ({ alert: vi.fn(async () => ({ sent: true })), rateLimit: vi.fn(), getPayment: vi.fn(), paymentsFor: vi.fn(), mark: vi.fn(), push: vi.fn(), row: null, selects: [], gate: vi.fn() }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: mocks.rateLimit }))
 vi.mock('@/lib/payments', () => ({ paymentsFor: mocks.paymentsFor }))
 vi.mock('@/lib/trial-purchase-payments', () => ({ markTrialPurchasePaymentStatus: mocks.mark }))
 vi.mock('@/lib/qstash', () => ({ publishQueuePush: mocks.push, TRIAL_PURCHASES_WORKER_PATH: '/api/workers/trial-purchases' }))
 // HATCHTRACK.1 — the paid gate has its own tests (trial-purchase-un1t-resume.test.js); here it answers what a test sets.
 vi.mock('@/lib/trial-purchase-un1t-resume', () => ({ un1tRetryGate: mocks.gate }))
+vi.mock('@/lib/sale-alert-sources', () => ({ alertTrialSale: mocks.alert }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
@@ -64,6 +65,23 @@ describe('GET /api/public/trial-purchases/[id]', () => {
     expect(mocks.paymentsFor).toHaveBeenCalledWith('revolut')
     expect(mocks.getPayment).toHaveBeenCalledWith('ord1', { connectedAccountId: null })
     expect(data.checkout).toEqual({ provider: 'revolut', token: 'tok', url: null })
+  })
+
+  // SALEALERT.1 — the poll that wins the paid transition rings the sale push; one that does not, never does.
+  it('a poll that releases the row rings the sale push once, naming the buyer from a server-side read', async () => {
+    mocks.row = { ...BASE, status: 'awaiting_payment', payment_status: 'pending', payment_provider: 'revolut', payment_provider_ref: 'ord1', payment_checkout_token: 'tok', payment_checkout_url: null, location_id: 'loc-1' }
+    mocks.mark.mockResolvedValue({ released: true })
+    mocks.getPayment.mockResolvedValue({ state: 'completed', amountCents: 3900 })
+    await call('tp1')
+    expect(mocks.alert).toHaveBeenCalledTimes(1)
+    expect(mocks.alert).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'tp1', location_id: 'loc-1' }), { paidAmountCents: 3900 })
+  })
+
+  it('a poll that releases nothing rings no sale push', async () => {
+    mocks.row = { ...BASE, status: 'awaiting_payment', payment_status: 'pending', payment_provider: 'revolut', payment_provider_ref: 'ord1', payment_checkout_token: 'tok', payment_checkout_url: null }
+    mocks.mark.mockResolvedValue({ released: false })
+    await call('tp1')
+    expect(mocks.alert).not.toHaveBeenCalled()
   })
 
   // TRIALLEAK.1 — `resumable`: may the page put the checkout back?

@@ -50,6 +50,7 @@ import { runSetPasswordStep } from '@/lib/un1t-online-account'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { readPaidTrialAccountEmailCopy } from '@/lib/trial-studios'
 import { sendUn1tAccountEmail } from '@/lib/un1t-online-funnel-emails'
+import { alertTrialSale } from '@/lib/sale-alert-sources'
 import { logError, logWarn } from '@/lib/log'
 
 const LOG = 'trial-purchase-un1t'
@@ -238,6 +239,12 @@ async function settleRow(db, row, tx, nowMs, out) {
     logWarn(LOG, 'un1t trial row no longer open; nothing sent', ids)
     return false
   }
+
+  // SALEALERT.1 — the stamp matched, so this run is the first paid transition:
+  // ring the studio's owners and managers, keyed on the un1t.online transaction
+  // (the row as read has no payment_provider_ref yet; the stamp just set it).
+  // Awaited: this is a cron, and a frozen function would drop a floating push.
+  await alertTrialSale(db, { ...row, payment_provider: 'un1t_online', payment_provider_ref: tx.un1t_id }, { paidAmountCents: Number(tx.amount_cents) })
 
   // CLASSFIRST.1 — the class they picked before paying: queued now, booked
   // against the trial's credits by the class-booking worker (the un1t.online

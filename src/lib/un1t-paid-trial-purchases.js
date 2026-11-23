@@ -20,6 +20,7 @@
 
 import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 import { triggerSequencesForUn1tPaidTrialPurchased } from '@/lib/sequences/triggers'
+import { alertTrialSale } from '@/lib/sale-alert-sources'
 import { logError } from '@/lib/log'
 
 const MODULE = 'un1t-paid-trial-purchases'
@@ -69,7 +70,7 @@ export async function sweepPaidTrialPurchases(db, locationId, { nowMs = Date.now
 
   const { data: rows, error: txErr } = await db
     .from('un1t_transactions')
-    .select('id, contact_id, product_id, amount_cents, remote_created_at')
+    .select('id, un1t_id, contact_id, product_id, product_title, amount_cents, remote_created_at')
     .eq('location_id', locationId)
     .in('product_id', [...productIds])
     .gt('amount_cents', 0)
@@ -84,6 +85,8 @@ export async function sweepPaidTrialPurchases(db, locationId, { nowMs = Date.now
     out.ok = false
     return out
   }
+
+  await ringSales(db, locationId, rows || [])
 
   // One offer per buyer: their newest purchase (chosen here, not by trusting
   // the read's order).
@@ -106,4 +109,26 @@ export async function sweepPaidTrialPurchases(db, locationId, { nowMs = Date.now
     }
   }
   return out
+}
+
+// SALEALERT.1 — the sale push for each purchase seen. This sweep re-reads the
+// same 48 hours every tick, so it is NOT a first-paid transition point: the
+// dedup key (sale:un1t:<un1t.online transaction id>) is what keeps it to one
+// ring, and also what stops it ringing again for a purchase the /trial settle
+// or a payment link already announced. A buyer's first name is read once for
+// the batch; a failed read rings without a name.
+async function ringSales(db, locationId, rows) {
+  const buys = rows.filter((t) => t?.un1t_id && t?.contact_id && Number(t.amount_cents) > 0)
+  if (buys.length === 0) return
+  const names = new Map()
+  const { data: contacts, error } = await db.from('contacts').select('id, first_name')
+    .in('id', [...new Set(buys.map((t) => t.contact_id))])
+  if (error) logError(MODULE, 'buyer names unreadable for the sale push', { locationId, code: error.code ?? null })
+  for (const c of contacts || []) names.set(c.id, c.first_name || '')
+  for (const t of buys) {
+    await alertTrialSale(db, {
+      payment_provider: 'un1t_online', payment_provider_ref: String(t.un1t_id), location_id: locationId,
+      contact_id: t.contact_id, product_name: t.product_title, first_name: names.get(t.contact_id) || '',
+    }, { paidAmountCents: Number(t.amount_cents) })
+  }
 }

@@ -4,9 +4,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/paid-trial-products', () => ({ paidTrialProductIdsFor: vi.fn() }))
+vi.mock('@/lib/sale-alert-sources', () => ({ alertTrialSale: vi.fn(async () => ({ sent: true })) }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 import { logError } from '@/lib/log'
+import { alertTrialSale } from '@/lib/sale-alert-sources'
 import { sweepPaidTrialPurchases, PURCHASE_WINDOW_MS } from './un1t-paid-trial-purchases.js'
 
 const LOC = 'loc-hatch'
@@ -132,5 +134,31 @@ describe('sweepPaidTrialPurchases', () => {
     const out = await sweepPaidTrialPurchases(db, LOC, { nowMs: NOW, trigger: vi.fn() })
     expect(out).toMatchObject({ ok: true, checked: 0 })
     expect(db.calls.some((c) => c.table === 'un1t_transactions')).toBe(false)
+  })
+
+  // SALEALERT.1 — the sweep re-reads the window every tick, so the push relies
+  // on its dedup key, not on this sweep being the first sighting.
+  it('rings the sale push for each purchase, keyed on its un1t.online transaction id, with the buyer\'s first name', async () => {
+    const trigger = vi.fn().mockResolvedValue({ ok: true, enrolled: 1 })
+    const db = fakeDb({ txs: [
+      tx({ id: 'tx-1', un1t_id: '9001', product_title: 'The UN1T Trial' }),
+      { id: 'c1', first_name: 'Ava' },
+    ] })
+    await sweepPaidTrialPurchases(db, LOC, { nowMs: NOW, trigger })
+    expect(alertTrialSale).toHaveBeenCalledTimes(1)
+    expect(alertTrialSale).toHaveBeenCalledWith(db, {
+      payment_provider: 'un1t_online', payment_provider_ref: '9001', location_id: LOC,
+      contact_id: 'c1', product_name: 'The UN1T Trial', first_name: 'Ava',
+    }, { paidAmountCents: 3900 })
+  })
+
+  it('rings nothing for a purchase with no transaction id', async () => {
+    await sweepPaidTrialPurchases(fakeDb({ txs: [tx()] }), LOC, { nowMs: NOW, trigger: vi.fn().mockResolvedValue({ ok: true, enrolled: 1 }) })
+    expect(alertTrialSale).not.toHaveBeenCalled()
+  })
+
+  it('rings nothing at a studio with no active sequence (the sweep stops before reading purchases)', async () => {
+    await sweepPaidTrialPurchases(fakeDb({ activeSequences: 0, txs: [tx({ un1t_id: '9001' })] }), LOC, { nowMs: NOW, trigger: vi.fn() })
+    expect(alertTrialSale).not.toHaveBeenCalled()
   })
 })
