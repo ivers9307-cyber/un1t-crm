@@ -192,6 +192,14 @@ describe('POST /api/public/corp-claims', () => {
     expect(m.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'Lead' }))
   })
 
+  it('CLAIMNAME.1: a matched contact with a first name and no surname gets the typed surname, and keeps its first name', async () => {
+    m.reads.contacts = { id: 'c-1', email: 'ann@work.ie', first_name: 'Annie', last_name: null }
+    const { status } = await call()
+    expect(status).toBe(200)
+    const nameWrites = m.updates.filter((u) => u.table === 'contacts' && ('first_name' in u.payload || 'last_name' in u.payload))
+    expect(nameWrites.map((u) => u.payload)).toEqual([{ last_name: 'Byrne' }])
+  })
+
   it('an unknown promo: 400 not_available, nothing captured', async () => {
     const { status, json } = await call({ ...BODY, promo: 'nope' })
     expect([status, json.code]).toEqual([400, 'not_available'])
