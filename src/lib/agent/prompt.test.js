@@ -15,6 +15,7 @@ import {
   buildTrialUsedClassLine,
   buildOtherStudiosBlock,
   CURRENT_OFFERS_RULES,
+  GIVING_RULE,
 } from './prompt'
 
 describe('buildKnowledgeBlock', () => {
@@ -1174,6 +1175,19 @@ describe('what is on offer right now (MIAPAGES.1)', () => {
     for (const [name, prompt] of Object.entries(VARIANTS)) {
       expect(prompt.split(CURRENT_OFFERS_RULES), name).toHaveLength(2)
     }
+  })
+
+  // MIAGIVING.1
+  it('every variant tells Mia what still_giving is, once, in words the un1t prompts allow', () => {
+    for (const [name, prompt] of Object.entries(VARIANTS)) {
+      expect(prompt.split(GIVING_RULE), name).toHaveLength(2)
+    }
+    expect(GIVING_RULE).toContain('still_giving')
+    expect(GIVING_RULE).toContain('still_giving_unreadable')
+    expect(GIVING_RULE).toContain('raffle_closes_label')
+    expect(GIVING_RULE).toContain('this_conversation')
+    expect(GIVING_RULE).toMatch(/never say how much has been raised/i)
+    expect(GIVING_RULE).not.toMatch(/[—–]|limited|spaces|capacity/i)
   })
 
   it('the section names the tool, the lead rule and the link on a yes, with no dashes', () => {

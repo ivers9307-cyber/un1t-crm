@@ -51,6 +51,7 @@ import { DEFAULT_TZ } from '@/lib/location-time'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { EVENT_MOVE_TOOLS, executeMoveTool, policyHandoffResult } from './event-move-tools'
 import { holdsPlace, pendingLapsed, selfServiceBlock } from '@/lib/entry-policy'
+import { readStillGiving } from './event-giving'
 
 export const EVENT_TOOLS = [
   {
@@ -61,7 +62,10 @@ export const EVENT_TOOLS = [
       'the signup link. Waves carry full and limited flags, never a count: never tell the ' +
       'customer how many spaces are left. No verification needed. Use when someone asks about races/events, or ' +
       'AFTER answering their question when an event is genuinely relevant to their interests. ' +
-      'For paid events, share the signup link — payment happens securely on that page.',
+      'For paid events, share the signup link — payment happens securely on that page. ' +
+      'The result may also carry still_giving: past events, at this studio or another studio of the organisation, ' +
+      'whose online raffle or donation page is still open. Each has the url of its page, which is the link to send. ' +
+      'Copy raffle_closes_label exactly as written.',
     input_schema: { type: 'object', properties: {} },
   },
   {
@@ -354,6 +358,13 @@ export async function executeEventTool(toolName, input, ctx) {
   if (toolName === 'list_upcoming_events') {
     const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
     const today = todayIn(Date.now(), zone)
+    // MIAGIVING.1 — past events still taking raffle entries or donations,
+    // organisation wide. Unknown is said, never passed off as nothing.
+    const giving = await readStillGiving(db, { threadLocationId: locationId })
+    const givingPart = {
+      ...(giving.entries.length ? { still_giving: giving.entries } : {}),
+      ...(giving.unreadable ? { still_giving_unreadable: true } : {}),
+    }
     const { data: events } = await db.from('race_events')
       .select('id, name, kind, slug, description, race_date, active, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, pricing_tiers, waves:race_waves(id, start_time, capacity, label)')
       .eq('location_id', locationId)
@@ -362,6 +373,7 @@ export async function executeEventTool(toolName, input, ctx) {
       .order('race_date', { ascending: true })
       .limit(15)
     if (!events?.length) {
+      if (giving.entries.length || giving.unreadable) return { events: [], ...givingPart }
       return { events: [], message: 'No upcoming special events on the calendar right now.' }
     }
     const waveIds = events.flatMap((e) => (e.waves || []).map((w) => w.id))
@@ -390,7 +402,7 @@ export async function executeEventTool(toolName, input, ctx) {
       }
     }
     // W1.L3b — Mia's signup links land on HER ACTIVE LOCATION's tenant host.
-    return { events: shapeEventsForAgent(events, takenByWave, Date.now(), await resolveCustomerBaseUrl(db, locationId), zone) }
+    return { events: shapeEventsForAgent(events, takenByWave, Date.now(), await resolveCustomerBaseUrl(db, locationId), zone), ...givingPart }
   }
 
   if (toolName === 'get_my_event_registrations') {

@@ -11,6 +11,11 @@ vi.mock('@/lib/tenant-host', async (importOriginal) => {
   resolveCustomerBaseUrlMock.mockImplementation(actual.resolveCustomerBaseUrl)
   return { ...actual, resolveCustomerBaseUrl: resolveCustomerBaseUrlMock }
 })
+// MIAGIVING.1 — the organisation-wide giving read has its own tests; here it
+// is a stand-in that answers "nothing open" unless a case says otherwise.
+const { readStillGivingMock } = vi.hoisted(() => ({ readStillGivingMock: vi.fn() }))
+readStillGivingMock.mockResolvedValue({ entries: [], unreadable: false })
+vi.mock('./event-giving', () => ({ readStillGiving: readStillGivingMock }))
 import {
   EVENT_TOOLS,
   formatEventPrice,
@@ -275,5 +280,35 @@ describe('executeEventTool · list_upcoming_events signup link host (W1.L3b)', (
     expect(resolveCustomerBaseUrlMock).toHaveBeenCalledWith(db, ctx.locationId)
     expect(res.events).toHaveLength(1)
     expect(res.events[0].signup_url).toBe('https://gym-a.repset.ie/event/stillorgan-jun20-0900')
+  })
+})
+
+describe('executeEventTool · list_upcoming_events still_giving (MIAGIVING.1)', () => {
+  const emptyDb = {
+    from() {
+      const b = { select() { return b }, eq() { return b }, gte() { return b }, in() { return b }, order() { return b }, limit() { return b }, then(resolve) { resolve({ data: [], error: null }) } }
+      return b
+    },
+  }
+  const ctx = { db: emptyDb, locationId: 'loc-a', contactId: null, verifiedContactId: null, channel: 'whatsapp' }
+  const GIVING = { name: 'Charity Day', studio: 'UN1T Stillorgan', this_conversation: false, date: 'Sat 21 Nov', charity: 'MS Ireland', raffle_open: true, raffle_closes_label: 'Mon 23 Nov, 15:00', donations_open: true, url: 'https://x.test/event/charity' }
+
+  it('no upcoming events but a page still open: the entry, and no "nothing on" message', async () => {
+    readStillGivingMock.mockResolvedValueOnce({ entries: [GIVING], unreadable: false })
+    const res = await executeEventTool('list_upcoming_events', {}, ctx)
+    expect(readStillGivingMock).toHaveBeenCalledWith(emptyDb, { threadLocationId: 'loc-a' })
+    expect(res).toEqual({ events: [], still_giving: [GIVING] })
+  })
+
+  it('nothing upcoming and nothing open keeps the plain answer', async () => {
+    readStillGivingMock.mockResolvedValueOnce({ entries: [], unreadable: false })
+    const res = await executeEventTool('list_upcoming_events', {}, ctx)
+    expect(res).toEqual({ events: [], message: 'No upcoming special events on the calendar right now.' })
+  })
+
+  it('an unreadable giving list is said, never passed off as nothing', async () => {
+    readStillGivingMock.mockResolvedValueOnce({ entries: [], unreadable: true })
+    const res = await executeEventTool('list_upcoming_events', {}, ctx)
+    expect(res).toEqual({ events: [], still_giving_unreadable: true })
   })
 })
