@@ -33,6 +33,13 @@ describe('buildSaleAlertPayload', () => {
     expect(p.data).toEqual({ type: 'sale_new' })
   })
 
+  it('shows cents only when the amount is not whole euros', () => {
+    expect(buildSaleAlertPayload({ ...base, amountCents: 1250 }).title).toBe('New sale: 20 Class Pack (€12.50)')
+    expect(buildSaleAlertPayload({ ...base, amountCents: 1205 }).title).toBe('New sale: 20 Class Pack (€12.05)')
+    expect(buildSaleAlertPayload({ ...base, amountCents: 1200 }).title).toBe('New sale: 20 Class Pack (€12)')
+    expect(buildSaleAlertPayload({ ...base, amountCents: 125000 }).title).toBe('New sale: 20 Class Pack (€1,250)')
+  })
+
   it('omits the amount when unknown', () => {
     expect(buildSaleAlertPayload({ ...base, amountCents: null }).title).toBe('New sale: 20 Class Pack')
   })
@@ -99,11 +106,26 @@ describe('notifyNewSale', () => {
     expect(logError).toHaveBeenCalledTimes(1)
   })
 
-  it('uses the same key on repeat calls', async () => {
-    await notifyNewSale({}, base)
-    await notifyNewSale({}, base)
+  it('uses the same key on repeat calls, and the repeat reports a duplicate, not a send', async () => {
+    sendPushToRolesAtLocationOnce
+      .mockResolvedValueOnce({ sent: 1, deduped: 0 })
+      .mockResolvedValueOnce({ sent: 0, deduped: 1 })
+    const first = await notifyNewSale({}, base)
+    const second = await notifyNewSale({}, base)
+    expect(first).toEqual({ sent: true })
+    expect(second).toEqual({ sent: false, reason: 'duplicate' })
     expect(sendPushToRolesAtLocationOnce).toHaveBeenCalledTimes(2)
     expect(sendPushToRolesAtLocationOnce.mock.calls[0][1]).toBe(sendPushToRolesAtLocationOnce.mock.calls[1][1])
+  })
+
+  it('reports recipients_failed when the recipients read failed', async () => {
+    sendPushToRolesAtLocationOnce.mockResolvedValue({ sent: 0, skipped: 0, invalidated: 0, failed: 0, deduped: 0, recipients_failed: 1 })
+    expect(await notifyNewSale({}, base)).toEqual({ sent: false, reason: 'recipients_failed' })
+  })
+
+  it('reports not sent (no duplicate) when nobody could be reached', async () => {
+    sendPushToRolesAtLocationOnce.mockResolvedValue({ sent: 0, skipped: 2, failed: 0, deduped: 0 })
+    expect((await notifyNewSale({}, base)).sent).toBe(false)
   })
 })
 

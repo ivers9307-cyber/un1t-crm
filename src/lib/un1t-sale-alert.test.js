@@ -76,7 +76,8 @@ describe('alertUn1tSales', () => {
     const calls = db.queries.un1t_transactions.calls
     expect(calls).toContainEqual(['eq', 'location_id', 'hatch'])
     expect(calls).toContainEqual(['gte', 'remote_created_at', '2026-11-24T12:00:00.000Z'])
-    expect(calls.some((c) => c[0] === 'order')).toBe(true)
+    expect(calls).toContainEqual(['order', 'remote_created_at', { ascending: false }])
+    expect(calls).toContainEqual(['order', 'un1t_id', { ascending: false }])
     expect(calls).toContainEqual(['in', 'type', ['one_time', 'sub_initial']])
     expect(calls).toContainEqual(['gt', 'amount_cents', 0])
     expect(calls).toContainEqual(['range', 0, 199])

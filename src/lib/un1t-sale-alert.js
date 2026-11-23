@@ -64,8 +64,8 @@ export async function alertUn1tSales(db, { locationId, locationName, nowMs = Dat
       .gte('remote_created_at', new Date(fromMs).toISOString())
       .in('type', SALE_TYPES)
       .gt('amount_cents', 0)
-      .order('remote_created_at', { ascending: true })
-      .order('un1t_id', { ascending: true })
+      .order('remote_created_at', { ascending: false })
+      .order('un1t_id', { ascending: false })
       .range(0, CANDIDATE_CAP - 1)
     if (error) {
       logError('un1t-sale-alert', 'could not read recent transactions', { locationId, code: error.code ?? null })
@@ -73,7 +73,7 @@ export async function alertUn1tSales(db, { locationId, locationName, nowMs = Dat
     }
     const rows = data || []
     if (rows.length >= CANDIDATE_CAP) {
-      logWarn('un1t-sale-alert', 'candidate cap hit; later purchases wait for the next run', { locationId, cap: CANDIDATE_CAP })
+      logWarn('un1t-sale-alert', 'candidate cap hit; the oldest purchases in the window were not read this run', { locationId, cap: CANDIDATE_CAP })
     }
     const sales = rows.filter((t) => t?.un1t_id && un1tTransactionIsNewSale(t, nowMs))
     if (sales.length === 0) return { rung }

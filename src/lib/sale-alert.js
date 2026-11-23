@@ -19,7 +19,11 @@ function oneLine(v) {
 }
 
 function formatEuro(cents) {
-  return '€' + (cents / 100).toLocaleString('en-IE', { maximumFractionDigits: 0 })
+  const whole = cents % 100 === 0
+  return '€' + (cents / 100).toLocaleString('en-IE', {
+    minimumFractionDigits: whole ? 0 : 2,
+    maximumFractionDigits: whole ? 0 : 2,
+  })
 }
 
 export function saleAlertKey(source, saleId) {
@@ -41,7 +45,7 @@ export async function notifyNewSale(db, { source, saleId, locationId, itemName, 
   if (typeof amountCents === 'number' && amountCents <= 0) return { sent: false, reason: 'zero_amount' }
   try {
     const payload = buildSaleAlertPayload({ itemName, amountCents, buyerFirstName, locationName, contactId })
-    await sendPushToRolesAtLocationOnce(
+    const result = await sendPushToRolesAtLocationOnce(
       db,
       saleAlertKey(source, saleId),
       locationId,
@@ -49,7 +53,10 @@ export async function notifyNewSale(db, { source, saleId, locationId, itemName, 
       payload,
       { locationScoped: true },
     )
-    return { sent: true }
+    if (result?.recipients_failed) return { sent: false, reason: 'recipients_failed' }
+    if ((result?.sent || 0) > 0) return { sent: true }
+    if ((result?.deduped || 0) > 0) return { sent: false, reason: 'duplicate' }
+    return { sent: false, reason: 'not_delivered' }
   } catch (err) {
     logError('sale-alert', 'sale alert failed', { source, sale_id: saleId, error: err?.message })
     return { sent: false, reason: 'error' }
