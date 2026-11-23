@@ -302,7 +302,13 @@ async function fetchAccountTaxTypes(db, locationId, fields) {
  *     enforcement of the PR 2 UI gate)
  *   - Xero API failure (token, network, validation)
  */
-export async function pushQueueRowToXero(queueId) {
+/**
+ * @param {string} queueId
+ * @param {{ rateLimitWaitMs?: number }} [options]  XERO429.1: how long one
+ *   Xero call may wait out a 429 (bulk send passes a minute; the default is a
+ *   few seconds).
+ */
+export async function pushQueueRowToXero(queueId, options = {}) {
   const db = createServerClient()
 
   const { data: row, error: loadErr } = await db
@@ -362,7 +368,10 @@ export async function pushQueueRowToXero(queueId) {
   // OAuth + tenant lookup. withFreshToken returns the connection
   // alongside xfetch so we can compute the deep-link URL with the
   // right tenant_id.
-  const { conn, xfetch } = await withFreshToken(row.location_id)
+  const { conn, xfetch } = await withFreshToken(
+    row.location_id,
+    options.rateLimitWaitMs != null ? { rateLimitWaitMs: options.rateLimitWaitMs } : {},
+  )
 
   const deepLink = xeroBillDeepLink
 

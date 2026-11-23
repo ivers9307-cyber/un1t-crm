@@ -43,6 +43,13 @@ export const maxDuration = 300
 
 const SENDABLE_STATUSES = ['extracted', 'data_approved']
 
+// XERO429.1 — a bulk send waits out Xero's per-minute limit instead of failing
+// the rest of the batch: each Xero call may wait up to this long on a 429.
+const RATE_LIMIT_WAIT_MS = 65_000
+// Stop starting new rows with this much of maxDuration (300 s) left, so the
+// response always comes back and the rest can be sent with another click.
+const TIME_BUDGET_MS = 225_000
+
 export async function POST(request) {
   const ctx = await loadBookkeeper()
   if (ctx.response) return ctx.response
@@ -67,9 +74,22 @@ export async function POST(request) {
   for (const id of missingIds) results.push({ id, outcome: 'skipped', reason: 'not_found' })
   for (const id of forbiddenIds) results.push({ id, outcome: 'skipped', reason: 'forbidden' })
 
+  const startedAt = Date.now()
+  // Set when Xero is still refusing after the wait (or the daily limit is
+  // hit): every later row is left untouched for another click.
+  let xeroBusy = null
+
   for (const id of ids) {
     const row = rowsById[id]
     if (!row) continue
+    if (xeroBusy) {
+      results.push({ id, outcome: 'skipped', reason: xeroBusy })
+      continue
+    }
+    if (Date.now() - startedAt > TIME_BUDGET_MS) {
+      results.push({ id, outcome: 'skipped', reason: 'out_of_time' })
+      continue
+    }
     if (!SENDABLE_STATUSES.includes(row.status)) {
       results.push({ id, outcome: 'skipped', reason: `wrong_status:${row.status}` })
       continue
@@ -131,7 +151,7 @@ export async function POST(request) {
     // server-side enforcement of the PR 2 UI gate.
     let pushResult
     try {
-      pushResult = await pushQueueRowToXero(id)
+      pushResult = await pushQueueRowToXero(id, { rateLimitWaitMs: RATE_LIMIT_WAIT_MS })
     } catch (e) {
       const msg = e instanceof XeroError ? e.message : (e?.message || String(e))
       await db.from('invoices_queue').update({ xero_error: msg }).eq('id', id)
@@ -142,6 +162,11 @@ export async function POST(request) {
       if (e instanceof XeroError && e.code === 'already_in_xero') {
         results.push({ id, outcome: 'already_in_xero', note: msg })
         continue
+      }
+      // XERO429.1 — still limited after waiting: this row stays retryable and
+      // the rest of the batch is not attempted.
+      if (e instanceof XeroError && (e.code === 'rate_limited' || e.code === 'rate_limited_day')) {
+        xeroBusy = e.code === 'rate_limited_day' ? 'xero_daily_limit' : 'xero_busy'
       }
       results.push({ id, outcome: 'failed', error: msg, retry_state: 'data_approved' })
       continue
