@@ -14,6 +14,7 @@ import {
   buildStudioFactsBlock,
   buildTrialUsedClassLine,
   buildOtherStudiosBlock,
+  CURRENT_OFFERS_RULES,
 } from './prompt'
 
 describe('buildKnowledgeBlock', () => {
@@ -1154,5 +1155,58 @@ describe('the offer board line', () => {
   it('null or blank adds no heading', () => {
     expect(buildCustomerSystemPromptParts({ ...base, boardContextLine: null }).volatile).not.toContain("offer board")
     expect(buildCustomerSystemPromptParts({ ...base, boardContextLine: '  ' }).volatile).not.toContain("offer board")
+  })
+})
+
+// MIAPAGES.1 — the live pages and offers read is Mia's only source for an
+// offer's price, end date and link, in every variant of the prompt.
+describe('what is on offer right now (MIAPAGES.1)', () => {
+  const SRC = { key: 'un1t_online', label: 'un1t.online' }
+  const VARIANTS = {
+    glofox: renderCustomerAgentBasePrompt(),
+    no_booking: renderCustomerAgentBasePrompt({ key: 'none', label: 'No membership source' }, { bookings: false, bookingUrl: 'https://book.test' }),
+    un1t_read: renderCustomerAgentBasePrompt(SRC, { bookings: false, bookingUrl: 'https://book.test', un1tVariant: 'read' }),
+    un1t_read_dual: renderCustomerAgentBasePrompt(SRC, { bookings: false, bookingUrl: 'https://book.test', un1tVariant: 'read', multiStudio: true, un1tStudioName: 'Hatch Street' }),
+    un1t_full: renderCustomerAgentBasePrompt(SRC, { bookings: false, bookingUrl: 'https://book.test', un1tVariant: 'full', multiStudio: true, un1tStudioName: 'Hatch Street' }),
+  }
+
+  it('the section is in every variant of the prompt, once', () => {
+    for (const [name, prompt] of Object.entries(VARIANTS)) {
+      expect(prompt.split(CURRENT_OFFERS_RULES), name).toHaveLength(2)
+    }
+  })
+
+  it('the section names the tool, the lead rule and the link on a yes, with no dashes', () => {
+    expect(CURRENT_OFFERS_RULES).toMatch(/^## What is on offer right now\n/)
+    expect(CURRENT_OFFERS_RULES).toContain('list_current_offers')
+    expect(CURRENT_OFFERS_RULES).toContain('LEAD FIRST')
+    expect(CURRENT_OFFERS_RULES).toContain('APPLY CONTEXT')
+    expect(CURRENT_OFFERS_RULES).toContain('only_if_asked')
+    expect(CURRENT_OFFERS_RULES).toContain('Use request_membership_purchase only for a yes to something that is not on the list')
+    expect(CURRENT_OFFERS_RULES).toContain('Never say there are no offers')
+    expect(CURRENT_OFFERS_RULES).not.toMatch(/[—–]/)
+  })
+
+  it('no variant still tells Mia that offers and trials come from KNOWLEDGE', () => {
+    for (const [name, prompt] of Object.entries(VARIANTS)) {
+      expect(prompt, name).not.toContain('ONLY state facts (prices, offers,')
+      expect(prompt, name).not.toContain('offer the trial KNOWLEDGE describes')
+      expect(prompt, name).not.toContain('unless KNOWLEDGE describes one that is on offer now')
+      expect(prompt, name).not.toContain('Answer those only when KNOWLEDGE settles them word-for-word')
+      expect(prompt, name).toContain('what is on offer online only as list_current_offers gives it')
+      expect(prompt, name).toContain('offer the trial list_current_offers lists')
+    }
+  })
+
+  it('a yes to an entry on the list gets its link, not a card for the team', () => {
+    for (const [name, prompt] of Object.entries(VARIANTS)) {
+      const yes = prompt.slice(prompt.indexOf('## When someone says YES to a membership or offer'))
+      expect(yes.slice(0, 400), name).toContain('If the offer is an entry from list_current_offers, send its url instead and do not call request_membership_purchase.')
+    }
+  })
+
+  it('where Mia sells in chat, a live store entry is shown beside the chat options', () => {
+    expect(VARIANTS.un1t_full).toContain('When list_current_offers has a live store entry that matches what they asked for, mention it with its url alongside the options from list_purchase_options')
+    expect(VARIANTS.glofox).not.toContain('alongside the options from list_purchase_options')
   })
 })

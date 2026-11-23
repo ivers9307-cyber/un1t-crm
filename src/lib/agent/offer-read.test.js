@@ -168,19 +168,19 @@ describe('readCurrentOffers: the store', () => {
   it('lists a sellable store offer with its storefront link', async () => {
     storeAt(STILL, { ok: true, studioKey: 'stillorgan', offers: [OFFER] })
     const store = studioOf(await read(seed()), 'UN1T Stillorgan').store
-    expect(store).toEqual([{ name: '20 Class Pack', category: 'class_pack', bonus: '+5 free classes', price_label: '€380', ends_label: 'Mon 30 Nov, 23:59', opens_label: null, limited: true, sold_out: false, url: `${BASE}/offers/stillorgan/20-class-pack` }])
+    expect(store).toEqual([{ name: '20 Class Pack', category: 'class_pack', bonus: '+5 free classes', price_label: '€380', ends_label: 'Mon 30 Nov, 23:59', opens_label: null, while_stocks_last: true, sold_out: false, url: `${BASE}/offers/stillorgan/20-class-pack` }])
   })
 
   it('a sold out offer stays, marked sold out', async () => {
     storeAt(STILL, { ok: true, studioKey: 'stillorgan', offers: [OFFER] })
     vi.mocked(readOfferStock).mockResolvedValue(new Map([['SECRET-OFFER-ID', { limit: 50, sold: 50, held: 0, left: 0, state: 'sold_out' }]]))
-    expect(studioOf(await read(seed()), 'UN1T Stillorgan').store[0]).toMatchObject({ limited: true, sold_out: true })
+    expect(studioOf(await read(seed()), 'UN1T Stillorgan').store[0]).toMatchObject({ while_stocks_last: true, sold_out: true })
   })
 
-  it('stock that cannot be read: still listed, limited from its limit, not sold out', async () => {
+  it('stock that cannot be read: still listed, flagged from its limit, not sold out', async () => {
     storeAt(STILL, { ok: true, studioKey: 'stillorgan', offers: [OFFER] })
     vi.mocked(readOfferStock).mockRejectedValue(new Error('boom'))
-    expect(studioOf(await read(seed()), 'UN1T Stillorgan').store[0]).toMatchObject({ limited: true, sold_out: false })
+    expect(studioOf(await read(seed()), 'UN1T Stillorgan').store[0]).toMatchObject({ while_stocks_last: true, sold_out: false })
   })
 
   it('a studio with no storefront key lists no store offers', async () => {

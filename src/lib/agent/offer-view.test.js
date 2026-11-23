@@ -117,17 +117,17 @@ describe('storeEntry', () => {
   const offer = { id: 'offer-id-1', un1t_product_id: 'prod-9', name: '20 Class Pack', category: 'class_pack', bonus_headline: '+5 free classes', price_cents: 38000, currency: 'EUR', ends_at: '2026-11-30T23:59:59Z', starts_at: null, stock_limit: 50 }
   const now = new Date('2026-11-23T12:00:00Z')
 
-  it('labels in the studio zone, limited and sold out as flags, no number', () => {
+  it('labels in the studio zone, stock as two flags, no number', () => {
     const e = storeEntry({ offer, stock: { limit: 50, sold: 50, held: 0, left: 0, state: 'sold_out' }, zone: ZONE, url: 'https://x.test/offers/stillorgan/20-class-pack', now })
-    expect(e).toEqual({ name: '20 Class Pack', category: 'class_pack', bonus: '+5 free classes', price_label: '€380', ends_label: 'Mon 30 Nov, 23:59', opens_label: null, limited: true, sold_out: true, url: 'https://x.test/offers/stillorgan/20-class-pack' })
+    expect(e).toEqual({ name: '20 Class Pack', category: 'class_pack', bonus: '+5 free classes', price_label: '€380', ends_label: 'Mon 30 Nov, 23:59', opens_label: null, while_stocks_last: true, sold_out: true, url: 'https://x.test/offers/stillorgan/20-class-pack' })
   })
 
-  it('not yet open carries opens_label; stock null means not sold out; no limit means not limited', () => {
+  it('not yet open carries opens_label; stock null means not sold out; no limit means no stock flag', () => {
     const e = storeEntry({ offer: { ...offer, starts_at: '2026-11-27T00:00:00Z', stock_limit: null, bonus_headline: '' }, stock: null, zone: ZONE, url: 'u', now })
     expect(e.opens_label).toBe('Fri 27 Nov, 00:00')
-    expect(e).toMatchObject({ limited: false, sold_out: false, bonus: null })
+    expect(e).toMatchObject({ while_stocks_last: false, sold_out: false, bonus: null })
     const open = storeEntry({ offer: { ...offer, starts_at: '2026-11-01T00:00:00Z', ends_at: null }, stock: null, zone: ZONE, url: 'u', now })
-    expect(open).toMatchObject({ opens_label: null, ends_label: null, limited: true, sold_out: false })
+    expect(open).toMatchObject({ opens_label: null, ends_label: null, while_stocks_last: true, sold_out: false })
   })
 
   it('an end date is told on the studio clock, not UTC', () => {

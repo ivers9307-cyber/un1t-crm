@@ -156,7 +156,9 @@ export function storeEntry({ offer, stock = null, zone, url, now = new Date() })
     price_label: formatTrialPrice(offer.price_cents, str(offer.currency) || 'EUR'),
     ends_label: offer.ends_at ? dateTimeLabel(offer.ends_at, zone) : null,
     opens_label: opens ? dateTimeLabel(offer.starts_at, zone) : null,
-    limited: Number.isInteger(offer.stock_limit) && offer.stock_limit > 0,
+    // Named for what Mia may say. The un1t.online prompts never use the word
+    // "limited" (it reads as a hint about class places), so neither does this.
+    while_stocks_last: Number.isInteger(offer.stock_limit) && offer.stock_limit > 0,
     sold_out: stock?.state === 'sold_out',
     url,
   }

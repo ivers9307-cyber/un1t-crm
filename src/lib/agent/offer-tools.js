@@ -23,8 +23,8 @@ export const OFFER_TOOLS = [
       'other studios. Each entry says who it is for, its price_label, its ends_label when it has an end date, and its url. ' +
       'Pages come in priority order and one is marked lead. No identity verification needed. Call this before you answer ' +
       'anything about trying the studio, joining, prices, class packs, gift cards, deals or a sale, and before you state ' +
-      "any offer's price, end date or link. Copy price_label and ends_label exactly. Entries flagged limited may be " +
-      'described as limited; never give a number. Never share the url of an entry flagged sold_out.',
+      "any offer's price, end date or link. Copy price_label and ends_label exactly. Entries flagged while_stocks_last may be " +
+      'described as available while stocks last; never give a number. Never share the url of an entry flagged sold_out.',
     input_schema: { type: 'object', properties: {} },
   },
 ]
