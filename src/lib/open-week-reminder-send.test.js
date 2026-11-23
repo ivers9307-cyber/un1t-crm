@@ -47,6 +47,18 @@ beforeEach(() => {
 })
 
 describe('runOpenWeekReminders', () => {
+  // OPENWEEKREMIND.1 — a signup whose grant failed or is waiting on staff can
+  // still hold a booked class (23 Nov 2026: three such people got no reminder).
+  it.each(['failed', 'help_requested'])('reminds a %s signup who has a booked class', async (status) => {
+    const db = seed({
+      corp_promo_claims: [{ id: 'c9', location_id: HATCH, contact_id: 'k2', promo_key: 'hatch-open-week', status }],
+    })
+    const out = await runOpenWeekReminders(db, { now: NOW })
+    expect(m.send).toHaveBeenCalledTimes(1)
+    expect(m.send.mock.calls[0][0]).toMatchObject({ contact: expect.objectContaining({ id: 'k2' }) })
+    expect(out).toMatchObject({ ok: true, sent: 1 })
+  })
+
   it('reminds a granted claimant of a booked open week class that is due, with the template values', async () => {
     const db = seed()
     const out = await runOpenWeekReminders(db, { now: NOW })
