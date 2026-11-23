@@ -21,6 +21,10 @@
 //      UI surfaces the error + a manual retry. Both received and
 //      quality_approved rows are claimed.
 //
+//   3. SUPPLIERMATCH.1 — refresh one studio's stale Xero contact list and
+//      re-check rows flagged "New supplier" (src/lib/invoices-queue/
+//      supplier-refresh.js). No read is paid for.
+//
 // BATCH is sized so a worst-case tick (10 × ~15s) stays well under the
 // 300s function cap. 100 queued invoices drain in ~10 ticks (~10 min at
 // the */2 schedule) even with QStash entirely absent.
@@ -32,6 +36,7 @@
 import { defineCron } from '@/lib/define-cron'
 import { processInvoiceAnalysisRow } from '@/lib/invoice-analysis-queue'
 import { logError } from '@/lib/log'
+import { refreshStaleSupplierList, rematchUnmatchedSuppliers } from '@/lib/invoices-queue/supplier-refresh'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,5 +61,16 @@ export const GET = defineCron({ heartbeat: 'process-invoice-analysis' }, async (
     else extracted++
   }
 
-  return { body: { claimed: rows.length, ok: extracted, failed } }
+  // SUPPLIERMATCH.1 — after the reads: keep one studio's Xero contact list
+  // fresh, then look again for suppliers that can now be matched. Neither
+  // throws, and neither costs a read.
+  const { refreshed } = await refreshStaleSupplierList(db)
+  const rematch = await rematchUnmatchedSuppliers(db)
+
+  return {
+    body: {
+      claimed: rows.length, ok: extracted, failed,
+      contacts_refreshed: refreshed ? 1 : 0, suppliers_checked: rematch.checked, suppliers_matched: rematch.matched,
+    },
+  }
 })

@@ -463,3 +463,65 @@ describe('recheckInvoiceRow', () => {
     expect(await recheckInvoiceRow(db, /** @type {any} */ (null))).toMatchObject({ reasons: [] })
   })
 })
+
+describe('SUPPLIERMATCH.1 — the supplier of a bill found in Xero', () => {
+  it('fills the supplier from the Xero bill when no rule matched one', async () => {
+    extract = vi.fn(async () => ({ ok: true, fields: read({ supplier_name: 'Acme Supplies Holdings (Head Office)' }), raw_response: '{}' }))
+    findBill = vi.fn(async () => ({ InvoiceID: 'x1', InvoiceNumber: 'INV-100', Contact: { ContactID: CONTACT, Name: 'Acme Supplies' } }))
+    setup({ tables: KNOWN })
+    const out = await run()
+    expect(out.reasons).toEqual(['already_in_xero'])
+    expect(stored('q2').extracted_fields.xero_contact_ref).toEqual({ kind: 'existing', xero_contact_id: CONTACT, name: 'Acme Supplies' })
+    expect(stored('q2').extracted_fields.xero_account_id).toBe(ACCOUNT)
+  })
+
+  it('keeps a supplier the rules matched, whatever the Xero bill says', async () => {
+    findBill = vi.fn(async () => ({ InvoiceID: 'x1', InvoiceNumber: 'INV-100', Contact: { ContactID: 'someone-else', Name: 'Other' } }))
+    setup({ tables: KNOWN })
+    await run()
+    expect(stored('q2').extracted_fields.xero_contact_ref.xero_contact_id).toBe(CONTACT)
+  })
+
+  it('a Xero bill with no contact leaves the row a new supplier', async () => {
+    extract = vi.fn(async () => ({ ok: true, fields: read({ supplier_name: 'Nobody Known' }), raw_response: '{}' }))
+    findBill = vi.fn(async () => ({ InvoiceID: 'x1', InvoiceNumber: 'INV-100' }))
+    setup({ tables: KNOWN })
+    expect((await run()).reasons).toEqual(['already_in_xero', 'new_supplier'])
+  })
+})
+
+describe('SUPPLIERMATCH.1 — recheck with rematchSupplier', () => {
+  const extractedRow = (fields, over = {}) => queueRow({ status: 'extracted', extracted_fields: fields, ...over })
+  const unmatched = () => extractedRow(read({ supplier_name: 'Acme Supplies Ltd.' }), { review_reasons: ['new_supplier'], prepared_at: '2026-11-20T10:00:00.000Z' })
+
+  it('finds the supplier, fills the remembered account, clears the reason and re-stamps', async () => {
+    setup({ tables: KNOWN, rows: [unmatched()] })
+    const out = await recheckInvoiceRow(db, { ...stored('q2') }, { rematchSupplier: true })
+    expect(out.reasons).not.toContain('new_supplier')
+    expect(stored('q2').extracted_fields.xero_contact_ref.xero_contact_id).toBe(CONTACT)
+    expect(stored('q2').extracted_fields.xero_account_id).toBe(ACCOUNT)
+    expect(stored('q2').prepared_at).not.toBe('2026-11-20T10:00:00.000Z')
+  })
+
+  it('without the option a recheck never looks for a supplier or re-stamps', async () => {
+    setup({ tables: KNOWN, rows: [unmatched()] })
+    const out = await recheckInvoiceRow(db, { ...stored('q2') })
+    expect(out.reasons).toContain('new_supplier')
+    expect(stored('q2').extracted_fields.xero_contact_ref).toBeUndefined()
+    expect(stored('q2').prepared_at).toBe('2026-11-20T10:00:00.000Z')
+  })
+
+  it('still unmatched: the reason stays and the row is re-stamped so it is not looked at again', async () => {
+    setup({ tables: KNOWN, rows: [extractedRow(read({ supplier_name: 'Nobody Known' }), { review_reasons: ['new_supplier'], prepared_at: '2026-11-20T10:00:00.000Z' })] })
+    const out = await recheckInvoiceRow(db, { ...stored('q2') }, { rematchSupplier: true })
+    expect(out.reasons).toContain('new_supplier')
+    expect(stored('q2').prepared_at).not.toBe('2026-11-20T10:00:00.000Z')
+  })
+
+  it('never replaces a supplier a person already picked', async () => {
+    const picked = { kind: 'existing', xero_contact_id: 'picked-by-hand', name: 'Hand Picked' }
+    setup({ tables: KNOWN, rows: [extractedRow(read({ supplier_name: 'Acme Supplies', xero_contact_ref: picked }), { review_reasons: [] })] })
+    await recheckInvoiceRow(db, { ...stored('q2') }, { rematchSupplier: true })
+    expect(stored('q2').extracted_fields.xero_contact_ref).toEqual(picked)
+  })
+})

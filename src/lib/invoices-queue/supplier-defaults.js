@@ -23,10 +23,123 @@
 import { escapeLikePattern } from '../like-escape'
 import { logWarn } from '@/lib/log'
 
+// SUPPLIERMATCH.1 — three ways to recognise a supplier, tried in order. Each
+// answers only when exactly one contact fits; anything else is "no match" and a
+// person picks. A wrong match would post a bill to the wrong supplier, so no
+// rule here guesses: no prefixes, no partial words, no nearest name.
+//
+//   1. The read name equals a Xero supplier's name (case-insensitive).
+//   2. History: every bill this studio approved or sent under the same tidied
+//      name went to one contact. A person chose that contact, so it is the
+//      strongest evidence there is for a name Xero spells differently.
+//   3. The tidied read name equals one Xero supplier's tidied name ("X Ltd."
+//      and "X Limited" are the same supplier).
+
+// Legal-form words dropped from the END of a name only.
+const LEGAL_SUFFIXES = new Set([
+  'ltd', 'limited', 'plc', 'llc', 'llp', 'inc', 'dac', 'uc', 'clg', 'gmbh', 'teoranta', 'teo',
+  'sl', 'sa', 'bv', 'nv', 'kft', 'lda', 'srl', 'sas', 'ag', 'ab', 'oy', 'company',
+])
+const HISTORY_STATUSES = ['data_approved', 'forwarded']
+const HISTORY_LIMIT = 500
+const CONTACT_PAGE = 1000
+const CONTACT_PAGES = 5
+
 /**
- * Resolve an extracted supplier name to a cached Xero contact for
- * this location. Returns the contact only on an unambiguous single
- * match; 0 or 2+ matches → null (let the operator pick by hand).
+ * A supplier name reduced to what identifies it: lower case, no accents, no
+ * bracketed aside, no "c/o" or "t/a" tail, no punctuation, no trailing legal
+ * form, no leading "the". Returns '' when nothing usable is left.
+ *
+ * @param {unknown} name
+ * @returns {string}
+ */
+export function tidySupplierName(name) {
+  let s = String(name ?? '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  s = s.replace(/\([^)]*\)/g, ' ')
+  s = s.replace(/\s(c\/o|t\/a|trading as)\s.*$/, ' ')
+  // "S.L." and "B.V." are one word each, so dots go before other punctuation.
+  s = s.replace(/\./g, '').replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim()
+  const words = s.split(' ').filter(Boolean)
+  while (words.length > 1 && LEGAL_SUFFIXES.has(words[words.length - 1])) words.pop()
+  if (words.length > 1 && words[0] === 'the') words.shift()
+  const key = words.join(' ')
+  return key.length >= 2 ? key : ''
+}
+
+async function matchExact(db, locationId, name) {
+  const { data, error } = await db
+    .from('xero_contacts')
+    .select('xero_contact_id, name, email')
+    .eq('location_id', locationId)
+    .eq('status', 'ACTIVE')
+    .eq('is_supplier', true)
+    // Escaped, so this really is an exact case-insensitive match. The pattern
+    // is an OCR/AI-extracted supplier name off a PDF a third party sent us, and
+    // an unescaped `_` silently matched a DIFFERENT supplier, which .limit(2)'s
+    // ambiguity guard cannot see (one wrong row is still one row). See
+    // src/lib/like-escape.js.
+    .ilike('name', escapeLikePattern(name))
+    .limit(2)
+
+  if (error || !data || data.length !== 1) return null
+  return data[0]
+}
+
+/** The one contact every earlier bill under this tidied name went to, if it is still an active Xero contact. */
+async function matchByHistory(db, locationId, key) {
+  const { data, error } = await db
+    .from('invoices_queue')
+    .select('extracted_fields')
+    .eq('location_id', locationId)
+    .in('status', HISTORY_STATUSES)
+    .order('received_at', { ascending: false })
+    .limit(HISTORY_LIMIT)
+  if (error || !Array.isArray(data)) return null
+
+  const ids = new Set()
+  for (const row of data) {
+    const f = row?.extracted_fields
+    const id = f?.xero_contact_ref?.xero_contact_id
+    if (!id || tidySupplierName(f?.supplier_name) !== key) continue
+    ids.add(String(id))
+  }
+  if (ids.size !== 1) return null
+
+  const { data: contacts, error: contactErr } = await db
+    .from('xero_contacts')
+    .select('xero_contact_id, name, email')
+    .eq('location_id', locationId)
+    .eq('status', 'ACTIVE')
+    .eq('xero_contact_id', [...ids][0])
+    .limit(2)
+  if (contactErr || !contacts || contacts.length !== 1) return null
+  return contacts[0]
+}
+
+/** The one active Xero supplier whose tidied name equals this one. */
+async function matchTidied(db, locationId, key) {
+  const hits = []
+  for (let page = 0; page < CONTACT_PAGES; page++) {
+    const { data, error } = await db
+      .from('xero_contacts')
+      .select('xero_contact_id, name, email')
+      .eq('location_id', locationId)
+      .eq('status', 'ACTIVE')
+      .eq('is_supplier', true)
+      .order('xero_contact_id', { ascending: true })
+      .range(page * CONTACT_PAGE, (page + 1) * CONTACT_PAGE - 1)
+    if (error || !Array.isArray(data)) return null
+    for (const c of data) if (tidySupplierName(c.name) === key) hits.push(c)
+    if (hits.length > 1) return null
+    if (data.length < CONTACT_PAGE) break
+  }
+  return hits.length === 1 ? hits[0] : null
+}
+
+/**
+ * Resolve an extracted supplier name to a cached Xero contact for this
+ * location. Returns the contact only when one of the three rules above gives
+ * exactly one; otherwise null (let the operator pick by hand). Never throws.
  *
  * @returns {Promise<{ xero_contact_id, name, email } | null>}
  */
@@ -34,23 +147,49 @@ export async function matchSupplier(db, locationId, supplierName) {
   const name = (supplierName || '').trim()
   if (!locationId || name.length < 2) return null
 
-  const { data, error } = await db
-    .from('xero_contacts')
-    .select('xero_contact_id, name, email')
-    .eq('location_id', locationId)
-    .eq('status', 'ACTIVE')
-    .eq('is_supplier', true)
-    // Escaped, so this really is the exact case-insensitive match the header
-    // promises. The pattern is an OCR/AI-extracted supplier name off a PDF a
-    // third party sent us — "no % wildcards" was never something we could
-    // assert about it, and an unescaped `_` silently matched a DIFFERENT
-    // supplier, which .limit(2)'s ambiguity guard cannot see (one wrong row is
-    // still one row). See src/lib/like-escape.js.
-    .ilike('name', escapeLikePattern(name))
-    .limit(2)
+  const exact = await matchExact(db, locationId, name)
+  if (exact) return exact
 
-  if (error || !data || data.length !== 1) return null
-  return data[0]
+  const key = tidySupplierName(name)
+  if (!key) return null
+  try {
+    return (await matchByHistory(db, locationId, key)) || (await matchTidied(db, locationId, key))
+  } catch (e) {
+    logWarn('supplier-defaults', 'supplier match failed', { location_id: locationId, error: e?.message })
+    return null
+  }
+}
+
+/**
+ * The patch a known contact brings to extracted_fields: the supplier itself
+ * plus the account and category remembered for it.
+ *
+ * @param {any} db
+ * @param {string} locationId
+ * @param {{ xero_contact_id: string, name?: string|null, email?: string|null }} contact
+ */
+export async function defaultsForContact(db, locationId, contact) {
+  const patch = {
+    xero_contact_ref: {
+      kind: 'existing',
+      xero_contact_id: contact.xero_contact_id,
+      name: contact.name,
+      ...(contact.email ? { email: contact.email } : {}),
+    },
+  }
+
+  // The remembered tax type is deliberately NOT patched in: a rate derived from
+  // the document's own figures must win; the remembered one is only compared later.
+  const def = await getSupplierDefault(db, locationId, contact.xero_contact_id)
+  if (def) {
+    if (def.default_xero_account_id) {
+      patch.xero_account_id = def.default_xero_account_id
+      patch.account_code = def.default_account_code || null
+    }
+    if (def.default_category) patch.category = def.default_category
+  }
+
+  return patch
 }
 
 /**
@@ -116,26 +255,5 @@ export async function recordSupplierDefault(db, {
 export async function resolveExtractionDefaults(db, locationId, supplierName) {
   const contact = await matchSupplier(db, locationId, supplierName)
   if (!contact) return {}
-
-  const patch = {
-    xero_contact_ref: {
-      kind: 'existing',
-      xero_contact_id: contact.xero_contact_id,
-      name: contact.name,
-      ...(contact.email ? { email: contact.email } : {}),
-    },
-  }
-
-  // The remembered tax type is deliberately NOT patched in: a rate derived from
-  // the document's own figures must win; the remembered one is only compared later.
-  const def = await getSupplierDefault(db, locationId, contact.xero_contact_id)
-  if (def) {
-    if (def.default_xero_account_id) {
-      patch.xero_account_id = def.default_xero_account_id
-      patch.account_code = def.default_account_code || null
-    }
-    if (def.default_category) patch.category = def.default_category
-  }
-
-  return patch
+  return defaultsForContact(db, locationId, contact)
 }
