@@ -74,9 +74,31 @@ describe('LandingPageSettingsForm (page mode)', () => {
     expect(puts[0].body.chrome).toEqual({
       logo_url: 'https://cdn.example/logo.png', logo_alt: null, logo_width_px: null,
       tone: 'dark', noindex: true, show_instagram_feed: true,
+      mia_note: null, mia_priority: null,
     })
     expect(Object.keys(puts[0].body).sort()).toEqual(['blocks', 'chrome', 'title'])
     expect(screen.getByText(/^Saved /)).toBeTruthy()
+  })
+
+  // MIAPAGES.1 — what Mia reads about a page: who it is for, and its priority.
+  it('shows the stored Mia note and priority, and saves what the operator sets', async () => {
+    renderForm({ page: basePage({ chrome: { mia_note: 'People over 50.', mia_priority: 'ask_only' } }) })
+    const note = screen.getByLabelText('Who is this for? (Mia reads this)')
+    const priority = screen.getByLabelText("Mia's priority")
+    expect(note.value).toBe('People over 50.')
+    expect(priority.value).toBe('ask_only')
+    expect([...priority.options].map((o) => [o.value, o.textContent])).toEqual([['', 'Automatic'], ['lead', 'Lead with this'], ['ask_only', 'Only if asked']])
+
+    fireEvent.change(note, { target: { value: ' New members only. ' } })
+    fireEvent.change(priority, { target: { value: 'lead' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
+    expect(puts[0].body.chrome).toMatchObject({ mia_note: 'New members only.', mia_priority: 'lead' })
+  })
+
+  it('a page with neither set shows Automatic and a blank note', () => {
+    renderForm()
+    expect(screen.getByLabelText('Who is this for? (Mia reads this)').value).toBe('')
+    expect(screen.getByLabelText("Mia's priority").value).toBe('')
   })
 
   it('a refused save shows the reason and keeps the edits', async () => {

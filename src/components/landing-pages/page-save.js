@@ -14,7 +14,16 @@ import { DEFAULT_FUNNEL_TERMS_COPY } from '@/lib/un1t-online-funnel-copy'
 export const PAGE_CHROME_KEYS = Object.freeze([
   'logo_url', 'logo_alt', 'logo_width_px', 'tone', 'noindex', 'meta_title', 'meta_description',
   'show_instagram_feed', 'chooser_label', 'chooser_cta_text', 'chooser_image_url', 'un1t_terms',
+  'mia_note', 'mia_priority',
 ])
+
+// MIAPAGES.1 — "Mia's priority" on a page: '' is Automatic (stored as null).
+export const MIA_PRIORITY_OPTIONS = Object.freeze([
+  { value: '', label: 'Automatic' },
+  { value: 'lead', label: 'Lead with this' },
+  { value: 'ask_only', label: 'Only if asked' },
+])
+export const MIA_NOTE_MAX = 200
 
 export function storedChrome(chrome) {
   const out = {}
@@ -47,13 +56,16 @@ export function logoWidthForSave(raw) {
  * page also sends its un1t.online terms copy (the editor shows those fields
  * on a studio page only) as chrome.un1t_terms.
  */
-export function pageSaveBody({ page, title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms }) {
+export function pageSaveBody({ page, title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms, miaNote, miaPriority }) {
   const chrome = {
     ...storedChrome(page?.chrome),
     logo_url: (logoUrl || '').trim() || null,
     logo_alt: (logoAlt || '').trim() || null,
     logo_width_px: logoWidthForSave(logoWidthPx),
     show_instagram_feed: Boolean(showInstagramFeed),
+    // MIAPAGES.1 — who Mia suggests the page to, and its place in her order.
+    mia_note: (miaNote || '').trim() || null,
+    mia_priority: miaPriority === 'lead' || miaPriority === 'ask_only' ? miaPriority : null,
   }
   if (page?.kind === 'studio') chrome.un1t_terms = termsForSave(terms)
   return { title: (title || '').trim(), blocks, chrome }
@@ -93,8 +105,8 @@ export function studioRowSaveBody({ enabled, offer, attribution, storedAttributi
 
 // Everything the page-mode Save sends, as one string: unequal to the last
 // saved snapshot means there are unsaved edits.
-export function pageEditSnapshot({ title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms }) {
-  return JSON.stringify({ title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms })
+export function pageEditSnapshot({ title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms, miaNote, miaPriority }) {
+  return JSON.stringify({ title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms, miaNote, miaPriority })
 }
 
 export const PAGE_SAVE_MESSAGES = Object.freeze({

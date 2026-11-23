@@ -54,6 +54,11 @@ export const landingPageChromeSchema = z.object({
     terms_required_message: termsText,
     legal_unavailable_message: termsText,
   }).strict().partial(),
+  // MIAPAGES.1 — what Mia reads about the page (src/lib/agent/offer-view.js):
+  // who to suggest it to, and its place in her order. null priority is
+  // Automatic: an offer with an end date leads while it runs.
+  mia_note: z.string().trim().max(200).nullable(),
+  mia_priority: z.enum(['lead', 'ask_only']).nullable(),
   was_live: z.boolean(),
 }).strict().partial()
 

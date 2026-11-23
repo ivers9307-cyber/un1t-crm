@@ -127,7 +127,7 @@ const NO_BOOKING_NAMES = [
   'verify_identity', 'request_pause', 'request_membership_purchase', 'list_upcoming_classes',
   'list_consultation_slots', 'book_consultation', 'save_lead_details', 'list_upcoming_events',
   'get_my_event_registrations', 'book_event', 'cancel_event_registration', 'reschedule_event_wave',
-  'list_event_move_options', 'move_event_entry', 'send_card_set',
+  'list_event_move_options', 'move_event_entry', 'list_current_offers', 'send_card_set',
 ]
 
 beforeEach(() => { vi.clearAllMocks() })

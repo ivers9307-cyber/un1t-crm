@@ -558,3 +558,33 @@ describe('parseAgentId and tagUn1tId', () => {
     expect(parseAgentId('un1tabc')).toEqual({ provider: 'glofox', id: 'un1tabc' })
   })
 })
+
+// MIAPAGES.1 — the live pages and offers read is public information: every
+// block offers it, on every channel, and the executor refuses it nowhere.
+describe('list_current_offers', () => {
+  const BLOCKS = {
+    glofox: CACHED_ACCOUNT_TOOLS, no_booking: CACHED_NO_BOOKING_TOOLS, un1t_read: CACHED_UN1T_READ_TOOLS,
+    un1t_read_dual: CACHED_UN1T_READ_DUAL_TOOLS, un1t_full: CACHED_UN1T_FULL_TOOLS,
+  }
+
+  it('is offered in all five blocks, the same object, never the last tool', () => {
+    const own = ALL_AGENT_TOOLS.find((t) => t.name === 'list_current_offers')
+    expect(own).toBeTruthy()
+    for (const [block, tools] of Object.entries(BLOCKS)) {
+      const found = tools.filter((t) => t.name === 'list_current_offers')
+      expect(found, block).toHaveLength(1)
+      expect(JSON.stringify(found[0]), block).toBe(JSON.stringify(own))
+      expect(tools.at(-1).name, block).not.toBe('list_current_offers')
+    }
+  })
+
+  it('is refused in no block, on WhatsApp or Instagram, with or without a turn', () => {
+    for (const block of Object.keys(BLOCKS)) {
+      for (const channel of ['whatsapp', 'instagram']) {
+        expect(refuseToolForTurn('list_current_offers', { turn: { block, channel, un1tWrites: false, answerable: [] } }), `${block}/${channel}`).toBeNull()
+      }
+    }
+    expect(refuseToolForTurn('list_current_offers', { canBook: false })).toBeNull()
+    expect(refuseToolForTurn('list_current_offers', { turn: { block: 'a_block_this_build_does_not_know', channel: 'whatsapp' } })).toBeNull()
+  })
+})
