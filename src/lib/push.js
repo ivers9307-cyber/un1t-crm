@@ -308,6 +308,19 @@ export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
   return (await readPushAllowedIds(db, ids, category, opts)).allowed
 }
 
+// SALEALERT.2 — sound files bundled into the app binary by the
+// expo-notifications plugin (`sounds` in mobile/app.config.js). A name sent
+// here must be listed there. iOS plays the default chime when a binary does
+// not carry the file, so a name can go out before every phone has updated.
+// Android ignores a per-message sound: its sound belongs to the channel.
+export const PUSH_CUSTOM_SOUNDS = Object.freeze(['cha-ching.wav'])
+
+/** The Expo `sound` for a payload: null stays silent, a listed file passes, anything else is 'default'. */
+export function resolvePushSound(sound) {
+  if (sound === null) return null
+  return PUSH_CUSTOM_SOUNDS.includes(sound) ? sound : 'default'
+}
+
 /**
  * Fan out a push notification to one or more users.
  *
@@ -322,7 +335,9 @@ export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
  *                                  used for in-app routing (which screen
  *                                  to open when the user taps the
  *                                  notification).
- * @param {string} [payload.sound]  'default' (iOS chime) | null. Default 'default'.
+ * @param {string} [payload.sound]  'default' (iOS chime) | null (silent) | a name
+ *                                  in PUSH_CUSTOM_SOUNDS. Default 'default';
+ *                                  any other string is 'default' too.
  * @param {number} [payload.badge]  Override the iOS app icon badge count.
  *
  * @param {object} [opts]
@@ -414,7 +429,7 @@ export async function sendPush(userIds, payload, opts = {}) {
     to: t.expo_push_token,
     title: payload.title,
     body: payload.body,
-    sound: payload.sound === null ? null : 'default',
+    sound: resolvePushSound(payload.sound),
     badge: payload.badge,
     channelId,
     data: payload.data || {},
