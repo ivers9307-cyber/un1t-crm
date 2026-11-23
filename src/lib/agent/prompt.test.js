@@ -1187,6 +1187,9 @@ describe('what is on offer right now (MIAPAGES.1)', () => {
     expect(GIVING_RULE).toContain('raffle_closes_label')
     expect(GIVING_RULE).toContain('this_conversation')
     expect(GIVING_RULE).toMatch(/never say how much has been raised/i)
+    // An unreadable list matters only to someone who asked about giving.
+    expect(GIVING_RULE).toContain('Only when they asked about a past event, a raffle or donating')
+    expect(GIVING_RULE).toContain('Otherwise ignore it')
     expect(GIVING_RULE).not.toMatch(/[—–]|limited|spaces|capacity/i)
   })
 

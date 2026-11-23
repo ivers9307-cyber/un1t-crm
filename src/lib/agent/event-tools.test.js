@@ -296,7 +296,7 @@ describe('executeEventTool · list_upcoming_events still_giving (MIAGIVING.1)', 
   it('no upcoming events but a page still open: the entry, and no "nothing on" message', async () => {
     readStillGivingMock.mockResolvedValueOnce({ entries: [GIVING], unreadable: false })
     const res = await executeEventTool('list_upcoming_events', {}, ctx)
-    expect(readStillGivingMock).toHaveBeenCalledWith(emptyDb, { threadLocationId: 'loc-a' })
+    expect(readStillGivingMock).toHaveBeenCalledWith(emptyDb, { threadLocationId: 'loc-a', excludeEventIds: [] })
     expect(res).toEqual({ events: [], still_giving: [GIVING] })
   })
 
@@ -306,9 +306,29 @@ describe('executeEventTool · list_upcoming_events still_giving (MIAGIVING.1)', 
     expect(res).toEqual({ events: [], message: 'No upcoming special events on the calendar right now.' })
   })
 
-  it('an unreadable giving list is said, never passed off as nothing', async () => {
+  it('an unreadable giving list is said, and the upcoming answer is still given', async () => {
     readStillGivingMock.mockResolvedValueOnce({ entries: [], unreadable: true })
     const res = await executeEventTool('list_upcoming_events', {}, ctx)
-    expect(res).toEqual({ events: [], still_giving_unreadable: true })
+    expect(res).toEqual({ events: [], message: 'No upcoming special events on the calendar right now.', still_giving_unreadable: true })
+  })
+
+  it('upcoming events are returned beside an unreadable giving list, and are excluded from the giving read', async () => {
+    readStillGivingMock.mockResolvedValueOnce({ entries: [], unreadable: true })
+    const upcoming = [{
+      id: 'e1', name: 'Hyrox Sim', kind: 'race', slug: 's', description: null, race_date: '2099-06-20', active: true,
+      registration_opens_at: null, registration_closes_at: null, member_pricing_enabled: false, member_fee_cents: null,
+      non_member_fee_cents: null, members_only: false, waves: [],
+    }]
+    const db = {
+      from(table) {
+        const b = { select() { return b }, eq() { return b }, gte() { return b }, in() { return b }, order() { return b }, limit() { return b }, then(resolve) { resolve({ data: table === 'race_events' ? upcoming : [], error: null }) } }
+        return b
+      },
+    }
+    resolveCustomerBaseUrlMock.mockResolvedValueOnce('https://x.test')
+    const res = await executeEventTool('list_upcoming_events', {}, { ...ctx, db })
+    expect(res.events).toHaveLength(1)
+    expect(res.still_giving_unreadable).toBe(true)
+    expect(readStillGivingMock).toHaveBeenLastCalledWith(db, { threadLocationId: 'loc-a', excludeEventIds: ['e1'] })
   })
 })

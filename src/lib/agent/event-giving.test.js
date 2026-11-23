@@ -16,7 +16,8 @@ const BASE = 'https://stillorgan.test'
 const loc = (id, name, extra = {}) => ({ id, name, organization_id: ORG, timezone: 'Europe/Dublin', active: true, ...extra })
 const event = (id, extra = {}) => ({
   id, name: 'MS Ireland X UN1T Dublin Charity Day', slug: 'stillorgan-nov21-0900', race_date: '2026-11-21',
-  location_id: STILL, host_id: null, active: true, status: 'published', charity_enabled: true, charity: { name: 'MS Ireland' }, ...extra,
+  location_id: STILL, host_id: null, active: true, status: 'published', charity_enabled: true, charity: { name: 'MS Ireland', signup_off: true },
+  registration_closes_at: null, ...extra,
 })
 const raffle = (eventId, extra = {}) => ({
   id: `raffle-${eventId}`, race_event_id: eventId, location_id: STILL, name: 'Raffle', ticket_price_cents: 100, currency: 'EUR',
@@ -51,9 +52,22 @@ describe('givingEntry', () => {
     expect(entry({ event: event('e1', { race_date: '2026-10-23' }), raffle: null })).toBeNull()
   })
 
-  it('an event dated today or later is not giving: it is still an upcoming event', () => {
-    expect(entry({ event: event('e1', { race_date: '2026-11-23' }) })).toBeNull()
-    expect(entry({ event: event('e1', { race_date: '2026-12-01' }) })).toBeNull()
+  it('an event dated today is listed (the day most people ask); a future one is not', () => {
+    expect(entry({ event: event('e1', { race_date: '2026-11-23' }) })).toMatchObject({ date: 'Mon 23 Nov', donations_open: true })
+    expect(entry({ event: event('e1', { race_date: '2026-11-24' }) })).toBeNull()
+  })
+
+  it('a past event whose page would still take a paid entry is never linked', () => {
+    const open = { charity: { name: 'MS Ireland' }, registration_closes_at: null }
+    expect(entry({ event: event('e1', open) })).toBeNull()
+    expect(entry({ event: event('e1', { ...open, registration_closes_at: '2026-11-30T00:00:00Z' }) })).toBeNull()
+    expect(entry({ event: event('e1', { ...open, registration_closes_at: '2026-11-21T09:49:00Z' }) })).not.toBeNull()
+    // On the day itself an open sign-up is the event's own business.
+    expect(entry({ event: event('e1', { ...open, race_date: '2026-11-23' }) })).not.toBeNull()
+  })
+
+  it("a raffle filed under another studio than its event is not the page's raffle", () => {
+    expect(entry({ raffle: raffle('e1', { location_id: HATCH }) })).toMatchObject({ raffle_open: false, donations_open: true })
   })
 
   it('a raffle that has closed, is off, or is not online does not qualify the event', () => {
@@ -111,6 +125,19 @@ describe('readStillGiving', () => {
       ],
     })
     expect((await read(db)).entries.map((e) => e.name)).toEqual(['Hatch older', 'Stillorgan recent', 'Stillorgan older'])
+  })
+
+  it('an event the caller already lists as upcoming is left out', async () => {
+    const db = seed({ events: [event('e1', { race_date: '2026-11-23' })] })
+    expect((await readStillGiving(db, { threadLocationId: STILL, nowMs: NOW, baseUrlFor })).entries).toHaveLength(1)
+    expect((await readStillGiving(db, { threadLocationId: STILL, nowMs: NOW, baseUrlFor, excludeEventIds: ['e1'] })).entries).toEqual([])
+  })
+
+  it('a host anchor studio is never named to a customer', async () => {
+    const db = createFakeDb({
+      tables: { locations: [loc(HATCH, 'UN1T Hatch Street'), loc(STILL, 'Host (host events)', { is_host_anchor: true })], race_events: [event('e1')], raffles: [] },
+    })
+    expect((await read(db)).entries).toEqual([])
   })
 
   it('nothing giving is an empty, readable answer', async () => {

@@ -9,7 +9,12 @@
 // docs/superpowers/specs/2026-11-23-mia-giving-links-design.md):
 //   - a UN1T event (no host), active and published, with charity switched on
 //     (the public page shows neither the donate card nor the raffle card
-//     without it), whose date has passed on its own studio's clock, and either
+//     without it), dated today or earlier on its own studio's clock (today is
+//     the day most people ask, and another studio's event is in no one's
+//     upcoming list), and
+//   - when it is in the past, its sign-up is closed: the public page judges
+//     sign-up by its opening and closing times only, never the event's date,
+//     so a past event with sign-up left open would offer a paid entry; and either
 //   - its raffle sells online right now (the public page's own rule,
 //     onlineSalesState), or
 //   - donations are switched on and the event was within GIVING_WINDOW_DAYS.
@@ -29,12 +34,20 @@ import { dateTimeLabel } from './offer-view'
 
 export const GIVING_WINDOW_DAYS = 30
 const MAX_ENTRIES = 6
-const MAX_EVENTS_READ = 200
+// One .in() of event ids follows this read: 150 is the house cap for one.
+const MAX_EVENTS_READ = 150
 const LOG_MODULE = 'mia-giving'
-const EVENT_COLUMNS = 'id, name, slug, race_date, location_id, host_id, active, status, charity_enabled, charity'
-const LOCATION_COLUMNS = 'id, name, timezone, active'
+const EVENT_COLUMNS = 'id, name, slug, race_date, location_id, host_id, active, status, charity_enabled, charity, registration_closes_at'
+const LOCATION_COLUMNS = 'id, name, timezone, active, is_host_anchor'
 
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+
+/** Would the public page still take an entry for this event? Its own rule: the closing time or the charity's sign-up switch. */
+function signupClosed(event, nowMs) {
+  if (event.charity?.signup_off === true) return true
+  const closes = event.registration_closes_at ? Date.parse(event.registration_closes_at) : NaN
+  return Number.isFinite(closes) && closes <= nowMs
+}
 
 /**
  * One past event as Mia sees it, or null when nothing of it is open. Pure.
@@ -48,8 +61,10 @@ export function givingEntry({ event, raffle = null, location, threadLocationId, 
   if (!date || !str(event.slug)) return null
   const zone = zoneOfLocation(location)
   const today = todayStrIn(zone, nowMs)
-  if (date >= today) return null
-  const raffleOpen = Boolean(raffle) && onlineSalesState(raffle, nowMs).open
+  if (date > today) return null
+  if (date < today && !signupClosed(event, nowMs)) return null
+  // The page's raffle is the one filed under the event's own studio (loadRaffleForEvent).
+  const raffleOpen = Boolean(raffle) && raffle.location_id === event.location_id && onlineSalesState(raffle, nowMs).open
   const donationsOpen = date >= addDaysISO(today, -GIVING_WINDOW_DAYS)
   if (!raffleOpen && !donationsOpen) return null
   return {
@@ -72,10 +87,10 @@ const UNKNOWN = Object.freeze({ entries: [], unreadable: true })
  * raffle entries or donations, the thread's studio first, then most recent.
  * Never throws.
  * @param {object} db service-role client
- * @param {{ threadLocationId: string, nowMs?: number, baseUrlFor?: (db: object, locationId: string) => Promise<string> }} opts
+ * @param {{ threadLocationId: string, nowMs?: number, excludeEventIds?: string[], baseUrlFor?: (db: object, locationId: string) => Promise<string> }} opts
  * @returns {Promise<{ entries: object[], unreadable: boolean }>}
  */
-export async function readStillGiving(db, { threadLocationId, nowMs = Date.now(), baseUrlFor } = {}) {
+export async function readStillGiving(db, { threadLocationId, nowMs = Date.now(), excludeEventIds = [], baseUrlFor } = {}) {
   if (!db || !threadLocationId) return { ...UNKNOWN }
   try {
     const { data: own, error: ownErr } = await db.from('locations').select('organization_id').eq('id', threadLocationId).maybeSingle()
@@ -89,7 +104,7 @@ export async function readStillGiving(db, { threadLocationId, nowMs = Date.now()
       logWarn(LOG_MODULE, 'studios unreadable', { code: locErr.code ?? null })
       return { ...UNKNOWN }
     }
-    const locations = new Map((locs || []).filter((l) => l.active !== false).map((l) => [l.id, l]))
+    const locations = new Map((locs || []).filter((l) => l.active !== false && l.is_host_anchor !== true).map((l) => [l.id, l]))
     if (locations.size === 0) return { entries: [], unreadable: false }
 
     // The latest "today" across the studios bounds the read; givingEntry
@@ -101,7 +116,7 @@ export async function readStillGiving(db, { threadLocationId, nowMs = Date.now()
       .eq('active', true)
       .eq('status', 'published')
       .eq('charity_enabled', true)
-      .lt('race_date', latestToday)
+      .lte('race_date', latestToday)
       .order('race_date', { ascending: false })
       .limit(MAX_EVENTS_READ)
     if (evErr) {
@@ -126,9 +141,10 @@ export async function readStillGiving(db, { threadLocationId, nowMs = Date.now()
     const resolveBase = baseUrlFor || (async (d, id) => (await import('@/lib/tenant-host')).resolveCustomerBaseUrl(d, id))
     const bases = new Map()
     const found = []
+    const excluded = new Set(excludeEventIds || [])
     for (const event of events) {
       const location = locations.get(event.location_id)
-      if (!location) continue
+      if (!location || excluded.has(event.id)) continue
       // Decide first with a placeholder host, so a studio with nothing open costs no host read.
       if (!givingEntry({ event, raffle: raffleByEvent.get(event.id) || null, location, threadLocationId, baseUrl: '', nowMs })) continue
       if (!bases.has(location.id)) bases.set(location.id, await resolveBase(db, location.id))

@@ -20,7 +20,12 @@ An event is in `still_giving` when all of these hold:
   `charity_enabled` true (the public page shows neither the donate card nor
   the raffle card without it; found while building)
 - its studio belongs to the conversation's organisation and is active
-- its date has passed (before today on its own studio's clock)
+- its date is today or earlier on its own studio's clock, and it is not
+  already in the upcoming list (review finding: the day itself is when most
+  people ask, and another studio's event is in no one's upcoming list)
+- when its date has passed, its sign-up is closed (`charity.signup_off`, or
+  `registration_closes_at` in the past): the public page never closes
+  sign-up by date, so a past event left open would offer a paid entry
 - and either
   - its raffle sells online right now (`onlineSalesState(raffle).open`), or
   - the date is within the last 30 days (donations).
