@@ -34,7 +34,7 @@ describe('givingEntry', () => {
   it('a past charity event with an open raffle: exactly the agreed fields, nothing internal', () => {
     const e = entry()
     expect(e).toEqual({
-      name: 'MS Ireland X UN1T Dublin Charity Day', studio: 'UN1T Stillorgan', this_conversation: true, date: 'Sat 21 Nov',
+      name: 'MS Ireland X UN1T Dublin Charity Day', studio: 'UN1T Stillorgan', this_conversation: true, date: 'Sat 21 Nov', when: 'past',
       description: 'In aid of MS Ireland. 11,000 reps shared over team workouts.',
       charity: 'MS Ireland', raffle_open: true, raffle_tickets: ['1 for €1', '20 for €10'], raffle_closes_label: 'Mon 23 Nov, 15:00',
       donations_open: true, url: 'https://stillorgan.test/event/stillorgan-nov21-0900',
@@ -58,9 +58,10 @@ describe('givingEntry', () => {
     expect(entry({ event: event('e1', { race_date: '2026-10-23' }), raffle: null })).toBeNull()
   })
 
-  it('an event dated today is listed (the day most people ask); a future one is not', () => {
-    expect(entry({ event: event('e1', { race_date: '2026-11-23' }) })).toMatchObject({ date: 'Mon 23 Nov', donations_open: true })
-    expect(entry({ event: event('e1', { race_date: '2026-11-24' }) })).toBeNull()
+  it('an event today, or still to come, is listed too, and says when it is', () => {
+    expect(entry({ event: event('e1', { race_date: '2026-11-23' }) })).toMatchObject({ date: 'Mon 23 Nov', when: 'today', donations_open: true })
+    expect(entry({ event: event('e1', { race_date: '2026-11-28' }) })).toMatchObject({ date: 'Sat 28 Nov', when: 'upcoming', donations_open: true })
+    expect(entry()).toMatchObject({ when: 'past' })
   })
 
   it('a past event whose page would still take a paid entry is never linked', () => {
@@ -146,6 +147,13 @@ describe('readStillGiving', () => {
     expect((await read(db)).entries).toEqual([])
   })
 
+  it("another studio's charity event that is still to come is found (no one else lists it)", async () => {
+    const db = seed({ events: [event('e1', { race_date: '2026-12-12', charity: { name: 'MS Ireland' } })] })
+    const res = await read(db)
+    expect(res.entries).toHaveLength(1)
+    expect(res.entries[0]).toMatchObject({ when: 'upcoming', this_conversation: false, studio: 'UN1T Stillorgan' })
+  })
+
   it('nothing giving is an empty, readable answer', async () => {
     expect(await read(seed({ events: [event('e1', { charity_enabled: false })] }))).toEqual({ entries: [], unreadable: false })
   })
@@ -197,6 +205,8 @@ describe('raffleTicketLabels', () => {
     expect(raffleTicketLabels(raffle('e1', { ticket_price_cents: 250, ticket_options: [{ tickets: 5, price_cents: 1000 }, { tickets: 100, price_cents: 5000 }] }))).toEqual(['1 for €2.50', '5 for €10'])
     expect(raffleTicketLabels(raffle('e1', { ticket_price_cents: 0, ticket_options: null }))).toEqual([])
     expect(raffleTicketLabels(null)).toEqual([])
+    // The labels are written in euro: another currency is never quoted as euro.
+    expect(raffleTicketLabels(raffle('e1', { currency: 'GBP' }))).toEqual([])
   })
 })
 

@@ -65,6 +65,8 @@ export function eventDescription(text) {
  */
 export function raffleTicketLabels(raffle) {
   if (!raffle || !(Number(raffle.ticket_price_cents) > 0)) return []
+  // optionLabel writes euro: another currency is never quoted as euro.
+  if ((raffle.currency || 'EUR') !== 'EUR') return []
   return pricingUnits(raffle)
     .filter((u) => u.tickets <= ONLINE_MAX_TICKETS)
     .map((u) => optionLabel(u.tickets, u.price_cents))
@@ -137,17 +139,21 @@ export function givingEntry({ event, raffle = null, location, threadLocationId, 
   if (!date || !str(event.slug)) return null
   const zone = zoneOfLocation(location)
   const today = todayStrIn(zone, nowMs)
-  if (date > today) return null
+  // An event still to come is listed too: another studio's is in no one's
+  // upcoming list, and this studio's is left out of it once sign-up is closed
+  // or switched off. The caller excludes what it already lists.
   if (date < today && !signupClosed(event, nowMs)) return null
   const raffleNow = raffleFields(event, raffle, zone, nowMs)
   const raffleOpen = raffleNow.raffle_open === true
   const donationsOpen = date >= addDaysISO(today, -GIVING_WINDOW_DAYS)
+  const when = date > today ? 'upcoming' : date === today ? 'today' : 'past'
   if (!raffleOpen && !donationsOpen) return null
   return {
     name: str(event.name) || 'Event',
     studio: location?.name || '',
     this_conversation: event.location_id === threadLocationId,
     date: dateLabel(date),
+    when,
     description: eventDescription(event.description),
     charity: str(event.charity?.name),
     raffle_open: raffleOpen,
@@ -185,16 +191,12 @@ export async function readStillGiving(db, { threadLocationId, nowMs = Date.now()
     const locations = new Map((locs || []).filter((l) => l.active !== false && l.is_host_anchor !== true).map((l) => [l.id, l]))
     if (locations.size === 0) return { entries: [], unreadable: false }
 
-    // The latest "today" across the studios bounds the read; givingEntry
-    // judges each event on its own studio's clock.
-    const latestToday = [...locations.values()].map((l) => todayStrIn(zoneOfLocation(l), nowMs)).sort().pop()
     const { data: events, error: evErr } = await db.from('race_events').select(EVENT_COLUMNS)
       .in('location_id', [...locations.keys()])
       .is('host_id', null)
       .eq('active', true)
       .eq('status', 'published')
       .eq('charity_enabled', true)
-      .lte('race_date', latestToday)
       .order('race_date', { ascending: false })
       .limit(MAX_EVENTS_READ)
     if (evErr) {

@@ -63,8 +63,8 @@ export const EVENT_TOOLS = [
       'customer how many spaces are left. No verification needed. Use when someone asks about races/events, or ' +
       'AFTER answering their question when an event is genuinely relevant to their interests. ' +
       'For paid events, share the signup link — payment happens securely on that page. ' +
-      'The result may also carry still_giving: events today or in the past, at this studio or another studio of the organisation, ' +
-      'whose online raffle or donation page is still open. Each has the url of its page, which is the link to send. ' +
+      'The result may also carry still_giving: events at this studio or another studio of the organisation, past, today or still to come (see when), ' +
+      'whose online raffle or donation page is open and which are not in the events list. Each has the url of its page, which is the link to send. ' +
       'Copy raffle_closes_label exactly as written. ' +
       'Every event carries what its own page says: its description and, for a charity event, charity, donations_open and, ' +
       'when a raffle is selling, raffle_tickets (the ticket prices) and raffle_closes_label. That is all there is to say about an event.',
@@ -225,6 +225,11 @@ export function classifyEventCancellation({ isOwner, status, eventDate, paidCent
   return (Number(paidCents) || 0) > 0 ? { action: 'draft' } : { action: 'direct' }
 }
 
+/** CHARITYSIGNUPOFF.1 as the public page reads it: the switch counts only while charity is on. Pure. */
+function signupSwitchedOff(event) {
+  return event?.charity_enabled === true && event.charity?.signup_off === true
+}
+
 const MAX_EVENTS = 8
 
 // CAPACITY-SECRECY.1 — a wave with this many places or fewer is "limited".
@@ -258,6 +263,10 @@ export function shapeEventsForAgent(events, takenByWave, nowMs, baseUrl, zone = 
     if (!e.race_date || String(e.race_date) < today) continue
     if (e.registration_opens_at && nowMs < Date.parse(e.registration_opens_at)) continue
     if (e.registration_closes_at && nowMs > Date.parse(e.registration_closes_at)) continue
+    // MIAEVENTFACTS.1 — sign-up switched off on a charity event: the page shows
+    // only the donate and raffle cards and the register route refuses, so it
+    // is not something to enter. It reaches Mia through still_giving instead.
+    if (signupSwitchedOff(e)) continue
     const waves = (e.waves || [])
       .slice()
       .sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)))
@@ -373,13 +382,22 @@ export async function executeEventTool(toolName, input, ctx) {
         ...(giving.unreadable ? { still_giving_unreadable: true } : {}),
       }
     }
-    const { data: events } = await db.from('race_events')
+    const { data: events, error: eventsErr } = await db.from('race_events')
       .select('id, name, kind, slug, description, race_date, active, location_id, host_id, charity_enabled, charity, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, pricing_tiers, waves:race_waves(id, start_time, capacity, label)')
       .eq('location_id', locationId)
       .eq('active', true)
+      .eq('status', 'published')
       .gte('race_date', today)
       .order('race_date', { ascending: true })
       .limit(15)
+    // A failed read is unknown, never "nothing on".
+    if (eventsErr) {
+      console.error('[agent][events] list_upcoming_events read failed:', eventsErr.message || eventsErr)
+      return {
+        error: 'events_unreadable',
+        message: 'The events could not be read just now. Say you cannot check right now and offer the team. Never say there are no events.',
+      }
+    }
     if (!events?.length) {
       const part = await givingPart([])
       // The upcoming answer stands whatever the giving read did.
@@ -464,12 +482,16 @@ export async function executeEventTool(toolName, input, ctx) {
       return { error: 'no_contact', message: 'No contact linked to this conversation — collect their name and email, then hand off to the team.' }
     }
     const { data: race } = await db.from('race_events')
-      .select('id, name, kind, slug, description, race_date, active, location_id, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, pricing_tiers, waves:race_waves(id, start_time, capacity, label)')
+      .select('id, name, kind, slug, description, race_date, active, location_id, charity_enabled, charity, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, pricing_tiers, waves:race_waves(id, start_time, capacity, label)')
       .eq('id', String(input?.event_id || ''))
       .eq('location_id', locationId)
       .maybeSingle()
     if (!race) return { error: 'not_found', message: 'That event was not found — re-check list_upcoming_events.' }
 
+    // MIAEVENTFACTS.1 — the register route refuses these too (409 signup_off).
+    if (signupSwitchedOff(race)) {
+      return { booked: false, reason: 'signup_off', message: 'This event is not taking entries: its page takes donations and raffle entries only. Say so and send the event page link.' }
+    }
     const openCheck = eventOpenForRegistration(race, Date.now(), zone)
     if (!openCheck.open) {
       return { booked: false, reason: openCheck.reason, message: 'Registration is not open for this event — say so honestly and offer alternatives.' }

@@ -237,6 +237,13 @@ describe('executeEventTool · identity gates', () => {
     expect(res.error).toBe('not_verified')
   })
 
+  // MIAEVENTFACTS.1 — the page drops the sign-up card and the register route refuses.
+  it('book_event refuses a charity event whose sign-up is switched off', async () => {
+    const db = eventDb({ race: { ...FUTURE_RACE, charity_enabled: true, charity: { signup_off: true } }, contact: { id: 'c-1', name: 'Jane Murphy', email: 'jane@example.com' } })
+    const res = await executeEventTool('book_event', { event_id: 'race-1' }, { ...baseCtx, db })
+    expect(res).toMatchObject({ booked: false, reason: 'signup_off' })
+  })
+
   it('book_event still lets a brand-new person enter a free event with name + email', async () => {
     // No glofox_member_id => no member account to protect, so the designed
     // consultation-style flow (name + email, no quiz) must survive the auth
@@ -392,5 +399,50 @@ describe('executeEventTool · list_upcoming_events raffles (MIAEVENTFACTS.1)', (
     resolveCustomerBaseUrlMock.mockResolvedValueOnce('https://x.test')
     const res = await executeEventTool('list_upcoming_events', {}, ctx)
     expect(res).not.toHaveProperty('raffles_unreadable')
+  })
+})
+
+describe('list_upcoming_events · honest about sign-up and failed reads (MIAEVENTFACTS.1)', () => {
+  const NOW_MS = Date.UTC(2026, 10, 23, 13, 0, 0)
+  const row = {
+    id: 'e1', name: 'Charity Day', kind: 'race', slug: 'cd', race_date: '2026-12-05', active: true, location_id: 'loc-a', host_id: null,
+    registration_opens_at: null, registration_closes_at: null, member_pricing_enabled: false, member_fee_cents: null,
+    non_member_fee_cents: 2500, members_only: false, waves: [], status: 'published', charity_enabled: true, charity: { name: 'MS Ireland', signup_off: true },
+  }
+
+  it('a charity event with sign-up switched off is not offered as something to enter', () => {
+    expect(shapeEventsForAgent([row], {}, NOW_MS, 'https://x.test')).toEqual([])
+    expect(shapeEventsForAgent([{ ...row, charity: { name: 'MS Ireland' } }], {}, NOW_MS, 'https://x.test')).toHaveLength(1)
+    // The switch only means something while charity is on, as on the page.
+    expect(shapeEventsForAgent([{ ...row, charity_enabled: false }], {}, NOW_MS, 'https://x.test')).toHaveLength(1)
+  })
+
+  function recordingDb(result) {
+    const eqs = []
+    return {
+      eqs,
+      from(table) {
+        const b = {
+          select() { return b }, eq(col, val) { if (table === 'race_events') eqs.push([col, val]); return b }, gte() { return b },
+          in() { return b }, order() { return b }, limit() { return b },
+          then(resolve) { resolve(table === 'race_events' ? result : { data: [], error: null }) },
+        }
+        return b
+      },
+    }
+  }
+
+  it('a failed events read is unknown, never "nothing on"', async () => {
+    const db = recordingDb({ data: null, error: { message: 'boom', code: 'XX000' } })
+    const res = await executeEventTool('list_upcoming_events', {}, { db, locationId: 'loc-a', contactId: null, verifiedContactId: null, channel: 'whatsapp' })
+    expect(res.error).toBe('events_unreadable')
+    expect(res.message).toMatch(/Never say there are no events/)
+    expect(res).not.toHaveProperty('events')
+  })
+
+  it('only published events are read', async () => {
+    const db = recordingDb({ data: [], error: null })
+    await executeEventTool('list_upcoming_events', {}, { db, locationId: 'loc-a', contactId: null, verifiedContactId: null, channel: 'whatsapp' })
+    expect(db.eqs).toContainEqual(['status', 'published'])
   })
 })
