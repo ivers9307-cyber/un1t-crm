@@ -7,7 +7,7 @@ import {
   unreadPanel,
   needsALookSkipped,
   isBeingRead,
-  canRejectOne, inPile, isSetAside, isReady, pileCounts, PILES
+  canRejectOne, inPile, isSetAside, isReady, pileCounts, PILES, isWaitingToBeRead
 } from './review-status'
 
 const P = '2026-11-22T09:00:00Z'
@@ -255,12 +255,26 @@ describe('INVSCREEN.1 — piles of the Awaiting action list', () => {
   })
 
   it('counts each pile, with Ready inside To review', () => {
-    expect(pileCounts([ready, flagged, legacy, dup, unreadable, reading])).toEqual({ review: 4, ready: 1, aside: 2 })
-    expect(pileCounts(null)).toEqual({ review: 0, ready: 0, aside: 0 })
+    expect(pileCounts([ready, flagged, legacy, dup, unreadable, reading])).toEqual({ review: 4, ready: 1, aside: 2, not_invoice: 0 })
+    expect(pileCounts(null)).toEqual({ review: 0, ready: 0, aside: 0, not_invoice: 0 })
   })
 
-  it('names three piles', () => {
-    expect(PILES.map((p) => p.key)).toEqual(['review', 'ready', 'aside'])
+  it('names four piles', () => {
+    expect(PILES.map((p) => p.key)).toEqual(['review', 'ready', 'aside', 'not_invoice'])
+  })
+
+  it('INVSCREEN.2: a row set aside as not an invoice is in its own pile and no other', () => {
+    const notInvoice = { status: 'not_invoice', review_reasons: [] }
+    expect(inPile(notInvoice, 'not_invoice')).toBe(true)
+    for (const k of ['review', 'ready', 'aside']) expect(inPile(notInvoice, k)).toBe(false)
+    expect(inPile(ready, 'not_invoice')).toBe(false)
+    expect(pileCounts([ready, notInvoice, notInvoice])).toEqual({ review: 1, ready: 1, aside: 0, not_invoice: 2 })
+  })
+
+  it('INVSCREEN.2: waiting to be read is an unread row that is neither queued nor stopped by the reader', () => {
+    expect(isWaitingToBeRead(untouched)).toBe(true)
+    expect(isWaitingToBeRead({ status: 'quality_approved', review_reasons: [], analysis_queued_at: null })).toBe(true)
+    expect([reading, dup, unreadable, ready, flagged, { status: 'not_invoice' }, null].some(isWaitingToBeRead)).toBe(false)
   })
 })
 

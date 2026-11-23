@@ -11,8 +11,9 @@
 // Each tab is a master-detail layout: list on the left, selected
 // row's detail on the right. The detail panel changes shape based
 // on the row's status:
-//   • received          → big attachment preview + Approve / Reject buttons
-//   • quality_approved  → "Extract with Claude Vision" button + retry on failure
+//   • received / quality_approved → not read yet: "Being read", the reader's
+//                         stop (duplicate, unreadable), or "Read now" + Reject.
+//                         There is no quality approval step (INVSCREEN.2).
 //   • extracted         → side-by-side: attachment preview + editable extracted-fields
 //                         form + Approve / Reject buttons
 //   • data_approved     → "Forwarding to Xero…" or retry button if forward failed
@@ -37,7 +38,7 @@ import XeroContactPicker from '@/components/invoices/XeroContactPicker'
 import BulkUploadPanel from '@/components/invoices/BulkUploadPanel'
 import { describeApiError } from '@/lib/api-error'
 import {
-  reasonChips, isReadyToSend, pillFor, notInvoiceText, unreadPanel, needsALookSkipped,
+  reasonChips, isReadyToSend, pillFor, notInvoiceText, unreadPanel, needsALookSkipped, isWaitingToBeRead,
   PILES, inPile, pileCounts,
   isBeingRead, canRejectOne,
 } from '@/components/invoices/review-status'
@@ -62,9 +63,8 @@ const CATEGORY_LABEL = {
 }
 
 // INVOICES-QUEUE.1 PR 2 — source_type is the primary nav. Status
-// becomes a secondary filter via STATUS_FILTERS. "Awaiting action"
-// (the default) means everything except forwarded + rejected — i.e.
-// rows that need bookkeeper attention.
+// becomes a secondary filter via STATUS_FILTERS. "To do" (the
+// default) means everything except sent + rejected, split into piles.
 const SOURCE_TABS = [
   { key: 'all',                label: 'All',          sourceTypes: null },
   { key: 'supplier_email',     label: 'Supplier',     sourceTypes: ['supplier_email'] },
@@ -74,12 +74,13 @@ const SOURCE_TABS = [
   { key: 'car_document',       label: 'Car documents',sourceTypes: ['car_document'] },
 ]
 
+// INVSCREEN.2 — three views. "To do" also loads what the reader set aside as
+// not an invoice, which shows as its own pile, so there is no separate filter.
 const STATUS_FILTERS = [
-  { key: 'pending',   label: 'Awaiting action', statuses: ['received', 'quality_approved', 'extracted', 'data_approved'] },
-  { key: 'forwarded', label: 'Forwarded',       statuses: ['forwarded'] },
-  { key: 'rejected',  label: 'Rejected',        statuses: ['rejected'] },
-  { key: 'not_invoice', label: 'Not an invoice', statuses: ['not_invoice'] },
-  { key: 'all',       label: 'All',             statuses: null },
+  { key: 'pending',   label: 'To do',    statuses: ['received', 'quality_approved', 'extracted', 'data_approved', 'not_invoice'] },
+  { key: 'forwarded', label: 'Sent',     statuses: ['forwarded'] },
+  { key: 'rejected',  label: 'Rejected', statuses: ['rejected'] },
+  { key: 'all',       label: 'All',      statuses: null },
 ]
 
 // Human-friendly labels for bulk-action outcome keys in the summary.
@@ -159,7 +160,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   const [error, setError] = useState(null)
   const [selectedId, setSelectedId] = useState(focusId)
   const [locationFilter, setLocationFilter] = useState('all')
-  // INVSCREEN.1 — which pile of the Awaiting action list is shown.
+  // INVSCREEN.1 — which pile of the To do list is shown.
   const [pile, setPile] = useState('review')
   // INVOICES-QUEUE.1 PR 2 — multi-select state for bulk actions.
   // Selection persists across tab switches (Set tracks ids; rows
@@ -239,7 +240,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   const selected = rows.find((r) => r.id === selectedId)
     || (pinnedRow && pinnedRow.id === selectedId ? pinnedRow : null)
 
-  // INVSCREEN.1 — the piles apply to Awaiting action only.
+  // INVSCREEN.1 — the piles apply to To do only.
   const piled = statusFilter === 'pending'
   const counts = useMemo(() => pileCounts(rows), [rows])
   const visibleRows = useMemo(
@@ -251,7 +252,9 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   useEffect(() => {
     if (!piled) return
     const row = rows.find((r) => r.id === selectedId)
-    if (row && !inPile(row, pile)) setPile(inPile(row, 'aside') ? 'aside' : 'review')
+    if (row && !inPile(row, pile)) {
+      setPile(inPile(row, 'not_invoice') ? 'not_invoice' : inPile(row, 'aside') ? 'aside' : 'review')
+    }
   // Only a change of selection or of the loaded rows moves the pile.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, rows, piled])
@@ -292,7 +295,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
     }
   }
 
-  // INVOICEPREP.3 — a restored row is back in Awaiting action; show it there.
+  // INVOICEPREP.3 — a restored row is back in To do; show it there.
   function onRestored(id) {
     setSelectedId(id)
     if (statusFilter === 'pending') loadRows()
@@ -321,8 +324,10 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   // for PR 2 the local count is "close enough" — the operator
   // clicks a tab to see the real list anyway.
   const sourceCounts = useMemo(() => {
-    const acc = { all: rows.length }
-    for (const r of rows) acc[r.source_type] = (acc[r.source_type] || 0) + 1
+    // Rows set aside as not an invoice are loaded with To do but are not work.
+    const counted = rows.filter((r) => r.status !== 'not_invoice')
+    const acc = { all: counted.length }
+    for (const r of counted) acc[r.source_type] = (acc[r.source_type] || 0) + 1
     return acc
   }, [rows])
 
@@ -992,23 +997,17 @@ function InboxDetail({ row, onChanged, onOpenRow, onRestored, earlierMissing = f
         />
       )}
 
-      {(row.status === 'received' || isBeingRead(row) || (row.status === 'quality_approved' && unreadPanel(row))) && (
+      {/* INVSCREEN.2 — one panel for every row that has not been read: being
+          read, stopped by the reader, or waiting. No quality approval step. */}
+      {(row.status === 'received' || row.status === 'quality_approved') && (
         <StageOneActions
           busy={busy}
           panel={unreadPanel(row)}
           reading={isBeingRead(row)}
+          waiting={isWaitingToBeRead(row)}
           extractionError={row.extraction_error}
-          onApprove={() => postAction('quality-approve')}
           onReadAgain={() => postAction('extract')}
           onReject={canRejectOne(row) ? (reason) => postAction('quality-reject', { reason }) : null}
-        />
-      )}
-
-      {row.status === 'quality_approved' && !unreadPanel(row) && !isBeingRead(row) && (
-        <ExtractAction
-          busy={busy}
-          extractionError={row.extraction_error}
-          onExtract={() => postAction('extract')}
         />
       )}
 
@@ -1134,14 +1133,14 @@ function AttachmentPreview({ attachment, loading, mime }) {
 // INVOICEPREP.3 — `panel` (from unreadPanel) retitles this for a row the
 // reader gave up on; without it, today's quality review shows unchanged.
 // `reading` (a row queued to be read) shows only a short line and Reject.
-function StageOneActions({ busy, panel = null, reading = false, extractionError = null, onApprove, onReadAgain, onReject }) {
+function StageOneActions({ busy, panel = null, reading = false, waiting = false, extractionError = null, onReadAgain, onReject }) {
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [reason, setReason] = useState('')
   const primaryCls = 'px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50'
   const secondaryCls = 'px-4 py-2 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50'
   const readButton = (cls) => (
     <button key="read" type="button" disabled={!!busy} onClick={onReadAgain} className={cls}>
-      {busy === 'extract' ? 'Reading…' : (panel?.primary === 'read_again' ? 'Read again' : 'Read it anyway')}
+      {busy === 'extract' ? 'Reading…' : (!panel ? 'Read now' : panel.primary === 'read_again' ? 'Read again' : 'Read it anyway')}
     </button>
   )
   const rejectButton = (cls) => (
@@ -1162,10 +1161,12 @@ function StageOneActions({ busy, panel = null, reading = false, extractionError 
           {extractionError && <p className="text-xs text-un1t-subtle break-words">{extractionError}</p>}
         </div>
       ) : (
-      <p className="text-sm text-un1t-subtle">
-        Quality review — is this attachment legible and a real invoice for this location?
-        Approving runs Claude Vision next (which costs API tokens), so reject anything that isn't an invoice or isn't readable.
-      </p>
+        <div className="space-y-1">
+          <p className="text-sm text-un1t-subtle">
+            {waiting ? 'Waiting to be read. It is picked up automatically within a few minutes, or read it now.' : 'This has not been read yet.'}
+          </p>
+          {extractionError && <p className="text-xs text-un1t-subtle break-words">{extractionError}</p>}
+        </div>
       )}
       {reading ? null : panel ? (
         <div className="flex gap-2 flex-wrap">
@@ -1178,24 +1179,10 @@ function StageOneActions({ busy, panel = null, reading = false, extractionError 
               : [readButton(primaryCls), rejectButton(secondaryCls)]}
         </div>
       ) : (
-      <div className="flex gap-2 flex-wrap">
-        <button
-          type="button"
-          disabled={!!busy}
-          onClick={onApprove}
-          className="px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50"
-        >
-          {busy === 'quality-approve' ? 'Approving…' : 'Approve quality'}
-        </button>
-        <button
-          type="button"
-          disabled={!!busy}
-          onClick={() => setShowRejectForm((v) => !v)}
-          className="px-4 py-2 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50"
-        >
-          Reject…
-        </button>
-      </div>
+        <div className="flex gap-2 flex-wrap">
+          {readButton(primaryCls)}
+          {onReject && rejectButton(secondaryCls)}
+        </div>
       )}
       {showRejectForm && onReject && (
         <div className="space-y-2 border border-un1t-border rounded-md p-3">
@@ -1257,30 +1244,6 @@ function DuplicatePointer({ row, onOpenRow, missing = false }) {
         Open the earlier one
       </button>
       {missing && <span className="text-un1t-subtle">The earlier invoice is no longer in the list.</span>}
-    </div>
-  )
-}
-
-function ExtractAction({ busy, extractionError, onExtract }) {
-  return (
-    <div className="space-y-3">
-      <p className="text-sm text-un1t-subtle">
-        Quality approved. Run Claude Vision to extract supplier, amount, and line items.
-        {extractionError && ' Previous run failed — see the error below.'}
-      </p>
-      {extractionError && (
-        <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-xs">
-          {extractionError}
-        </div>
-      )}
-      <button
-        type="button"
-        disabled={!!busy}
-        onClick={onExtract}
-        className="px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50"
-      >
-        {busy === 'extract' ? 'Extracting…' : 'Extract with Claude Vision'}
-      </button>
     </div>
   )
 }
