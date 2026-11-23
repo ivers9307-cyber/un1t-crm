@@ -59,6 +59,16 @@ describe('sendOpsAlert (SAAS4-O2)', () => {
     expect(sendPush).toHaveBeenCalledTimes(1)
   })
 
+  it('pushFallback:false sends no push when no recipients are configured', async () => {
+    const sendPush = vi.fn(async () => {})
+    const result = await sendOpsAlert(
+      { organizationId: 'org-1', locationId: 'loc-1', subject: 'S', htmlBody: 'b', pushFallback: false },
+      { db: stubDb(null), sendEmail: vi.fn(), sendPush }
+    )
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ channel: 'none' })
+  })
+
   it('never throws — an infra failure reports channel none', async () => {
     const db = {
       from: () => {

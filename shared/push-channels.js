@@ -89,6 +89,7 @@ const CATEGORY_CHANNELS = Object.freeze({
   inspection_due: 'reminders', // EQUIP-MAINT.3 — inspection-day cron nudge
   inspection_overdue: 'reminders', // …and the owners' "nobody did it" sweep
   lead: 'reminders',
+  sale: 'reminders', // SALEALERT.1 — own 'sales' channel arrives with the bundled sound
   // Needs a manager decision.
   swap: 'approvals',
   time_off: 'approvals',

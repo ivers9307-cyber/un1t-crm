@@ -48,6 +48,8 @@ import {
   triggerSequencesForMembershipStateChange,
 } from '@/lib/sequences/triggers'
 import { applyInvoiceWebhook } from '@/lib/glofox-invoices'
+import { alertGlofoxInvoiceSale } from '@/lib/glofox-sale-alert'
+import { ringSaleAfterResponse } from '@/lib/sale-alert'
 import { applyServiceWebhook } from '@/lib/glofox-services'
 import { applyMembershipPauseWindow } from '@/lib/glofox-membership'
 import { maybeEnrolDunning, exitDunningForContact, dunningActionFor } from '@/lib/dunning'
@@ -227,6 +229,21 @@ export async function POST(request) {
   // provider. The inner try/catch blocks below (invoice, tag, sequences,
   // member-sync) are best-effort guards for known failure modes; this outer
   // catch is the safety net for anything else.
+  // SALEALERT.1 — every INVOICE_UPDATED delivery reaches the sale alert exactly
+  // once, whichever way processing exits below (a repeat delivery is absorbed
+  // by the sale:glofox:<invoice id> dedup key). Scheduled once, up front; the
+  // thunk waits for `saleContactSettled`, which the `finally` below resolves
+  // with the contact the processing found (null when it found none or exited
+  // early), so it rings with the contact whenever there is one.
+  let saleContact = null
+  let settleSaleContact = () => {}
+  if (String(parsed.eventType || '').toUpperCase() === 'INVOICE_UPDATED') {
+    const saleContactSettled = new Promise((resolve) => { settleSaleContact = resolve })
+    ringSaleAfterResponse(async () => {
+      await saleContactSettled
+      return alertGlofoxInvoiceSale(db, { locationId: creds.locationId, payload, contact: saleContact })
+    })
+  }
   try {
     // 5. Map event type → tag list. Unknown events get marked but
     // not failed — Glofox might send domains we haven't mapped yet.
@@ -366,6 +383,8 @@ export async function POST(request) {
         user_id: parsed.userId,
       })
     }
+
+    saleContact = contact
 
     // 7a. GLOFOX2.1.20 — INVOICE_UPDATED side-effect. Mirror the
     // Glofox invoice into glofox_invoices + recompute the contact's
@@ -629,6 +648,8 @@ export async function POST(request) {
     ])
     // Always 200 Glofox — we have the raw payload in dead_letter for replay.
     return NextResponse.json({ success: true, status: 'processing_failed_dead_lettered' })
+  } finally {
+    settleSaleContact()
   }
 }
 

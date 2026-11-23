@@ -23,6 +23,9 @@
 // A new staff push that is not a reply to the recipient's own action imports
 // this; it does not grow a copy. The table is staff-push-hours.test.js.
 //
+// EXCEPTION (SALEALERT.1): the "new sale" push (src/lib/sale-alert.js) rings at
+// any hour by the owner's choice and deliberately does NOT import this.
+//
 // NOT the customer send-time quiet hours (src/lib/send-quiet-hours.js), which
 // are operator-configurable and advisory.
 

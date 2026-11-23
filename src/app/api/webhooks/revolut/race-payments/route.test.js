@@ -12,6 +12,12 @@ vi.mock('next/server', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, after: vi.fn((fn) => { fn() }) }
 })
+// SALEALERT.1 — the entry sale alert schedules itself through its own
+// ringSaleAfterResponse; stub it so after() here counts only the Glofox push.
+vi.mock('@/lib/sale-alert', () => ({
+  notifyNewSale: vi.fn(async () => ({ sent: false })),
+  ringSaleAfterResponse: vi.fn(),
+}))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/revolut', () => ({ verifyWebhookSignature: vi.fn(), getOrder: vi.fn() }))
 vi.mock('@/lib/race-payments', () => ({
@@ -35,6 +41,7 @@ import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/ra
 import { sendRaceConfirmations, sendGapPaidEmail } from '@/lib/race-confirmations'
 import { recordWebhookEvent, releaseWebhookEvent } from '@/lib/webhook-events'
 import { after } from 'next/server'
+import { ringSaleAfterResponse } from '@/lib/sale-alert'
 
 // Minimal DB mock — only the fire-and-forget Glofox IIFE touches it, and it
 // bails early when the race_payments lookup returns null (no create_in_glofox).
@@ -155,6 +162,8 @@ describe('POST /api/webhooks/revolut/race-payments', () => {
     await POST(makeRequest())
     expect(after).toHaveBeenCalledTimes(1)
     expect(after).toHaveBeenCalledWith(expect.any(Function))
+    // ...and the sale alert went through its own scheduler, not the Glofox slot.
+    expect(ringSaleAfterResponse).toHaveBeenCalledTimes(1)
   })
 
   it('fresh completion → marks payment + fires confirmations once', async () => {

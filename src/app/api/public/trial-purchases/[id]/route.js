@@ -10,6 +10,8 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { paymentsFor } from '@/lib/payments'
 import { markTrialPurchasePaymentStatus } from '@/lib/trial-purchase-payments'
+import { alertTrialSale } from '@/lib/sale-alert-sources'
+import { ringSaleAfterResponse } from '@/lib/sale-alert'
 import { trialPurchasePublicState } from '@/lib/paid-trial'
 import { trialCheckoutUsable } from '@/lib/trial-checkout-window'
 import { un1tRetryGate } from '@/lib/trial-purchase-un1t-resume'
@@ -67,6 +69,16 @@ export async function GET(_request, props) {
         const { released } = await markTrialPurchasePaymentStatus({ db, purchase: row, providerState: norm.state, providerAmount: Number.isFinite(norm.amountCents) ? norm.amountCents : null })
         if (released) {
           try { await publishQueuePush({ path: TRIAL_PURCHASES_WORKER_PATH, body: { id: row.id }, deduplicationId: `trial-purchase-${row.id}` }) } catch { /* queue is the guarantee */ }
+          // SALEALERT.1 — the first paid transition: ring the studio's owners and
+          // managers. COLS never names the buyer (this route is anonymous), so the
+          // push reads who it was fresh, server-side only.
+          let buyer = null
+          try {
+            const { data: b, error: buyerErr } = await db.from('trial_purchases').select('contact_id, first_name, customer_name').eq('id', row.id).maybeSingle()
+            if (buyerErr) logWarn('trialbuy-poll', 'buyer unreadable for the sale push', { code: buyerErr.code ?? null })
+            buyer = b
+          } catch { /* the push goes without a name; never fails the poll */ }
+          ringSaleAfterResponse(() => alertTrialSale(db, { ...row, ...buyer }, { paidAmountCents: Number.isFinite(norm.amountCents) ? norm.amountCents : null }))
         }
         const { data: fresh } = await db.from('trial_purchases').select(COLS).eq('id', id).maybeSingle()
         if (fresh) row = fresh

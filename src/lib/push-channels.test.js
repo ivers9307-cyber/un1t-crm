@@ -17,7 +17,7 @@ const STAFF_TYPES = [
   'swap_declined', 'swap_open', 'swap_awaiting', 'swap_decision',
   'time_off_inbound', 'time_off_decision',
   'schedule_published', 'schedule_updated', 'shift_adjusted', 'shift_reminder',
-  'lead_new', 'whatsapp_inbound', 'whatsapp_agent_handoff',
+  'lead_new', 'sale_new', 'whatsapp_inbound', 'whatsapp_agent_handoff',
   'instagram_inbound', 'instagram_agent_handoff',
   'invoice_approved', 'invoice_declined',
   'expense_submitted', 'expense_approved', 'expense_declined',
@@ -59,6 +59,9 @@ describe('staff push channels (shared/push-channels)', () => {
 
   it('routes chat to messages and decision queues to approvals', () => {
     expect(androidChannelId({ category: 'whatsapp' })).toBe('messages')
+    // SALEALERT.1 — rides 'reminders' until the dedicated 'sales' channel ships with its sound.
+    expect(androidChannelId({ category: 'sale' })).toBe('reminders')
+    expect(NOTIFICATION_CATEGORIES).toContain('sale')
     expect(androidChannelId({ category: 'instagram' })).toBe('messages')
     expect(androidChannelId({ category: 'swap' })).toBe('approvals')
     expect(androidChannelId({ category: 'time_off' })).toBe('approvals')

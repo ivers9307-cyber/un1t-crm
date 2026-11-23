@@ -17,7 +17,7 @@ import { sdk } from '../../../../lib/sdk'
 import { buildStaffAssignmentsPatch, hydratePermissions } from '../../../../lib/staff-edit'
 import { Button } from '../../../../components/ui'
 import BackHeaderLeft from '../../../../components/BackHeaderLeft'
-import { WEB_PERMISSIONS, MOBILE_PERMISSIONS } from 'shared/permissions'
+import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, permissionOfferedToRole } from 'shared/permissions'
 
 // Categories derived from the shared model — never hardcode the keys, so a
 // new permission flows here automatically. Web keys live top-level on the
@@ -84,7 +84,13 @@ export default function StaffPermissions() {
   }, [canEdit, load])
 
   const selectedAssignment = editable.find(pl => pl.location_id === selectedLocationId) || null
-  const category = CATEGORIES.find(c => c.id === selectedCategory) || CATEGORIES[0]
+  // Display only: a key offered to some roles (onlyRoles) is hidden for the
+  // others; a saved value is never dropped (the blob keeps it untouched).
+  const baseCategory = CATEGORIES.find(c => c.id === selectedCategory) || CATEGORIES[0]
+  const category = {
+    ...baseCategory,
+    items: baseCategory.items.filter(it => permissionOfferedToRole(it, selectedAssignment?.role)),
+  }
 
   // The working blob for the selected location — the edited one if touched,
   // else the hydrated current state so toggles render the truthful value.

@@ -139,6 +139,10 @@ export function routeForNotification(data) {
     case 'lead_new':
       return data.contact_id ? `/contacts/${data.contact_id}` : '/contacts'
 
+    // SALEALERT.1 — new sale push (src/lib/sale-alert.js).
+    case 'sale_new':
+      return data.contact_id ? `/contacts/${data.contact_id}` : '/contacts'
+
     // ── Messaging (whatsapp webhook, instagram, agent handoffs) ─────
     case 'whatsapp_inbound':
     case 'whatsapp_agent_handoff':
