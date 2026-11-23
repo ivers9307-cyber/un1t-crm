@@ -662,7 +662,9 @@ function InboxList({
   return (
     // ONESCREEN.1 — on xl the list fills the workspace height and scrolls
     // inside it; below xl it keeps a 70vh cap above the stacked detail.
-    <aside className="border border-un1t-border rounded-lg overflow-hidden min-w-0 flex flex-col xl:min-h-0">
+    // Between lg and xl the list sits beside a taller, stacked detail: it keeps
+    // its own height (self-start) so its box never stretches into a blank half.
+    <aside className="border border-un1t-border rounded-lg overflow-hidden min-w-0 flex flex-col lg:self-start xl:self-auto xl:min-h-0">
       <header className="px-3 py-1.5 border-b border-un1t-border flex items-center justify-between gap-2">
         <span className="text-xs uppercase tracking-wide text-un1t-subtle">
           {loading ? 'Loading…' : `${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}
