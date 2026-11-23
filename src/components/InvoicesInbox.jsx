@@ -1430,15 +1430,24 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
             onApprove()
           }
           return (
-            <button
-              type="button"
-              disabled={!!busy || gate}
-              onClick={approve}
-              className="px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50"
-              title={title}
-            >
-              {busy === 'data-approve' ? (isApproved ? 'Retrying send…' : 'Approving + sending…') : (isApproved ? 'Retry send to Xero' : 'Approve + send to Xero')}
-            </button>
+            <>
+              <button
+                type="button"
+                disabled={!!busy || gate}
+                onClick={approve}
+                className="px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50"
+                title={title}
+              >
+                {busy === 'data-approve' ? (isApproved ? 'Retrying send…' : 'Approving + sending…') : (isApproved ? 'Retry send to Xero' : 'Approve + send to Xero')}
+              </button>
+              {/* NEWSUPPLIER.1 — the reason the button is off used to be a
+                  hover tooltip only, so a greyed button looked broken. */}
+              {gate && (
+                <span role="status" className="order-last basis-full text-sm text-amber-700">
+                  {title}.
+                </span>
+              )}
+            </>
           )
         })()}
         <button

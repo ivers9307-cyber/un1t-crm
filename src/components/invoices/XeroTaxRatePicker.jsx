@@ -14,7 +14,10 @@ export default function XeroTaxRatePicker({ locationId, fields, value, onChange 
     let live = true
     fetch(`/api/locations/${locationId}/xero/tax-rates`)
       .then((r) => r.json())
-      .then((j) => { if (live && j.success) setRates(j.taxRates || []) })
+      // The route returns only active rates that apply to expenses, without
+      // those two columns. resolveBillTaxType filters on both, so without them
+      // every rate was discarded and nothing was ever detected here.
+      .then((j) => { if (live && j.success) setRates((j.taxRates || []).map((r) => ({ status: 'ACTIVE', can_apply_to_expenses: true, ...r }))) })
       .catch(() => {})
       .finally(() => { if (live) setLoaded(true) })
     return () => { live = false }
@@ -29,7 +32,8 @@ export default function XeroTaxRatePicker({ locationId, fields, value, onChange 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, derived?.taxType])
 
-  const hint = derived && derived.status !== 'matched' && derived.status !== 'zero'
+  // Only when nothing is chosen: "pick one" beside a chosen rate is wrong.
+  const hint = !value && derived && derived.status !== 'matched' && derived.status !== 'zero'
     ? `Couldn’t auto-detect (derived ${derived.derivedRate == null ? '—' : derived.derivedRate.toFixed(1) + '%'}) — pick one`
     : null
 
