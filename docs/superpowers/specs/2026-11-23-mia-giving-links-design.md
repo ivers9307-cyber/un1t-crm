@@ -16,12 +16,14 @@ handed over to the team.
 
 An event is in `still_giving` when all of these hold:
 
-- it is a UN1T event (`host_id` null), `active`, `status = 'published'`
+- it is a UN1T event (`host_id` null), `active`, `status = 'published'`, with
+  `charity_enabled` true (the public page shows neither the donate card nor
+  the raffle card without it; found while building)
 - its studio belongs to the conversation's organisation and is active
 - its date has passed (before today on its own studio's clock)
 - and either
   - its raffle sells online right now (`onlineSalesState(raffle).open`), or
-  - `charity_enabled` is true and the date is within the last 30 days.
+  - the date is within the last 30 days (donations).
 
 Each entry carries: `name`, `studio`, `this_conversation`, `date` (label),
 `charity` (name or null), `raffle_open`, `raffle_closes_label` (or null),

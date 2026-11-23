@@ -7,8 +7,9 @@
 //
 // What qualifies (the design is
 // docs/superpowers/specs/2026-11-23-mia-giving-links-design.md):
-//   - a UN1T event (no host), active and published, whose date has passed on
-//     its own studio's clock, and either
+//   - a UN1T event (no host), active and published, with charity switched on
+//     (the public page shows neither the donate card nor the raffle card
+//     without it), whose date has passed on its own studio's clock, and either
 //   - its raffle sells online right now (the public page's own rule,
 //     onlineSalesState), or
 //   - donations are switched on and the event was within GIVING_WINDOW_DAYS.
@@ -41,13 +42,15 @@ const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
  */
 export function givingEntry({ event, raffle = null, location, threadLocationId, baseUrl, nowMs = Date.now() }) {
   if (!event || event.host_id || event.active !== true || event.status !== 'published') return null
+  // The public event page builds its raffle card only beside the charity block.
+  if (event.charity_enabled !== true) return null
   const date = str(event.race_date)
   if (!date || !str(event.slug)) return null
   const zone = zoneOfLocation(location)
   const today = todayStrIn(zone, nowMs)
   if (date >= today) return null
   const raffleOpen = Boolean(raffle) && onlineSalesState(raffle, nowMs).open
-  const donationsOpen = event.charity_enabled === true && date >= addDaysISO(today, -GIVING_WINDOW_DAYS)
+  const donationsOpen = date >= addDaysISO(today, -GIVING_WINDOW_DAYS)
   if (!raffleOpen && !donationsOpen) return null
   return {
     name: str(event.name) || 'Event',
@@ -97,6 +100,7 @@ export async function readStillGiving(db, { threadLocationId, nowMs = Date.now()
       .is('host_id', null)
       .eq('active', true)
       .eq('status', 'published')
+      .eq('charity_enabled', true)
       .lt('race_date', latestToday)
       .order('race_date', { ascending: false })
       .limit(MAX_EVENTS_READ)

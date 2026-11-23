@@ -37,9 +37,13 @@ describe('givingEntry', () => {
 
   it('the window is 30 days', () => expect(GIVING_WINDOW_DAYS).toBe(30))
 
-  it('raffle open, charity off, 40 days old: listed for the raffle only', () => {
-    const e = entry({ event: event('e1', { race_date: '2026-10-14', charity_enabled: false, charity: null }) })
-    expect(e).toMatchObject({ raffle_open: true, donations_open: false, charity: null })
+  it('raffle open, charity on, 40 days old: listed for the raffle only', () => {
+    const e = entry({ event: event('e1', { race_date: '2026-10-14' }) })
+    expect(e).toMatchObject({ raffle_open: true, donations_open: false, charity: 'MS Ireland' })
+  })
+
+  it('charity off: the public page shows no raffle card, so an open raffle does not list the event', () => {
+    expect(entry({ event: event('e1', { charity_enabled: false, charity: null }) })).toBeNull()
   })
 
   it('donations: listed at exactly 30 days, not at 31', () => {
@@ -53,7 +57,7 @@ describe('givingEntry', () => {
   })
 
   it('a raffle that has closed, is off, or is not online does not qualify the event', () => {
-    const off = event('e1', { charity_enabled: false })
+    const off = event('e1', { race_date: '2026-10-01' })
     expect(entry({ event: off, raffle: raffle('e1', { online_closes_at: '2026-11-23T12:00:00Z' }) })).toBeNull()
     expect(entry({ event: off, raffle: raffle('e1', { sales_open: false }) })).toBeNull()
     expect(entry({ event: off, raffle: raffle('e1', { online_enabled: false }) })).toBeNull()
@@ -125,7 +129,7 @@ describe('readStillGiving', () => {
 
   it('a failed raffle read keeps what donations qualify and says the rest is unknown', async () => {
     const db = seed({
-      events: [event('e1'), event('e2', { name: 'Raffle only', charity_enabled: false, slug: 'r-only' })],
+      events: [event('e1'), event('e2', { name: 'Raffle only', race_date: '2026-10-01', slug: 'r-only' })],
       raffles: [raffle('e1'), raffle('e2')],
       errors: { raffles: { select: { message: 'boom' } } },
     })
