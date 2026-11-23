@@ -30,6 +30,7 @@
 3. A store offer that is sold out, or whose stock could not be read: `sold_out: true` in the first case, listed as available and not limited in the second, never dropped. (Task 2)
 4. A customer on a studio whose organisation has a second studio with a live page switched on only there: the entry appears under the second studio's name, never under the conversation's. (Task 2)
 5. A page whose "Who is this for?" line is blank or only spaces: the default by offer type is used. (Task 1)
+6. Open Week and the paid trial both live at a studio: Open Week is `lead` and first; the day after its window ends, the paid trial is `lead`. (Tasks 1 and 2)
 
 ---
 
@@ -44,6 +45,8 @@
   - `forLine(page: { offer_type, title, chrome }, summary: string|null): string`
   - `pageEntry({ page, mergedOffer, promo, zone, url, withOffer }): { title, kind, for, summary, price_label, ends_label, url }`. `kind` is the page's `offer_type`. `promo` is a `promoView` row (`src/lib/corp-promos-db.js`) or null. `withOffer: false` (a studio page whose trial a campaign page already lists, or offer type `none`) gives `price_label: null, ends_label: null`.
   - `storeEntry({ offer, stock, zone, url, now }): { name, category, bonus, price_label, ends_label, opens_label, limited, sold_out, url }`. `stock` is an `offerStockStatus` result or null.
+  - `rankPages(items: Array<{ entry: PageEntry, page, endsOn: string|null }>): PageEntry[]`: orders the entries and sets `priority` on each (`'lead' | 'normal' | 'only_if_asked'`). `endsOn` is the offer's end as `YYYY-MM-DD` on the studio clock, null when open ended. Order: `page.chrome.mia_priority === 'lead'` (by title); then `endsOn` set and `entry.price_label !== null || entry.kind` carries an offer, soonest `endsOn` first; then the other entries with an offer; then entries with no offer (`withOffer: false`); then `mia_priority === 'ask_only'`. `lead` goes to every operator-marked page, or, when there is none, to the first entry of groups two and three. `ask_only` pages get `only_if_asked`; the rest `normal`.
+  - `pageEntry` returns `priority: 'normal'` until `rankPages` sets it, and a non-enumerable-free plain `has_offer: boolean` is NOT added: `rankPages` is told through `items[].withOffer` (add that field to each item).
   - `dateTimeLabel(iso: string, zone: string): string` and `dayLabel(isoDate: string, zone: string): string`, e.g. `Mon 30 Nov, 23:59` and `Sun 29 Nov`.
 
 - [ ] **Step 1: Write the failing tests** in `offer-view.test.js`:
@@ -74,6 +77,23 @@ it('the editor line wins; blank or spaces falls back to the default', () => {
   expect(forLine({ offer_type: 'sale', title: 'T', chrome: {} }, null)).toBe('Anyone buying a pack, a membership or a gift.')
   expect(forLine({ offer_type: 'promo_credits', title: 'New Start', chrome: {} }, 'Three free classes for new members.')).toBe('New Start: Three free classes for new members.')
 })
+it('rankPages: a time-limited open offer leads the open-ended trial', () => {
+  const trial = { entry: { title: '14 Day Reset' }, page: { title: '14 Day Reset', chrome: {} }, endsOn: null, withOffer: true }
+  const week = { entry: { title: 'Open Week' }, page: { title: 'Open Week', chrome: {} }, endsOn: '2026-11-29', withOffer: true }
+  const home = { entry: { title: 'UN1T Stillorgan' }, page: { title: 'UN1T Stillorgan', chrome: {} }, endsOn: null, withOffer: false }
+  expect(rankPages([trial, home, week]).map((e) => [e.title, e.priority])).toEqual([
+    ['Open Week', 'lead'], ['14 Day Reset', 'normal'], ['UN1T Stillorgan', 'normal']])
+  expect(rankPages([trial, home]).map((e) => [e.title, e.priority])).toEqual([
+    ['14 Day Reset', 'lead'], ['UN1T Stillorgan', 'normal']])
+})
+it('rankPages: the operator override beats the automatic rule', () => {
+  const trial = { entry: { title: '14 Day Reset' }, page: { title: '14 Day Reset', chrome: { mia_priority: 'lead' } }, endsOn: null, withOffer: true }
+  const week = { entry: { title: 'Open Week' }, page: { title: 'Open Week', chrome: {} }, endsOn: '2026-11-29', withOffer: true }
+  const corp = { entry: { title: 'Corporate promo' }, page: { title: 'Corporate promo', chrome: { mia_priority: 'ask_only' } }, endsOn: null, withOffer: true }
+  expect(rankPages([corp, week, trial]).map((e) => [e.title, e.priority])).toEqual([
+    ['14 Day Reset', 'lead'], ['Open Week', 'normal'], ['Corporate promo', 'only_if_asked']])
+})
+it('rankPages: two time-limited offers, the sooner end first; an empty list is an empty list', () => {})
 it('store offer: labels in the studio zone, limited and sold out as flags, no number', () => {
   const e = storeEntry({ offer: { name: '20 Class Pack', category: 'class_pack', bonus_headline: '+5 free classes', price_cents: 38000, currency: 'EUR', ends_at: '2026-11-30T23:59:59Z', starts_at: null, stock_limit: 50 },
     stock: { limit: 50, sold: 50, held: 0, left: 0, state: 'sold_out' }, zone: 'Europe/Dublin', url: 'https://x.test/offers/stillorgan/20-class-pack', now: new Date('2026-11-23T12:00:00Z') })
@@ -83,7 +103,7 @@ it('store offer not yet open carries opens_label; stock null means not limited, 
 ```
 
 - [ ] **Step 2: Run** `npx vitest run src/lib/agent/offer-view.test.js`. Expected: FAIL, module not found.
-- [ ] **Step 3: Implement** the four exports. Price through `formatTrialPrice` (`src/lib/paid-trial.js`). Summary source: paid trial, `paidTrialCopyFromBlock`; one class, `campaignFunnelCopy(...).subhead`; promo, `corpPromoCopyFromBlocks` heading with tokens filled by `fillCorpPromoTokens`, plus "N free classes" from `promo.credits` (or `maxClasses` for an open week); sale and none, `page.chrome.meta_description` or null. One line, at most 200 characters. `limited` is `Number.isInteger(offer.stock_limit) && offer.stock_limit > 0`; `sold_out` is `stock?.state === 'sold_out'`.
+- [ ] **Step 3: Implement** the five exports. Price through `formatTrialPrice` (`src/lib/paid-trial.js`). Summary source: paid trial, `paidTrialCopyFromBlock`; one class, `campaignFunnelCopy(...).subhead`; promo, `corpPromoCopyFromBlocks` heading with tokens filled by `fillCorpPromoTokens`, plus "N free classes" from `promo.credits` (or `maxClasses` for an open week); sale and none, `page.chrome.meta_description` or null. One line, at most 200 characters. `limited` is `Number.isInteger(offer.stock_limit) && offer.stock_limit > 0`; `sold_out` is `stock?.state === 'sold_out'`.
 - [ ] **Step 4: Run** the test file. Expected: PASS.
 - [ ] **Step 5: Commit** `MIAPAGES.1 — entry views for Mia's live offers`.
 
@@ -104,7 +124,8 @@ Decisions:
 - A `kind = 'studio'` page is listed with `withOffer: false` when a `kind = 'campaign'` page at the same studio carries the same `offer_type`; otherwise it keeps its offer.
 - A `sale` page is listed with `withOffer: false`. Store entries come from `sellableSaleOffers(db, locationId, { now })` for each studio that has any enabled live page or any active `sale_offers` row; stock from `readOfferStock` (`src/lib/offer-stock.js`); a null stock read leaves `stock: null`.
 - URLs: `baseUrl` plus the path the public route serves for that page at that studio; store offers `/offers/<studioKey>/<slug>` (`saleOfferView` shows the form). `baseUrl` is the origin `executeEventTool` uses for the event sign-up link.
-- Order: the thread's studio first, then by studio name. A studio with no pages and no store entries and no unreadable flag is omitted.
+- Each studio's `pages` go through `rankPages` (Task 1), with `endsOn` the promo's `windowEndsOn` when it has one and null otherwise. `store` keeps `sellableSaleOffers`' order.
+- Order of studios: the thread's studio first, then by studio name. A studio with no pages and no store entries and no unreadable flag is omitted.
 - Zone: `zoneOfLocation` from `@/lib/location-time` on the embedded location.
 
 - [ ] **Step 1: Write the failing tests** with `createFakeDb` (see `tests/` helpers and an existing agent reader test for the idiom). One `it` each, asserting on the returned object:
@@ -113,6 +134,7 @@ Decisions:
   - the trial appears once: `/trial` with `price_label: '€39'`, the studio page with `price_label: null`;
   - Review Focus 2: open week with `window_ends_on` the day before `now` in the studio zone is absent; the same row with `now` one day earlier is present;
   - a promo row with `live: false` is absent;
+  - Review Focus 6: with Open Week and the trial both live, `pages[0]` is Open Week with `priority: 'lead'` and the trial is `normal`; with `now` the day after the window, `pages[0]` is the trial with `priority: 'lead'`;
   - Review Focus 3: sold out gives `sold_out: true`; a failing `offer_stock_counts` rpc gives `limited` from `stock_limit` and `sold_out: false`;
   - Review Focus 1: `sale_offers` read errors → `{ ok: true }` with `store_unreadable: true` and the pages intact;
   - `landing_pages` read errors and store fine → `pages_unreadable: true` on each studio that has store entries;
@@ -139,7 +161,7 @@ Decisions:
 
 Tool description (exact):
 
-> List what the studio is offering right now, read live: every public page that is switched on (trials, free class offers, sales) and every offer in the online store, for this studio and the organisation's other studios. Each entry says who it is for, its price_label, its ends_label when it has an end date, and its url. No identity verification needed. Call this before you answer anything about trying the studio, joining, prices, class packs, gift cards, deals or a sale, and before you state any offer's price, end date or link. Copy price_label and ends_label exactly. Entries flagged limited may be described as limited; never give a number. Never share the url of an entry flagged sold_out.
+> List what the studio is offering right now, read live: every public page that is switched on (trials, free class offers, sales) and every offer in the online store, for this studio and the organisation's other studios. Each entry says who it is for, its price_label, its ends_label when it has an end date, and its url. Pages come in priority order and one is marked lead. No identity verification needed. Call this before you answer anything about trying the studio, joining, prices, class packs, gift cards, deals or a sale, and before you state any offer's price, end date or link. Copy price_label and ends_label exactly. Entries flagged limited may be described as limited; never give a number. Never share the url of an entry flagged sold_out.
 
 Results: on `{ ok: true }` return `{ studios }`, or `{ studios: [], message: 'Nothing is on offer online right now. Do not invent an offer; hand off if they want to buy.' }` when the list is empty. On `{ ok: false }` or a throw return `{ error: 'offers_unreadable', message: 'The offers could not be read just now. Say you cannot check at the moment and offer to pass them to the team. Never say there are no offers.' }`.
 
@@ -168,6 +190,7 @@ Results: on `{ ok: true }` return `{ studios }`, or `{ studios: [], message: 'No
 - Call list_current_offers before answering anything about trying the studio, joining, prices, class packs, gift cards, deals or a sale. Call it again rather than trusting a price from an earlier message in the thread.
 - APPLY CONTEXT. First work out what this person is after (trying the studio, a membership, more classes, a gift, an offer for their company) and what you already know about them (new, on a trial, a member, which studio). Then offer the one or two entries whose "for" line fits them, with the price_label, the ends_label when there is one, and the url last with nothing after it. Never list everything. If it is not clear what they want, ask one short question first.
 - Never offer a trial or a new customer page to someone you know is a current member. Offer an entry aimed at a group (a company's staff, the over 50s) only when the customer's own words put them in that group. You do not check who is eligible: say who it is for and that the page confirms it.
+- LEAD FIRST. Pages come in priority order. Among the entries that fit this person, offer the one whose priority is lead. Mention the next one only if the lead does not suit them (they cannot make its dates, or they are not who it is for). Bring up an entry whose priority is only_if_asked only when the customer's own words ask for it.
 - Say "free" only for an entry whose price_label is "Free".
 - When an entry is limited you may say it is limited. When it is sold_out, say it has sold out and never share its url. Never give a number.
 - An entry listed under another studio is that studio's offer: name the studio.
@@ -189,17 +212,18 @@ Edits to existing rules:
 - [ ] **Step 4: Regenerate** the two system-prompt fixtures, then run `npx vitest run src/lib/agent`. Expected: PASS.
 - [ ] **Step 5: Commit** `MIAPAGES.1 — Mia's rules read offers from the live list`.
 
-### Task 5: "Who is this for?" in the page editor
+### Task 5: "Who is this for?" and "Mia's priority" in the page editor
 
 **Files:**
-- Modify: `src/lib/landing-page-schemas.js` (`landingPageChromeSchema`): add `mia_note: z.string().trim().max(200).nullable()`
+- Modify: `src/lib/landing-page-schemas.js` (`landingPageChromeSchema`): add `mia_note: z.string().trim().max(200).nullable()` and `mia_priority: z.enum(['lead', 'ask_only']).nullable()` (null is Automatic)
 - Modify: `src/components/LandingPageSettingsForm.jsx`: one text input in the page settings, label "Who is this for? (Mia reads this)", help text "Optional. One line telling Mia who to suggest this page to. Left blank, she works it out from the page.", bound to `chrome.mia_note`, using the `@/components/ui` input the neighbouring `chooser_label` field uses.
 - Test: `src/components/LandingPageSettingsForm.page.test.jsx`, the schema's test file.
 
 **Interfaces:**
-- Produces: `page.chrome.mia_note`, read by Task 1's `forLine`.
+- Produces: `page.chrome.mia_note`, read by Task 1's `forLine`; `page.chrome.mia_priority`, read by Task 1's `rankPages`.
+- Second field in the form: a select labelled "Mia's priority" with options "Automatic" (null), "Lead with this" (`lead`), "Only if asked" (`ask_only`), help text "Automatic: an offer with an end date leads while it runs, then the trial leads again.".
 
-- [ ] **Step 1: Write the failing tests:** the schema accepts `{ mia_note: 'People over 50.' }` and `{ mia_note: null }` and rejects 201 characters; the form renders the field with the stored value and sends `chrome.mia_note` on save.
+- [ ] **Step 1: Write the failing tests:** the schema accepts `{ mia_note: 'People over 50.' }` and `{ mia_note: null }` and rejects 201 characters; it accepts `mia_priority` of `'lead'`, `'ask_only'` and `null` and rejects `'high'`; the form renders both fields with the stored values and sends `chrome.mia_note` and `chrome.mia_priority` on save.
 - [ ] **Step 2: Run** the two test files. Expected: FAIL.
 - [ ] **Step 3: Implement.** Check `mergedChrome` (`src/lib/landing-pages.js:716`) passes the new key through.
 - [ ] **Step 4: Run** the two test files. Expected: PASS.

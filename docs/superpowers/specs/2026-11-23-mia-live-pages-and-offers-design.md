@@ -18,6 +18,10 @@ Richard wants three things:
 3. She applies context: she works out what the customer is looking for and
    offers what fits, not the whole list.
 
+4. The right page leads. The baseline for a new person is the paid trial, but
+   a time-limited offer such as this week's free Open Week takes priority over
+   it while it runs (Richard, 23 Nov 2026).
+
 So she always quotes the current price and end date, and the right offer.
 
 ## Goals
@@ -169,6 +173,33 @@ least one entry, the conversation's studio first, each under its studio name:
 - **Labels** (`price_label`, `ends_label`, `opens_label`) are formatted on the
   server, in the studio's timezone, so Mia copies them and does no maths.
 
+### Which page leads
+
+Each studio's `pages` list reaches Mia already ranked, and every entry carries
+`priority`: `lead`, `normal` or `only_if_asked`. Mia offers the lead entry and
+mentions the next one only when the lead does not suit the customer.
+
+The rank is automatic, with an override (Richard chose both, 23 Nov 2026):
+
+1. Pages the operator set to "Lead with this", in title order.
+2. Pages with an offer that has an end date and is open now, soonest end
+   first. This is what puts Open Week above the paid trial for its week.
+3. Every other page with an offer (the open-ended baseline, such as the
+   14 Day Reset).
+4. Pages without an offer of their own (studio pages, the sale page).
+5. Pages the operator set to "Only if asked", flagged `only_if_asked`.
+
+The first page in groups 1 to 3 is `lead`; when the operator marked several,
+each of them is. Nothing is stored about the outcome: the rank is worked out
+on every read, so when Open Week's window ends it leaves the list and the
+paid trial leads again with no one touching anything.
+
+The override is one setting per page in the page editor, "Mia's priority":
+Automatic (the default), Lead with this, Only if asked. It is saved in the
+page's settings beside the "Who is this for?" line.
+
+Store offers keep the storefront's own order and carry no priority.
+
 ### Failure
 
 A source that cannot be read is reported, never emptied: the studio's entry
@@ -209,6 +240,10 @@ Changes to `src/lib/agent/prompt.js`, in every block:
   (a card for the team) stays for a yes to something that is not on the list,
   and the membership sign-up link stays for a plain "I want to join" when no
   live entry fits. (Confirmed by Richard, 23 Nov 2026.)
+- **Lead first.** Among the entries that fit the customer, offer the one
+  marked `lead`. Mention the next one only when the lead does not suit them
+  (they cannot make the dates, they are not who it is for). Bring up an
+  `only_if_asked` entry only when the customer's own words ask for it.
 - Say an offer is limited or sold out when the tool says so, never a number,
   and never link a sold-out offer.
 - An offer for another studio is named as that studio's.
@@ -246,6 +281,9 @@ this)", up to 200 characters, saved with the page in its existing settings
 ## Claude's calls, for Richard to check
 
 - A tool rather than the list in every prompt.
+- "Open now with an end date" is what makes an offer outrank the baseline; a
+  time-limited store offer does not outrank a page, since store offers are for
+  people buying, not people trying.
 - The optional "Who is this for?" line per page, with a default by offer type.
 - Mia never gives a stock number, only "limited".
 - Promo pages are mentioned only when the customer raises the company or code.
