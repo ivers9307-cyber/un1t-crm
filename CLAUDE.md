@@ -90,6 +90,7 @@ Guidance for Claude Code working in **un1t-crm**: the staff and admin CRM (Next.
 - Mia states an offer's price, end date and link only from `list_current_offers`; a new public surface that sells something is added to `readCurrentOffers`.
 - A past event's raffle or donation link reaches Mia only through `still_giving` (`readStillGiving`), organisation wide; upcoming events and bookings stay studio-scoped.
 - Mia says about an event only what `list_upcoming_events` gives her (`EVENT_FACTS_RULE`); a new thing an event page shows is added to that result, or she will not know it.
+- A class note is shared across an organisation's studios only by `readSharedClassNotes`: a sibling's note for a class on this studio's own timetable, when this studio has none. No other knowledge note crosses studios.
 
 ---
 
