@@ -37,7 +37,7 @@ export function buildSaleAlertPayload({ itemName, amountCents, buyerFirstName, l
 
 export async function notifyNewSale(db, { source, saleId, locationId, itemName, amountCents, buyerFirstName, locationName, contactId }) {
   if (!source || !saleId || !locationId) return { sent: false, reason: 'missing_key' }
-  if (amountCents === 0) return { sent: false, reason: 'zero_amount' }
+  if (typeof amountCents === 'number' && amountCents <= 0) return { sent: false, reason: 'zero_amount' }
   try {
     const payload = buildSaleAlertPayload({ itemName, amountCents, buyerFirstName, locationName, contactId })
     await sendPushToRolesAtLocationOnce(

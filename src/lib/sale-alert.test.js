@@ -72,6 +72,11 @@ describe('notifyNewSale', () => {
     expect(opts).toEqual({ locationScoped: true })
   })
 
+  it('does not ring for a negative amount', async () => {
+    expect(await notifyNewSale({}, { ...base, amountCents: -500 })).toEqual({ sent: false, reason: 'zero_amount' })
+    expect(sendPushToRolesAtLocationOnce).not.toHaveBeenCalled()
+  })
+
   it('does not ring for a zero amount', async () => {
     expect(await notifyNewSale({}, { ...base, amountCents: 0 })).toEqual({ sent: false, reason: 'zero_amount' })
     expect(sendPushToRolesAtLocationOnce).not.toHaveBeenCalled()
