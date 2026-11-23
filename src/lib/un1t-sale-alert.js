@@ -19,7 +19,7 @@ import { logError, logWarn } from './log'
 
 // Set to the release time in the PR: rows paid before it never ring, so
 // deploying cannot replay a day of old purchases.
-export const UN1T_SALE_ALERT_FROM = '2026-11-24T00:00:00Z'
+export const UN1T_SALE_ALERT_FROM = '2026-11-23T22:30:00Z'
 export const UN1T_SALE_ALERT_WINDOW_MS = 24 * 60 * 60 * 1000
 
 const SALE_TYPES = Object.freeze(['one_time', 'sub_initial'])

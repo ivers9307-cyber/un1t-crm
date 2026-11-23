@@ -20,7 +20,7 @@ const tx = (over = {}) => ({
 
 describe('un1tTransactionIsNewSale', () => {
   it('cutover is the agreed instant and the window is a day', () => {
-    expect(UN1T_SALE_ALERT_FROM).toBe('2026-11-24T00:00:00Z')
+    expect(UN1T_SALE_ALERT_FROM).toBe('2026-11-23T22:30:00Z')
     expect(UN1T_SALE_ALERT_WINDOW_MS).toBe(24 * 60 * 60 * 1000)
   })
   it('a product purchase (one_time) rings', () => {
@@ -38,7 +38,7 @@ describe('un1tTransactionIsNewSale', () => {
     ['a refunded first payment', { type: 'sub_initial', refunded: true }],
     ['a free trial (EUR 0)', { amount_cents: 0 }],
     ['a null amount', { amount_cents: null }],
-    ['a row before the cutover', { remote_created_at: '2026-11-23T23:59:59Z' }],
+    ['a row before the cutover', { remote_created_at: '2026-11-23T22:29:59Z' }],
     ['a row older than 24 hours', { remote_created_at: '2026-11-24T11:59:59Z' }],
     ['a row with no date', { remote_created_at: null }],
     ['a row dated in the future', { remote_created_at: '2026-11-25T12:00:01Z' }],
@@ -47,7 +47,7 @@ describe('un1tTransactionIsNewSale', () => {
   })
   it('a row exactly at the cutover rings while inside the day', () => {
     const now = Date.parse('2026-11-24T10:00:00Z')
-    expect(un1tTransactionIsNewSale(tx({ remote_created_at: '2026-11-24T00:00:00Z' }), now)).toBe(true)
+    expect(un1tTransactionIsNewSale(tx({ remote_created_at: '2026-11-23T22:30:00Z' }), now)).toBe(true)
   })
 })
 
@@ -86,7 +86,7 @@ describe('alertUn1tSales', () => {
   it('never reads before the cutover', async () => {
     const db = makeDb()
     await alertUn1tSales(db, { locationId: 'hatch', nowMs: Date.parse('2026-11-24T10:00:00Z') })
-    expect(db.queries.un1t_transactions.calls).toContainEqual(['gte', 'remote_created_at', '2026-11-24T00:00:00.000Z'])
+    expect(db.queries.un1t_transactions.calls).toContainEqual(['gte', 'remote_created_at', '2026-11-23T22:30:00.000Z'])
   })
 
   it('rings each qualifying row once, with the un1t source, item name and buyer first name', async () => {
