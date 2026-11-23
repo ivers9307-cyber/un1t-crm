@@ -27,6 +27,7 @@ import { Check, AlertCircle, RotateCcw } from 'lucide-react'
 import {
   WEB_PERMISSIONS,
   MOBILE_PERMISSIONS,
+  permissionOfferedToRole,
   hydratePermissions,
 } from '@shared/permissions'
 import AcDeviceAllowlistPicker from './AcDeviceAllowlistPicker'
@@ -134,7 +135,7 @@ export default function RolePermissions({ locationId }) {
   const webItems = WEB_PERMISSIONS.filter((p) => !p.locationGateOnly && p.group !== 'approvals')
   const approvalItems = WEB_PERMISSIONS.filter((p) => p.group === 'approvals')
   const mobileItems = MOBILE_PERMISSIONS.filter((p) => !p.isNotify)
-  const notifyItems = MOBILE_PERMISSIONS.filter((p) => p.isNotify)
+  const notifyItems = MOBILE_PERMISSIONS.filter((p) => p.isNotify && permissionOfferedToRole(p, activeRole))
 
   function setKey(key, mobile, value) {
     const cur = blob

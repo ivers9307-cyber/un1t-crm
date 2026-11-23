@@ -27,6 +27,10 @@ vi.mock('@/lib/trial-purchase-payments', () => ({
   resolveTrialPurchaseByRef: vi.fn(),
   markTrialPurchasePaymentStatus: vi.fn(),
 }))
+vi.mock('@/lib/sale-alert-sources', () => ({
+  alertTrialSale: vi.fn(async () => ({ sent: true })),
+  alertClassBookingSale: vi.fn(async () => ({ sent: true })),
+}))
 vi.mock('@/lib/sale-offers', () => ({
   resolveOfferPurchaseByOrderId: vi.fn(),
   markOfferPurchaseState: vi.fn(),
@@ -56,6 +60,7 @@ import { runRacePaymentCompletedEffects } from '@/lib/race-payment-completed'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
 import { resolveTrialPurchaseByRef, markTrialPurchasePaymentStatus } from '@/lib/trial-purchase-payments'
 import { resolveOfferPurchaseByOrderId, markOfferPurchaseState } from '@/lib/sale-offers'
+import { alertTrialSale, alertClassBookingSale } from '@/lib/sale-alert-sources'
 import { runOfferPaidSideEffects } from '@/lib/offer-purchase-paid'
 import { resolveDonationByRef, markDonationPaymentStatus, runPaidDonationSideEffects } from '@/lib/donation-payments'
 
@@ -380,6 +385,28 @@ describe('runRevolutReconcile — class bookings and trials', () => {
     expect(markClassBookingPaymentStatus).toHaveBeenCalledWith(expect.objectContaining({ request: row, providerState: 'completed', providerAmount: 1500 }))
     expect(publish).toHaveBeenCalledWith({ path: '/w/class-bookings', body: { id: 'cb1' }, deduplicationId: 'class-booking-cb1' })
     expect(r.counts.settled).toBe(1)
+    // SALEALERT.1 — the first paid transition rings once, with Revolut's amount.
+    expect(alertClassBookingSale).toHaveBeenCalledTimes(1)
+    expect(alertClassBookingSale).toHaveBeenCalledWith(db, row, { paidAmountCents: 1500 })
+  })
+
+  it('a class booking that released nothing rings no sale push', async () => {
+    const row = { id: 'cb1', status: 'awaiting_payment', payment_status: 'pending', payment_provider: 'revolut', payment_provider_ref: 'ord-cb1', created_at: ago(30 * MIN) }
+    const db = makeDb({ class_booking_requests: [row] })
+    resolveClassBookingPaymentByRef.mockResolvedValue(row)
+    markClassBookingPaymentStatus.mockResolvedValue({ released: false })
+    await runRevolutReconcile({ db, now: NOW, getOrder: async () => ({ state: 'completed', amount: 1500 }), publish: vi.fn() })
+    expect(alertClassBookingSale).not.toHaveBeenCalled()
+  })
+
+  it('a paid trial is released and rings the sale push once', async () => {
+    const row = { id: 't1', status: 'awaiting_payment', payment_status: 'pending', payment_provider: 'revolut', payment_provider_ref: 'ord-t1', created_at: ago(30 * MIN) }
+    const db = makeDb({ trial_purchases: [row] })
+    resolveTrialPurchaseByRef.mockResolvedValue(row)
+    markTrialPurchasePaymentStatus.mockResolvedValue({ released: true })
+    await runRevolutReconcile({ db, now: NOW, getOrder: async () => ({ state: 'completed', amount: 3900 }), publish: vi.fn(async () => {}) })
+    expect(alertTrialSale).toHaveBeenCalledTimes(1)
+    expect(alertTrialSale).toHaveBeenCalledWith(db, row, { paidAmountCents: 3900 })
   })
 
   it('a trial still pending is not released and not nudged', async () => {
@@ -391,6 +418,7 @@ describe('runRevolutReconcile — class bookings and trials', () => {
     const r = await runRevolutReconcile({ db, now: NOW, getOrder: async () => ({ state: 'processing' }), publish })
     expect(r.counts).toMatchObject({ candidates: 1, still_pending: 1 })
     expect(publish).not.toHaveBeenCalled()
+    expect(alertTrialSale).not.toHaveBeenCalled()
   })
 })
 

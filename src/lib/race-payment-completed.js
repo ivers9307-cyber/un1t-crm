@@ -17,6 +17,8 @@
 import { sendRaceConfirmations, sendGapPaidEmail } from './race-confirmations'
 import { GAP_PAYMENT_KIND } from './registration-entry'
 import { logWarn, logError } from './log'
+import { alertRaceSale } from './sale-alert-sources'
+import { ringSaleAfterResponse } from './sale-alert'
 
 /**
  * GLOFOX3.3 (mig 145). Post-payment Glofox push for opted-in events. Race
@@ -84,6 +86,21 @@ export async function pushRacePaymentTeamToGlofox(db, paymentId) {
   }
 }
 
+async function ringRaceSale(db, paymentId) {
+  const { data: row, error } = await db
+    .from('race_payments')
+    .select('id, kind, amount_cents, payment_provider, connected_account_id, contact_id, contact_name, race_events:race_event_id ( name, location_id )')
+    .eq('id', paymentId)
+    .maybeSingle()
+  if (error) {
+    logWarn('race-payment-completed', 'payment unreadable; sale alert skipped', { err: error, paymentId })
+    return
+  }
+  if (!row) return
+  const { race_events: event, ...payment } = row
+  await alertRaceSale(db, payment, event)
+}
+
 /**
  * Run the completion side effects for a payment this caller completed.
  *
@@ -114,5 +131,9 @@ export async function runRacePaymentCompletedEffects({ db, payment, applied }) {
     confirmations = { failed: [`unhandled:${e.message}`] }
   }
   const glofoxPush = () => pushRacePaymentTeamToGlofox(db, payment.id)
+  // SALEALERT.1 — the owners' sale push, after the buyer's confirmations and
+  // off the response path. It reads the payment fresh: the caller's row may
+  // not carry the columns the sale decision needs.
+  await ringSaleAfterResponse(() => ringRaceSale(db, payment.id))
   return { confirmations, glofoxPush }
 }

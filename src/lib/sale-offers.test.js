@@ -6,6 +6,11 @@ const writeContactTag = vi.fn(async () => ({ written: true }))
 vi.mock('./contact-tags', () => ({ writeContactTag: (...a) => writeContactTag(...a) }))
 const sendOpsAlert = vi.fn(async () => ({ channel: 'email' }))
 vi.mock('./ops-alerts', () => ({ sendOpsAlert: (...a) => sendOpsAlert(...a) }))
+const notifyNewSale = vi.fn(async () => ({ sent: true }))
+vi.mock('./sale-alert', () => ({
+  notifyNewSale: (...a) => notifyNewSale(...a),
+  ringSaleAfterResponse: (fn) => fn().catch(() => {}),
+}))
 
 import {
   OFFER_SALE_TAG,
@@ -26,6 +31,8 @@ beforeEach(() => {
   findOrCreateRaceContact.mockClear()
   writeContactTag.mockClear()
   sendOpsAlert.mockClear()
+  notifyNewSale.mockClear()
+  notifyNewSale.mockImplementation(async () => ({ sent: true }))
 })
 
 const openOffer = {
@@ -302,6 +309,40 @@ describe('notifyStaffOfPaidPurchase', () => {
   it('oneLine collapses whitespace and tolerates non-strings', () => {
     expect(oneLine(' a\n\tb  c ')).toBe('a b c')
     expect(oneLine(null)).toBe('')
+  })
+  // SALEALERT.1 — the owners-and-managers sale push, both rails.
+  describe('sale alert push', () => {
+    const db = dbFor({ organization_id: 'org1', name: 'UN1T Stillorgan', membership_source: 'glofox' })
+    it('a paid Revolut offer rings the offer source, keyed on the purchase id', async () => {
+      await notifyStaffOfPaidPurchase(db, { ...purchase, contact_id: 'c1' }, offer)
+      expect(notifyNewSale).toHaveBeenCalledTimes(1)
+      expect(notifyNewSale).toHaveBeenCalledWith(db, {
+        source: 'offer', saleId: 'p1', locationId: 'loc1', itemName: '3 Month Membership',
+        amountCents: 49700, buyerFirstName: 'Jane', locationName: 'UN1T Stillorgan', contactId: 'c1',
+      })
+    })
+    it('a un1t.online offer rings the un1t source, keyed on the transaction id', async () => {
+      await notifyStaffOfPaidPurchase(db, { ...purchase, payment_provider: 'un1t_online', un1t_transaction_id: '9981' }, offer)
+      expect(notifyNewSale).toHaveBeenCalledWith(db, expect.objectContaining({ source: 'un1t', saleId: '9981' }))
+    })
+    it('a un1t.online offer with no transaction id does not ring under the wrong key', async () => {
+      await notifyStaffOfPaidPurchase(db, { ...purchase, payment_provider: 'un1t_online' }, offer)
+      expect(notifyNewSale).not.toHaveBeenCalled()
+    })
+    it('the ops alert drops its push fallback so the sale push is the only push', async () => {
+      await notifyStaffOfPaidPurchase(db, purchase, offer)
+      expect(sendOpsAlert.mock.calls[0][0].pushFallback).toBe(false)
+    })
+    it('a rejecting notifyNewSale leaves the result and the email unchanged', async () => {
+      notifyNewSale.mockRejectedValueOnce(new Error('boom'))
+      const r = await notifyStaffOfPaidPurchase(db, purchase, offer)
+      expect(r).toEqual({ sent: true })
+      expect(sendOpsAlert).toHaveBeenCalledTimes(1)
+    })
+    it('no organisation means no sale push either', async () => {
+      await notifyStaffOfPaidPurchase(dbFor(null), purchase, offer)
+      expect(notifyNewSale).not.toHaveBeenCalled()
+    })
   })
   it('missing org → sent:false, no alert', async () => {
     const db = {

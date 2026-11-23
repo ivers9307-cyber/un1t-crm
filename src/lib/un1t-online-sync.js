@@ -96,6 +96,7 @@ import { projectUn1tBookings } from './un1t-online-bookings.js'
 import { resolveUn1tContacts } from './un1t-online-contacts.js'
 import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
 import { upsertContactStudio, setMembershipFacts } from './contact-studios.js'
+import { alertUn1tSales } from './un1t-sale-alert.js'
 import { tokenFingerprint } from './un1t-online-token.js'
 import { readConnection } from './connection-registry.js'
 import { logError, logWarn, logInfo } from './log'
@@ -393,7 +394,7 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     // 5. Organisation + contacts.
     const { data: loc, error: locError } = await db
       .from('locations')
-      .select('id, organization_id, membership_source')
+      .select('id, name, organization_id, membership_source')
       .eq('id', locationId)
       .maybeSingle()
     if (locError || !loc?.organization_id) {
@@ -502,6 +503,11 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
         locationId, runId, history: counts.history,
       })
     }
+
+    // 6d. SALEALERT.1 — ring the sale push for purchases just mirrored (there
+    // is no un1t.online webhook, so this run is the detector). Awaited, never
+    // throws; counted only, and never the run's status.
+    counts.sale_alerts = await alertUn1tSales(db, { locationId, locationName: loc.name, nowMs: startedAt.getTime() })
 
     // 7. Memberships.
     const membership = await reconcileMemberships(db, {

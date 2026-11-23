@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('./sequences/triggers.js', () => ({ triggerSequencesForContactCreated: vi.fn() }))
+vi.mock('./un1t-sale-alert.js', () => ({ alertUn1tSales: vi.fn(async () => ({ rung: 0 })) }))
 vi.mock('./un1t-dunning.js', () => ({ runUn1tDunningStep: vi.fn(async () => ({ enrolled: 0, already: 0, exited: 0, skipped: 0 })) }))
 
+import { alertUn1tSales } from './un1t-sale-alert.js'
 import {
   runUn1tSync, UN1T_LISTS, STALE_RUN_MS, pickFreshSignups, SIGNUP_MAX_AGE_DAYS,
   UN1T_WINDOWED_LISTS, UN1T_WINDOW_DAYS, UN1T_SWEEP_PAGES, UN1T_FULL_LIST_MAX_PAGES, UN1T_HEADROOM_ROWS,
@@ -254,6 +256,16 @@ describe('runUn1tSync', () => {
   it('lists every un1t.online collection', () => {
     expect(UN1T_LISTS).toEqual(['/products', '/events', '/users/clients', '/subscriptions', '/transactions', '/invoices', '/bookings'])
     expect(Object.isFrozen(UN1T_LISTS)).toBe(true)
+  })
+
+  it('rings the sale alert for this studio after mirroring, and records only its count (SALEALERT.1)', async () => {
+    alertUn1tSales.mockResolvedValueOnce({ rung: 2 })
+    const { db } = makeDb(baseSeed())
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(alertUn1tSales).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: HATCH, nowMs: expect.any(Number) }))
+    expect(r.counts.sale_alerts).toEqual({ rung: 2 })
   })
 
   it('fires contact_created AT THIS STUDIO for fresh signups only (SHAREDCONTACT.1)', async () => {

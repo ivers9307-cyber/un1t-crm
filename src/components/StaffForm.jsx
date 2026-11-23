@@ -18,6 +18,7 @@ import {
   WEB_PERMISSIONS as allPermissions,
   isFeatureGatedByLocation,
   MOBILE_PERMISSIONS as allMobilePermissions,
+  permissionOfferedToRole,
   hydratePermissions,
   mergeTemplates,
 } from '@shared/permissions'
@@ -1125,7 +1126,7 @@ export default function StaffForm({
         )}
 
         <div className="space-y-2">
-          {allMobilePermissions.map(perm => {
+          {allMobilePermissions.filter(perm => permissionOfferedToRole(perm, selectedAssignment?.role)).map(perm => {
             const isNotifyRow = perm.key.startsWith('notify_')
             const dim = isNotifyRow && !selectedMobilePerms.push_notifications
             const selectedLoc = locations.find(l => l.id === selectedPermLocationId)

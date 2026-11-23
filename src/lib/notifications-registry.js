@@ -136,6 +136,17 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     fallbackEmail: false,  // high volume; email per lead would be a nightmare
   },
   {
+    // SALEALERT.1 — rings at any hour (owner's choice), so it never checks
+    // inStaffPushHours; see src/lib/sale-alert.js.
+    category: 'sale',
+    label: 'New sales',
+    description: 'Fires when someone buys something new at your location. Renewals do not fire.',
+    trigger: { kind: 'event', source: 'settled payments (src/lib/sale-alert.js)' },
+    recipients: { kind: 'roles_at_location', detail: 'owner / manager' },
+    configurable: { leadTimes: false, roles: false },
+    fallbackEmail: false,
+  },
+  {
     category: 'whatsapp',
     label: 'WhatsApp messages',
     description: 'Inbound WhatsApp message. Also requires the WhatsApp Inbox permission.',

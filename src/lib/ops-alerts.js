@@ -40,7 +40,8 @@ export function parseOpsAlertEmails(input) {
  * none, an uncategorised push to the location's admins (see below). Never throws.
  *
  * @param {{ organizationId: string, locationId?: string|null,
- *           subject: string, htmlBody: string, pushBody?: string }} alert
+ *           subject: string, htmlBody: string, pushBody?: string,
+ *           pushFallback?: boolean }} alert (pushFallback:false = email only)
  *   locationId is used for email attribution/branding and as the push
  *   fallback target.
  * @param {{ db?: object, sendEmail?: Function, sendPush?: Function }} [deps]
@@ -65,13 +66,15 @@ export async function sendOpsAlert(alert, { db, sendEmail, sendPush } = {}) {
       // readPushAllowedIds then gates only on the master switch
       // (push_notifications), so it reaches every active master, owner and
       // manager (ADMIN_ROLES) at the location who has push on (C31 PUSHNITS.1).
-      if (alert.locationId) {
+      // `pushFallback: false` opts a call out (the paid-offer alert has its own
+      // categorised sale push); every other caller keeps the fallback.
+      if (alert.locationId && alert.pushFallback !== false) {
         await push(alert.locationId, ADMIN_ROLES, {
           title: alert.subject,
           body: alert.pushBody || alert.subject,
         })
       }
-      return { channel: 'push_fallback' }
+      return alert.pushFallback === false ? { channel: 'none' } : { channel: 'push_fallback' }
     }
 
     for (const to of recipients) {

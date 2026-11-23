@@ -10,6 +10,7 @@
 import { findOrCreateRaceContact } from './race-contact-linking'
 import { writeContactTag } from './contact-tags'
 import { sendOpsAlert } from './ops-alerts'
+import { notifyNewSale, ringSaleAfterResponse } from './sale-alert'
 import { escapeHtml } from './html-escape'
 import { resolveZone, DEFAULT_TZ } from '@shared/zoned-time'
 
@@ -139,8 +140,10 @@ export async function linkOrCreateContactForPurchase(db, purchase) {
   return { contactId }
 }
 
-// Staff notice on a paid purchase — org-configured ops recipients with the
-// master-push fallback (sendOpsAlert never throws). Staff-facing copy.
+// Staff notice on a paid purchase — the ops email to org-configured recipients
+// (sendOpsAlert never throws) plus the owners-and-managers "new sale" push
+// (SALEALERT.1), which replaces the old uncategorised master-push fallback.
+// Staff-facing copy.
 /** Any whitespace run (newlines included) to one space, trimmed; '' for non-strings. */
 export function oneLine(v) {
   return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : ''
@@ -183,12 +186,31 @@ export async function notifyStaffOfPaidPurchase(db, purchase, offer) {
       <li>Studio: ${escapeHtml(loc.name || purchase.location_id)}</li>
     </ul>
     <p>${escapeHtml(closing)}</p>`
+  // SALEALERT.1 — the sale push, fire-and-forget so it never delays the email.
+  // A sale paid on un1t.online is keyed on its transaction id whichever path
+  // sees it; without one there is no safe key, so it does not ring.
+  const onUn1t = purchase.payment_provider === 'un1t_online'
+  const saleId = onUn1t ? purchase.un1t_transaction_id : purchase.id
+  if (saleId) {
+    ringSaleAfterResponse(() => notifyNewSale(db, {
+      source: onUn1t ? 'un1t' : 'offer',
+      saleId: String(saleId),
+      locationId: purchase.location_id,
+      itemName: offerName,
+      amountCents: purchase.amount_cents,
+      buyerFirstName: buyerName.split(' ')[0],
+      locationName: loc.name,
+      contactId: purchase.contact_id,
+    }))
+  }
+
   await sendOpsAlert({
     organizationId: loc.organization_id,
     locationId: purchase.location_id,
     subject,
     htmlBody,
     pushBody: `${buyerName} bought ${offerName} (${amount})`,
+    pushFallback: false,
   }, { db })
   return { sent: true }
 }

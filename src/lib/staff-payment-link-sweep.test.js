@@ -2,10 +2,11 @@
 // un1t_transactions mirror.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ step: vi.fn(), settings: vi.fn(), email: vi.fn() }))
+const mocks = vi.hoisted(() => ({ sale: vi.fn(async () => ({ sent: true })), step: vi.fn(), settings: vi.fn(), email: vi.fn() }))
 vi.mock('@/lib/un1t-online-account', () => ({ runSetPasswordStep: mocks.step }))
 vi.mock('@/lib/un1t-online-settings', () => ({ readUn1tWriteSettings: mocks.settings }))
 vi.mock('@/lib/un1t-online-funnel-emails', () => ({ sendUn1tAccountEmail: mocks.email }))
+vi.mock('@/lib/sale-alert-sources', () => ({ alertPayLinkSale: mocks.sale }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
 import { sweepStaffPaymentLinks } from './staff-payment-link-sweep'
@@ -127,6 +128,22 @@ describe('sweepStaffPaymentLinks', () => {
     const res = await sweepStaffPaymentLinks(makeDb(t, { lostCas: new Set(['L1']) }), 'loc', { now: NOW })
     expect(res).toMatchObject({ ok: true, paid: 0, failed: 0 })
     expect(mocks.step).not.toHaveBeenCalled()
+    expect(mocks.sale).not.toHaveBeenCalled()
+  })
+
+  // SALEALERT.1 — the winning CAS rings the sale push once, keyed on the transaction.
+  it('a link the CAS settles rings the sale push once with the buyer\'s first name and the paid amount', async () => {
+    const t = { staff_payment_links: [link()], un1t_transactions: [tx()], contacts: [{ id: 'c1', first_name: 'Kim' }] }
+    const db = makeDb(t)
+    await sweepStaffPaymentLinks(db, 'loc', { now: NOW })
+    expect(mocks.sale).toHaveBeenCalledTimes(1)
+    expect(mocks.sale).toHaveBeenCalledWith(db, expect.objectContaining({ id: 'L1', location_id: 'loc', contact_id: 'c1', paid_transaction_id: 't1', first_name: 'Kim' }), { paidAmountCents: 12500 })
+  })
+
+  it('still rings, without a name, when the set-password step could not run', async () => {
+    const t = { staff_payment_links: [link()], un1t_transactions: [tx()], contacts: [] }
+    await sweepStaffPaymentLinks(makeDb(t), 'loc', { now: NOW })
+    expect(mocks.sale).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ paid_transaction_id: 't1', first_name: '' }), { paidAmountCents: 12500 })
   })
 
   it('a read error is ok:false and writes nothing', async () => {

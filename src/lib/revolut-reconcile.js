@@ -79,6 +79,8 @@ import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from './race-p
 import { runRacePaymentCompletedEffects } from './race-payment-completed'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from './class-booking-payments'
 import { resolveTrialPurchaseByRef, markTrialPurchasePaymentStatus } from './trial-purchase-payments'
+import { alertTrialSale, alertClassBookingSale } from './sale-alert-sources'
+import { ringSaleAfterResponse } from './sale-alert'
 import { publishQueuePush, publishClassBookingJob, TRIAL_PURCHASES_WORKER_PATH } from './qstash'
 import { resolveOfferPurchaseByOrderId, markOfferPurchaseState } from './sale-offers'
 import { runOfferPaidSideEffects } from './offer-purchase-paid'
@@ -366,6 +368,8 @@ const APPLY = {
     if (released) {
       // The webhook's nudge, with its dedup id. The queue row is the guarantee.
       try { await publishClassBookingJob(request.id, { publish }) } catch { /* queue is the guarantee */ }
+      // SALEALERT.1 — the first paid transition: ring the studio's owners and managers.
+      ringSaleAfterResponse(() => alertClassBookingSale(db, request, { paidAmountCents: minorAmount(order) }))
     }
     return transientOr(state, 'settled')
   },
@@ -379,6 +383,8 @@ const APPLY = {
     const { released } = await markTrialPurchasePaymentStatus({ db, purchase, providerState: state, providerAmount: minorAmount(order) })
     if (released) {
       try { await publish({ path: TRIAL_PURCHASES_WORKER_PATH, body: { id: purchase.id }, deduplicationId: `trial-purchase-${purchase.id}` }) } catch { /* queue is the guarantee */ }
+      // SALEALERT.1 — the first paid transition: ring the studio's owners and managers.
+      ringSaleAfterResponse(() => alertTrialSale(db, purchase, { paidAmountCents: minorAmount(order) }))
     }
     return transientOr(state, 'settled')
   },

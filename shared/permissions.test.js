@@ -10,6 +10,8 @@ import {
   sanitizePermissionsBlob,
   diffPermissionsBlob,
   mergeTemplates,
+  permissionOfferedToRole,
+  MOBILE_PERMISSIONS,
   isFeatureGatedByLocation,
   WEB_PERMISSIONS,
   WEB_PERMISSION_KEYS,
@@ -640,5 +642,41 @@ describe('resolvePermission — mcp_access (MCPACCESS.1)', () => {
       defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
       key: 'mcp_access',
     })).toBe(true)
+  })
+})
+
+describe('notify_sale — SALEALERT.1', () => {
+  const entry = MOBILE_PERMISSIONS.find((p) => p.key === 'notify_sale')
+
+  it('defaults on for master, owner and manager and off for everyone else', () => {
+    for (const role of ROLES) {
+      expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE[role].notify_sale, role)
+        .toBe(['master', 'owner', 'manager'].includes(role))
+    }
+  })
+
+  it('permissionOfferedToRole: no onlyRoles means everyone; otherwise only the listed roles', () => {
+    expect(permissionOfferedToRole({ key: 'x' }, 'staff')).toBe(true)
+    expect(permissionOfferedToRole(undefined, 'staff')).toBe(true)
+    expect(permissionOfferedToRole(entry, 'owner')).toBe(true)
+    expect(permissionOfferedToRole(entry, 'manager')).toBe(true)
+    expect(permissionOfferedToRole(entry, 'master')).toBe(true)
+    expect(permissionOfferedToRole(entry, 'head_coach')).toBe(false)
+    expect(permissionOfferedToRole(entry, 'staff')).toBe(false)
+    expect(permissionOfferedToRole(entry, 'reception')).toBe(false)
+  })
+
+  it('the editor lists (filtered by role) hide notify_sale from head_coach and staff only', () => {
+    const shown = (role) => MOBILE_PERMISSIONS.filter((p) => p.isNotify && permissionOfferedToRole(p, role)).map((p) => p.key)
+    expect(shown('owner')).toContain('notify_sale')
+    expect(shown('manager')).toContain('notify_sale')
+    expect(shown('head_coach')).not.toContain('notify_sale')
+    expect(shown('staff')).not.toContain('notify_sale')
+    expect(shown('staff')).toContain('notify_lead')
+  })
+
+  it('hydratePermissions keeps a saved notify_sale for a role that is not offered it', () => {
+    const out = hydratePermissions({ mobile: { notify_sale: true } }, 'staff')
+    expect(out.mobile.notify_sale).toBe(true)
   })
 })
