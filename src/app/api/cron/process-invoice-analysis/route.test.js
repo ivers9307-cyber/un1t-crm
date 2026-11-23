@@ -15,12 +15,15 @@ vi.mock('@/lib/invoices-queue/supplier-refresh', () => ({
   rematchUnmatchedSuppliers: vi.fn(async () => ({ checked: 0, matched: 0 })),
 }))
 
+vi.mock('@/lib/invoices-queue/queue-preparation', () => ({ queueMissedInvoices: vi.fn(async () => ({ queued: [] })) }))
+
 const { GET } = await import('./route.js')
+const { queueMissedInvoices } = await import('@/lib/invoices-queue/queue-preparation')
 const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
 const { processInvoiceAnalysisRow } = await import('@/lib/invoice-analysis-queue')
 const { logError } = await import('@/lib/log')
 const { refreshStaleSupplierList, rematchUnmatchedSuppliers } = await import('@/lib/invoices-queue/supplier-refresh')
-const QUIET = { contacts_refreshed: 0, suppliers_checked: 0, suppliers_matched: 0 }
+const QUIET = { contacts_refreshed: 0, suppliers_checked: 0, suppliers_matched: 0, missed_queued: 0 }
 
 const req = (secret = 'shh') =>
   new Request('https://x.test/api/cron/process-invoice-analysis', { headers: { authorization: `Bearer ${secret}` } })
@@ -78,9 +81,22 @@ describe('GET /api/cron/process-invoice-analysis', () => {
     refreshStaleSupplierList.mockResolvedValueOnce({ refreshed: 'loc-1' })
     rematchUnmatchedSuppliers.mockResolvedValueOnce({ checked: 7, matched: 3 })
     const res = await GET(req())
-    expect(await res.json()).toEqual({ success: true, claimed: 2, ok: 1, failed: 1, contacts_refreshed: 1, suppliers_checked: 7, suppliers_matched: 3 })
+    expect(await res.json()).toEqual({ success: true, claimed: 2, ok: 1, failed: 1, contacts_refreshed: 1, suppliers_checked: 7, suppliers_matched: 3, missed_queued: 0 })
     expect(refreshStaleSupplierList).toHaveBeenCalledWith(db)
     expect(rematchUnmatchedSuppliers).toHaveBeenCalledWith(db)
     expect(refreshStaleSupplierList.mock.invocationCallOrder[0]).toBeLessThan(rematchUnmatchedSuppliers.mock.invocationCallOrder[0])
+  })
+
+  it('INVHARDEN.1: queues invoices that were never queued, and reports how many', async () => {
+    queueMissedInvoices.mockResolvedValueOnce({ queued: ['m1', 'm2'] })
+    const res = await GET(req())
+    expect((await res.json()).missed_queued).toBe(2)
+    expect(queueMissedInvoices).toHaveBeenCalledWith(db)
+  })
+
+  it('INVHARDEN.1: a failed claim never runs the safety net', async () => {
+    db = seed({ errors: { rpc: { claim_invoice_analysis_batch: { message: 'boom' } } } })
+    await GET(req())
+    expect(queueMissedInvoices).not.toHaveBeenCalled()
   })
 })

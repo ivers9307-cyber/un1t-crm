@@ -154,4 +154,44 @@ describe('POST /api/invoices-inbox/[id]/extract', () => {
     expect((await post()).status).toBe(400)
     expect(prepareInvoiceRow).not.toHaveBeenCalled()
   })
+
+  describe('INVHARDEN.1 — reading a good row again', () => {
+    const good = () => row({ status: 'extracted', review_reasons: ['no_vat_rate'], duplicate_of_id: null, extraction_error: null, prepared_at: '2026-11-22T10:00:00.000Z', extracted_fields: { supplier_name: 'Acme' } })
+    const seedGood = () => {
+      db = createFakeDb({ tables: { invoices_queue: [good()], locations: [{ id: LOC_A, name: 'A' }] } })
+      createServerClient.mockReturnValue(db)
+    }
+
+    it('a failed re-read keeps the earlier reading: still extracted, same reasons, off the queue', async () => {
+      seedGood()
+      prepareInvoiceRow.mockImplementationOnce(async () => {
+        Object.assign(mine(), { review_reasons: ['unreadable'], extraction_error: 'timed out', analysis_claimed_at: null, analysis_queued_at: null })
+        return { outcome: 'unreadable', reasons: ['unreadable'] }
+      })
+      const res = await post()
+      expect(res.status).toBe(422)
+      expect((await res.json()).error).toMatch(/earlier reading is kept/)
+      expect(mine()).toMatchObject({ status: 'extracted', review_reasons: ['no_vat_rate'], extraction_error: null, prepared_at: '2026-11-22T10:00:00.000Z', analysis_queued_at: null, analysis_claimed_at: null })
+      expect(mine().extracted_fields).toEqual({ supplier_name: 'Acme' })
+    })
+
+    it('a re-read that throws also keeps the earlier reading', async () => {
+      seedGood()
+      prepareInvoiceRow.mockRejectedValueOnce(new Error('boom'))
+      const res = await post()
+      expect(res.status).toBe(500)
+      expect(mine()).toMatchObject({ status: 'extracted', review_reasons: ['no_vat_rate'], analysis_claimed_at: null })
+    })
+
+    it('a row that was never read has nothing to keep: it stays flagged unreadable', async () => {
+      prepareInvoiceRow.mockImplementationOnce(async () => {
+        Object.assign(mine(), { review_reasons: ['unreadable'], extraction_error: 'bad file', analysis_claimed_at: null, analysis_queued_at: null })
+        return { outcome: 'unreadable', reasons: ['unreadable'] }
+      })
+      const res = await post()
+      expect(res.status).toBe(422)
+      expect((await res.json()).error).toBe('bad file')
+      expect(mine()).toMatchObject({ status: 'received', review_reasons: ['unreadable'] })
+    })
+  })
 })
