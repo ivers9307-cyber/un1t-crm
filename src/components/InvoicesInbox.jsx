@@ -103,14 +103,6 @@ const SOURCE_TYPE_LABEL = {
   car_document: 'Car document',
 }
 
-const SOURCE_TYPE_TONE = {
-  supplier_email:     'bg-blue-500/20 text-blue-700 border-blue-500/40',
-  contractor_invoice: 'bg-purple-500/20 text-purple-700 border-purple-500/40',
-  fte_expense_item:   'bg-orange-500/20 text-orange-700 border-orange-500/40',
-  card_receipt:       'bg-pink-500/20 text-pink-700 border-pink-500/40',
-  car_document:       'bg-teal-500/20 text-teal-700 border-teal-500/40',
-}
-
 // INVOICES — order-insensitive comparison for the edit form's dirty
 // check. extracted_fields is stored as jsonb, which normalises (re-
 // orders) object keys on round-trip, so a plain JSON.stringify compare
@@ -145,6 +137,10 @@ function formatDateTime(s) {
 // INVSCREEN.1 — the list route's own maximum. It used to be left at the
 // default 100, which silently hid the oldest rows of a long queue.
 const LIST_LIMIT = 500
+// ONESCREEN.1 — breathing room under the workspace, and what the fixed bulk
+// action bar covers while rows are ticked.
+const WORK_BOTTOM_GAP = 16
+const BULK_BAR_ROOM = 150
 
 export default function InvoicesInbox({ locations, isMaster, isBookkeeper = false }) {
   // BOOKKEEPER-APPROVALS.1 — `?focus=<id>` arrives when the user
@@ -162,6 +158,29 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   const [locationFilter, setLocationFilter] = useState('all')
   // INVSCREEN.1 — which pile of the To do list is shown.
   const [pile, setPile] = useState('review')
+  // ONESCREEN.1 — the addresses and upload live behind one toolbar button.
+  const [addOpen, setAddOpen] = useState(false)
+  // The height left for the workspace on a wide screen (see the root element).
+  const rootRef = useRef(null)
+  const [workHeight, setWorkHeight] = useState(700)
+  useEffect(() => {
+    const measure = () => {
+      const el = rootRef.current
+      if (!el) return
+      // The page's scroller is the nearest scrolling ancestor; measure from the
+      // root's place in it, so a scrolled page does not shrink the workspace.
+      let scroller = el.parentElement
+      while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement
+      const top = el.getBoundingClientRect().top + (scroller ? scroller.scrollTop : window.scrollY) - (scroller ? scroller.getBoundingClientRect().top : 0)
+      const room = (scroller ? scroller.clientHeight : window.innerHeight) - top - WORK_BOTTOM_GAP
+      setWorkHeight(Math.round(room))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
+  // After a send, open the row that followed the sent one (set by onSent).
+  const advanceToRef = useRef(null)
   // INVOICES-QUEUE.1 PR 2 — multi-select state for bulk actions.
   // Selection persists across tab switches (Set tracks ids; rows
   // not in the current filter just don't render their checkbox).
@@ -203,6 +222,11 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
         // Prefer the URL-supplied focus on first load if it's in
         // the result set; otherwise keep the user's last pick if
         // still visible; otherwise default to the top row.
+        // ONESCREEN.1 — "send and next": the sent row has left the list, so
+        // open the one that followed it.
+        const advanceTo = advanceToRef.current
+        advanceToRef.current = null
+        if (advanceTo && (j.data || []).some((r) => r.id === advanceTo)) return advanceTo
         const desired = prev || focusId
         if (desired && (j.data || []).some((r) => r.id === desired)) return desired
         if (desired && desired === pinnedIdRef.current) return desired
@@ -258,6 +282,31 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   // Only a change of selection or of the loaded rows moves the pile.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, rows, piled])
+  // ONESCREEN.1 — stepping through the visible list (arrows, J and K), and
+  // moving on after a send.
+  const selectedIndex = visibleRows.findIndex((r) => r.id === selectedId)
+  function stepRow(delta) {
+    const next = visibleRows[selectedIndex + delta]
+    if (next) selectRow(next.id)
+  }
+  function onSent() {
+    const next = visibleRows[selectedIndex + 1] || visibleRows[selectedIndex - 1]
+    advanceToRef.current = next ? next.id : null
+    return loadRows()
+  }
+  const stepRef = useRef(stepRow)
+  useEffect(() => { stepRef.current = stepRow })
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target
+      if (t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
+      if (e.key === 'j') stepRef.current(1)
+      else if (e.key === 'k') stepRef.current(-1)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   function choosePile(next) {
     setPile(next)
     const first = rows.find((r) => inPile(r, next))
@@ -401,67 +450,73 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   }
 
   return (
-    // INV-BULK.3 — reserve space at the bottom while the fixed bulk
-    // action bar is shown, so it never covers the detail panel's lower
-    // fields (e.g. the Xero supplier picker) and the page can scroll
-    // everything clear of it.
-    <div className={`space-y-6 ${isBookkeeper && bulkSelection.size > 0 ? 'pb-44' : ''}`}>
-      <ForwardingAddresses locations={locations} />
-      <BulkUploadPanel
-        locations={locations}
-        defaultLocationId={locationFilter !== 'all' ? locationFilter : (locations.length === 1 ? locations[0].id : null)}
-        onUploaded={loadRows}
-      />
-
-      {/* Source-type tabs — primary navigation */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-1 border border-un1t-border rounded-lg p-1 bg-un1t-bg/40 flex-wrap">
+    // ONESCREEN.1 — on a wide screen (xl) the whole screen is one fixed-height
+    // workspace: a single toolbar, then the list, the document and the fields
+    // side by side, each scrolling on its own, so the page itself never
+    // scrolls. Below xl it stacks and scrolls as before. `--inv-h` is the room
+    // left under the toolbar's top edge, measured (the hub strip above is not
+    // always there); the fixed bulk bar takes its share while it is shown.
+    <div
+      ref={rootRef}
+      style={{ '--inv-h': `${Math.max(420, workHeight - (isBookkeeper && bulkSelection.size > 0 ? BULK_BAR_ROOM : 0))}px` }}
+      className={`flex flex-col gap-3 xl:h-[var(--inv-h)] ${isBookkeeper && bulkSelection.size > 0 ? 'pb-44 xl:pb-0' : ''}`}
+    >
+      <div className="flex items-center gap-2 flex-wrap">
+        <h1 className="text-xl font-semibold text-un1t-text mr-2">Invoices</h1>
+        {piled && <PileTabs active={pile} counts={counts} onChoose={choosePile} />}
+        <span className="flex-1" />
+        <select
+          aria-label="Source"
+          value={sourceTab}
+          onChange={(e) => setSourceTab(e.target.value)}
+          className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text"
+        >
           {SOURCE_TABS.map((t) => {
             const count = sourceCounts[t.key === 'all' ? 'all' : t.sourceTypes[0]] || 0
-            const isActive = sourceTab === t.key
-            return (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setSourceTab(t.key)}
-                className={`px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2 ${
-                  isActive
-                    ? 'bg-un1t-text text-un1t-bg font-medium'
-                    : 'text-un1t-subtle hover:text-un1t-text'
-                }`}
-              >
-                {t.label}
-                {count > 0 && (
-                  <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full ${
-                    isActive ? 'bg-un1t-bg text-un1t-text' : 'bg-un1t-border/40 text-un1t-subtle'
-                  }`}>{count}</span>
-                )}
-              </button>
-            )
+            return <option key={t.key} value={t.key}>{t.key === 'all' ? 'All sources' : t.label}{count > 0 ? ` (${count})` : ''}</option>
           })}
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Status filter (secondary) */}
+        </select>
+        <select
+          aria-label="Status"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text"
+        >
+          {STATUS_FILTERS.map((s) => (
+            <option key={s.key} value={s.key}>{s.label}</option>
+          ))}
+        </select>
+        {locations.length > 1 && (
           <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text"
+            aria-label="Location"
+            value={locationFilter}
+            onChange={(e) => setLocationFilter(e.target.value)}
+            className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text"
           >
-            {STATUS_FILTERS.map((s) => (
-              <option key={s.key} value={s.key}>{s.label}</option>
+            <option value="all">All locations</option>
+            {locations.map((l) => (
+              <option key={l.id} value={l.id}>{l.name}</option>
             ))}
           </select>
-          {locations.length > 1 && (
-            <select
-              value={locationFilter}
-              onChange={(e) => setLocationFilter(e.target.value)}
-              className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text"
-            >
-              <option value="all">All locations</option>
-              {locations.map((l) => (
-                <option key={l.id} value={l.id}>{l.name}</option>
-              ))}
-            </select>
+        )}
+        <div className="relative">
+          <button
+            type="button"
+            aria-expanded={addOpen}
+            onClick={() => setAddOpen((v) => !v)}
+            className="border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text bg-un1t-bg"
+          >
+            Add invoices
+          </button>
+          {addOpen && (
+            <div className="absolute right-0 top-full mt-2 z-30 w-[min(34rem,90vw)] space-y-3 rounded-lg border border-un1t-border bg-un1t-bg p-3 shadow-lg">
+              <ForwardingAddresses locations={locations} />
+              <BulkUploadPanel
+                locations={locations}
+                defaultLocationId={locationFilter !== 'all' ? locationFilter : (locations.length === 1 ? locations[0].id : null)}
+                onUploaded={loadRows}
+              />
+            </div>
           )}
         </div>
       </div>
@@ -474,10 +529,9 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,360px)_1fr] gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)] gap-3 xl:flex-1 xl:min-h-0">
         <InboxList
           rows={visibleRows}
-          piles={piled ? { active: pile, counts, onChoose: choosePile } : null}
           capped={rows.length >= LIST_LIMIT}
           showLocation={locationFilter === 'all' && locations.length > 1}
           loading={loading}
@@ -492,6 +546,9 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
         <InboxDetail
           row={selected}
           onChanged={loadRows}
+          onSent={onSent}
+          onStep={stepRow}
+          canStep={{ prev: selectedIndex > 0, next: selectedIndex >= 0 && selectedIndex < visibleRows.length - 1 }}
           onOpenRow={openRow}
           onRestored={onRestored}
           earlierMissing={!!selectedId && missingEarlierId === selectedId}
@@ -543,10 +600,47 @@ function ForwardingAddresses({ locations }) {
   )
 }
 
+// ONESCREEN.1 — the piles, in the toolbar.
+function PileTabs({ active, counts, onChoose }) {
+  return (
+    <div className="flex items-center gap-0.5 border border-un1t-border rounded-lg p-0.5 bg-un1t-bg/40 flex-wrap">
+      {PILES.map((p) => {
+        const on = active === p.key
+        return (
+          <button
+            key={p.key}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChoose(p.key)}
+            className={`px-2.5 py-1 text-sm rounded-md transition-colors whitespace-nowrap ${
+              on ? 'bg-un1t-text text-un1t-bg font-medium' : 'text-un1t-subtle hover:text-un1t-text'
+            }`}
+          >
+            {p.label} <span className="tabular-nums">{counts[p.key]}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// What a row is worth, for the list: the total with its currency, or nothing
+// when it has not been read.
+function rowAmount(row) {
+  const total = Number(row?.extracted_fields?.total)
+  if (!row?.extracted_fields || !Number.isFinite(total)) return null
+  const currency = String(row.extracted_fields.currency || 'EUR').toUpperCase()
+  try {
+    return new Intl.NumberFormat('en-IE', { style: 'currency', currency }).format(total)
+  } catch {
+    return `${total.toFixed(2)} ${currency}`
+  }
+}
+
 function InboxList({
   rows, loading, selectedId, onSelect, isBookkeeper,
   bulkSelection, onToggleSelect, onSelectAll, onClearSelection,
-  piles = null, capped = false, showLocation = false,
+  capped = false, showLocation = false,
 }) {
   const allVisibleSelected = rows.length > 0 && rows.every((r) => bulkSelection.has(r.id))
   // INV-BULK.3 — live queue progress across the visible list.
@@ -560,36 +654,16 @@ function InboxList({
     },
     { total: 0, queued: 0, analysing: 0 },
   )
+  // Keep the open row in view when it changes (J and K, send and next).
+  const activeRef = useRef(null)
+  useEffect(() => {
+    activeRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [selectedId])
   return (
-    // INVLIST.1 — beside the detail panel (lg and up) the list fills the panel's
-    // full height and scrolls inside it. It used to stop at 70% of the screen
-    // height while its box stretched to the taller detail panel, leaving a
-    // blank half that looked like a list that had not finished loading. The
-    // inner wrapper is absolutely placed so the list's own length never sets
-    // the row height; the detail panel does, with a floor for a short one.
-    <aside className="border border-un1t-border rounded-lg overflow-hidden min-w-0 lg:relative lg:min-h-[70vh]">
-      <div className="flex flex-col lg:absolute lg:inset-0">
-      {piles && (
-        <div className="px-2 py-2 border-b border-un1t-border flex items-center gap-1 flex-wrap">
-          {PILES.map((p) => {
-            const on = piles.active === p.key
-            return (
-              <button
-                key={p.key}
-                type="button"
-                aria-pressed={on}
-                onClick={() => piles.onChoose(p.key)}
-                className={`px-2 py-1 text-xs rounded-md transition-colors ${
-                  on ? 'bg-un1t-text text-un1t-bg font-medium' : 'text-un1t-subtle hover:text-un1t-text'
-                }`}
-              >
-                {p.label} <span className="tabular-nums">{piles.counts[p.key]}</span>
-              </button>
-            )
-          })}
-        </div>
-      )}
-      <header className="px-3 py-2 border-b border-un1t-border flex items-center justify-between gap-2">
+    // ONESCREEN.1 — on xl the list fills the workspace height and scrolls
+    // inside it; below xl it keeps a 70vh cap above the stacked detail.
+    <aside className="border border-un1t-border rounded-lg overflow-hidden min-w-0 flex flex-col xl:min-h-0">
+      <header className="px-3 py-1.5 border-b border-un1t-border flex items-center justify-between gap-2">
         <span className="text-xs uppercase tracking-wide text-un1t-subtle">
           {loading ? 'Loading…' : `${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}
           {queueProgress.total > 0 && (
@@ -609,7 +683,7 @@ function InboxList({
           </button>
         )}
       </header>
-      <ul className="divide-y divide-un1t-border/50 max-h-[70vh] overflow-y-auto lg:max-h-none lg:flex-1 lg:min-h-0">
+      <ul className="divide-y divide-un1t-border/50 overflow-y-auto max-h-[70vh] xl:max-h-none xl:flex-1 xl:min-h-0">
         {rows.length === 0 && !loading && (
           <li className="p-4 text-sm text-un1t-subtle">Nothing here.</li>
         )}
@@ -621,8 +695,10 @@ function InboxList({
         {rows.map((r) => {
           const active = r.id === selectedId
           const checked = bulkSelection.has(r.id)
+          const amount = rowAmount(r)
+          const hasChips = reasonChips(r).length > 0
           return (
-            <li key={r.id} className={checked ? 'bg-un1t-text/10' : ''}>
+            <li key={r.id} ref={active ? activeRef : null} className={checked ? 'bg-un1t-text/10' : ''}>
               <div className="flex items-stretch">
                 {isBookkeeper && (
                   <label className="flex items-center pl-3 cursor-pointer">
@@ -637,35 +713,32 @@ function InboxList({
                     />
                   </label>
                 )}
+                {/* Two lines: who and how much; then what it is and what it needs. */}
                 <button
                   type="button"
                   onClick={() => onSelect(r.id)}
-                  className={`flex-1 min-w-0 text-left p-3 transition-colors ${
-                    active ? 'bg-un1t-text/10' : 'hover:bg-un1t-text/5'
+                  aria-current={active ? 'true' : undefined}
+                  className={`flex-1 min-w-0 text-left px-3 py-1.5 transition-colors ${
+                    active ? 'bg-un1t-text/10 shadow-[inset_3px_0_0_currentColor]' : 'hover:bg-un1t-text/5'
                   }`}
                 >
-                  <div className="flex justify-between items-start gap-2">
+                  <div className="flex justify-between items-baseline gap-2">
                     <div className="text-sm font-medium text-un1t-text truncate min-w-0">
                       {r.extracted_fields?.supplier_name || r.sender_email || '(no sender)'}
                     </div>
-                    {/* The chips say what the row needs; the stage pill is kept
-                        only for a row that has none, so the chips are never cut off. */}
-                    <span className="flex items-center gap-1 flex-wrap justify-end shrink-0 max-w-[60%]">
+                    {amount && <span className="text-sm tabular-nums text-un1t-text shrink-0">{amount}</span>}
+                  </div>
+                  <div className="mt-0.5 flex justify-between items-center gap-2">
+                    <span className="text-xs text-un1t-subtle truncate min-w-0">
+                      {SOURCE_TYPE_LABEL[r.source_type] || r.source_type} · {formatDateTime(r.received_at)}
+                      {showLocation && r.location?.name ? ` · ${r.location.name}` : ''}
+                    </span>
+                    <span className="flex items-center gap-1 justify-end shrink-0">
                       <ReasonChips row={r} compact />
-                      {reasonChips(r).length === 0 && (
+                      {!hasChips && (
                         <StatusPill status={r.status} stage={r.rejected_stage} queuedAt={r.analysis_queued_at} claimedAt={r.analysis_claimed_at} />
                       )}
                     </span>
-                  </div>
-                  <div className="text-xs text-un1t-subtle truncate mt-1">
-                    {r.subject || r.attachment_filename || '(no subject)'}
-                  </div>
-                  <div className="text-xs text-un1t-subtle mt-1 flex justify-between items-center gap-2">
-                    <span className="flex items-center gap-1.5 min-w-0">
-                      <SourceTypePill source={r.source_type} />
-                      <span className="truncate">{formatDateTime(r.received_at)}</span>
-                    </span>
-                    {showLocation && <span className="shrink-0">{r.location?.name}</span>}
                   </div>
                 </button>
               </div>
@@ -673,18 +746,7 @@ function InboxList({
           )
         })}
       </ul>
-      </div>
     </aside>
-  )
-}
-
-function SourceTypePill({ source }) {
-  const label = SOURCE_TYPE_LABEL[source] || source
-  const tone = SOURCE_TYPE_TONE[source] || 'bg-un1t-border/30 text-un1t-subtle border-un1t-border'
-  return (
-    <span className={`text-[9px] uppercase tracking-wide border rounded px-1 py-0.5 whitespace-nowrap ${tone}`}>
-      {label}
-    </span>
   )
 }
 
@@ -868,7 +930,7 @@ function ReasonChips({ row, compact = false }) {
   ))
 }
 
-function InboxDetail({ row, onChanged, onOpenRow, onRestored, earlierMissing = false }) {
+function InboxDetail({ row, onChanged, onSent, onStep, canStep = { prev: false, next: false }, onOpenRow, onRestored, earlierMissing = false }) {
   const [attachment, setAttachment] = useState(null)
   const [attLoading, setAttLoading] = useState(false)
   const [busy, setBusy] = useState(null) // 'approve' | 'reject' | 'extract' | 'send' | 'delete'
@@ -929,6 +991,8 @@ function InboxDetail({ row, onChanged, onOpenRow, onRestored, earlierMissing = f
         throw new Error(describeApiError(j, 'Action failed'))
       }
       if (path === 'restore' && onRestored) onRestored(row.id)
+      // ONESCREEN.1 — a sent row leaves the list: move on to the next one.
+      else if (path === 'data-approve' && onSent) onSent()
       else onChanged()
     } catch (e) {
       setActionError(e.message)
@@ -982,60 +1046,76 @@ function InboxDetail({ row, onChanged, onOpenRow, onRestored, earlierMissing = f
     }
   }
 
+  const stepper = onStep ? (
+    <div className="flex items-center gap-1">
+      <button type="button" aria-label="Previous invoice" title="Previous (K)" disabled={!canStep.prev} onClick={() => onStep(-1)} className="h-8 w-8 rounded-md border border-un1t-border text-un1t-text disabled:opacity-40">↑</button>
+      <button type="button" aria-label="Next invoice" title="Next (J)" disabled={!canStep.next} onClick={() => onStep(1)} className="h-8 w-8 rounded-md border border-un1t-border text-un1t-text disabled:opacity-40">↓</button>
+    </div>
+  ) : null
+
   return (
-    <section className="border border-un1t-border rounded-lg p-5 space-y-5">
-      <DetailHeader row={row} />
-      <ArrivalNotes row={row} bodyText={bodyText} />
-
-      {actionError && (
-        <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm">
-          {actionError}
-        </div>
-      )}
-
+    // ONESCREEN.1 — on xl the document and the fields sit side by side and
+    // each scrolls on its own; below xl they stack as before.
+    <section className="min-w-0 grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1.3fr)_minmax(360px,1fr)] xl:min-h-0">
       <AttachmentPreview attachment={attachment} loading={attLoading} mime={row.attachment_mime_type} />
 
-      <DuplicatePointer row={row} onOpenRow={onOpenRow} missing={earlierMissing} />
+      <div className="border border-un1t-border rounded-lg min-w-0 flex flex-col xl:min-h-0 xl:overflow-y-auto">
+        <div className="p-4 space-y-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1"><DetailHeader row={row} /></div>
+            {stepper}
+          </div>
+          <ArrivalNotes row={row} bodyText={bodyText} />
 
-      {row.status === 'not_invoice' && (
-        <NotInvoiceActions
-          row={row}
-          busy={busy}
-          onRestore={() => postAction('restore')}
-        />
-      )}
+          {actionError && (
+            <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm">
+              {actionError}
+            </div>
+          )}
 
-      {/* INVSCREEN.2 — one panel for every row that has not been read: being
-          read, stopped by the reader, or waiting. No quality approval step. */}
-      {(row.status === 'received' || row.status === 'quality_approved') && (
-        <StageOneActions
-          busy={busy}
-          panel={unreadPanel(row)}
-          reading={isBeingRead(row)}
-          waiting={isWaitingToBeRead(row)}
-          extractionError={row.extraction_error}
-          onReadAgain={() => postAction('extract')}
-          onReject={canRejectOne(row) ? (reason) => postAction('quality-reject', { reason }) : null}
-        />
-      )}
+          <DuplicatePointer row={row} onOpenRow={onOpenRow} missing={earlierMissing} />
 
-      {(row.status === 'extracted' || row.status === 'data_approved') && (
-        <StageTwoBlock
-          row={row}
-          busy={busy}
-          onSaveFields={patchFields}
-          onApprove={() => postAction('data-approve')}
-          onReject={(reason) => postAction('data-reject', { reason })}
-        />
-      )}
+          {row.status === 'not_invoice' && (
+            <NotInvoiceActions
+              row={row}
+              busy={busy}
+              onRestore={() => postAction('restore')}
+            />
+          )}
 
-      {row.status === 'forwarded' && (
-        <ForwardedSummary row={row} />
-      )}
+          {/* INVSCREEN.2 — one panel for every row that has not been read: being
+              read, stopped by the reader, or waiting. No quality approval step. */}
+          {(row.status === 'received' || row.status === 'quality_approved') && (
+            <StageOneActions
+              busy={busy}
+              panel={unreadPanel(row)}
+              reading={isBeingRead(row)}
+              waiting={isWaitingToBeRead(row)}
+              extractionError={row.extraction_error}
+              onReadAgain={() => postAction('extract')}
+              onReject={canRejectOne(row) ? (reason) => postAction('quality-reject', { reason }) : null}
+            />
+          )}
 
-      {row.status === 'rejected' && (
-        <RejectedSummary row={row} busy={busy} onDelete={deleteRow} />
-      )}
+          {(row.status === 'extracted' || row.status === 'data_approved') && (
+            <StageTwoBlock
+              row={row}
+              busy={busy}
+              onSaveFields={patchFields}
+              onApprove={() => postAction('data-approve')}
+              onReject={(reason) => postAction('data-reject', { reason })}
+            />
+          )}
+
+          {row.status === 'forwarded' && (
+            <ForwardedSummary row={row} />
+          )}
+
+          {row.status === 'rejected' && (
+            <RejectedSummary row={row} busy={busy} onDelete={deleteRow} />
+          )}
+        </div>
+      </div>
     </section>
   )
 }
@@ -1081,7 +1161,7 @@ function DetailHeader({ row }) {
   return (
     <header className="space-y-1">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h2 className="text-lg font-semibold text-un1t-text">
+        <h2 className="text-base font-semibold text-un1t-text">
           {row.extracted_fields?.supplier_name || row.sender_email || '(no sender)'}
         </h2>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1110,14 +1190,15 @@ function DetailHeader({ row }) {
 
 function AttachmentPreview({ attachment, loading, mime }) {
   if (loading) {
-    return <div className="border border-un1t-border rounded-lg p-4 text-sm text-un1t-subtle">Loading attachment…</div>
+    return <div className="border border-un1t-border rounded-lg p-4 text-sm text-un1t-subtle xl:min-h-0">Loading attachment…</div>
   }
   if (!attachment) {
-    return <div className="border border-un1t-border rounded-lg p-4 text-sm text-un1t-subtle">No attachment available.</div>
+    return <div className="border border-un1t-border rounded-lg p-4 text-sm text-un1t-subtle xl:min-h-0">No attachment available.</div>
   }
   const isPdf = mime === 'application/pdf'
   return (
-    <div className="border border-un1t-border rounded-lg overflow-hidden">
+    // ONESCREEN.1 — on xl the document fills its column's full height.
+    <div className="border border-un1t-border rounded-lg overflow-hidden min-w-0 flex flex-col xl:min-h-0">
       <div className="px-3 py-2 border-b border-un1t-border flex justify-between items-center text-xs">
         <span className="text-un1t-subtle truncate">{attachment.filename}</span>
         <a href={attachment.url} target="_blank" rel="noreferrer" className="text-un1t-text underline">
@@ -1128,11 +1209,12 @@ function AttachmentPreview({ attachment, loading, mime }) {
         <iframe
           title="Invoice attachment"
           src={attachment.url}
-          className="w-full bg-un1t-bg"
-          style={{ height: '60vh' }}
+          className="w-full bg-un1t-bg h-[60vh] xl:h-auto xl:flex-1 xl:min-h-0"
         />
       ) : (
-        <img src={attachment.url} alt="Invoice attachment" className="w-full max-h-[60vh] object-contain bg-un1t-bg" />
+        <div className="xl:flex-1 xl:min-h-0 xl:overflow-auto bg-un1t-bg">
+          <img src={attachment.url} alt="Invoice attachment" className="w-full max-h-[60vh] xl:max-h-none object-contain" />
+        </div>
       )}
     </div>
   )
@@ -1313,12 +1395,13 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
   }
 
   const isApproved = row.status === 'data_approved'
+  // ONESCREEN.1 — the fields a send rarely needs changed sit behind a toggle.
+  const [showMore, setShowMore] = useState(false)
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-un1t-subtle">
-        Data review — confirm the extracted fields. Edit anything that's wrong. Approving sends the original attachment to Xero's bills email; Xero creates a draft bill from it.
-      </p>
+    // The action row is first and stays pinned while the fields scroll under
+    // it (order-first: it is written after the fields it acts on).
+    <div className="flex flex-col gap-3">
 
       {row.xero_error && (
         <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm">
@@ -1326,32 +1409,28 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
         </div>
       )}
 
+      {/* What a send needs decided comes first: supplier, account, VAT rate. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <FieldRow label="Supplier (label)" value={strField('supplier_name')}   onChange={(v) => setField('supplier_name', v)} />
-        <FieldRow label="Invoice #"    value={strField('invoice_number')}  onChange={(v) => setField('invoice_number', v)} />
-        <FieldRow label="Invoice date" value={strField('invoice_date')}    onChange={(v) => setField('invoice_date', v)} placeholder="YYYY-MM-DD" />
-        <FieldRow label="Due date"     value={strField('due_date')}        onChange={(v) => setField('due_date', v)} placeholder="YYYY-MM-DD" />
-        <FieldRow label="Currency"     value={strField('currency')}        onChange={(v) => setField('currency', v.toUpperCase())} />
-        <FieldRow label="Subtotal"     value={numField('subtotal')}        onChange={(v) => setField('subtotal', v === '' ? null : Number(v))} type="number" />
-        <FieldRow label="VAT / tax"    value={numField('tax_amount')}      onChange={(v) => setField('tax_amount', v === '' ? null : Number(v))} type="number" />
-        <FieldRow label="Total"        value={numField('total')}           onChange={(v) => setField('total', v === '' ? null : Number(v))} type="number" />
-        {/* INVOICES.3 — Claude-suggested category. Stays as a
-            human-friendly hint that flows into the audit log.
-            (Xero categorisation now driven by the account picker
-            below — categories were a transitional INVOICES.3
-            pattern from when there was no account picker.) */}
-        <SelectRow
-          label="Category (suggested)"
-          value={strField('category')}
-          onChange={(v) => setField('category', v || null)}
-          options={INVOICE_CATEGORIES.map((k) => ({ value: k, label: CATEGORY_LABEL[k] || k }))}
-        />
-        {/* XERO-API.2 — Xero account picker (replaces the old free-
-            text account_code field). Stores xero_account_id on
-            extracted_fields so PR 3's /Invoices API push can wire
-            up the LineItem to the right AccountCode. The legacy
-            account_code field is also kept in sync from the
-            picker's code so existing audit views still render. */}
+        <div className="sm:col-span-2">
+          {/* XERO-API.2 — Xero supplier picker. Stores a structured
+              xero_contact_ref so the send step knows whether to
+              attach an existing ContactID or create one inline. */}
+          <XeroContactPicker
+            locationId={row.location_id}
+            initialName={strField('supplier_name')}
+            value={fields.xero_contact_ref || null}
+            onChange={(ref) => {
+              setField('xero_contact_ref', ref)
+              // Pull this supplier's remembered account / category.
+              if (ref?.kind === 'existing' && ref.xero_contact_id) {
+                applySupplierDefault(ref.xero_contact_id)
+              }
+            }}
+          />
+        </div>
+        {/* XERO-API.2 — Xero account picker. Stores xero_account_id on
+            extracted_fields for the /Invoices push; the legacy
+            account_code is kept in sync for the audit views. */}
         <XeroAccountPicker
           locationId={row.location_id}
           value={strField('xero_account_id') || null}
@@ -1373,24 +1452,39 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
             setField('tax_type_source', taxType ? source : null)
           }}
         />
-        {/* XERO-API.2 — Xero supplier picker. Stores a structured
-            xero_contact_ref so the send step knows whether to
-            attach an existing ContactID or create one inline. */}
-        <XeroContactPicker
-          locationId={row.location_id}
-          initialName={strField('supplier_name')}
-          value={fields.xero_contact_ref || null}
-          onChange={(ref) => {
-            setField('xero_contact_ref', ref)
-            // Pull this supplier's remembered account / category.
-            if (ref?.kind === 'existing' && ref.xero_contact_id) {
-              applySupplierDefault(ref.xero_contact_id)
-            }
-          }}
-        />
+        <FieldRow label="Invoice #"    value={strField('invoice_number')}  onChange={(v) => setField('invoice_number', v)} />
+        <FieldRow label="Invoice date" value={strField('invoice_date')}    onChange={(v) => setField('invoice_date', v)} placeholder="YYYY-MM-DD" />
       </div>
+      <div className="grid grid-cols-3 gap-3">
+        <FieldRow label="Subtotal"     value={numField('subtotal')}        onChange={(v) => setField('subtotal', v === '' ? null : Number(v))} type="number" />
+        <FieldRow label="VAT / tax"    value={numField('tax_amount')}      onChange={(v) => setField('tax_amount', v === '' ? null : Number(v))} type="number" />
+        <FieldRow label="Total"        value={numField('total')}           onChange={(v) => setField('total', v === '' ? null : Number(v))} type="number" />
+      </div>
+      <button
+        type="button"
+        aria-expanded={showMore}
+        onClick={() => setShowMore((v) => !v)}
+        className="self-start text-sm text-un1t-subtle hover:text-un1t-text underline underline-offset-2"
+      >
+        {showMore ? 'Fewer fields' : 'More fields'}
+      </button>
+      {showMore && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <FieldRow label="Due date"     value={strField('due_date')}        onChange={(v) => setField('due_date', v)} placeholder="YYYY-MM-DD" />
+          <FieldRow label="Currency"     value={strField('currency')}        onChange={(v) => setField('currency', v.toUpperCase())} />
+          <FieldRow label="Supplier (label)" value={strField('supplier_name')}   onChange={(v) => setField('supplier_name', v)} />
+          {/* INVOICES.3 — Claude-suggested category: a human-friendly hint
+              that flows into the audit log. Xero coding is the account. */}
+          <SelectRow
+            label="Category (suggested)"
+            value={strField('category')}
+            onChange={(v) => setField('category', v || null)}
+            options={INVOICE_CATEGORIES.map((k) => ({ value: k, label: CATEGORY_LABEL[k] || k }))}
+          />
+        </div>
+      )}
 
-      <div className="flex gap-2 flex-wrap">
+      <div className="order-first sticky top-0 z-10 -mx-4 -mt-1 px-4 py-2 bg-un1t-bg border-y border-un1t-border flex gap-2 flex-wrap items-center">
         <button
           type="button"
           // A 'data_approved' row whose Xero send FAILED (xero_error
@@ -1400,7 +1494,7 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
           // an error is the post-send state and never reaches here).
           disabled={!dirty || !!busy || (isApproved && !row.xero_error)}
           onClick={async () => { const saved = await onSaveFields(fields); if (saved) setFields(saved) }}
-          className="px-4 py-2 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50"
+          className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50"
         >
           {busy === 'fields' ? 'Saving…' : 'Save edits'}
         </button>
@@ -1435,10 +1529,10 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
                 type="button"
                 disabled={!!busy || gate}
                 onClick={approve}
-                className="px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50"
+                className="order-first px-4 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50"
                 title={title}
               >
-                {busy === 'data-approve' ? (isApproved ? 'Retrying send…' : 'Approving + sending…') : (isApproved ? 'Retry send to Xero' : 'Approve + send to Xero')}
+                {busy === 'data-approve' ? (isApproved ? 'Retrying send…' : 'Sending…') : (isApproved ? 'Retry send to Xero' : 'Send to Xero and next')}
               </button>
               {/* NEWSUPPLIER.1 — the reason the button is off used to be a
                   hover tooltip only, so a greyed button looked broken. */}
@@ -1454,13 +1548,13 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
           type="button"
           disabled={!!busy}
           onClick={() => setShowRejectForm((v) => !v)}
-          className="px-4 py-2 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50"
+          className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50"
         >
           Reject…
         </button>
       </div>
       {showRejectForm && (
-        <div className="space-y-2 border border-un1t-border rounded-md p-3">
+        <div className="order-first space-y-2 border border-un1t-border rounded-md p-3">
           <label className="text-xs uppercase tracking-wide text-un1t-subtle">Reason</label>
           <textarea
             value={reason}

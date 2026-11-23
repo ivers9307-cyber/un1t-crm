@@ -101,7 +101,7 @@ export function canRejectOne(row) {
   return reasons.includes('unreadable') || reasons.includes('duplicate_file')
 }
 
-// INVSCREEN.1 — the Awaiting action list is split so repeated signature images
+// INVSCREEN.1 — the To do list is split so repeated signature images
 // and unreadable files do not bury the invoices.
 const SET_ASIDE_REASONS = ['duplicate_file', 'unreadable']
 
