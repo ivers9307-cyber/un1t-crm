@@ -9,10 +9,10 @@
 //     compare-and-set on contacts_last_synced_at: two overlapping pulls would
 //     each sweep the other's rows as stale and empty the list.
 //
-//   rematchUnmatchedSuppliers  A row flagged "New supplier" is looked at again
-//     when something that could match it has changed since it was last
-//     checked: the studio's contact list was refreshed, or the studio sent a
-//     bill to Xero (a person picked a supplier, which teaches the name). The
+//   rematchUnmatchedSuppliers  A row flagged "New supplier" or "No VAT rate" is
+//     looked at again when something that could clear it has changed since it
+//     was last checked: the studio's contact list or tax rates were refreshed,
+//     or the studio sent a bill to Xero (a person picked a supplier, which teaches the name). The
 //     row's prepared_at is re-stamped, so each change costs one look per row.
 //     Rows that were never prepared on arrival (prepared_at null) are left
 //     alone.
@@ -26,6 +26,9 @@ import { recheckInvoiceRow } from '@/lib/invoices-queue/prepare'
 const MODULE = 'supplier-refresh'
 export const SUPPLIER_LIST_MAX_AGE_MS = 24 * 60 * 60 * 1000
 export const REMATCH_LIMIT = 25
+// The reasons a later look can clear without a person: the supplier may now be
+// matched, and (VATRATE.1) the VAT rate may now be derived.
+const RECHECKED_REASONS = ['new_supplier', 'no_vat_rate']
 
 /** @param {any} e */
 const messageOf = (e) => (e instanceof Error ? e.message : String(e))
@@ -96,7 +99,7 @@ export async function rematchUnmatchedSuppliers(db, opts = {}) {
   try {
     const { data: connections, error } = await db
       .from('xero_connections')
-      .select('location_id, contacts_last_synced_at')
+      .select('location_id, contacts_last_synced_at, tax_rates_last_synced_at')
       .order('location_id', { ascending: true })
     if (error || !Array.isArray(connections)) return { checked, matched }
 
@@ -111,7 +114,7 @@ export async function rematchUnmatchedSuppliers(db, opts = {}) {
         .not('forwarded_at', 'is', null)
         .order('forwarded_at', { ascending: false })
         .limit(1)
-      const changedAt = [c.contacts_last_synced_at, lastSent?.[0]?.forwarded_at]
+      const changedAt = [c.contacts_last_synced_at, c.tax_rates_last_synced_at, lastSent?.[0]?.forwarded_at]
         .filter((t) => typeof t === 'string')
         .map(String)
         .sort((a, b) => Date.parse(b) - Date.parse(a))[0]
@@ -122,7 +125,7 @@ export async function rematchUnmatchedSuppliers(db, opts = {}) {
         .select('*')
         .eq('location_id', c.location_id)
         .eq('status', 'extracted')
-        .contains('review_reasons', ['new_supplier'])
+        .overlaps('review_reasons', RECHECKED_REASONS)
         .lt('prepared_at', changedAt)
         .order('prepared_at', { ascending: true })
         .limit(limit - checked)
@@ -131,7 +134,8 @@ export async function rematchUnmatchedSuppliers(db, opts = {}) {
       for (const row of rows) {
         const { reasons } = await recheckInvoiceRow(db, row, { rematchSupplier: true })
         checked++
-        if (!reasons.includes('new_supplier')) matched++
+        // Counted when a reason this pass can clear has gone.
+        if (RECHECKED_REASONS.some((r) => row.review_reasons?.includes(r) && !reasons.includes(r))) matched++
       }
     }
   } catch (e) {

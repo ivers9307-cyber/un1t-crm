@@ -33,6 +33,12 @@ const activeExpense = (r) => r?.status === 'ACTIVE' && r?.can_apply_to_expenses 
 // rate Xero never gave a value would be wrongly treated as a 0% rate.
 const rateOf = (r) => (r?.effective_rate == null ? NaN : Number(r.effective_rate))
 
+// A rate Xero names as a purchases rate ("Purchases Standard 23%", "Purchases
+// tax - reduced rate"), and not also as a sales one.
+const isPurchasesRate = (r) => /\bpurchases?\b/i.test(String(r?.name ?? '')) && !/\bsales?\b/i.test(String(r?.name ?? ''))
+// A sales rate: named as one, or Xero's own system sales type (OUTPUT, OUTPUT2…).
+const isSalesRate = (r) => !isPurchasesRate(r) && (/\bsales?\b/i.test(String(r?.name ?? '')) || /^OUTPUT/i.test(String(r?.tax_type ?? '')))
+
 /**
  * @param {object} fields  extracted_fields (subtotal, tax_amount, total, line_items)
  * @param {Array}  taxRates  the location's xero_tax_rates rows
@@ -60,6 +66,18 @@ export function resolveBillTaxType(fields, taxRates) {
     .filter((r) => Number.isFinite(rateOf(r)) && Math.abs(rateOf(r) - derivedRate) <= TOLERANCE_PP)
 
   if (matches.length === 1) return { taxType: matches[0].tax_type, derivedRate, status: 'matched', candidates: matches }
+  // VATRATE.1 — Xero keeps a sales rate and a purchases rate at the same
+  // percentage, and marks both as usable on expenses. A supplier bill takes the
+  // purchases one: when exactly one match is a purchases rate and every other
+  // match is a sales rate, it wins. Two purchases rates, none, or any other
+  // kind of rate beside it (imports, reverse charge) stay ambiguous for a person.
+  if (matches.length > 1) {
+    const purchases = matches.filter(isPurchasesRate)
+    const others = matches.filter((r) => !isPurchasesRate(r))
+    if (purchases.length === 1 && others.every(isSalesRate)) {
+      return { taxType: purchases[0].tax_type, derivedRate, status: 'matched', candidates: matches }
+    }
+  }
   if (matches.length > 1) return { taxType: null, derivedRate, status: 'ambiguous', candidates: matches }
   return { taxType: null, derivedRate, status: 'unmatched', candidates: rates.filter(activeExpense) }
 }
