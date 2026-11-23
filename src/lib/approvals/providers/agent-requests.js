@@ -30,7 +30,7 @@ import { viewerActiveLocationId } from '../registry'
 import { visitOriginLabel } from '@/lib/visit-origin'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { retryOffered, RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
-import { accountSummaryLine, whyFlagged, accountMismatchWarning } from '@/lib/approvals/agent-request-why'
+import { accountLineFor, lookupLabel, whyFlagged, accountMismatchWarning } from '@/lib/approvals/agent-request-why'
 import { approvalSummary, explainFailure } from '@/lib/approvals/event-move-card'
 
 // AGENT-FUNNEL-CREDITS.1 — the membership/credit fields the Glofox sync
@@ -105,7 +105,8 @@ function toItem(r) {
     channel: r.channel || null,
     conversationId: r.conversation_id || null,
     // Pre-computed (like failedWhy) so mobile renders them without a lib.
-    accountLine: accountSummaryLine(r.contact),
+    accountLine: accountLineFor(r, r.contact),
+    lookupLabel: lookupLabel(r),
     why: whyFlagged(r),
     // PERSON-ACCT.8 — pause/cancellation only; null for every other kind
     // (class_booking gets its own BLOCKING ACCOUNT_MISMATCH treatment at
