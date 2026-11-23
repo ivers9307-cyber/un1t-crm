@@ -1,9 +1,9 @@
 // INV-BULK.1 — "Send for analysis" (bulk enqueue).
 //
 // Bookkeeper-gated. Takes an array of queue row ids and marks them for
-// background analysis by the process-invoice-analysis cron. This is the
-// instant, no-timeout counterpart to the synchronous bulk-analyse route:
-// it just flags rows, so it scales to 100s.
+// background analysis by the process-invoice-analysis cron. It only flags
+// rows, so it is instant and scales to 100s. It is the one bulk way to have
+// rows read: the synchronous bulk-analyse route is gone (INVRETIRE.1).
 //
 // Per row:
 //   • received          → quality_approved + analysis_queued_at (the
