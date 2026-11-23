@@ -871,7 +871,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // MIAKNOWLEDGE.1 — a failed read is retried once and logged; it used to
     // become "no knowledge" in silence (the prompt then hands off every
     // factual question). The turn still runs: refusing it would lose the reply.
-    const knowledgeRead = await readAgentKnowledge(db, locationId, 'reply')
+    const knowledgeRead = await readAgentKnowledge(db, locationId, 'reply', { shareClassNotes: true })
     const knowledge = knowledgeRead.ok ? knowledgeRead.rows : []
 
     // A still-fresh prior verification, re-read from the stamp.

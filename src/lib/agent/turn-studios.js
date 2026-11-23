@@ -42,6 +42,7 @@ import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { zoneOfLocation } from '@/lib/location-time'
 import { latestTrialUsedClass } from '@/lib/un1t-online-trial-used'
 import { logWarn, logError } from '@/lib/log'
+import { readSharedClassNotes } from './shared-class-notes'
 
 const LOG_MODULE = 'mia-un1t'
 
@@ -274,12 +275,17 @@ export async function loadAgentKnowledge(db, locationId) {
  * so one database blip silently turned Mia into a hand-off machine for that
  * turn. One retry, then a structured error. Never throws.
  * @returns {Promise<{ ok: true, rows: object[] } | { ok: false }>}
+ *
+ * MIACLASSNOTES.1 — `shareClassNotes` adds the class notes this studio borrows
+ * from its sibling studios (the customer reply asks for them).
  */
-export async function readAgentKnowledge(db, locationId, caller = 'agent') {
+export async function readAgentKnowledge(db, locationId, caller = 'agent', { shareClassNotes = false } = {}) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const { data, error } = await loadAgentKnowledge(db, locationId)
-      if (!error) return { ok: true, rows: data || [] }
+      // MIACLASSNOTES.1 — plus the class notes this studio borrows from its
+      // sibling studios (best effort: a failed borrow adds nothing).
+      if (!error) return { ok: true, rows: [...(data || []), ...(shareClassNotes ? await readSharedClassNotes(db, locationId) : [])] }
       if (attempt === 2) logError(LOG_MODULE, 'studio knowledge unreadable', { caller, locationId, code: error.code ?? null, message: error.message })
     } catch (err) {
       if (attempt === 2) logError(LOG_MODULE, 'studio knowledge read threw', { caller, locationId, errClass: err?.name, message: err?.message })
