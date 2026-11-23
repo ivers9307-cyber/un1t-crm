@@ -17,6 +17,8 @@ vi.mock('@/lib/location-time', async (importOriginal) => ({
 // (the resolved page's merged blocks); a caller with only a studio gets the
 // studio's own page, stubbed here (landing-pages.copy-source.test.js covers it).
 const mocks = vi.hoisted(() => ({ studioBlocks: vi.fn() }))
+const held = vi.hoisted(() => ({ readHeldPlaces: vi.fn(async () => ({ waiting: new Map(), recent: [] })) }))
+vi.mock('@/lib/class-places-held', async (importOriginal) => ({ ...(await importOriginal()), readHeldPlaces: held.readHeldPlaces }))
 vi.mock('@/lib/landing-pages', () => ({ studioPageBlocksFor: mocks.studioBlocks }))
 import { shapePublicClass, listPublicClasses, readPublicClasses, parseHiddenKeywords, isClassHidden, isClassAllowed, isEventFull, PUBLIC_CLASS_KEYS } from './public-classes'
 import { fetchUpcomingEvents, glofoxCredentialsForLocation } from '@/lib/glofox'
@@ -100,6 +102,16 @@ describe('listPublicClasses deny-list', () => {
 })
 
 describe('listPublicClasses — PUBCAP.1 no capacity leaves the server', () => {
+  it('HOLDPLACES.1: a Glofox class whose last place is queued is left out', async () => {
+    held.readHeldPlaces.mockResolvedValueOnce({ waiting: new Map([['last', 1]]), recent: [{ eventId: 'room', atMs: Date.now() }] })
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: [
+      { _id: 'last', name: 'HIIT', time_start: 4102448400, size: 12, booked: 11, active: true, private: false },
+      { _id: 'room', name: 'RALLY', time_start: 4102452000, size: 12, booked: 11, active: true, private: false },
+    ] })
+    const out = await listPublicClasses(makeDb({}), 'LOC', 7)
+    expect(out.map((c) => c.event_id)).toEqual(['room'])
+  })
+
   it('drops a full class and returns only display keys for the rest', async () => {
     fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: [
       { _id: 'open', name: 'BASE', time_start: 4102444800, size: 12, booked: 11, waiting: 0, active: true, private: false },
@@ -300,7 +312,7 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
     const out = await readPublicClasses(db, 'HATCH', 7, { blocks: BLOCKS })
     expect(out.error).toBeNull()
     const r = reads.find((x) => x.table === 'un1t_events' && !x.ops.some((o) => o[0] === 'range'))
-    expect(r.ops).toContainEqual(['select', 'un1t_id, title, starts_at, capacity, bookings_count'])
+    expect(r.ops).toContainEqual(['select', 'un1t_id, title, starts_at, capacity, bookings_count, synced_at'])
     expect(r.ops).toContainEqual(['eq', 'location_id', 'HATCH'])
     expect(r.ops).toContainEqual(['eq', 'status', 'scheduled'])
     expect(r.ops).toContainEqual(['eq', 'access_mode', 'open'])
@@ -350,6 +362,26 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
     ], error: null }
     const out = await readPublicClasses(un1tDb({ events }).db, 'HATCH', 7, { blocks: BLOCKS })
     expect(out.classes.map((c) => c.event_id)).toEqual(['un1t:open', 'un1t:nocap'])
+  })
+
+  // HOLDPLACES.1 — 23 Nov 2026: the last place stayed on offer while someone
+  // was already queued for it.
+  it('a class whose last places are queued or just booked is left out', async () => {
+    await noGlofox()
+    held.readHeldPlaces.mockResolvedValueOnce({
+      waiting: new Map([['un1t:lastplace', 1]]),
+      recent: [{ eventId: 'un1t:justbooked', atMs: Date.now() - 60_000 }, { eventId: 'un1t:counted', atMs: Date.now() - 20 * 60_000 }],
+    })
+    const synced = new Date(Date.now() - 10 * 60_000).toISOString()
+    const events = { data: [
+      ev({ un1t_id: 'lastplace', capacity: 27, bookings_count: 26, synced_at: synced }),
+      ev({ un1t_id: 'justbooked', capacity: 27, bookings_count: 26, synced_at: synced, starts_at: at(25) }),
+      ev({ un1t_id: 'counted', capacity: 27, bookings_count: 26, synced_at: synced, starts_at: at(26) }),
+      ev({ un1t_id: 'room', capacity: 27, bookings_count: 20, synced_at: synced, starts_at: at(27) }),
+    ], error: null }
+    const out = await readPublicClasses(un1tDb({ events }).db, 'HATCH', 7, { blocks: BLOCKS })
+    expect(out.classes.map((c) => c.event_id)).toEqual(['un1t:counted', 'un1t:room'])
+    expect(held.readHeldPlaces).toHaveBeenCalledWith(expect.anything(), 'HATCH', { withRecent: true })
   })
 
   it('the deny-list at settings.un1t_online.hidden_class_keywords hides by name', async () => {

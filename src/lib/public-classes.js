@@ -16,6 +16,7 @@ import { logWarn } from '@/lib/log'
 import { parseHiddenKeywords } from '@/lib/class-keywords'
 import { freshCutoff, onlyFreshEvents } from '@/lib/un1t-online-freshness'
 import { studioPageBlocksFor } from '@/lib/landing-pages'
+import { readHeldPlaces, heldPlacesFor } from '@/lib/class-places-held'
 
 // The exact Intl options the Dublin formatters used, so a Dublin studio's
 // day/time/label text is byte-identical (TZ.7).
@@ -28,9 +29,12 @@ const LABEL_OPTS = Object.freeze({ weekday: 'short', day: 'numeric', month: 'sho
 export const PUBLIC_CLASS_KEYS = Object.freeze(['event_id', 'name', 'starts_at', 'day', 'day_label', 'time'])
 
 // Server-side only: is this raw Glofox event full? Never sent to a client.
-export function isEventFull(e) {
+// HOLDPLACES.1 — `held` is the places promised to bookings this count does
+// not show yet (class-places-held.js): a class whose last place is queued
+// for someone is full to the next visitor.
+export function isEventFull(e, held = 0) {
   const size = Number(e?.size) || 0
-  const booked = Number(e?.booked) || 0
+  const booked = (Number(e?.booked) || 0) + (Number(held) || 0)
   return size > 0 && booked >= size
 }
 
@@ -53,9 +57,9 @@ export function shapePublicClass(e, zone = DEFAULT_TZ) {
 }
 
 // Server-side only: is this un1t_events row full? Never sent to a client.
-export function isUn1tEventFull(e) {
+export function isUn1tEventFull(e, held = 0) {
   const capacity = Number(e?.capacity) || 0
-  const booked = Number(e?.bookings_count) || 0
+  const booked = (Number(e?.bookings_count) || 0) + (Number(held) || 0)
   return capacity > 0 && booked >= capacity
 }
 
@@ -147,9 +151,12 @@ export async function readPublicClasses(db, locationId, days = 7, { allowKeyword
     logWarn('public-classes', 'location zone unreadable; labelling in the default zone', { locationId, err })
     return DEFAULT_TZ
   })
+  // HOLDPLACES.1 — Glofox is read live, so only bookings still in the queue
+  // are missing from its count.
+  const held = await readHeldPlaces(db, locationId)
   const classes = events
     .filter((e) => e && e.active !== false && e.private !== true && (Number(e.time_start) || 0) * 1000 > now)
-    .filter((e) => !isEventFull(e))
+    .filter((e) => !isEventFull(e, heldPlacesFor(held, e._id || e.id)))
     .map((e) => shapePublicClass(e, zone))
     .filter((c) => !isClassHidden(c.name, hidden))
     .filter((c) => isClassAllowed(c.name, allowKeywords))
@@ -240,7 +247,7 @@ async function readUn1tClasses(db, locationId, days, { blocks, hidden, allowKeyw
   try {
     const cutoffIso = await freshCutoff(db, 'un1t_events', locationId)
     res = await onlyFreshEvents(db.from('un1t_events')
-      .select('un1t_id, title, starts_at, capacity, bookings_count')
+      .select('un1t_id, title, starts_at, capacity, bookings_count, synced_at')
       .eq('location_id', locationId)
       .eq('status', 'scheduled')
       .eq('access_mode', 'open')
@@ -258,9 +265,12 @@ async function readUn1tClasses(db, locationId, days, { blocks, hidden, allowKeyw
   }
   const zone = await readListingZone(db, locationId)
   if (!zone) return { classes: [], error: 'location_zone_unreadable' }
+  // HOLDPLACES.1 — the mirror's count is as old as its last sync, so a class
+  // also holds the bookings queued for it and the ones made since that sync.
+  const held = await readHeldPlaces(db, locationId, { withRecent: true })
   const classes = (res?.data || [])
     .filter((e) => e && e.un1t_id != null && e.un1t_id !== '' && Number.isFinite(Date.parse(e.starts_at)))
-    .filter((e) => !isUn1tEventFull(e))
+    .filter((e) => !isUn1tEventFull(e, heldPlacesFor(held, `${UN1T_EVENT_PREFIX}${e.un1t_id}`, e.synced_at ?? null)))
     .map((e) => shapeUn1tPublicClass(e, zone))
     .filter((c) => !isClassHidden(c.name, hidden))
     .filter((c) => isClassAllowed(c.name, allowKeywords))
