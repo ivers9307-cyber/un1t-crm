@@ -16,6 +16,7 @@ import {
   buildOtherStudiosBlock,
   CURRENT_OFFERS_RULES,
   GIVING_RULE,
+  EVENT_FACTS_RULE,
 } from './prompt'
 
 describe('buildKnowledgeBlock', () => {
@@ -1175,6 +1176,20 @@ describe('what is on offer right now (MIAPAGES.1)', () => {
     for (const [name, prompt] of Object.entries(VARIANTS)) {
       expect(prompt.split(CURRENT_OFFERS_RULES), name).toHaveLength(2)
     }
+  })
+
+  // MIAEVENTFACTS.1
+  it('every variant tells Mia to say about an event only what the tool gives, once', () => {
+    for (const [name, prompt] of Object.entries(VARIANTS)) {
+      expect(prompt.split(EVENT_FACTS_RULE), name).toHaveLength(2)
+    }
+    expect(EVENT_FACTS_RULE).toContain('only what list_upcoming_events gives you')
+    expect(EVENT_FACTS_RULE).toContain('Never guess')
+    expect(EVENT_FACTS_RULE).toContain('raffle_tickets')
+    expect(EVENT_FACTS_RULE).toContain('raffle_closes_label is when the raffle closes, not when donations close')
+    expect(EVENT_FACTS_RULE).toContain('raffles_unreadable')
+    expect(EVENT_FACTS_RULE).toMatch(/do not have that detail/)
+    expect(EVENT_FACTS_RULE).not.toMatch(/[—–]|limited|spaces|capacity/i)
   })
 
   // MIAGIVING.1

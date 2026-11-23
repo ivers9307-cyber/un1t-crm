@@ -3,7 +3,10 @@ import { createFakeDb } from '../../../tests/helpers/fake-db'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
-import { GIVING_WINDOW_DAYS, givingEntry, readStillGiving } from './event-giving'
+import {
+  GIVING_WINDOW_DAYS, MAX_EVENT_DESCRIPTION, givingEntry, readStillGiving,
+  eventDescription, raffleTicketLabels, givingDetails, readEventRaffles,
+} from './event-giving'
 
 const ORG = '00000000-0000-4000-8000-0000000000a1'
 const OTHER_ORG = '00000000-0000-4000-8000-0000000000a2'
@@ -16,12 +19,14 @@ const BASE = 'https://stillorgan.test'
 const loc = (id, name, extra = {}) => ({ id, name, organization_id: ORG, timezone: 'Europe/Dublin', active: true, ...extra })
 const event = (id, extra = {}) => ({
   id, name: 'MS Ireland X UN1T Dublin Charity Day', slug: 'stillorgan-nov21-0900', race_date: '2026-11-21',
+  description: 'In aid of MS Ireland.\n\n11,000 reps shared over team workouts.',
   location_id: STILL, host_id: null, active: true, status: 'published', charity_enabled: true, charity: { name: 'MS Ireland', signup_off: true },
   registration_closes_at: null, ...extra,
 })
 const raffle = (eventId, extra = {}) => ({
   id: `raffle-${eventId}`, race_event_id: eventId, location_id: STILL, name: 'Raffle', ticket_price_cents: 100, currency: 'EUR',
-  sales_open: true, online_enabled: true, online_closes_at: '2026-11-23T15:00:00Z', next_ticket_number: 1486, ticket_options: [], ...extra,
+  sales_open: true, online_enabled: true, online_closes_at: '2026-11-23T15:00:00Z', next_ticket_number: 1486,
+  ticket_options: [{ tickets: 20, price_cents: 1000 }], ...extra,
 })
 const entry = (over = {}) => givingEntry({ event: event('e1'), raffle: raffle('e1'), location: loc(STILL, 'UN1T Stillorgan'), threadLocationId: STILL, baseUrl: BASE, nowMs: NOW, ...over })
 
@@ -30,8 +35,9 @@ describe('givingEntry', () => {
     const e = entry()
     expect(e).toEqual({
       name: 'MS Ireland X UN1T Dublin Charity Day', studio: 'UN1T Stillorgan', this_conversation: true, date: 'Sat 21 Nov',
-      charity: 'MS Ireland', raffle_open: true, raffle_closes_label: 'Mon 23 Nov, 15:00', donations_open: true,
-      url: 'https://stillorgan.test/event/stillorgan-nov21-0900',
+      description: 'In aid of MS Ireland. 11,000 reps shared over team workouts.',
+      charity: 'MS Ireland', raffle_open: true, raffle_tickets: ['1 for €1', '20 for €10'], raffle_closes_label: 'Mon 23 Nov, 15:00',
+      donations_open: true, url: 'https://stillorgan.test/event/stillorgan-nov21-0900',
     })
     expect(JSON.stringify(e)).not.toMatch(/e1|raffle-|1486/)
   })
@@ -169,5 +175,62 @@ describe('readStillGiving', () => {
   it('never throws, and without a studio answers unknown', async () => {
     expect(await readStillGiving(null, { threadLocationId: STILL })).toEqual({ entries: [], unreadable: true })
     expect(await readStillGiving(seed(), {})).toEqual({ entries: [], unreadable: true })
+  })
+})
+
+// MIAEVENTFACTS.1 — what an event says about itself, so Mia has no gap to fill.
+describe('eventDescription', () => {
+  it('is the event\'s own text on one line, capped, or null', () => {
+    expect(eventDescription('  Line one.\n\nLine   two. ')).toBe('Line one. Line two.')
+    expect(eventDescription('')).toBeNull()
+    expect(eventDescription(null)).toBeNull()
+    const long = eventDescription('x'.repeat(4000))
+    expect(MAX_EVENT_DESCRIPTION).toBe(1500)
+    expect(long.length).toBe(1500)
+    expect(long.endsWith('…')).toBe(true)
+  })
+})
+
+describe('raffleTicketLabels', () => {
+  it('the single price, then each bundle the online card sells', () => {
+    expect(raffleTicketLabels(raffle('e1'))).toEqual(['1 for €1', '20 for €10'])
+    expect(raffleTicketLabels(raffle('e1', { ticket_price_cents: 250, ticket_options: [{ tickets: 5, price_cents: 1000 }, { tickets: 100, price_cents: 5000 }] }))).toEqual(['1 for €2.50', '5 for €10'])
+    expect(raffleTicketLabels(raffle('e1', { ticket_price_cents: 0, ticket_options: null }))).toEqual([])
+    expect(raffleTicketLabels(null)).toEqual([])
+  })
+})
+
+describe('givingDetails', () => {
+  const details = (over = {}) => givingDetails({ event: event('e1', { race_date: '2026-12-05' }), raffle: raffle('e1'), zone: 'Europe/Dublin', nowMs: NOW, ...over })
+
+  it('a charity event: the charity, that donations are open, and the raffle as the page sells it', () => {
+    expect(details()).toEqual({ charity: 'MS Ireland', donations_open: true, raffle_open: true, raffle_tickets: ['1 for €1', '20 for €10'], raffle_closes_label: 'Mon 23 Nov, 15:00' })
+  })
+
+  it('no open raffle: no raffle fields at all', () => {
+    expect(details({ raffle: null })).toEqual({ charity: 'MS Ireland', donations_open: true })
+    expect(details({ raffle: raffle('e1', { sales_open: false }) })).toEqual({ charity: 'MS Ireland', donations_open: true })
+    expect(details({ raffle: raffle('e1', { location_id: HATCH }) })).toEqual({ charity: 'MS Ireland', donations_open: true })
+  })
+
+  it('charity off, or a host event: nothing, the page shows neither card', () => {
+    expect(details({ event: event('e1', { charity_enabled: false }) })).toBeNull()
+    expect(details({ event: event('e1', { host_id: 'h' }) })).toBeNull()
+  })
+
+  it('a charity with no name still says donations are open', () => {
+    expect(details({ event: event('e1', { charity: {} }), raffle: null })).toEqual({ charity: null, donations_open: true })
+  })
+})
+
+describe('readEventRaffles', () => {
+  it('the raffles of the given events, by event; an error is unknown; no events is no read', async () => {
+    const db = createFakeDb({ tables: { raffles: [raffle('e1'), raffle('e9')] } })
+    const res = await readEventRaffles(db, [event('e1'), event('e2')])
+    expect(res.unreadable).toBe(false)
+    expect([...res.byEvent.keys()]).toEqual(['e1'])
+    const bad = createFakeDb({ tables: { raffles: [raffle('e1')] }, errors: { raffles: { select: { message: 'boom' } } } })
+    expect(await readEventRaffles(bad, [event('e1')])).toMatchObject({ unreadable: true })
+    expect((await readEventRaffles(bad, [])).unreadable).toBe(false)
   })
 })

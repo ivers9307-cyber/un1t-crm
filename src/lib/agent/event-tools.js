@@ -51,7 +51,7 @@ import { DEFAULT_TZ } from '@/lib/location-time'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { EVENT_MOVE_TOOLS, executeMoveTool, policyHandoffResult } from './event-move-tools'
 import { holdsPlace, pendingLapsed, selfServiceBlock } from '@/lib/entry-policy'
-import { readStillGiving } from './event-giving'
+import { readStillGiving, readEventRaffles, givingDetails, eventDescription } from './event-giving'
 
 export const EVENT_TOOLS = [
   {
@@ -65,7 +65,9 @@ export const EVENT_TOOLS = [
       'For paid events, share the signup link — payment happens securely on that page. ' +
       'The result may also carry still_giving: events today or in the past, at this studio or another studio of the organisation, ' +
       'whose online raffle or donation page is still open. Each has the url of its page, which is the link to send. ' +
-      'Copy raffle_closes_label exactly as written.',
+      'Copy raffle_closes_label exactly as written. ' +
+      'Every event carries what its own page says: its description and, for a charity event, charity, donations_open and, ' +
+      'when a raffle is selling, raffle_tickets (the ticket prices) and raffle_closes_label. That is all there is to say about an event.',
     input_schema: { type: 'object', properties: {} },
   },
   {
@@ -224,7 +226,6 @@ export function classifyEventCancellation({ isOwner, status, eventDate, paidCent
 }
 
 const MAX_EVENTS = 8
-const MAX_DESCRIPTION = 200
 
 // CAPACITY-SECRECY.1 — a wave with this many places or fewer is "limited".
 // Same coarse signal as the class list: urgency without a number.
@@ -247,8 +248,9 @@ const LIMITED_SPOTS_THRESHOLD = 3
  *   location's tenant host (W1.L3b), on the canonical /event/ path: /race/ is
  *   only a next.config alias on the CRM host and is not served on a tenant host
  * @param {string} [zone] the events' location zone (TZ.5)
+ * @param {Map<string, object>} [raffleByEvent] MIAEVENTFACTS.1 — each event's raffle row, by event id
  */
-export function shapeEventsForAgent(events, takenByWave, nowMs, baseUrl, zone = DEFAULT_TZ) {
+export function shapeEventsForAgent(events, takenByWave, nowMs, baseUrl, zone = DEFAULT_TZ, raffleByEvent = new Map()) {
   const today = todayIn(nowMs, zone)
   const out = []
   for (const e of Array.isArray(events) ? events : []) {
@@ -282,7 +284,10 @@ export function shapeEventsForAgent(events, takenByWave, nowMs, baseUrl, zone = 
       // cheap; the booking itself re-resolves with the count, so a just-sold-
       // out early bird may show here and then not apply).
       price: formatEventPrice(e, publicPricing({ race: e, soldByTier: {} })),
-      ...(e.description ? { description: String(e.description).replace(/\s+/g, ' ').trim().slice(0, MAX_DESCRIPTION) } : {}),
+      // MIAEVENTFACTS.1 — the event's own words and, for a charity event, what
+      // its page offers (the charity, donations, the raffle's ticket prices).
+      ...(eventDescription(e.description) ? { description: eventDescription(e.description) } : {}),
+      ...(givingDetails({ event: e, raffle: raffleByEvent.get(e.id) || null, zone, nowMs }) || {}),
       waves,
       signup_url: `${baseUrl}/event/${e.slug}`,
     })
@@ -369,7 +374,7 @@ export async function executeEventTool(toolName, input, ctx) {
       }
     }
     const { data: events } = await db.from('race_events')
-      .select('id, name, kind, slug, description, race_date, active, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, pricing_tiers, waves:race_waves(id, start_time, capacity, label)')
+      .select('id, name, kind, slug, description, race_date, active, location_id, host_id, charity_enabled, charity, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, pricing_tiers, waves:race_waves(id, start_time, capacity, label)')
       .eq('location_id', locationId)
       .eq('active', true)
       .gte('race_date', today)
@@ -406,8 +411,14 @@ export async function executeEventTool(toolName, input, ctx) {
       }
     }
     // W1.L3b — Mia's signup links land on HER ACTIVE LOCATION's tenant host.
-    const shaped = shapeEventsForAgent(events, takenByWave, Date.now(), await resolveCustomerBaseUrl(db, locationId), zone)
-    return { events: shaped, ...(await givingPart(shaped.map((e) => e.event_id))) }
+    // MIAEVENTFACTS.1 — only a charity event's page sells a raffle.
+    const raffles = await readEventRaffles(db, events.filter((e) => e.charity_enabled === true && !e.host_id))
+    const shaped = shapeEventsForAgent(events, takenByWave, Date.now(), await resolveCustomerBaseUrl(db, locationId), zone, raffles.byEvent)
+    return {
+      events: shaped,
+      ...(raffles.unreadable ? { raffles_unreadable: true } : {}),
+      ...(await givingPart(shaped.map((e) => e.event_id))),
+    }
   }
 
   if (toolName === 'get_my_event_registrations') {

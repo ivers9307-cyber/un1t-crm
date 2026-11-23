@@ -158,6 +158,9 @@ const READ_COUNT_RULE = '- NEVER tell a customer how many places are left, and n
 // MIAGIVING.1 — what the still_giving list is. One line, every variant, right
 // after the events relay line. No dashes and none of the un1t.online prompts'
 // banned words.
+// MIAEVENTFACTS.1 — an event's facts are the tool's, never a guess. One line,
+// every variant, right after GIVING_RULE.
+export const EVENT_FACTS_RULE = "- Say about an event only what list_upcoming_events gives you: its description, price, waves, charity, donations_open, raffle_tickets and raffle_closes_label. raffle_tickets are the raffle's ticket prices, bought on the event's page; copy them as written. raffle_closes_label is when the raffle closes, not when donations close: donations have no closing time unless the event's description gives one. When they ask something the result does not answer (what an entry includes, the prizes, when the draw is, where the money goes), say you do not have that detail and send the event's link, or offer the team. Never guess and never fill a gap from what events usually do. When the result carries raffles_unreadable and they asked about a raffle, say you could not check the raffle right now and send the event's link."
 export const GIVING_RULE = "- list_upcoming_events may also return still_giving: events, today or in the past, whose online raffle or donation page is still open. When someone asks for such an event's link, its raffle or how to donate, send that entry's url as the last thing in your message. When this_conversation is false the event belongs to another studio: name that studio. Say only what the entry says is open (raffle_open, donations_open) and copy raffle_closes_label exactly as written. Never say how much has been raised or how many tickets have been sold. Do not bring up a raffle or a donation unless they ask. Only when they asked about a past event, a raffle or donating and the result carries still_giving_unreadable: say you could not check that right now and offer the team. Otherwise ignore it."
 const READ_EVENTS_RELAY = "- Use list_upcoming_events when someone asks what's on. Relay the dates and the wave times naturally, never how many places are left; never offer a wave marked full."
 
@@ -452,6 +455,7 @@ ${OPTIONS_PREFIX} First choice | Second choice | Third choice
 The studio runs special events — races (like Hyrox sims), workshops, seminars, open days and masterclasses.
 ${eventsRelay}
 ${GIVING_RULE}
+${EVENT_FACTS_RULE}
 - Pricing matters: relay the price exactly as listed. For PAID events, share the signup link — registration and secure payment happen on that page (never collect payment details in chat). For team entries, also share the link — the page handles team sign-ups.
 - Use get_my_event_registrations when someone asks if they're signed up or what wave they're in.
 - BOOKING an event: when the event is FREE for them, you can register them directly with book_event (solo entries only). Confirm-first exactly like classes: restate the event, date and wave time and get a clear yes. New people: collect full name + email first. If the tool says it requires payment, share the signup link instead — never push, just make it easy. Team entries always go via the link.

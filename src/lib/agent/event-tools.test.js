@@ -15,7 +15,11 @@ vi.mock('@/lib/tenant-host', async (importOriginal) => {
 // is a stand-in that answers "nothing open" unless a case says otherwise.
 const { readStillGivingMock } = vi.hoisted(() => ({ readStillGivingMock: vi.fn() }))
 readStillGivingMock.mockResolvedValue({ entries: [], unreadable: false })
-vi.mock('./event-giving', () => ({ readStillGiving: readStillGivingMock }))
+const { readEventRafflesMock } = vi.hoisted(() => ({ readEventRafflesMock: vi.fn() }))
+readEventRafflesMock.mockResolvedValue({ byEvent: new Map(), unreadable: false })
+vi.mock('./event-giving', async (importOriginal) => ({
+  ...(await importOriginal()), readStillGiving: readStillGivingMock, readEventRaffles: readEventRafflesMock,
+}))
 import {
   EVENT_TOOLS,
   formatEventPrice,
@@ -330,5 +334,63 @@ describe('executeEventTool · list_upcoming_events still_giving (MIAGIVING.1)', 
     expect(res.events).toHaveLength(1)
     expect(res.still_giving_unreadable).toBe(true)
     expect(readStillGivingMock).toHaveBeenLastCalledWith(db, { threadLocationId: 'loc-a', excludeEventIds: ['e1'] })
+  })
+})
+
+// MIAEVENTFACTS.1 — an upcoming event carries its own words and its giving details.
+describe('shapeEventsForAgent · the event\'s own facts (MIAEVENTFACTS.1)', () => {
+  const NOW_MS = Date.UTC(2026, 10, 23, 13, 0, 0)
+  const base = {
+    id: 'e1', name: 'Charity Day', kind: 'race', slug: 'cd', race_date: '2026-12-05', active: true, location_id: 'loc-a', host_id: null,
+    registration_opens_at: null, registration_closes_at: null, member_pricing_enabled: false, member_fee_cents: null,
+    non_member_fee_cents: 2500, members_only: false, waves: [], status: 'published',
+  }
+
+  it('the description is the event\'s own text up to 1,500 characters, not the first 200', () => {
+    const text = `What is included: a workout and a smoothie. ${'More detail. '.repeat(40)}`
+    const [e] = shapeEventsForAgent([{ ...base, description: text }], {}, NOW_MS, 'https://x.test')
+    expect(e.description.length).toBeGreaterThan(400)
+    expect(e.description.length).toBeLessThanOrEqual(1500)
+    expect(e.description.startsWith('What is included: a workout and a smoothie.')).toBe(true)
+  })
+
+  it('a charity event says who it is for and how its raffle sells; a plain event carries none of it', () => {
+    const charityEvent = { ...base, charity_enabled: true, charity: { name: 'MS Ireland' } }
+    const raffle = { race_event_id: 'e1', location_id: 'loc-a', ticket_price_cents: 100, ticket_options: [{ tickets: 20, price_cents: 1000 }], sales_open: true, online_enabled: true, online_closes_at: '2026-12-06T15:00:00Z' }
+    const [e] = shapeEventsForAgent([charityEvent], {}, NOW_MS, 'https://x.test', 'Europe/Dublin', new Map([['e1', raffle]]))
+    expect(e).toMatchObject({ charity: 'MS Ireland', donations_open: true, raffle_open: true, raffle_tickets: ['1 for €1', '20 for €10'], raffle_closes_label: 'Sun 6 Dec, 15:00' })
+    const [plain] = shapeEventsForAgent([base], {}, NOW_MS, 'https://x.test', 'Europe/Dublin', new Map([['e1', raffle]]))
+    for (const k of ['charity', 'donations_open', 'raffle_open', 'raffle_tickets', 'raffle_closes_label']) expect(plain).not.toHaveProperty(k)
+  })
+})
+
+describe('executeEventTool · list_upcoming_events raffles (MIAEVENTFACTS.1)', () => {
+  const upcoming = [{
+    id: 'e1', name: 'Charity Day', kind: 'race', slug: 'cd', description: null, race_date: '2099-06-20', active: true, location_id: 'loc-a', host_id: null,
+    charity_enabled: true, charity: { name: 'MS Ireland' }, status: 'published',
+    registration_opens_at: null, registration_closes_at: null, member_pricing_enabled: false, member_fee_cents: null,
+    non_member_fee_cents: null, members_only: false, waves: [],
+  }]
+  const db = {
+    from(table) {
+      const b = { select() { return b }, eq() { return b }, gte() { return b }, in() { return b }, order() { return b }, limit() { return b }, then(resolve) { resolve({ data: table === 'race_events' ? upcoming : [], error: null }) } }
+      return b
+    },
+  }
+  const ctx = { db, locationId: 'loc-a', contactId: null, verifiedContactId: null, channel: 'whatsapp' }
+
+  it('an unreadable raffle read is said, never passed off as no raffle', async () => {
+    resolveCustomerBaseUrlMock.mockResolvedValueOnce('https://x.test')
+    readEventRafflesMock.mockResolvedValueOnce({ byEvent: new Map(), unreadable: true })
+    const res = await executeEventTool('list_upcoming_events', {}, ctx)
+    expect(res.events[0]).toMatchObject({ charity: 'MS Ireland', donations_open: true })
+    expect(res.events[0]).not.toHaveProperty('raffle_open')
+    expect(res.raffles_unreadable).toBe(true)
+  })
+
+  it('a readable one carries no flag', async () => {
+    resolveCustomerBaseUrlMock.mockResolvedValueOnce('https://x.test')
+    const res = await executeEventTool('list_upcoming_events', {}, ctx)
+    expect(res).not.toHaveProperty('raffles_unreadable')
   })
 })
