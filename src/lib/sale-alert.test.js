@@ -31,6 +31,7 @@ describe('buildSaleAlertPayload', () => {
     expect(p.body).toBe('Jordan · Stillorgan')
     expect(p.category).toBe('sale')
     expect(p.data).toEqual({ type: 'sale_new' })
+    expect(p.sound).toBe('cha_ching.wav')
   })
 
   it('shows cents only when the amount is not whole euros', () => {

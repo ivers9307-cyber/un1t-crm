@@ -104,7 +104,7 @@ beforeEach(() => {
   })
 })
 
-import { sendPush, resolvePushAllowedIds, readRoleRecipientIds } from './push.js'
+import { sendPush, resolvePushAllowedIds, readRoleRecipientIds, resolvePushSound, PUSH_CUSTOM_SOUNDS } from './push.js'
 
 describe('sendPush — ANDROID-VIS.1 token-less device rows (mig 565)', () => {
   it('never sends to a device row whose expo_push_token is NULL', async () => {
@@ -599,5 +599,18 @@ describe('readRoleRecipientIds — the same answer, with the read error', () => 
   it('no studio or no roles is an empty answer, not an error', async () => {
     expect(await readRoleRecipientIds(working, null, ['manager'])).toEqual({ ids: [], error: null })
     expect(await readRoleRecipientIds(working, 'loc1', [])).toEqual({ ids: [], error: null })
+  })
+})
+
+describe('resolvePushSound — SALEALERT.2 custom sounds', () => {
+  it('passes a listed sound file through', () => {
+    expect(PUSH_CUSTOM_SOUNDS).toContain('cha_ching.wav')
+    expect(resolvePushSound('cha_ching.wav')).toBe('cha_ching.wav')
+  })
+  it('keeps null silent', () => {
+    expect(resolvePushSound(null)).toBeNull()
+  })
+  it.each([undefined, 'default', 'other.wav', '', 42])('falls back to the default chime for %p', (v) => {
+    expect(resolvePushSound(v)).toBe('default')
   })
 })

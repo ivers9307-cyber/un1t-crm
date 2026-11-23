@@ -119,7 +119,16 @@ export default ({ config }) => ({
   // in lockstep (see the runtimeVersion log below). 🔴 The two-build rule
   // applies: build AND submit both `production` and `production-legacy`,
   // or the legacy record's installed base silently stops receiving OTAs.
-  version: '2.4.0',
+  // 2.4.1 (SALEALERT.2) — binary that carries the bundled notification
+  // sound (assets/sounds/cha_ching.wav, via the expo-notifications plugin's
+  // `sounds`). Build-config only: no new native module and no JS↔native
+  // change, so runtimeVersion STAYS 2.4.0 (the 2.3.1 / FCM-SETUP precedent)
+  // and every existing install keeps receiving OTAs. A phone still on a
+  // 2.4.0 binary plays the default chime for the sale push. Known cost of
+  // the bump: `version` reaches 2.4.0 binaries over the OTA, so devices
+  // report 2.4.1 before the store has it (staff-devices "outdated" nudge);
+  // native_build, not app_version, tells who has the sound.
+  version: '2.4.1',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
@@ -288,6 +297,18 @@ export default ({ config }) => ({
         // on transparent (Android masks it). iOS uses the app icon.
         icon: './assets/notification-icon.png',
         color: '#131316',
+        // SALEALERT.2 — the new-sale push names this file (src/lib/push.js
+        // PUSH_CUSTOM_SOUNDS). The plugin copies it into the iOS bundle at
+        // BUILD time, so it only exists in binaries cut after this line
+        // landed; an older binary cannot find it and iOS plays the default
+        // chime instead. Not an OTA input and not a reason to move the
+        // runtime lane: no JS depends on it. Android keeps the default
+        // sound until a channel with this sound is added (see
+        // shared/push-channels.js), which must wait for a binary that
+        // carries the file. The file NAME must be a valid Android resource
+        // name ([a-z0-9_] only): the plugin copies it into res/raw as is, and
+        // a hyphen fails the Android build.
+        sounds: ['./assets/sounds/cha_ching.wav'],
       },
     ],
     // PHASE2 — registered BEFORE the HealthKit plugin so Expo composes

@@ -89,7 +89,12 @@ const CATEGORY_CHANNELS = Object.freeze({
   inspection_due: 'reminders', // EQUIP-MAINT.3 — inspection-day cron nudge
   inspection_overdue: 'reminders', // …and the owners' "nobody did it" sweep
   lead: 'reminders',
-  sale: 'reminders', // SALEALERT.1 — own 'sales' channel arrives with the bundled sound
+  // SALEALERT.1/.2 — iOS gets the cha-ching from the message's `sound`.
+  // Android's sound belongs to the channel, and a channel is immutable once
+  // created, so a 'sales' channel must only be created by a binary that
+  // carries the sound file. Until Android push is live (FCM) and that is
+  // built, sales ride 'reminders' with the default sound.
+  sale: 'reminders',
   // Needs a manager decision.
   swap: 'approvals',
   time_off: 'approvals',
