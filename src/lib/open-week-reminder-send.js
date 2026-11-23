@@ -4,8 +4,11 @@
 // morning class or the morning of a lunch or afternoon class
 // (src/lib/open-week-reminders.js holds the timing).
 //
-// Who: a person with a granted (or staff-handled) claim on a LIVE open week
-// promo, for each of their BOOKED classes at that studio inside the week. The
+// Who: a person who signed up on a LIVE open week promo, for each of their
+// BOOKED classes at that studio inside the week. A signup whose grant failed
+// or is waiting on staff counts too (OPENWEEKREMIND.1, Richard, 23 Nov 2026:
+// three such people held a booked class and got no reminder); an ineligible
+// one does not. The
 // bookings are read from class_bookings, so a class they moved or booked by
 // hand is reminded and a cancelled one is not.
 //
@@ -37,12 +40,14 @@ const CHUNK = 200
 const UNIQUE_VIOLATION = '23505'
 // A send that failed this way can succeed later: release the claim.
 const PERMANENT_SKIPS = new Set(['no_phone', 'unnormalisable_phone'])
+// The signups reminded: the booking is what matters, not how the grant went.
+export const REMINDED_CLAIM_STATUSES = Object.freeze(['granted', 'handled', 'failed', 'help_requested'])
 
 async function pagedClaimants(db, { locationId, promoKey }) {
   const ids = new Set()
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db.from('corp_promo_claims').select('id, contact_id')
-      .eq('location_id', locationId).eq('promo_key', promoKey).in('status', ['granted', 'handled'])
+      .eq('location_id', locationId).eq('promo_key', promoKey).in('status', REMINDED_CLAIM_STATUSES)
       .order('id', { ascending: true }).range(from, from + PAGE - 1)
     if (error) return { ok: false, error }
     for (const r of data || []) if (r.contact_id) ids.add(r.contact_id)
