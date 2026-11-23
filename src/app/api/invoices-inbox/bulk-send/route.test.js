@@ -97,8 +97,8 @@ describe('POST /api/invoices-inbox/bulk-send', () => {
     rows[B] = ROW(B, { review_reasons: null })
     const { data } = await (await send([A, B])).json()
     expect(data.counts).toEqual({ ok: 2 })
-    expect(pushQueueRowToXero).toHaveBeenCalledWith(A)
-    expect(pushQueueRowToXero).toHaveBeenCalledWith(B)
+    expect(pushQueueRowToXero).toHaveBeenCalledWith(A, { rateLimitWaitMs: 65_000 })
+    expect(pushQueueRowToXero).toHaveBeenCalledWith(B, { rateLimitWaitMs: 65_000 })
   })
 
   it.each([[null], [[]]])('a credit note is never sent, whatever its reasons (%j)', async (reasons) => {
@@ -106,5 +106,50 @@ describe('POST /api/invoices-inbox/bulk-send', () => {
     const { data } = await (await send([A])).json()
     expect(data.results).toEqual([{ id: A, outcome: 'skipped', reason: 'credit_note' }])
     expect(pushQueueRowToXero).not.toHaveBeenCalled()
+  })
+
+  describe('XERO429.1 — Xero\'s rate limit', () => {
+    const limitedError = async (code = 'rate_limited') => {
+      const { XeroError } = await import('@/lib/xero/client')
+      return new XeroError('Xero is limiting requests right now. Wait a minute and try again.', { status: 429, code })
+    }
+
+    it('lets each push wait out a minute', async () => {
+      await send([A])
+      expect(pushQueueRowToXero).toHaveBeenCalledWith(A, { rateLimitWaitMs: 65_000 })
+    })
+
+    it('still limited after waiting: that row fails retryable and the rest are left untouched', async () => {
+      pushQueueRowToXero.mockRejectedValueOnce(await limitedError())
+      const { data } = await (await send([A, B])).json()
+      expect(data.results.find((r) => r.id === A)).toMatchObject({ outcome: 'failed', retry_state: 'data_approved' })
+      expect(data.results.find((r) => r.id === B)).toEqual({ id: B, outcome: 'skipped', reason: 'xero_busy' })
+      expect(pushQueueRowToXero).toHaveBeenCalledTimes(1)
+      expect(rows[B].status).toBe('extracted')
+    })
+
+    it('the daily limit stops the batch with its own reason', async () => {
+      pushQueueRowToXero.mockRejectedValueOnce(await limitedError('rate_limited_day'))
+      const { data } = await (await send([A, B])).json()
+      expect(data.results.find((r) => r.id === B)).toMatchObject({ outcome: 'skipped', reason: 'xero_daily_limit' })
+    })
+
+    it('an ordinary failure does not stop the batch', async () => {
+      pushQueueRowToXero.mockRejectedValueOnce(new Error('validation'))
+      const { data } = await (await send([A, B])).json()
+      expect(data.results.find((r) => r.id === B)).toMatchObject({ outcome: 'ok' })
+    })
+
+    it('stops starting rows when time is nearly up', async () => {
+      const real = Date.now
+      let t = real()
+      const spy = vi.spyOn(Date, 'now').mockImplementation(() => t)
+      pushQueueRowToXero.mockImplementationOnce(async (id) => { t += 230_000; return { billId: `bill-${id}`, billNumber: 'N', deepLinkUrl: 'u' } })
+      const { data } = await (await send([A, B])).json()
+      spy.mockRestore()
+      expect(data.results.find((r) => r.id === A)).toMatchObject({ outcome: 'ok' })
+      expect(data.results.find((r) => r.id === B)).toEqual({ id: B, outcome: 'skipped', reason: 'out_of_time' })
+      expect(rows[B].status).toBe('extracted')
+    })
   })
 })

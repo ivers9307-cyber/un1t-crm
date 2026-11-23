@@ -217,7 +217,38 @@ export async function listConnectedTenants(accessToken) {
 //
 // Uses the service-role client so this works even from background
 // jobs / API routes that don't have a user session.
-export async function withFreshToken(locationId) {
+// XERO429.1 — Xero limits each organisation to 60 calls a minute and 5 at
+// once, and answers 429 with a Retry-After header (seconds) and
+// X-Rate-Limit-Problem ('minute', 'concurrent', 'day' or 'appminute'). A 429
+// means the request was NOT processed, so repeating it (a create included)
+// cannot make a duplicate. xfetch waits and repeats it when the wait fits the
+// caller's budget:
+//   - default budget: a few seconds, enough for a 'concurrent' hit, and short
+//     enough for any interactive route;
+//   - a long-running caller (bulk send) passes a larger `rateLimitWaitMs` so a
+//     'minute' hit is waited out.
+// The daily limit is never waited for. When the wait does not fit, the error
+// carries code 'rate_limited' and `retryAfterMs` so the caller can stop.
+export const DEFAULT_RATE_LIMIT_WAIT_MS = 4_000
+export const MAX_RATE_LIMIT_ATTEMPTS = 3
+const RATE_LIMIT_MESSAGE = 'Xero is limiting requests right now. Wait a minute and try again.'
+const RATE_LIMIT_DAY_MESSAGE = "Xero's daily request limit has been reached. Try again tomorrow."
+
+/** How long a 429 asks us to wait, in ms (2 s when it does not say). */
+export function retryAfterMsOf(res) {
+  const raw = res?.headers?.get?.('retry-after')
+  const secs = Number(raw)
+  return Number.isFinite(secs) && secs >= 0 && raw !== null && raw !== '' ? Math.ceil(secs * 1000) : 2_000
+}
+
+/**
+ * @param {string} locationId
+ * @param {{ rateLimitWaitMs?: number, sleep?: (ms: number) => Promise<void> }} [options]
+ *   rateLimitWaitMs: the longest one call may wait on a 429 before giving up.
+ */
+export async function withFreshToken(locationId, options = {}) {
+  const rateLimitWaitMs = Number.isFinite(options.rateLimitWaitMs) ? Number(options.rateLimitWaitMs) : DEFAULT_RATE_LIMIT_WAIT_MS
+  const sleep = options.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
   const db = createServerClient()
   const { data: conn, error } = await db
     .from('xero_connections')
@@ -280,7 +311,23 @@ export async function withFreshToken(locationId) {
       headers['Content-Type'] = headers['Content-Type'] || 'application/json'
       body = JSON.stringify(body)
     }
-    const res = await fetch(url, { ...opts, headers, body })
+    let res
+    for (let attempt = 1; ; attempt++) {
+      res = await fetch(url, { ...opts, headers, body })
+      if (res.status !== 429) break
+      const problem = String(res.headers?.get?.('x-rate-limit-problem') || '').toLowerCase()
+      const waitMs = retryAfterMsOf(res)
+      const daily = problem === 'day'
+      if (daily || attempt >= MAX_RATE_LIMIT_ATTEMPTS || waitMs > rateLimitWaitMs) {
+        await res.text().catch(() => '')
+        throw new XeroError(daily ? RATE_LIMIT_DAY_MESSAGE : RATE_LIMIT_MESSAGE, {
+          status: 429, code: daily ? 'rate_limited_day' : 'rate_limited', body: { problem, retryAfterMs: waitMs, path },
+        })
+      }
+      await res.text().catch(() => '') // release the connection before waiting
+      // A little past what Xero asked, so the window has really rolled over.
+      await sleep(waitMs + 250)
+    }
     if (opts.responseType === 'buffer') {
       if (!res.ok) {
         const text = await res.text().catch(() => '')
