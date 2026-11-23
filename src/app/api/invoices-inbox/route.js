@@ -113,16 +113,26 @@ export async function GET(request) {
   // `?location_id=<id>` query param overrides (allows a master to
   // address a specific location via API URL), but only if they
   // have access to it.
-  let effectiveLocationId = locationFilter || scope.activeLocationId
-  if (locationFilter && !scope.isMaster && !scope.permittedLocations.includes(locationFilter)) {
-    return NextResponse.json({ success: false, error: 'Forbidden — not your location' }, { status: 403 })
+  // INVSCREEN.1 — `?location_id=all` is every studio this user may open the
+  // inbox for (a master: every studio they belong to). The screen's "All
+  // locations" asks for this; it used to send nothing and silently got the
+  // active studio only, so a queue elsewhere looked empty.
+  if (locationFilter === 'all') {
+    const ids = scope.isMaster ? (user.locations || []).map((l) => l.id) : scope.permittedLocations
+    if (ids.length === 0) return NextResponse.json({ success: true, data: [] })
+    query = query.in('location_id', ids)
+  } else {
+    const effectiveLocationId = locationFilter || scope.activeLocationId
+    if (locationFilter && !scope.isMaster && !scope.permittedLocations.includes(locationFilter)) {
+      return NextResponse.json({ success: false, error: 'Forbidden — not your location' }, { status: 403 })
+    }
+    if (!effectiveLocationId) {
+      // No active location set + no explicit filter → nothing to show.
+      // Better than silently returning everything for master.
+      return NextResponse.json({ success: true, data: [] })
+    }
+    query = query.eq('location_id', effectiveLocationId)
   }
-  if (!effectiveLocationId) {
-    // No active location set + no explicit filter → nothing to show.
-    // Better than silently returning everything for master.
-    return NextResponse.json({ success: true, data: [] })
-  }
-  query = query.eq('location_id', effectiveLocationId)
   if (statusFilter) {
     const statuses = statusFilter.split(',').map((s) => s.trim()).filter(Boolean)
     if (statuses.length > 0) query = query.in('status', statuses)

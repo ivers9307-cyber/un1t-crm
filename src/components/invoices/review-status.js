@@ -100,3 +100,42 @@ export function canRejectOne(row) {
   const reasons = reasonsOf(row)
   return reasons.includes('unreadable') || reasons.includes('duplicate_file')
 }
+
+// INVSCREEN.1 — the Awaiting action list is split so repeated signature images
+// and unreadable files do not bury the invoices.
+const SET_ASIDE_REASONS = ['duplicate_file', 'unreadable']
+
+/** A row the reader stopped on: a repeat of a file already queued, or a file it could not read. */
+export function isSetAside(row) {
+  if (!row || !UNREAD_STATUSES.has(row.status) || row.analysis_queued_at) return false
+  const reasons = reasonsOf(row)
+  return SET_ASIDE_REASONS.some((r) => reasons.includes(r))
+}
+
+/** A row that shows the green Ready chip. */
+export function isReady(row) {
+  return reasonChips(row).some((c) => c.key === 'ready')
+}
+
+export const PILES = Object.freeze([
+  { key: 'review', label: 'To review' },
+  { key: 'ready', label: 'Ready' },
+  { key: 'aside', label: 'Duplicates and unreadable' },
+])
+
+/** Whether a row belongs in a pile. 'review' is everything not set aside; 'ready' is part of it. */
+export function inPile(row, pile) {
+  if (pile === 'aside') return isSetAside(row)
+  if (pile === 'ready') return isReady(row)
+  return !isSetAside(row)
+}
+
+/** How many rows each pile holds. */
+export function pileCounts(rows) {
+  const list = Array.isArray(rows) ? rows : []
+  return {
+    review: list.filter((r) => inPile(r, 'review')).length,
+    ready: list.filter((r) => inPile(r, 'ready')).length,
+    aside: list.filter((r) => inPile(r, 'aside')).length,
+  }
+}

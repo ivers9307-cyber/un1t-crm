@@ -7,7 +7,7 @@ import {
   unreadPanel,
   needsALookSkipped,
   isBeingRead,
-  canRejectOne,
+  canRejectOne, inPile, isSetAside, isReady, pileCounts, PILES
 } from './review-status'
 
 const P = '2026-11-22T09:00:00Z'
@@ -227,3 +227,40 @@ describe('canRejectOne', () => {
     expect(canRejectOne(null)).toBe(false)
   })
 })
+
+describe('INVSCREEN.1 — piles of the Awaiting action list', () => {
+  const ready = { status: 'extracted', prepared_at: '2026-11-23T10:00:00Z', review_reasons: [], extracted_fields: {} }
+  const flagged = { status: 'extracted', prepared_at: '2026-11-23T10:00:00Z', review_reasons: ['new_supplier'], extracted_fields: {} }
+  const legacy = { status: 'extracted', prepared_at: null, review_reasons: [], extracted_fields: {} }
+  const dup = { status: 'received', review_reasons: ['duplicate_file'], analysis_queued_at: null }
+  const unreadable = { status: 'quality_approved', review_reasons: ['unreadable'], analysis_queued_at: null }
+  const reading = { status: 'received', review_reasons: ['unreadable'], analysis_queued_at: '2026-11-23T10:00:00Z' }
+  const untouched = { status: 'received', review_reasons: [], analysis_queued_at: null }
+  const numberDup = { status: 'extracted', prepared_at: '2026-11-23T10:00:00Z', review_reasons: ['duplicate_number'], extracted_fields: {} }
+
+  it('sets aside only an unread row stopped as a repeated or unreadable file', () => {
+    expect([dup, unreadable].every(isSetAside)).toBe(true)
+    expect([ready, flagged, legacy, reading, untouched, numberDup, null].some(isSetAside)).toBe(false)
+  })
+
+  it('Ready is the green chip: checked on arrival with nothing flagged', () => {
+    expect(isReady(ready)).toBe(true)
+    expect([flagged, legacy, dup, untouched].some(isReady)).toBe(false)
+  })
+
+  it('every row is in exactly one of To review and Duplicates and unreadable', () => {
+    for (const r of [ready, flagged, legacy, dup, unreadable, reading, untouched, numberDup]) {
+      expect(inPile(r, 'review')).toBe(!inPile(r, 'aside'))
+    }
+  })
+
+  it('counts each pile, with Ready inside To review', () => {
+    expect(pileCounts([ready, flagged, legacy, dup, unreadable, reading])).toEqual({ review: 4, ready: 1, aside: 2 })
+    expect(pileCounts(null)).toEqual({ review: 0, ready: 0, aside: 0 })
+  })
+
+  it('names three piles', () => {
+    expect(PILES.map((p) => p.key)).toEqual(['review', 'ready', 'aside'])
+  })
+})
+
