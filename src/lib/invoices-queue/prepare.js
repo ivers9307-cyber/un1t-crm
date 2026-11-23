@@ -24,7 +24,7 @@ import { extractInvoiceFieldsFromBytes, scoreExtractionConfidence } from '@/lib/
 import { sha256Hex } from '@/lib/inbound-invoices'
 import { fieldReasons, mergeReasons } from '@/lib/invoices-queue/readiness'
 import { resolveBillTaxType } from '@/lib/invoices-queue/vat'
-import { resolveExtractionDefaults, getSupplierDefault } from '@/lib/invoices-queue/supplier-defaults'
+import { contactFromXeroBill, defaultsForContact, resolveExtractionDefaults, getSupplierDefault } from '@/lib/invoices-queue/supplier-defaults'
 import { findXeroBillByNumber } from '@/lib/invoices-queue/push-xero'
 import { withFreshToken } from '@/lib/xero/client'
 import { logWarn, logError } from '@/lib/log'
@@ -368,23 +368,39 @@ async function prepare(db, row, deps, { write, unreadable, hashPatch, nowIso }) 
   // 7. VAT.
   const taxRates = await loadTaxRates(db, locationId)
   const vat = applyDerivedTaxType(fields, taxRates)
-  const rememberedTaxType = await rememberedTaxTypeFor(db, locationId, fields)
 
   // 8. Duplicate by number, then already in Xero.
   /** @type {string[]} */
   const duplicateReasons = []
+  /** @type {any} */
+  let billContact = null
   const duplicateOf = await findNumberDuplicate(db, row, fields)
   if (duplicateOf) duplicateReasons.push('duplicate_number')
   if (!blank(fields.invoice_number)) {
     try {
       const lookup = (deps.xero || defaultXero).findBill(locationId, String(fields.invoice_number).trim())
       const bill = await withTimeout(lookup, deps.xeroTimeoutMs ?? XERO_LOOKUP_TIMEOUT_MS)
-      if (bill) duplicateReasons.push('already_in_xero')
+      if (bill) {
+        duplicateReasons.push('already_in_xero')
+        billContact = bill.Contact?.ContactID ? bill.Contact : null
+      }
     } catch (e) {
       // No connection, a token failure, a network error or a timeout: tried once, no reason raised.
       logWarn(MODULE, 'could not look the bill up in Xero', { queue_id: row.id, error: messageOf(e) })
     }
   }
+  // The bill in Xero names its supplier. When no rule matched one, it is used
+  // only if it is an active contact here whose name agrees with the document:
+  // two suppliers can share an invoice number.
+  if (billContact && !fields.xero_contact_ref) {
+    try {
+      const contact = await contactFromXeroBill(db, locationId, fields.supplier_name, billContact)
+      if (contact) fields = { ...fields, ...(await defaultsForContact(db, locationId, contact)) }
+    } catch (e) {
+      logWarn(MODULE, 'could not take the supplier from the Xero bill', { queue_id: row.id, error: messageOf(e) })
+    }
+  }
+  const rememberedTaxType = await rememberedTaxTypeFor(db, locationId, fields)
 
   // 9. Write.
   const reasons = mergeReasons(fieldReasons(fields, { vat, rememberedTaxType, taxRates }), duplicateReasons)
@@ -407,10 +423,12 @@ async function prepare(db, row, deps, { write, unreadable, hashPatch, nowIso }) 
  *
  * @param {import('@/lib/supabase').Db} db  service-role client
  * @param {any} row  the invoices_queue row, with the edited extracted_fields
+ * @param {{ rematchSupplier?: boolean }} [opts]  rematchSupplier: look again
+ *   for the supplier of a row that has none, and re-stamp prepared_at
  * @returns {Promise<{ reasons: string[], fields: any }>} the reasons and the
  *   extracted_fields as stored afterwards (the row's own when nothing was written)
  */
-export async function recheckInvoiceRow(db, row) {
+export async function recheckInvoiceRow(db, row, opts = {}) {
   /** @type {string[]} */
   const existing = Array.isArray(row?.review_reasons) ? row.review_reasons : []
   const unchanged = () => ({ reasons: existing, fields: row?.extracted_fields ?? null })
@@ -418,6 +436,17 @@ export async function recheckInvoiceRow(db, row) {
     if (!row || row.status !== 'extracted') return unchanged()
     const locationId = row.location_id
     const fields = { ...(row.extracted_fields || {}) }
+    // A later look for the supplier: only for a row that has none, so a
+    // person's pick is never replaced.
+    let supplierFound = false
+    if (opts.rematchSupplier === true && !fields.xero_contact_ref) {
+      /** @type {any} */
+      const found = await resolveExtractionDefaults(db, locationId, fields.supplier_name)
+      if (found.xero_contact_ref) {
+        Object.assign(fields, found)
+        supplierFound = true
+      }
+    }
     const taxRates = await loadTaxRates(db, locationId)
 
     // A person's tax type, or a legacy one with no source, is left exactly as it is.
@@ -435,9 +464,12 @@ export async function recheckInvoiceRow(db, row) {
       duplicateOf ? ['duplicate_number'] : [],
     )
 
-    const patch = vatChanged
-      ? { review_reasons: reasons, duplicate_of_id: duplicateOf, extracted_fields: fields }
-      : { review_reasons: reasons, duplicate_of_id: duplicateOf }
+    const fieldsChanged = vatChanged || supplierFound
+    // The supplier pass re-stamps the row so it is looked at once per change.
+    const stamp = opts.rematchSupplier === true ? { prepared_at: new Date().toISOString() } : {}
+    const patch = fieldsChanged
+      ? { review_reasons: reasons, duplicate_of_id: duplicateOf, extracted_fields: fields, ...stamp }
+      : { review_reasons: reasons, duplicate_of_id: duplicateOf, ...stamp }
     const { data, error } = await db
       .from('invoices_queue')
       .update(patch)
@@ -451,7 +483,7 @@ export async function recheckInvoiceRow(db, row) {
     }
     // The row moved on before the write: what is stored still stands.
     if (!Array.isArray(data) || data.length === 0) return unchanged()
-    return { reasons, fields: vatChanged ? fields : row.extracted_fields ?? null }
+    return { reasons, fields: fieldsChanged ? fields : row.extracted_fields ?? null }
   } catch (e) {
     logError(MODULE, 'recheck failed', { queue_id: row?.id, error: messageOf(e) })
     return unchanged()
