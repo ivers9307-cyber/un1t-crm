@@ -1213,6 +1213,12 @@ describe('what is on offer right now (MIAPAGES.1)', () => {
     expect(GIVING_RULE).toContain('raffle_closes_label')
     expect(GIVING_RULE).toContain('this_conversation')
     expect(GIVING_RULE).toMatch(/never say how much has been raised/i)
+    // Richard, 23 Nov 2026: the raffle is part of the event. Someone asking about
+    // the event is told what is open for it; only an unrelated chat is left alone.
+    expect(GIVING_RULE).toContain('The raffle and donations are part of the event')
+    expect(GIVING_RULE).toContain('tell them what is open for it right now')
+    expect(GIVING_RULE).not.toContain('Do not bring up a raffle or a donation unless they ask')
+    expect(GIVING_RULE).toContain('when the conversation is not about that event')
     // An unreadable list matters only to someone who asked about giving.
     expect(GIVING_RULE).toContain('Only when they asked about an event, a raffle or donating')
     expect(GIVING_RULE).toContain('Otherwise ignore it')
