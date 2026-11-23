@@ -58,6 +58,7 @@ import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account
 import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 import { SEND_BOOKING_FLOW_TOOL, SEND_BOOKING_FLOW_TOOL_NAME, bookingFlowOffered, executeSendBookingFlow } from './booking-flow'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
+import { OFFER_TOOLS, OFFER_TOOL_NAMES, executeOfferTool } from './offer-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
 import {
   BOOKING_SYSTEM_TOOL_NAMES, deriveNoBookingTools, membershipAtOtherStudio,
@@ -130,7 +131,9 @@ export const AGENT_THINKING = { type: 'adaptive' }
 // Adopting it means shedding 5 optional parameters — several are deliberately
 // optional (verify_identity takes email OR surname) — or going strict on a
 // subset of tools. See tool-schemas.test.js, which tracks the budget.
-export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOOLS, ...CARD_TOOLS]
+// MIAPAGES.1 — OFFER_TOOLS sits before CARD_TOOLS: the last tool carries the
+// cache breakpoint and stays the same tool.
+export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOOLS, ...OFFER_TOOLS, ...CARD_TOOLS]
 // MIA-HYGIENE.5 — 1h TTL on this cross-turn breakpoint (see prompt.js
 // buildCachedSystem for the measurement). The intra-turn tool_result marker
 // further down keeps the 5-minute default: it caches a prefix that only lives
@@ -1315,6 +1318,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                 ? await (await import('./purchase-intents')).executePurchaseTool(block.name, block.input || {}, execCtx)
                 : ACCOUNT_TOOL_NAMES.has(block.name)
                 ? await executeAccountTool(block.name, block.input || {}, execCtx)
+                // MIAPAGES.1 — the live pages and offers read; never throws.
+                : OFFER_TOOL_NAMES.has(block.name)
+                  ? await executeOfferTool(block.name, block.input || {}, execCtx)
                 : EVENT_TOOL_NAMES.has(block.name)
                   ? await executeEventTool(block.name, block.input || {}, execCtx)
                   : CARD_TOOL_NAMES.has(block.name)

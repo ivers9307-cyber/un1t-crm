@@ -47,6 +47,7 @@ describe('page-save', () => {
       blocks: [],
       chrome: {
         tone: 'dark', logo_url: null, logo_alt: null, logo_width_px: null, show_instagram_feed: false,
+        mia_note: null, mia_priority: null,
         un1t_terms: { terms_label: 'x', terms_link_label: null, waiver_link_label: null, terms_required_message: null, legal_unavailable_message: null },
       },
     })
@@ -56,5 +57,20 @@ describe('page-save', () => {
   it('studioRowSaveBody keeps a stored Meta page URL and drops blank attribution', () => {
     expect(studioRowSaveBody({ enabled: 1, offer: null, attribution: { tag: '', lead_source: ' meta ' }, storedAttribution: { event_source_url: 'https://x/y' } }))
       .toEqual({ enabled: true, offer: {}, attribution: { lead_source: 'meta', event_source_url: 'https://x/y' } })
+  })
+
+  // MIAPAGES.1 — the two things Mia reads about a page.
+  it('pageSaveBody sends the Mia note trimmed (blank = null) and the priority (anything but lead or ask_only = null)', () => {
+    const base = { page: { kind: 'campaign', chrome: { mia_note: 'old', mia_priority: 'lead' } }, title: 'T', blocks: [] }
+    expect(pageSaveBody({ ...base, miaNote: '  People over 50.  ', miaPriority: 'ask_only' }).chrome).toMatchObject({ mia_note: 'People over 50.', mia_priority: 'ask_only' })
+    expect(pageSaveBody({ ...base, miaNote: '   ', miaPriority: '' }).chrome).toMatchObject({ mia_note: null, mia_priority: null })
+    expect(pageSaveBody({ ...base, miaNote: 'x', miaPriority: 'high' }).chrome.mia_priority).toBeNull()
+    expect(pageSaveBody({ ...base, miaNote: 'x', miaPriority: 'lead' }).chrome.mia_priority).toBe('lead')
+  })
+
+  it('pageEditSnapshot changes when the Mia note or priority changes', () => {
+    const state = { title: 'T', blocks: [], logoUrl: '', logoAlt: '', logoWidthPx: '', showInstagramFeed: true, terms: {}, miaNote: '', miaPriority: '' }
+    expect(pageEditSnapshot({ ...state, miaNote: 'x' })).not.toBe(pageEditSnapshot(state))
+    expect(pageEditSnapshot({ ...state, miaPriority: 'lead' })).not.toBe(pageEditSnapshot(state))
   })
 })
