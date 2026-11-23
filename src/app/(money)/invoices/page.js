@@ -56,14 +56,10 @@ export default async function InvoicesInboxPage() {
     }
   }
 
+  // ONESCREEN.1 — full width, no page header: the screen's own toolbar carries
+  // the title, and the list, document and fields share one screen height.
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold text-un1t-text">Invoices</h1>
-        <p className="text-sm text-un1t-subtle mt-1">
-          Forward supplier invoices to the address below. Each one is read and checked as it arrives.
-        </p>
-      </header>
+    <div className="px-4 pb-4 xl:px-6 xl:pb-0">
       <InvoicesInbox
         locations={locations}
         isMaster={isMaster}

@@ -228,7 +228,7 @@ describe('canRejectOne', () => {
   })
 })
 
-describe('INVSCREEN.1 — piles of the Awaiting action list', () => {
+describe('INVSCREEN.1 — piles of the To do list', () => {
   const ready = { status: 'extracted', prepared_at: '2026-11-23T10:00:00Z', review_reasons: [], extracted_fields: {} }
   const flagged = { status: 'extracted', prepared_at: '2026-11-23T10:00:00Z', review_reasons: ['new_supplier'], extracted_fields: {} }
   const legacy = { status: 'extracted', prepared_at: null, review_reasons: [], extracted_fields: {} }
