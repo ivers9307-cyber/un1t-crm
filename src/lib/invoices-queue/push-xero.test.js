@@ -52,6 +52,7 @@ const mockDb = {
         // A thenable that also takes .is().select() (markCarDocumentInXero).
         const done = { error: null }
         const tail = {
+          eq: vi.fn(() => tail),
           is: vi.fn(() => tail),
           select: vi.fn(() => Promise.resolve({ data: [{ id: 'stamped' }], error: null })),
           then: (res, rej) => Promise.resolve(done).then(res, rej),
@@ -463,6 +464,13 @@ describe('pushQueueRowToXero — new contact branch', () => {
     // Local xero_contacts cache backfilled so the next picker
     // fetch finds the new contact without a manual Refresh.
     expect(dbCaptured.upserts.find((u) => u.table === 'xero_contacts')).toBeTruthy()
+    // NEWSUPPLIER.1 — the row now holds the created supplier as an existing
+    // contact, and the result says so, so its coding can be remembered.
+    const resolved = { kind: 'existing', xero_contact_id: 'C-NEW', name: 'Brand New Co' }
+    expect(r.supplierResolved).toEqual(resolved)
+    const stored = dbCaptured.updates.find((u) => u.table === 'invoices_queue' && u.patch.extracted_fields?.xero_contact_ref)
+    expect(stored.patch.extracted_fields.xero_contact_ref).toEqual(resolved)
+    expect(stored.patch.extracted_fields.xero_account_id).toBe('A1')
   })
 
   it('handles race when contact already exists in Xero (kind=new, but Xero has the same name)', async () => {

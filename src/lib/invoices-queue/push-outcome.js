@@ -27,6 +27,22 @@ import { recordSupplierDefault } from './supplier-defaults.js'
  * >}
  */
 export async function recordPushOutcome(db, id, pushResult, { select = 'id' } = {}) {
+  // NEWSUPPLIER.1 — approval remembers a supplier's coding before the push,
+  // when a supplier picked as new has no Xero id yet. Now that the push has
+  // created it, remember it here. Best effort: never changes the outcome.
+  if (pushResult?.supplierResolved?.xero_contact_id) {
+    try {
+      const { data: sent } = await db.from('invoices_queue').select('id, location_id, extracted_fields').eq('id', id).maybeSingle()
+      if (sent) {
+        await rememberSupplierCoding(db, {
+          ...sent,
+          extracted_fields: { ...(sent.extracted_fields || {}), xero_contact_ref: pushResult.supplierResolved },
+        })
+      }
+    } catch (e) {
+      console.warn(`[push-outcome ${id}] could not remember the new supplier's coding: ${e?.message || e}`)
+    }
+  }
   const now = new Date().toISOString()
   const billFields = {
     xero_bill_id: pushResult.billId,

@@ -375,6 +375,8 @@ export async function pushQueueRowToXero(queueId, options = {}) {
 
   const deepLink = xeroBillDeepLink
 
+  /** @type {{ kind: 'existing', xero_contact_id: string, name: string }|null} */
+  let supplierResolved = null
   let billId = row.xero_bill_id || null
   let billNumber = row.xero_bill_number || fields.invoice_number || null
   let deepLinkUrl = row.xero_deep_link_url || (billId ? deepLink(billId) : null)
@@ -396,6 +398,21 @@ export async function pushQueueRowToXero(queueId, options = {}) {
     const supplierContactId = await resolveContactId({
       xfetch, db, locationId: row.location_id, contactRef: fields.xero_contact_ref,
     })
+    // NEWSUPPLIER.1 — a supplier created (or found) on send now has a Xero
+    // contact id. Store it on the row as an existing contact, so the row no
+    // longer says "will be created", a retry reuses it, and the supplier's
+    // coding can be remembered for the next invoice. Best effort: the bill
+    // must still go even if this write fails.
+    if (fields.xero_contact_ref?.kind === 'new' && supplierContactId) {
+      const resolvedRef = { kind: 'existing', xero_contact_id: supplierContactId, name: String(fields.xero_contact_ref.name || '').trim() }
+      const { error: refErr } = await db
+        .from('invoices_queue')
+        .update({ extracted_fields: { ...fields, xero_contact_ref: resolvedRef } })
+        .eq('id', queueId)
+        .eq('status', 'data_approved')
+      if (refErr) logError('push-xero', 'could not store the created supplier on the row', { queue_id: queueId, message: refErr.message })
+      else supplierResolved = resolvedRef
+    }
 
     // Resolve each line's Xero tax type from the account cache so the
     // draft books under the right rate (0%-VAT → 'NONE'), instead of
@@ -490,6 +507,8 @@ export async function pushQueueRowToXero(queueId, options = {}) {
     deepLinkUrl,
     attachmentError,
     sentTo: conn?.tenant_name || conn?.tenant_id || null,
+    // Set when this push created or found a supplier that was picked as new.
+    supplierResolved,
   }
 }
 

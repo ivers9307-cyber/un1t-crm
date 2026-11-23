@@ -46,6 +46,41 @@ describe('recordPushOutcome', () => {
   })
 })
 
+describe('recordPushOutcome — a supplier created on send (NEWSUPPLIER.1)', () => {
+  const resolved = { kind: 'existing', xero_contact_id: 'C-NEW', name: 'Brand New Co' }
+  const withRow = (row) => {
+    const db = fakeDb()
+    const from = db.from
+    db.from = () => {
+      const q = from()
+      q.select = () => q
+      q.maybeSingle = async () => ({ data: row, error: null })
+      const eq = q.eq
+      // The forward write still ends in .select(); keep that awaitable.
+      q.eq = (...a) => { eq(...a); return Object.assign(q, { select: (cols) => (cols === 'id, location_id, extracted_fields' ? q : Promise.resolve({ data: [{ id: 'q1' }], error: null })) }) }
+      return q
+    }
+    return db
+  }
+  const sent = { id: 'q1', location_id: 'loc1', extracted_fields: { xero_contact_ref: { kind: 'new', name: 'Brand New Co' }, xero_account_id: 'a1', account_code: '400' } }
+
+  it('remembers the coding under the created contact', async () => {
+    const out = await recordPushOutcome(withRow(sent), 'q1', { ...PUSHED, supplierResolved: resolved })
+    expect(out.outcome).toBe('ok')
+    expect(recordSupplierDefault).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: 'loc1', xeroContactId: 'C-NEW', xeroAccountId: 'a1', supplierName: 'Brand New Co' }))
+  })
+
+  it('does nothing extra for an ordinary push', async () => {
+    await recordPushOutcome(fakeDb(), 'q1', PUSHED)
+    expect(recordSupplierDefault).not.toHaveBeenCalled()
+  })
+
+  it('a failure to remember never changes the outcome', async () => {
+    recordSupplierDefault.mockRejectedValueOnce(new Error('memory down'))
+    expect((await recordPushOutcome(withRow(sent), 'q1', { ...PUSHED, supplierResolved: resolved })).outcome).toBe('ok')
+  })
+})
+
 describe('rememberSupplierCoding', () => {
   it('records an existing contact with a picked account', async () => {
     const row = { location_id: 'loc1', extracted_fields: { xero_contact_ref: { kind: 'existing', xero_contact_id: 'c1', name: 'Acme' }, xero_account_id: 'a1', account_code: '400', category: 'Supplies' } }
