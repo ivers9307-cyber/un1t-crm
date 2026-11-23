@@ -1,11 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   PENDING_STATUSES,
-  MOBILE_EXTRACT_SYNC_CAP,
   isExtractable,
-  splitExtractIds,
   xeroSupplierUnresolved,
-  mergeExtractCounts,
+  queueCounts,
   queueStatusMeta,
   SOURCE_LABEL,
 } from './invoices-queue'
@@ -28,23 +26,6 @@ describe('isExtractable', () => {
   it('handles null/undefined', () => {
     expect(isExtractable(null)).toBe(false)
     expect(isExtractable(undefined)).toBe(false)
-  })
-})
-
-describe('splitExtractIds', () => {
-  it('splits at the mobile sync cap', () => {
-    const ids = ['a', 'b', 'c', 'd', 'e']
-    const { syncIds, queueIds } = splitExtractIds(ids)
-    expect(syncIds).toEqual(ids.slice(0, MOBILE_EXTRACT_SYNC_CAP))
-    expect(queueIds).toEqual(ids.slice(MOBILE_EXTRACT_SYNC_CAP))
-  })
-  it('queues nothing when under the cap', () => {
-    expect(splitExtractIds(['a'])).toEqual({ syncIds: ['a'], queueIds: [] })
-    expect(splitExtractIds([])).toEqual({ syncIds: [], queueIds: [] })
-    expect(splitExtractIds(null)).toEqual({ syncIds: [], queueIds: [] })
-  })
-  it('honours an explicit cap', () => {
-    expect(splitExtractIds(['a', 'b', 'c'], 1)).toEqual({ syncIds: ['a'], queueIds: ['b', 'c'] })
   })
 })
 
@@ -74,16 +55,15 @@ describe('xeroSupplierUnresolved', () => {
   })
 })
 
-describe('mergeExtractCounts', () => {
-  it('maps sync ok → extracted and merges the queued leg', () => {
-    expect(mergeExtractCounts(
-      { counts: { ok: 2, failed: 1, skipped: 1 } },
-      { counts: { queued: 4, skipped: 1 } },
-    )).toEqual({ extracted: 2, failed: 1, skipped: 2, queued: 4 })
+describe('queueCounts (INVMOBILE.1)', () => {
+  it('keeps queued, failed and skipped, and omits zero counts', () => {
+    expect(queueCounts({ counts: { queued: 4, failed: 1, skipped: 0 } })).toEqual({ queued: 4, failed: 1 })
+    expect(queueCounts({ counts: { skipped: 2 } })).toEqual({ skipped: 2 })
   })
-  it('omits zero-count keys', () => {
-    expect(mergeExtractCounts({ counts: { ok: 1 } }, null)).toEqual({ extracted: 1 })
-    expect(mergeExtractCounts(null, null)).toEqual({})
+  it('ignores other keys and a missing payload', () => {
+    expect(queueCounts({ counts: { ok: 3, queued: 1 } })).toEqual({ queued: 1 })
+    expect(queueCounts(null)).toEqual({})
+    expect(queueCounts({})).toEqual({})
   })
 })
 
