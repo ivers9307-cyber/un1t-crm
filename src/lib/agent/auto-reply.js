@@ -767,6 +767,8 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     const { messages, reason: historyReason, trailing } = buildReplyTurnMessages(history || [], {
       maxMessages: MAX_HISTORY,
       answeredThroughIso,
+      // MIAHISTORYDATES.1 — earlier days carry their date, on the studio's clock.
+      zone,
     })
     if (historyReason) return { handled: false, reason: historyReason, ...(trailing ? { trailing } : {}) }
 

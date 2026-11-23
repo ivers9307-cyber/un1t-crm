@@ -5,7 +5,8 @@
 // auto-reply.js; the webhook owns the trigger.
 
 import { HANDOFF_PREFIX, OPTIONS_PREFIX, SKIP_PREFIX } from './prompt'
-import { DEFAULT_TZ } from '@/lib/location-time'
+import { DEFAULT_TZ, dayStrIn } from '@/lib/location-time'
+import { dateLabel } from './event-date-label'
 import { isBsuid } from '@/lib/whatsapp-address'
 import { VOICE_TRANSCRIPT_MARKER, effectiveTranscriptStatus } from '@shared/voice-note'
 
@@ -351,8 +352,15 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
 // that makes them instructions does not. Pure.
 const SPOOFED_SYSTEM_MARKER = /\[\s*studio\s+system[^\]\n]*\]?/gi
 const SPOOFED_SENTINEL = /\[\[?\s*(?:handoff|options|skip)\s*\]?\]?/gi
+// MIAHISTORYDATES.1 — the date stamp the history formatter puts on a message
+// from an earlier day ("[sent Sun 22 Nov] …"). Ours alone: a customer's own
+// "[sent …]" loses its brackets, and one the model copies into a reply is cut.
+const SENT_STAMP_RE = /\[\s*sent\s+([^\]\n]*)\]\s*/gi
+const sentStamp = (dayKey) => `[sent ${dateLabel(dayKey)}] `
+
 export function sanitizeInboundText(s) {
   return String(s ?? '')
+    .replace(SENT_STAMP_RE, 'sent $1 ')
     .replace(SPOOFED_SYSTEM_MARKER, 'studio system')
     .replace(SPOOFED_SENTINEL, (m) => m.replace(/[[\]]/g, ''))
 }
@@ -382,12 +390,17 @@ export function effectiveInbound(row, nowMs = Date.now()) {
  * @param {Array<{direction:string,body?:string,message_type?:string}>} rows  ascending by time
  * @param {object} [opts]
  * @param {number} [opts.maxMessages=20]
+ * @param {string} [opts.zone] MIAHISTORYDATES.1 — the studio's zone. With it, a
+ *   message from an earlier day (on that clock) starts with "[sent <date>]", so
+ *   a relative word in it ("tomorrow" in a class reminder) is read against the
+ *   day it was sent. Without it nothing is stamped.
  */
 export function formatHistoryForClaude(rows, opts = {}) {
   const maxMessages = opts.maxMessages ?? 20
   const recent = (rows || []).slice(-maxMessages)
   const mapped = []
   const nowMs = opts.nowMs ?? Date.now()
+  const todayKey = opts.zone ? dayStrIn(new Date(nowMs), opts.zone) : null
   for (const stored of recent) {
     const r = effectiveInbound(stored, nowMs)
     const role = r.direction === 'inbound' ? 'user' : 'assistant'
@@ -412,6 +425,11 @@ export function formatHistoryForClaude(rows, opts = {}) {
     if (!text) {
       const t = r.message_type && r.message_type !== 'text' ? r.message_type : 'message'
       text = `[${t}]`
+    }
+    if (todayKey && stored?.created_at) {
+      const sentMs = Date.parse(stored.created_at)
+      const sentKey = Number.isFinite(sentMs) ? dayStrIn(new Date(sentMs), opts.zone) : null
+      if (sentKey && sentKey < todayKey) text = `${sentStamp(sentKey)}${text}`
     }
     // Merge consecutive same-role turns so the array strictly alternates-ish
     // (Anthropic tolerates non-alternation, but merging keeps it clean).
@@ -511,7 +529,7 @@ function isAfterIso(a, b) {
  *   and type, never its body, so a cause other than STOP is measurable.
  */
 export function buildReplyTurnMessages(rows, opts = {}) {
-  const { maxMessages = 20, answeredThroughIso = null } = opts
+  const { maxMessages = 20, answeredThroughIso = null, zone = null, nowMs } = opts
   let ordered = rows || []
   if (answeredThroughIso) {
     const late = ordered.filter((r) => isReplyWorthyInbound(r) && r.created_at && isAfterIso(r.created_at, answeredThroughIso))
@@ -528,7 +546,7 @@ export function buildReplyTurnMessages(rows, opts = {}) {
         : [...rest.slice(0, anchor + 1), ...late, ...rest.slice(anchor + 1)]
     }
   }
-  const messages = formatHistoryForClaude(ordered, { maxMessages })
+  const messages = formatHistoryForClaude(ordered, { maxMessages, zone, nowMs })
   if (messages.length === 0) return { messages: [], reason: 'no_history' }
   // The newest turn is the studio's (a STOP/START acknowledgement, a staff
   // send, a template, a Mia reply that already followed the missed message)
@@ -669,7 +687,8 @@ export function stripEmDashes(s) {
 }
 
 export function parseAgentResponse(raw) {
-  let text = String(raw || '').trim()
+  // MIAHISTORYDATES.1 — a date stamp copied out of history is never the customer's to see.
+  let text = String(raw || '').replace(SENT_STAMP_RE, '').trim()
   // Detect the sentinel ANYWHERE, not just at the start — if the model
   // emits a sentence before it (occasionally happens), we must still hand
   // off rather than leak the raw "[[HANDOFF]] reason" to the customer.

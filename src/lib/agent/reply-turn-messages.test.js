@@ -144,3 +144,14 @@ describe('buildReplyTurnMessages', () => {
     expect(checked).toBeGreaterThan(19000)
   })
 })
+
+describe('buildReplyTurnMessages · zone (MIAHISTORYDATES.1)', () => {
+  it('hands the zone to the formatter, so an earlier day is stamped', () => {
+    const rows = [
+      { direction: 'outbound', source: 'api', message_type: 'template', body: 'tomorrow · 07:00 · FORCE', created_at: '2026-11-22T18:00:00Z' },
+      { direction: 'inbound', message_type: 'text', body: 'can I switch', created_at: '2026-11-23T18:50:00Z' },
+    ]
+    const { messages } = buildReplyTurnMessages(rows, { zone: 'Europe/Dublin', nowMs: Date.parse('2026-11-23T18:50:10Z') })
+    expect(messages[0].content).toContain('[sent Sun 22 Nov] tomorrow · 07:00 · FORCE')
+  })
+})
