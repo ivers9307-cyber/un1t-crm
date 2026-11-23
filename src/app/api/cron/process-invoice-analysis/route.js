@@ -37,6 +37,7 @@ import { defineCron } from '@/lib/define-cron'
 import { processInvoiceAnalysisRow } from '@/lib/invoice-analysis-queue'
 import { logError } from '@/lib/log'
 import { refreshStaleSupplierList, rematchUnmatchedSuppliers } from '@/lib/invoices-queue/supplier-refresh'
+import { queueMissedInvoices } from '@/lib/invoices-queue/queue-preparation'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -66,11 +67,15 @@ export const GET = defineCron({ heartbeat: 'process-invoice-analysis' }, async (
   // throws, and neither costs a read.
   const { refreshed } = await refreshStaleSupplierList(db)
   const rematch = await rematchUnmatchedSuppliers(db)
+  // INVHARDEN.1 — the safety net: queue rows that arrived but were never
+  // queued for reading. They are read on the next tick (or sooner by QStash).
+  const missed = await queueMissedInvoices(db)
 
   return {
     body: {
       claimed: rows.length, ok: extracted, failed,
       contacts_refreshed: refreshed ? 1 : 0, suppliers_checked: rematch.checked, suppliers_matched: rematch.matched,
+      missed_queued: missed.queued.length,
     },
   }
 })

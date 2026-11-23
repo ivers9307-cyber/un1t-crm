@@ -88,6 +88,34 @@ async function withTimeout(promise, ms) {
   }
 }
 
+// INVHARDEN.1 — how many times the queue tries a file before calling it unreadable.
+export const MAX_READ_ATTEMPTS = 3
+const RETRY_NOTE = /^The reader was unavailable \(attempt (\d+) of \d+\)/
+
+/**
+ * A failure of the reader service itself (a timeout, a dropped connection,
+ * rate limiting, a 5xx), as opposed to something wrong with the file.
+ * @param {unknown} message
+ */
+export function isTransientReadError(message) {
+  const m = String(message ?? '')
+  return /timed out/i.test(m)
+    || /^Anthropic API request failed/i.test(m)
+    || /^Anthropic API error \((408|409|425|429|5\d\d)\)/i.test(m)
+    || /overloaded/i.test(m)
+}
+
+/** How many attempts the row's stored error records (0 when it records none). @param {unknown} stored */
+export function readAttemptOf(stored) {
+  const m = RETRY_NOTE.exec(String(stored ?? ''))
+  return m ? Number(m[1]) : 0
+}
+
+/** @param {number} attempt @param {unknown} message */
+function retryNote(attempt, message) {
+  return `The reader was unavailable (attempt ${attempt} of ${MAX_READ_ATTEMPTS}). It will be read again shortly. ${String(message ?? '').slice(0, 300)}`
+}
+
 /** @param {any} v */
 const blank = (v) => v == null || (typeof v === 'string' && v.trim() === '')
 /** @param {any} e */
@@ -336,7 +364,23 @@ async function prepare(db, row, deps, { write, unreadable, hashPatch, nowIso }) 
   const extract = deps.extract || extractInvoiceFieldsFromBytes
   /** @type {{ ok: boolean, fields?: any, error?: string }} */
   const result = await extract(bytes, row.attachment_mime_type, { locationId })
-  if (!result.ok || !result.fields) return unreadable(result.error || 'extraction_failed')
+  if (!result.ok || !result.fields) {
+    // INVHARDEN.1 — a reader outage is not a bad file. On the queue (no person
+    // waiting) the row stays queued and claimed, so the sweeper reads it again
+    // once the claim goes stale; only the last attempt marks it unreadable.
+    const attempt = readAttemptOf(row.extraction_error) + 1
+    if (deps.force !== true && isTransientReadError(result.error) && attempt < MAX_READ_ATTEMPTS) {
+      const { error: noteErr } = await db
+        .from('invoices_queue')
+        .update({ extraction_error: retryNote(attempt, result.error) })
+        .eq('id', row.id)
+        .eq('location_id', locationId)
+        .in('status', PREPARABLE)
+      if (noteErr) logWarn(MODULE, 'could not note a failed read attempt', { queue_id: row.id, error: noteErr.message })
+      return skipped
+    }
+    return unreadable(result.error || 'extraction_failed')
+  }
   // The reader never chooses the tax type: only a derived or a person's one stands.
   const { tax_type: _t, tax_type_source: _s, ...readFields } = result.fields
   /** @type {any} */

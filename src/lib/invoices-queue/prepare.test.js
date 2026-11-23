@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createHash } from 'node:crypto'
 import { createFakeDb } from '../../../tests/helpers/fake-db.js'
-import { prepareInvoiceRow, recheckInvoiceRow, XERO_LOOKUP_TIMEOUT_MS } from './prepare.js'
+import { prepareInvoiceRow, recheckInvoiceRow, XERO_LOOKUP_TIMEOUT_MS, isTransientReadError, readAttemptOf, MAX_READ_ATTEMPTS } from './prepare.js'
 
 vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logError: vi.fn() }))
 // The default Xero lookup must never run in a test: every test injects deps.xero.
@@ -540,3 +540,61 @@ describe('SUPPLIERMATCH.1 — recheck with rematchSupplier', () => {
     expect(stored('q2').extracted_fields.xero_contact_ref).toEqual(picked)
   })
 })
+
+describe('INVHARDEN.1 — a reader outage is not an unreadable file', () => {
+  const outage = (error) => { extract = vi.fn(async () => ({ ok: false, error })) }
+
+  it.each([
+    'Anthropic API request timed out after 90 s',
+    'Anthropic API request failed: fetch failed',
+    'Anthropic API error (529): {"type":"overloaded_error"}',
+    'Anthropic API error (429): rate limited',
+    'Anthropic API error (503): unavailable',
+  ])('treats "%s" as an outage', (m) => expect(isTransientReadError(m)).toBe(true))
+
+  it.each([
+    'Extracted JSON failed schema validation: total: Invalid input',
+    'Failed to parse extracted JSON: Unexpected token',
+    'Anthropic API error (400): invalid image',
+    'ANTHROPIC_API_KEY is not configured.',
+    '',
+  ])('treats "%s" as a problem with the file or setup', (m) => expect(isTransientReadError(m)).toBe(false))
+
+  it('first outage: the row stays queued and claimed, notes attempt 1, and is not flagged', async () => {
+    outage('Anthropic API request timed out after 90 s')
+    const out = await run()
+    expect(out.outcome).toBe('skipped')
+    const r = stored('q2')
+    expect(r.status).toBe('received')
+    expect(r.review_reasons).toEqual([])
+    expect(r.analysis_queued_at).toBe('2026-11-20T10:00:01.000Z')
+    expect(r.analysis_claimed_at).toBe('2026-11-20T10:00:02.000Z')
+    expect(readAttemptOf(r.extraction_error)).toBe(1)
+  })
+
+  it('the last attempt marks it unreadable and takes it off the queue', async () => {
+    outage('Anthropic API error (529): overloaded')
+    setup({ rows: [queueRow({ extraction_error: `The reader was unavailable (attempt ${MAX_READ_ATTEMPTS - 1} of ${MAX_READ_ATTEMPTS}). It will be read again shortly. x` })] })
+    const out = await run()
+    expect(out.outcome).toBe('unreadable')
+    expect(stored('q2').review_reasons).toEqual(['unreadable'])
+    expect(stored('q2').analysis_queued_at).toBeNull()
+  })
+
+  it('a successful read after an outage clears the note', async () => {
+    setup({ tables: KNOWN, rows: [queueRow({ extraction_error: 'The reader was unavailable (attempt 1 of 3). It will be read again shortly. x' })] })
+    expect((await run()).outcome).toBe('prepared')
+    expect(stored('q2').extraction_error).toBeNull()
+  })
+
+  it('a bad file is unreadable at once', async () => {
+    outage('Extracted JSON failed schema validation: total: Invalid input')
+    expect((await run()).outcome).toBe('unreadable')
+  })
+
+  it('with a person waiting (force) an outage is reported at once, not retried', async () => {
+    outage('Anthropic API request timed out after 90 s')
+    expect((await run('q2', { force: true })).outcome).toBe('unreadable')
+  })
+})
+

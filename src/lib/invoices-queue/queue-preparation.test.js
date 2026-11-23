@@ -6,7 +6,7 @@ import { createFakeDb } from '../../../tests/helpers/fake-db.js'
 
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
-import { queueInvoicePreparation } from './queue-preparation.js'
+import { queueInvoicePreparation, queueMissedInvoices, MISSED_AFTER_MINUTES } from './queue-preparation.js'
 import { logError, logWarn } from '@/lib/log'
 import {
   INVOICE_ANALYSIS_WORKER_PATH,
@@ -104,3 +104,46 @@ describe('queueInvoicePreparation', () => {
     expect(publish).not.toHaveBeenCalled()
   })
 })
+
+describe('queueMissedInvoices (INVHARDEN.1)', () => {
+  const NOW = new Date('2026-11-23T12:00:00.000Z')
+  const now = () => NOW
+  const old = '2026-11-23T11:00:00.000Z'
+  const missed = (id, extra = {}) => row(id, 'received', { created_at: old, prepared_at: null, analysis_claimed_at: null, ...extra })
+
+  it('queues a received row that was never queued or prepared and arrived a while ago', async () => {
+    const db = createFakeDb({ tables: { invoices_queue: [missed(A)] } })
+    expect(await queueMissedInvoices(db, { now, publish })).toEqual({ queued: [A] })
+    expect(db.tables.invoices_queue[0].analysis_queued_at).toEqual(expect.any(String))
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('leaves alone a fresh arrival, a queued row, a row the reader already stopped on, and other statuses', async () => {
+    const fresh = new Date(NOW.getTime() - (MISSED_AFTER_MINUTES - 1) * 60_000).toISOString()
+    const db = createFakeDb({ tables: { invoices_queue: [
+      missed(A, { created_at: fresh }),
+      missed(B, { analysis_queued_at: old }),
+      missed(C, { prepared_at: old, review_reasons: ['duplicate_file'] }),
+      row('00000000-0000-4000-8000-0000000000a4', 'quality_approved', { created_at: old, prepared_at: null }),
+      row('00000000-0000-4000-8000-0000000000a5', 'extracted', { created_at: old, prepared_at: null }),
+    ] } })
+    expect(await queueMissedInvoices(db, { now, publish })).toEqual({ queued: [] })
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('takes the oldest first, up to the limit', async () => {
+    const db = createFakeDb({ tables: { invoices_queue: [
+      missed(A, { created_at: '2026-11-23T10:00:00.000Z' }),
+      missed(B, { created_at: '2026-11-23T09:00:00.000Z' }),
+      missed(C, { created_at: '2026-11-23T08:00:00.000Z' }),
+    ] } })
+    expect((await queueMissedInvoices(db, { now, publish, limit: 2 })).queued.sort()).toEqual([B, C].sort())
+  })
+
+  it('a failed read never throws', async () => {
+    const db = createFakeDb({ tables: { invoices_queue: [] }, errors: { invoices_queue: { select: { message: 'boom' } } } })
+    expect(await queueMissedInvoices(db, { now, publish })).toEqual({ queued: [] })
+  })
+})
+
