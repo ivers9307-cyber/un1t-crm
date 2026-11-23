@@ -88,6 +88,7 @@ Guidance for Claude Code working in **un1t-crm**: the staff and admin CRM (Next.
 - Tests: move a fake clock inside `act()`, await every async assertion, use `createFakeDb` for a database, and add a `role-access` case for a table a client reads.
 - Mia stays on the Anthropic Messages API; no OpenAI anywhere.
 - Mia states an offer's price, end date and link only from `list_current_offers`; a new public surface that sells something is added to `readCurrentOffers`.
+- A past event's raffle or donation link reaches Mia only through `still_giving` (`readStillGiving`), organisation wide; upcoming events and bookings stay studio-scoped.
 
 ---
 
