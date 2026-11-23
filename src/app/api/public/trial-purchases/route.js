@@ -52,6 +52,7 @@ import { logWarn, logError } from '@/lib/log'
 import { resolveChosenClass, classColumnsFor, chosenClassRefusal } from '@/lib/class-first-choice'
 import { classFirstStepCopy } from '@/lib/class-first-funnel'
 import { clientDataForAttribution, inheritAttribution } from '@/lib/trial-purchase-conversion'
+import { fillMissingContactNames } from '@/lib/contact-name-fill'
 
 export const runtime = 'nodejs'
 
@@ -230,10 +231,12 @@ export async function POST(request) {
   })
   if (!contactId) return NextResponse.json({ success: false, code: 'capture_failed', error: 'Could not capture your details. Please try again.' }, { status: 500 })
 
-  // A matched contact with no first/last (an old import) gets the typed names,
-  // because the Glofox register needs both. Stamp-if-null, best-effort.
+  // A matched contact missing a first or last name (an old import, a race
+  // sign-up) gets the typed one, because the Glofox register needs both. Each
+  // blank field on its own (CLAIMNAME.1), best-effort.
   try {
-    await db.from('contacts').update({ first_name: b.first_name, last_name: b.last_name }).eq('id', contactId).is('first_name', null)
+    const { error: nameErr } = await fillMissingContactNames(db, contactId, { first_name: b.first_name, last_name: b.last_name })
+    if (nameErr) logWarn('trialbuy', 'first/last stamp failed', { code: nameErr.code ?? null })
   } catch (e) { logWarn('trialbuy', 'first/last stamp failed', { err: e }) }
   try { await db.from('contacts').update({ lead_source: product.leadSource }).eq('id', contactId).is('lead_source', null) } catch (e) { logWarn('trialbuy', 'lead_source failed', { err: e }) }
   try {

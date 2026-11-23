@@ -40,6 +40,7 @@ import { findOrCreateRaceContactWithOutcome } from '@/lib/race-contact-linking'
 import { applyOfferFormConsent } from '@/lib/offer-form-consent'
 import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
+import { fillMissingContactNames } from '@/lib/contact-name-fill'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 import { hatchActiveMembership } from '@/lib/trial-eligibility'
@@ -306,7 +307,9 @@ export async function POST(request) {
   if (!contactId) return NextResponse.json({ success: false, code: 'capture_failed', error: 'Could not capture your details. Please try again.' }, { status: 500 })
 
   const nowIso = new Date().toISOString()
-  await bestEffort('first/last stamp', () => db.from('contacts').update({ first_name: b.first_name, last_name: b.last_name }).eq('id', contactId).is('first_name', null))
+  // CLAIMNAME.1 — each blank name on its own: a matched contact holding a first
+  // name and no surname gets the surname (the Glofox register needs both).
+  await bestEffort('first/last stamp', () => fillMissingContactNames(db, contactId, { first_name: b.first_name, last_name: b.last_name }))
   await bestEffort('lead_source stamp', () => db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null))
   await bestEffort('last_lead_source stamp', () => db.from('contacts').update({ last_lead_source: leadSource, last_lead_source_at: nowIso }).eq('id', contactId))
   const a = b.attribution || {}
