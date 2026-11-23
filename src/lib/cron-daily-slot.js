@@ -104,6 +104,8 @@ export const DAILY_SLOTS = Object.freeze({
   'qualification-digest': Object.freeze({ hour: 8, rides: 'contract-reminders' }),
   'run-challenge-events': Object.freeze({ hour: 8 }),
   'receipt-coverage-weekly': Object.freeze({ hour: 8, weekday: 5, anchor: 'local' }),
+  // INVWEEKLY.1 — Monday 08:00 studio wall clock, every zone.
+  'invoice-weekly-summary': Object.freeze({ hour: 8, weekday: 1, anchor: 'local' }),
   'event-reminders': Object.freeze({ hour: 9 }),
   // HOSTPAGE.2 — the rating-request arm rides event-reminders' 09:00 slot.
   'event-rating-requests': Object.freeze({ hour: 9, rides: 'event-reminders' }),
