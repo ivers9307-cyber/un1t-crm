@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./push-dedup', () => ({ sendPushToRolesAtLocationOnce: vi.fn() }))
+const afterMock = vi.hoisted(() => vi.fn())
+vi.mock('next/server', () => ({ after: afterMock }))
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 
 import { sendPushToRolesAtLocationOnce } from './push-dedup'
 import { logError } from './log'
-import { SALE_ALERT_ROLES, saleAlertKey, buildSaleAlertPayload, notifyNewSale } from './sale-alert'
+import { SALE_ALERT_ROLES, saleAlertKey, buildSaleAlertPayload, notifyNewSale, ringSaleAfterResponse } from './sale-alert'
 
 const base = {
   source: 'offer',
@@ -102,5 +104,33 @@ describe('notifyNewSale', () => {
     await notifyNewSale({}, base)
     expect(sendPushToRolesAtLocationOnce).toHaveBeenCalledTimes(2)
     expect(sendPushToRolesAtLocationOnce.mock.calls[0][1]).toBe(sendPushToRolesAtLocationOnce.mock.calls[1][1])
+  })
+})
+
+describe('ringSaleAfterResponse', () => {
+  beforeEach(() => { afterMock.mockReset() })
+
+  it('hands the work to after() when a request scope exists', async () => {
+    const fn = vi.fn(async () => {})
+    await ringSaleAfterResponse(fn)
+    expect(afterMock).toHaveBeenCalledTimes(1)
+    expect(fn).not.toHaveBeenCalled()
+    await afterMock.mock.calls[0][0]()
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs the work immediately when after() throws (cron, tests)', async () => {
+    afterMock.mockImplementation(() => { throw new Error('outside a request scope') })
+    const fn = vi.fn(async () => {})
+    await ringSaleAfterResponse(fn)
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+
+  it('never throws, whichever way the work fails', async () => {
+    afterMock.mockImplementation(() => { throw new Error('outside a request scope') })
+    await expect(ringSaleAfterResponse(async () => { throw new Error('boom') })).resolves.toBeUndefined()
+    afterMock.mockReset()
+    ringSaleAfterResponse(() => { throw new Error('sync boom') })
+    await expect(afterMock.mock.calls[0][0]()).resolves.toBeUndefined()
   })
 })

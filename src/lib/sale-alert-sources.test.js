@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./sale-alert', () => ({ notifyNewSale: vi.fn() }))
 
 import { notifyNewSale } from './sale-alert'
-import { alertTrialSale, alertClassBookingSale, alertPayLinkSale } from './sale-alert-sources'
+import { alertTrialSale, alertClassBookingSale, alertPayLinkSale, alertRaceSale } from './sale-alert-sources'
 
 const db = {}
 
@@ -107,5 +107,46 @@ describe('alertPayLinkSale', () => {
   it('swallows a rejection', async () => {
     notifyNewSale.mockRejectedValue(new Error('boom'))
     await expect(alertPayLinkSale(db, link)).resolves.toEqual({ sent: false, reason: 'error' })
+  })
+})
+
+describe('alertRaceSale', () => {
+  const payment = { id: 'rp1', kind: 'entry', amount_cents: 6000, payment_provider: 'revolut', connected_account_id: null, contact_id: 'c9', contact_name: 'Ciara Walsh' }
+  const event = { name: 'Summer Hyrox', location_id: 'loc-1' }
+
+  it('rings for a studio-settled entry, keyed on the payment', async () => {
+    await alertRaceSale(db, payment, event)
+    expect(notifyNewSale).toHaveBeenCalledWith(db, {
+      source: 'race', saleId: 'rp1', locationId: 'loc-1', itemName: 'Summer Hyrox',
+      amountCents: 6000, buyerFirstName: 'Ciara', contactId: 'c9',
+    })
+  })
+
+  it('does not ring for an entry paid to a host connected account', async () => {
+    await alertRaceSale(db, { ...payment, connected_account_id: 'acct_123' })
+    await alertRaceSale(db, { ...payment, payment_provider: 'stripe_connect' }, event)
+    expect(notifyNewSale).not.toHaveBeenCalled()
+  })
+
+  it('does not ring for a move_gap payment', async () => {
+    await alertRaceSale(db, { ...payment, kind: 'move_gap' }, event)
+    expect(notifyNewSale).not.toHaveBeenCalled()
+  })
+
+  it('does not ring for an event with no location', async () => {
+    await alertRaceSale(db, payment, { ...event, location_id: null })
+    await alertRaceSale(db, payment, null)
+    expect(notifyNewSale).not.toHaveBeenCalled()
+  })
+
+  it('does not ring on an unknown or non-positive amount', async () => {
+    await alertRaceSale(db, { ...payment, amount_cents: null }, event)
+    await alertRaceSale(db, { ...payment, amount_cents: 0 }, event)
+    expect(notifyNewSale).not.toHaveBeenCalled()
+  })
+
+  it('swallows a rejection', async () => {
+    notifyNewSale.mockRejectedValue(new Error('boom'))
+    await expect(alertRaceSale(db, payment, event)).resolves.toEqual({ sent: false, reason: 'error' })
   })
 })

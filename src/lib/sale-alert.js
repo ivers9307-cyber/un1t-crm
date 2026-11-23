@@ -8,6 +8,7 @@
 
 import { sendPushToRolesAtLocationOnce } from './push-dedup'
 import { logError } from './log'
+import { after } from 'next/server'
 
 export const SALE_ALERT_ROLES = Object.freeze(['owner', 'manager'])
 
@@ -52,5 +53,28 @@ export async function notifyNewSale(db, { source, saleId, locationId, itemName, 
   } catch (err) {
     logError('sale-alert', 'sale alert failed', { source, sale_id: saleId, error: err?.message })
     return { sent: false, reason: 'error' }
+  }
+}
+
+/**
+ * Run a sale alert once the response is sent. On serverless the function can
+ * freeze after the response, so a floating promise may never finish; after()
+ * keeps it alive. Outside a request scope (a cron, a test) after() throws and
+ * the work runs inline instead. Never throws; the returned promise (inline
+ * case only) never rejects.
+ */
+export function ringSaleAfterResponse(fn) {
+  const run = async () => {
+    try {
+      await fn()
+    } catch (err) {
+      logError('sale-alert', 'sale alert task failed', { error: err?.message })
+    }
+  }
+  try {
+    after(run)
+    return undefined
+  } catch {
+    return run()
   }
 }

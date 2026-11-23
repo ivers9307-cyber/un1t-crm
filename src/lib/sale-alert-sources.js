@@ -2,7 +2,7 @@
 // payment path stays one line. Each takes the row its caller already holds
 // (plus, optionally, the amount the provider reported, which beats a stale
 // row), never throws, and returns notifyNewSale's promise. Callers do not
-// await it: `void alertTrialSale(db, row).catch(() => {})`.
+// await it: `ringSaleAfterResponse(() => alertTrialSale(db, row))`.
 
 import { notifyNewSale } from './sale-alert'
 
@@ -85,6 +85,32 @@ export function alertPayLinkSale(db, row, { paidAmountCents } = {}) {
       amountCents: amountOf(paidAmountCents, row.price_cents) ?? undefined,
       buyerFirstName: firstName(row),
       contactId: row.contact_id,
+    }
+  })
+}
+
+/**
+ * A completed race_payments entry (`event` is its race_events row). Rings only
+ * for money that settled to the studio: a payment carrying a host's Stripe
+ * connected account (connected_account_id, provider stripe_connect, as
+ * createRacePayment writes them) belongs to the host, and a move_gap price
+ * difference is not a new sale. An event with no studio has nobody to tell.
+ */
+export function alertRaceSale(db, payment, event) {
+  return ring(db, () => {
+    if (!payment?.id || (payment.kind || 'entry') !== 'entry') return { skip: 'not_an_entry' }
+    if (payment.connected_account_id || payment.payment_provider === 'stripe_connect') return { skip: 'host_account' }
+    if (!event?.location_id) return { skip: 'no_location' }
+    const amountCents = amountOf(payment.amount_cents)
+    if (amountCents === null || amountCents <= 0) return { skip: 'unknown_amount' }
+    return {
+      source: 'race',
+      saleId: String(payment.id),
+      locationId: event.location_id,
+      itemName: event.name,
+      amountCents,
+      buyerFirstName: firstName({ customer_name: payment.contact_name }),
+      contactId: payment.contact_id,
     }
   })
 }
