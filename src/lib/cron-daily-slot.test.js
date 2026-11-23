@@ -29,6 +29,8 @@ const LEGACY_SCHEDULE = {
   'qualification-digest': [0, 8, null],
   'run-challenge-events': [0, 8, null],
   'receipt-coverage-weekly': 'friday-08-dublin', // 0 7 * * 5 + 0 8 * * 5, Dublin-hour gate
+  // INVWEEKLY.1 — new with the gate: Monday 08:00 wall clock, never a fixed UTC hour.
+  'invoice-weekly-summary': 'monday-08-dublin',
   'event-reminders': [0, 9, null],
   // HOSTPAGE.2 — the rating-request arm rides event-reminders' 09:00 slot.
   'event-rating-requests': [0, 9, null],
@@ -45,9 +47,11 @@ function legacyActs(cron) {
   for (let ms = at('2026-01-01T00:00:00Z'); ms < at('2027-01-01T00:00:00Z'); ms += HOUR) {
     const d = new Date(ms)
     const spec = LEGACY_SCHEDULE[cron]
-    if (spec === 'friday-08-dublin') {
-      // Fired at 07:00 and 08:00 UTC on Fridays; acted on the one whose Dublin hour is 8.
-      if (d.getUTCDay() === 5 && (d.getUTCHours() === 7 || d.getUTCHours() === 8) && instantToZonedParts(ms, 'Europe/Dublin').h === 8) out.push(ms)
+    if (typeof spec === 'string') {
+      // 'friday-08-dublin' fired at 07:00 and 08:00 UTC on Fridays and acted on
+      // the one whose Dublin hour is 8; 'monday-08-dublin' is the same wall clock on Mondays.
+      const dow = spec.startsWith('monday') ? 1 : 5
+      if (d.getUTCDay() === dow && (d.getUTCHours() === 7 || d.getUTCHours() === 8) && instantToZonedParts(ms, 'Europe/Dublin').h === 8) out.push(ms)
       continue
     }
     const [m, h, dow] = spec
@@ -241,7 +245,7 @@ describe('TZ.6 failure semantics: Dublin is skipped and pages, never late or twi
   it('Europe/Dublin is due ONLY at the legacy instant (+1h/+2h never), for every anchor', () => {
     for (const [cron, slot] of Object.entries(DAILY_SLOTS)) {
       const base = slot.anchor === 'local'
-        ? at('2026-07-03T07:00:00Z') // Friday 08:00 IST
+        ? at(slot.weekday === 1 ? '2026-07-06T07:00:00Z' : '2026-07-03T07:00:00Z') // Monday or Friday 08:00 IST
         : Date.UTC(2026, 6, slot.weekday === 1 ? 6 : 1, slot.hour) // a Monday for the Monday crons
       expect(dailySlotDue('Europe/Dublin', base, slot), cron).toMatchObject({ due: true, lateHours: 0 })
       expect(dailySlotDue('Europe/Dublin', base + HOUR, slot).due, cron).toBe(false)
