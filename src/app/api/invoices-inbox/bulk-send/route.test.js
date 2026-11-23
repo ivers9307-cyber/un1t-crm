@@ -81,4 +81,30 @@ describe('POST /api/invoices-inbox/bulk-send', () => {
     const { data } = await (await send([A, B])).json()
     expect(data.counts).toEqual({ failed: 2 })
   })
+
+  it('a row that needs a look is skipped before any change and never pushed', async () => {
+    rows[A] = ROW(A, { review_reasons: ['no_vat_rate'] })
+    const { loadAndScopeBulkRows } = await import('../_bulk-helpers')
+    const { data } = await (await send([A])).json()
+    expect(data.results).toEqual([{ id: A, outcome: 'skipped', reason: 'needs_a_look' }])
+    expect(pushQueueRowToXero).not.toHaveBeenCalled()
+    expect(rememberSupplierCoding).not.toHaveBeenCalled()
+    expect(loadAndScopeBulkRows.mock.calls[0][0].select).toMatch(/\breview_reasons\b/)
+  })
+
+  it('a row with no reasons, or none recorded yet, is sent', async () => {
+    rows[A] = ROW(A, { review_reasons: [] })
+    rows[B] = ROW(B, { review_reasons: null })
+    const { data } = await (await send([A, B])).json()
+    expect(data.counts).toEqual({ ok: 2 })
+    expect(pushQueueRowToXero).toHaveBeenCalledWith(A)
+    expect(pushQueueRowToXero).toHaveBeenCalledWith(B)
+  })
+
+  it.each([[null], [[]]])('a credit note is never sent, whatever its reasons (%j)', async (reasons) => {
+    rows = { [A]: ROW(A, { review_reasons: reasons, extracted_fields: { ...ROW(A).extracted_fields, document_type: 'credit_note' } }) }
+    const { data } = await (await send([A])).json()
+    expect(data.results).toEqual([{ id: A, outcome: 'skipped', reason: 'credit_note' }])
+    expect(pushQueueRowToXero).not.toHaveBeenCalled()
+  })
 })

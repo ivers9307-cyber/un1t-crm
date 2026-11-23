@@ -26,13 +26,18 @@
 //      From, FromFull, Subject, MessageID, Attachments[...] }.
 //   3. Claim the MessageID in webhook_events. The claim is an audit record
 //      and a hint ("deduped: true" in the answer), not a gate: see below.
-//   4. Find the slug from ToFull (preferred — array of { Email, Name })
-//      falling back to To, then OriginalRecipient.
-//   5. Resolve slug → location_id via `locations.invoices_inbound_slug`.
+//   4. Collect a candidate slug from each of ToFull (array of { Email, Name }),
+//      To and OriginalRecipient, in that order.
+//   5. Resolve them with one query on `locations.invoices_inbound_slug`; the
+//      first candidate that belongs to a studio wins. Only when none does is
+//      the email a stray.
 //   6. ingestInboundEmail stores every supported attachment (one
 //      invoices_queue row each) or one empty row when nothing is usable.
-//   7. Return 200. The inbox UI then shows the row and the operator
-//      does quality review.
+//   7. Queue every row this delivery inserted (files, not-received and the
+//      empty-email row) for automatic preparation, then return 200. A queueing
+//      failure never changes the answer. A row whose stamp did land is swept
+//      by the cron if the QStash push fails; one whose stamp did not is not
+//      (the sweeper claims only stamped rows) and waits for a person's Extract.
 //
 // Why we don't queue here like the outbound webhook does:
 //   • Inbound volume is single-digit per day — no burst risk.
@@ -63,6 +68,7 @@ import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/li
 import { parseInboundAddress } from '@/lib/inbound-invoices'
 import { ingestInboundEmail } from '@/lib/invoices-queue/ingest-email'
 import { recordInboundStray } from '@/lib/invoices-queue/strays'
+import { queueInvoicePreparation } from '@/lib/invoices-queue/queue-preparation'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -145,12 +151,12 @@ export async function POST(request, { params }) {
   }
 
   try {
-    // Resolve recipient → slug → location.
+    // Resolve recipient → slugs → location.
     //
     // Postmark gives us three places the slug might appear, in
     // priority order:
-    //   1. ToFull[] — typed-recipient list (preferred — already
-    //      normalised by Postmark into { Email, Name, MailboxHash })
+    //   1. ToFull[] — typed-recipient list (already normalised by Postmark
+    //      into { Email, Name, MailboxHash })
     //   2. To — display string "Name <addr>, Name <addr>"
     //   3. OriginalRecipient — the actual envelope RCPT TO from
     //      the SMTP transaction. Per the Postmark spec, when an
@@ -158,13 +164,16 @@ export async function POST(request, { params }) {
     //      that rewrote the visible To, this is the ground truth
     //      of where Postmark received the mail.
     //
-    // Falling back through all three avoids silently dropping
-    // legitimate invoices that were addressed to the slug via Cc/Bcc
-    // or a forwarding hop.
-    const slug =
-      parseInboundAddress(body.ToFull) ||
-      parseInboundAddress(body.To) ||
-      parseInboundAddress(body.OriginalRecipient)
+    // Every field contributes a candidate, not just the first that parses: a
+    // visible address that names no studio must not hide the envelope address
+    // that does, or a legitimate invoice would be filed as a stray.
+    const candidates = [
+      ...new Set(
+        [body.ToFull, body.To, body.OriginalRecipient]
+          .map((field) => parseInboundAddress(field))
+          .filter(Boolean),
+      ),
+    ]
 
     const stray = async (reason, ignoredSlug) => {
       logWarn('invoices-inbound', `recording stray: ${reason}`, { messageId, slug: ignoredSlug })
@@ -184,23 +193,35 @@ export async function POST(request, { params }) {
       )
     }
 
-    if (!slug) return await stray('unparseable_recipient', null)
+    if (candidates.length === 0) return await stray('unparseable_recipient', null)
 
-    const { data: location, error: locErr } = await db
+    const { data: found, error: locErr } = await db
       .from('locations')
       .select('id, name, invoices_inbound_slug')
-      .eq('invoices_inbound_slug', slug)
-      .maybeSingle()
+      .in('invoices_inbound_slug', candidates)
     if (locErr) {
       logError('invoices-inbound', 'location lookup failed', { messageId, error: locErr.message })
       return await fail('location_lookup_failed')
     }
-    if (!location) return await stray('unknown_slug', slug)
+    // The slug column is unique, so each candidate matches at most one studio.
+    const location = candidates
+      .map((c) => (found || []).find((l) => l.invoices_inbound_slug === c))
+      .find(Boolean)
+    if (!location) return await stray('unknown_slug', candidates[0])
 
     const result = await ingestInboundEmail(db, { location: { id: location.id }, body })
     if (!result.ok) {
       logError('invoices-inbound', 'ingest failed', { messageId, error: result.error })
       return await fail(result.error)
+    }
+    // The ingest stays free of QStash; queueing is ours. A repeat delivery
+    // inserted nothing, so rowIds is empty and nothing is queued twice.
+    if (result.rowIds.length > 0) {
+      try {
+        await queueInvoicePreparation(db, result.rowIds)
+      } catch (err) {
+        logError('invoices-inbound', 'could not queue rows for preparation', { messageId, error: err?.message })
+      }
     }
     return NextResponse.json({ success: true, ...repeat, created: result.created.length, ids: result.created, notReceived: result.notReceived })
   } catch (err) {

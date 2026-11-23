@@ -18,8 +18,12 @@
 //   • data_approved     → "Forwarding to Xero…" or retry button if forward failed
 //   • forwarded         → read-only summary with Xero MessageID
 //   • rejected          → read-only summary with reason + stage; Delete button
+//   • not_invoice       → why, and "Move to Needs a look" (INVOICEPREP.3)
+//
+// INVOICEPREP.3 — rows are read and checked on arrival; review_reasons
+// show as chips (see invoices/review-status.js).
 
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import InboundStraysNotice from '@/components/invoices/InboundStraysNotice'
 import Link from 'next/link'
 // BOOKKEEPER-APPROVALS.1 — read `?focus=<id>` so the drill-in from
@@ -32,6 +36,10 @@ import XeroTaxRatePicker from '@/components/invoices/XeroTaxRatePicker'
 import XeroContactPicker from '@/components/invoices/XeroContactPicker'
 import BulkUploadPanel from '@/components/invoices/BulkUploadPanel'
 import { describeApiError } from '@/lib/api-error'
+import {
+  reasonChips, isReadyToSend, pillFor, notInvoiceText, unreadPanel, needsALookSkipped,
+  isBeingRead, canRejectOne,
+} from '@/components/invoices/review-status'
 
 // INVOICES.3 — friendly labels for the category dropdown. Keys
 // match the enum in INVOICE_CATEGORIES exactly; the underscore →
@@ -69,6 +77,7 @@ const STATUS_FILTERS = [
   { key: 'pending',   label: 'Awaiting action', statuses: ['received', 'quality_approved', 'extracted', 'data_approved'] },
   { key: 'forwarded', label: 'Forwarded',       statuses: ['forwarded'] },
   { key: 'rejected',  label: 'Rejected',        statuses: ['rejected'] },
+  { key: 'not_invoice', label: 'Not an invoice', statuses: ['not_invoice'] },
   { key: 'all',       label: 'All',             statuses: null },
 ]
 
@@ -152,6 +161,12 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   const [bulkBusy, setBulkBusy] = useState(null)
   const [bulkError, setBulkError] = useState(null)
   const [bulkSummary, setBulkSummary] = useState(null)
+  // INVOICEPREP.3 — "Open the earlier one": the earlier row, read by id, is
+  // held here until the list contains it, so the selection never falls back
+  // to the top row; missingEarlierId marks one that could not be found.
+  const [pinnedRow, setPinnedRow] = useState(null)
+  const pinnedIdRef = useRef(null)
+  const [missingEarlierId, setMissingEarlierId] = useState(null)
 
   const activeStatuses = useMemo(
     () => STATUS_FILTERS.find((s) => s.key === statusFilter)?.statuses,
@@ -180,6 +195,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
         // still visible; otherwise default to the top row.
         const desired = prev || focusId
         if (desired && (j.data || []).some((r) => r.id === desired)) return desired
+        if (desired && desired === pinnedIdRef.current) return desired
         return (j.data || [])[0]?.id || null
       })
     } catch (e) {
@@ -209,12 +225,55 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId, loading])
 
-  const selected = rows.find((r) => r.id === selectedId) || null
+  const selected = rows.find((r) => r.id === selectedId)
+    || (pinnedRow && pinnedRow.id === selectedId ? pinnedRow : null)
+
+  function selectRow(id) {
+    pinnedIdRef.current = null
+    setPinnedRow(null)
+    setMissingEarlierId(null)
+    setSelectedId(id)
+  }
+
+  // INVOICEPREP.3 — "Open the earlier one" on a possible duplicate. A row in
+  // the loaded list is selected directly; otherwise it is read by id and the
+  // filters are widened so the list can show it. If it cannot be read, the
+  // current selection stays and the panel says so.
+  async function openRow(id) {
+    if (!id) return
+    setMissingEarlierId(null)
+    if (rows.some((r) => r.id === id)) { selectRow(id); return }
+    const fromId = selectedId
+    try {
+      const res = await fetch(`/api/invoices-inbox/${id}`)
+      const j = await res.json()
+      if (!j?.success || !j.data) throw new Error('not found')
+      pinnedIdRef.current = id
+      setPinnedRow(j.data)
+      setSelectedId(id)
+      setStatusFilter('all')
+      setSourceTab('all')
+      setLocationFilter('all')
+    } catch {
+      setMissingEarlierId(fromId)
+    }
+  }
+
+  // INVOICEPREP.3 — a restored row is back in Awaiting action; show it there.
+  function onRestored(id) {
+    setSelectedId(id)
+    if (statusFilter === 'pending') loadRows()
+    else setStatusFilter('pending')
+  }
 
   // INV-BULK.3 — while any visible row is queued or mid-analysis,
   // poll silently every 5s so the operator watches the queue drain
   // (received/quality_approved → extracted) without manual refresh.
-  const queueActive = useMemo(() => rows.some((r) => r.analysis_queued_at), [rows])
+  // INVOICEPREP.3 — only rows still waiting to be read keep the poll going.
+  const queueActive = useMemo(
+    () => rows.some((r) => r.analysis_queued_at && ['received', 'quality_approved'].includes(r.status)),
+    [rows],
+  )
   useEffect(() => {
     if (!queueActive) return
     const t = setInterval(() => { loadRows({ silent: true }) }, 5000)
@@ -395,7 +454,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
           rows={rows}
           loading={loading}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          onSelect={selectRow}
           isMaster={isMaster}
           isBookkeeper={isBookkeeper}
           bulkSelection={bulkSelection}
@@ -406,6 +465,9 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
         <InboxDetail
           row={selected}
           onChanged={loadRows}
+          onOpenRow={openRow}
+          onRestored={onRestored}
+          earlierMissing={!!selectedId && missingEarlierId === selectedId}
           isMaster={isMaster}
         />
       </div>
@@ -526,7 +588,10 @@ function InboxList({
                     <div className="text-sm font-medium text-un1t-text truncate">
                       {r.extracted_fields?.supplier_name || r.sender_email || '(no sender)'}
                     </div>
-                    <StatusPill status={r.status} stage={r.rejected_stage} queuedAt={r.analysis_queued_at} claimedAt={r.analysis_claimed_at} />
+                    <span className="flex items-center gap-1 flex-wrap justify-end shrink-0">
+                      <ReasonChips row={r} compact />
+                      <StatusPill status={r.status} stage={r.rejected_stage} queuedAt={r.analysis_queued_at} claimedAt={r.analysis_claimed_at} />
+                    </span>
                   </div>
                   <div className="text-xs text-un1t-subtle truncate mt-1">
                     {r.subject || r.attachment_filename || '(no subject)'}
@@ -578,7 +643,9 @@ function BulkActionBar({
   // (confirmed tax_type or a genuine 0%-VAT bill); rate-undetermined rows
   // are skipped server-side, so don't count them toward the Send button.
   const sendableCount = selectedRows.filter((r) =>
-    ['extracted', 'data_approved'].includes(r.status) && r.extracted_fields && hasResolvedVatRate(r.extracted_fields)).length
+    ['extracted', 'data_approved'].includes(r.status) && r.extracted_fields && hasResolvedVatRate(r.extracted_fields)
+    // INVOICEPREP.3 — and nothing flagged; the send skips a row that needs a look.
+    && isReadyToSend(r)).length
   const rejectableCount = selectedRows.filter((r) =>
     ['received', 'quality_approved', 'extracted', 'data_approved'].includes(r.status)).length
   // INV-RECONCILE.1 — ONLY rows the send path flagged as already in
@@ -614,7 +681,7 @@ function BulkActionBar({
             disabled={sendableCount === 0 || !!busy}
             onClick={onSend}
             className="px-3 py-1.5 text-sm rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-40"
-            title={sendableCount === 0 ? 'No selected rows have extracted fields ready to send' : ''}
+            title={sendableCount === 0 ? 'No selected rows are ready to send' : ''}
           >
             {busy === 'send' ? 'Sending…' : `Send to Xero (${sendableCount})`}
           </button>
@@ -677,6 +744,9 @@ function BulkActionBar({
           {Object.entries(summary.counts || {}).map(([k, v]) => (
             <span key={k}>{OUTCOME_LABEL[k] || k}: <strong className="text-un1t-text">{v}</strong></span>
           ))}
+          {needsALookSkipped(summary.results) > 0 && (
+            <span>skipped, needs a look: <strong className="text-un1t-text">{needsALookSkipped(summary.results)}</strong></span>
+          )}
         </div>
       )}
     </div>
@@ -687,10 +757,20 @@ function StatusPill({ status, stage, queuedAt = null, claimedAt = null }) {
   // INV-BULK.3 — a row queued for background analysis sits in
   // 'quality_approved'; surface the live sub-state instead of the
   // static label so the operator sees it move through the queue.
-  if (queuedAt && (status === 'quality_approved' || status === 'received')) {
+  // INVOICEPREP.3 — every queued row reads "Reading…"; a claimed one
+  // (being read right now) keeps its pulse.
+  const extra = pillFor({ status, analysis_queued_at: queuedAt })
+  if (extra?.tone === 'blue') {
     return claimedAt
-      ? <span className="text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap bg-blue-500/20 text-blue-700 border-blue-500/40 animate-pulse">Analysing…</span>
-      : <span className="text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap bg-amber-500/20 text-amber-700 border-amber-500/40">Queued</span>
+      ? <span className="text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap bg-blue-500/20 text-blue-700 border-blue-500/40 animate-pulse">{extra.label}</span>
+      : <span className="text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap bg-blue-500/20 text-blue-700 border-blue-500/40">{extra.label}</span>
+  }
+  if (extra) {
+    return (
+      <span className="text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap bg-un1t-border/30 text-un1t-subtle border-un1t-border">
+        {extra.label}
+      </span>
+    )
   }
   const map = {
     received:         { label: 'Awaiting review',  cls: 'bg-yellow-500/20 text-yellow-700 border-yellow-500/40' },
@@ -708,7 +788,22 @@ function StatusPill({ status, stage, queuedAt = null, claimedAt = null }) {
   )
 }
 
-function InboxDetail({ row, onChanged }) {
+// INVOICEPREP.3 — why a row needs a look, or a green Ready.
+const CHIP_TONE = {
+  red: 'bg-red-500/10 text-red-700',
+  amber: 'bg-amber-500/10 text-amber-700',
+  green: 'bg-green-500/10 text-green-700',
+}
+function ReasonChips({ row, compact = false }) {
+  const chips = reasonChips(row)
+  if (chips.length === 0) return null
+  const size = compact ? 'text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap' : 'text-xs px-2 py-1 rounded'
+  return chips.map((c) => (
+    <span key={c.key} className={`${size} ${CHIP_TONE[c.tone]}`}>{c.label}</span>
+  ))
+}
+
+function InboxDetail({ row, onChanged, onOpenRow, onRestored, earlierMissing = false }) {
   const [attachment, setAttachment] = useState(null)
   const [attLoading, setAttLoading] = useState(false)
   const [busy, setBusy] = useState(null) // 'approve' | 'reject' | 'extract' | 'send' | 'delete'
@@ -761,8 +856,15 @@ function InboxDetail({ row, onChanged }) {
         body: body ? JSON.stringify(body) : undefined,
       })
       const j = await res.json()
-      if (!j.success) throw new Error(describeApiError(j, 'Action failed'))
-      onChanged()
+      if (!j.success) {
+        // INVOICEPREP.3 — a read that failed (422) still saved its error
+        // on the row; reload so the panel shows it.
+        // A 409 on restore means the row moved on; reload to show where.
+        if (res.status === 422 || (path === 'restore' && res.status === 409)) onChanged()
+        throw new Error(describeApiError(j, 'Action failed'))
+      }
+      if (path === 'restore' && onRestored) onRestored(row.id)
+      else onChanged()
     } catch (e) {
       setActionError(e.message)
     } finally {
@@ -828,15 +930,29 @@ function InboxDetail({ row, onChanged }) {
 
       <AttachmentPreview attachment={attachment} loading={attLoading} mime={row.attachment_mime_type} />
 
-      {row.status === 'received' && (
-        <StageOneActions
+      <DuplicatePointer row={row} onOpenRow={onOpenRow} missing={earlierMissing} />
+
+      {row.status === 'not_invoice' && (
+        <NotInvoiceActions
+          row={row}
           busy={busy}
-          onApprove={() => postAction('quality-approve')}
-          onReject={(reason) => postAction('quality-reject', { reason })}
+          onRestore={() => postAction('restore')}
         />
       )}
 
-      {row.status === 'quality_approved' && (
+      {(row.status === 'received' || isBeingRead(row) || (row.status === 'quality_approved' && unreadPanel(row))) && (
+        <StageOneActions
+          busy={busy}
+          panel={unreadPanel(row)}
+          reading={isBeingRead(row)}
+          extractionError={row.extraction_error}
+          onApprove={() => postAction('quality-approve')}
+          onReadAgain={() => postAction('extract')}
+          onReject={canRejectOne(row) ? (reason) => postAction('quality-reject', { reason }) : null}
+        />
+      )}
+
+      {row.status === 'quality_approved' && !unreadPanel(row) && !isBeingRead(row) && (
         <ExtractAction
           busy={busy}
           extractionError={row.extraction_error}
@@ -866,6 +982,8 @@ function InboxDetail({ row, onChanged }) {
 }
 
 function notInvoiceLine(reason) {
+  const read = notInvoiceText(reason)
+  if (read) return read
   if (reason === 'no_attachment') return 'Nothing usable was attached'
   if (reason === 'attachment_not_received: too_large') return 'An attachment was too large to receive (over 25 MB)'
   if (reason === 'attachment_not_received: too_many') return 'An attachment was not received (more than 25 files in one email)'
@@ -907,7 +1025,7 @@ function DetailHeader({ row }) {
         <h2 className="text-lg font-semibold text-un1t-text">
           {row.extracted_fields?.supplier_name || row.sender_email || '(no sender)'}
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {row.xero_tax_mismatch === true ? (
             // audit F2 (RCOV.P2) — Xero booked a different tax figure
             // than the OCR read off the receipt (account default VAT
@@ -919,6 +1037,7 @@ function DetailHeader({ row }) {
               VAT mismatch
             </span>
           ) : null}
+          <ReasonChips row={row} />
           <StatusPill status={row.status} stage={row.rejected_stage} queuedAt={row.analysis_queued_at} claimedAt={row.analysis_claimed_at} />
         </div>
       </div>
@@ -960,15 +1079,53 @@ function AttachmentPreview({ attachment, loading, mime }) {
   )
 }
 
-function StageOneActions({ busy, onApprove, onReject }) {
+// INVOICEPREP.3 — `panel` (from unreadPanel) retitles this for a row the
+// reader gave up on; without it, today's quality review shows unchanged.
+// `reading` (a row queued to be read) shows only a short line and Reject.
+function StageOneActions({ busy, panel = null, reading = false, extractionError = null, onApprove, onReadAgain, onReject }) {
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [reason, setReason] = useState('')
+  const primaryCls = 'px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50'
+  const secondaryCls = 'px-4 py-2 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50'
+  const readButton = (cls) => (
+    <button key="read" type="button" disabled={!!busy} onClick={onReadAgain} className={cls}>
+      {busy === 'extract' ? 'Reading…' : (panel?.primary === 'read_again' ? 'Read again' : 'Read it anyway')}
+    </button>
+  )
+  const rejectButton = (cls) => (
+    <button key="reject" type="button" disabled={!!busy} onClick={() => setShowRejectForm((v) => !v)} className={cls}>
+      Reject…
+    </button>
+  )
   return (
     <div className="space-y-3">
+      {reading ? (
+        <>
+          <p className="text-sm text-un1t-subtle">Being read. This takes a moment.</p>
+          {onReject && <div className="flex gap-2 flex-wrap">{rejectButton(secondaryCls)}</div>}
+        </>
+      ) : panel ? (
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-un1t-text">{panel.title}</p>
+          {extractionError && <p className="text-xs text-un1t-subtle break-words">{extractionError}</p>}
+        </div>
+      ) : (
       <p className="text-sm text-un1t-subtle">
         Quality review — is this attachment legible and a real invoice for this location?
         Approving runs Claude Vision next (which costs API tokens), so reject anything that isn't an invoice or isn't readable.
       </p>
+      )}
+      {reading ? null : panel ? (
+        <div className="flex gap-2 flex-wrap">
+          {/* onReject is null when quality-reject would refuse the row
+              (canRejectOne); the read is then offered alone. */}
+          {!onReject
+            ? readButton(primaryCls)
+            : panel.primary === 'reject'
+              ? [rejectButton(primaryCls), readButton(secondaryCls)]
+              : [readButton(primaryCls), rejectButton(secondaryCls)]}
+        </div>
+      ) : (
       <div className="flex gap-2 flex-wrap">
         <button
           type="button"
@@ -987,7 +1144,8 @@ function StageOneActions({ busy, onApprove, onReject }) {
           Reject…
         </button>
       </div>
-      {showRejectForm && (
+      )}
+      {showRejectForm && onReject && (
         <div className="space-y-2 border border-un1t-border rounded-md p-3">
           <label className="text-xs uppercase tracking-wide text-un1t-subtle">Reason</label>
           <textarea
@@ -1007,6 +1165,46 @@ function StageOneActions({ busy, onApprove, onReject }) {
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+// INVOICEPREP.3 — a row the reader judged not to be an invoice. The reason
+// line shows in ArrivalNotes; this offers the way back.
+function NotInvoiceActions({ row, busy, onRestore }) {
+  if (!row.attachment_path) {
+    return <p className="text-sm text-un1t-subtle">There is no attachment to read</p>
+  }
+  return (
+    <div className="flex gap-2 flex-wrap">
+      <button
+        type="button"
+        disabled={!!busy}
+        onClick={onRestore}
+        className="px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50"
+      >
+        {busy === 'restore' ? 'Moving…' : 'Move to Needs a look'}
+      </button>
+    </div>
+  )
+}
+
+// INVOICEPREP.3 — points a possible duplicate at the earlier row.
+function DuplicatePointer({ row, onOpenRow, missing = false }) {
+  const reasons = Array.isArray(row.review_reasons) ? row.review_reasons : []
+  if (!row.duplicate_of_id) return null
+  if (!reasons.includes('duplicate_file') && !reasons.includes('duplicate_number')) return null
+  return (
+    <div className="flex items-center gap-3 flex-wrap text-sm">
+      <span className="text-un1t-text">Possible duplicate of an earlier invoice</span>
+      <button
+        type="button"
+        onClick={() => onOpenRow?.(row.duplicate_of_id)}
+        className="text-un1t-text underline underline-offset-2"
+      >
+        Open the earlier one
+      </button>
+      {missing && <span className="text-un1t-subtle">The earlier invoice is no longer in the list.</span>}
     </div>
   )
 }

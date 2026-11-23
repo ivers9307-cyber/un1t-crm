@@ -14,12 +14,12 @@
 //   1. Atomically claim up to BATCH queued rows (claim_invoice_analysis_batch,
 //      FOR UPDATE SKIP LOCKED — overlapping ticks never grab the same row,
 //      and rows the QStash worker holds mid-claim are skipped).
-//   2. Extract each sequentially via the shared per-row processor
+//   2. Prepare each sequentially via the shared per-row processor
 //      (src/lib/invoice-analysis-queue.js — the SAME implementation the
-//      QStash worker runs). On success → 'extracted' + fields +
-//      confidence, and clear the queue flags. On failure → record the
-//      error and DE-QUEUE (clear analysis_queued_at) so a bad file isn't
-//      retried forever; the UI surfaces the error + a manual retry.
+//      QStash worker runs; it calls prepareInvoiceRow). An unreadable
+//      file is recorded and DE-QUEUED so it isn't retried forever; the
+//      UI surfaces the error + a manual retry. Both received and
+//      quality_approved rows are claimed.
 //
 // BATCH is sized so a worst-case tick (10 × ~15s) stays well under the
 // 300s function cap. 100 queued invoices drain in ~10 ticks (~10 min at

@@ -43,8 +43,14 @@ const BUCKET = INVOICE_STAGING_BUCKET
 /**
  * @param {import('@/lib/supabase').Db} db
  * @param {{ location: { id: string }, body: any }} input
+ * `rowIds`: rows of this message that still need queueing for preparation.
+ * That is every row THIS call inserted (stored, not-received, empty-email),
+ * then any earlier row of the message still in 'received' that was never
+ * queued and never prepared (left by an attempt that failed part-way: only
+ * stamped rows are swept, so nobody else would pick it up). `created` stays
+ * the stored-with-a-file subset.
  * @returns {Promise<
- *   { ok: true, created: string[], alreadyStored: number, skippedInline: number, notReceived: number }
+ *   { ok: true, created: string[], rowIds: string[], alreadyStored: number, skippedInline: number, notReceived: number }
  *   | { ok: false, error: 'insert_failed' | 'storage_upload_failed' | 'lookup_failed' | 'path_update_failed' | 'staged_download_failed' }
  * >}
  */
@@ -71,7 +77,7 @@ export async function ingestInboundEmail(db, { location, body }) {
   for (let i = 0; i < attachments.length; i++) ids.push(attachmentMessageId(messageId, i), missingMessageId(i))
   const { data: existing, error: readErr } = await db
     .from('invoices_queue')
-    .select('id, email_message_id, attachment_path, attachment_mime_type, attachment_size_bytes')
+    .select('id, email_message_id, status, analysis_queued_at, prepared_at, attachment_path, attachment_mime_type, attachment_size_bytes')
     .eq('location_id', location.id)
     .in('email_message_id', [...new Set(ids)])
   if (readErr) {
@@ -98,6 +104,9 @@ export async function ingestInboundEmail(db, { location, body }) {
     })
   }
 
+  /** @type {Set<string>} */
+  const replacedIds = new Set()
+
   const resolved = await resolveInboundAttachments(db, body, { skipIndexes: storedIndexes })
   if (!resolved.ok) return { ok: false, error: 'staged_download_failed' }
   const { usable, skippedInline, unsupportedTypes } = classifyInboundAttachments(
@@ -114,16 +123,22 @@ export async function ingestInboundEmail(db, { location, body }) {
    * @param {string[]} created
    * @param {number} alreadyStored
    * @param {number} notReceived
-   * @returns {Promise<{ ok: true, created: string[], alreadyStored: number, skippedInline: number, notReceived: number }>}
+   * @param {string[]} inserted every row this call inserted
+   * @returns {Promise<{ ok: true, created: string[], rowIds: string[], alreadyStored: number, skippedInline: number, notReceived: number }>}
    */
-  const succeed = async (created, alreadyStored, notReceived) => {
+  const succeed = async (created, alreadyStored, notReceived, inserted) => {
     await removeStagedAttachments(db, stagedPaths)
-    return { ok: true, created, alreadyStored, skippedInline, notReceived }
+    // A row this call deleted and redid is represented by its new id only.
+    const leftovers = (existing || [])
+      .filter((r) => r.status === 'received' && !r.analysis_queued_at && !r.prepared_at && !replacedIds.has(r.id))
+      .map((r) => r.id)
+    const rowIds = [...new Set([...inserted, ...leftovers])]
+    return { ok: true, created, rowIds, alreadyStored, skippedInline, notReceived }
   }
 
   if (usable.length === 0 && storedIndexes.size === 0 && resolved.failed.length === 0) {
     // Keep a row so staff can see the email arrived with nothing to ingest.
-    if (byMessageId.has(messageId)) return succeed([], 0, 0)
+    if (byMessageId.has(messageId)) return succeed([], 0, 0, [])
     const reason = unsupportedTypes.length > 0 ? `unsupported_type: ${unsupportedTypes.join(', ')}` : 'no_attachment'
     const { data: row, error } = await db
       .from('invoices_queue')
@@ -131,11 +146,11 @@ export async function ingestInboundEmail(db, { location, body }) {
       .select('id')
       .single()
     if (error || !row) {
-      if (error?.code === '23505') return succeed([], 0, 0)
+      if (error?.code === '23505') return succeed([], 0, 0, [])
       logError('invoice-ingest', 'empty-email row insert failed', { err: error })
       return { ok: false, error: 'insert_failed' }
     }
-    return succeed([row.id], 0, 0)
+    return succeed([row.id], 0, 0, [row.id])
   }
 
   /** @type {string[]} */
@@ -150,12 +165,14 @@ export async function ingestInboundEmail(db, { location, body }) {
     }
     if (prior) {
       // Inserted but never finished: clear it so the insert below can reuse the id.
-      // Only while untouched: a row staff have already acted on is theirs.
+      // Only while untouched: a row staff have already acted on is theirs, and
+      // one a concurrent delivery finished since our read now has a path.
       const { data: removed, error: delErr } = await db
         .from('invoices_queue')
         .delete()
         .eq('id', prior.id)
         .eq('status', 'received')
+        .is('attachment_path', null)
         .select('id')
       if (delErr) {
         logError('invoice-ingest', 'unfinished row cleanup failed', { err: delErr, rowId: prior.id })
@@ -165,6 +182,7 @@ export async function ingestInboundEmail(db, { location, body }) {
         alreadyStored++
         continue
       }
+      replacedIds.add(prior.id)
     }
 
     const filename = safeInboundFilename(att.name) || `attachment-${att.index + 1}`
@@ -223,22 +241,25 @@ export async function ingestInboundEmail(db, { location, body }) {
   // family from attachmentMessageId, so the half-written-row cleanup above
   // never deletes one.
   let notReceived = 0
+  /** @type {string[]} */
+  const missingIds = []
   for (const miss of resolved.failed) {
     const emailMessageId = missingMessageId(miss.index)
     if (byMessageId.has(emailMessageId)) continue
-    const { error: missErr } = await db.from('invoices_queue').insert({
+    const { data: missRow, error: missErr } = await db.from('invoices_queue').insert({
       ...common,
       email_message_id: emailMessageId,
       attachment_filename: safeInboundFilename(miss.name) || `attachment-${miss.index + 1}`,
       not_invoice_reason: `attachment_not_received: ${miss.reason}`,
-    })
+    }).select('id').single()
     if (missErr) {
       if (missErr.code === '23505') continue
       logError('invoice-ingest', 'not-received row insert failed', { err: missErr })
       return { ok: false, error: 'insert_failed' }
     }
     notReceived++
+    if (missRow?.id) missingIds.push(missRow.id)
   }
 
-  return succeed(created, alreadyStored, notReceived)
+  return succeed(created, alreadyStored, notReceived, [...created, ...missingIds])
 }

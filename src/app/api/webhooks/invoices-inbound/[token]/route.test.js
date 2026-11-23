@@ -6,6 +6,7 @@ import { createFakeDb } from '../../../../../../tests/helpers/fake-db.js'
 let db
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/invoices-queue/ingest-email', () => ({ ingestInboundEmail: vi.fn() }))
+vi.mock('@/lib/invoices-queue/queue-preparation', () => ({ queueInvoicePreparation: vi.fn(async () => ({ queued: [] })) }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/webhook-events', async () => ({
   ...(await vi.importActual('@/lib/webhook-events')),
@@ -15,6 +16,7 @@ vi.mock('@/lib/webhook-events', async () => ({
 
 const { POST } = await import('./route.js')
 const { ingestInboundEmail } = await import('@/lib/invoices-queue/ingest-email')
+const { queueInvoicePreparation } = await import('@/lib/invoices-queue/queue-preparation')
 const { recordWebhookEvent, releaseWebhookEvent } = await import('@/lib/webhook-events')
 
 const TOKEN = 'test-token'
@@ -32,7 +34,7 @@ const email = (extra = {}) => ({
   ...extra,
 })
 const strays = () => db.tables.invoice_inbound_strays || []
-const OK = { ok: true, created: ['r1'], alreadyStored: 0, skippedInline: 0, notReceived: 0 }
+const OK = { ok: true, created: ['r1'], rowIds: ['r1', 'r2'], alreadyStored: 0, skippedInline: 0, notReceived: 0 }
 
 let savedToken
 beforeEach(() => {
@@ -54,6 +56,36 @@ describe('inbound invoice webhook', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, created: 1, ids: ['r1'], notReceived: 0 })
     expect(ingestInboundEmail).toHaveBeenCalledWith(db, expect.objectContaining({ location: expect.objectContaining({ id: 'loc1' }) }))
+    expect(releaseWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  // INVOICEPREP.3 — every inserted row, including path-less ones, is queued.
+  it('queues every row the ingest inserted, once, with the same client', async () => {
+    const res = await POST(req(email()), ctx())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, created: 1, ids: ['r1'], notReceived: 0 })
+    expect(queueInvoicePreparation).toHaveBeenCalledTimes(1)
+    expect(queueInvoicePreparation).toHaveBeenCalledWith(db, ['r1', 'r2'])
+  })
+
+  it('queues nothing when the ingest inserted nothing (repeat delivery)', async () => {
+    ingestInboundEmail.mockResolvedValue({ ...OK, created: [], rowIds: [], alreadyStored: 1 })
+    const res = await POST(req(email()), ctx())
+    expect(res.status).toBe(200)
+    expect(queueInvoicePreparation).not.toHaveBeenCalled()
+  })
+
+  it('queues nothing when the ingest fails', async () => {
+    ingestInboundEmail.mockResolvedValue({ ok: false, error: 'insert_failed' })
+    await POST(req(email()), ctx())
+    expect(queueInvoicePreparation).not.toHaveBeenCalled()
+  })
+
+  it('a helper that rejects changes neither the status nor the body, and frees nothing', async () => {
+    queueInvoicePreparation.mockRejectedValue(new Error('qstash down'))
+    const res = await POST(req(email()), ctx())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, created: 1, ids: ['r1'], notReceived: 0 })
     expect(releaseWebhookEvent).not.toHaveBeenCalled()
   })
 
@@ -99,6 +131,47 @@ describe('inbound invoice webhook', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, ignored: 'unparseable_recipient' })
     expect(strays()).toEqual([expect.objectContaining({ reason: 'unparseable_recipient', slug: null, to_address: 'someone@example.com' })])
+  })
+
+  describe('routing by any recipient field', () => {
+    const addr = (slug) => `${slug}-invoices@mail.un1tdublin.com`
+    const lookups = () => db.calls.filter((c) => c.table === 'locations')
+
+    it('routes by a later field when the first names no studio', async () => {
+      const res = await POST(req(email({
+        To: undefined, ToFull: [{ Email: addr('nowhere') }], OriginalRecipient: addr('north'),
+      })), ctx())
+      expect(res.status).toBe(200)
+      expect(ingestInboundEmail).toHaveBeenCalledWith(db, expect.objectContaining({ location: { id: 'loc1' } }))
+      expect(strays()).toEqual([])
+      expect(lookups()).toHaveLength(1)
+    })
+
+    it('uses the first field that names a studio and ignores later ones', async () => {
+      db.tables.locations.push({ id: 'loc2', name: 'South', invoices_inbound_slug: 'south' })
+      await POST(req(email({
+        ToFull: [{ Email: addr('south') }], To: addr('north'), OriginalRecipient: addr('north'),
+      })), ctx())
+      expect(ingestInboundEmail).toHaveBeenCalledWith(db, expect.objectContaining({ location: { id: 'loc2' } }))
+      expect(lookups()).toHaveLength(1)
+    })
+
+    it('records one stray with the first slug when no candidate names a studio', async () => {
+      const res = await POST(req(email({
+        ToFull: [{ Email: addr('one') }], To: addr('two'), OriginalRecipient: addr('three'),
+      })), ctx())
+      expect(await res.json()).toEqual({ success: true, ignored: 'unknown_slug', slug: 'one' })
+      expect(strays()).toEqual([expect.objectContaining({ reason: 'unknown_slug', slug: 'one' })])
+      expect(ingestInboundEmail).not.toHaveBeenCalled()
+      expect(lookups()).toHaveLength(1)
+    })
+
+    it('records unparseable_recipient when no field holds a studio address', async () => {
+      const res = await POST(req(email({ To: 'a@example.com', ToFull: [{ Email: 'b@example.com' }], OriginalRecipient: 'c@example.com' })), ctx())
+      expect(await res.json()).toEqual({ success: true, ignored: 'unparseable_recipient' })
+      expect(strays()).toHaveLength(1)
+      expect(lookups()).toHaveLength(0)
+    })
   })
 
   it('releases the claim and answers 500 when the stray cannot be written', async () => {

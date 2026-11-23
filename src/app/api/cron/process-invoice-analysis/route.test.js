@@ -26,7 +26,7 @@ beforeEach(() => {
   process.env.CRON_SECRET = 'shh'
   batch = [{ id: 'inv-1' }, { id: 'inv-2' }]
   db = seed()
-  processInvoiceAnalysisRow.mockImplementation(async (_db, row) => (row.id === 'inv-2' ? { extractionError: 'bad file' } : {}))
+  processInvoiceAnalysisRow.mockImplementation(async (_db, row) => (row.id === 'inv-2' ? { status: 'processed', extractionError: 'unreadable' } : { status: 'processed' }))
 })
 
 describe('GET /api/cron/process-invoice-analysis', () => {

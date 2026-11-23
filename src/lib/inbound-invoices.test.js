@@ -104,6 +104,7 @@ describe('INBOUND_INVOICE_STATUSES', () => {
       'data_approved',
       'forwarded',
       'rejected',
+      'not_invoice',
     ])
   })
 })
@@ -129,8 +130,32 @@ describe('canTransitionInboundInvoice', () => {
     expect(canTransitionInboundInvoice('rejected', 'received')).toBe(false)
   })
 
+  it('lets preparation read a received row straight to extracted', () => {
+    expect(canTransitionInboundInvoice('received', 'extracted')).toBe(true)
+  })
+
+  it('sets a non-invoice aside and brings it back only to received', () => {
+    expect(canTransitionInboundInvoice('received', 'not_invoice')).toBe(true)
+    expect(canTransitionInboundInvoice('quality_approved', 'not_invoice')).toBe(true)
+    expect(canTransitionInboundInvoice('not_invoice', 'quality_approved')).toBe(true)
+    expect(canTransitionInboundInvoice('not_invoice', 'received')).toBe(false)
+    expect(canTransitionInboundInvoice('not_invoice', 'extracted')).toBe(false)
+    expect(canTransitionInboundInvoice('extracted', 'not_invoice')).toBe(false)
+  })
+
+  it('pins the whole map', () => {
+    expect(INBOUND_INVOICE_TRANSITIONS).toEqual({
+      received: ['quality_approved', 'extracted', 'not_invoice', 'rejected'],
+      quality_approved: ['extracted', 'not_invoice', 'rejected'],
+      extracted: ['data_approved', 'rejected'],
+      data_approved: ['forwarded', 'rejected'],
+      forwarded: [],
+      rejected: [],
+      not_invoice: ['quality_approved'],
+    })
+  })
+
   it('blocks skipping a stage', () => {
-    expect(canTransitionInboundInvoice('received', 'extracted')).toBe(false)
     expect(canTransitionInboundInvoice('received', 'data_approved')).toBe(false)
     expect(canTransitionInboundInvoice('quality_approved', 'data_approved')).toBe(false)
   })

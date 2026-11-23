@@ -16,17 +16,13 @@
 //   • extracted/data_approved/forwarded/rejected → skipped (already past
 //                          analysis, or terminal).
 //
-// QSTASH.6: after the row updates land, each successfully-queued id is
-// fire-and-forget published onto the QStash `invoice-analysis` QUEUE
-// (parallelism 2 — Claude Vision OCR must stay rate-limit-bounded, so a
-// 50-invoice bulk queue must never become 50 concurrent worker
-// invocations). Publishes are batched with allSettled AFTER the loop
-// (one 3s worst-case window total, not one per row), dedup id DASH-ONLY
-// (QStash 400s on colons — the QSTASH.2 lesson), own try/catch — a
-// publish failure never changes the operator's response; the
-// process-invoice-analysis cron sweeps whatever QStash misses. This
-// route is the ONLY site that sets analysis_queued_at (repo-sweep
-// verified: bulk-analyse and the cron only ever clear it).
+// INVOICEPREP.3: the route still writes status, who vouched for quality and
+// the cleared error itself (queueInvoicePreparation does none of those), and
+// it stamps analysis_queued_at in the same update so a per-id outcome of
+// 'queued' is exact: a row is queued only when that update returned it. The
+// update never touches analysis_claimed_at, so a read in flight is not freed. Publishing is the shared helper's job, so there is one
+// publisher: it re-stamps and pushes each id to the QStash queue. A failure
+// there never changes the response; the sweeper cron picks the rows up.
 //
 // Returns per-id outcomes + counts, same shape as the other bulk routes.
 
@@ -37,12 +33,8 @@ import {
   loadAndScopeBulkRows,
 } from '../_bulk-helpers'
 import { validateBody } from '@/lib/validate'
-import {
-  publishQueuePush,
-  INVOICE_ANALYSIS_WORKER_PATH,
-  INVOICE_ANALYSIS_QUEUE_NAME,
-  INVOICE_ANALYSIS_QUEUE_PARALLELISM,
-} from '@/lib/qstash'
+import { queueInvoicePreparation } from '@/lib/invoices-queue/queue-preparation'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -87,44 +79,41 @@ export async function POST(request) {
     }
     // received rows are auto-quality-approved (operator-vouched); already-
     // approved rows just get (re)queued with any stale error cleared.
-    const { error: updErr } = await db
+    // analysis_claimed_at is left alone: a live claim means a read is in
+    // flight (freeing it could start a second, paid read), and a stale one is
+    // already re-claimable by the sweeper.
+    const { data: updated, error: updErr } = await db
       .from('invoices_queue')
       .update({
         status: 'quality_approved',
         quality_reviewed_at: row.status === 'received' ? now : undefined,
         quality_reviewed_by: row.status === 'received' ? user.id : undefined,
         analysis_queued_at: now,
-        analysis_claimed_at: null,
         extraction_error: null,
       })
       .eq('id', id)
+      .eq('location_id', row.location_id)
       .in('status', ['received', 'quality_approved'])
+      .select('id')
     if (updErr) {
       results.push({ id, outcome: 'failed', error: updErr.message })
+      continue
+    }
+    if (!updated || updated.length === 0) {
+      // The row moved on (read, rejected) since it was loaded.
+      results.push({ id, outcome: 'skipped', reason: 'concurrent_change' })
       continue
     }
     results.push({ id, outcome: 'queued' })
   }
 
-  // Fire-and-forget QStash enqueue for every row that actually queued.
-  // The table write above is the delivery guarantee (cron sweeps); the
-  // push is the latency optimisation. allSettled + never-throwing
-  // publishQueuePush + belt-and-braces try/catch: nothing here can
-  // touch the operator's response.
+  // The table write above is the delivery guarantee; the push is latency.
   const queuedIds = results.filter((r) => r.outcome === 'queued').map((r) => r.id)
   if (queuedIds.length > 0) {
     try {
-      await Promise.allSettled(queuedIds.map((id) => publishQueuePush({
-        path: INVOICE_ANALYSIS_WORKER_PATH,
-        body: { id },
-        // Dash-separated, not colon — QStash 400s on colons in this
-        // header (the QSTASH.2 lesson).
-        deduplicationId: `invoice-analysis-${id}`,
-        queueName: INVOICE_ANALYSIS_QUEUE_NAME,
-        queueParallelism: INVOICE_ANALYSIS_QUEUE_PARALLELISM,
-      })))
-    } catch {
-      // publishQueuePush swallows its own errors; belt-and-braces only.
+      await queueInvoicePreparation(db, queuedIds)
+    } catch (err) {
+      logError('bulk-queue-analysis', 'preparation hand-off failed', { err })
     }
   }
 

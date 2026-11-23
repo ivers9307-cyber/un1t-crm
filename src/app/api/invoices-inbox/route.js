@@ -17,6 +17,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
+import { queueInvoicePreparation } from '@/lib/invoices-queue/queue-preparation'
+import { logError } from '@/lib/log'
 import {
   INBOUND_INVOICE_SUPPORTED_MIME,
   inboundInvoiceStoragePath,
@@ -98,6 +100,7 @@ export async function GET(request) {
       xero_bill_status, xero_bill_paid_at, xero_bill_amount_paid, xero_bill_amount_due,
       xero_total_tax, xero_tax_mismatch,
       not_invoice_reason, skipped_attachment_count,
+      review_reasons, prepared_at, duplicate_of_id,
       created_at,
       location:location_id ( id, name ),
       quality_reviewer:quality_reviewed_by ( id, full_name ),
@@ -233,6 +236,16 @@ export async function POST(request) {
     .eq('id', row.id)
   if (updErr) {
     return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+  }
+
+  // Read and checked on arrival, no click. A failure here never fails the
+  // upload: the file is stored. If the stamp did not land, the sweeper cron
+  // (which claims only rows stamped analysis_queued_at) will not see it, and
+  // the row waits in received for a person's Extract.
+  try {
+    await queueInvoicePreparation(db, [row.id])
+  } catch (err) {
+    logError('invoices-inbox', 'could not queue upload for preparation', { rowId: row.id, err })
   }
 
   return NextResponse.json({ success: true, data: { ...row, attachment_path: storagePath } }, { status: 201 })

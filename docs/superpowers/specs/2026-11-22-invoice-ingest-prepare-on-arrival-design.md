@@ -4,6 +4,10 @@ Date: 2026-11-22. Status: approved by Richard 22 Nov 2026 (the
 recommendations, the screen mockup and the four calls under "Decisions
 settled"). Trusted suppliers (section 7) stays parked.
 
+Progress: phase 1 (arrival safety) and phase 1b (large emails) are live. Phase 2
+(preparation, INVOICEPREP.3) is built on branch `invoice-prepare-on-arrival`, pending
+merge; migration 872 is the one it needs. Phases 3 and 4 are not started.
+
 ## Intent
 
 Richard forwards a supplier invoice to a studio's invoices address. Today it
@@ -93,7 +97,7 @@ Changes to the inbound webhook:
   gets one row, now carrying the body and a `not_invoice_reason`
   (`no_attachment`, `unsupported_type: <types>`). In phase 1 the row stays
   `received` so the current screen keeps showing it; phase 2 moves it to the
-  new `not_invoice` status.
+  new `not_invoice` status (preparation does this when it finds no file).
 - **Catch misaddressed mail.** An email to an address that resolves to no
   studio is written to a new small table, `invoice_inbound_strays` (message id,
   to, from, subject, reason, received time). Masters see a count and the list
@@ -103,83 +107,143 @@ Changes to the inbound webhook:
   rows and for uploads through `POST /api/invoices-inbox`, as the email hunt
   already does.
 
-### 2. Preparation: one function, run on arrival
+### 2. Preparation: one function, run on arrival (built in phase 2)
 
-A new `prepareInvoiceRow(db, row)` in `src/lib/invoices-queue/prepare.js`
-replaces the manual sequence. It is the only place a row is read and checked.
-It runs through the existing QStash `invoice-analysis` queue (parallelism 2)
-with the existing sweeper cron (`process-invoice-analysis`) as the delivery
-guarantee. The webhook and the upload route publish the row id after insert;
-they do not wait for the result.
+`prepareInvoiceRow(db, row, deps)` in `src/lib/invoices-queue/prepare.js` replaces the
+manual sequence. It is the only place a row is read and checked. It runs through the
+`invoice-analysis` QStash queue (parallelism 2) with the sweeper cron
+(`process-invoice-analysis`) as the delivery guarantee. Every arrival path hands its new
+row ids to `queueInvoicePreparation` (`src/lib/invoices-queue/queue-preparation.js`),
+which stamps `analysis_queued_at` (the sweeper claims only stamped rows) and publishes
+each id; it never throws and never waits for the result. The paths are the inbound
+email webhook (a retried email also queues the rows an earlier attempt stored), the
+upload route, the contractor, expense, car-document and card-receipt/hunt enqueue
+helpers in `enqueue.js`, and the coverage upload route. A receiptless expense row is
+born `extracted` with the reasons its typed fields give and is not queued.
+
+The caller claims the row first (`analysis_claimed_at`); the queue worker, the sweeper,
+"Extract" / "Read again" and the bulk extract all do. Every write that
+`prepareInvoiceRow` makes is guarded on the status still being `received` or
+`quality_approved`, clears both queue columns and stamps `prepared_at`; if the row moved
+on in the meantime the outcome is `skipped` and nothing is written.
 
 Steps, in order:
 
-1. **Duplicate by file.** Another row at the same studio with the same
-   `content_hash` that is not rejected: stop, flag `duplicate_file`, link it
-   (`duplicate_of_id`). No extraction is paid for.
-2. **Read.** `extractInvoiceFieldsFromBytes`, as today, with one new output
-   field, `document_type` (`invoice`, `receipt`, `statement`, `other`).
-   `statement` and `other` go to `not_invoice`. A failed read leaves the row
-   in Needs a look with reason `unreadable` and the error text.
-3. **Match the supplier.** `resolveExtractionDefaults`, as today: exact
-   case-insensitive match to a Xero contact, then the remembered account and
-   category.
-4. **Resolve VAT.** `resolveBillTaxType` against the studio's cached Xero tax
-   rates, on the server, so the rate is settled before anyone opens the row.
-   Today this happens only in the review screen.
-5. **Duplicate by number.** Another row at the same studio with the same Xero
-   contact and invoice number that is forwarded or waiting: flag
-   `duplicate_number`. Then `findXeroBillByNumber`: a match flags
-   `already_in_xero`. A failed Xero lookup does not block preparation; the
-   push-time check remains the backstop.
-6. **Decide the pile.** Write `review_reasons` (text array) and `prepared_at`.
+1. **No file.** A row with no attachment becomes `not_invoice` (reason
+   `no_attachment` unless the row already carried one).
+2. **Download and hash.** From the row's own bucket. A failed or empty download is
+   `unreadable`. `content_hash` is filled if the row has none.
+3. **Duplicate by file.** An earlier row at the same studio with the same hash that is
+   not `rejected` or `not_invoice` (earlier by `received_at`, ties by smaller id, so two
+   copies never flag each other): flag `duplicate_file`, set `duplicate_of_id`, leave the
+   status as it is, and make no read. A person's "Read again" runs with `force` and skips
+   this check.
+4. **Read.** `extractInvoiceFieldsFromBytes`, with a 90 second deadline
+   (`EXTRACTION_TIMEOUT_MS`). The reader reports `document_type`: `invoice`, `receipt`,
+   `credit_note`, `statement` or `other`, and never chooses the tax type. Just before
+   the paid read the status is checked again. A failed read is `unreadable` with the
+   error text.
+5. **Set aside.** Only a row still `received` whose type is `statement` or `other` moves
+   to `not_invoice`, with `not_invoice_reason: document_type: <type>`.
+6. **Match the supplier.** `resolveExtractionDefaults`: exact case-insensitive match to a
+   Xero contact, then the remembered account and category. The remembered VAT rate is not
+   patched in.
+7. **Resolve VAT.** `resolveBillTaxType` against the studio's cached Xero tax rates, on the
+   server. A rate derived from the document's own figures is stored with
+   `tax_type_source: 'derived'`.
+8. **Duplicate by number, then Xero.** Another row at the studio with the same Xero
+   contact and invoice number (trimmed, case-insensitive) in `extracted`,
+   `data_approved` or `forwarded`: `duplicate_number` and `duplicate_of_id`. Then
+   `findXeroBillByNumber`, tried once with a 10 second limit: a match flags
+   `already_in_xero`. A failed or slow lookup raises nothing.
+9. **Write.** `status: 'extracted'`, the fields, `extraction_confidence`
+   (`scoreExtractionConfidence`) and `review_reasons`.
 
-A row is **Ready** when `review_reasons` is empty. The reasons, each with the
-label the screen shows:
+A row is **Ready** when it is `extracted` and `review_reasons` is empty. There are 13
+reasons (`src/lib/invoices-queue/readiness.js`), listed in display order with the label
+the screen shows:
 
 | Reason | Label | Raised when |
 |---|---|---|
-| `new_supplier` | New supplier | no single matching Xero contact |
-| `no_account` | No account yet | supplier matched but nothing remembered |
-| `no_vat_rate` | No VAT rate | VAT status is `unmatched` or `ambiguous` |
-| `vat_differs` | VAT differs from last time | document shows zero VAT but this supplier's last approved bill had a rate |
-| `totals_mismatch` | Totals don't add up | net plus VAT is more than 1c from the total |
-| `missing_date` | No invoice date | date not read |
-| `zero_total` | Total is zero | total is 0 |
+| `unreadable` | Could not be read | the download, the read or the preparation itself failed |
 | `duplicate_file` | Possible duplicate | same file already in the queue |
 | `duplicate_number` | Possible duplicate | same supplier and number in the queue |
 | `already_in_xero` | Already in Xero | Xero holds a bill with this number |
-| `unreadable` | Could not be read | extraction failed |
+| `credit_note` | Credit note | the reader calls it a credit note |
+| `not_an_invoice` | May not be an invoice | the reader calls it a statement or other document, on a row a person had already approved |
+| `new_supplier` | New supplier | no matched Xero contact |
+| `no_account` | No account yet | supplier matched but no account remembered |
+| `no_vat_rate` | No VAT rate | no tax type and the VAT status is unmatched or ambiguous, or the tax figures are missing or cannot back a derived rate |
+| `vat_differs` | VAT differs from last time | the document shows zero VAT, the rate was not set by a person, and the supplier's remembered rate is above zero |
+| `totals_mismatch` | Totals don't add up | net plus VAT is more than 1c from the total |
+| `missing_date` | No invoice date | date not read |
+| `zero_total` | Total is zero | total is zero or not read |
 
-Editing a field on a Needs a look row re-runs steps 4 to 6 (no new
-extraction), so fixing the flagged field moves the row to Ready.
+Two reasons go beyond the original design: `credit_note` and `not_an_invoice`.
 
-To support `vat_differs`, supplier memory gains one column,
-`xero_supplier_defaults.default_tax_type`, written by `rememberSupplierCoding`
-alongside the account. It is used only for that comparison and as the
-pre-selected value in the VAT picker; a rate derived from the document's own
-figures always wins.
+**Credit notes.** A credit note sent as a bill would be booked the wrong way round, so
+it is never Ready: preparation flags it, bulk send skips it like any flagged row, and
+`data-approve` refuses it outright (422, "This is a credit note. It cannot be sent as a
+bill."). There is no route that sends a credit note in this phase.
+
+**A row a person vouched for is never set aside.** Contractor invoices, expense receipts,
+restored rows and rows sent for analysis arrive at `quality_approved`. If the reader calls
+one a statement or other document it is still read and coded, and comes out `extracted`
+with `not_an_invoice` (so it is never Ready), not `not_invoice`.
+
+**Editing.** Saving a field edit on an `extracted` row calls `recheckInvoiceRow`: it
+re-derives the VAT unless a person chose it, recomputes the reasons and the
+number-duplicate link, and carries `already_in_xero` and `duplicate_file` over as they
+were. It downloads nothing, reads nothing and calls no Xero API, so fixing the flagged
+field moves the row to Ready. The fields route returns the new `review_reasons`. A recheck
+that fails changes nothing.
+
+**Supplier memory.** `xero_supplier_defaults.default_tax_type` is written by
+`rememberSupplierCoding` when a bill is sent. It keeps a rate only when a person set it,
+the type has no source (an older row), or it was derived and the row has a real subtotal
+and tax breakdown; a stated zero tax with a breakdown is remembered as `NONE`. A guessed
+rate (for example a till receipt with no VAT breakdown) never overwrites the real one.
+It is used only for the `vat_differs` comparison.
+
+**Failure.** An error while preparing is written to the row as `unreadable` with the error
+text, which also clears the claim. If that write itself fails, or the queue's call throws,
+the claim is kept and the sweeper retries the row once the claim is 10 minutes old,
+rather than paying for a read every two minutes.
 
 ### 3. States
 
-The status column and the Xero push are kept; the two human gates are removed.
+The status column and the Xero push are kept; the two human gates are gone from the
+path, though the old routes remain until phase 3.
 
 - Emailed, uploaded, card-receipt, car-document and hunted rows: `received` →
-  (preparation) → `extracted`. The `quality_approved` step is skipped.
-- Contractor invoices and expense receipts still enter at `quality_approved`
-  after the owner's approval, and are prepared at once in the same way.
-  Receiptless expense rows are unchanged.
-- New status `not_invoice`, with one way out: "Move to Needs a look" returns
-  the row to `received` and prepares it.
+  (preparation) → `extracted`. Nobody has to approve the file first.
+- Contractor invoices and expense receipts still enter at `quality_approved` after the
+  owner's approval, and are prepared at once in the same way.
+- New status `not_invoice` (migration 872 widens the status check), with one way out:
+  `POST /api/invoices-inbox/[id]/restore`. It works only from `not_invoice` (otherwise
+  409), needs a file (otherwise 400), and moves the row to `quality_approved`, not back to
+  `received`: the person restoring it has vouched for it, so preparation will not set it
+  aside again on the reader's say-so. It records who and when, clears
+  `not_invoice_reason`, `review_reasons`, `prepared_at`, `duplicate_of_id`, the extraction
+  error and the claim, stamps `analysis_queued_at` and queues the row. The read runs with
+  the duplicate-by-file check on.
 - `extracted` → `data_approved` → `forwarded` and `rejected` are unchanged.
+- `unreadable` and `duplicate_file` leave the status where it was (`received` or
+  `quality_approved`), so those rows can still be rejected from the quality stage; the
+  quality reject route accepts them.
+- The sweeper's claim function (`claim_invoice_analysis_batch`) now takes `received` as
+  well as `quality_approved` rows, only those stamped with `analysis_queued_at`.
 
 The pile is derived, not stored as a status: Ready is `extracted` with empty
 `review_reasons`; Needs a look is everything else still waiting.
 
-Routes removed once the screen no longer calls them: `quality-approve`,
-`bulk-queue-analysis`. `quality-reject` and `data-reject` become one `reject`
-route. `extract` stays as "Read again" and delegates to `prepareInvoiceRow`,
-which also fixes fault 8.
+Routes still in place (removed in phase 3 once the screen no longer calls them):
+`quality-approve`, `bulk-queue-analysis`, the separate `quality-reject` and `data-reject`.
+`bulk-queue-analysis` now queues through `queueInvoicePreparation`. `bulk-analyse`
+(the first few selected rows) now runs `prepareInvoiceRow` in sequence with the same
+claim as "Read again". `extract` stays as "Read again", claims the row, runs
+`prepareInvoiceRow` with `force`, and no longer scores confidence with its own rule
+(fault 8 fixed).
 
 ### 4. Sending
 
@@ -187,9 +251,13 @@ No change to how a bill is built or pushed (`pushQueueRowToXero`,
 `recordPushOutcome`): one summary line, tax-inclusive, draft status, source
 file attached, bill id saved before attaching.
 
-- "Send to Xero" on an open row is today's `data-approve`.
-- "Send all ready" is today's `bulk-send` over the Ready pile. It refuses a
-  row whose `review_reasons` is not empty, checked on the server.
+- "Send to Xero" on an open row is today's `data-approve`. It still sends a row with
+  reasons if a person clicks it, except a credit note (above); the screen disables the
+  button until the row is Ready.
+- "Send all ready" is today's `bulk-send`. It skips any row whose `review_reasons` is not
+  empty, checked on the server, and leaves it untouched.
+- Nothing is ever sent to Xero without a person's click: preparation only reads, checks
+  and codes, and its one Xero call is the read-only bill lookup.
 - Who may send is unchanged: master or owner at the studio for a single row,
   the `bookkeeper` permission for bulk.
 
@@ -247,7 +315,10 @@ remains the second check. Not built until Richard asks for it.
 
 ### 8. Clearing the backlog
 
-After phase 2 is live, run preparation once over every `received` row.
+After phase 2 is live, run preparation once over every `received` row. The
+sweeper claims only rows stamped with `analysis_queued_at`, so the clean-up is one
+statement that stamps them (shown to Richard first); the sweeper then reads ten every
+two minutes.
 Existing rows did not record whether an image was inline, so the old logos are
 read like any other file and set aside as `document_type: other` (about 71
 reads, roughly one euro in total). Expected result at the studio with 161
@@ -255,6 +326,12 @@ waiting: about 71 set aside, the 25 same-file groups flagged, the rest sorted
 into the two piles. Nothing is sent to Xero by the clean-up.
 
 ## Database changes (one forward-only migration per phase)
+
+Phase 1 is migration 868 (`email_body_text`, `skipped_attachment_count`,
+`not_invoice_reason`, the strays table, the hash index). Phase 2 is migration 872
+(`review_reasons`, `prepared_at`, `duplicate_of_id`, the `not_invoice` status,
+`default_tax_type` and the seven-argument `upsert_supplier_default`, and the claim
+function taking `received` rows). The list below is the whole design.
 
 - `invoices_queue`: `email_body_text text`, `skipped_attachment_count int`,
   `prepared_at timestamptz`, `review_reasons text[] not null default '{}'`,
@@ -275,12 +352,15 @@ into the two piles. Nothing is sent to Xero by the clean-up.
 
 1. **Arrival safety** (no screen change): safe retry, body kept, logos
    skipped, strays table, hash on arrival. Fixes faults 1 to 5 on its own.
-2. **Preparation**: `prepareInvoiceRow`, reasons, `not_invoice`, supplier VAT
-   memory, publish on arrival. The current screen keeps working: rows simply
-   arrive already extracted.
-3. **Screen**: the two piles, the drawer, the new open-invoice panel; old
-   routes removed. Then the backlog clean-up.
-4. **Weekly email.**
+2. **Preparation (built, pending merge)**: `prepareInvoiceRow`, the 13 reasons,
+   `not_invoice`, restore, supplier VAT memory, every arrival queued, credit notes
+   refused, bulk send skipping flagged rows. The current screen keeps working and now
+   shows the reasons, the not-an-invoice rows and a restore button: rows simply arrive
+   already extracted.
+3. **Screen** (not started): the two piles, the drawer, the new open-invoice panel; the
+   `quality-approve` and `bulk-queue-analysis` routes removed, the two reject routes
+   merged, "Move to Needs a look" wording. Then the backlog clean-up.
+4. **Weekly email** (not started).
 5. **Trusted suppliers**, only on request.
 
 **Phase 1b: large emails (INVOICEPREP.2).** An email whose attachments total
@@ -304,7 +384,9 @@ Each phase is its own PR with its own changelog entry.
 - `prepareInvoiceRow` with `createFakeDb`: one test per reason in the table,
   one for Ready, one for same-file duplicate (no extraction call made), one
   for a failed Xero lookup (preparation still completes).
-- `bulk-send` refuses a row with reasons.
+- `bulk-send` refuses a row with reasons; `data-approve` refuses a credit note.
+- A row a person approved is never set aside; restore returns a set-aside row to
+  `quality_approved` and queues it.
 - A `role-access` case for `invoice_inbound_strays` and the new columns.
 - Screen: a row moves from Needs a look to Ready when its flagged field is
   set.

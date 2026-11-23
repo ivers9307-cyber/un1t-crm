@@ -12,8 +12,51 @@
 // a duplicate extraction; 500 is reserved for infrastructure errors
 // (row fetch failure) where a retry genuinely helps.
 
-import { describe, it, expect } from 'vitest'
-import { responseForOutcome, statusForVerifyFailure, maxDuration } from './route'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createFakeDb } from '../../../../../../tests/helpers/fake-db.js'
+
+let db
+vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
+vi.mock('@/lib/qstash', () => ({
+  verifyQStashSignature: vi.fn(() => ({ ok: true })),
+  INVOICE_ANALYSIS_WORKER_PATH: '/api/webhooks/qstash/invoice-analysis',
+}))
+vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://x.test' }))
+vi.mock('@/lib/invoice-analysis-queue', () => ({ claimAndProcessInvoiceAnalysisRow: vi.fn() }))
+
+const { responseForOutcome, statusForVerifyFailure, maxDuration, POST } = await import('./route')
+const { claimAndProcessInvoiceAnalysisRow } = await import('@/lib/invoice-analysis-queue')
+
+const ID = '00000000-0000-4000-8000-0000000000a1'
+const LOC = '00000000-0000-4000-8000-000000000001'
+const post = () => POST(new Request('https://x.test/api/webhooks/qstash/invoice-analysis', {
+  method: 'POST', body: JSON.stringify({ id: ID }), headers: { 'upstash-signature': 'sig' },
+}))
+const seed = (status, queued = '2026-11-22T10:00:00.000Z') => createFakeDb({
+  tables: { invoices_queue: [{ id: ID, location_id: LOC, status, attachment_bucket: 'invoices', analysis_queued_at: queued }] },
+})
+
+describe('POST row eligibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    claimAndProcessInvoiceAnalysisRow.mockResolvedValue({ status: 'processed' })
+  })
+
+  it.each(['received', 'quality_approved'])('accepts a queued %s row', async (status) => {
+    db = seed(status)
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, processed: true })
+    expect(claimAndProcessInvoiceAnalysisRow).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([['extracted', '2026-11-22T10:00:00.000Z'], ['received', null]])('answers a clean 200 skip for %s / queued=%s', async (status, queued) => {
+    db = seed(status, queued)
+    const res = await post()
+    expect(await res.json()).toEqual({ success: true, skipped: true })
+    expect(claimAndProcessInvoiceAnalysisRow).not.toHaveBeenCalled()
+  })
+})
 
 describe('maxDuration', () => {
   it('gets the same 300s budget as the cron — a worst-case OCR is ~15s but downloads can crawl', () => {

@@ -7,14 +7,15 @@
 // readStagedMarker; nothing is downloaded that it did not return as 'staged'.
 
 import { readStagedMarker } from '@/lib/email-attachment-staging'
+import { MAX_ATTACHMENTS_PER_MESSAGE } from '@/lib/email-attachment-quota'
 import { logError, logWarn } from '@/lib/log'
 
 export const INVOICE_STAGING_BUCKET = 'inbound-invoices'
 
-// Mirrors MAX_ATTACHMENTS_PER_MESSAGE in the shim
-// (supabase/functions/postmark-inbound-shim/index.ts). Past it the shim empties
-// Content and writes no marker. Change the two together.
-export const SHIM_MAX_ATTACHMENTS_PER_MESSAGE = 25
+// The shim's cap (supabase/functions/postmark-inbound-shim/index.ts). Past it
+// the shim empties Content and writes no marker. One copy here: the quota
+// module's constant, which a contract test pins to the shim.
+export const SHIM_MAX_ATTACHMENTS_PER_MESSAGE = MAX_ATTACHMENTS_PER_MESSAGE
 
 // The type checker here has no Node typings; Buffer is a global at runtime.
 const NodeBuffer = /** @type {any} */ (globalThis).Buffer

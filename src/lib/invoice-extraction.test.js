@@ -10,7 +10,7 @@
 // out of scope here — those are I/O paths covered by smoke tests.
 
 import { describe, it, expect } from 'vitest'
-import { invoiceFieldsSchema, scoreExtractionConfidence, applyDueDateDefault, sniffMimeFromBytes } from  './invoice-extraction.js'
+import { invoiceFieldsSchema, scoreExtractionConfidence, applyDueDateDefault, sniffMimeFromBytes, INVOICE_DOCUMENT_TYPES } from  './invoice-extraction.js'
 
 // RECEIPT-NULLS.1 — a till receipt is not an invoice. It routinely has no
 // invoice number, and often no date the model can read off a crumpled
@@ -416,5 +416,104 @@ describe('applyDueDateDefault', () => {
   it('no-ops when there is no invoice_date', () => {
     const f = { invoice_date: null, due_date: null }
     expect(applyDueDateDefault(f)).toBe(f)
+  })
+})
+
+// INVOICEPREP.3 — the reader says what kind of document it read, so a
+// statement or a stray logo can be set aside without a person opening it.
+describe('invoiceFieldsSchema — document_type', () => {
+  const base = {
+    supplier_name: 'Acme Supplies',
+    invoice_number: 'INV-1',
+    invoice_date: '2026-05-01',
+    total: 10,
+  }
+
+  it('lists the five kinds, frozen', () => {
+    expect([...INVOICE_DOCUMENT_TYPES]).toEqual(['invoice', 'receipt', 'credit_note', 'statement', 'other'])
+    expect(Object.isFrozen(INVOICE_DOCUMENT_TYPES)).toBe(true)
+  })
+
+  it.each(['invoice', 'receipt', 'credit_note', 'statement', 'other'])('accepts %s', (document_type) => {
+    const r = invoiceFieldsSchema.safeParse({ ...base, document_type })
+    expect(r.success).toBe(true)
+    expect(r.data.document_type).toBe(document_type)
+  })
+
+  it('rejects an unknown kind', () => {
+    expect(invoiceFieldsSchema.safeParse({ ...base, document_type: 'poster' }).success).toBe(false)
+  })
+
+  it('still parses a row with no document_type (rows extracted before this change)', () => {
+    const r = invoiceFieldsSchema.safeParse(base)
+    expect(r.success).toBe(true)
+    expect(r.data.document_type).toBeUndefined()
+  })
+
+  it('treats null and an empty box as no value', () => {
+    const a = invoiceFieldsSchema.safeParse({ ...base, document_type: null })
+    const b = invoiceFieldsSchema.safeParse({ ...base, document_type: '' })
+    expect(a.success && b.success).toBe(true)
+    expect(a.data.document_type).toBeNull()
+    expect(b.data.document_type).toBeNull()
+  })
+
+  it('a non-invoice answered the way the prompt asks (Unknown, total 0) still validates', () => {
+    const r = invoiceFieldsSchema.safeParse({
+      document_type: 'other',
+      supplier_name: 'Unknown',
+      invoice_number: null,
+      invoice_date: null,
+      total: 0,
+    })
+    expect(r.success).toBe(true)
+  })
+
+  it('a statement with a real supplier name and total 0 validates', () => {
+    const r = invoiceFieldsSchema.safeParse({
+      document_type: 'statement',
+      supplier_name: 'Acme Supplies',
+      invoice_number: null,
+      invoice_date: null,
+      due_date: null,
+      total: 0,
+    })
+    expect(r.success).toBe(true)
+  })
+})
+
+describe('invoiceFieldsSchema — currency and a null-filled non-invoice', () => {
+  const base = { supplier_name: 'Acme Supplies', invoice_number: 'INV-1', invoice_date: '2026-05-01', total: 10 }
+
+  it.each([[null], [''], ['   '], [undefined]])('currency %j falls back to EUR', (currency) => {
+    const r = invoiceFieldsSchema.safeParse({ ...base, currency })
+    expect(r.success).toBe(true)
+    expect(r.data.currency).toBe('EUR')
+  })
+
+  it('keeps a given currency and rejects one that is not three characters', () => {
+    expect(invoiceFieldsSchema.parse({ ...base, currency: 'GBP' }).currency).toBe('GBP')
+    expect(invoiceFieldsSchema.safeParse({ ...base, currency: 'EURO' }).success).toBe(false)
+  })
+
+  it('validates the exact payload the statement/other rule describes', () => {
+    const r = invoiceFieldsSchema.safeParse({
+      document_type: 'other',
+      supplier_name: 'Unknown',
+      total: 0,
+      currency: null,
+      supplier_address: null,
+      invoice_number: null,
+      invoice_date: null,
+      due_date: null,
+      subtotal: null,
+      tax_amount: null,
+      category: null,
+      account_code: null,
+    })
+    expect(r.success).toBe(true)
+    expect(r.data.subtotal).toBe(0)
+    expect(r.data.tax_amount).toBe(0)
+    expect(r.data.currency).toBe('EUR')
   })
 })

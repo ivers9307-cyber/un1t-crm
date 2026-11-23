@@ -100,13 +100,19 @@ export function parseInboundAddress(toAddress) {
 // If the async work fails, the row is left in the intermediate
 // state and the UI surfaces a retry. The transition map is kept
 // data-driven so the test suite can assert on it directly.
+//
+// INVOICEPREP.3: preparation on arrival reads a received row straight to
+// extracted, and sets a row with nothing to read aside as not_invoice. A
+// person can bring a not_invoice row back to quality_approved (the restore
+// route: the person has vouched for it), which queues it to be read again.
 export const INBOUND_INVOICE_TRANSITIONS = {
-  received:         ['quality_approved', 'rejected'],
-  quality_approved: ['extracted', 'rejected'],
+  received:         ['quality_approved', 'extracted', 'not_invoice', 'rejected'],
+  quality_approved: ['extracted', 'not_invoice', 'rejected'],
   extracted:        ['data_approved', 'rejected'],
   data_approved:    ['forwarded', 'rejected'],
   forwarded:        [],
   rejected:         [],
+  not_invoice:      ['quality_approved'],
 }
 
 export const INBOUND_INVOICE_STATUSES = Object.keys(INBOUND_INVOICE_TRANSITIONS)

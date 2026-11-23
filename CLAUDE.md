@@ -72,6 +72,7 @@ Guidance for Claude Code working in **un1t-crm**: the staff and admin CRM (Next.
 - A new Revolut payment table needs a reconcile domain in `src/lib/revolut-reconcile.js`.
 - A queued webhook event is never marked processed when it recorded nothing.
 - A webhook that claims a dedup key before it writes must release it on failure and store idempotently, so a retry can finish the job.
+- A new path that inserts into `invoices_queue` must call `queueInvoicePreparation`; the sweeper claims only rows stamped `analysis_queued_at`.
 
 **Conventions that bite**: full text in [`docs/rules/conventions.md`](docs/rules/conventions.md).
 - No silent env fallbacks, no `x-api-key`; responses are `{ success, data?, error?, issues? }`.

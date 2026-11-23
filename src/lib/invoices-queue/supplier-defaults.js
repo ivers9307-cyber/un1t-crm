@@ -21,6 +21,7 @@
 // memory miss never blocks an extraction or an approval.
 
 import { escapeLikePattern } from '../like-escape'
+import { logWarn } from '@/lib/log'
 
 /**
  * Resolve an extracted supplier name to a cached Xero contact for
@@ -61,7 +62,7 @@ export async function getSupplierDefault(db, locationId, xeroContactId) {
 
   const { data, error } = await db
     .from('xero_supplier_defaults')
-    .select('default_account_code, default_xero_account_id, default_category, use_count, last_used_at')
+    .select('default_account_code, default_xero_account_id, default_category, default_tax_type, use_count, last_used_at')
     .eq('location_id', locationId)
     .eq('xero_contact_id', xeroContactId)
     .maybeSingle()
@@ -78,18 +79,31 @@ export async function getSupplierDefault(db, locationId, xeroContactId) {
  */
 export async function recordSupplierDefault(db, {
   locationId, xeroContactId, supplierName,
-  accountCode, xeroAccountId, category,
+  accountCode, xeroAccountId, category, taxType,
 }) {
   if (!locationId || !xeroContactId || !xeroAccountId) return
 
-  await db.rpc('upsert_supplier_default', {
+  // Best-effort: a memory write must never fail an approval, so log and move on.
+  let error = null
+  try {
+    ;({ error } = await db.rpc('upsert_supplier_default', {
     p_location_id: locationId,
     p_xero_contact_id: xeroContactId,
     p_supplier_name: supplierName || null,
     p_account_code: accountCode || null,
     p_xero_account_id: xeroAccountId,
     p_category: category || null,
-  })
+    // null leaves the stored rate unchanged (see the RPC).
+    p_tax_type: taxType || null,
+    }))
+  } catch (e) {
+    error = e
+  }
+  if (error) {
+    logWarn('supplier-defaults', 'could not remember supplier coding', {
+      location_id: locationId, xero_contact_id: xeroContactId, error: error.message,
+    })
+  }
 }
 
 /**
@@ -112,6 +126,8 @@ export async function resolveExtractionDefaults(db, locationId, supplierName) {
     },
   }
 
+  // The remembered tax type is deliberately NOT patched in: a rate derived from
+  // the document's own figures must win; the remembered one is only compared later.
   const def = await getSupplierDefault(db, locationId, contact.xero_contact_id)
   if (def) {
     if (def.default_xero_account_id) {

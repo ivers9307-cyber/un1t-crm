@@ -51,6 +51,12 @@ import { createServerClient } from '@/lib/supabase'
 import { INVOICE_CATEGORIES } from './invoice-categories'
 import { anthropicMessages } from '@/lib/anthropic'
 
+// INVOICEPREP.3 — the reader call's deadline. A read that never answers would
+// otherwise hold the preparation worker until the platform kills it, leaving
+// the row claimed after a paid read. 90 s is well past a normal read (5-15 s)
+// and inside every caller's maxDuration (120 s for /extract).
+export const EXTRACTION_TIMEOUT_MS = 90_000
+
 /**
  * Convert a HEIC/HEIF image (HEVC-encoded — the iPhone default) to JPEG so
  * Claude vision can read it. sharp's prebuilt libvips has NO HEVC decoder
@@ -183,6 +189,11 @@ const optionalMoney = z.coerce.number().optional().transform((v) => v ?? 0)
 const blankToNull = (schema) =>
   z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? null : v), schema)
 
+// INVOICEPREP.3 — what kind of document the reader saw, so statements and
+// non-invoices can be set aside automatically. Optional everywhere: rows
+// extracted before this field existed, and editor saves, carry none.
+export const INVOICE_DOCUMENT_TYPES = Object.freeze(['invoice', 'receipt', 'credit_note', 'statement', 'other'])
+
 const lineItem = z.object({
   description: z.string().min(1).max(500),
   quantity: z.coerce.number().nonnegative(),
@@ -223,7 +234,12 @@ const invoiceFields = z.object({
   invoice_number: blankToNull(z.string().trim().min(1).max(100).nullable()),
   invoice_date: blankToNull(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invoice_date must be YYYY-MM-DD').nullable()),
   due_date: blankToNull(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'due_date must be YYYY-MM-DD').nullable().optional()),
-  currency: z.string().length(3).default('EUR'),
+  // A statement or non-invoice carries no currency; null, '' and blanks mean
+  // "not given" and fall back to EUR. A present value must still be 3 chars.
+  currency: z.preprocess(
+    (v) => (v === null || (typeof v === 'string' && v.trim() === '') ? undefined : v),
+    z.string().length(3).default('EUR'),
+  ),
   // ZERO-TOTAL.1 — see requiredMoney/optionalMoney above. The total is the
   // one number the document must actually state; the breakdown may be absent.
   subtotal: optionalMoney,
@@ -234,6 +250,7 @@ const invoiceFields = z.object({
   // the prompt instruction for the inbound_invoices path). Validated
   // against the enum so the inbox UI can rely on the value if set.
   category: blankToNull(z.enum(INVOICE_CATEGORIES).nullable().optional()),
+  document_type: blankToNull(z.enum(INVOICE_DOCUMENT_TYPES).nullable().optional()),
   // INVOICES.3 — operator-editable account code free-text field.
   // Claude can suggest one if the supplier maps obviously to a
   // standard chart-of-accounts entry; otherwise this stays null and
@@ -292,6 +309,7 @@ Required fields:
 - tax_amount (number) — VAT / GST / sales tax total
 - total (number) — invoice total including tax. Must equal subtotal + tax_amount within 0.01.
 - category (string | null) — one of: utilities, cleaning, equipment, marketing, insurance, rent, maintenance, professional_services, staff_training, office_supplies, software, bank_fees, other. Pick the SINGLE best match for the whole invoice based on the supplier name and what the invoice is for. Use null only if genuinely unclear.
+- document_type (string) — one of: invoice, receipt, credit_note, statement, other. Never null. "invoice" is any bill asking for payment for goods or services, including a utility bill and a pro-forma invoice. "receipt" is proof of a payment already made: a till or card receipt, an invoice marked paid, a subscription or online payment receipt. "credit_note" is a document from a supplier that reduces what is owed (a credit note, a refund note). "statement" lists several invoices or a running balance and is not itself a bill. "other" is something that is clearly not a bill, a credit note or proof of payment: a logo, a signature image, a photo of something else, a letter, a quote, a delivery note, a remittance advice. When unsure between invoice and other, choose invoice.
 - account_code (string | null) — only suggest a value if the supplier matches an obvious accounting category (e.g. an electric utility → "Utilities" account code if visible on the invoice). Otherwise null and let the operator decide.
 
 Category guidance:
@@ -314,6 +332,8 @@ Rules:
 - Numbers must be JSON numbers, not strings. Strip currency symbols, commas, and any other formatting.
 - Dates must be ISO format. If the invoice shows "12/03/2026" or "12 March 2026", convert to "2026-03-12".
 - If a field is genuinely absent, use null (for optional fields) or your best inference from context (for required fields). Never invent supplier names or invoice numbers.
+- For a document_type of statement or other ONLY: still return the JSON object, with supplier_name as best read (or "Unknown"), total 0 (do not put a statement's balance in total), currency "EUR" unless another is shown, and every other field except document_type null.
+- For an invoice, receipt or credit_note, never return 0 for a total you could not read. If the total cannot be read, return null for total. For a credit_note, return the amounts as positive numbers.
 - Return ONLY the JSON object, starting with { and ending with }. No markdown fences. No "Here is the JSON:" preamble.`
 
 /**
@@ -453,9 +473,13 @@ export async function extractInvoiceFieldsFromBytes(bytes, mime, meta = {}) {
           },
         ],
       },
-      { apiKey, locationId: meta.locationId ?? null, source: 'invoice_ocr' }
+      { apiKey, locationId: meta.locationId ?? null, source: 'invoice_ocr', signal: AbortSignal.timeout(EXTRACTION_TIMEOUT_MS) }
     ))
   } catch (e) {
+    // Returned like every other reader failure: preparation records it as unreadable.
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+      return { ok: false, error: `Anthropic API request timed out after ${EXTRACTION_TIMEOUT_MS / 1000} s` }
+    }
     return { ok: false, error: `Anthropic API request failed: ${e.message || String(e)}` }
   }
 

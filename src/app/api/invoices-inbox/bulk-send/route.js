@@ -1,6 +1,8 @@
 // INVOICES-QUEUE.1 PR 2 + XERO-API.3 — bulk send-to-Xero.
 //
-// Bookkeeper-gated. For each row in 'extracted' state, this route:
+// Bookkeeper-gated. A row whose review_reasons is non-empty ("Needs a
+// look") is skipped untouched (INVOICEPREP.3). For each other row in
+// 'extracted' state, this route:
 //   1. Flips status to 'data_approved' (audit checkpoint).
 //   2. Calls pushQueueRowToXero — direct /Invoices API push that
 //      reads the bookkeeper-picked xero_account_id + supplier ref
@@ -54,7 +56,7 @@ export async function POST(request) {
   try {
     scoped = await loadAndScopeBulkRows({
       db, user, ids,
-      select: 'id, location_id, status, source_type, extracted_fields',
+      select: 'id, location_id, status, source_type, extracted_fields, review_reasons',
     })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message }, { status: 500 })
@@ -72,8 +74,22 @@ export async function POST(request) {
       results.push({ id, outcome: 'skipped', reason: `wrong_status:${row.status}` })
       continue
     }
+    // INVOICEPREP.3 — a row preparation flagged ("Needs a look") is never
+    // sent in bulk; a person opens it first. Checked before any status change
+    // or push. null is a row from before preparation, sent as before.
+    if (Array.isArray(row.review_reasons) && row.review_reasons.length > 0) {
+      results.push({ id, outcome: 'skipped', reason: 'needs_a_look' })
+      continue
+    }
     if (!row.extracted_fields) {
       results.push({ id, outcome: 'skipped', reason: 'no_extracted_fields' })
+      continue
+    }
+    // INVOICEPREP.3 — a credit note is never sent as a bill. Prepared rows
+    // already carry the credit_note reason; this also stops a row from before
+    // preparation (no reasons recorded) and a data_approved retry.
+    if (row.extracted_fields.document_type === 'credit_note') {
+      results.push({ id, outcome: 'skipped', reason: 'credit_note' })
       continue
     }
     // XERO-BILL-VAT.2 — never send a bill whose VAT rate is undetermined.
