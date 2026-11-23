@@ -1,6 +1,6 @@
 import { hasBookableMembership } from '@/lib/person-accounts'
 import { CLASS_BOOKING_MAX_ATTEMPTS } from '@/lib/class-booking-attempts'
-import { isHandBookedEventId } from '@/lib/manual-timetable'
+import { isHandBookedEventId, isUn1tEventId } from '@/lib/manual-timetable'
 
 // AGENT-REQ-UX.1 — operator-readable explanations for agent requests.
 //
@@ -231,6 +231,32 @@ function miaUn1tWhy(d) {
   return 'Mia passed this to the team. Check the member in un1t.online before approving.'
 }
 
+const UN1T_BOOKING_FAILED = 'un1t_booking_failed:'
+function un1tBookingFailedExplanation(code) {
+  if (code === 'CLASS_FULL') {
+    return 'This class is full in un1t.online, so the booking was refused. Make room in the class in un1t.online, then approve to try the booking again. Or decline so they can pick another class.'
+  }
+  return `un1t.online refused the booking (${code}). Check the member and the class in un1t.online, then approve to try the booking again.`
+}
+
+// CARDHATCH.1 — which platform a card's customer is looked up on. A
+// un1t.online studio's card is never a Glofox lookup, and a hand-written
+// timetable's has no platform the CRM knows.
+const isUn1tCard = (row) => row?.details?.provider === 'un1t_online' || isUn1tEventId(row?.details?.event_id)
+export function lookupLabel(row) {
+  if (isUn1tCard(row)) return 'un1t.online lookup'
+  if (isHandBookedEventId(row?.details?.event_id)) return 'Contact details'
+  return 'Glofox lookup'
+}
+
+// The account line reads the Glofox fields on the contact, which say nothing
+// about a un1t.online or hand-booked account ("No membership on file" showed
+// on a person holding credits), so those cards carry no line.
+export function accountLineFor(row, contact) {
+  if (isUn1tCard(row) || isHandBookedEventId(row?.details?.event_id)) return null
+  return accountSummaryLine(contact)
+}
+
 export function whyFlagged(row) {
   if (row && (row.kind === 'class_booking' || row.kind === 'class_cancellation') && isMiaUn1tRow(row)) {
     return miaUn1tWhy(row.details)
@@ -241,6 +267,9 @@ export function whyFlagged(row) {
   // A un1t.online funnel reason names what happened on that card, so it wins
   // over the studio's book-by-hand line (its un1t: event id is hand-booked).
   if (reason?.startsWith('un1t_') && MACHINE_REASONS[reason]) return MACHINE_REASONS[reason]
+  // CARDHATCH.1 — un1t.online refused the booking itself. Approving runs the
+  // booking again (executeUn1tApproval), so the book-by-hand line was false.
+  if (reason?.startsWith(UN1T_BOOKING_FAILED)) return un1tBookingFailedExplanation(reason.slice(UN1T_BOOKING_FAILED.length) || 'unknown')
   if (isHandBookedEventId(d.event_id)) return MANUAL_BOOKING
   if (reason) {
     if (reason === 'credit_check_failed') {

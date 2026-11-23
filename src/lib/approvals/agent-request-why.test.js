@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { whyFlagged, customerWords, approvalGrantsTrialCredit, un1tFailureExplanation } from './agent-request-why'
+import { whyFlagged, customerWords, approvalGrantsTrialCredit, un1tFailureExplanation, lookupLabel, accountLineFor } from './agent-request-why'
 
 describe('whyFlagged', () => {
   it('translates every routeToReview machine code for class bookings', () => {
@@ -540,5 +540,47 @@ describe("un1tFailureExplanation: a failed Mia un1t.online card", () => {
     const { explainFailure } = await import('./event-move-card')
     expect(explainFailure(failed({ ok: false, message_code: 'MIA_NO_CREDITS' }))).toMatch(/No credits show in un1t\.online/)
     expect(explainFailure({ status: 'failed', details: { result: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } } })).toMatch(/Glofox refused the booking/)
+  })
+})
+
+// CARDHATCH.1 — a website booking un1t.online refused (23 Nov 2026: a full
+// class at Hatch Street read "This studio books by hand ... approving does
+// not book anything", when approving retries the booking).
+describe('whyFlagged: a un1t.online booking that was refused', () => {
+  const row = (reason) => ({ kind: 'class_booking', details: { provider: 'un1t_online', source: 'start_funnel', mode: 'draft', event_id: 'un1t:f3e27fd1-8a4c-4a42-9e40-c23b21b9e6a7', reason } })
+
+  it('a full class says so, and that approving tries the booking again', () => {
+    const why = whyFlagged(row('un1t_booking_failed:CLASS_FULL'))
+    expect(why).toMatch(/class is full/i)
+    expect(why).toMatch(/un1t\.online/)
+    expect(why).toMatch(/approve to try the booking again/i)
+    expect(why).not.toMatch(/books by hand|books nothing|does not book|Glofox/)
+  })
+  it('any other refusal keeps its code and never claims the studio books by hand', () => {
+    const why = whyFlagged(row('un1t_booking_failed:SOMETHING_NEW'))
+    expect(why).toMatch(/un1t\.online refused the booking \(SOMETHING_NEW\)/)
+    expect(why).not.toMatch(/books by hand|Glofox/)
+  })
+  it('a un1t: class with the funnel off still reads as booked by hand', () => {
+    expect(whyFlagged({ kind: 'class_booking', details: { event_id: 'un1t:abc', reason: 'manual_booking' } })).toMatch(/books by hand/)
+  })
+})
+
+describe('lookupLabel and accountLineFor', () => {
+  const contact = { glofox_membership_plan: null, trial_credits_remaining: null }
+  it('a un1t.online card is not a Glofox lookup and shows no Glofox account line', () => {
+    const r = { kind: 'class_booking', details: { provider: 'un1t_online', event_id: 'un1t:abc' } }
+    expect(lookupLabel(r)).toBe('un1t.online lookup')
+    expect(accountLineFor(r, contact)).toBeNull()
+  })
+  it('a hand-written timetable card shows plain contact details', () => {
+    const r = { kind: 'class_booking', details: { event_id: 'manual-20261005-0615-strength' } }
+    expect(lookupLabel(r)).toBe('Contact details')
+    expect(accountLineFor(r, contact)).toBeNull()
+  })
+  it('a Glofox card is unchanged', () => {
+    const r = { kind: 'class_booking', details: { event_id: '64f0c0ffee64f0c0ffee64f0' } }
+    expect(lookupLabel(r)).toBe('Glofox lookup')
+    expect(accountLineFor(r, contact)).toBe('No membership on file · credits unknown')
   })
 })
