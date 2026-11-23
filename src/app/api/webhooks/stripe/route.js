@@ -21,6 +21,7 @@ import { sendRaceConfirmations, sendGapPaidEmail } from '@/lib/race-confirmation
 import { refundPatchFromCharge } from '@/lib/stripe-refund-sync'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
 import { alertClassBookingSale } from '@/lib/sale-alert-sources'
+import { ringSaleAfterResponse } from '@/lib/sale-alert'
 import {
   DONATION_COLS,
   resolveDonationByRef,
@@ -143,7 +144,7 @@ export async function POST(request) {
               // still picks it up. Never let a queue hiccup fail the webhook.
             }
             // SALEALERT.1 — the first paid transition: ring the studio's owners and managers.
-            void alertClassBookingSale(db, row, { paidAmountCents: Number.isFinite(session.amount_total) ? session.amount_total : null }).catch(() => {})
+            ringSaleAfterResponse(() => alertClassBookingSale(db, row, { paidAmountCents: Number.isFinite(session.amount_total) ? session.amount_total : null }))
           }
         }
         return NextResponse.json({ received: true })

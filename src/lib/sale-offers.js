@@ -10,7 +10,7 @@
 import { findOrCreateRaceContact } from './race-contact-linking'
 import { writeContactTag } from './contact-tags'
 import { sendOpsAlert } from './ops-alerts'
-import { notifyNewSale } from './sale-alert'
+import { notifyNewSale, ringSaleAfterResponse } from './sale-alert'
 import { escapeHtml } from './html-escape'
 import { resolveZone, DEFAULT_TZ } from '@shared/zoned-time'
 
@@ -192,7 +192,7 @@ export async function notifyStaffOfPaidPurchase(db, purchase, offer) {
   const onUn1t = purchase.payment_provider === 'un1t_online'
   const saleId = onUn1t ? purchase.un1t_transaction_id : purchase.id
   if (saleId) {
-    void notifyNewSale(db, {
+    ringSaleAfterResponse(() => notifyNewSale(db, {
       source: onUn1t ? 'un1t' : 'offer',
       saleId: String(saleId),
       locationId: purchase.location_id,
@@ -201,7 +201,7 @@ export async function notifyStaffOfPaidPurchase(db, purchase, offer) {
       buyerFirstName: buyerName.split(' ')[0],
       locationName: loc.name,
       contactId: purchase.contact_id,
-    }).catch(() => {}) // notifyNewSale never throws; this only guards an unhandled rejection
+    }))
   }
 
   await sendOpsAlert({

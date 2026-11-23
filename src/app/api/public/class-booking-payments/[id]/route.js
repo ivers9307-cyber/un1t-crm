@@ -7,6 +7,7 @@ import { createServerClient } from '@/lib/supabase'
 import { paymentsFor } from '@/lib/payments'
 import { markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
 import { alertClassBookingSale } from '@/lib/sale-alert-sources'
+import { ringSaleAfterResponse } from '@/lib/sale-alert'
 import { publishClassBookingJob } from '@/lib/qstash'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { logWarn } from '@/lib/log'
@@ -40,7 +41,7 @@ export async function GET(_request, props) {
           // SALEALERT.1 — the first paid transition: ring the studio's owners and
           // managers (location_id, contact_id and customer_name are read for this
           // alone; the answer below is built field by field).
-          void alertClassBookingSale(db, row, { paidAmountCents: Number.isFinite(norm.amountCents) ? norm.amountCents : null }).catch(() => {})
+          ringSaleAfterResponse(() => alertClassBookingSale(db, row, { paidAmountCents: Number.isFinite(norm.amountCents) ? norm.amountCents : null }))
         }
         const { data: fresh } = await db.from('class_booking_requests')
           .select('id, status, payment_status, payment_provider, payment_checkout_token, payment_checkout_url, amount_cents, currency, class_name, connected_account_id')

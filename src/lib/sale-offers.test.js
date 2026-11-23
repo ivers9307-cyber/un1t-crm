@@ -7,7 +7,10 @@ vi.mock('./contact-tags', () => ({ writeContactTag: (...a) => writeContactTag(..
 const sendOpsAlert = vi.fn(async () => ({ channel: 'email' }))
 vi.mock('./ops-alerts', () => ({ sendOpsAlert: (...a) => sendOpsAlert(...a) }))
 const notifyNewSale = vi.fn(async () => ({ sent: true }))
-vi.mock('./sale-alert', () => ({ notifyNewSale: (...a) => notifyNewSale(...a) }))
+vi.mock('./sale-alert', () => ({
+  notifyNewSale: (...a) => notifyNewSale(...a),
+  ringSaleAfterResponse: (fn) => fn().catch(() => {}),
+}))
 
 import {
   OFFER_SALE_TAG,

@@ -11,6 +11,7 @@ import { createServerClient } from '@/lib/supabase'
 import { paymentsFor } from '@/lib/payments'
 import { markTrialPurchasePaymentStatus } from '@/lib/trial-purchase-payments'
 import { alertTrialSale } from '@/lib/sale-alert-sources'
+import { ringSaleAfterResponse } from '@/lib/sale-alert'
 import { trialPurchasePublicState } from '@/lib/paid-trial'
 import { trialCheckoutUsable } from '@/lib/trial-checkout-window'
 import { un1tRetryGate } from '@/lib/trial-purchase-un1t-resume'
@@ -77,7 +78,7 @@ export async function GET(_request, props) {
             if (buyerErr) logWarn('trialbuy-poll', 'buyer unreadable for the sale push', { code: buyerErr.code ?? null })
             buyer = b
           } catch { /* the push goes without a name; never fails the poll */ }
-          void alertTrialSale(db, { ...row, ...buyer }, { paidAmountCents: Number.isFinite(norm.amountCents) ? norm.amountCents : null }).catch(() => {})
+          ringSaleAfterResponse(() => alertTrialSale(db, { ...row, ...buyer }, { paidAmountCents: Number.isFinite(norm.amountCents) ? norm.amountCents : null }))
         }
         const { data: fresh } = await db.from('trial_purchases').select(COLS).eq('id', id).maybeSingle()
         if (fresh) row = fresh
