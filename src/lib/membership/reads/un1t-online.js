@@ -469,6 +469,8 @@ const ELIGIBILITY_SUB_COLS = 'un1t_id, un1t_user_id, contact_id, status'
 const PIPE_TX_COLS = 'un1t_id, un1t_user_id, contact_id, product_id, product_type, type, amount_cents, refunded, remote_created_at'
 // TRIALDONE.2 — expire_credits_in_days (from raw, as text) dates the trial's expiry.
 const PRODUCT_COLS = 'un1t_id, type, price_cents, credits_per_period, title, expire_credits_in_days:raw->>expire_credits_in_days'
+// PROMOCREDITS.1 — a granted free promo: who, how many credits, when, and until when.
+const PROMO_GRANT_COLS = 'id, un1t_user_id, contact_id, credits, created_at, expires_at'
 const BOOKING_COLS = 'un1t_user_id, contact_id, event_id, status, source, credit_charged, external_member_ref, remote_created_at'
 // TRIALDONE.2 — ends_at (mig 726) dates "the 3rd class ended" for the outreach.
 const EVENT_COLS = 'un1t_id, starts_at, ends_at'
@@ -686,7 +688,7 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
       return { success: true, data: { ...formOnly, unlinked, skipped_no_contact: 0, form_only: formOnly.contacts.length } }
     }
 
-    const [subs, txs, products, bookings, events, memberships, contactRows, ledger, studioDismissals] = await Promise.all([
+    const [subs, txs, products, bookings, events, memberships, contactRows, ledger, studioDismissals, promoClaims] = await Promise.all([
       listFresh(db, locationId, 'un1t_subscriptions', PIPE_SUB_COLS),
       listAtStudio(db, locationId, 'un1t_transactions', PIPE_TX_COLS),
       listAtStudio(db, locationId, 'un1t_products', PRODUCT_COLS),
@@ -716,6 +718,16 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
         .eq('location_id', locationId)
         .order('contact_id', { ascending: true })
         .range(from, to), { pageSize: PAGE }),
+      // PROMOCREDITS.1 — the free promo grants (Open Week, a /corp promo): their
+      // credits sit on the same balance as a paid pack's and are never paid.
+      selectAll((from, to) => db
+        .from('corp_promo_claims')
+        .select(PROMO_GRANT_COLS)
+        .eq('location_id', locationId)
+        .eq('platform', 'un1t_online')
+        .eq('status', 'granted')
+        .order('id', { ascending: true })
+        .range(from, to), { pageSize: PAGE }),
     ])
 
     const clientsByContact = groupBy(linked, (c) => c.contact_id)
@@ -735,6 +747,7 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
       owner,
     )
     const membershipsBy = groupBy(memberships, (m) => m.contact_id)
+    const promoGrantsBy = groupBy(promoClaims, owner)
     const productsById = productsMap(products)
     const contactById = new Map(contactRows.map((c) => [c.id, c]))
     const studioDismissalBy = new Map(studioDismissals.map((d) => [d.contact_id, d.dismissed_at]))
@@ -758,6 +771,7 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
         bookings: bookingsBy.get(contactId) ?? [],
         memberships: membershipsBy.get(contactId) ?? [],
         ledgerTrials: ledgerEntriesFor(ledger, theirClients.map((c) => c.un1t_user_id), [contactId]),
+        promoGrants: (promoGrantsBy.get(contactId) ?? []).map((g) => ({ at: g.created_at ?? null, credits: g.credits, expiresAt: g.expires_at ?? null })),
         paidTrialProductIds,
         now,
       }

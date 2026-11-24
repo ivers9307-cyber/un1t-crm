@@ -758,6 +758,36 @@ describe('pipelineInputs and trialEligibility', () => {
       expect(out.data.snapshots.get('c2').recent_bookings).toEqual([])
     })
 
+    it('PROMOCREDITS.1 — a granted promo credit beside an old paid pack is not a paid credit; another studio\'s, a failed or an expired claim is not read as one', async () => {
+      const claim = (over = {}) => ({
+        id: 'pc1', location_id: HATCH, platform: 'un1t_online', status: 'granted', un1t_user_id: 'u1', contact_id: 'c1',
+        credits: 4, created_at: '2026-10-16T08:00:00Z', expires_at: '2026-10-25T08:00:00Z', ...over,
+      })
+      const w = (claims) => world({
+        un1t_clients: [client({ credit_balance: 1 })],
+        un1t_subscriptions: [], contact_studios: [],
+        un1t_transactions: [ctx({ un1t_id: 'p1', product_id: 'pack5', amount_cents: 6000, remote_created_at: '2026-09-01T09:00:00Z' })],
+        un1t_bookings: [],
+        corp_promo_claims: claims,
+      })
+      const status = async (claims) => (await un1tOnlineReads.pipelineInputs(makeDb(w(claims)).db, HATCH, { now: NOW.getTime() }))
+        .data.snapshots.get('c1').glofox_membership_status
+      expect(await status([])).toBe('credit_member')
+      expect(await status([claim()])).not.toBe('credit_member')
+      // filed by the contact when the claim carries no un1t user
+      expect(await status([claim({ un1t_user_id: null })])).not.toBe('credit_member')
+      expect(await status([claim({ location_id: STILLORGAN })])).toBe('credit_member')
+      expect(await status([claim({ status: 'failed' })])).toBe('credit_member')
+      expect(await status([claim({ platform: 'glofox' })])).toBe('credit_member')
+      expect(await status([claim({ expires_at: '2026-10-16T09:00:00Z' })])).toBe('credit_member')
+    })
+
+    it('PROMOCREDITS.1 — a failed promo claims read fails the pass (the board is never placed on a missing input)', async () => {
+      const { db } = makeDb(world(), { fail: ['corp_promo_claims'] })
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(out.success).toBe(false)
+    })
+
     it('a booking with no un1t_user_id is filed under the client its contact_id names', async () => {
       const w = world()
       w.un1t_bookings = [{ ...w.un1t_bookings[0], un1t_user_id: null, contact_id: 'c1' }]
@@ -771,7 +801,7 @@ describe('pipelineInputs and trialEligibility', () => {
       const { db, log } = makeDb(world())
       await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
       const tables = new Set(log.map((q) => q.table))
-      expect([...tables].sort()).toEqual(['contact_pipeline_dismissals', 'contact_studios', 'contacts', 'un1t_bookings', 'un1t_clients', 'un1t_events', 'un1t_products', 'un1t_subscriptions', 'un1t_transactions', 'un1t_write_events'])
+      expect([...tables].sort()).toEqual(['contact_pipeline_dismissals', 'contact_studios', 'contacts', 'corp_promo_claims', 'un1t_bookings', 'un1t_clients', 'un1t_events', 'un1t_products', 'un1t_subscriptions', 'un1t_transactions', 'un1t_write_events'])
       for (const q of log.filter((x) => x.table !== 'contacts')) {
         expect(q.filters, q.table).toContainEqual(['eq', 'location_id', HATCH])
       }

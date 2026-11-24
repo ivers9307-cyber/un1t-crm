@@ -533,7 +533,36 @@ function trialsTaken({ transactions = [], productsById, ledgerTrials = [], paidT
 }
 
 /**
- * How a un1t.online credit balance splits between the trial and paid packs.
+ * PROMOCREDITS.1 — the credits the person's free promo grants still hold.
+ *
+ * Each grant `{ at, credits, expiresAt }` gave `credits` at `at`. A grant past
+ * its `expiresAt` holds none (un1t.online has taken them back); one with no
+ * expiry keeps holding. The grants' credits, less every `credit_charged`
+ * booking made at or after the earliest live grant that is NOT cancelled: a
+ * cancelled booking handed its credit back, so it has not used one. Floored
+ * at 0. A grant with no readable time counts every such booking.
+ *
+ * This leans towards "free" (a late cancel that kept its credit still reads as
+ * handed back), which is the safe side: the caller caps the answer at the
+ * balance, and a free credit read as paid makes a non-buyer a credit member.
+ */
+function promoCreditsHeld(promoGrants, bookings, now) {
+  const live = (Array.isArray(promoGrants) ? promoGrants : []).filter((g) => {
+    if (!g || !(Number(g.credits) > 0)) return false
+    const expires = msOf(g.expiresAt)
+    return expires == null || expires > now
+  })
+  if (live.length === 0) return 0
+  const granted = live.reduce((sum, g) => sum + Number(g.credits), 0)
+  const times = live.map((g) => msOf(g.at))
+  const sinceMs = times.some((t) => t == null) ? null : Math.min(...times)
+  const used = bookings.filter((b) => b?.credit_charged === true && lower(b.status) !== 'cancelled'
+    && (sinceMs == null || (msOf(b.remote_created_at) ?? -Infinity) >= sinceMs)).length
+  return Math.max(0, granted - used)
+}
+
+/**
+ * How a un1t.online credit balance splits between the trial, promos and paid packs.
  *
  * Trial credits left = the newest trial product's `credits_per_period` minus
  * the `credit_charged` bookings made (`remote_created_at`) at or after that
@@ -548,10 +577,19 @@ function trialsTaken({ transactions = [], productsById, ledgerTrials = [], paidT
  * its product (TRIALDONE.2: the trial's expiry is read off that product). When
  * several trials share the newest time, one whose product resolves names it.
  *
- * @returns {{ trialCreditsLeft: number, paidCredits: number, hasPaidPack: boolean,
+ * PROMOCREDITS.1 — promo credits left = what the live free promo grants
+ * (`promoGrants`: Open Week, a /corp promo) still hold, capped at what the
+ * balance leaves after the trial. They are free, so they are never paid: an
+ * Open Week credit handed back by a cancelled class beside an old paid pack is
+ * not a credit member. See `promoCreditsHeld`.
+ *
+ * @returns {{ trialCreditsLeft: number, promoCreditsLeft: number, paidCredits: number, hasPaidPack: boolean,
  *   tookTrial: boolean, newestTrialAt: string|null, newestTrialProductId: string|null }}
  */
-export function splitUn1tCredits({ client, transactions = [], productsById = new Map(), bookings = [], ledgerTrials = [], paidTrialProductIds = EMPTY_IDS } = {}) {
+export function splitUn1tCredits({
+  client, transactions = [], productsById = new Map(), bookings = [], ledgerTrials = [], promoGrants = [],
+  paidTrialProductIds = EMPTY_IDS, now = Date.now(),
+} = {}) {
   const balance = Math.max(0, Number(client?.credit_balance) || 0)
   const trials = trialsTaken({ transactions, productsById, ledgerTrials, paidTrialProductIds })
   const newestTrialAt = latestOf(trials.map((t) => t.at))
@@ -573,9 +611,11 @@ export function splitUn1tCredits({ client, transactions = [], productsById = new
       && (trialMs == null || (msOf(b.remote_created_at) ?? -Infinity) >= trialMs)).length
     trialCreditsLeft = Math.min(Math.max(0, granted - used), balance)
   }
+  const promoCreditsLeft = Math.min(promoCreditsHeld(promoGrants, bookings, now), balance - trialCreditsLeft)
   return {
     trialCreditsLeft,
-    paidCredits: hasPaidPack ? Math.max(0, balance - trialCreditsLeft) : 0,
+    promoCreditsLeft,
+    paidCredits: hasPaidPack ? Math.max(0, balance - trialCreditsLeft - promoCreditsLeft) : 0,
     hasPaidPack,
     tookTrial: trials.length > 0,
     newestTrialAt,
@@ -701,14 +741,15 @@ function aggregatorOf(bookings) {
  * @param {object|null} a.contact { id, location_id, pipeline_dismissed_at, last_lead_source_at }
  * @param {string} a.locationId
  * @param {string|null} [a.studioDismissedAt] this studio's own Cold (non-home contacts)
- * @param {number} [a.now]        accepted for the interface; no rule here reads the clock
+ * @param {Array<{at:string|null,credits:number,expiresAt:string|null}>} [a.promoGrants] this person's granted free promos (PROMOCREDITS.1)
+ * @param {number} [a.now]        read only to tell a live promo grant from an expired one
  *                                (classifyContact applies every time window itself)
  */
 export function shapePipelineSnapshot({
   client, contact, locationId, studioDismissedAt = null, freshSubs = [], transactions = [], productsById = new Map(),
-  bookings = [], memberships = [], ledgerTrials = [], paidTrialProductIds = EMPTY_IDS, now: _now = Date.now(),
+  bookings = [], memberships = [], ledgerTrials = [], promoGrants = [], paidTrialProductIds = EMPTY_IDS, now = Date.now(),
 } = {}) {
-  const credits = splitUn1tCredits({ client, transactions, productsById, bookings, ledgerTrials, paidTrialProductIds })
+  const credits = splitUn1tCredits({ client, transactions, productsById, bookings, ledgerTrials, promoGrants, paidTrialProductIds, now })
   const paidTrial = paidTrialOf(transactions.filter(Boolean), productsById, paidTrialProductIds)
   const aggregator = aggregatorOf(bookings)
   const attendedStarts = bookings.filter((b) => lower(b?.status) === 'attended').map((b) => b.starts_at)

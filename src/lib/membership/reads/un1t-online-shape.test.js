@@ -1421,3 +1421,63 @@ describe('shapeTrialWindow (HATCHCARD.2)', () => {
     expect(shapeTrialWindow({})).toBeNull()
   })
 })
+
+// PROMOCREDITS.1 — a free promo grant (Open Week, a /corp promo) is never a paid credit.
+describe('promo grants in the credit split (PROMOCREDITS.1)', () => {
+  const grant = (over = {}) => ({ at: daysAgo(1), credits: 4, expiresAt: daysAgo(-6), ...over })
+  const charged = (over = {}) => booking({ credit_charged: true, remote_created_at: daysAgo(0.9), starts_at: daysAgo(-1), ...over })
+  // an old single paid credit, long since used
+  const oldPack = () => tx({ remote_created_at: daysAgo(40) })
+
+  it('an Open Week credit handed back by a cancelled class is not a paid credit: lead, not credit_member', () => {
+    const input = {
+      client: pclient({ credit_balance: 1 }),
+      transactions: [oldPack()],
+      bookings: [charged(), charged(), charged(), charged({ status: 'cancelled' })],
+      promoGrants: [grant()],
+      productsById: PRODUCTS_BY_ID,
+      now: NOW,
+    }
+    expect(splitUn1tCredits(input)).toMatchObject({ promoCreditsLeft: 1, paidCredits: 0, hasPaidPack: true })
+    expect(snap(input).glofox_membership_status).not.toBe('credit_member')
+  })
+
+  it('without the grant the same balance still reads as paid (the old behaviour, for a real pack)', () => {
+    expect(splitUn1tCredits({
+      client: pclient({ credit_balance: 1 }), transactions: [oldPack()], productsById: PRODUCTS_BY_ID, now: NOW,
+    })).toMatchObject({ promoCreditsLeft: 0, paidCredits: 1 })
+  })
+
+  it('paid credits beside an untouched grant stay paid: balance 7 = 3 paid + 4 promo', () => {
+    const input = { client: pclient({ credit_balance: 7 }), transactions: [oldPack()], promoGrants: [grant()], productsById: PRODUCTS_BY_ID, now: NOW }
+    expect(splitUn1tCredits(input)).toMatchObject({ promoCreditsLeft: 4, paidCredits: 3 })
+    expect(snap(input).glofox_membership_status).toBe('credit_member')
+  })
+
+  it('a charged booking made before the grant does not use it; a cancelled one hands its credit back', () => {
+    expect(splitUn1tCredits({
+      client: pclient({ credit_balance: 9 }), transactions: [oldPack()], promoGrants: [grant()],
+      bookings: [charged({ remote_created_at: daysAgo(3) }), charged({ status: 'cancelled' }), charged()],
+      productsById: PRODUCTS_BY_ID, now: NOW,
+    }).promoCreditsLeft).toBe(3)
+  })
+
+  it('an expired grant holds no credits; one with no expiry still does', () => {
+    const base = { client: pclient({ credit_balance: 2 }), transactions: [oldPack()], productsById: PRODUCTS_BY_ID, now: NOW }
+    expect(splitUn1tCredits({ ...base, promoGrants: [grant({ at: daysAgo(10), expiresAt: daysAgo(3) })] }))
+      .toMatchObject({ promoCreditsLeft: 0, paidCredits: 2 })
+    expect(splitUn1tCredits({ ...base, promoGrants: [grant({ expiresAt: null })] }))
+      .toMatchObject({ promoCreditsLeft: 2, paidCredits: 0 })
+  })
+
+  it('promo credits are capped at what the balance leaves after the trial, and never go below 0', () => {
+    expect(splitUn1tCredits({
+      client: pclient({ credit_balance: 1 }), transactions: [oldPack()], promoGrants: [grant(), grant({ credits: 3 })],
+      productsById: PRODUCTS_BY_ID, now: NOW,
+    })).toMatchObject({ promoCreditsLeft: 1, paidCredits: 0 })
+    expect(splitUn1tCredits({
+      client: pclient({ credit_balance: 0 }), transactions: [oldPack()], promoGrants: [grant({ credits: 'x' })],
+      productsById: PRODUCTS_BY_ID, now: NOW,
+    })).toMatchObject({ promoCreditsLeft: 0, paidCredits: 0 })
+  })
+})
