@@ -291,11 +291,17 @@ export async function lastInboundFacts(db, conversationId) {
 export async function intentFlags(db, conversationId, lastInboundAtMs) {
   if (!lastInboundAtMs) return { sensitiveIntent: false, intentClosed: false }
   const sinceIso = new Date(lastInboundAtMs).toISOString()
-  const { data } = await db.from('agent_membership_requests')
+  const { data, error } = await db.from('agent_membership_requests')
     .select('kind, status')
     .eq('conversation_id', conversationId)
     .gte('created_at', sinceIso)
     .limit(10)
+  // INBOXFOLLOW.3 — a failed read is never "not sensitive": callers skip or wait
+  // on readFailed (a pause/cancel request must never be chased by a blind read).
+  if (error) {
+    logError('agent-followups', 'intent read failed; thread skipped this tick', { conversationId, err: error })
+    return { sensitiveIntent: false, intentClosed: false, readFailed: true }
+  }
   const rows = data || []
   return {
     // never chase someone who asked to pause or cancel
@@ -308,15 +314,21 @@ export async function intentFlags(db, conversationId, lastInboundAtMs) {
 export async function sentTodayCount(db, locationId, nowMs) {
   const d = new Date(nowMs)
   const dayStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString()
-  const { count } = await db.from('whatsapp_conversations')
+  const { count, error } = await db.from('whatsapp_conversations')
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
     .gte('agent_followup_sent_at', dayStart)
+  // INBOXFOLLOW.3 — an unreadable ladder count fails closed like the staff one:
+  // Infinity, so neither runner sends for this location this tick.
+  if (error || typeof count !== 'number') {
+    logError('agent-followups', 'ladder send count unreadable; location sends nothing this tick', { locationId, err: error })
+    return Infinity
+  }
   // INBOXFOLLOW.3 — ONE daily cap for everything Mia starts: the ladder's own
   // sends plus today's staff-thread nudges. Infinity when the staff count is
   // unreadable, so the location sends nothing this tick (fail closed).
   const staff = await staffNudgesSentToday(db, locationId, dayStart)
-  return (count || 0) + staff
+  return count + staff
 }
 
 // Staff-thread nudges sent (or in flight) today. KNOWN UNDER-COUNT: it reads
@@ -535,7 +547,9 @@ export async function readStudioMarketingConsent(db, { contact_id, location_id }
     .eq('location_id', location_id)
     .maybeSingle()
   if (error) return { error }
-  return { consented: prefs?.whatsapp_marketing === true }
+  // INBOXFOLLOW.3 — `refused` is an EXPLICIT false (an opt-out at this studio);
+  // no row, or a row with no decision, is neither consented nor refused.
+  return { consented: prefs?.whatsapp_marketing === true, refused: prefs?.whatsapp_marketing === false }
 }
 
 /**
@@ -726,6 +740,8 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
         // CHECKINSTALL.1 — logged once, inside lastInboundFacts (logError).
         if (facts.readFailed) { results.skipped++; continue }
         const flags = await intentFlags(db, c.id, facts.lastInboundAtMs)
+        // INBOXFOLLOW.3 — logged once, inside intentFlags; the next tick retries.
+        if (flags.readFailed) { results.skipped++; continue }
         const decision = classifyFollowupCandidate({
           stage: c.agent_followup_stage,
           lastInboundAtMs: facts.lastInboundAtMs,

@@ -13,7 +13,7 @@ vi.mock('@/lib/anthropic', () => ({ anthropicMessages }))
 vi.mock('@/lib/log', async (orig) => ({ ...(await orig()), logError, logWarn: vi.fn() }))
 
 import { runAgentFollowups } from './followups'
-import { classifyStaffNudge, runStaffThreadNudges, STAFF_NUDGE_DEFAULTS } from './staff-nudges'
+import { classifyStaffNudge, runStaffThreadNudges, STAFF_NUDGE_DEFAULTS, STAFF_NUDGE_MAX_COMPOSES_PER_TICK } from './staff-nudges'
 import { WhatsAppNumberMissingError } from '@/lib/whatsapp-number-missing'
 import { createFakeDb } from '../../../tests/helpers/fake-db'
 
@@ -68,6 +68,22 @@ describe('classifyStaffNudge', () => {
     expect(run({ hasContact: false })).toEqual({ action: 'skip', reason: 'no_contact' })
     expect(run({ optedOut: true })).toEqual({ action: 'skip', reason: 'opted_out' })
     expect(run({ blocked: true })).toEqual({ action: 'skip', reason: 'blocked' })
+  })
+  it('skips opted-out, blocked and undeliverable wa_status with their own reason', () => {
+    for (const reason of ['opted_out', 'blocked', 'undeliverable']) {
+      expect(run({ doNotContactReason: reason })).toEqual({ action: 'skip', reason })
+      expect(run({ doNotContactReason: reason, windowExpiresAtMs: NOW + H }).reason).toBe(reason)
+    }
+  })
+  it('an explicit marketing refusal blocks free text and the template; absent or granted consent does not', () => {
+    expect(run({ marketingRefused: true, windowExpiresAtMs: NOW + H })).toEqual({ action: 'skip', reason: 'no_consent' })
+    expect(run({ marketingRefused: true })).toEqual({ action: 'skip', reason: 'no_consent' })
+    // no decision on file: free text still allowed, template still needs consent
+    expect(run({ marketingRefused: false, marketingConsent: false, windowExpiresAtMs: NOW + H }).action).toBe('freeform')
+    expect(run({ marketingRefused: false, marketingConsent: false }).reason).toBe('no_consent')
+    // granted: both
+    expect(run({ marketingConsent: true, windowExpiresAtMs: NOW + H }).action).toBe('freeform')
+    expect(run({ marketingConsent: true }).action).toBe('template')
   })
   it('skips a customer who asked to pause or cancel', () => {
     expect(run({ sensitiveIntent: true })).toEqual({ action: 'skip', reason: 'sensitive_intent' })
@@ -196,10 +212,35 @@ describe('runStaffThreadNudges — studio gates', () => {
     const db = world({ settings: agentSettings({ quiet_hours: { start: '12:00', end: '14:00', tz: 'Europe/Dublin' } }) })
     await run(db); sentNothing(); untouched(db)
   })
-  it('a studio with no WhatsApp number sends nothing and stamps nothing', async () => {
+  it('a studio with no WhatsApp number sends nothing and stamps each due thread skipped:no_number at once', async () => {
     const db = world({ number: false })
-    await run(db); sentNothing(); untouched(db)
+    const out = await run(db); sentNothing()
+    expect(row(db)).toMatchObject({ staff_nudge_outcome: 'skipped:no_number', staff_nudged_at: iso(NOW) })
+    expect(out.skipped).toBe(1)
     expect(warned('no_number')).toBe(true) // a studio gate, logged with the locationId
+    const stamp = db.calls.find((c) => c.op === 'update' && c.filters.some((f) => f.column === 'staff_waiting_since'))
+    expect(stamp.filters.map((f) => `${f.column}:${f.op}`)).toEqual(expect.arrayContaining(['id:eq', 'staff_nudged_at:is', 'staff_waiting_since:eq']))
+  })
+  it('a no-number studio in test mode leaves a stranger unstamped', async () => {
+    const db = world({ number: false, settings: agentSettings({ enabled: false, test_mode: true, test_phones: ['353870009999'] }) })
+    await run(db); sentNothing(); untouched(db)
+  })
+  it('a no-number studio whose thread is past Q + 24 h is stamped at the moment it expired', async () => {
+    const waiting = NOW - (Q + 25) * H
+    const db = world({ number: false, convs: [conv({ staff_waiting_since: iso(waiting) })] })
+    await run(db)
+    expect(row(db)).toMatchObject({ staff_nudge_outcome: 'skipped:no_number', staff_nudged_at: iso(waiting + (Q + 24) * H) })
+  })
+  it('an ownership read that fails stamps nothing, sends nothing and waits (logged)', async () => {
+    const db = world({ errors: { location_whatsapp_numbers: { select: { message: 'boom' } } } })
+    await run(db); sentNothing(); untouched(db)
+    expect(warned('number_read_failed')).toBe(true)
+    expect(logError).toHaveBeenCalledWith('staff-nudges', expect.stringContaining('number unreadable'), expect.anything())
+  })
+  it('a failed locations read fails the run (the cron records the arm error)', async () => {
+    const db = world({ errors: { locations: { select: { message: 'boom' } } } })
+    await expect(run(db)).rejects.toThrow(/locations read failed/)
+    sentNothing()
   })
   it('does not need followups.enabled (that switch is Mia\'s own-thread ladder)', async () => {
     const db = world({ convs: [conv({ window_expires_at: iso(NOW + H) })] })
@@ -245,6 +286,25 @@ describe('runStaffThreadNudges — what is sent', () => {
     const db = world({ consent: false })
     await run(db); sentNothing()
     expect(row(db)).toMatchObject({ staff_nudge_outcome: 'skipped:no_consent', staff_nudged_at: iso(NOW) })
+  })
+  it('a customer who refused WhatsApp marketing at this studio gets no free text either', async () => {
+    const db = world({ convs: [conv({ window_expires_at: iso(NOW + H) })] })
+    db.tables.contact_location_preferences[0].whatsapp_marketing = false
+    await run(db); sentNothing()
+    expect(row(db)).toMatchObject({ staff_nudge_outcome: 'skipped:no_consent', staff_nudged_at: iso(NOW) })
+  })
+  it('no consent row at all (no decision) still allows the in-window free text', async () => {
+    const db = world({ convs: [conv({ window_expires_at: iso(NOW + H) })], consent: false })
+    expect((await run(db)).freeform).toBe(1)
+    expect(row(db).staff_nudge_outcome).toBe('sent')
+  })
+  it('granted consent allows free text', async () => {
+    const db = world({ convs: [conv({ window_expires_at: iso(NOW + H) })] })
+    expect((await run(db)).freeform).toBe(1)
+  })
+  it('a consent read that fails still waits unstamped inside the window', async () => {
+    const db = world({ convs: [conv({ window_expires_at: iso(NOW + H) })], errors: { contact_location_preferences: { select: { message: 'boom' } } } })
+    await run(db); sentNothing(); untouched(db)
   })
   it('no template set and the window shut: skipped:no_template', async () => {
     const db = world({ settings: agentSettings({ followups: { staff_threads: { ...STAFF_THREADS, template_name: null } } }) })
@@ -308,19 +368,27 @@ describe('runStaffThreadNudges — threads that must not be nudged', () => {
     ['blocked', { is_blocked: true }, {}, 'blocked'],
     ['no contact', { contact_id: null }, {}, 'no_contact'],
     ['opted out', {}, { wa_status: 'opted_out' }, 'opted_out'],
-    ['past Q + 24 h', { staff_waiting_since: iso(NOW - (Q + 25) * H) }, {}, 'expired'],
+    ['wa_status blocked', {}, { wa_status: 'blocked' }, 'blocked'],
+    ['wa_status undeliverable', {}, { wa_status: 'undeliverable' }, 'undeliverable'],
   ])('%s: stamps skipped:<reason> and sends nothing', async (_n, convPatch, contactPatch, reason) => {
-    const messages = [inbound({ created_at: iso(NOW - 90 * H) }), coach({ created_at: iso(NOW - (Q + 25) * H) })]
-    const db = world({ convs: [conv({ window_expires_at: iso(NOW + H), ...convPatch })], contact: contactPatch, messages })
+    const db = world({ convs: [conv({ window_expires_at: iso(NOW + H), ...convPatch })], contact: contactPatch })
     await run(db); sentNothing()
     expect(row(db)).toMatchObject({ staff_nudge_outcome: `skipped:${reason}`, staff_nudged_at: iso(NOW) })
+  })
+
+  it('expired is stamped at the moment the thread returned to staff (waiting + Q + 24 h), not now', async () => {
+    const waiting = NOW - (Q + 25) * H
+    const messages = [inbound({ created_at: iso(NOW - 90 * H) }), coach({ created_at: iso(waiting) })]
+    const db = world({ convs: [conv({ window_expires_at: iso(NOW + H), staff_waiting_since: iso(waiting) })], messages })
+    await run(db); sentNothing()
+    expect(row(db)).toMatchObject({ staff_nudge_outcome: 'skipped:expired', staff_nudged_at: iso(waiting + (Q + 24) * H) })
   })
 
   it('a snooze that ended past the quiet point is skipped, not nudged late', async () => {
     const waiting = NOW - 50 * H
     const db = world({ convs: [conv({ window_expires_at: iso(NOW + H), snoozed_until: iso(waiting + Q * H + 60_000) })] })
     await run(db); sentNothing()
-    expect(row(db).staff_nudge_outcome).toBe('skipped:after_snooze')
+    expect(row(db)).toMatchObject({ staff_nudge_outcome: 'skipped:after_snooze', staff_nudged_at: iso(waiting + Q * H + 60_000) })
   })
 
   it('a customer who asked to pause is never chased', async () => {
@@ -339,6 +407,12 @@ describe('runStaffThreadNudges — threads that must not be nudged', () => {
     const db = world({ convs: [conv({ window_expires_at: iso(NOW + H) })], errors: { whatsapp_messages: { select: { message: 'boom' } } } })
     const out = await run(db)
     expect(out.waiting).toBe(1); sentNothing(); untouched(db)
+  })
+
+  it('an intent read that fails waits unstamped (never read as "not sensitive")', async () => {
+    const db = world({ convs: [conv({ window_expires_at: iso(NOW + H) })], errors: { agent_membership_requests: { select: { message: 'boom' } } } })
+    const out = await run(db)
+    expect(out.waiting).toBe(1); expect(out.reasons.intent_read_failed).toBe(1); sentNothing(); untouched(db)
   })
 
   it('a consent read that fails waits unstamped (never read as "no consent")', async () => {
@@ -409,6 +483,33 @@ describe('runStaffThreadNudges — claim before send', () => {
   })
 })
 
+describe('runStaffThreadNudges — compose budget', () => {
+  it('composes at most 5 free-text nudges per tick; the rest wait unstamped, templates are not limited', async () => {
+    expect(STAFF_NUDGE_MAX_COMPOSES_PER_TICK).toBe(5)
+    const convs = Array.from({ length: 7 }, (_, n) => conv({ id: `conv-${n + 1}`, window_expires_at: iso(NOW + H), staff_waiting_since: iso(NOW - (50 + n) * H) }))
+    const messages = convs.flatMap((c) => [inbound({ id: `i${c.id}`, conversation_id: c.id }), coach({ id: `c${c.id}`, conversation_id: c.id, created_at: c.staff_waiting_since })])
+    const db = world({ settings: agentSettings({ followups: { daily_cap: 50, staff_threads: STAFF_THREADS } }), convs, messages })
+    const out = await run(db)
+    expect(out.freeform).toBe(5)
+    expect(out.waiting).toBe(2)
+    expect(out.reasons.compose_budget).toBe(2)
+    expect(anthropicMessages).toHaveBeenCalledTimes(5)
+    expect(sendTextMessage).toHaveBeenCalledTimes(5)
+    const waiting = db.tables.whatsapp_conversations.filter((c) => !c.staff_nudged_at)
+    expect(waiting.map((c) => c.id).sort()).toEqual(['conv-1', 'conv-2']) // the newest two wait
+    expect(waiting.every((c) => c.staff_nudge_outcome === null)).toBe(true)
+    // the next tick picks them up
+    const next = await run(db, NOW + 15 * 60_000)
+    expect(next.freeform).toBe(2)
+  })
+  it('template sends are not counted against the budget', async () => {
+    const convs = Array.from({ length: 6 }, (_, n) => conv({ id: `conv-${n + 1}`, staff_waiting_since: iso(NOW - (50 + n) * H) }))
+    const messages = convs.flatMap((c) => [inbound({ id: `i${c.id}`, conversation_id: c.id }), coach({ id: `c${c.id}`, conversation_id: c.id, created_at: c.staff_waiting_since })])
+    const db = world({ settings: agentSettings({ followups: { daily_cap: 50, staff_threads: STAFF_THREADS } }), convs, messages })
+    expect((await run(db)).templates).toBe(6)
+  })
+})
+
 describe('runStaffThreadNudges — daily cap', () => {
   it('is shared with the ladder and makes the rest wait, unstamped', async () => {
     const convs = [1, 2, 3].map((n) => conv({ id: `conv-${n}`, window_expires_at: iso(NOW + H), staff_waiting_since: iso(NOW - (50 + n) * H) }))
@@ -450,8 +551,49 @@ describe('the daily cap is one cap for the ladder and the staff nudge', () => {
     const out = await runAgentFollowups(db, { nowMs: NOW })
     expect(out.nudges).toBe(1)
   })
-  it('an unreadable staff count makes the staff runner send nothing', async () => {
-    const db = world({ convs: [conv({ window_expires_at: iso(NOW + H) })], errors: { whatsapp_conversations: { select: { message: 'boom' } } } })
-    await run(db); sentNothing(); untouched(db)
+  // Fails only the daily-cap count queries (head selects), never the candidate read.
+  const countFails = (column) => ({ options, filters }) =>
+    (options?.head && filters.some((f) => f.column === column) ? { message: 'boom' } : null)
+  it('an unreadable staff count makes the staff runner wait; with the count readable the same setup sends', async () => {
+    const setup = (errors) => world({ convs: [conv({ window_expires_at: iso(NOW + H) })], errors })
+    // positive control: nothing broken, it sends
+    const ok = setup({})
+    expect((await run(ok)).freeform).toBe(1)
+    vi.clearAllMocks()
+    sendTextMessage.mockResolvedValue({ messageId: 'wamid.text' })
+    anthropicMessages.mockResolvedValue({ res: { ok: true }, data: { content: [{ type: 'text', text: 'Hi Jane, just checking you saw the 6pm slot?' }] } })
+    const db = setup({ whatsapp_conversations: { select: countFails('staff_nudged_at') } })
+    const out = await run(db)
+    expect(out.waiting).toBe(1); expect(out.reasons.daily_cap).toBe(1)
+    sentNothing(); untouched(db)
+    expect(db.calls.some((c) => c.table === 'whatsapp_conversations' && c.op === 'select' && !c.filters.some((f) => f.column === 'staff_nudge_outcome') && c.filters.some((f) => f.column === 'staff_waiting_since'))).toBe(true) // the candidate read ran
+  })
+  it('an unreadable ladder count makes the staff runner wait too, stamping nothing', async () => {
+    const db = world({ convs: [conv({ window_expires_at: iso(NOW + H) })], errors: { whatsapp_conversations: { select: countFails('agent_followup_sent_at') } } })
+    const out = await run(db)
+    expect(out.reasons.daily_cap).toBe(1); sentNothing(); untouched(db)
+  })
+  it('an unreadable ladder count makes the ladder send nothing for that location', async () => {
+    const ok = ladderWorld(5, [])
+    expect((await runAgentFollowups(ok, { nowMs: NOW })).nudges).toBe(1) // positive control
+    vi.clearAllMocks()
+    sendTextMessage.mockResolvedValue({ messageId: 'wamid.text' })
+    anthropicMessages.mockResolvedValue({ res: { ok: true }, data: { content: [{ type: 'text', text: 'Fancy a class?' }] } })
+    const db = ladderWorld(5, [])
+    db.errors.whatsapp_conversations = { select: countFails('agent_followup_sent_at') }
+    const out = await runAgentFollowups(db, { nowMs: NOW })
+    expect(out.nudges).toBe(0); sentNothing()
+    expect(db.tables.whatsapp_conversations.find((c) => c.id === 'ladder').agent_followup_stage).toBe(0)
+  })
+  it('an intent read that fails makes the ladder skip that thread for the tick', async () => {
+    const ok = ladderWorld(5, [])
+    expect((await runAgentFollowups(ok, { nowMs: NOW })).nudges).toBe(1)
+    vi.clearAllMocks()
+    sendTextMessage.mockResolvedValue({ messageId: 'wamid.text' })
+    anthropicMessages.mockResolvedValue({ res: { ok: true }, data: { content: [{ type: 'text', text: 'Fancy a class?' }] } })
+    const db = ladderWorld(5, [])
+    db.errors.agent_membership_requests = { select: { message: 'boom' } }
+    const out = await runAgentFollowups(db, { nowMs: NOW })
+    expect(out.nudges).toBe(0); sentNothing()
   })
 })

@@ -17,10 +17,12 @@
 // skip and wait logs a structured reason.
 import { SKIP_PREFIX } from './prompt'
 import {
-  FOLLOWUP_DEFAULTS, proactiveWindowOpen, studioOwnsWhatsAppNumber, sendNudge, sendApprovedTemplate,
+  FOLLOWUP_DEFAULTS, proactiveWindowOpen, sendNudge, sendApprovedTemplate,
   lastInboundFacts, intentFlags, sentTodayCount, readStudioMarketingConsent, skipLog, readTickZones, tickSettings,
 } from './followups'
 import { phoneMatchesAllowlist } from './core'
+import { OPTED_OUT_STATUSES } from './trial-done'
+import { locationsWithWhatsApp } from '@/lib/whatsapp-config'
 import { followupConfigFromSettings } from '@/lib/inbox-followup-config'
 import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { logError } from '@/lib/log'
@@ -30,6 +32,10 @@ const CLAIM_LEASE_MS = 30 * 60_000
 const WINDOW_AFTER_QUIET_MS = 24 * H_MS
 const PAGE = 100
 const MAX_TEST_ROWS = 1000
+
+// Free-text nudges call the model one after another inside a shared cron route
+// (maxDuration 300): at most this many per tick; the rest wait for the next one.
+export const STAFF_NUDGE_MAX_COMPOSES_PER_TICK = 5
 
 export const STAFF_NUDGE_DEFAULTS = { quiet_after_hours: 48, nudge_enabled: false, template_name: null }
 
@@ -46,8 +52,8 @@ const STAFF_NUDGE_INSTRUCTION =
  */
 export function classifyStaffNudge({
   staffWaitingSinceMs, snoozedUntilMs = null, windowExpiresAtMs = null, nowMs, quietHours,
-  hasContact, optedOut, blocked, marketingConsent, sensitiveIntent, templateReady, daytimeOpen, capReached,
-  customerRepliedSince = false,
+  hasContact, optedOut, doNotContactReason = null, blocked, marketingConsent, marketingRefused = false,
+  sensitiveIntent, templateReady, daytimeOpen, capReached, customerRepliedSince = false,
 } = {}) {
   if (!Number.isFinite(staffWaitingSinceMs)) return { action: 'wait', reason: 'not_due' }
   const dueAt = staffWaitingSinceMs + quietHours * H_MS
@@ -60,8 +66,13 @@ export function classifyStaffNudge({
   if (nowMs > dueAt + WINDOW_AFTER_QUIET_MS) return { action: 'skip', reason: 'expired' }
   if (!hasContact) return { action: 'skip', reason: 'no_contact' }
   if (optedOut) return { action: 'skip', reason: 'opted_out' }
+  // wa_status opted_out / blocked / undeliverable: never message this number.
+  if (doNotContactReason) return { action: 'skip', reason: doNotContactReason }
   if (blocked) return { action: 'skip', reason: 'blocked' }
   if (sensitiveIntent) return { action: 'skip', reason: 'sensitive_intent' }
+  // An explicit WhatsApp marketing opt-out at this studio ends the check-in on
+  // either path (the template path also needs consent; free text needs no opt-out).
+  if (marketingRefused) return { action: 'skip', reason: 'no_consent' }
   if (!daytimeOpen) return { action: 'wait', reason: 'quiet_hours' }
   if (capReached) return { action: 'wait', reason: 'daily_cap' }
   if (Number.isFinite(windowExpiresAtMs) && windowExpiresAtMs > nowMs) return { action: 'freeform' }
@@ -114,9 +125,12 @@ export async function runStaffThreadNudges(db, { nowMs = Date.now() } = {}) {
   const { data: locations, error: locError } = await db.from('locations')
     .select('id, name, organization_id, membership_source, settings')
     .eq('active', true)
-  if (locError) { logError('staff-nudges', 'locations read failed', { err: locError }); return results }
+  // A failed read is a failed run, not a quiet one: the cron's arm wrapper logs it
+  // and records 'staff_nudges' in armErrors, so the heartbeat never stamps it healthy.
+  if (locError) { logError('staff-nudges', 'locations read failed', { err: locError }); throw new Error(`staff nudges: locations read failed: ${locError.message}`) }
   const zones = await readTickZones(db, locations, 'staff-nudges')
   const orgCache = new Map()
+  let composes = 0 // free-text composes this tick, across every studio
 
   for (const location of locations || []) {
     await releaseStuckClaims(db, location.id, nowMs, results)
@@ -130,11 +144,21 @@ export async function runStaffThreadNudges(db, { nowMs = Date.now() } = {}) {
     if (!zone) { gate('zone_read_failed'); continue }
     const window = proactiveWindowOpen(nowMs, settings, zone)
     if (!window.open) { gate(window.reason); continue }
-    if (!(await studioOwnsWhatsAppNumber(db, location.id))) { gate('no_number'); continue }
+    // Unlike the ladder, an unreadable ownership read is "do not know": stamp
+    // nothing, log, wait for the next tick. A studio with no number still has its
+    // due threads stamped skipped:no_number below, so they go back to staff at once.
+    let noNumber = false
+    try {
+      noNumber = !(await locationsWithWhatsApp(db, [location.id])).has(location.id)
+    } catch (err) {
+      logError('staff-nudges', 'studio WhatsApp number unreadable; thread waits', { locationId: location.id, err })
+      gate('number_read_failed'); continue
+    }
+    if (noNumber) gate('no_number')
     const templateName = settings.followups?.staff_threads?.template_name || null
     const cap = { ...FOLLOWUP_DEFAULTS, ...(settings.followups || {}) }.daily_cap
     // The shared cap: ladder sends + staff nudges (Infinity when unreadable).
-    let sentToday = await sentTodayCount(db, location.id, nowMs)
+    let sentToday = noNumber ? 0 : await sentTodayCount(db, location.id, nowMs)
 
     const nowIso = new Date(nowMs).toISOString()
     const candidates = () => db.from('whatsapp_conversations')
@@ -148,6 +172,7 @@ export async function runStaffThreadNudges(db, { nowMs = Date.now() } = {}) {
       .is('agent_paused_at', null)
       .or(`snoozed_until.is.null,snoozed_until.lte.${nowIso}`)
       .order('staff_waiting_since', { ascending: true })
+      .order('id', { ascending: true })
     // Live: one oldest-first read of 100. Test mode: strangers are never stamped
     // (that would change when their thread returns to staff), so they would
     // crowd the page; page on (up to 1,000 rows) and keep allow-listed phones only.
@@ -173,41 +198,59 @@ export async function runStaffThreadNudges(db, { nowMs = Date.now() } = {}) {
       try {
         const contact = c.contacts || {}
         const to = contact.wa_phone || contact.phone
-        if (to && !settings.enabled && settings.test_mode && !phoneMatchesAllowlist(to, settings.test_phones)) {
-          note('waiting', c.id, 'test_mode_not_allowlisted'); continue
+        const waitingMs = toMs(c.staff_waiting_since)
+        const expiresAtMs = Number.isFinite(waitingMs) ? waitingMs + (cfg.quietHours * H_MS) + WINDOW_AFTER_QUIET_MS : null
+        // Only a thread still exactly as read may be touched: same waiting stamp, never nudged.
+        const unchanged = (q) => q.eq('id', c.id).is('staff_nudged_at', null).eq('staff_waiting_since', c.staff_waiting_since)
+        // Stamp a skip. atMs is when the thread actually returned to staff.
+        const stampSkip = async (reason, atMs) => {
+          const { error } = await unchanged(db.from('whatsapp_conversations')
+            .update({ staff_nudged_at: new Date(atMs).toISOString(), staff_nudge_outcome: `skipped:${reason}` }))
+          if (error) { logError('staff-nudges', 'skip stamp failed', { conversationId: c.id, err: error }); results.outcomeWriteFailed++ }
+          note('skipped', c.id, reason)
         }
+        // No number switched on: nothing can be sent, so the thread goes back to
+        // staff now (never later than the moment its grace day would have ended).
+        if (noNumber) { await stampSkip('no_number', Math.min(nowMs, expiresAtMs ?? nowMs)); continue }
         // The thread itself, not the conversation row, says whether the customer
         // wrote since the coach: an inbound can land before the row is updated.
         const facts = await lastInboundFacts(db, c.id)
         if (facts.readFailed) { note('waiting', c.id, 'thread_read_failed'); continue }
-        const waitingMs = toMs(c.staff_waiting_since)
         const flags = await intentFlags(db, c.id, facts.lastInboundAtMs)
-        const windowOpen = (toMs(c.window_expires_at) ?? 0) > nowMs
+        // A failed intent read must never read as "not sensitive" (logged inside intentFlags).
+        if (flags.readFailed) { note('waiting', c.id, 'intent_read_failed'); continue }
+        // The studio's marketing consent: a refusal ends both paths, a missing
+        // decision still allows in-window free text. A failed read waits.
         let marketingConsent = false
-        if (!windowOpen && templateName && to) {
+        let marketingRefused = false
+        if (to) {
           const consent = await readStudioMarketingConsent(db, c)
           if (consent.error) {
             logError('staff-nudges', 'consent read failed; thread waits', { conversationId: c.id, err: consent.error })
             note('waiting', c.id, 'consent_read_failed'); continue
           }
           marketingConsent = consent.consented
+          marketingRefused = consent.refused === true
         }
         const decision = classifyStaffNudge({
           staffWaitingSinceMs: waitingMs, snoozedUntilMs: toMs(c.snoozed_until), windowExpiresAtMs: toMs(c.window_expires_at),
-          nowMs, quietHours: cfg.quietHours, hasContact: !!(c.contact_id && to), optedOut: contact.wa_status === 'opted_out',
-          blocked: c.is_blocked === true, marketingConsent, sensitiveIntent: flags.sensitiveIntent, templateReady: !!templateName,
+          nowMs, quietHours: cfg.quietHours, hasContact: !!(c.contact_id && to),
+          doNotContactReason: OPTED_OUT_STATUSES.has(contact.wa_status) ? contact.wa_status : null,
+          blocked: c.is_blocked === true, marketingConsent, marketingRefused, sensitiveIntent: flags.sensitiveIntent, templateReady: !!templateName,
           daytimeOpen: true, capReached: sentToday >= cap,
           customerRepliedSince: facts.lastInboundAtMs !== null && facts.lastInboundAtMs > waitingMs,
         })
         if (decision.action === 'wait') { note('waiting', c.id, decision.reason); continue }
 
-        // Only a thread still exactly as read may be touched: same waiting stamp, never nudged.
-        const unchanged = (q) => q.eq('id', c.id).is('staff_nudged_at', null).eq('staff_waiting_since', c.staff_waiting_since)
         if (decision.action === 'skip') {
-          const { error } = await unchanged(db.from('whatsapp_conversations')
-            .update({ staff_nudged_at: nowIso, staff_nudge_outcome: `skipped:${decision.reason}` }))
-          if (error) { logError('staff-nudges', 'skip stamp failed', { conversationId: c.id, err: error }); results.outcomeWriteFailed++ }
-          note('skipped', c.id, decision.reason); continue
+          // The moment the thread actually came back to staff, so the queue
+          // never thinks it returned at switch-on time.
+          const atMs = decision.reason === 'expired' ? expiresAtMs
+            : decision.reason === 'after_snooze' ? toMs(c.snoozed_until) : null
+          await stampSkip(decision.reason, Number.isFinite(atMs) ? atMs : nowMs); continue
+        }
+        if (decision.action === 'freeform' && composes >= STAFF_NUDGE_MAX_COMPOSES_PER_TICK) {
+          note('waiting', c.id, 'compose_budget'); continue
         }
 
         // CLAIM, then send only if this tick won it.
@@ -218,6 +261,7 @@ export async function runStaffThreadNudges(db, { nowMs = Date.now() } = {}) {
         const { data: won, error: claimError } = await claim.select('id')
         if (claimError) { logError('staff-nudges', 'claim failed; nothing sent', { conversationId: c.id, err: claimError }); note('waiting', c.id, 'claim_failed'); continue }
         if (!won?.length) { note('waiting', c.id, 'claim_lost'); continue }
+        if (decision.action === 'freeform') composes++
 
         const conv = {
           id: c.id, contact_id: c.contact_id, location_id: c.location_id, to,

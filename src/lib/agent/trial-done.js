@@ -36,7 +36,7 @@ export const TRIAL_DONE_CLAIM_LEASE_MS = 30 * 60_000
 export const TRIAL_DONE_NUDGE_INSTRUCTION = '[STUDIO SYSTEM - not the customer] They finished their trial and talked with you about continuing, then went quiet. Write one short, friendly check-in that picks up where you left off. No prices unless you already gave them. No pressure. If they declined, said they will decide later, or there is nothing open to follow up on, reply with exactly [[SKIP]] and nothing else.'
 
 // wa_status values that mean "never message this number" (whatsapp-consent.js).
-const OPTED_OUT_STATUSES = new Set(['opted_out', 'blocked', 'undeliverable'])
+export const OPTED_OUT_STATUSES = new Set(['opted_out', 'blocked', 'undeliverable'])
 // shapeTrialEligibility reasons that mean they bought something.
 // HATCH39 — a €39 paid trial is a purchase too (shapeTrialEligibility's paid_trial).
 const PURCHASE_REASONS = new Set(['membership_history', 'paid_pack', 'paid_trial'])
