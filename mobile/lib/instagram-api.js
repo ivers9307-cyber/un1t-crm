@@ -57,6 +57,16 @@ export function resolveConversation(conversationId, resolved, locationId) {
   })
 }
 
+// INBOXFOLLOW.4 — snooze an Instagram thread, or clear the snooze
+// ({ until: null }); same body and 409 as the WhatsApp route.
+export function snoozeConversation(conversationId, body, locationId) {
+  return api(`/api/instagram/conversations/${conversationId}/snooze`, {
+    method: 'POST',
+    locationId,
+    body,
+  })
+}
+
 // Rate one of Mia's IG replies (AGENT-QA.1).
 export function rateAgentMessage({ messageId, rating, note, locationId }) {
   return api('/api/agent/feedback', {

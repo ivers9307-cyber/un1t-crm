@@ -9,10 +9,13 @@
 
 import { supabase } from './supabase'
 import { api } from './api'
+import { ACTIVE_SET_LIMIT, ACTIVE_SET_OR, mergeActiveSet } from 'shared/inbox-active-set'
+import { DEFAULT_FOLLOWUP_CFG } from 'shared/inbox-queues'
 
-export async function listConversations(locationId) {
-  let q = supabase.from('whatsapp_conversations')
-    .select(`
+// Every column the row, the queue rules (shared/inbox-queues) and the row text
+// (shared/inbox-row-text) read, named: never `*`, never a `profiles` embed, never
+// snoozed_by (the phone has no use for it). Both list reads share it.
+export const LIST_SELECT = `
       id, location_id, contact_id, wa_phone, wa_profile_name, status,
       last_message_at, last_message_direction, last_message_preview,
       unread_count, window_expires_at, assigned_to, created_at,
@@ -21,12 +24,61 @@ export async function listConversations(locationId) {
       staff_nudged_at, staff_nudge_outcome, handoff_requested_at,
       snoozed_until, snooze_note,
       contacts:contact_id (id, name, first_name, last_name, pipeline_stage_slug)
-    `)
+    `
+
+// The newest 100 threads, plus (INBOXFOLLOW.4) every unresolved thread that
+// needs someone, oldest first, so a long-waiting thread or a fired snooze
+// reminder is never cut off by the "newest 100". The second read is the same
+// filter the web list routes use (shared/inbox-active-set) and is best effort:
+// if it fails the newest-100 list is shown, as before.
+export async function listConversations(locationId) {
+  let latest = supabase.from('whatsapp_conversations')
+    .select(LIST_SELECT)
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(100)
-  if (locationId) q = q.eq('location_id', locationId)
-  const { data, error } = await q
-  return error ? { success: false, error: error.message } : { success: true, data }
+  let active = supabase.from('whatsapp_conversations')
+    .select(LIST_SELECT)
+    .is('resolved_at', null)
+    .or(ACTIVE_SET_OR)
+    // Oldest first: the longest-waiting threads must never be the ones cut at the limit.
+    .order('last_message_at', { ascending: true, nullsFirst: false })
+    .limit(ACTIVE_SET_LIMIT)
+  if (locationId) {
+    latest = latest.eq('location_id', locationId)
+    active = active.eq('location_id', locationId)
+  }
+  const [latestRes, activeRes] = await Promise.all([latest, active])
+  if (latestRes.error) return { success: false, error: latestRes.error.message }
+  if (activeRes.error) {
+    // eslint-disable-next-line no-console
+    console.warn('whatsapp list: active-set read failed, showing the newest 100', activeRes.error.message)
+    return { success: true, data: latestRes.data }
+  }
+  return { success: true, data: mergeActiveSet(latestRes.data, activeRes.data) }
+}
+
+// INBOXFOLLOW.4 — the studio's follow-up config ({ quietHours, nudgeEnabled }),
+// which the queue rules need to say when a quiet thread returns. The list is read
+// direct from Supabase, so the config comes from its own route. Any failure, or
+// an answer that is not the expected shape, is the shared default (the phone's
+// behaviour before this existed): a list with the default cfg is still a list.
+export async function getInboxConfig(locationId) {
+  if (!locationId) return { ...DEFAULT_FOLLOWUP_CFG }
+  const res = await api(`/api/whatsapp/inbox-config?location_id=${encodeURIComponent(locationId)}`, { locationId })
+  const d = res?.success ? res.data : null
+  if (!d || typeof d.quietHours !== 'number' || !Number.isFinite(d.quietHours)) return { ...DEFAULT_FOLLOWUP_CFG }
+  return { quietHours: d.quietHours, nudgeEnabled: d.nudgeEnabled === true }
+}
+
+// INBOXFOLLOW.4 — snooze a thread, or clear the snooze ({ until: null }). `body`
+// is snoozeBody(...) from ./inbox-followup. The route answers 409 when a customer
+// message has landed since `seen_last_message_at`.
+export function snoozeConversation(conversationId, body, locationId) {
+  return api(`/api/whatsapp/conversations/${conversationId}/snooze`, {
+    method: 'POST',
+    locationId,
+    body,
+  })
 }
 
 // Conversation + newest messages + Flow availability in one call, via

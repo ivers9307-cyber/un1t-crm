@@ -5,10 +5,15 @@
 
 export {
   DEFAULT_FOLLOWUP_CFG, NUDGE_GRACE_HOURS, QUEUES,
-  isSnoozed, returnAtMs, returnReason, needsReply, needsMiaHelp,
+  isSnoozed, snoozeEnded, returnAtMs, returnReason, needsReply, needsMiaHelp,
   isWaiting, needsAction, hasPendingApproval, waitSinceMs, sortNeedsReply,
   windowState, handledBy, filterByQueue, queueCounts,
 } from 'shared/inbox-queues'
+
+// The row's words (wait chip, window chip, state line) and the snooze presets are
+// the shared ones the web uses, so both surfaces read the same.
+export { waitChipInfo, windowChipInfo, stateLineText, durationLabel } from 'shared/inbox-row-text'
+export { snoozePresets, SNOOZE_NOTE_MAX } from 'shared/inbox-snooze'
 
 // Chip metadata for non-text messages. Returns null for text (no chip)
 // or { icon, label } where icon is an Ionicons name. Voice notes matter
