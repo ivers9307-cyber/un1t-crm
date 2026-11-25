@@ -28,6 +28,8 @@ import { logError } from '@/lib/log'
 const H_MS = 3600_000
 const CLAIM_LEASE_MS = 30 * 60_000
 const WINDOW_AFTER_QUIET_MS = 24 * H_MS
+const PAGE = 100
+const MAX_TEST_ROWS = 1000
 
 export const STAFF_NUDGE_DEFAULTS = { quiet_after_hours: 48, nudge_enabled: false, template_name: null }
 
@@ -96,22 +98,6 @@ async function releaseStuckClaims(db, locationId, nowMs, results) {
   }
 }
 
-// Nudges sent (or in flight) today, same UTC day as the ladder's cap. null = unknown.
-async function staffSentToday(db, locationId, nowMs) {
-  const d = new Date(nowMs)
-  const dayStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString()
-  const { count, error } = await db.from('whatsapp_conversations')
-    .select('id', { count: 'exact', head: true })
-    .eq('location_id', locationId)
-    .gte('staff_nudged_at', dayStart)
-    .in('staff_nudge_outcome', ['sent', 'sending'])
-  if (error || typeof count !== 'number') {
-    logError('staff-nudges', 'daily cap unreadable; location waits this tick', { locationId, err: error })
-    return null
-  }
-  return count
-}
-
 /**
  * One cron tick: for every location with the staff-thread nudge switched on,
  * send at most one check-in per quiet staff-owned thread. Never throws for a
@@ -147,11 +133,11 @@ export async function runStaffThreadNudges(db, { nowMs = Date.now() } = {}) {
     if (!(await studioOwnsWhatsAppNumber(db, location.id))) { gate('no_number'); continue }
     const templateName = settings.followups?.staff_threads?.template_name || null
     const cap = { ...FOLLOWUP_DEFAULTS, ...(settings.followups || {}) }.daily_cap
-    const staffToday = await staffSentToday(db, location.id, nowMs)
-    let sentToday = staffToday === null ? Infinity : staffToday + (await sentTodayCount(db, location.id, nowMs))
+    // The shared cap: ladder sends + staff nudges (Infinity when unreadable).
+    let sentToday = await sentTodayCount(db, location.id, nowMs)
 
     const nowIso = new Date(nowMs).toISOString()
-    const { data: convs, error: convsError } = await db.from('whatsapp_conversations')
+    const candidates = () => db.from('whatsapp_conversations')
       .select(ownCols)
       .eq('location_id', location.id)
       .not('staff_waiting_since', 'is', null)
@@ -162,7 +148,25 @@ export async function runStaffThreadNudges(db, { nowMs = Date.now() } = {}) {
       .is('agent_paused_at', null)
       .or(`snoozed_until.is.null,snoozed_until.lte.${nowIso}`)
       .order('staff_waiting_since', { ascending: true })
-      .limit(100)
+    // Live: one oldest-first read of 100. Test mode: strangers are never stamped
+    // (that would change when their thread returns to staff), so they would
+    // crowd the page; page on (up to 1,000 rows) and keep allow-listed phones only.
+    let convs = []
+    let convsError = null
+    if (settings.enabled) {
+      ;({ data: convs, error: convsError } = await candidates().limit(PAGE))
+    } else {
+      for (let from = 0; from < MAX_TEST_ROWS; from += PAGE) {
+        const { data, error } = await candidates().range(from, from + PAGE - 1)
+        if (error) { convsError = error; break }
+        convs.push(...(data || []).filter((r) => {
+          const ct = r.contacts || {}
+          const phone = ct.wa_phone || ct.phone
+          return phone && phoneMatchesAllowlist(phone, settings.test_phones)
+        }))
+        if ((data || []).length < PAGE) break
+      }
+    }
     if (convsError) { logError('staff-nudges', 'candidate query failed', { locationId: location.id, err: convsError }); continue }
 
     for (const c of convs || []) {

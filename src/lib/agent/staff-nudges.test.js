@@ -12,6 +12,7 @@ vi.mock('@/lib/radar-outreach', () => ({ extractTemplateBody: () => ({ varCount:
 vi.mock('@/lib/anthropic', () => ({ anthropicMessages }))
 vi.mock('@/lib/log', async (orig) => ({ ...(await orig()), logError, logWarn: vi.fn() }))
 
+import { runAgentFollowups } from './followups'
 import { classifyStaffNudge, runStaffThreadNudges, STAFF_NUDGE_DEFAULTS } from './staff-nudges'
 import { WhatsAppNumberMissingError } from '@/lib/whatsapp-number-missing'
 import { createFakeDb } from '../../../tests/helpers/fake-db'
@@ -166,8 +167,22 @@ describe('runStaffThreadNudges — studio gates', () => {
   it('test mode honours the phone allowlist: a stranger waits unstamped', async () => {
     const db = world({ settings: agentSettings({ enabled: false, test_mode: true, test_phones: ['353870009999'] }), convs: [conv({ window_expires_at: iso(NOW + H) })] })
     const out = await run(db)
-    expect(out.waiting).toBe(1); sentNothing(); untouched(db)
-    expect(warned('test_mode_not_allowlisted')).toBe(true)
+    expect(out.freeform + out.templates + out.skipped).toBe(0); sentNothing(); untouched(db)
+  })
+  it('test mode reaches an allow-listed thread behind 150 older strangers, and never stamps the strangers', async () => {
+    const strangers = Array.from({ length: 150 }, (_, n) => conv({ id: `s-${n}`, contact_id: `e${String(n).padStart(7, '0')}-0000-0000-0000-000000000000`, wa_phone: '353879999999', window_expires_at: iso(NOW + H), staff_waiting_since: iso(NOW - (300 - n) * H) }))
+    const mine = conv({ id: 'mine', window_expires_at: iso(NOW + H), staff_waiting_since: iso(NOW - 50 * H) })
+    const db = world({
+      settings: agentSettings({ enabled: false, test_mode: true, test_phones: ['353870000000'] }), convs: [...strangers, mine],
+      messages: [inbound({ conversation_id: 'mine' }), coach({ conversation_id: 'mine' })],
+    })
+    db.tables.contacts.push(...strangers.map((c) => ({ id: c.contact_id, first_name: 'X', name: 'X', wa_phone: '353879999999', phone: '353879999999', wa_status: 'active' })))
+    const out = await run(db)
+    expect(out.freeform).toBe(1)
+    expect(sendTextMessage).toHaveBeenCalledTimes(1)
+    expect(sendTextMessage.mock.calls[0][0]).toBe('353870000000')
+    expect(row(db, 'mine').staff_nudge_outcome).toBe('sent')
+    expect(db.tables.whatsapp_conversations.filter((c) => c.id.startsWith('s-') && (c.staff_nudged_at || c.staff_nudge_outcome))).toHaveLength(0)
   })
   it('test mode sends to an allow-listed phone', async () => {
     const db = world({ settings: agentSettings({ enabled: false, test_mode: true, test_phones: ['353870000000'] }), convs: [conv({ window_expires_at: iso(NOW + H) })] })
@@ -415,5 +430,28 @@ describe('runStaffThreadNudges — daily cap', () => {
     const db = world({ settings: agentSettings({ followups: { daily_cap: 1, staff_threads: STAFF_THREADS } }), convs })
     const out = await run(db)
     expect(out.freeform).toBe(0); sentNothing(); untouched(db)
+  })
+})
+
+describe('the daily cap is one cap for the ladder and the staff nudge', () => {
+  const ladderWorld = (cap, staffSent) => {
+    const ladder = { id: 'ladder', location_id: LOC, contact_id: CONTACT, wa_phone: '353870000000', agent_active: true, agent_followup_stage: 0, last_message_at: iso(NOW - 5 * H), last_message_direction: 'outbound', window_expires_at: iso(NOW + 10 * H) }
+    const sent = staffSent.map((id) => conv({ id, staff_nudged_at: iso(NOW - 2 * H), staff_nudge_outcome: 'sent' }))
+    const messages = [inbound({ conversation_id: 'ladder', created_at: iso(NOW - 6 * H) }), { id: 'a1', conversation_id: 'ladder', direction: 'outbound', source: 'agent', body: 'Want a class?', created_at: iso(NOW - 5 * H) }]
+    return world({ settings: agentSettings({ followups: { enabled: true, daily_cap: cap, nudge_after_hours: 3, staff_threads: STAFF_THREADS } }), convs: [ladder, ...sent], messages })
+  }
+  it('staff nudges that fill the cap make the ladder wait', async () => {
+    const db = ladderWorld(1, ['s1'])
+    const out = await runAgentFollowups(db, { nowMs: NOW })
+    expect(out.nudges).toBe(0); sentNothing()
+  })
+  it('with room under the cap the same ladder thread is nudged', async () => {
+    const db = ladderWorld(2, ['s1'])
+    const out = await runAgentFollowups(db, { nowMs: NOW })
+    expect(out.nudges).toBe(1)
+  })
+  it('an unreadable staff count makes the staff runner send nothing', async () => {
+    const db = world({ convs: [conv({ window_expires_at: iso(NOW + H) })], errors: { whatsapp_conversations: { select: { message: 'boom' } } } })
+    await run(db); sentNothing(); untouched(db)
   })
 })

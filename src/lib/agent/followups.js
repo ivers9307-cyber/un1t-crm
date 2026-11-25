@@ -312,7 +312,30 @@ export async function sentTodayCount(db, locationId, nowMs) {
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
     .gte('agent_followup_sent_at', dayStart)
-  return count || 0
+  // INBOXFOLLOW.3 — ONE daily cap for everything Mia starts: the ladder's own
+  // sends plus today's staff-thread nudges. Infinity when the staff count is
+  // unreadable, so the location sends nothing this tick (fail closed).
+  const staff = await staffNudgesSentToday(db, locationId, dayStart)
+  return (count || 0) + staff
+}
+
+// Staff-thread nudges sent (or in flight) today. KNOWN UNDER-COUNT: it reads
+// staff_nudged_at/outcome on the conversation, and a customer reply or a coach
+// reply clears both, so a nudge that was answered drops out of today's count.
+// No existing column on the recorded whatsapp_messages row can mark a nudge
+// reliably (a free-text nudge is source 'agent', message_type 'text', like any
+// Mia message), and this task adds no column.
+async function staffNudgesSentToday(db, locationId, dayStart) {
+  const { count, error } = await db.from('whatsapp_conversations')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId)
+    .gte('staff_nudged_at', dayStart)
+    .in('staff_nudge_outcome', ['sent', 'sending'])
+  if (error || typeof count !== 'number') {
+    logError('agent-followups', 'staff nudge count unreadable; location sends nothing this tick', { locationId, err: error })
+    return Infinity
+  }
+  return count
 }
 
 export function skipLog(conversationId, reason) {
