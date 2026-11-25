@@ -9,7 +9,7 @@
 // (`zone`), never the phone's. The screen passes `snooze(body)` (its channel's
 // route) and `onChanged()` (refetch the thread).
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { View, Text, TextInput, Pressable, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { Button, Modal } from './ui'
@@ -22,16 +22,25 @@ export default function ThreadFollowupBar({ conv, channel, zone, snooze, onChang
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  // The press guard: state is read from a stale closure, so two presses in one
+  // frame would both pass a `busy` check. A ref is set before the await.
+  const inFlight = useRef(false)
   const mode = snoozeStripMode(conv)
   if (!conv) return null
 
   // One request: a snooze (until = an ISO instant) or a clear (until = null).
   async function send(until) {
-    if (busy) return
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy(true)
     setError(null)
-    const res = await snooze(snoozeBody({ until, note, seenLastMessageAt: conv.last_message_at ?? null }))
-    setBusy(false)
+    let res
+    try {
+      res = await snooze(snoozeBody({ until, note, seenLastMessageAt: conv.last_message_at ?? null }))
+    } finally {
+      inFlight.current = false
+      setBusy(false)
+    }
     const outcome = snoozeOutcome(res)
     if (outcome.ok) {
       setOpen(false)

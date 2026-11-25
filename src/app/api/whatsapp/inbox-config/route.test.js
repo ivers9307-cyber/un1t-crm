@@ -16,6 +16,7 @@ const { readInboxFollowupConfig } = await import('@/lib/inbox-followup-config')
 const { GET } = await import('./route.js')
 
 const withWhatsApp = person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: true } } }, LOC_A)
+const mobileOnly = person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false, mobile: { whatsapp: true } } } }, LOC_A)
 const withoutWhatsApp = person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false } } }, LOC_A)
 const get = (qs = '') => GET(new Request(`http://localhost/api/whatsapp/inbox-config${qs}`))
 
@@ -36,6 +37,20 @@ describe('GET /api/whatsapp/inbox-config', () => {
     const res = await get(`?location_id=${LOC_B}`)
     expect(res.status).toBe(403)
     expect((await res.json()).success).toBe(false)
+    expect(readInboxFollowupConfig).not.toHaveBeenCalled()
+  })
+
+  it('answers a caller who holds WhatsApp on the phone only (web key off)', async () => {
+    getCurrentUser.mockResolvedValue(mobileOnly)
+    const res = await get(`?location_id=${LOC_A}`)
+    expect(res.status).toBe(200)
+    expect(readInboxFollowupConfig).toHaveBeenCalledWith(expect.anything(), LOC_A)
+  })
+
+  it('refuses a caller with neither the web nor the mobile key', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false, mobile: { whatsapp: false } } } }, LOC_A))
+    const res = await get(`?location_id=${LOC_A}`)
+    expect(res.status).toBe(403)
     expect(readInboxFollowupConfig).not.toHaveBeenCalled()
   })
 

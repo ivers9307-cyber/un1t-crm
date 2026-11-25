@@ -110,6 +110,21 @@ describe('listConversations', () => {
     warn.mockRestore()
   })
 
+  it('warns when the active set hits its limit, naming limit and studio, and not below it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const many = (n) => Array.from({ length: n }, (_, i) => row(`r${i}`, '2026-10-01T10:00:00Z'))
+    mockReads({ data: [], error: null }, { data: many(300), error: null })
+    await listConversations(LOC)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('300')
+    expect(warn.mock.calls[0][0]).toContain(LOC)
+    warn.mockClear()
+    mockReads({ data: [], error: null }, { data: many(299), error: null })
+    await listConversations(LOC)
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('a failed newest-100 read is a failure, whatever the active set says', async () => {
     mockReads({ data: null, error: { message: 'down' } }, { data: [row('x', '2026-11-25T10:00:00Z')], error: null })
     expect(await listConversations(LOC)).toEqual({ success: false, error: 'down' })

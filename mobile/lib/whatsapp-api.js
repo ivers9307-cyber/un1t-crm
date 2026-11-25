@@ -53,6 +53,9 @@ export async function listConversations(locationId) {
     console.warn('whatsapp list: active-set read failed, showing the newest 100', activeRes.error.message)
     return { success: true, data: latestRes.data }
   }
+  if ((activeRes.data || []).length >= ACTIVE_SET_LIMIT) {
+    console.warn(`whatsapp list: active set hit its limit of ${ACTIVE_SET_LIMIT}; the newest waiting threads beyond it are not listed (location ${locationId ?? 'all'})`)
+  }
   return { success: true, data: mergeActiveSet(latestRes.data, activeRes.data) }
 }
 
