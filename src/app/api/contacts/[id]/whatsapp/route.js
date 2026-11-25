@@ -238,6 +238,8 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
     last_message_direction: 'outbound',
     last_message_preview: messageBody?.substring(0, 100),
     ...manualTakeoverPatch(conversation.agent_handed_off_at),
+    // INBOXFOLLOW.2 — a person has acted, so the thread leaves "Mia needs help" (not a thread reply: no follow-up ladder).
+    handoff_requested_at: null,
   }).eq('id', conversation.id)
   // Timeline activity — mirrors the ad-hoc SMS surface so the
   // contact's timeline shows the send. Best-effort: the message is

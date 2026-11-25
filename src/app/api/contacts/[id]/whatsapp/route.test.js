@@ -112,6 +112,8 @@ function echoInsert() {
   return spy
 }
 
+const convUpdates = []
+
 function makeDb(messageInsertSpy, { contact = CONTACT, conversation = CONVERSATION } = {}) {
   return {
     from: vi.fn((table) => {
@@ -142,7 +144,7 @@ function makeDb(messageInsertSpy, { contact = CONTACT, conversation = CONVERSATI
             }),
           }),
           // post-send update: .update().eq()
-          update: () => ({ eq: () => Promise.resolve({ data: null, error: null }) }),
+          update: (patch) => { convUpdates.push(patch); return { eq: () => Promise.resolve({ data: null, error: null }) } },
         }
       }
       if (table === 'whatsapp_messages') {
@@ -177,6 +179,7 @@ beforeEach(() => {
   hasPermission.mockReturnValue(true)
   hasMobilePermission.mockReturnValue(true)
   getCurrentUser.mockResolvedValue(STAFF)
+  convUpdates.length = 0
 })
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
@@ -197,6 +200,14 @@ describe('POST /api/contacts/[id]/whatsapp', () => {
     // … with sent_by = the operator's profiles.id uuid, never their name.
     expect(payload.sent_by).toBe(USER_ID)
     expect(payload.sent_by).not.toBe(STAFF.full_name)
+  })
+
+  it('a staff send clears handoff_requested_at and starts no follow-up ladder', async () => {
+    createServerClient.mockReturnValue(makeDb(echoInsert()))
+    const res = await POST(postReq({ text: 'Hi Casey' }), props)
+    expect(res.status).toBe(200)
+    expect(convUpdates[0]).toMatchObject({ handoff_requested_at: null })
+    expect(Object.keys(convUpdates[0]).filter((k) => k.startsWith('staff_'))).toEqual([])
   })
 })
 
