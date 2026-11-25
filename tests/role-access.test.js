@@ -15,6 +15,7 @@ const C = id(13)
 const U = {
   master: id(101), ownerA: id(102), managerA: id(103), headA: id(104), receptionA: id(105), staffA: id(106),
   staffB: id(107), inactiveA: id(108), deletedA: id(109), member: id(110), stranger: id(111),
+  webOnlyA: id(112), phoneKeyA: id(113),
 }
 const R = (base) => ({ a: id(base + 1), b: id(base + 2), c: id(base + 3), x: id(base + 4) })
 const CONTACT = R(200)
@@ -123,9 +124,10 @@ describe('Instagram conversations and messages need the inbox key (INBOXPERM.1, 
   // EXPECTED TO FAIL until mig 875 is applied and supabase/schema/access.json is
   // refreshed (the role db is built from access.json, not from migrations), at
   // the plain-staff expectation (staffA / staffB read nothing, who read their
-  // studio under the old policy), in exactly two cases: 'the inbox key opens
-  // them at its own studio...' and 'messages follow the same rule'. The others
-  // hold under both policies. Not skipped on purpose.
+  // studio under the old policy), in exactly four cases: 'the inbox key opens
+  // them at its own studio...', 'messages follow the same rule', and the two
+  // per-user grant cases below. The others hold under both policies. (Checked:
+  // all pass with the migration's SQL run against the role db.) Not skipped on purpose.
   const COLS = 'customer_waiting_since, staff_owned_since, staff_waiting_since, staff_nudged_at, staff_nudge_outcome, handoff_requested_at, snoozed_until, snoozed_by, snooze_note'
   const ig = R(480)
   const msg = R(490)
@@ -156,6 +158,39 @@ describe('Instagram conversations and messages need the inbox key (INBOXPERM.1, 
       expect(await read(who, `select id from public.instagram_messages`)).toEqual([])
     }
   })
+  describe('per-user inbox grants', () => {
+    // webOnlyA: staff at A with the WEB inbox grant only (top-level `whatsapp`
+    // true, no phone key). phoneKeyA: staff at A AND B, with the PHONE key
+    // switched on at A only. The policy reads the phone key (mig 691's
+    // private.auth_mobile_can_location_ids), so the web grant alone opens nothing
+    // directly (the /api routes, which take web OR phone, still serve it) and the
+    // phone key opens exactly the studio it is set at.
+    //
+    // EXPECTED TO FAIL until mig 875 is applied and access.json refreshed:
+    // 'a web-only grant reads no Instagram rows directly' (the old policy admits
+    // any active member) and 'a plain staff member with the phone key at A reads
+    // A and not B' (the old policy also admits B).
+    beforeAll(async () => {
+      await db.seed('profiles', [
+        { id: U.webOnlyA, role: 'staff', active: true, deleted_at: null, employment_type: 'fte', full_name: 'Test Person' },
+        { id: U.phoneKeyA, role: 'staff', active: true, deleted_at: null, employment_type: 'fte', full_name: 'Test Person' },
+      ])
+      await db.seed('profile_locations', [
+        [U.webOnlyA, A, { whatsapp: true }],
+        [U.phoneKeyA, A, { mobile: { whatsapp: true } }],
+        [U.phoneKeyA, B, {}],
+      ].map(([profile_id, location_id, permissions]) => ({ profile_id, location_id, role: 'staff', permissions })))
+    })
+    it('a web-only grant reads no Instagram rows directly', async () => {
+      expect(await read('webOnlyA', `select id from public.instagram_conversations`)).toEqual([])
+      expect(await read('webOnlyA', `select id from public.instagram_messages`)).toEqual([])
+    })
+    it('a plain staff member with the phone key at A reads A and not B', async () => {
+      expect((await read('phoneKeyA', `select id from public.instagram_conversations`)).map((r) => r.id)).toEqual([ig.a])
+      expect((await read('phoneKeyA', `select id from public.instagram_messages`)).map((r) => r.id)).toEqual([msg.a])
+    })
+  })
+
   it('a session that is not an active member of the studio sees nothing', async () => {
     for (const who of ['inactiveA', 'deletedA', 'member', 'stranger']) {
       expect(await read(who, `select ${COLS} from public.instagram_conversations`)).toEqual([])

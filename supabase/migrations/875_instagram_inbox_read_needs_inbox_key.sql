@@ -64,7 +64,7 @@ BEGIN
       RAISE EXCEPTION 'mig 875: % must have exactly one permissive SELECT policy', r.tbl;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = r.tbl AND policyname = r.pol
-                     AND cmd = 'SELECT' AND roles = '{authenticated}' AND qual LIKE '%auth_mobile_can_location_ids(''whatsapp''%') THEN
+                     AND cmd = 'SELECT' AND roles = '{authenticated}' AND qual LIKE '%location_id = ANY%' AND qual LIKE '%auth_mobile_can_location_ids(''whatsapp''%') THEN
       RAISE EXCEPTION 'mig 875: % is not on the inbox key', r.pol;
     END IF;
   END LOOP;
