@@ -61,7 +61,7 @@ beforeEach(() => { vi.clearAllMocks(); getCurrentUser.mockResolvedValue(USER) })
 
 describe('POST /api/whatsapp/conversations/[id]/send-carousel', () => {
   // INBOXFOLLOW.1 — sent from the thread: the coach owns it and the wait moves to the customer.
-  it('starts the follow-up ladder: staffReplyPatch only, no take-over, no last_message_*', async () => {
+  it('is a full coach reply: last-message columns, Mia take-over and the follow-up ladder', async () => {
     const db = stubDb()
     createServerClient.mockReturnValue(db)
     const res = await post({ card_set_id: SET_ID })
@@ -75,7 +75,12 @@ describe('POST /api/whatsapp/conversations/[id]/send-carousel', () => {
     })
     expect(typeof patch.staff_owned_since).toBe('string')
     expect(patch.staff_waiting_since).toBe(patch.staff_owned_since)
-    for (const k of ['agent_active', 'agent_handed_off_at', 'last_message_at', 'last_message_direction']) expect(patch).not.toHaveProperty(k)
+    expect(patch).toMatchObject({
+      last_message_direction: 'outbound', last_message_preview: '[Card set: Membership]', agent_active: false,
+    })
+    expect(typeof patch.last_message_at).toBe('string')
+    expect(typeof patch.agent_handed_off_at).toBe('string')
+    expect(patch.staff_owned_since).toBe(patch.last_message_at)
   })
 
   it('records the carousel thread row with sent_by = the acting staff member, and no source', async () => {
