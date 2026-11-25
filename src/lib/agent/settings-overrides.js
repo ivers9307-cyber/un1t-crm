@@ -58,7 +58,7 @@ export const INHERITABLE_OBJECT_KEYS = ['limits', 'followups', 'first_class_chec
 // settings-contract.test.js).
 export const INHERITABLE_OBJECT_FIELDS = Object.freeze({
   limits: Object.freeze(['max_replies_per_conversation_per_hour', 'max_replies_per_location_per_day']),
-  followups: Object.freeze(['enabled', 'nudge_after_hours', 'template_name', 'daily_cap']),
+  followups: Object.freeze(['enabled', 'nudge_after_hours', 'template_name', 'daily_cap', 'staff_threads']),
   first_class_checkin: Object.freeze(['enabled', 'delay_hours', 'template_name', 'daily_cap']),
   inline_suggestion: Object.freeze(['enabled']),
   // MIAORG.1 Task 4 (T4-A) — `off` is studio-only IN EFFECT: a studio sets

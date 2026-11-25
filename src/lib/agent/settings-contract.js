@@ -266,6 +266,15 @@ export const SettingsSchema = z.object({
     nudge_after_hours: z.number().min(1).max(18).optional().default(3),
     template_name: z.string().max(512).nullable().optional(),
     daily_cap: z.number().min(1).max(500).optional().default(50),
+    // INBOXFOLLOW.3 — the one nudge Mia may send on a thread a coach took over
+    // (src/lib/agent/staff-nudges.js; read by inbox-followup-config.js).
+    // Deliberately NOT in DEFAULTS.followups: a studio that never set it
+    // resolves exactly as before, and the reader falls back to off / 48 h.
+    staff_threads: z.object({
+      quiet_after_hours: z.number().min(4).max(336).nullable().optional(),
+      nudge_enabled: z.boolean().optional().default(false),
+      template_name: z.string().max(512).nullable().optional(),
+    }).nullable().optional(),
   }).nullable().optional(),
   first_class_checkin: z.object({
     enabled: z.boolean().optional().default(false),
