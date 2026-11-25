@@ -20,14 +20,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../../lib/auth-context'
 import {
   getThread, sendText, resolveConversation, rateAgentMessage,
-  setAgentActive, igDisplayName,
+  setAgentActive, igDisplayName, snoozeConversation,
 } from '../../../lib/instagram-api'
 import { listConversationApprovals } from '../../../lib/inbox-approvals-api'
 import { needsReply, needsMiaHelp } from '../../../lib/inbox'
+import { zoneOfLocationRow } from '../../../lib/studio-zone'
 import { mergeTimeline } from 'shared/approval-cards'
 import MessageBubble from '../../../components/MessageBubble'
 import ThreadApprovalCard from '../../../components/ThreadApprovalCard'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
+import ThreadFollowupBar from '../../../components/ThreadFollowupBar'
 
 export default function InstagramConversation() {
   const { conversationId } = useLocalSearchParams()
@@ -207,6 +209,15 @@ export default function InstagramConversation() {
               )}
             </View>
           )}
+
+          {/* INBOXFOLLOW.4 — who has the thread, and Snooze. */}
+          <ThreadFollowupBar
+            conv={conv}
+            channel="ig"
+            zone={zoneOfLocationRow(activeLocation)}
+            snooze={body => snoozeConversation(conversationId, body, activeLocation?.id)}
+            onChanged={refresh}
+          />
 
           {needsMiaHelp(conv) && (
             <View className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 flex-row items-center">

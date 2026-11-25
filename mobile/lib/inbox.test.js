@@ -151,3 +151,15 @@ describe('mediaLabel', () => {
     expect(mediaLabel('order')).toEqual({ icon: 'attach-outline', label: 'order' })
   })
 })
+
+// INBOXFOLLOW.4 — the phone reads the row's words and the snooze presets from the
+// shared modules, through this file.
+describe('shared follow-up exports', () => {
+  it('re-exports the row text, the snooze rules and the presets', async () => {
+    const m = await import('./inbox')
+    for (const name of ['waitChipInfo', 'windowChipInfo', 'stateLineText', 'durationLabel', 'snoozePresets', 'snoozeEnded', 'handledBy', 'sortNeedsReply']) {
+      expect(typeof m[name]).toBe('function')
+    }
+    expect(m.SNOOZE_NOTE_MAX).toBe(140)
+  })
+})

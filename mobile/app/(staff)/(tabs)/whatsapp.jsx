@@ -1,11 +1,14 @@
 // Messages tab — unified WhatsApp + Instagram inbox (MOBILE-MSG.M2/M3).
 //
 // Merges both chat channels into one list (client-side, like the web
-// unified inbox), newest message first, with unread-count badges
-// and a channel glyph on each avatar. Queue chips (All / Needs reply /
-// Agent handoff / Approval) mirror the web queues so a coach on their
-// phone can triage exactly what the desk sees — especially threads Mia
-// escalated or requests she's holding for a human decision.
+// unified inbox) with unread-count badges and a channel glyph on each
+// avatar. The five queue chips (Needs reply / Mia needs help / Waiting /
+// Approvals / All) are the web's, from the same shared rules
+// (shared/inbox-queues) and the same words (shared/inbox-row-text): Needs
+// reply is longest-waiting first, each row carries its wait chip, WhatsApp
+// window chip and state line (INBOXFOLLOW.4). A coach on their phone triages
+// exactly what the desk sees. The studio's follow-up config comes from
+// /api/whatsapp/inbox-config; a failed read falls back to the defaults.
 // Tapping opens the per-channel conversation thread.
 // Pull-to-refresh re-fetches.
 //
@@ -23,7 +26,7 @@
 // re-derive it here from one batched pending-requests read. IG rows
 // arrive pre-annotated from /api/instagram/conversations.
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, Pressable, RefreshControl,
   ActivityIndicator,
@@ -31,17 +34,37 @@ import {
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
-import { listConversations, isWindowOpen } from '../../../lib/whatsapp-api'
+import { listConversations, getInboxConfig } from '../../../lib/whatsapp-api'
 import { listConversations as listInstagram, igDisplayName } from '../../../lib/instagram-api'
 import { listPendingApprovalConversationIds } from '../../../lib/inbox-approvals-api'
-import { needsMiaHelp, hasPendingApproval, queueCounts, filterByQueue, QUEUES } from '../../../lib/inbox'
+import { needsMiaHelp, hasPendingApproval, queueCounts, QUEUES, DEFAULT_FOLLOWUP_CFG } from '../../../lib/inbox'
+import { rowsForQueue, rowDecor, defaultQueue } from '../../../lib/inbox-list'
+import { zoneOfLocationRow } from '../../../lib/studio-zone'
+
+// Wait / window chip colours, by the tone the shared row text names.
+const TONE_CLASSES = {
+  amber: { bg: 'bg-amber-500/10', text: 'text-amber-700' },
+  slate: { bg: 'bg-slate-500/10', text: 'text-slate-700' },
+  gray: { bg: 'bg-gray-500/10', text: 'text-gray-700' },
+  emerald: { bg: 'bg-emerald-500/10', text: 'text-emerald-700' },
+}
+
+function TextChip({ info }) {
+  if (!info) return null
+  const tone = TONE_CLASSES[info.tone] || TONE_CLASSES.gray
+  return (
+    <View className={`ml-2 px-1.5 py-0.5 rounded-full ${tone.bg}`}>
+      <Text className={`text-[10px] font-medium ${tone.text}`}>{info.text}</Text>
+    </View>
+  )
+}
 
 const CHANNEL_GLYPHS = {
   whatsapp: { icon: 'logo-whatsapp', color: '#25D366' },
   instagram: { icon: 'logo-instagram', color: '#E1306C' },
 }
 
-function ConversationRow({ conv, onPress }) {
+function ConversationRow({ conv, onPress, nowMs, cfg, zone }) {
   const ig = conv.channel === 'instagram'
   const c = conv.contacts
   const name = ig
@@ -58,9 +81,9 @@ function ConversationRow({ conv, onPress }) {
         ...(isToday(conv.last_message_at) ? {} : { month: 'short', day: 'numeric' }),
       })
     : ''
-  // The 24h send window only exists on WhatsApp — IG rows never show the
-  // Closed chip.
-  const windowOpen = ig || isWindowOpen(conv)
+  // Wait chip, WhatsApp window chip (none for IG) and the state line that
+  // replaces the preview when the thread's state matters more.
+  const { wait, window: windowInfo, stateLine } = rowDecor(conv, nowMs, cfg, zone)
   const glyph = CHANNEL_GLYPHS[conv.channel] || CHANNEL_GLYPHS.whatsapp
   return (
     <Pressable
@@ -86,8 +109,11 @@ function ConversationRow({ conv, onPress }) {
           {isInbound ? null : (
             <Ionicons name="checkmark" size={12} color="#94A3B8" style={{ marginRight: 4 }} />
           )}
-          <Text className="text-sm text-un1t-subtle flex-1" numberOfLines={1}>
-            {conv.last_message_preview || '—'}
+          <Text
+            className={`text-sm flex-1 ${stateLine ? 'text-un1t-text' : 'text-un1t-subtle'}`}
+            numberOfLines={1}
+          >
+            {stateLine || conv.last_message_preview || '—'}
           </Text>
           {needsMiaHelp(conv) && (
             <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20 flex-row items-center">
@@ -100,11 +126,8 @@ function ConversationRow({ conv, onPress }) {
               <Text className="text-[10px] uppercase text-purple-700 font-semibold">Approval</Text>
             </View>
           )}
-          {!windowOpen && !needsMiaHelp(conv) && (
-            <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
-              <Text className="text-[10px] uppercase text-amber-700 font-medium">Closed</Text>
-            </View>
-          )}
+          <TextChip info={wait} />
+          <TextChip info={windowInfo} />
         </View>
       </View>
       {conv.unread_count > 0 && (
@@ -140,7 +163,11 @@ export default function WhatsApp() {
   const { activeLocation } = useAuth()
   const router = useRouter()
   const [conversations, setConversations] = useState([])
-  const [queue, setQueue] = useState('all')
+  const [queue, setQueue] = useState(defaultQueue)
+  const [cfg, setCfg] = useState(DEFAULT_FOLLOWUP_CFG)
+  // A one-minute tick, so a thread whose snooze ends or whose quiet window runs
+  // out moves between queues (and its wait chip counts up) with the screen open.
+  const [nowMs, setNowMs] = useState(() => Date.now())
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
@@ -149,11 +176,14 @@ export default function WhatsApp() {
   const load = useCallback(async () => {
     if (!activeLocation) return
     setError(null)
-    const [wa, ig, pendingIds] = await Promise.all([
+    const [wa, ig, pendingIds, followup] = await Promise.all([
       listConversations(activeLocation.id),
       listInstagram(activeLocation.id),
       listPendingApprovalConversationIds(activeLocation.id),
+      getInboxConfig(activeLocation.id),
     ])
+    setCfg(followup)
+    setNowMs(Date.now())
     if (!wa.success) setError(wa.error || 'Failed to load conversations')
     // An Instagram failure must never blank WhatsApp — degrade to what
     // loaded, with a soft note.
@@ -183,14 +213,20 @@ export default function WhatsApp() {
     }, [load])
   )
 
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 60_000)
+    return () => clearInterval(t)
+  }, [])
+
   async function onRefresh() {
     setRefreshing(true)
     await load()
     setRefreshing(false)
   }
 
-  const counts = queueCounts(conversations)
-  const visible = filterByQueue(conversations, queue)
+  const zone = zoneOfLocationRow(activeLocation)
+  const counts = useMemo(() => queueCounts(conversations, nowMs, cfg), [conversations, nowMs, cfg])
+  const visible = useMemo(() => rowsForQueue(conversations, queue, nowMs, cfg), [conversations, queue, nowMs, cfg])
 
   if (loading) {
     return (
@@ -271,6 +307,9 @@ export default function WhatsApp() {
           <ConversationRow
             key={`${c.channel}:${c.id}`}
             conv={c}
+            nowMs={nowMs}
+            cfg={cfg}
+            zone={zone}
             onPress={() => router.push(routeForConversation(c))}
           />
         ))
