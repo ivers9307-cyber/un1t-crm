@@ -145,6 +145,10 @@ const PAIRS = {
     mode: 'reexport',
     why: 'INBOXFOLLOW.1 — the inbox queue rules (needs reply, Mia needs help, waiting, wait clocks) live in shared/ because the web inbox, the badge counts and the phone must put a thread in the same queue; src/lib is an `export * from` shim and mobile/lib/inbox.js re-exports shared.',
   },
+  'inbox-active-set.js': {
+    mode: 'reexport',
+    why: 'INBOXFOLLOW.4 — the filter and limit of the "every thread that needs someone" read live in shared/ because the web list routes and the phone must read the same set; src/lib is an `export * from` shim.',
+  },
   'mail-quote.js': {
     mode: 'reexport',
     why: 'MAIL-REPLY-QUOTE.1 — the quoted-text splitter serves the web thread and the mobile thread; src/lib re-exports shared.',
