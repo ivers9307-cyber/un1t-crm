@@ -122,6 +122,16 @@ describe('needsReply / isWaiting / needsAction', () => {
     expect(needsReply(c, NOW, Q48, 'wa')).toBe(false)
     expect(needsAction(c, NOW, Q48, 'wa')).toBe(false)
   })
+  it('an unanswered customer message is Needs reply and not Waiting, even with a stale staff_waiting_since', () => {
+    const c = inbound({ staff_waiting_since: ago(2) })
+    expect(needsReply(c, NOW, Q48, 'wa')).toBe(true)
+    expect(isWaiting(c, NOW, Q48, 'wa')).toBe(false)
+  })
+  it('the same thread snoozed is Waiting and not Needs reply', () => {
+    const c = inbound({ staff_waiting_since: ago(2), snoozed_until: ahead(5) })
+    expect(isWaiting(c, NOW, Q48, 'wa')).toBe(true)
+    expect(needsReply(c, NOW, Q48, 'wa')).toBe(false)
+  })
   it('resolved thread is in no queue', () => {
     const c = inbound({ resolved_at: ago(1), handoff_requested_at: ago(2), pending_approval: true, snoozed_until: ahead(5) })
     expect(needsReply(c, NOW, Q48, 'wa')).toBe(false)

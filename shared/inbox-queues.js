@@ -83,6 +83,9 @@ export function needsMiaHelp(c) {
 export function isWaiting(c, nowMs = Date.now(), cfg = DEFAULT_FOLLOWUP_CFG, channel = 'wa') {
   if (!c || c.resolved_at) return false
   if (isSnoozed(c, nowMs)) return true
+  // Belt and braces: a customer message the coach has not answered is Needs
+  // reply, whatever stale staff_waiting_since says.
+  if (c.last_message_direction === 'inbound') return false
   return ms(c.staff_waiting_since) !== null && !hasReturned(c, nowMs, cfg, channel)
 }
 
