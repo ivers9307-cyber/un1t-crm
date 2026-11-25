@@ -235,3 +235,19 @@ describe('markVoiceNoteForStaff', () => {
     await expect(markVoiceNoteForStaff(db, { conversationId: 'conv-1', locationId: 'loc-1' })).resolves.toBeUndefined()
   })
 })
+
+// INBOXFOLLOW.1 — when the cooldown hands the thread back to Mia, it leaves the
+// "Mia needs help" queue: the re-arm update also nulls handoff_requested_at.
+describe('cooldown re-arm', () => {
+  it('clears handoff_requested_at together with the handoff stamp', async () => {
+    vi.stubGlobal('fetch', modelReplies('Sure.'))
+    const calls = []
+    const longAgo = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()
+    const handedOff = { ...conv, agent_active: false, agent_handed_off_at: longAgo }
+    const db = agentDb({ conv: handedOff, history: [{ direction: 'inbound', body: 'Hi', message_type: 'text', created_at: now() }], calls, settings: { enabled: true } })
+    await runChannelAgent(db, makeAdapter(), { conversationId: 'conv-1', locationId: 'loc-1', recipient: '353870000000', contactId: 'c-1', messageType: 'text', body: 'Hi', connection: null })
+    const rearm = calls.find((c) => c.op === 'update' && c.patch?.agent_active === true && c.patch?.agent_handed_off_at === null)
+    expect(rearm).toBeTruthy()
+    expect(rearm.patch).toMatchObject({ handoff_escalated_at: null, handoff_requested_at: null })
+  })
+})

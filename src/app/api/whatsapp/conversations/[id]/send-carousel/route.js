@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
+import { staffReplyPatch } from '@/lib/inbox-state'
 import { z } from 'zod'
 import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
@@ -29,7 +30,7 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
 
   const db = createServerClient()
   const { data: conversation } = await db.from('whatsapp_conversations')
-    .select('id, location_id, contact_id, wa_phone, wa_bsuid')
+    .select('id, location_id, contact_id, wa_phone, wa_bsuid, staff_owned_since')
     .eq('id', params.id)
     .maybeSingle()
   if (!conversation) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -58,6 +59,18 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
     const status = whatsappErrorStatus(e, 502)
     if (status !== 409) logError('wa-send-carousel', 'Meta carousel call failed', { conversationId: conversation.id, err: e?.message })
     return NextResponse.json({ success: false, error: status === 409 ? e.message : 'Meta carousel call failed' }, { status })
+  }
+
+  // INBOXFOLLOW.1 — a card set sent from the thread is a coach reply: it starts
+  // the follow-up ladder. Staff route only (the shared lib is also Mia's tool).
+  // Follow-up columns only; a failed stamp is logged and never fails the send.
+  try {
+    const { error: stampErr } = await db.from('whatsapp_conversations')
+      .update(staffReplyPatch(conversation, new Date().toISOString()))
+      .eq('id', conversation.id)
+    if (stampErr) logError('wa-send-carousel', 'follow-up stamp failed after the card set was sent', { conversationId: conversation.id, err: stampErr.message })
+  } catch (err) {
+    logError('wa-send-carousel', 'follow-up stamp threw after the card set was sent', { conversationId: conversation.id, err: err?.message })
   }
 
   return NextResponse.json({ success: true })

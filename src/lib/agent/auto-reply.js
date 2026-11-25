@@ -638,9 +638,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   if (decision.rearm) {
     try {
       await db.from(adapter.conversationsTable)
+        // INBOXFOLLOW.1 — Mia has the thread back, so it leaves "Mia needs help".
         // MIA-REVIEW.3 — handoff_escalated_at clears with the handoff stamp,
         // or the SLA sweep could only ever escalate this thread once, ever.
-        .update({ agent_active: true, agent_handed_off_at: null, agent_verify_attempts: 0, handoff_escalated_at: null })
+        .update({ agent_active: true, agent_handed_off_at: null, agent_verify_attempts: 0, handoff_escalated_at: null, handoff_requested_at: null })
         .eq('id', conversationId)
     } catch { /* next turn retries */ }
   }

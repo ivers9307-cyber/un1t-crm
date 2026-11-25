@@ -7,6 +7,7 @@ import { sendFlowMessage } from '@/lib/whatsapp'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { flowTokenFor } from '@/lib/whatsapp-flow/config'
 import { logError } from '@/lib/log'
+import { staffReplyPatch } from '@/lib/inbox-state'
 
 const LOG = 'wa-flow-send'
 // Plain words, no em-dashes. Same wording as the inbox send route's.
@@ -33,7 +34,7 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
 
   const db = createServerClient()
   const { data: conversation, error: convError } = await db.from('whatsapp_conversations')
-    .select('id, location_id, contact_id, wa_phone, wa_bsuid')
+    .select('id, location_id, contact_id, wa_phone, wa_bsuid, staff_owned_since')
     .eq('id', params.id)
     .maybeSingle()
   // A failed read is never an empty answer: not a 404, a retryable 500.
@@ -126,6 +127,19 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
       conversationId: conversation.id, locationId: conversation.location_id, waMessageId: sendResult?.messageId || null, err: insertError.message,
     })
     warnings.push(TEXT.notLogged)
+  }
+
+  // INBOXFOLLOW.1 — a Flow sent from the thread is a coach reply: it starts the
+  // follow-up ladder. Only the follow-up columns are written (no take-over, no
+  // last_message_*). The customer already has the Flow, so a failed stamp is
+  // logged and never fails the send; it runs even when the thread row was lost.
+  try {
+    const { error: stampErr } = await db.from('whatsapp_conversations')
+      .update(staffReplyPatch(conversation, new Date().toISOString()))
+      .eq('id', conversation.id)
+    if (stampErr) logError(LOG, 'follow-up stamp failed after the Flow was sent', { conversationId: conversation.id, locationId: conversation.location_id, err: stampErr.message })
+  } catch (err) {
+    logError(LOG, 'follow-up stamp threw after the Flow was sent', { conversationId: conversation.id, locationId: conversation.location_id, err: err?.message })
   }
 
   return NextResponse.json({ success: true, ...(warnings.length ? { warnings } : {}) })

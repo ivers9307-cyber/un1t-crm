@@ -38,12 +38,14 @@ const LOCATION = { settings: { whatsapp_flow: { flow_id: 'flow-1', invite_text: 
 
 function stubDb({ insertError = null, readErrors = {} } = {}) {
   const inserts = []
+  const updates = []
   return {
-    inserts,
+    inserts, updates,
     from(table) {
       const data = table === 'whatsapp_conversations' ? CONVERSATION : table === 'locations' ? LOCATION : null
       const b = {
         select: () => b, eq: () => b, maybeSingle: () => b, single: () => b,
+        update: (patch) => { updates.push({ table, patch }); return b },
         insert: async (row) => { inserts.push({ table, row }); return { error: insertError } },
         then: (ok, bad) => Promise.resolve(readErrors[table]
           ? { data: null, error: readErrors[table] }
@@ -63,6 +65,24 @@ const post = () => POST(
 beforeEach(() => { vi.clearAllMocks(); getCurrentUser.mockResolvedValue(USER) })
 
 describe('POST /api/whatsapp/conversations/[id]/send-flow', () => {
+  // INBOXFOLLOW.1 — sent from the thread: the coach owns it and the wait moves to the customer.
+  it('starts the follow-up ladder: staffReplyPatch only, no take-over, no last_message_*', async () => {
+    const db = stubDb()
+    createServerClient.mockReturnValue(db)
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect(db.updates).toHaveLength(1)
+    const { table, patch } = db.updates[0]
+    expect(table).toBe('whatsapp_conversations')
+    expect(patch).toMatchObject({
+      customer_waiting_since: null, handoff_requested_at: null, snoozed_until: null,
+      staff_nudged_at: null, staff_nudge_outcome: null,
+    })
+    expect(typeof patch.staff_owned_since).toBe('string')
+    expect(patch.staff_waiting_since).toBe(patch.staff_owned_since)
+    for (const k of ['agent_active', 'agent_handed_off_at', 'last_message_at', 'last_message_direction']) expect(patch).not.toHaveProperty(k)
+  })
+
   it('records the Flow thread row with sent_by = the acting staff member', async () => {
     const db = stubDb()
     createServerClient.mockReturnValue(db)
