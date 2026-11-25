@@ -15,7 +15,7 @@ vi.mock('@/lib/push', () => ({
 }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
-import { handoff } from './auto-reply'
+import { handoff, sendAndLog } from './auto-reply'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { logError } from '@/lib/log'
 
@@ -70,5 +70,36 @@ describe('handoff — parking the thread', () => {
     expect(logError).toHaveBeenCalledWith('agent.handoff', expect.stringMatching(/NOT parked/), expect.objectContaining({ conversationId: 'conv-1', code: '57014' }))
     expect(adapter.send).toHaveBeenCalledTimes(1)
     expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
+  })
+})
+
+// INBOXFOLLOW.1 — Mia's handoff asks for a human; her replies answer the
+// customer and touch nothing staff-owned.
+describe('inbox follow-up stamps', () => {
+  const STAFF_OR_SNOOZE = ['staff_owned_since', 'staff_waiting_since', 'staff_nudged_at', 'staff_nudge_outcome', 'snoozed_until', 'snoozed_by', 'snooze_note']
+
+  it('the park write stamps handoff_requested_at with the handoff time', async () => {
+    const d = db([])
+    await handoff(d, adapter, args)
+    const park = parks(d)[0].patch
+    expect(park.handoff_requested_at).toBe(park.agent_handed_off_at)
+  })
+
+  it('the holding message stamp clears customer_waiting_since and nothing staff-owned', async () => {
+    const d = db([])
+    await handoff(d, adapter, args)
+    const hold = d.updates.find((u) => u.patch.last_message_direction === 'outbound').patch
+    expect(hold.customer_waiting_since).toBeNull()
+    for (const k of STAFF_OR_SNOOZE) expect(hold).not.toHaveProperty(k)
+    expect(hold).not.toHaveProperty('handoff_requested_at')
+  })
+
+  it('a normal Mia reply clears customer_waiting_since and nothing staff-owned', async () => {
+    const d = db([])
+    const ok = await sendAndLog(d, adapter, { conversationId: 'conv-1', locationId: 'loc-1', recipient: '353870000000', contactId: 'c-1', text: 'Hello', settings: {} })
+    expect(ok).toBe(true)
+    const stamp = d.updates.find((u) => u.patch.last_message_direction === 'outbound').patch
+    expect(stamp.customer_waiting_since).toBeNull()
+    for (const k of STAFF_OR_SNOOZE) expect(stamp).not.toHaveProperty(k)
   })
 })

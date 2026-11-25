@@ -35,7 +35,7 @@
 //                     0, i.e. this message is what makes the ticket newly
 //                     need a reply (email-inbound-push.js).
 //
-//   inbox (countInboxNeedsAction — needsReply OR isAgentHandoff on an
+//   inbox (countInboxNeedsAction — needsReply OR needsMiaHelp (handoff_requested_at) on an
 //   unresolved WhatsApp/Instagram conversation, src/lib/inbox-queues.js):
 //     whatsapp_inbound, instagram_inbound         — new inbound message.
 //     whatsapp_agent_handoff, instagram_agent_handoff — agent handed the
@@ -57,7 +57,7 @@
 //     — about an item that is ALREADY counted; the queue size doesn't
 //     change.
 //   - agent_activity — "customer is chatting with Mia"; the agent is still
-//     handling it, so isAgentHandoff/needsReply haven't flipped yet.
+//     handling it, so needsMiaHelp/needsReply haven't flipped yet.
 //   - contract_issued, checklist_overdue, checklist_compliance, lead_new,
 //     task_reminder, booking_reminder, schedule_published/updated,
 //     shift_adjusted, wa_quality, number_health, flow_health,

@@ -16,6 +16,7 @@ vi.mock('@/lib/approvals/registry', () => ({
   getPendingApprovals: vi.fn(),
   getPendingApprovalsCount: vi.fn(),
 }))
+vi.mock('@/lib/inbox-followup-config', () => ({ readInboxFollowupConfig: vi.fn(async () => ({ quietHours: 48, nudgeEnabled: false })) }))
 vi.mock('@/lib/permissions', () => ({
   hasPermission: vi.fn(),
   hasPermissionForLocation: vi.fn(),
@@ -38,6 +39,7 @@ import {
 import { getPendingApprovals, getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
 import { loadVisibleMailboxes } from '@/app/api/email/mail/_conversation'
+import { readInboxFollowupConfig } from '@/lib/inbox-followup-config'
 
 const LOC = 'loc-1'
 const userAt = (over = {}) => ({ id: 'u1', role: 'staff', activeLocation: { id: LOC }, ...over })
@@ -228,13 +230,13 @@ describe('assembleHomeQueue — inbox source', () => {
           {
             id: 'w1', wa_phone: '+353871234567', resolved_at: null,
             last_message_at: '2026-08-10T08:00:00Z', last_message_direction: 'inbound',
-            agent_handed_off_at: null, contacts: { name: 'Alice' },
+            handoff_requested_at: null, contacts: { name: 'Alice' },
           },
           // does NOT need action: resolved
           {
             id: 'w2', wa_phone: '+353870000000', resolved_at: '2026-08-09T00:00:00Z',
             last_message_at: '2026-08-09T08:00:00Z', last_message_direction: 'inbound',
-            agent_handed_off_at: null, contacts: null,
+            handoff_requested_at: null, contacts: null,
           },
         ],
       },
@@ -243,7 +245,7 @@ describe('assembleHomeQueue — inbox source', () => {
           {
             id: 'g1', ig_username: 'ig_user', resolved_at: null,
             last_message_at: '2026-08-10T07:00:00Z', last_message_direction: 'outbound',
-            agent_handed_off_at: '2026-08-10T07:00:00Z', contacts: null,
+            handoff_requested_at: '2026-08-10T07:00:00Z', contacts: null,
           },
         ],
       },
@@ -260,6 +262,23 @@ describe('assembleHomeQueue — inbox source', () => {
     expect(result.counts.inbox).toBe(2)
   })
 
+  // INBOXFOLLOW.1 — the queue rules read the follow-up columns and the studio's config.
+  it('leaves a thread a coach replied to out of the queue until it has been quiet for the studio\'s window', async () => {
+    hasPermission.mockReturnValue(true)
+    const repliedAt = Date.now() - 10 * 3600_000
+    const coachReplied = {
+      id: 'w9', wa_phone: '+353872222222', resolved_at: null, last_message_at: new Date(repliedAt).toISOString(),
+      last_message_direction: 'outbound', staff_owned_since: new Date(repliedAt).toISOString(),
+      staff_waiting_since: new Date(repliedAt).toISOString(), handoff_requested_at: null, contacts: null,
+    }
+    const db = makeDb({ whatsapp_conversations: { rows: [coachReplied] } })
+    expect((await assembleHomeQueue(db, userAt())).counts.inbox).toBe(0)
+    // A 4-hour quiet window has passed: the thread is back in "Needs reply".
+    readInboxFollowupConfig.mockResolvedValueOnce({ quietHours: 4, nudgeEnabled: false })
+    expect((await assembleHomeQueue(db, userAt())).counts.inbox).toBe(1)
+    expect(readInboxFollowupConfig).toHaveBeenCalledWith(expect.anything(), LOC)
+  })
+
   it('falls back to phone/username when there is no linked contact', async () => {
     hasPermission.mockReturnValue(true)
     const db = makeDb({
@@ -267,7 +286,7 @@ describe('assembleHomeQueue — inbox source', () => {
         rows: [{
           id: 'w3', wa_phone: '+353871111111', resolved_at: null,
           last_message_at: '2026-08-10T08:00:00Z', last_message_direction: 'inbound',
-          agent_handed_off_at: null, contacts: null,
+          handoff_requested_at: null, contacts: null,
         }],
       },
     })
@@ -298,7 +317,7 @@ describe('assembleHomeQueue — merge, sort and caps', () => {
       whatsapp_conversations: {
         rows: [{
           id: 'w1', wa_phone: '+353', resolved_at: null, last_message_at: '2026-08-10T09:00:00Z',
-          last_message_direction: 'inbound', agent_handed_off_at: null, contacts: null,
+          last_message_direction: 'inbound', handoff_requested_at: null, contacts: null,
         }],
       },
     })
@@ -328,7 +347,7 @@ describe('assembleHomeQueue — merge, sort and caps', () => {
       id: `w${i}`, wa_phone: '+353', resolved_at: null,
       // Newer half of the timeline — these must win the cap.
       last_message_at: new Date(Date.UTC(2026, 7, 21 + i)).toISOString(),
-      last_message_direction: 'inbound', agent_handed_off_at: null, contacts: null,
+      last_message_direction: 'inbound', handoff_requested_at: null, contacts: null,
     }))
     const db = makeDb({
       email_tickets: { rows: conversationRows, count: 20 },
@@ -356,7 +375,7 @@ describe('assembleHomeQueue — degraded source path', () => {
       whatsapp_conversations: {
         rows: [{
           id: 'w1', wa_phone: '+353', resolved_at: null, last_message_at: '2026-08-10T08:00:00Z',
-          last_message_direction: 'inbound', agent_handed_off_at: null, contacts: null,
+          last_message_direction: 'inbound', handoff_requested_at: null, contacts: null,
         }],
       },
     })
@@ -404,7 +423,7 @@ describe('assembleHomeQueue — mail visibility-lookup failure (EMAIL-TICKET-CLE
       whatsapp_conversations: {
         rows: [{
           id: 'w1', wa_phone: '+353', resolved_at: null, last_message_at: '2026-08-10T08:00:00Z',
-          last_message_direction: 'inbound', agent_handed_off_at: null, contacts: null,
+          last_message_direction: 'inbound', handoff_requested_at: null, contacts: null,
         }],
       },
     })
@@ -618,7 +637,7 @@ describe('getHomeQueueCounts', () => {
       whatsapp_conversations: {
         rows: [{
           id: 'w1', resolved_at: null, last_message_at: '2026-08-10T08:00:00Z',
-          last_message_direction: 'inbound', agent_handed_off_at: null,
+          last_message_direction: 'inbound', handoff_requested_at: null,
         }],
       },
     })
@@ -642,7 +661,7 @@ describe('getHomeQueueCounts', () => {
       whatsapp_conversations: {
         rows: [{
           id: 'w1', resolved_at: null, last_message_at: '2026-08-10T08:00:00Z',
-          last_message_direction: 'inbound', agent_handed_off_at: null,
+          last_message_direction: 'inbound', handoff_requested_at: null,
         }],
       },
     })

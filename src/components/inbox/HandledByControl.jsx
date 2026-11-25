@@ -20,6 +20,7 @@
 
 import { useState } from 'react'
 import { Sparkles, UserCheck } from 'lucide-react'
+import { handledBy } from '@/lib/inbox-queues'
 
 const FLIP_FAILED = 'Could not change who handles this thread. Try again.'
 
@@ -29,8 +30,9 @@ const AGENT_ENDPOINT = {
 }
 
 function isHandledByMia(channel, conversation) {
-  if (channel === 'ig') return conversation?.agent_active !== false
-  return !conversation?.agent_paused_at // wa (default)
+  // INBOXFOLLOW.1 — the shared rule: a paused, unclaimed or coach-owned thread
+  // is on the "You" side, so pressing "Mia" can hand it back.
+  return handledBy(conversation, channel === 'ig' ? 'ig' : 'wa') === 'mia'
 }
 
 export default function HandledByControl({ channel, conversation, onChanged }) {

@@ -25,6 +25,7 @@ export const REASON_LABELS = {
   voice_too_long: 'Voice note over 3 minutes',
   voice_unavailable: 'Voice note: transcription unavailable',
   human_took_over: 'A staff member had already replied',
+  staff_owned: 'A coach is handling this conversation',
   verify_failed: "Couldn't verify the member's identity",
   rate_limited: 'Hourly reply cap reached',
   location_daily_cap: 'Daily reply cap reached',

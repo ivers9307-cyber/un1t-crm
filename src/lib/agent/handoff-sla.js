@@ -55,6 +55,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { pushOutcome } from '@/lib/push-outcome'
 import { logWarn, logError } from '@/lib/log'
 import { resolveRearmPatch, AGENT_HANDOFF_PUSH_CATEGORY } from './core'
+import { completePatch } from '@/lib/inbox-state'
 import { WA_STAFF_OUTBOUND_OR_FILTER } from '@/lib/whatsapp-staff-sources'
 import { resolveAgentSettingsForLocation } from './settings-resolve'
 
@@ -225,6 +226,9 @@ export function classifyAutoResolve({
   // HANDOFFKEEP.1 — false only when the caller KNOWS nobody is waiting (a
   // broadcast handover the customer never answered). Unknown counts as waiting.
   customerWaiting,
+  // INBOXFOLLOW.1 — a coach replied in the thread and owns it until a coach
+  // completes it: never auto-resolved, whichever case would otherwise apply.
+  staffOwned = false,
   nowMs,
   afterReplyHours = AUTO_RESOLVE_AFTER_REPLY_HOURS_DEFAULT,
   staleHours = AUTO_RESOLVE_STALE_HOURS_DEFAULT,
@@ -233,6 +237,7 @@ export function classifyAutoResolve({
   if (pausedAt) return { resolve: false, reason: 'paused' }
   if (agentActive) return { resolve: false, reason: 'already_armed' }
   if (resolvedAtMs && resolvedAtMs >= handedOffAtMs) return { resolve: false, reason: 'already_resolved' }
+  if (staffOwned) return { resolve: false, reason: 'staff_owned' }
 
   // "Quiet" is measured from the last activity of ANY kind; a thread with no
   // messages at all measures from the handoff itself.
@@ -276,8 +281,8 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
       // agent_paused_at is WhatsApp-only (mig 435) — same conditional select
       // as humanTookOverDuringTurn.
       const cols = channel.name === 'whatsapp'
-        ? 'id, agent_active, agent_handed_off_at, agent_paused_at, resolved_at, last_message_at'
-        : 'id, agent_active, agent_handed_off_at, resolved_at, last_message_at'
+        ? 'id, agent_active, agent_handed_off_at, agent_paused_at, resolved_at, last_message_at, staff_owned_since'
+        : 'id, agent_active, agent_handed_off_at, resolved_at, last_message_at, staff_owned_since'
       const { data: convs, error } = await db.from(channel.conversationsTable)
         .select(cols)
         .eq('location_id', location.id)
@@ -313,6 +318,7 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
             resolvedAtMs: c.resolved_at ? new Date(c.resolved_at).getTime() : null,
             lastMessageAtMs: c.last_message_at ? new Date(c.last_message_at).getTime() : null,
             humanRepliedAtMs: reply.atMs,
+            staffOwned: c.staff_owned_since != null,
             nowMs,
             afterReplyHours,
             staleHours,
@@ -340,6 +346,8 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
             .update({
               resolved_at: nowIso,
               ...resolveRearmPatch({ resolved: true, agent_handed_off_at: c.agent_handed_off_at }),
+              // INBOXFOLLOW.1 — an auto-resolve completes the thread like a coach's resolve.
+              ...completePatch(),
             })
             .eq('id', c.id)
           if (resolveErr) {

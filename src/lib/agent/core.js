@@ -280,6 +280,13 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   // no re-arm. Cleared only by the explicit resume endpoint.
   if (conversation?.agent_paused_at) return { reply: false, reason: 'agent_paused' }
 
+  // INBOXFOLLOW.1 — a coach replied in this thread and keeps it until a coach
+  // completes it (staff_owned_since). Mia stays fully silent: no answer, no
+  // holding message, no soft-handoff acknowledgement, no re-arm. Checked before
+  // the cooldown re-arm below, which would otherwise hand a quiet coach thread
+  // back to Mia after handoff_cooldown_hours.
+  if (conversation?.staff_owned_since) return { reply: false, reason: 'staff_owned' }
+
   // Per-conversation kill switch (human takeover / prior escalation).
   // AGENT-REARM.1 — a handoff auto-releases after the configured
   // cooldown so one escalation doesn't silence the agent forever; the

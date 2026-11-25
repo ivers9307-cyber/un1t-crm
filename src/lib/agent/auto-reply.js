@@ -86,6 +86,7 @@ import { isVoiceTrigger, splitForVoice, voiceKindFor, toolResultSucceeded, membe
 import { maybeSendVoiceReply, voiceReplyPossible, waitForVoiceNoteDelivery } from '@/lib/wa-voice/reply'
 import { studiosOfContact } from '@/lib/contact-studios'
 import { isBsuid } from '@/lib/whatsapp-address'
+import { agentReplyPatch, handoffRequestPatch } from '@/lib/inbox-state'
 
 // MIA-SONNET5 — Claude Sonnet 5. Reaches previous Opus-tier quality on
 // agentic work, and Mia was unusually cheap to migrate: she never sent
@@ -603,7 +604,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   // unconditionally would 400 the whole conv fetch for every Instagram turn.
   const isWhatsApp = adapter.name === 'whatsapp'
   const { data: conv } = await db.from(adapter.conversationsTable)
-    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at, agent_activity_notified_at, agent_verify_attempts${nameCol ? `, ${nameCol}` : ''}${isWhatsApp ? ', agent_paused_at, agent_chosen_location_id' : ''}`)
+    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at, agent_activity_notified_at, agent_verify_attempts, staff_owned_since${nameCol ? `, ${nameCol}` : ''}${isWhatsApp ? ', agent_paused_at, agent_chosen_location_id' : ''}`)
     .eq('id', conversationId)
     .single()
 
@@ -637,12 +638,16 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   // back on duty. Best-effort; the decision already treats it as active.
   if (decision.rearm) {
     try {
-      await db.from(adapter.conversationsTable)
+      const { error: rearmErr } = await db.from(adapter.conversationsTable)
+        // INBOXFOLLOW.1 — Mia has the thread back, so it leaves "Mia needs help".
         // MIA-REVIEW.3 — handoff_escalated_at clears with the handoff stamp,
         // or the SLA sweep could only ever escalate this thread once, ever.
-        .update({ agent_active: true, agent_handed_off_at: null, agent_verify_attempts: 0, handoff_escalated_at: null })
+        .update({ agent_active: true, agent_handed_off_at: null, agent_verify_attempts: 0, handoff_escalated_at: null, handoff_requested_at: null })
         .eq('id', conversationId)
-    } catch { /* next turn retries */ }
+      if (rearmErr) logError('agent', 're-arm write failed; the next turn retries', { channel: adapter.name, conversationId, error: rearmErr.message })
+    } catch (err) {
+      logError('agent', 're-arm write threw; the next turn retries', { channel: adapter.name, conversationId, error: err?.message || String(err) })
+    }
   }
 
   if (!decision.reply) {
@@ -1663,12 +1668,16 @@ export async function sendAndLog(db, adapter, { conversationId, locationId, reci
   await recordAgentMessage(db, adapter,
     adapter.outboundRow({ conversationId, locationId, contactId, messageId, text: recordedText, now })
   )
-  await db.from(adapter.conversationsTable).update({
+  // INBOXFOLLOW.1 — Mia's reply answers the customer (agentReplyPatch touches
+  // customer_waiting_since only, never the staff_* or snooze columns).
+  const { error: replyStampErr } = await db.from(adapter.conversationsTable).update({
     last_message_at: now,
     last_message_direction: 'outbound',
     last_message_preview: recordedText.substring(0, 100),
     agent_last_reply_at: now,
+    ...agentReplyPatch(),
   }).eq('id', conversationId)
+  if (replyStampErr) logError('agent', 'reply conversation stamp failed', { conversationId, error: replyStampErr.message })
   return true
 }
 
@@ -1786,12 +1795,14 @@ async function sendVoiceReply(db, adapter, { conversationId, locationId, recipie
   if (sendNotice) await sendFollowText(r.aiNotice, 'notice')
 
   try {
-    await db.from(adapter.conversationsTable).update({
+    const { error: voiceStampErr } = await db.from(adapter.conversationsTable).update({
       last_message_at: now,
       last_message_direction: 'outbound',
       last_message_preview: String(text).substring(0, 100),
       ...(stamp.agent_last_reply_at ? { agent_last_reply_at: now } : {}),
+      ...agentReplyPatch(),
     }).eq('id', conversationId)
+    if (voiceStampErr) logError('agent', 'voice reply conversation stamp failed', { conversationId, error: voiceStampErr.message })
   } catch { /* the reply is out; the stamp only orders the inbox */ }
   return true
 }
@@ -1837,8 +1848,9 @@ const VOICE_HANDOFF_TEXT = Object.freeze({
  */
 export async function markVoiceNoteForStaff(db, { conversationId, locationId }) {
   try {
+    const stampedAt = new Date().toISOString()
     const { error } = await db.from(whatsappAdapter.conversationsTable)
-      .update({ agent_handed_off_at: new Date().toISOString(), handoff_escalated_at: null })
+      .update({ agent_handed_off_at: stampedAt, handoff_escalated_at: null, ...handoffRequestPatch(stampedAt) })
       .eq('id', conversationId)
     if (error) logError('agent', 'voice note staff stamp failed', { conversationId, error: error.message })
   } catch (err) {
@@ -1877,6 +1889,8 @@ export async function handoff(db, adapter, { conversationId, locationId, recipie
     // per-handoff by design (handoff-sla.js), but nothing ever cleared it, so
     // the second and every later handoff on a thread could breach in silence.
     handoff_escalated_at: null,
+    // INBOXFOLLOW.1 — Mia asking for a human (the "Mia needs help" queue).
+    ...handoffRequestPatch(now),
   }
   let parkErr = (await db.from(adapter.conversationsTable).update(parkPatch).eq('id', conversationId))?.error || null
   if (parkErr) parkErr = (await db.from(adapter.conversationsTable).update(parkPatch).eq('id', conversationId))?.error || null
@@ -1896,11 +1910,13 @@ export async function handoff(db, adapter, { conversationId, locationId, recipie
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
-    await db.from(adapter.conversationsTable).update({
+    const { error: holdStampErr } = await db.from(adapter.conversationsTable).update({
       last_message_at: now,
       last_message_direction: 'outbound',
       last_message_preview: holding.substring(0, 100),
+      ...agentReplyPatch(),
     }).eq('id', conversationId)
+    if (holdStampErr) console.error(`[radar-agent] ${adapter.name} holding-message conversation stamp failed`, holdStampErr.message)
   } catch (err) {
     console.error(`[radar-agent] ${adapter.name} holding-message send failed`, err?.message)
   }
@@ -2043,12 +2059,14 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
-    await db.from(adapter.conversationsTable).update({
+    const { error: softStampErr } = await db.from(adapter.conversationsTable).update({
       last_message_at: now,
       last_message_direction: 'outbound',
       last_message_preview: holding.substring(0, 100),
       agent_last_reply_at: now,
+      ...agentReplyPatch(),
     }).eq('id', conversationId)
+    if (softStampErr) console.error(`[radar-agent] ${adapter.name} soft-handoff conversation stamp failed`, softStampErr.message)
   } catch (err) {
     console.error(`[radar-agent] ${adapter.name} soft-handoff send failed`, err?.message)
   }

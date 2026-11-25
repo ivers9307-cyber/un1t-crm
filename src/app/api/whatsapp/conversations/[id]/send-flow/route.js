@@ -7,6 +7,8 @@ import { sendFlowMessage } from '@/lib/whatsapp'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { flowTokenFor } from '@/lib/whatsapp-flow/config'
 import { logError } from '@/lib/log'
+import { staffReplyPatch } from '@/lib/inbox-state'
+import { manualTakeoverPatch } from '@/lib/agent/core'
 
 const LOG = 'wa-flow-send'
 // Plain words, no em-dashes. Same wording as the inbox send route's.
@@ -33,7 +35,7 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
 
   const db = createServerClient()
   const { data: conversation, error: convError } = await db.from('whatsapp_conversations')
-    .select('id, location_id, contact_id, wa_phone, wa_bsuid')
+    .select('id, location_id, contact_id, wa_phone, wa_bsuid, staff_owned_since, agent_handed_off_at')
     .eq('id', params.id)
     .maybeSingle()
   // A failed read is never an empty answer: not a 404, a retryable 500.
@@ -99,6 +101,7 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
   // a louder one); it is logged structurally and returned as a WARNING so staff
   // don't send it twice. wa_message_id lets the status webhooks match the row.
   const warnings = []
+  const flowBody = `[Booking Flow] ${cfg.invite_text || 'Tap below to book your first visit.'}`
   let insertError = null
   try {
     const { error: err } = await db.from('whatsapp_messages').insert({
@@ -108,7 +111,7 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
       wa_message_id: sendResult?.messageId || null,
       direction: 'outbound',
       message_type: 'flow',
-      body: `[Booking Flow] ${cfg.invite_text || 'Tap below to book your first visit.'}`,
+      body: flowBody,
       status: 'sent',
       // CHECKINSTALL.2 (C106 b) — a staff action: sent_by from the SESSION,
       // never the body (UUID REFERENCES profiles, mig 007), same as the send
@@ -126,6 +129,26 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
       conversationId: conversation.id, locationId: conversation.location_id, waMessageId: sendResult?.messageId || null, err: insertError.message,
     })
     warnings.push(TEXT.notLogged)
+  }
+
+  // INBOXFOLLOW.1 — a Flow sent from the thread is a full coach reply, like the
+  // send route's: last-message columns, the Mia take-over and the follow-up
+  // ladder. The customer already has the Flow, so a failed update is logged and
+  // never fails the send; it runs even when the thread row was lost.
+  try {
+    const now = new Date().toISOString()
+    const { error: stampErr } = await db.from('whatsapp_conversations')
+      .update({
+        last_message_at: now,
+        last_message_direction: 'outbound',
+        last_message_preview: flowBody.substring(0, 100),
+        ...manualTakeoverPatch(conversation.agent_handed_off_at),
+        ...staffReplyPatch(conversation, now),
+      })
+      .eq('id', conversation.id)
+    if (stampErr) logError(LOG, 'follow-up stamp failed after the Flow was sent', { conversationId: conversation.id, locationId: conversation.location_id, err: stampErr.message })
+  } catch (err) {
+    logError(LOG, 'follow-up stamp threw after the Flow was sent', { conversationId: conversation.id, locationId: conversation.location_id, err: err?.message })
   }
 
   return NextResponse.json({ success: true, ...(warnings.length ? { warnings } : {}) })

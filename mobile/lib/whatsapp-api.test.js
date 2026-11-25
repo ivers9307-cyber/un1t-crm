@@ -19,7 +19,7 @@ vi.mock('./supabase', () => ({ supabase: { from: vi.fn() } }))
 
 import { api } from './api'
 import { supabase } from './supabase'
-import { listTemplates, sendTemplate } from './whatsapp-api'
+import { listConversations, listTemplates, sendTemplate } from './whatsapp-api'
 
 const LOC = '11111111-1111-1111-1111-111111111111'
 const CONV = '22222222-2222-2222-2222-222222222222'
@@ -32,12 +32,33 @@ function builder(result) {
     select: (...a) => { calls.push(['select', ...a]); return b },
     eq: (...a) => { calls.push(['eq', ...a]); return b },
     order: (...a) => { calls.push(['order', ...a]); return b },
+    limit: (...a) => { calls.push(['limit', ...a]); return b },
     then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
   }
   return b
 }
 
 beforeEach(() => { vi.clearAllMocks() })
+
+// INBOXFOLLOW.1 — the phone's list read feeds the shared queue rules, so its
+// select names every column they read. needsMiaHelp reads handoff_requested_at
+// (not agent_handed_off_at): a select without it leaves "Mia needs help" empty.
+describe('listConversations', () => {
+  const RULE_COLUMNS = [
+    'customer_waiting_since', 'staff_owned_since', 'staff_waiting_since', 'staff_nudged_at',
+    'staff_nudge_outcome', 'handoff_requested_at', 'snoozed_until', 'snooze_note',
+  ]
+
+  it('selects the follow-up columns the queue rules read, and never snoozed_by or a profiles embed', async () => {
+    const q = builder({ data: [], error: null })
+    supabase.from.mockReturnValue(q)
+    await listConversations(LOC)
+    expect(supabase.from).toHaveBeenCalledWith('whatsapp_conversations')
+    const cols = q.calls[0][1].split(',').map((c) => c.trim())
+    for (const col of RULE_COLUMNS) expect(cols).toContain(col)
+    expect(q.calls[0][1]).not.toMatch(/snoozed_by|profiles/)
+  })
+})
 
 describe('listTemplates', () => {
   it('selects components (the template text), never the phantom body_text/header_text', async () => {

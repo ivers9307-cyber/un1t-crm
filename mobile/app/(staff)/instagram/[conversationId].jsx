@@ -23,7 +23,7 @@ import {
   setAgentActive, igDisplayName,
 } from '../../../lib/instagram-api'
 import { listConversationApprovals } from '../../../lib/inbox-approvals-api'
-import { needsReply, isAgentHandoff } from '../../../lib/inbox'
+import { needsReply, needsMiaHelp } from '../../../lib/inbox'
 import { mergeTimeline } from 'shared/approval-cards'
 import MessageBubble from '../../../components/MessageBubble'
 import ThreadApprovalCard from '../../../components/ThreadApprovalCard'
@@ -155,7 +155,7 @@ export default function InstagramConversation() {
         options={{
           title: name,
           headerLeft: () => <BackHeaderLeft label="Messages" fallbackHref="/(tabs)/whatsapp" />,
-          headerRight: conv && !conv.resolved_at && (needsReply(conv) || isAgentHandoff(conv))
+          headerRight: conv && !conv.resolved_at && (needsReply(conv) || needsMiaHelp(conv))
             ? () => (
                 <Pressable onPress={resolve} disabled={resolving} hitSlop={10}>
                   {resolving
@@ -208,7 +208,7 @@ export default function InstagramConversation() {
             </View>
           )}
 
-          {isAgentHandoff(conv) && (
+          {needsMiaHelp(conv) && (
             <View className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 flex-row items-center">
               <Ionicons name="hand-left-outline" size={16} color="#B45309" />
               <Text className="text-xs text-amber-800 flex-1 ml-2">

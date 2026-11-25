@@ -90,6 +90,30 @@ describe('reading a studio\'s rows', () => {
   }
 })
 
+describe('inbox follow-up columns on whatsapp_conversations (INBOXFOLLOW.1, mig 874)', () => {
+  // These columns exist in the test database only once the snapshot is
+  // refreshed from the live database after mig 874 is applied.
+  const COLS = 'customer_waiting_since, staff_owned_since, staff_waiting_since, staff_nudged_at, staff_nudge_outcome, handoff_requested_at, snoozed_until, snoozed_by, snooze_note'
+  const conv = R(BASE.whatsapp_conversations)
+  beforeAll(async () => {
+    await db.pg.query(`update public.whatsapp_conversations set staff_waiting_since = now(), snooze_note = 'later' where id in ('${conv.a}', '${conv.b}')`)
+  })
+  it('inbox staff read them at their own studio and not at another', async () => {
+    const own = await read('receptionA', `select id, ${COLS} from public.whatsapp_conversations`)
+    expect(own.map((r) => r.id)).toEqual([conv.a])
+    expect(own[0].snooze_note).toBe('later')
+    expect(own[0].staff_waiting_since).toBeTruthy()
+  })
+  it('a session without inbox access sees nothing', async () => {
+    expect(await read('staffA', `select ${COLS} from public.whatsapp_conversations`)).toEqual([])
+  })
+  it('no signed-in session can update them', async () => {
+    await refused(read('receptionA', `update public.whatsapp_conversations set staff_waiting_since = null where id = '${conv.a}'`))
+    await refused(read('managerA', `update public.whatsapp_conversations set snoozed_until = now() where id = '${conv.a}'`))
+    await refused(read('master', `update public.whatsapp_conversations set snooze_note = 'x'`))
+  })
+})
+
 describe('contacts', () => {
   it.each([
     ['master', 'abcx'], ['ownerA', 'ax'], ['managerA', 'ax'], ['headA', 'ax'], ['receptionA', 'ax'], ['staffA', 'ax'],

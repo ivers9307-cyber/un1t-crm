@@ -5,6 +5,7 @@ import { withAuth } from '@/lib/with-auth'
 import { z } from 'zod'
 import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { resolveRearmPatch } from '@/lib/agent/core'
+import { completePatch } from '@/lib/inbox-state'
 import { validateBody } from '@/lib/validate'
 
 const ConversationPatchSchema = z.object({
@@ -138,6 +139,8 @@ export const PATCH = withAuth({ permission: null, location: false }, async ({ us
     .update({
       resolved_at: body.resolved ? new Date().toISOString() : null,
       ...resolveRearmPatch({ resolved: body.resolved, agent_handed_off_at: conversation.agent_handed_off_at }),
+      // INBOXFOLLOW.1 — completing a thread closes every follow-up state; reopening changes none.
+      ...(body.resolved ? completePatch() : {}),
     })
     .eq('id', params.id)
   if (upErr) {

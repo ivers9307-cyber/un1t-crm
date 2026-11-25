@@ -17,6 +17,9 @@ export async function listConversations(locationId) {
       last_message_at, last_message_direction, last_message_preview,
       unread_count, window_expires_at, assigned_to, created_at,
       resolved_at, agent_handed_off_at, agent_active, is_blocked,
+      customer_waiting_since, staff_owned_since, staff_waiting_since,
+      staff_nudged_at, staff_nudge_outcome, handoff_requested_at,
+      snoozed_until, snooze_note,
       contacts:contact_id (id, name, first_name, last_name, pipeline_stage_slug)
     `)
     .order('last_message_at', { ascending: false, nullsFirst: false })

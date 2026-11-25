@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "through_migration": 872,
+  "through_migration": 874,
   "latest_applied_version": "20261122223601",
   "policies": [
     ["ac_sessions","no_anon_or_authenticated_access",false,["anon","authenticated"],"*","false","false"],

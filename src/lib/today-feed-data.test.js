@@ -15,6 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+vi.mock('@/lib/inbox-followup-config', () => ({ readInboxFollowupConfig: vi.fn(async () => ({ quietHours: 48, nudgeEnabled: false })) }))
 vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn() }))
 vi.mock('@/lib/approvals/registry', () => ({ getPendingApprovalsCount: vi.fn() }))
 vi.mock('@/lib/issues', () => ({ countInboxIssues: vi.fn() }))
@@ -33,6 +34,7 @@ import { countInboxIssues } from '@/lib/issues'
 import { loadRadar } from '@/lib/churn-radar-data'
 import { radarAvailability } from '@/lib/radar-availability'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
+import { readInboxFollowupConfig } from '@/lib/inbox-followup-config'
 
 const LOC = 'loc-1'
 
@@ -78,19 +80,19 @@ function makeDb(overrides = {}) {
 // entirely and the whole reason SIDEBAR-BADGES.2 fixed the nav badge.
 const NEEDS_REPLY_BUT_READ = {
   id: 'w1', location_id: LOC, resolved_at: null, last_message_at: '2026-08-14T09:00:00Z',
-  last_message_direction: 'inbound', agent_handed_off_at: null, unread_count: 0,
+  last_message_direction: 'inbound', handoff_requested_at: null, unread_count: 0,
 }
 // unread_count is high but the thread is already resolved — must NOT count,
 // even though the old implementation's query never checked resolved_at.
 const UNREAD_BUT_RESOLVED = {
   id: 'w2', location_id: LOC, resolved_at: '2026-08-13T00:00:00Z', last_message_at: '2026-08-13T09:00:00Z',
-  last_message_direction: 'inbound', agent_handed_off_at: null, unread_count: 5,
+  last_message_direction: 'inbound', handoff_requested_at: null, unread_count: 5,
 }
 // handed off to a human, unresolved, last message was the agent's own — the
 // other case a raw-unread sum could never see.
 const AGENT_HANDOFF = {
   id: 'w3', location_id: LOC, resolved_at: null, last_message_at: '2026-08-14T08:00:00Z',
-  last_message_direction: 'outbound', agent_handed_off_at: '2026-08-14T08:00:00Z', unread_count: 0,
+  last_message_direction: 'outbound', handoff_requested_at: '2026-08-14T08:00:00Z', unread_count: 0,
 }
 
 beforeEach(() => {
@@ -122,6 +124,20 @@ describe('fetchTodayFeed — WhatsApp row uses needsAction, not raw unread_count
     // resolved thread alone) or 5 total; the fix counts only the one
     // genuinely-unresolved needs-reply thread.
     expect(rows.find((r) => r.id === 'whatsapp')?.count).toBe(1)
+  })
+
+  // INBOXFOLLOW.1 — a thread a coach replied to is not "needs reply" until the
+  // studio's quiet window has passed; Mia's own handoff stamp is handoff_requested_at.
+  it('leaves a coach-replied thread out until the studio\'s quiet window has passed', async () => {
+    const repliedAt = new Date(Date.now() - 10 * 3600_000).toISOString()
+    const coachReplied = {
+      id: 'w9', location_id: LOC, resolved_at: null, last_message_at: repliedAt, last_message_direction: 'outbound',
+      staff_owned_since: repliedAt, staff_waiting_since: repliedAt, handoff_requested_at: null,
+    }
+    const db = makeDb({ whatsapp_conversations: tableStub([coachReplied]) })
+    expect((await fetchTodayFeed(db, { id: 'u1' }, LOC)).find((r) => r.id === 'whatsapp')?.count ?? 0).toBe(0)
+    readInboxFollowupConfig.mockResolvedValueOnce({ quietHours: 4, nudgeEnabled: false })
+    expect((await fetchTodayFeed(db, { id: 'u1' }, LOC)).find((r) => r.id === 'whatsapp')?.count).toBe(1)
   })
 
   it("counts an agent handoff whose last message was the agent's own holding line", async () => {

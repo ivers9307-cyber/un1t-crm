@@ -36,12 +36,14 @@ const LOCATION = { settings: { wa_card_sets: [{ id: SET_ID, name: 'Membership', 
 
 function stubDb() {
   const inserts = []
+  const updates = []
   return {
-    inserts,
+    inserts, updates,
     from(table) {
       const data = table === 'whatsapp_conversations' ? CONVERSATION : table === 'locations' ? LOCATION : null
       const b = {
         select: () => b, eq: () => b, maybeSingle: () => b, single: () => b,
+        update: (patch) => { updates.push({ table, patch }); return b },
         insert: async (row) => { inserts.push({ table, row }); return { error: null } },
         then: (ok, bad) => Promise.resolve({ data, error: null }).then(ok, bad),
       }
@@ -58,6 +60,29 @@ const post = (body) => POST(
 beforeEach(() => { vi.clearAllMocks(); getCurrentUser.mockResolvedValue(USER) })
 
 describe('POST /api/whatsapp/conversations/[id]/send-carousel', () => {
+  // INBOXFOLLOW.1 — sent from the thread: the coach owns it and the wait moves to the customer.
+  it('is a full coach reply: last-message columns, Mia take-over and the follow-up ladder', async () => {
+    const db = stubDb()
+    createServerClient.mockReturnValue(db)
+    const res = await post({ card_set_id: SET_ID })
+    expect(res.status).toBe(200)
+    expect(db.updates).toHaveLength(1)
+    const { table, patch } = db.updates[0]
+    expect(table).toBe('whatsapp_conversations')
+    expect(patch).toMatchObject({
+      customer_waiting_since: null, handoff_requested_at: null, snoozed_until: null,
+      staff_nudged_at: null, staff_nudge_outcome: null,
+    })
+    expect(typeof patch.staff_owned_since).toBe('string')
+    expect(patch.staff_waiting_since).toBe(patch.staff_owned_since)
+    expect(patch).toMatchObject({
+      last_message_direction: 'outbound', last_message_preview: '[Card set: Membership]', agent_active: false,
+    })
+    expect(typeof patch.last_message_at).toBe('string')
+    expect(typeof patch.agent_handed_off_at).toBe('string')
+    expect(patch.staff_owned_since).toBe(patch.last_message_at)
+  })
+
   it('records the carousel thread row with sent_by = the acting staff member, and no source', async () => {
     const db = stubDb()
     createServerClient.mockReturnValue(db)

@@ -1,20 +1,20 @@
 import { describe, it, expect } from 'vitest'
 import {
-  needsReply, isAgentHandoff, needsAction, hasPendingApproval,
+  needsReply, needsMiaHelp, needsAction, hasPendingApproval,
   queueCounts, filterByQueue, mediaLabel, QUEUES,
 } from './inbox'
 
 // MOBILE-MSG.M1 — these predicates must match the web
 // src/lib/inbox-queues.js semantics exactly so a conversation sits in
 // the same queue on both surfaces: needsReply = unresolved + last
-// message inbound; agent handoff = handed off + unresolved;
+// message inbound; Mia needs help = handoff_requested_at + unresolved;
 // needsAction = unresolved + (reply owed OR handed off) + has a
 // last_message_at (SIDEBAR-BADGES.2 empty-shell guard). INBOX-EMAIL-M.1
 // added needsAction/hasPendingApproval and the pending_approval queue.
 
 const base = {
   resolved_at: null,
-  agent_handed_off_at: null,
+  handoff_requested_at: null,
   last_message_direction: 'inbound',
   last_message_at: '2026-06-13T08:00:00Z',
 }
@@ -35,20 +35,20 @@ describe('needsReply', () => {
   })
 })
 
-describe('isAgentHandoff', () => {
+describe('needsMiaHelp', () => {
   it('true when handed off and not resolved', () => {
-    expect(isAgentHandoff({ ...base, agent_handed_off_at: '2026-06-13T09:00:00Z' })).toBe(true)
+    expect(needsMiaHelp({ ...base, handoff_requested_at: '2026-06-13T09:00:00Z' })).toBe(true)
   })
   it('false once resolved (resolve hands the thread back to the agent)', () => {
-    expect(isAgentHandoff({
+    expect(needsMiaHelp({
       ...base,
-      agent_handed_off_at: '2026-06-13T09:00:00Z',
+      handoff_requested_at: '2026-06-13T09:00:00Z',
       resolved_at: '2026-06-13T10:00:00Z',
     })).toBe(false)
   })
   it('false when never handed off', () => {
-    expect(isAgentHandoff({ ...base })).toBe(false)
-    expect(isAgentHandoff(null)).toBe(false)
+    expect(needsMiaHelp({ ...base })).toBe(false)
+    expect(needsMiaHelp(null)).toBe(false)
   })
 })
 
@@ -60,14 +60,14 @@ describe('needsAction', () => {
     expect(needsAction({
       ...base,
       last_message_direction: 'outbound',
-      agent_handed_off_at: '2026-06-13T09:00:00Z',
+      handoff_requested_at: '2026-06-13T09:00:00Z',
     })).toBe(true)
   })
   it('false once resolved', () => {
     expect(needsAction({ ...base, resolved_at: '2026-06-13T10:00:00Z' })).toBe(false)
     expect(needsAction({
       ...base,
-      agent_handed_off_at: '2026-06-13T09:00:00Z',
+      handoff_requested_at: '2026-06-13T09:00:00Z',
       resolved_at: '2026-06-13T10:00:00Z',
     })).toBe(false)
   })
@@ -79,7 +79,7 @@ describe('needsAction', () => {
     expect(needsAction({
       ...base,
       last_message_at: undefined,
-      agent_handed_off_at: '2026-06-13T09:00:00Z',
+      handoff_requested_at: '2026-06-13T09:00:00Z',
     })).toBe(false)
   })
   it('false for null/undefined input', () => {
@@ -103,7 +103,7 @@ describe('hasPendingApproval', () => {
 })
 
 describe('queueCounts + filterByQueue', () => {
-  const handoff = { ...base, id: 'a', agent_handed_off_at: '2026-06-13T09:00:00Z' }
+  const handoff = { ...base, id: 'a', handoff_requested_at: '2026-06-13T09:00:00Z' }
   const inboundUnresolved = { ...base, id: 'b' }
   const replied = { ...base, id: 'c', last_message_direction: 'outbound' }
   const resolved = { ...base, id: 'd', resolved_at: '2026-06-13T10:00:00Z' }
@@ -111,21 +111,21 @@ describe('queueCounts + filterByQueue', () => {
   const list = [handoff, inboundUnresolved, replied, resolved, withApproval]
 
   it('counts: handoff rows also count as needs-reply (chips are filters, not partitions)', () => {
-    expect(queueCounts(list)).toEqual({ all: 5, needs_reply: 3, handoff: 1, pending_approval: 1 })
+    expect(queueCounts(list)).toEqual({ needs_reply: 3, mia_help: 1, waiting: 0, pending_approval: 1, all: 5 })
   })
   it('filters each queue', () => {
     expect(filterByQueue(list, 'all').map(c => c.id)).toEqual(['a', 'b', 'c', 'd', 'e'])
     expect(filterByQueue(list, 'needs_reply').map(c => c.id)).toEqual(['a', 'b', 'e'])
-    expect(filterByQueue(list, 'handoff').map(c => c.id)).toEqual(['a'])
+    expect(filterByQueue(list, 'mia_help').map(c => c.id)).toEqual(['a'])
     expect(filterByQueue(list, 'pending_approval').map(c => c.id)).toEqual(['e'])
   })
   it('unknown queue falls back to all; empty input is safe', () => {
     expect(filterByQueue(list, 'nope').length).toBe(5)
-    expect(queueCounts([])).toEqual({ all: 0, needs_reply: 0, handoff: 0, pending_approval: 0 })
-    expect(queueCounts(null)).toEqual({ all: 0, needs_reply: 0, handoff: 0, pending_approval: 0 })
+    expect(queueCounts([])).toEqual({ needs_reply: 0, mia_help: 0, waiting: 0, pending_approval: 0, all: 0 })
+    expect(queueCounts(null)).toEqual({ needs_reply: 0, mia_help: 0, waiting: 0, pending_approval: 0, all: 0 })
   })
   it('QUEUES drives the chip strip in order', () => {
-    expect(QUEUES.map(q => q.key)).toEqual(['all', 'needs_reply', 'handoff', 'pending_approval'])
+    expect(QUEUES.map(q => q.key)).toEqual(['needs_reply', 'mia_help', 'waiting', 'pending_approval', 'all'])
   })
 })
 

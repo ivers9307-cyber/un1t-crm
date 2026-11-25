@@ -210,6 +210,40 @@ describe('shouldAgentReply — sticky pause (agent_paused_at)', () => {
   })
 })
 
+// INBOXFOLLOW.1 — a coach's thread stays theirs until a coach completes it.
+describe('shouldAgentReply — coach-owned thread (staff_owned_since)', () => {
+  const base = {
+    settings: { enabled: true },
+    senderPhone: '+353871234567',
+    now: new Date('2026-06-01T12:00:00Z'),
+    lastOutboundHuman: false,
+    conversation: {
+      agent_active: false,
+      agent_handed_off_at: '2026-05-31T23:00:00Z', // 13 h old: past the cooldown
+      staff_owned_since: '2026-05-31T23:05:00Z',
+    },
+  }
+  it('stays silent with no onDuty and no rearm even when the handoff cooldown has passed', () => {
+    const r = shouldAgentReply({ ...base, settings: { enabled: true, handoff_cooldown_hours: 12 }, message: { type: 'text', body: 'hi again' } })
+    expect(r).toEqual({ reply: false, reason: 'staff_owned' })
+    expect(r.onDuty).toBeUndefined()
+    expect(r.rearm).toBeUndefined()
+  })
+  it('an audio message gets the same silence (no soft handoff)', () => {
+    const r = shouldAgentReply({ ...base, settings: { enabled: true, handoff_cooldown_hours: 12 }, message: { type: 'audio', body: '' } })
+    expect(r).toEqual({ reply: false, reason: 'staff_owned' })
+    expect(r.onDuty).toBeUndefined()
+  })
+  it('applies with the agent still armed (agent_active true)', () => {
+    const r = shouldAgentReply({ ...base, conversation: { agent_active: true, staff_owned_since: '2026-05-31T23:05:00Z' }, message: { type: 'text', body: 'hi' } })
+    expect(r).toEqual({ reply: false, reason: 'staff_owned' })
+  })
+  it('agent_paused still wins', () => {
+    const r = shouldAgentReply({ ...base, conversation: { ...base.conversation, agent_paused_at: '2026-05-31T23:10:00Z' }, message: { type: 'text', body: 'hi' } })
+    expect(r.reason).toBe('agent_paused')
+  })
+})
+
 describe('formatHistoryForClaude', () => {
   it('maps direction to roles and folds a leading outbound OPENER into the first user turn as context (does not drop it)', () => {
     const rows = [

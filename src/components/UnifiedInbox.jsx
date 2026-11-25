@@ -22,7 +22,9 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
-import { needsReply, isAgentHandoff } from '@/lib/inbox-queues'
+import {
+  DEFAULT_FOLLOWUP_CFG, QUEUES, needsReply, needsMiaHelp, filterByQueue, queueCounts, sortNeedsReply,
+} from '@/lib/inbox-queues'
 import { matchesSearch } from '@/lib/inbox-search'
 import {
   MessageCircle, RefreshCw, Check, Inbox as InboxIcon,
@@ -34,6 +36,7 @@ import CommandCentre from '@/components/CommandCentre'
 import { ChannelGlyph, ChannelAvatar } from '@/components/inbox/ChannelBits'
 import OwnerFilter from '@/components/inbox/OwnerFilter'
 import OwnerTag from '@/components/inbox/OwnerTag'
+import { WaitChip, WindowChip, StateLine, stateLineText } from '@/components/inbox/RowChips'
 import { matchesOwnerFilter } from '@/lib/inbox-owner'
 import { channelOf } from '../../shared/channels'
 
@@ -68,17 +71,6 @@ function initialsOf(name) {
   return String(name || '').replace(/^@/, '').split(/[^A-Za-z0-9]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'
 }
 
-// The Approvals queue filter reads the SAME signal as the row's purple
-// "Approval" badge below (conv.pending_approval — stamped server-side from
-// a pending agent_membership_requests row by the wa/ig conversations
-// routes; see src/app/api/whatsapp/conversations/route.js). Deliberately
-// NOT inbox-queues.js's needsAction() — that predicate is the reply/handoff
-// badge signal (needsReply || isAgentHandoff) and is unrelated to pending
-// approvals (INBOX-REDESIGN.6).
-function isPendingApproval(conv) {
-  return !!conv?.pending_approval
-}
-
 const VALID_CHANNELS = new Set(['wa', 'ig'])
 
 export default function UnifiedInbox({ locationId, timezone = null, userId, initialConversationId, initialChannel, canEditConsent = false }) {
@@ -86,6 +78,10 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
   const [igConvs, setIgConvs] = useState([])
   const [loading, setLoading] = useState(true)
   const [queueFilter, setQueueFilter] = useState('needs_reply')
+  // INBOXFOLLOW.1 — the studio's follow-up config (from the list response) and
+  // a clock that ticks each minute, so threads move queues without a reload.
+  const [cfg, setCfg] = useState(DEFAULT_FOLLOWUP_CFG)
+  const [nowMs, setNowMs] = useState(() => Date.now())
   // INBOXASSIGN.1 — Anyone / Mine / Unassigned, on top of the queue chips.
   const [ownerFilter, setOwnerFilter] = useState('any')
   const [search, setSearch] = useState('')
@@ -106,7 +102,12 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
     const qs = locationId ? `?location_id=${encodeURIComponent(locationId)}` : ''
     const [wa, ig] = await Promise.all([
       fetch(`/api/whatsapp/conversations${qs}`).then(r => r.json()).then(
-        d => (d.success ? d.conversations || [] : null),
+        d => {
+          if (!d.success) return null
+          const f = d.followup
+          setCfg(f && Number.isFinite(f.quietHours) ? { quietHours: f.quietHours, nudgeEnabled: !!f.nudgeEnabled } : DEFAULT_FOLLOWUP_CFG)
+          return d.conversations || []
+        },
         () => null
       ),
       fetch(`/api/instagram/conversations${qs}`).then(r => r.json()).then(
@@ -118,6 +119,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
     // blanking part of the queue.
     if (wa) setWaConvs(wa)
     if (ig) setIgConvs(ig)
+    setNowMs(Date.now())
     setLoading(false)
   }, [locationId])
 
@@ -156,6 +158,14 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
     const t = setInterval(loadConversations, 60000)
     return () => clearInterval(t)
   }, [loadConversations])
+
+  // INBOXFOLLOW.1 — re-render each minute so a snooze that ended, or a thread
+  // that has been quiet long enough, changes queue (and its wait chip ticks)
+  // between list reads.
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 60000)
+    return () => clearInterval(t)
+  }, [])
 
   // INBOX-SEARCH.1 — debounced server search. Below 2 chars the server
   // hits clear and the queue falls back to the instant client filter
@@ -205,13 +215,11 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
     ...igConvs.map(c => ({ ...c, _ch: 'ig' })),
   ].sort((a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0))
 
-  const queueMatched = queueFilter === 'all'
-    ? merged
-    : queueFilter === 'handoff'
-      ? merged.filter(isAgentHandoff)
-      : queueFilter === 'approvals'
-        ? merged.filter(isPendingApproval)
-        : merged.filter(needsReply)
+  // INBOXFOLLOW.1 — the queue rules are shared with the badge and the phone.
+  // Needs reply is longest-waiting first; the others keep newest-first (merged
+  // is already in that order).
+  const filtered = filterByQueue(merged, queueFilter, nowMs, cfg)
+  const queueMatched = queueFilter === 'needs_reply' ? sortNeedsReply(filtered, nowMs, cfg) : filtered
 
   // INBOX-SEARCH.1 — while a server search is active, rows are the
   // server hits UNIONed with client matches from the loaded lists
@@ -237,9 +245,8 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
   }
   // INBOXASSIGN.1 — the owner filter narrows the queue and search alike.
   visible = visible.filter(conv => matchesOwnerFilter(conv, ownerFilter, userId))
-  const needsReplyCount = merged.filter(needsReply).length
-  const handoffCount = merged.filter(isAgentHandoff).length
-  const approvalsCount = merged.filter(isPendingApproval).length
+  const counts = queueCounts(merged, nowMs, cfg)
+  const needsReplyCount = counts.needs_reply
 
   // UIX-P2 — the command centre needs the selected thread's linked
   // contact. The queue rows already embed contacts!contact_id, so no
@@ -292,29 +299,26 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
           </div>
         </div>
 
-        {/* Queue split chips (P1a semantics; INBOX-HANDOFF.1 added the
-            agent-handoff queue; INBOX-REDESIGN.6 added Approvals and
-            relabelled Everything/Agent handoff → All/Handoff per spec §4.2) */}
-        <div className="flex gap-1.5 px-3 py-2 border-b border-un1t-border">
-          {[['all', 'All'], ['needs_reply', 'Needs reply'], ['handoff', 'Handoff'], ['approvals', 'Approvals']].map(([key, label]) => (
+        {/* Queue chips: the five queues in the shared rules' order
+            (INBOXFOLLOW.1; before that P1a, INBOX-HANDOFF.1, INBOX-REDESIGN.6) */}
+        <div className="flex flex-wrap gap-1.5 px-3 py-2 border-b border-un1t-border">
+          {QUEUES.map(({ key, label }) => (
             <button
               key={key}
               type="button"
               onClick={() => setQueueFilter(key)}
               className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                 queueFilter === key
-                  ? key === 'handoff'
+                  ? key === 'mia_help'
                     ? 'bg-amber-500 text-white border-transparent'
-                    : key === 'approvals'
+                    : key === 'pending_approval'
                       ? 'bg-purple-500 text-white border-transparent'
                       : 'bg-un1t-text text-un1t-bg border-transparent'
                   : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
               }`}
             >
               {label}
-              {key === 'needs_reply' && needsReplyCount > 0 && <span className="ml-1">· {needsReplyCount}</span>}
-              {key === 'handoff' && handoffCount > 0 && <span className="ml-1">· {handoffCount}</span>}
-              {key === 'approvals' && approvalsCount > 0 && <span className="ml-1">· {approvalsCount}</span>}
+              {key !== 'all' && counts[key] > 0 && <span className="ml-1">· {counts[key]}</span>}
             </button>
           ))}
         </div>
@@ -336,15 +340,23 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                 ? `No matches for "${search.trim()}"`
                 : ownerFilter !== 'any'
                   ? (ownerFilter === 'mine' ? 'Nothing assigned to you here.' : 'Nothing unassigned here.')
-                  : queueFilter === 'handoff'
-                  ? 'No agent handoffs waiting — the agent is handling things. 🤖'
-                  : 'Queue clear — nothing needs a reply. 🎉'}
+                  : queueFilter === 'mia_help'
+                    ? 'No agent handoffs waiting — the agent is handling things. 🤖'
+                    : queueFilter === 'waiting'
+                      ? 'Nothing waiting on a customer.'
+                      : queueFilter === 'pending_approval'
+                        ? 'No approvals waiting.'
+                        : queueFilter === 'all'
+                          ? 'No conversations.'
+                          : 'Queue clear — nothing needs a reply. 🎉'}
             </p>
           )}
 
           {visible.map(conv => {
             const isSelected = selected?.id === conv.id && selected?.ch === conv._ch
             const name = rowName(conv)
+            const hasStateLine = !!stateLineText({ conv, nowMs, cfg, zone: timezone })
+            const owesReply = needsReply(conv, nowMs, cfg, conv._ch)
             return (
               <button
                 key={`${conv._ch}:${conv.id}`}
@@ -361,7 +373,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                 <div className="min-w-0 flex flex-col gap-0.5">
                   <span className="flex items-center gap-1.5 min-w-0">
                     <span className="font-medium text-sm truncate">{name}</span>
-                    {isAgentHandoff(conv) && (
+                    {needsMiaHelp(conv) && (
                       <span className="text-[10px] font-semibold text-amber-700 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">
                         Needs human
                       </span>
@@ -377,7 +389,12 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                   {/* WAMSGSEARCH.1 — a thread found by its message text shows the matching words. */}
                   {searchActive && conv.search_snippet
                     ? <span className="text-xs text-un1t-muted truncate" data-search-snippet>{conv.search_snippet}</span>
-                    : <span className="text-xs text-un1t-subtle truncate">{conv.last_message_preview || '—'}</span>}
+                    : (hasStateLine ? <StateLine conv={conv} nowMs={nowMs} cfg={cfg} zone={timezone} /> : <span className="text-xs text-un1t-subtle truncate">{conv.last_message_preview || '—'}</span>)}
+                  {/* INBOXFOLLOW.1 — how long, and how long the WhatsApp window has left. */}
+                  <span className="flex items-center gap-1.5 empty:hidden">
+                    <WaitChip conv={conv} nowMs={nowMs} cfg={cfg} />
+                    <WindowChip conv={conv} nowMs={nowMs} />
+                  </span>
                 </div>
                 <div className="flex flex-col items-end gap-0.5">
                   <span className="text-xs text-un1t-muted shrink-0">{formatTime(conv.last_message_at)}</span>
@@ -387,11 +404,11 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                         {conv.unread_count}
                       </span>
                     )}
-                    {(needsReply(conv) || isAgentHandoff(conv)) && (
+                    {(owesReply || needsMiaHelp(conv)) && (
                       <span
                         role="button"
                         tabIndex={0}
-                        title={isAgentHandoff(conv) ? 'Mark handled — hand back to the agent' : 'Mark handled — no reply needed'}
+                        title={needsMiaHelp(conv) ? 'Mark handled — hand back to the agent' : 'Mark handled — no reply needed'}
                         onClick={e => { e.stopPropagation(); quickResolve(conv) }}
                         onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); quickResolve(conv) } }}
                         className="p-1 rounded-md border border-un1t-border text-un1t-muted hover:text-emerald-700 hover:border-emerald-600 transition-colors"

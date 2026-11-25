@@ -39,7 +39,7 @@ import { adSignal, replySignal } from './wa-studio-pick/signals'
 
 export const RECENT_OUTBOUND_MS = 7 * 24 * 60 * 60 * 1000
 
-const CONVERSATION_COLUMNS = 'id, location_id, contact_id, ctwa_clid, studio_resolution, wa_phone, wa_bsuid, whatsapp_number_id'
+const CONVERSATION_COLUMNS = 'id, location_id, contact_id, ctwa_clid, studio_resolution, wa_phone, wa_bsuid, whatsapp_number_id, staff_owned_since'
 
 function warn(message, meta, e) {
   logWarn('wa-inbound-route', message, { ...meta, err: e?.message || String(e) })

@@ -479,3 +479,69 @@ describe('POST /api/webhooks/whatsapp — consent keywords', () => {
     expect(applyWhatsappConsentKeyword).toHaveBeenCalledWith(expect.objectContaining({ keyword: 'stop', contact: expect.objectContaining({ id: 'contact-1' }) }))
   })
 })
+
+// INBOXFOLLOW.1 — an inbound message stamps the follow-up queue columns.
+describe('POST /api/webhooks/whatsapp — inbox follow-up stamps', () => {
+  const THREAD_WAITING = '2026-11-24T09:00:00.000Z'
+
+  function stampDb(readResult) {
+    return makeDb({
+      contacts: { data: [], error: null },
+      whatsapp_conversations: (ops, terminal) => {
+        if (ops.some(([m]) => m === 'insert')) return { data: { id: 'conv-1' }, error: null }
+        if (terminal === 'maybeSingle' && ops.some(([m, c]) => m === 'select' && c === 'customer_waiting_since')) return readResult
+        return { data: null, error: null }
+      },
+      whatsapp_messages: (ops) => {
+        if (ops.some(([m]) => m === 'insert')) return { data: { id: 'msg-row-1' }, error: null }
+        return { data: null, error: null }
+      },
+    })
+  }
+
+  function inboundStamp(d) {
+    const call = d.calls.find((c) => c.table === 'whatsapp_conversations'
+      && c.ops.some(([m]) => m === 'update') && c.ops.some(([m, v]) => m === 'update' && v?.last_message_direction === 'inbound'))
+    return call?.ops.find(([m]) => m === 'update')[1]
+  }
+
+  it('a snoozed thread that receives an inbound message is un-snoozed, staff wait cleared, customer wait set, resolved_at null', async () => {
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    const d = stampDb({ data: { customer_waiting_since: null }, error: null })
+    createServerClient.mockReturnValue(d)
+
+    const res = await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(res.status).toBe(200)
+
+    const stamp = inboundStamp(d)
+    expect(stamp).toMatchObject({
+      resolved_at: null,
+      snoozed_until: null, snoozed_by: null, snooze_note: null,
+      staff_waiting_since: null, staff_nudged_at: null, staff_nudge_outcome: null,
+    })
+    // the wait starts at the message's own time (timestamp 1770000000), not at webhook time
+    expect(stamp.customer_waiting_since).toBe(new Date(1770000000 * 1000).toISOString())
+  })
+
+  it('keeps the thread\'s existing customer_waiting_since', async () => {
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    const d = stampDb({ data: { customer_waiting_since: THREAD_WAITING }, error: null })
+    createServerClient.mockReturnValue(d)
+
+    await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(inboundStamp(d).customer_waiting_since).toBe(THREAD_WAITING)
+  })
+
+  it('a failed read of customer_waiting_since is logged and the rest of the stamp is still written', async () => {
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    const d = stampDb({ data: null, error: { message: 'read boom' } })
+    createServerClient.mockReturnValue(d)
+
+    const res = await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(res.status).toBe(200)
+    const stamp = inboundStamp(d)
+    expect(stamp.resolved_at).toBeNull()
+    expect(typeof stamp.customer_waiting_since).toBe('string')
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('customer_waiting_since read failed'), 'read boom')
+  })
+})

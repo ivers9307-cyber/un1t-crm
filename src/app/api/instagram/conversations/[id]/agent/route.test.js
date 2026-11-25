@@ -58,6 +58,33 @@ describe('PATCH /api/instagram/conversations/[id]/agent', () => {
     expect(thread(T_A).agent_handed_off_at).toBeTruthy()
   })
 
+  it('resuming hands a staff-owned thread back: the clocks clear and Mia is re-armed', async () => {
+    getCurrentUser.mockResolvedValue(inbox())
+    Object.assign(thread(T_A), {
+      agent_active: false, agent_handed_off_at: '2026-11-25T10:00:00Z', handoff_escalated_at: '2026-11-25T10:30:00Z',
+      staff_owned_since: '2026-11-25T10:00:00Z', staff_waiting_since: '2026-11-25T10:00:00Z', customer_waiting_since: '2026-11-25T09:00:00Z',
+      staff_nudged_at: '2026-11-25T11:00:00Z', staff_nudge_outcome: 'sent', handoff_requested_at: '2026-11-25T09:30:00Z',
+      snoozed_until: '2026-11-26T00:00:00Z', snoozed_by: 'u1', snooze_note: 'later',
+    })
+    const res = await patch(T_A, { active: true })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, agent_active: true })
+    expect(thread(T_A)).toMatchObject({
+      agent_active: true, agent_handed_off_at: null, handoff_escalated_at: null,
+      staff_owned_since: null, staff_waiting_since: null, customer_waiting_since: null,
+      staff_nudged_at: null, staff_nudge_outcome: null, handoff_requested_at: null,
+      snoozed_until: null, snoozed_by: null, snooze_note: null,
+    })
+  })
+
+  it('pausing writes only agent_active, the first hand-off stamp and updated_at', async () => {
+    getCurrentUser.mockResolvedValue(inbox())
+    Object.assign(thread(T_A), { staff_owned_since: '2026-11-25T10:00:00Z' })
+    await patch()
+    expect(thread(T_A).staff_owned_since).toBe('2026-11-25T10:00:00Z')
+    expect(thread(T_A).agent_active).toBe(false)
+  })
+
   it('a failed write is a 500 with a fixed message', async () => {
     getCurrentUser.mockResolvedValue(inbox())
     db.errors.instagram_conversations = { update: { code: '57014', message: 'statement timeout on instagram_conversations' } }

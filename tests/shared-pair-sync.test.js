@@ -141,6 +141,10 @@ const PAIRS = {
       '`export * from` shim; src/components/mail/mail-vocabulary.js re-exports it for the web components and mobile ' +
       "imports 'shared/mail-vocabulary' directly, so the two surfaces read the very same functions.",
   },
+  'inbox-queues.js': {
+    mode: 'reexport',
+    why: 'INBOXFOLLOW.1 — the inbox queue rules (needs reply, Mia needs help, waiting, wait clocks) live in shared/ because the web inbox, the badge counts and the phone must put a thread in the same queue; src/lib is an `export * from` shim and mobile/lib/inbox.js re-exports shared.',
+  },
   'mail-quote.js': {
     mode: 'reexport',
     why: 'MAIL-REPLY-QUOTE.1 — the quoted-text splitter serves the web thread and the mobile thread; src/lib re-exports shared.',
@@ -416,11 +420,6 @@ function driftedExports(sharedSrc, webSrc) {
 // modules. Nine allowlist entries is a reviewable amount of noise for a check
 // that forces every future cross-named duplicate to be classified.
 const COINCIDENTAL = {
-  'shared/mail-vocabulary.js::src/lib/inbox-queues.js':
-    '`needsReply` twice, over two different row shapes, and deliberately so: inbox-queues answers it for ' +
-    'WhatsApp/Instagram conversations (`!resolved_at && last inbound`, the sidebar badge + UnifiedInbox queue), ' +
-    'mail-vocabulary answers it for email_tickets rows (the server-stamped `needs_reply`, falling back to ' +
-    '`open` + last inbound). Different tables, different columns; unifying them would invent a column one side lacks.',
   'shared/approval-cards.js::src/lib/contact-view.js':
     'Both define a local `mergeTimeline`, over different row shapes: approval cards merge approval events, contact-view merges a contact drawer timeline. No shared vocabulary.',
   'shared/dashboard-metrics.js::src/lib/ads/funnel.js':

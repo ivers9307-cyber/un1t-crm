@@ -2,6 +2,8 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
+import { staffReplyPatch } from '@/lib/inbox-state'
+import { manualTakeoverPatch } from '@/lib/agent/core'
 import { z } from 'zod'
 import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
@@ -29,7 +31,7 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
 
   const db = createServerClient()
   const { data: conversation } = await db.from('whatsapp_conversations')
-    .select('id, location_id, contact_id, wa_phone, wa_bsuid')
+    .select('id, location_id, contact_id, wa_phone, wa_bsuid, staff_owned_since, agent_handed_off_at')
     .eq('id', params.id)
     .maybeSingle()
   if (!conversation) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -58,6 +60,26 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
     const status = whatsappErrorStatus(e, 502)
     if (status !== 409) logError('wa-send-carousel', 'Meta carousel call failed', { conversationId: conversation.id, err: e?.message })
     return NextResponse.json({ success: false, error: status === 409 ? e.message : 'Meta carousel call failed' }, { status })
+  }
+
+  // INBOXFOLLOW.1 — a card set sent from the thread is a full coach reply, like
+  // the send route's: last-message columns, the Mia take-over and the follow-up
+  // ladder. Staff route only (the shared lib is also Mia's tool). A failed
+  // update is logged and never fails the send.
+  try {
+    const now = new Date().toISOString()
+    const { error: stampErr } = await db.from('whatsapp_conversations')
+      .update({
+        last_message_at: now,
+        last_message_direction: 'outbound',
+        last_message_preview: `[Card set: ${set.name}]`.substring(0, 100),
+        ...manualTakeoverPatch(conversation.agent_handed_off_at),
+        ...staffReplyPatch(conversation, now),
+      })
+      .eq('id', conversation.id)
+    if (stampErr) logError('wa-send-carousel', 'follow-up stamp failed after the card set was sent', { conversationId: conversation.id, err: stampErr.message })
+  } catch (err) {
+    logError('wa-send-carousel', 'follow-up stamp threw after the card set was sent', { conversationId: conversation.id, err: err?.message })
   }
 
   return NextResponse.json({ success: true })

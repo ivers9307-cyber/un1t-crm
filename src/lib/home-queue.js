@@ -56,6 +56,7 @@
 import { getPendingApprovals, getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
 import { needsAction } from '@/lib/inbox-queues'
+import { readInboxFollowupConfig } from '@/lib/inbox-followup-config'
 import {
   loadVisibleMailboxes,
   scopeToVisibleMailboxes,
@@ -222,7 +223,7 @@ async function countConversationsNeedsReply(db, user, locationId) {
 // ── Inbox (WhatsApp + Instagram) ────────────────────────────────────────
 
 const INBOX_COLUMNS =
-  'id, resolved_at, last_message_at, last_message_direction, agent_handed_off_at, ' +
+  'id, resolved_at, last_message_at, last_message_direction, agent_handed_off_at, customer_waiting_since, staff_owned_since, staff_waiting_since, staff_nudged_at, staff_nudge_outcome, handoff_requested_at, snoozed_until, snooze_note, ' +
   'contacts!contact_id(id, name, first_name)'
 
 function contactTitle(row, fallback) {
@@ -248,7 +249,9 @@ function toInboxRow(row, channel) {
 }
 
 async function fetchNeedsActionConversations(db, locationId) {
-  const [wa, ig] = await Promise.all([
+  const nowMs = Date.now()
+  const [cfg, wa, ig] = await Promise.all([
+    readInboxFollowupConfig(db, locationId),
     db.from('whatsapp_conversations')
       .select(`${INBOX_COLUMNS}, wa_phone`)
       .eq('location_id', locationId)
@@ -261,8 +264,9 @@ async function fetchNeedsActionConversations(db, locationId) {
   if (wa.error) throw new Error(`inbox wa: ${wa.error.message}`)
   if (ig.error) throw new Error(`inbox ig: ${ig.error.message}`)
 
-  const waRows = (wa.data || []).filter(needsAction).map((c) => toInboxRow(c, 'wa'))
-  const igRows = (ig.data || []).filter(needsAction).map((c) => toInboxRow(c, 'ig'))
+  // Explicit arguments: Array.filter would pass its index as nowMs.
+  const waRows = (wa.data || []).filter((c) => needsAction(c, nowMs, cfg, 'wa')).map((c) => toInboxRow(c, 'wa'))
+  const igRows = (ig.data || []).filter((c) => needsAction(c, nowMs, cfg, 'ig')).map((c) => toInboxRow(c, 'ig'))
   return [...waRows, ...igRows]
 }
 

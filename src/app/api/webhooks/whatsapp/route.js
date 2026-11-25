@@ -30,6 +30,7 @@ import { syncContactMatchOnly, ingestCoexistenceMessage } from '@/lib/whatsapp-c
 import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
 import { buttonTapBody, interactiveReplyBody } from '@/lib/whatsapp-inbound-tap'
 import { logError } from '@/lib/log'
+import { inboundPatch } from '@/lib/inbox-state'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -760,12 +761,30 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   }
   const awaitingStudio = studioPick?.action === 'asked'
 
+  // INBOXFOLLOW.1 — the thread's current customer_waiting_since, so the first
+  // unanswered message keeps its place. Read by the id the stamp below writes
+  // (the studio picker may have moved the thread). A failed read never costs
+  // the message: log loudly and treat the value as unknown (now).
+  let existingWaiting = null
+  try {
+    const { data: waitRow, error: waitErr } = await db.from('whatsapp_conversations')
+      .select('customer_waiting_since')
+      .eq('id', conversationId)
+      .maybeSingle()
+    if (waitErr) console.error(`[wa-webhook] customer_waiting_since read failed for ${conversationId} (falling back to the message's own time):`, waitErr.message)
+    else existingWaiting = waitRow
+  } catch (e) {
+    console.error(`[wa-webhook] customer_waiting_since read threw for ${conversationId} (falling back to the message's own time):`, e?.message || String(e))
+  }
+
   // Update conversation
   const { error: convStampErr } = await db.from('whatsapp_conversations').update({
     last_message_at: timestamp.toISOString(),
     last_message_direction: 'inbound',
     last_message_preview: body?.substring(0, 100) || `[${messageType}]`,
     resolved_at: null,
+    // the message's own time, so a delayed webhook does not shorten the wait
+    ...inboundPatch(existingWaiting, timestamp.toISOString()),
     // AGENT-FOLLOWUP.1 — a reply ends the quiet-cycle: the ladder
     // starts fresh from this message.
     agent_followup_stage: 0,
