@@ -345,7 +345,7 @@ export const CORE_KEYS = Object.freeze([
 // ============================================================
 // EXEMPT_KEYS — keys that were NEVER location-gated PER-KEY in the
 // first place (shared/permissions.js `isFeatureGatedByLocation`): the
-// 30 personal `notify_*` toggles and the 8 `approvals_*` per-category
+// 31 personal `notify_*` toggles and the 8 `approvals_*` per-category
 // grants. bundlesDenyKey() (the KEY_BUNDLES-based single-key check)
 // never denies them — that part is still exactly as documented before.
 //
@@ -390,7 +390,7 @@ export const EXEMPT_KEYS = Object.freeze([
   'approvals_rosters',
   'approvals_hyrox_sessions',
   'approvals_offer_purchases',
-  // -- the 30 personal notify_* toggles (NOTIFY_KEYS) --
+  // -- the 31 personal notify_* toggles (NOTIFY_KEYS) --
   'notify_time_off',
   'notify_schedule',
   'notify_swap',
@@ -400,6 +400,7 @@ export const EXEMPT_KEYS = Object.freeze([
   'notify_instagram',
   'notify_email',
   'notify_agent_activity',
+  'notify_agent_handoff',
   'notify_agent_requests',
   'notify_host_event_review',
   'notify_invoice_approved',

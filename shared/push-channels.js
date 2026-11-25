@@ -79,6 +79,8 @@ const CATEGORY_CHANNELS = Object.freeze({
   // Real-time human conversation — heads-up.
   whatsapp: 'messages',
   instagram: 'messages',
+  // HANDOFFALERT.1 — Mia handed a chat to the team: a customer is waiting on a person.
+  agent_handoff: 'messages',
   // Inbound ticket mail — its own channel (see ANDROID_CHANNELS.email).
   email: 'email',
   // Time-sensitive nudges (cron lead-time reminders + speed-to-lead).

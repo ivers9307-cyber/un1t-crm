@@ -78,6 +78,7 @@ Guidance for Claude Code working in **un1t-crm**: the staff and admin CRM (Next.
 - No silent env fallbacks, no `x-api-key`; responses are `{ success, data?, error?, issues? }`.
 - Consent has two families (`_administrative`, `_marketing`); every change goes through a route that writes `consent_log`, and per-studio changes through `applyStudioPreferenceChange`.
 - An unregistered `sendPush` category fails closed; pass the bare category name.
+- A "customer needs a person" push (Mia's handoff, the SLA escalation) rides `AGENT_HANDOFF_PUSH_CATEGORY`, never the `whatsapp` or `instagram` chat category.
 - A new path that takes money for a new sale calls `notifyNewSale` (`src/lib/sale-alert.js`); sale alerts go to owners and managers only and ring at any hour by the owner's choice.
 - Stillorgan's and Hatch's pipeline boards are placed by one router, `routeContact()`; a paid trial is never a pack.
 - `contacts.wa_phone` is derived by one rule in two twins; an inbound WhatsApp message may carry no phone number (use `inboundSender()`, `conversationAddress()`).

@@ -177,6 +177,17 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     fallbackEmail: false,
   },
   {
+    // HANDOFFALERT.1 — its own category: it rode 'whatsapp' / 'instagram', so a
+    // role with chat pings off never heard that a customer needed a person.
+    category: 'agent_handoff',
+    label: 'Customer needs a person',
+    description: 'The AI agent (Mia) handed a WhatsApp or Instagram chat to the team, could not answer, or a handed-over customer has waited past the handoff SLA with no reply. Separate from the inbound message pings, so switching those off does not silence it.',
+    trigger: { kind: 'event', source: 'Agent orchestrator (auto-reply.js) + handoff SLA sweep (agent-followups cron)' },
+    recipients: { kind: 'roles_at_location', detail: 'owner / manager / head coach at the conversation location (masters always included)' },
+    configurable: { leadTimes: false, roles: false },
+    fallbackEmail: false,
+  },
+  {
     category: 'agent_requests',
     label: 'Customer approval needed',
     description: 'A customer request landed in the approvals queue and needs a decision: a Mia booking issue, a /start funnel review, or a pause/cancel/membership request. One push per request.',

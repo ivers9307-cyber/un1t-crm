@@ -15,7 +15,7 @@ import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { logWarn, logError } from '@/lib/log'
-import { AGENT_MESSAGE_SOURCE } from '@/lib/agent/core'
+import { AGENT_MESSAGE_SOURCE, AGENT_HANDOFF_PUSH_CATEGORY } from '@/lib/agent/core'
 
 export async function resendVoiceReplyAsText(db, msg, deps = {}) {
   const sendText = deps.sendText || ((to, text, opts) => sendTextMessage(to, text, opts))
@@ -27,7 +27,7 @@ export async function resendVoiceReplyAsText(db, msg, deps = {}) {
       await push(msg.location_id, {
         title: 'WhatsApp · voice reply not delivered',
         body: "A voice reply from Mia didn't reach the customer and the text copy couldn't be sent. Check the thread and reply.",
-        category: 'whatsapp',
+        category: AGENT_HANDOFF_PUSH_CATEGORY,
         data: { type: 'whatsapp_agent_handoff', conversation_id: msg.conversation_id },
       })
     } catch (err) {
