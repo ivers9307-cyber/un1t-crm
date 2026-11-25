@@ -371,15 +371,15 @@ export default function IGInbox({ locationId, timezone = null, initialConversati
           </div>
         ) : (
           <>
-            <div className="flex items-center justify-between gap-3 p-4 border-b border-un1t-border">
-              <div className="flex items-center gap-3 min-w-0">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 p-4 border-b border-un1t-border">
+              <div className="flex items-center gap-3 min-w-0 flex-1 basis-48">
                 <button onClick={() => setSelectedId(null)} className={embedded ? 'hidden' : 'md:hidden text-un1t-subtle'} aria-label="Back">
                   <ArrowLeft size={18} />
                 </button>
                 <ChannelAvatar channel="ig" initials={initialsOf(displayName(conversation))} badge />
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-sm truncate">{displayName(conversation)}</p>
+                    <p className="font-medium text-sm truncate min-w-0 max-w-full">{displayName(conversation)}</p>
                     <span className="text-[10px] font-semibold text-channel-ig">{CHANNELS.ig.name}</span>
                   </div>
                   {/* IG-LINK.1 — Instagram has no phone/email to match on, so
@@ -408,29 +408,31 @@ export default function IGInbox({ locationId, timezone = null, initialConversati
                   )}
                 </div>
               </div>
-              <div className="shrink-0 flex items-center gap-3">
-                {/* INBOXFOLLOW.2 — snooze until a time; a snoozed thread waits. */}
-                {conversation && !conversation.resolved_at && (
-                  <SnoozeControl
-                    channel="ig"
-                    conversation={conversation}
-                    zone={timezone}
-                    onChanged={() => { threadSigRef.current = ''; loadThread(selectedId); loadConversations(); onThreadChanged?.() }}
-                  />
-                )}
-                {conversation && (
-                  <button
-                    onClick={() => toggleResolved(conversation)}
-                    className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition-colors ${
-                      conversation.resolved_at
-                        ? 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
-                        : 'bg-green-600 border-transparent text-white hover:bg-green-700'
-                    }`}
-                  >
-                    <Check size={11} />
-                    {conversation.resolved_at ? 'Reopen' : 'Resolve'}
-                  </button>
-                )}
+              <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 min-w-0 max-w-full ml-auto">
+                <div className="flex items-center gap-3 shrink-0">
+                  {/* INBOXFOLLOW.2 — snooze until a time; a snoozed thread waits. */}
+                  {conversation && !conversation.resolved_at && (
+                    <SnoozeControl
+                      channel="ig"
+                      conversation={conversation}
+                      zone={timezone}
+                      onChanged={() => { threadSigRef.current = ''; loadThread(selectedId); loadConversations(); onThreadChanged?.() }}
+                    />
+                  )}
+                  {conversation && (
+                    <button
+                      onClick={() => toggleResolved(conversation)}
+                      className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition-colors ${
+                        conversation.resolved_at
+                          ? 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
+                          : 'bg-green-600 border-transparent text-white hover:bg-green-700'
+                      }`}
+                    >
+                      <Check size={11} />
+                      {conversation.resolved_at ? 'Reopen' : 'Resolve'}
+                    </button>
+                  )}
+                </div>
                 {/* INBOXASSIGN.1 — who owns this thread (same control as WhatsApp). */}
                 {conversation && (
                   <AssignControl channel="instagram" conversationId={conversation.id} assignedTo={conversation.assigned_to || null} />

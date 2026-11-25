@@ -962,12 +962,12 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
         ) : (
           <>
             {/* Chat header */}
-            <div className="px-5 py-3 border-b border-un1t-border bg-un1t-surface flex items-center justify-between gap-3 shrink-0">
-              <div className="flex items-center gap-3 min-w-0">
+            <div className="px-5 py-3 border-b border-un1t-border bg-un1t-surface flex flex-wrap items-center justify-between gap-x-3 gap-y-2 shrink-0">
+              <div className="flex items-center gap-3 min-w-0 flex-1 basis-48">
                 <ChannelAvatar channel="wa" initials={initialsOf(headerName)} badge />
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-semibold text-sm truncate">
+                    <p className="font-semibold text-sm truncate min-w-0 max-w-full">
                       {headerName}
                     </p>
                     {isUnknown && (
@@ -996,7 +996,7 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-2 min-w-0 max-w-full ml-auto">
                 {/* INBOXASSIGN.1 — who owns this thread. */}
                 {conversation && (
                   <AssignControl channel="whatsapp" conversationId={conversation.id} assignedTo={conversation.assigned_to || null} />
@@ -1011,28 +1011,30 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
                 {conversation && (
                   <MiaDecisionTrace conversationId={conversation.id} />
                 )}
-                {/* INBOXFOLLOW.2 — snooze until a time; a snoozed thread waits. */}
-                {conversation && !conversation.resolved_at && (
-                  <SnoozeControl
-                    channel="wa"
-                    conversation={conversation}
-                    zone={timezone}
-                    onChanged={() => { threadSigRef.current = ''; fetchMessages(selectedId); fetchConversations(); onThreadChanged?.() }}
-                  />
-                )}
-                {conversation && (
-                  <button
-                    onClick={() => toggleResolved(conversation)}
-                    className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${
-                      conversation.resolved_at
-                        ? 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
-                        : 'bg-green-600 border-transparent text-white hover:bg-green-700'
-                    }`}
-                  >
-                    <Check size={12} />
-                    {conversation.resolved_at ? 'Reopen' : 'Resolve'}
-                  </button>
-                )}
+                <div className="flex items-center gap-2 shrink-0">
+                  {/* INBOXFOLLOW.2 — snooze until a time; a snoozed thread waits. */}
+                  {conversation && !conversation.resolved_at && (
+                    <SnoozeControl
+                      channel="wa"
+                      conversation={conversation}
+                      zone={timezone}
+                      onChanged={() => { threadSigRef.current = ''; fetchMessages(selectedId); fetchConversations(); onThreadChanged?.() }}
+                    />
+                  )}
+                  {conversation && (
+                    <button
+                      onClick={() => toggleResolved(conversation)}
+                      className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${
+                        conversation.resolved_at
+                          ? 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
+                          : 'bg-green-600 border-transparent text-white hover:bg-green-700'
+                      }`}
+                    >
+                      <Check size={12} />
+                      {conversation.resolved_at ? 'Reopen' : 'Resolve'}
+                    </button>
+                  )}
+                </div>
                 {conversation && (
                   <div className="relative">
                     <button
