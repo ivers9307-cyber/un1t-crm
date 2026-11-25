@@ -50,7 +50,6 @@ export async function listConversations(locationId) {
   const [latestRes, activeRes] = await Promise.all([latest, active])
   if (latestRes.error) return { success: false, error: latestRes.error.message }
   if (activeRes.error) {
-    // eslint-disable-next-line no-console
     console.warn('whatsapp list: active-set read failed, showing the newest 100', activeRes.error.message)
     return { success: true, data: latestRes.data }
   }

@@ -114,6 +114,41 @@ describe('inbox follow-up columns on whatsapp_conversations (INBOXFOLLOW.1, mig 
   })
 })
 
+describe('inbox follow-up columns on instagram_conversations (INBOXFOLLOW.1, mig 874)', () => {
+  // The Instagram twin of the WhatsApp cases above. Its read rule is
+  // ig_conv_select: any active member of the studio (no inbox permission is
+  // asked of a direct read); every write is denied to client sessions by the
+  // ig_conv_deny_* policies, so an update matches no rows rather than raising.
+  const COLS = 'customer_waiting_since, staff_owned_since, staff_waiting_since, staff_nudged_at, staff_nudge_outcome, handoff_requested_at, snoozed_until, snoozed_by, snooze_note'
+  const ig = R(480)
+  beforeAll(async () => {
+    await db.seed('instagram_conversations', [[ig.a, A], [ig.b, B], [ig.c, C]].map(([rowId, location_id]) => ({ id: rowId, location_id })))
+    await db.pg.query(`update public.instagram_conversations set staff_waiting_since = now(), snooze_note = 'later' where id in ('${ig.a}', '${ig.b}', '${ig.c}')`)
+  })
+  it('inbox staff read them at their own studio and not at another', async () => {
+    const own = await read('receptionA', `select id, ${COLS} from public.instagram_conversations`)
+    expect(own.map((r) => r.id)).toEqual([ig.a])
+    expect(own[0].snooze_note).toBe('later')
+    expect(own[0].staff_waiting_since).toBeTruthy()
+    expect((await read('staffB', `select id from public.instagram_conversations`)).map((r) => r.id)).toEqual([ig.b])
+    expect(letters(await read('master', `select id from public.instagram_conversations`), ig)).toBe('abc')
+  })
+  it('a session that is not an active member of the studio sees nothing', async () => {
+    for (const who of ['inactiveA', 'deletedA', 'member', 'stranger']) {
+      expect(await read(who, `select ${COLS} from public.instagram_conversations`)).toEqual([])
+    }
+  })
+  it('no signed-in session can update them: the write matches no row and the value stays', async () => {
+    expect(await read('receptionA', `update public.instagram_conversations set staff_waiting_since = null where id = '${ig.a}' returning id`)).toEqual([])
+    expect(await read('managerA', `update public.instagram_conversations set snoozed_until = now() where id = '${ig.a}' returning id`)).toEqual([])
+    expect(await read('master', `update public.instagram_conversations set snooze_note = 'x' returning id`)).toEqual([])
+    const { rows } = await db.pg.query(`select staff_waiting_since, snoozed_until, snooze_note from public.instagram_conversations where id = '${ig.a}'`)
+    expect(rows[0].staff_waiting_since).toBeTruthy()
+    expect(rows[0].snoozed_until).toBeNull()
+    expect(rows[0].snooze_note).toBe('later')
+  })
+})
+
 describe('contacts', () => {
   it.each([
     ['master', 'abcx'], ['ownerA', 'ax'], ['managerA', 'ax'], ['headA', 'ax'], ['receptionA', 'ax'], ['staffA', 'ax'],

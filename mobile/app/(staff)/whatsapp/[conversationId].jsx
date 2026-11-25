@@ -38,12 +38,13 @@ import { useAuth } from '../../../lib/auth-context'
 import {
   getThread, isWindowOpen, sendText, sendTemplate, listTemplates,
   resolveConversation, rateAgentMessage, setBlocked,
-  reactToInboundMessage, listCardSets, sendCardSet, sendBookingFlow,
+  reactToInboundMessage, listCardSets, sendCardSet, sendBookingFlow, snoozeConversation,
 } from '../../../lib/whatsapp-api'
 import { listConversationApprovals } from '../../../lib/inbox-approvals-api'
 import { sendWarningsNotice } from '../../../lib/wa-send-warnings'
 import { needsReply, needsMiaHelp } from '../../../lib/inbox'
 import { threadLocationId } from '../../../lib/wa-thread-location'
+import { locationZoneResolver } from '../../../lib/studio-zone'
 import { mergeTimeline } from 'shared/approval-cards'
 import { groupWaTemplates, UNGROUPED_LABEL, templateBodyText } from 'shared/wa-template-groups'
 import {
@@ -52,11 +53,12 @@ import {
 } from 'shared/wa-template-send'
 import MessageBubble from '../../../components/MessageBubble'
 import ThreadApprovalCard from '../../../components/ThreadApprovalCard'
+import ThreadFollowupBar from '../../../components/ThreadFollowupBar'
 
 export default function Conversation() {
   const { conversationId } = useLocalSearchParams()
   const router = useRouter()
-  const { activeLocation } = useAuth()
+  const { activeLocation, locations } = useAuth()
   const headerHeight = useHeaderHeight()
   const insets = useSafeAreaInsets()
   const [conv, setConv] = useState(null)
@@ -382,6 +384,17 @@ export default function Conversation() {
         </View>
       ) : (
         <>
+          {/* INBOXFOLLOW.4 — who has the thread, and Snooze. The studio's
+              zone is the conversation's own studio when it is one the phone
+              holds, else the active studio's. */}
+          <ThreadFollowupBar
+            conv={conv}
+            channel="wa"
+            zone={locationZoneResolver({ locations, activeLocation })(conv?.location_id)}
+            snooze={body => snoozeConversation(conversationId, body, locationId)}
+            onChanged={refresh}
+          />
+
           {/* Agent handoff banner — Mia escalated this thread and is
               muted until a human resolves it. */}
           {needsMiaHelp(conv) && (
