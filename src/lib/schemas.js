@@ -12,6 +12,7 @@ import { PURPOSE_KEYS } from './whatsapp-purpose-templates'
 import { CONSENT_COPY_MAX } from './whatsapp-consent-copy'
 import { MIA_OFFER_BLURB_MAX, MIA_OFFERS_MAX } from './agent/mia-offer-limits'
 import { isUsageFeature } from '@shared/usage-features'
+import { SNOOZE_NOTE_MAX } from '@shared/inbox-snooze'
 
 // UUID-shaped string matching what Postgres's uuid type accepts. See
 // src/lib/validate.js for the rationale (Zod 4's .uuid() is RFC-strict
@@ -637,4 +638,13 @@ export const followupActionSchema = z.object({
 export const entryOptionsQuerySchema = z.object({
   type: z.string().trim().min(1).max(40),
   match: z.string().trim().min(1).max(40).optional(),
+})
+
+// INBOXFOLLOW.2 — POST /api/{whatsapp,instagram}/conversations/[id]/snooze.
+// `until: null` unsnoozes (and ignores `note`). The shape is checked here; that
+// the instant is in the future and at most SNOOZE_MAX_DAYS ahead is judged in
+// the route against the server's clock (snoozeUntilProblem, shared/inbox-snooze).
+export const SnoozeSchema = z.object({
+  until: z.iso.datetime({ offset: true }).nullable(),
+  note: z.string().trim().max(SNOOZE_NOTE_MAX).nullish().transform((v) => v || null),
 })
