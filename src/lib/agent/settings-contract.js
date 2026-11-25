@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import {
   STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS, isKnownOverridePath, expandOverridden,
-  TRIAL_DONE_MIA_INSTRUCTION_DEFAULT,
+  TRIAL_DONE_MIA_INSTRUCTION_DEFAULT, STAFF_THREADS_STUDIO_ONLY_FIELDS, withoutStudioOnlyStaffThreads,
 } from './settings-overrides'
 import { UUID_SHAPE } from '../uuid-shape'
 
@@ -587,6 +587,14 @@ export function orgSettingsRefusals(settings, overridden = []) {
     for (const k of Object.keys(settings)) {
       if (ORG_REFUSED_KEYS.has(k)) issues.push({ path: `settings.${k}`, message: 'Set per studio, not for the organisation' })
     }
+    // INBOXFOLLOW.3 — the staff-thread nudge's switch and template are set per
+    // studio (they send messages to customers); only its quiet period is shared.
+    const st = settings.followups?.staff_threads
+    if (st && typeof st === 'object') {
+      for (const f of STAFF_THREADS_STUDIO_ONLY_FIELDS) {
+        if (f in st) issues.push({ path: `settings.followups.staff_threads.${f}`, message: 'Set per studio, not for the organisation' })
+      }
+    }
     const q = settings.quiet_hours
     if (q && typeof q === 'object' && 'off' in q) {
       issues.push({ path: 'settings.quiet_hours.off', message: 'Only a studio can switch quiet hours off' })
@@ -614,6 +622,12 @@ export function buildOrgLayer(data = {}, overridden = [], { sent = data } = {}) 
   const paths = overridden.filter((p) => p !== 'quiet_hours.off' && p !== 'quiet_hours.tz')
   const blob = buildStudioOverrideBlob(data, paths, { sent })
   for (const k of ORG_REFUSED_KEYS) delete blob[k]
+  if (blob.followups?.staff_threads) {
+    const st = withoutStudioOnlyStaffThreads(blob.followups.staff_threads)
+    if (st) blob.followups.staff_threads = st
+    else delete blob.followups.staff_threads
+    if (!Object.keys(blob.followups).length) delete blob.followups
+  }
   if (blob.quiet_hours) {
     const { start, end } = blob.quiet_hours
     if (start && end) blob.quiet_hours = { start, end }

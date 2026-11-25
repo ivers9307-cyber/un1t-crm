@@ -4,7 +4,7 @@
 // missing from the contract is silently dropped on the first settings save.
 import { describe, it, expect } from 'vitest'
 import { createFakeDb } from '../../../tests/helpers/fake-db'
-import { StudioSettingsSchema, OrgSettingsSchema } from './settings-contract'
+import { StudioSettingsSchema, OrgSettingsSchema, orgSettingsRefusals, buildOrgLayer } from './settings-contract'
 import { resolveAgentSettingsForLocation } from './settings-resolve'
 import { followupConfigFromSettings } from '@/lib/inbox-followup-config'
 
@@ -39,15 +39,38 @@ describe('followups.staff_threads', () => {
     expect(followupConfigFromSettings(out.settings)).toEqual({ quietHours: 48, nudgeEnabled: false })
   })
 
-  it('an organisation layer may carry it, and the studio object replaces it whole', async () => {
+  it('the nudge switch and template are studio-only: an organisation layer never turns them on', async () => {
     const orgLayer = { followups: { staff_threads: { quiet_after_hours: 24, nudge_enabled: true, template_name: 'org_tpl' } } }
     expect(OrgSettingsSchema.safeParse(orgLayer).success).toBe(true)
     const db = createFakeDb({ tables: { org_settings: [{ organization_id: 'org-1', customer_agent: orgLayer }] } })
 
+    // Studio silent: the quiet period is inherited, the switch and template are not.
     const inherited = await resolveAgentSettingsForLocation(db, location({ enabled: true }, 'org-1'))
-    expect(inherited.settings.followups.staff_threads).toEqual(orgLayer.followups.staff_threads)
+    const st = inherited.settings.followups.staff_threads
+    expect(st.quiet_after_hours).toBe(24)
+    expect(st.nudge_enabled ?? false).toBe(false)
+    expect(st.template_name ?? null).toBe(null)
+    expect(followupConfigFromSettings(inherited.settings)).toEqual({ quietHours: 24, nudgeEnabled: false })
+    // What the settings screen reads as the organisation's values carries no switch either.
+    expect(inherited.org.followups.staff_threads).toEqual({ quiet_after_hours: 24 })
 
-    const own = await resolveAgentSettingsForLocation(db, location({ enabled: true, followups: { staff_threads: STAFF } }, 'org-1'))
-    expect(own.settings.followups.staff_threads).toEqual(STAFF)
+    // Studio sets its own switch and template: those win; the quiet period still shows through.
+    const own = await resolveAgentSettingsForLocation(db, location({
+      enabled: true, followups: { staff_threads: { nudge_enabled: true, template_name: 'own_tpl' } },
+    }, 'org-1'))
+    expect(own.settings.followups.staff_threads).toEqual({ quiet_after_hours: 24, nudge_enabled: true, template_name: 'own_tpl' })
+
+    // Studio sets everything: its own values.
+    const full = await resolveAgentSettingsForLocation(db, location({ enabled: true, followups: { staff_threads: STAFF } }, 'org-1'))
+    expect(full.settings.followups.staff_threads).toEqual(STAFF)
+  })
+
+  it('the organisation editor path refuses the two studio-only fields', () => {
+    const issues = orgSettingsRefusals({ followups: { staff_threads: { quiet_after_hours: 24, nudge_enabled: true } } })
+    expect(issues.map((i) => i.path)).toEqual(['settings.followups.staff_threads.nudge_enabled'])
+    expect(orgSettingsRefusals({ followups: { staff_threads: { template_name: 'x' } } })).toHaveLength(1)
+    expect(orgSettingsRefusals({ followups: { staff_threads: { quiet_after_hours: 24 } } })).toEqual([])
+    const layer = buildOrgLayer({ followups: { staff_threads: STAFF } }, ['followups.staff_threads'])
+    expect(layer.followups.staff_threads).toEqual({ quiet_after_hours: 72 })
   })
 })

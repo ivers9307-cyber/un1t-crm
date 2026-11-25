@@ -68,6 +68,20 @@ export const INHERITABLE_OBJECT_FIELDS = Object.freeze({
   quiet_hours: Object.freeze(['start', 'end', 'tz', 'off']),
 })
 
+// INBOXFOLLOW.3 — followups.staff_threads is inheritable ONLY for its quiet
+// period. The switch that lets Mia message customers on threads a coach took
+// over, and its template, are set per studio: the resolver ignores them at the
+// org layer, the org editor's PUT refuses them, and an org save never stores
+// them (same shape as quiet_hours.off above, but one level deeper).
+export const STAFF_THREADS_STUDIO_ONLY_FIELDS = Object.freeze(['nudge_enabled', 'template_name'])
+
+/** A staff_threads object with the studio-only fields removed; null when nothing is left. */
+export function withoutStudioOnlyStaffThreads(st) {
+  if (st === null || typeof st !== 'object' || Array.isArray(st)) return null
+  const rest = Object.fromEntries(Object.entries(st).filter(([k, v]) => !STAFF_THREADS_STUDIO_ONLY_FIELDS.includes(k) && v !== null && v !== undefined))
+  return Object.keys(rest).length ? rest : null
+}
+
 // Every other DEFAULTS key: a plain value the org may supply (pinned against
 // DEFAULTS by settings-contract.test.js).
 export const INHERITABLE_SCALAR_KEYS = Object.freeze([
