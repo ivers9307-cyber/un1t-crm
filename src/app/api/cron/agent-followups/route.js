@@ -1,5 +1,6 @@
 import { defineCron } from '@/lib/define-cron'
 import { runAgentFollowups, runFirstClassCheckins } from '@/lib/agent/followups'
+import { runStaffThreadNudges } from '@/lib/agent/staff-nudges'
 import { runHandoffSlaSweep, runHandoffAutoResolve } from '@/lib/agent/handoff-sla'
 import { runApprovalsSlaSweep } from '@/lib/agent/approvals-sla'
 import { rollupCheckinDay } from '@/lib/agent/checkin-day-rollup'
@@ -47,6 +48,15 @@ export const GET = defineCron({ heartbeat: 'agent-followups' }, async ({ db }) =
     armErrors.push('checkins')
     logError('cron-agent-followups', 'checkins arm failed', { err: e })
   }
+  // INBOXFOLLOW.3 — same tick, independent failure domain: the one nudge Mia may
+  // send on a thread a coach took over (off per studio until staff_threads.nudge_enabled).
+  let staffNudges = null
+  try {
+    staffNudges = await runStaffThreadNudges(db)
+  } catch (e) {
+    armErrors.push('staff_nudges')
+    logError('cron-agent-followups', 'staff-thread nudges arm failed', { err: e })
+  }
   // TRIALDONE.4 — same tick, independent failure domain: the trial-done
   // opener at un1t.online studios that switched it on (default off).
   let trialDone = null
@@ -62,7 +72,7 @@ export const GET = defineCron({ heartbeat: 'agent-followups' }, async ({ db }) =
   // defineCron stamps it under its own catch. A tick with nothing to send stamps.
   const arms = trialDoneArmHealthy(trialDone) ? [{ heartbeat: TRIAL_DONE_HEARTBEAT, outcome: trialDone }] : []
   try {
-    return { ...(await runLaterArms(db, { results, checkins, trialDone, armErrors })), arms }
+    return { ...(await runLaterArms(db, { results, checkins, staffNudges, trialDone, armErrors })), arms }
   } catch (err) {
     // A later step that throws answers 500 and stamps no 'agent-followups'
     // (as before); the trial-done arm keeps its stamp.
@@ -72,7 +82,7 @@ export const GET = defineCron({ heartbeat: 'agent-followups' }, async ({ db }) =
 })
 
 /** The SLA arms, the check-in day rollup and the tick's own result. */
-async function runLaterArms(db, { results, checkins, trialDone, armErrors }) {
+async function runLaterArms(db, { results, checkins, staffNudges, trialDone, armErrors }) {
   // AGENT-HANDOFF-SLA.1 — same tick, independent failure domain: re-alert
   // managers about handed-off threads no human has picked up.
   let handoffSla = null
@@ -135,7 +145,7 @@ async function runLaterArms(db, { results, checkins, trialDone, armErrors }) {
     ok: armErrors.length === 0,
     stamp: true,
     status: 200,
-    outcome: { followups: results, checkins, checkins_day: checkinsDay, trial_done: trialDone, handoffSla, autoResolve, approvalsSla, ...failures },
-    body: { results, checkins, trial_done: trialDone, handoffSla, autoResolve, approvalsSla, ...failures },
+    outcome: { followups: results, checkins, staff_nudges: staffNudges, checkins_day: checkinsDay, trial_done: trialDone, handoffSla, autoResolve, approvalsSla, ...failures },
+    body: { results, checkins, staff_nudges: staffNudges, trial_done: trialDone, handoffSla, autoResolve, approvalsSla, ...failures },
   }
 }
