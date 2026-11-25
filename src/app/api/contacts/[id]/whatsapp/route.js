@@ -233,7 +233,7 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
   })
   // Manual operator send = intentional human take-over → pause Mia in this
   // thread (auto re-arms after the cooldown / on resolve). Same as the inbox.
-  await db.from('whatsapp_conversations').update({
+  const { error: convUpdateError } = await db.from('whatsapp_conversations').update({
     last_message_at: nowIso,
     last_message_direction: 'outbound',
     last_message_preview: messageBody?.substring(0, 100),
@@ -241,6 +241,12 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
     // INBOXFOLLOW.2 — a person has acted, so the thread leaves "Mia needs help" (not a thread reply: no follow-up ladder).
     handoff_requested_at: null,
   }).eq('id', conversation.id)
+  // The message has gone: a failed bookkeeping write is logged, never the response.
+  if (convUpdateError) {
+    logError('contact-whatsapp-send', 'conversation update after send failed', {
+      contactId, conversationId: conversation.id, locationId: studioId, err: convUpdateError.message,
+    })
+  }
   // Timeline activity — mirrors the ad-hoc SMS surface so the
   // contact's timeline shows the send. Best-effort: the message is
   // already delivered, so a log failure must not fail the response.

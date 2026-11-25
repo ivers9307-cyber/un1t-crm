@@ -39,6 +39,7 @@ vi.mock('@/lib/permissions', () => {
 })
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 // WACONFIGFALLBACK.1 — the route checks the location's OWN number before
 // opening a thread; the default is "has one" (the no-number case is at the end).
 // WAREPLYNUMBER.1 review — the thread's own number (null = none recorded);
@@ -113,6 +114,7 @@ function echoInsert() {
 }
 
 const convUpdates = []
+let convUpdateError = null // set by a test to make the post-send conversation update fail
 
 function makeDb(messageInsertSpy, { contact = CONTACT, conversation = CONVERSATION } = {}) {
   return {
@@ -144,7 +146,7 @@ function makeDb(messageInsertSpy, { contact = CONTACT, conversation = CONVERSATI
             }),
           }),
           // post-send update: .update().eq()
-          update: (patch) => { convUpdates.push(patch); return { eq: () => Promise.resolve({ data: null, error: null }) } },
+          update: (patch) => { convUpdates.push(patch); return { eq: () => Promise.resolve({ data: null, error: convUpdateError }) } },
         }
       }
       if (table === 'whatsapp_messages') {
@@ -180,6 +182,7 @@ beforeEach(() => {
   hasMobilePermission.mockReturnValue(true)
   getCurrentUser.mockResolvedValue(STAFF)
   convUpdates.length = 0
+  convUpdateError = null
 })
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
@@ -208,6 +211,18 @@ describe('POST /api/contacts/[id]/whatsapp', () => {
     expect(res.status).toBe(200)
     expect(convUpdates[0]).toMatchObject({ handoff_requested_at: null })
     expect(Object.keys(convUpdates[0]).filter((k) => k.startsWith('staff_'))).toEqual([])
+  })
+})
+
+describe('POST /api/contacts/[id]/whatsapp — a failed conversation update after the send', () => {
+  it('is logged with the route logger and never fails the response (the message has gone)', async () => {
+    const { logError } = await import('@/lib/log')
+    convUpdateError = { code: '57014', message: 'statement timeout' }
+    createServerClient.mockReturnValue(makeDb(echoInsert()))
+    const res = await POST(postReq({ text: 'Hi Casey' }), props)
+    expect(res.status).toBe(200)
+    expect((await res.json()).success).toBe(true)
+    expect(logError).toHaveBeenCalledWith('contact-whatsapp-send', 'conversation update after send failed', expect.objectContaining({ conversationId: CONV_ID, err: 'statement timeout' }))
   })
 })
 
