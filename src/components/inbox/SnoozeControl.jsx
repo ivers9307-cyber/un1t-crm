@@ -86,6 +86,9 @@ export default function SnoozeControl({ channel, conversation, zone, onChanged }
         onChanged?.()
       } else {
         setError(data?.error || SAVE_FAILED)
+        // A refused snooze (409: a newer message) refreshes the thread so the
+        // retry carries the fresh last_message_at; the popover stays open.
+        if (res.status === 409) onChanged?.()
       }
     } catch {
       setError(SAVE_FAILED)

@@ -106,6 +106,21 @@ describe('SnoozeControl', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('A new message arrived. Check it before snoozing.'))
   })
 
+  it('a 409 shows its message, keeps the popover open and refreshes the thread once; other errors do not refresh', async () => {
+    const onChanged = vi.fn()
+    fetchMock.mockResolvedValueOnce(reply({ success: false, error: 'A new message arrived. Check it before snoozing.' }, false, 409))
+    render(<SnoozeControl channel="wa" conversation={conv()} zone="Europe/Dublin" onChanged={onChanged} />)
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Later today' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('A new message arrived. Check it before snoozing.'))
+    expect(onChanged).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('group', { name: 'Snooze this conversation' })).toBeTruthy()
+    fetchMock.mockResolvedValueOnce(reply({ success: false, error: 'Conversation is completed' }, false, 400))
+    fireEvent.click(screen.getByRole('button', { name: 'In 3 days' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Conversation is completed'))
+    expect(onChanged).toHaveBeenCalledTimes(1)
+  })
+
   it('Escape closes the popover and returns focus to the Snooze button', () => {
     render(<SnoozeControl channel="wa" conversation={conv()} zone="Europe/Dublin" />)
     open()
