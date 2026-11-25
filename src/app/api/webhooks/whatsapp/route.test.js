@@ -519,7 +519,8 @@ describe('POST /api/webhooks/whatsapp — inbox follow-up stamps', () => {
       snoozed_until: null, snoozed_by: null, snooze_note: null,
       staff_waiting_since: null, staff_nudged_at: null, staff_nudge_outcome: null,
     })
-    expect(typeof stamp.customer_waiting_since).toBe('string')
+    // the wait starts at the message's own time (timestamp 1770000000), not at webhook time
+    expect(stamp.customer_waiting_since).toBe(new Date(1770000000 * 1000).toISOString())
   })
 
   it('keeps the thread\'s existing customer_waiting_since', async () => {

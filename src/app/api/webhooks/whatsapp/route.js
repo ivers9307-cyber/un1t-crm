@@ -783,7 +783,8 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     last_message_direction: 'inbound',
     last_message_preview: body?.substring(0, 100) || `[${messageType}]`,
     resolved_at: null,
-    ...inboundPatch(existingWaiting, new Date().toISOString()),
+    // the message's own time, so a delayed webhook does not shorten the wait
+    ...inboundPatch(existingWaiting, timestamp.toISOString()),
     // AGENT-FOLLOWUP.1 — a reply ends the quiet-cycle: the ladder
     // starts fresh from this message.
     agent_followup_stage: 0,

@@ -522,7 +522,8 @@ export async function handleInstagramInbound(db, event) {
         last_message_direction: 'inbound',
         resolved_at: null,
         last_message_preview: previewText,
-        ...inboundPatch(existingConv, new Date().toISOString()),
+        // the message's own time, so a delayed webhook does not shorten the wait
+        ...inboundPatch(existingConv, ts),
       }).eq('id', conversationId)
   if (inboundStampErr) console.error(`[instagram inbound] conversation stamp failed for ${conversationId}:`, inboundStampErr.message)
   // Atomic unread bump (best-effort) — replaces the read-modify-write above.

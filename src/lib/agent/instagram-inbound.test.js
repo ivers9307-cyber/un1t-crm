@@ -261,6 +261,15 @@ describe('handleInstagramInbound — inbox follow-up stamps', () => {
     expect(row.customer_waiting_since).toBe(new Date(NOW_ISH).toISOString())
   })
 
+  it("a first inbound starts the customer wait at the message's own time, not webhook time", async () => {
+    const db = igDb({ convLookups: [{ id: 'conv-1' }] })
+    const sentAt = NOW_ISH - 600_000
+    await handleInstagramInbound(db, { ...EVENT, timestamp: sentAt })
+    const row = db.updates.find((u) => u.table === 'instagram_conversations').row
+    expect(row.customer_waiting_since).toBe(new Date(sentAt).toISOString())
+    expect(row.last_message_at).toBe(new Date(sentAt).toISOString())
+  })
+
   it('a low-signal inbound carries no follow-up stamp', async () => {
     const db = igDb({ convLookups: [{ id: 'conv-1' }] })
     await handleInstagramInbound(db, { accountId: 'IGBIZ1', customerId: 'CUST1', messageId: 'mid-sm2', text: '', type: 'story_mention', mediaUrl: 'https://cdn.ig/s.jpg', isEcho: false, isStoryReply: false })
