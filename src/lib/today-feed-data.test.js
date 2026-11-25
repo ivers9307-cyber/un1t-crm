@@ -78,19 +78,19 @@ function makeDb(overrides = {}) {
 // entirely and the whole reason SIDEBAR-BADGES.2 fixed the nav badge.
 const NEEDS_REPLY_BUT_READ = {
   id: 'w1', location_id: LOC, resolved_at: null, last_message_at: '2026-08-14T09:00:00Z',
-  last_message_direction: 'inbound', agent_handed_off_at: null, unread_count: 0,
+  last_message_direction: 'inbound', handoff_requested_at: null, unread_count: 0,
 }
 // unread_count is high but the thread is already resolved — must NOT count,
 // even though the old implementation's query never checked resolved_at.
 const UNREAD_BUT_RESOLVED = {
   id: 'w2', location_id: LOC, resolved_at: '2026-08-13T00:00:00Z', last_message_at: '2026-08-13T09:00:00Z',
-  last_message_direction: 'inbound', agent_handed_off_at: null, unread_count: 5,
+  last_message_direction: 'inbound', handoff_requested_at: null, unread_count: 5,
 }
 // handed off to a human, unresolved, last message was the agent's own — the
 // other case a raw-unread sum could never see.
 const AGENT_HANDOFF = {
   id: 'w3', location_id: LOC, resolved_at: null, last_message_at: '2026-08-14T08:00:00Z',
-  last_message_direction: 'outbound', agent_handed_off_at: '2026-08-14T08:00:00Z', unread_count: 0,
+  last_message_direction: 'outbound', handoff_requested_at: '2026-08-14T08:00:00Z', unread_count: 0,
 }
 
 beforeEach(() => {

@@ -126,7 +126,8 @@ function isToday(iso) {
 
 const CHIP_BADGE_COLORS = {
   needs_reply: 'bg-green-500',
-  handoff: 'bg-amber-500',
+  mia_help: 'bg-amber-500',
+  waiting: 'bg-slate-400',
   pending_approval: 'bg-purple-500',
 }
 
@@ -259,7 +260,8 @@ export default function WhatsApp() {
           />
           <Text className="text-sm text-un1t-subtle mt-2">
             {queue === 'all' ? 'No conversations yet.'
-              : queue === 'handoff' ? 'No conversations waiting on a human.'
+              : queue === 'mia_help' ? 'Nothing Mia needs help with.'
+              : queue === 'waiting' ? 'Nothing waiting on a customer.'
               : queue === 'pending_approval' ? 'No requests waiting for approval.'
               : 'Queue clear — nothing needs a reply.'}
           </Text>
