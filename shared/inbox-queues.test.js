@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   DEFAULT_FOLLOWUP_CFG, NUDGE_GRACE_HOURS, QUEUES,
-  isSnoozed, returnAtMs, returnReason, needsReply, needsMiaHelp,
+  isSnoozed, snoozeEnded, returnAtMs, returnReason, needsReply, needsMiaHelp,
   isWaiting, needsAction, hasPendingApproval, waitSinceMs, sortNeedsReply,
   windowState, handledBy, filterByQueue, queueCounts,
 } from './inbox-queues'
@@ -161,6 +161,24 @@ describe('needsReply / isWaiting / needsAction', () => {
   })
 })
 
+describe('boundaries', () => {
+  it('a thread exactly at returnAt has returned', () => {
+    const c = staffReplied(10)
+    const at = returnAtMs(c, Q48, 'wa')
+    expect(isWaiting(c, at - 1, Q48, 'wa')).toBe(true)
+    expect(needsReply(c, at - 1, Q48, 'wa')).toBe(false)
+    expect(isWaiting(c, at, Q48, 'wa')).toBe(false)
+    expect(needsReply(c, at, Q48, 'wa')).toBe(true)
+    expect(returnReason(c, at, Q48, 'wa')).toBe('gone_quiet')
+  })
+  it('a snooze with snoozed_until === now is not snoozed', () => {
+    const c = inbound({ snoozed_until: new Date(NOW).toISOString() })
+    expect(isSnoozed(c, NOW)).toBe(false)
+    expect(needsReply(c, NOW, Q48, 'wa')).toBe(true)
+    expect(isSnoozed(c, NOW - 1)).toBe(true)
+  })
+})
+
 describe('needsMiaHelp', () => {
   it('reads handoff_requested_at on unresolved threads', () => {
     expect(needsMiaHelp({ handoff_requested_at: ago(1) })).toBe(true)
@@ -267,5 +285,108 @@ describe('filterByQueue / queueCounts', () => {
     const ig = staffReplied(60, { id: 'ig', _ch: 'ig' })
     const phoneIg = staffReplied(60, { id: 'pig', channel: 'instagram' })
     expect(filterByQueue([wa, ig, phoneIg], 'needs_reply', NOW, Q48N).map(c => c.id)).toEqual(['ig', 'pig'])
+  })
+})
+
+describe('a snoozed Mia hand-off', () => {
+  const handoff = (extra = {}) => staffReplied(1, { handoff_requested_at: ago(2), ...extra })
+  it('is Waiting, not Mia needs help, not needs-action, while snoozed', () => {
+    const c = handoff({ snoozed_until: ahead(5) })
+    expect(needsMiaHelp(c, NOW)).toBe(false)
+    expect(needsAction(c, NOW, Q48, 'wa')).toBe(false)
+    expect(isWaiting(c, NOW, Q48, 'wa')).toBe(true)
+    expect(filterByQueue([c], 'mia_help', NOW, Q48)).toEqual([])
+    expect(filterByQueue([c], 'waiting', NOW, Q48)).toEqual([c])
+    expect(queueCounts([c], NOW, Q48)).toMatchObject({ needs_reply: 0, mia_help: 0, waiting: 1 })
+  })
+  it('is back in Mia needs help when the snooze ends', () => {
+    const c = handoff({ snoozed_until: ahead(5) })
+    const later = NOW + 5 * H
+    expect(needsMiaHelp(c, later)).toBe(true)
+    expect(needsAction(c, later, Q48, 'wa')).toBe(true)
+    expect(filterByQueue([c], 'mia_help', later, Q48)).toEqual([c])
+    expect(queueCounts([c], later, Q48).mia_help).toBe(1)
+  })
+})
+
+describe('an ended snooze is a reminder that comes back', () => {
+  // A coach sent something from the contact page, then snoozed it.
+  const reminder = (extra = {}) => ({
+    id: 'r', last_message_at: ago(30), last_message_direction: 'outbound',
+    staff_waiting_since: null, handoff_requested_at: null, resolved_at: null,
+    snoozed_until: ago(2), snooze_note: 'check paid Friday', ...extra,
+  })
+
+  it('snoozeEnded is true from the moment the time comes, false before and when unset', () => {
+    expect(snoozeEnded({ snoozed_until: ago(1) }, NOW)).toBe(true)
+    expect(snoozeEnded({ snoozed_until: new Date(NOW).toISOString() }, NOW)).toBe(true)
+    expect(snoozeEnded({ snoozed_until: ahead(1) }, NOW)).toBe(false)
+    expect(snoozeEnded({ snoozed_until: null }, NOW)).toBe(false)
+    expect(snoozeEnded(null, NOW)).toBe(false)
+  })
+
+  it('outbound-last, no ladder: Needs reply, counted, reason snooze_ended, not Waiting', () => {
+    const c = reminder()
+    expect(needsReply(c, NOW, Q48, 'wa')).toBe(true)
+    expect(needsAction(c, NOW, Q48, 'wa')).toBe(true)
+    expect(returnReason(c, NOW, Q48, 'wa')).toBe('snooze_ended')
+    expect(isWaiting(c, NOW, Q48, 'wa')).toBe(false)
+    expect(filterByQueue([c], 'needs_reply', NOW, Q48)).toHaveLength(1)
+  })
+
+  it('still snoozed it is Waiting, not Needs reply', () => {
+    const c = reminder({ snoozed_until: ahead(2) })
+    expect(needsReply(c, NOW, Q48, 'wa')).toBe(false)
+    expect(isWaiting(c, NOW, Q48, 'wa')).toBe(true)
+    expect(returnReason(c, NOW, Q48, 'wa')).toBe(null)
+  })
+
+  it('sorts by when the reminder fired', () => {
+    const late = reminder({ id: 'late', snoozed_until: ago(1) })
+    const early = reminder({ id: 'early', snoozed_until: ago(5) })
+    expect(waitSinceMs(early, NOW, Q48, 'wa')).toBe(NOW - 5 * H)
+    expect(sortNeedsReply([late, early], NOW, Q48).map(r => r.id)).toEqual(['early', 'late'])
+  })
+
+  it('the same thread with no snooze is in no queue', () => {
+    const c = reminder({ snoozed_until: null })
+    expect(needsReply(c, NOW, Q48, 'wa')).toBe(false)
+    expect(isWaiting(c, NOW, Q48, 'wa')).toBe(false)
+    expect(needsAction(c, NOW, Q48, 'wa')).toBe(false)
+    expect(returnReason(c, NOW, Q48, 'wa')).toBe(null)
+    expect(waitSinceMs(c, NOW, Q48, 'wa')).toBe(null)
+  })
+
+  it('a ladder thread keeps its own return rules whatever its snooze says', () => {
+    const inside = staffReplied(10, { snoozed_until: ago(2) })
+    expect(needsReply(inside, NOW, Q48, 'wa')).toBe(false)
+    expect(isWaiting(inside, NOW, Q48, 'wa')).toBe(true)
+    expect(returnReason(inside, NOW, Q48, 'wa')).toBe(null)
+    const past = staffReplied(49, { snoozed_until: ago(2) })
+    expect(needsReply(past, NOW, Q48, 'wa')).toBe(true)
+    expect(returnReason(past, NOW, Q48, 'wa')).toBe('gone_quiet')
+    expect(waitSinceMs(past, NOW, Q48, 'wa')).toBe(NOW - 49 * H + 48 * H)
+  })
+
+  it('a Mia-needs-help thread goes back to its own queue, not Needs reply', () => {
+    const c = reminder({ handoff_requested_at: ago(10) })
+    expect(needsReply(c, NOW, Q48, 'wa')).toBe(false)
+    expect(needsMiaHelp(c, NOW)).toBe(true)
+    expect(needsAction(c, NOW, Q48, 'wa')).toBe(true)
+    expect(returnReason(c, NOW, Q48, 'wa')).toBe(null)
+  })
+
+  it('an inbound-last thread with an ended snooze is Needs reply with no return reason', () => {
+    const c = inbound({ snoozed_until: ago(2) })
+    expect(needsReply(c, NOW, Q48, 'wa')).toBe(true)
+    expect(returnReason(c, NOW, Q48, 'wa')).toBe(null)
+    expect(waitSinceMs(c, NOW, Q48, 'wa')).toBe(NOW - 1 * H)
+  })
+
+  it('a completed thread is never a reminder', () => {
+    const c = reminder({ resolved_at: ago(1) })
+    expect(needsReply(c, NOW, Q48, 'wa')).toBe(false)
+    expect(returnReason(c, NOW, Q48, 'wa')).toBe(null)
+    expect(waitSinceMs(c, NOW, Q48, 'wa')).toBe(null)
   })
 })

@@ -29,16 +29,25 @@ const AGENT_ENDPOINT = {
   ig: (id) => `/api/instagram/conversations/${id}/agent`,
 }
 
-function isHandledByMia(channel, conversation) {
-  // INBOXFOLLOW.1 — the shared rule: a paused, unclaimed or coach-owned thread
-  // is on the "You" side, so pressing "Mia" can hand it back.
-  return handledBy(conversation, channel === 'ig' ? 'ig' : 'wa') === 'mia'
+// INBOXFOLLOW.1 — the shared rule: a paused, unclaimed or coach-owned thread is
+// on the "You" side, so pressing "Mia" can hand it back.
+
+// INBOXFOLLOW.2 — the short line under the toggle that says who actually has
+// the thread. Mia has it: nothing extra. The name is the route's first name
+// (assignee, else the newest staff sender); a null name reads "A coach".
+function statusLabel(state, conversation) {
+  if (state === 'person') return conversation?.handled_by_name || 'A coach'
+  if (state === 'paused') return 'Mia paused'
+  if (state === 'unclaimed') return 'Waiting for a person'
+  return null
 }
 
 export default function HandledByControl({ channel, conversation, onChanged }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  const handledByMia = isHandledByMia(channel, conversation)
+  const state = handledBy(conversation, channel === 'ig' ? 'ig' : 'wa')
+  const handledByMia = state === 'mia'
+  const status = statusLabel(state, conversation)
   const buildUrl = AGENT_ENDPOINT[channel]
 
   async function flip(active) {
@@ -95,6 +104,9 @@ export default function HandledByControl({ channel, conversation, onChanged }) {
           </button>
         </div>
       </div>
+      {status && (
+        <p data-testid="handled-by-status" className="max-w-[18rem] text-right text-[11px] text-un1t-muted">{status}</p>
+      )}
       {error && (
         <p role="alert" className="max-w-[18rem] text-right text-[11px] text-red-700">{error}</p>
       )}

@@ -219,7 +219,8 @@ describe('POST whatsapp', () => {
     const msg = writes.find((w) => w.table === 'whatsapp_messages').payload
     expect(msg).toMatchObject({ conversation_id: 'conv-1', direction: 'outbound', message_type: 'interactive', sent_by: 'u-1', wa_message_id: 'wamid.cta' })
     const conv = writes.find((w) => w.table === 'whatsapp_conversations' && w.op === 'update').payload
-    expect(conv).toMatchObject({ last_message_direction: 'outbound', agent_handed_off_at: 'x' })
+    expect(conv).toMatchObject({ last_message_direction: 'outbound', agent_handed_off_at: 'x', handoff_requested_at: null })
+    expect(Object.keys(conv).filter((k) => k.startsWith('staff_'))).toEqual([])
   })
 
   it('outside the window with no template configured → 409 naming the fix, no link minted', async () => {

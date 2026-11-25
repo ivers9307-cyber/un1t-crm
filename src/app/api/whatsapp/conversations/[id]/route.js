@@ -7,6 +7,7 @@ import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAp
 import { resolveRearmPatch } from '@/lib/agent/core'
 import { completePatch } from '@/lib/inbox-state'
 import { validateBody } from '@/lib/validate'
+import { readHandledByName } from '@/lib/handled-by-name'
 
 const ConversationPatchSchema = z.object({
   resolved: z.boolean(),
@@ -92,6 +93,10 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
   // (INBOXWEBONLY3.1: the WEB key at this studio). Tell the web inbox whether
   // they would act, so it hides them instead of offering a control that fails.
   const canUseWebControls = requireWebWhatsAppInboxAt(user, conversation.location_id) === null
+
+  // INBOXFOLLOW.2 — the first name of whoever has the thread, for "Handled by".
+  // Read only when a person has it; a failed read gives null, never a failed load.
+  conversation.handled_by_name = await readHandledByName(db, 'wa', conversation)
 
   return NextResponse.json({
     success: true,

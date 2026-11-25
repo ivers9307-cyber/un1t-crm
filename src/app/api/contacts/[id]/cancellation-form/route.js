@@ -304,6 +304,8 @@ export async function POST(request, props) {
         last_message_direction: 'outbound',
         last_message_preview: body.substring(0, 100),
         ...manualTakeoverPatch(conversation.agent_handed_off_at),
+        // INBOXFOLLOW.2 — a person has acted, so the thread leaves "Mia needs help" (not a thread reply: no follow-up ladder).
+        handoff_requested_at: null,
       }).eq('id', conversation.id).select('id')
       if (convErr) console.error(`[cancel-form] conversation update failed: ${convErr.message}`)
     }

@@ -127,12 +127,16 @@ export function classifyHandoffBreach({
   escalatedAt,
   resolvedAtMs,
   humanRepliedAtMs,
+  // INBOXFOLLOW.2 — a coach snoozed the thread: the alert waits while the
+  // snooze is active, and once it has ended the thread is judged as usual.
+  snoozedUntilMs = null,
   nowMs,
   slaMinutes = HANDOFF_SLA_DEFAULT_MINUTES,
 } = {}) {
   if (!slaMinutes) return { breach: false, reason: 'sla_disabled' }
   if (!handedOffAtMs) return { breach: false, reason: 'not_handed_off' }
   if (escalatedAt) return { breach: false, reason: 'already_escalated' }
+  if (snoozedUntilMs && snoozedUntilMs > nowMs) return { breach: false, reason: 'snoozed' }
   if (nowMs - handedOffAtMs < slaMinutes * MIN_MS) return { breach: false, reason: 'within_sla' }
   if (resolvedAtMs && resolvedAtMs >= handedOffAtMs) return { breach: false, reason: 'resolved' }
   if (humanRepliedAtMs && humanRepliedAtMs >= handedOffAtMs - TAKEOVER_SKEW_MS) {
@@ -229,6 +233,10 @@ export function classifyAutoResolve({
   // INBOXFOLLOW.1 — a coach replied in the thread and owns it until a coach
   // completes it: never auto-resolved, whichever case would otherwise apply.
   staffOwned = false,
+  // INBOXFOLLOW.2 — a coach snoozed the thread. The column is only cleared by
+  // a person acting or the customer writing, so a snooze that has ended is
+  // still a fired reminder in the coach's queue: never auto-resolved either.
+  snoozedUntilMs = null,
   nowMs,
   afterReplyHours = AUTO_RESOLVE_AFTER_REPLY_HOURS_DEFAULT,
   staleHours = AUTO_RESOLVE_STALE_HOURS_DEFAULT,
@@ -238,6 +246,7 @@ export function classifyAutoResolve({
   if (agentActive) return { resolve: false, reason: 'already_armed' }
   if (resolvedAtMs && resolvedAtMs >= handedOffAtMs) return { resolve: false, reason: 'already_resolved' }
   if (staffOwned) return { resolve: false, reason: 'staff_owned' }
+  if (snoozedUntilMs) return { resolve: false, reason: 'snoozed' }
 
   // "Quiet" is measured from the last activity of ANY kind; a thread with no
   // messages at all measures from the handoff itself.
@@ -281,8 +290,8 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
       // agent_paused_at is WhatsApp-only (mig 435) — same conditional select
       // as humanTookOverDuringTurn.
       const cols = channel.name === 'whatsapp'
-        ? 'id, agent_active, agent_handed_off_at, agent_paused_at, resolved_at, last_message_at, staff_owned_since'
-        : 'id, agent_active, agent_handed_off_at, resolved_at, last_message_at, staff_owned_since'
+        ? 'id, agent_active, agent_handed_off_at, agent_paused_at, resolved_at, last_message_at, staff_owned_since, snoozed_until'
+        : 'id, agent_active, agent_handed_off_at, resolved_at, last_message_at, staff_owned_since, snoozed_until'
       const { data: convs, error } = await db.from(channel.conversationsTable)
         .select(cols)
         .eq('location_id', location.id)
@@ -319,6 +328,7 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
             lastMessageAtMs: c.last_message_at ? new Date(c.last_message_at).getTime() : null,
             humanRepliedAtMs: reply.atMs,
             staffOwned: c.staff_owned_since != null,
+            snoozedUntilMs: c.snoozed_until ? new Date(c.snoozed_until).getTime() : null,
             nowMs,
             afterReplyHours,
             staleHours,
@@ -492,7 +502,7 @@ export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
 
     for (const channel of CHANNELS) {
       const { data: convs, error } = await db.from(channel.conversationsTable)
-        .select('id, contact_id, resolved_at, agent_handed_off_at, handoff_escalated_at, last_message_preview, contacts!contact_id(first_name, name)')
+        .select('id, contact_id, resolved_at, agent_handed_off_at, handoff_escalated_at, snoozed_until, last_message_preview, contacts!contact_id(first_name, name)')
         .eq('location_id', location.id)
         .not('agent_handed_off_at', 'is', null)
         .is('handoff_escalated_at', null)
@@ -532,6 +542,7 @@ export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
             escalatedAt: c.handoff_escalated_at,
             resolvedAtMs: c.resolved_at ? new Date(c.resolved_at).getTime() : null,
             humanRepliedAtMs: reply.atMs,
+            snoozedUntilMs: c.snoozed_until ? new Date(c.snoozed_until).getTime() : null,
             nowMs,
             slaMinutes,
           })

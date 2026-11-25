@@ -435,6 +435,8 @@ export async function POST(request, props) {
     last_message_direction: 'outbound',
     last_message_preview: String(body ?? '').substring(0, 100),
     ...manualTakeoverPatch(conversation.agent_handed_off_at),
+    // INBOXFOLLOW.2 — a person has acted, so the thread leaves "Mia needs help" (not a thread reply: no follow-up ladder).
+    handoff_requested_at: null,
   }).eq('id', conversation.id).select('id'))
   await step('whatsapp_message_id stamp', () => db.from('staff_payment_links')
     .update({ whatsapp_message_id: result.messageId, updated_at: nowIso })

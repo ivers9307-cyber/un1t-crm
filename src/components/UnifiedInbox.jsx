@@ -373,7 +373,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                 <div className="min-w-0 flex flex-col gap-0.5">
                   <span className="flex items-center gap-1.5 min-w-0">
                     <span className="font-medium text-sm truncate">{name}</span>
-                    {needsMiaHelp(conv) && (
+                    {needsMiaHelp(conv, nowMs) && (
                       <span className="text-[10px] font-semibold text-amber-700 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">
                         Needs human
                       </span>
@@ -404,11 +404,11 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                         {conv.unread_count}
                       </span>
                     )}
-                    {(owesReply || needsMiaHelp(conv)) && (
+                    {(owesReply || needsMiaHelp(conv, nowMs)) && (
                       <span
                         role="button"
                         tabIndex={0}
-                        title={needsMiaHelp(conv) ? 'Mark handled — hand back to the agent' : 'Mark handled — no reply needed'}
+                        title={needsMiaHelp(conv, nowMs) ? 'Mark handled — hand back to the agent' : 'Mark handled — no reply needed'}
                         onClick={e => { e.stopPropagation(); quickResolve(conv) }}
                         onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); quickResolve(conv) } }}
                         className="p-1 rounded-md border border-un1t-border text-un1t-muted hover:text-emerald-700 hover:border-emerald-600 transition-colors"
@@ -451,6 +451,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                   userId={userId}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
+                  onThreadChanged={loadConversations}
                   onMoved={(movedId) => {
                     // WAHOMESTUDIO.1 (R7) — the thread left this inbox: drop the
                     // selection (pane, command centre, mobile back bar) and reload the queue.
@@ -465,6 +466,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                   timezone={timezone}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
+                  onThreadChanged={loadConversations}
                 />
               )}
             </div>

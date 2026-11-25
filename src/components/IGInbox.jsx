@@ -19,6 +19,7 @@ import LinkInstagramContactModal from '@/components/communications/LinkInstagram
 import ApprovalActionCard from '@/components/ApprovalActionCard'
 import { ChannelAvatar } from '@/components/inbox/ChannelBits'
 import HandledByControl from '@/components/inbox/HandledByControl'
+import SnoozeControl from '@/components/inbox/SnoozeControl'
 import AssignControl from '@/components/inbox/AssignControl'
 import MiaDecisionTrace from '@/components/inbox/MiaDecisionTrace'
 import WAMediaContent from '@/components/WAMediaContent'
@@ -57,7 +58,7 @@ function initialsOf(name) {
 
 // `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
 // the internal list is hidden and selection follows initialConversationId.
-export default function IGInbox({ locationId, timezone = null, initialConversationId, embedded = false, onOpenBookTab }) {
+export default function IGInbox({ locationId, timezone = null, initialConversationId, embedded = false, onOpenBookTab, onThreadChanged }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [conversation, setConversation] = useState(null)
@@ -408,6 +409,15 @@ export default function IGInbox({ locationId, timezone = null, initialConversati
                 </div>
               </div>
               <div className="shrink-0 flex items-center gap-3">
+                {/* INBOXFOLLOW.2 — snooze until a time; a snoozed thread waits. */}
+                {conversation && !conversation.resolved_at && (
+                  <SnoozeControl
+                    channel="ig"
+                    conversation={conversation}
+                    zone={timezone}
+                    onChanged={() => { threadSigRef.current = ''; loadThread(selectedId); loadConversations(); onThreadChanged?.() }}
+                  />
+                )}
                 {conversation && (
                   <button
                     onClick={() => toggleResolved(conversation)}

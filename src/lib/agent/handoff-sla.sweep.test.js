@@ -80,6 +80,24 @@ beforeEach(() => {
   sendPushToRolesAtLocation.mockResolvedValue({ sent: 1, skipped: 0, invalidated: 0, failed: 0 })
 })
 
+describe('runHandoffSlaSweep — snoozed threads (INBOXFOLLOW.2)', () => {
+  it('does not alert or stamp while the thread is snoozed', async () => {
+    const { db, updates } = sweepDb({ convs: [{ ...conv(), snoozed_until: new Date(NOW + H).toISOString() }] })
+    const out = await runHandoffSlaSweep(db, { nowMs: NOW })
+    expect(out.escalated).toBe(0)
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+    expect(stampOf(updates)).toBeUndefined()
+  })
+
+  it('alerts as usual once the snooze has ended', async () => {
+    const { db, updates } = sweepDb({ convs: [{ ...conv(), snoozed_until: new Date(NOW - H).toISOString() }] })
+    const out = await runHandoffSlaSweep(db, { nowMs: NOW })
+    expect(out.escalated).toBe(1)
+    expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
+    expect(stampOf(updates)).toBeDefined()
+  })
+})
+
 describe('runHandoffSlaSweep — stamp after the send (C21 PUSHDONE.1)', () => {
   it('pushes, THEN stamps, with a CAS on the null stamp', async () => {
     const { db, updates } = sweepDb({ convs: [conv()] })

@@ -11,6 +11,7 @@ vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), l
 
 const { getCurrentUser } = await import('@/lib/auth')
 const { createServerClient } = await import('@/lib/supabase')
+const { logError } = await import('@/lib/log')
 const { GET } = await import('./route.js')
 
 const inbox = (on) => person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: on } } }, LOC_A)
@@ -68,6 +69,19 @@ describe('GET /api/instagram/conversations', () => {
 
 // INBOXFOLLOW.1 — the queues see every waiting thread, and the route returns the
 // studio's follow-up config (the defaults when none is named).
+describe('GET /api/instagram/conversations — approval badges are best effort', () => {
+  it('a failed badge read is logged and the list still loads', async () => {
+    getCurrentUser.mockResolvedValue(inbox(true))
+    db.errors.agent_membership_requests = { select: { message: 'statement timeout' } }
+    const res = await get()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.conversations).toHaveLength(1)
+    expect(body.conversations[0].pending_approval).toBe(false)
+    expect(logError).toHaveBeenCalledWith('instagram-conversations', expect.stringContaining('approval badges'), expect.anything())
+  })
+})
+
 describe('GET /api/instagram/conversations — queues and follow-up config', () => {
   const id = (n) => `a2000000-0000-4000-8000-${String(n).padStart(12, '0')}`
   const hoursAgo = (n) => new Date(Date.UTC(2026, 10, 25) - n * 3600_000).toISOString()

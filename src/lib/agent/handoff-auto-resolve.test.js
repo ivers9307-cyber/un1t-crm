@@ -84,6 +84,28 @@ describe('classifyAutoResolve', () => {
       .toEqual({ resolve: true, reason: 'stale' })
   })
 
+  // INBOXFOLLOW.2 — a snoozed thread, or one whose reminder has fired, is a
+  // coach's: the snooze columns are only cleared by a person or the customer.
+  it('never auto-resolves a thread with an active snooze, in either case', () => {
+    const snoozedUntilMs = NOW + 2 * H
+    expect(classifyAutoResolve({ ...base, snoozedUntilMs })).toEqual({ resolve: false, reason: 'snoozed' }) // case a today
+    expect(classifyAutoResolve({ ...base, snoozedUntilMs, humanRepliedAtMs: null, customerWaiting: false, lastMessageAtMs: NOW - 49 * H }))
+      .toEqual({ resolve: false, reason: 'snoozed' }) // case b today
+  })
+
+  it('never auto-resolves a thread whose snooze has ended but was not cleared, in either case', () => {
+    const snoozedUntilMs = NOW - 2 * H
+    expect(classifyAutoResolve({ ...base, snoozedUntilMs })).toEqual({ resolve: false, reason: 'snoozed' })
+    expect(classifyAutoResolve({ ...base, snoozedUntilMs, humanRepliedAtMs: null, customerWaiting: false, lastMessageAtMs: NOW - 49 * H }))
+      .toEqual({ resolve: false, reason: 'snoozed' })
+  })
+
+  it('keeps today\'s results with no snooze', () => {
+    expect(classifyAutoResolve({ ...base, snoozedUntilMs: null })).toEqual({ resolve: true, reason: 'human_replied_quiet' })
+    expect(classifyAutoResolve({ ...base, humanRepliedAtMs: null, customerWaiting: false, lastMessageAtMs: NOW - 49 * H, snoozedUntilMs: null }))
+      .toEqual({ resolve: true, reason: 'stale' })
+  })
+
   it('skips threads the cooldown already re-armed', () => {
     expect(classifyAutoResolve({ ...base, agentActive: true }))
       .toEqual({ resolve: false, reason: 'already_armed' })
@@ -208,6 +230,26 @@ describe('runHandoffAutoResolve', () => {
       ...resolveRearmPatch({ resolved: true, agent_handed_off_at: 'x' }),
       ...completePatch(), // INBOXFOLLOW.1 — an auto-resolve completes the thread
     })
+  })
+
+  it('leaves a snoozed thread alone, active or ended, however stale', async () => {
+    for (const snoozed_until of [new Date(NOW + 5 * H).toISOString(), new Date(NOW - 5 * H).toISOString()]) {
+      const { db, updates } = sweepDb({
+        messages: unansweredBroadcast, // would resolve as stale without the snooze
+        convs: [{
+          id: 'c4',
+          agent_active: false,
+          agent_handed_off_at: new Date(NOW - 80 * H).toISOString(),
+          agent_paused_at: null,
+          resolved_at: null,
+          last_message_at: new Date(NOW - 79 * H).toISOString(),
+          snoozed_until,
+        }],
+      })
+      const out = await runHandoffAutoResolve(db, { nowMs: NOW })
+      expect(out.resolved).toBe(0)
+      expect(updates).toHaveLength(0)
+    }
   })
 
   it('leaves a coach-owned thread alone, however stale', async () => {

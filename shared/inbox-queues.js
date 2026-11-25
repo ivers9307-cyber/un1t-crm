@@ -44,6 +44,21 @@ export function isSnoozed(c, nowMs = Date.now()) {
   return t !== null && t > nowMs
 }
 
+// A snooze whose time has come. The columns are only cleared by a person
+// acting or the customer writing, so an ended snooze stays on the row.
+export function snoozeEnded(c, nowMs = Date.now()) {
+  const t = ms(c?.snoozed_until)
+  return t !== null && nowMs >= t
+}
+
+// A reminder that fired: the snooze ended on an unresolved thread that is not
+// on the ladder (no staff_waiting_since) and not a Mia hand-off. Ladder threads
+// keep returnAtMs; hand-offs go back to Mia needs help.
+function snoozeReminder(c, nowMs) {
+  return !!c && !c.resolved_at && snoozeEnded(c, nowMs)
+    && ms(c.staff_waiting_since) === null && !c.handoff_requested_at
+}
+
 // When a thread we are waiting on comes back, or null when we are not waiting.
 export function returnAtMs(c, cfg = DEFAULT_FOLLOWUP_CFG, channel = 'wa') {
   const since = ms(c?.staff_waiting_since)
@@ -66,18 +81,23 @@ function hasReturned(c, nowMs, cfg, channel) {
 }
 
 export function returnReason(c, nowMs = Date.now(), cfg = DEFAULT_FOLLOWUP_CFG, channel = 'wa') {
-  if (c?.resolved_at || !hasReturned(c, nowMs, cfg, channel)) return null
+  if (c?.resolved_at) return null
+  if (!hasReturned(c, nowMs, cfg, channel)) {
+    return c?.last_message_direction !== 'inbound' && snoozeReminder(c, nowMs) ? 'snooze_ended' : null
+  }
   const outcome = c.staff_nudge_outcome
   return outcome === 'sent' || outcome === 'sending' ? 'no_reply_after_nudge' : 'gone_quiet'
 }
 
 export function needsReply(c, nowMs = Date.now(), cfg = DEFAULT_FOLLOWUP_CFG, channel = 'wa') {
   if (!c || c.resolved_at || isSnoozed(c, nowMs)) return false
-  return c.last_message_direction === 'inbound' || hasReturned(c, nowMs, cfg, channel)
+  return c.last_message_direction === 'inbound' || hasReturned(c, nowMs, cfg, channel) || snoozeReminder(c, nowMs)
 }
 
-export function needsMiaHelp(c) {
-  return !!c && !c.resolved_at && !!c.handoff_requested_at
+// A snoozed hand-off waits with the rest of the snoozed threads (Waiting), so
+// the chip count and the badge agree; it is back when the snooze ends.
+export function needsMiaHelp(c, nowMs = Date.now()) {
+  return !!c && !c.resolved_at && !!c.handoff_requested_at && !isSnoozed(c, nowMs)
 }
 
 export function isWaiting(c, nowMs = Date.now(), cfg = DEFAULT_FOLLOWUP_CFG, channel = 'wa') {
@@ -96,13 +116,14 @@ export function hasPendingApproval(c) {
 // last_message_at guard: empty conversation shells never inflate a badge.
 export function needsAction(c, nowMs = Date.now(), cfg = DEFAULT_FOLLOWUP_CFG, channel = 'wa') {
   if (!c || c.resolved_at || !c.last_message_at || isSnoozed(c, nowMs)) return false
-  return needsReply(c, nowMs, cfg, channel) || needsMiaHelp(c)
+  return needsReply(c, nowMs, cfg, channel) || needsMiaHelp(c, nowMs)
 }
 
 export function waitSinceMs(c, nowMs = Date.now(), cfg = DEFAULT_FOLLOWUP_CFG, channel = 'wa') {
   if (!c) return null
   if (c.last_message_direction === 'inbound') return ms(c.customer_waiting_since)
-  return hasReturned(c, nowMs, cfg, channel) ? returnAtMs(c, cfg, channel) : null
+  if (hasReturned(c, nowMs, cfg, channel)) return returnAtMs(c, cfg, channel)
+  return snoozeReminder(c, nowMs) ? ms(c.snoozed_until) : null
 }
 
 // Oldest wait first; rows with no wait time come last, oldest last_message_at first.
@@ -140,7 +161,7 @@ function predicateFor(queue, nowMs, cfg) {
   const ch = c => channelKeyOf(c)
   switch (queue) {
     case 'needs_reply': return c => needsReply(c, nowMs, cfg, ch(c))
-    case 'mia_help': return needsMiaHelp
+    case 'mia_help': return c => needsMiaHelp(c, nowMs)
     case 'waiting': return c => isWaiting(c, nowMs, cfg, ch(c))
     case 'pending_approval': return hasPendingApproval
     default: return () => true

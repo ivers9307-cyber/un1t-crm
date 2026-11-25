@@ -362,6 +362,7 @@ export const EXPECTED = {
   'POST whatsapp/conversations/[id]/react/route.js': ['inbox-at-location', 'Reacts to a message.'],
   'POST whatsapp/conversations/[id]/attachments/sign/route.js': ['inbox-at-location', 'Signs a private upload slot for a photo or PDF to send in the thread (WAATTACH.1); membership at the thread\'s location, then the whatsapp permission there; refused outside the 24-hour window.'],
   'POST whatsapp/conversations/[id]/send/route.js': ['inbox-at-location', 'Sends a text or an approved template in the thread (WATPLSEND.1: template rows judged, Flow token minted); membership at the thread\'s location, then the whatsapp permission there.'],
+  'POST whatsapp/conversations/[id]/snooze/route.js': ['inbox-at-location', 'Snoozes a thread until a time or clears it (INBOXFOLLOW.2); the send route\'s gates: the whatsapp permission anywhere, membership (404) once the row is read, then the permission at the thread\'s location.'],
   'POST whatsapp/conversations/[id]/send-carousel/route.js': ['inbox-at-location', 'Sends a card set.'],
   'POST whatsapp/conversations/[id]/send-flow/route.js': ['inbox-at-location', 'Sends a Flow.'],
 

@@ -635,7 +635,7 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
     // candidates. Hence the loud error log below — a candidate-query failure
     // must never read as "nothing to do" again.
     const { data: convs, error: convsError } = await db.from('whatsapp_conversations')
-      .select('id, contact_id, location_id, agent_active, agent_handed_off_at, resolved_at, agent_followup_stage, last_message_at, contacts!contact_id(first_name, name, wa_phone, phone, wa_status)')
+      .select('id, contact_id, location_id, agent_active, agent_handed_off_at, resolved_at, agent_followup_stage, last_message_at, snoozed_until, contacts!contact_id(first_name, name, wa_phone, phone, wa_status)')
       .eq('location_id', location.id)
       .eq('agent_active', true)
       .is('agent_handed_off_at', null)
@@ -655,6 +655,11 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
 
     for (const c of convs || []) {
       try {
+        // INBOXFOLLOW.2 — a coach snoozed this thread: no proactive message
+        // while the snooze is active (done here, not in the query, to keep it simple).
+        if (c.snoozed_until && new Date(c.snoozed_until).getTime() > nowMs) {
+          results.skipped++; skipLog(c.id, 'snoozed'); continue
+        }
         const contact = c.contacts || {}
         const to = contact.wa_phone || contact.phone
         if (!to || contact.wa_status === 'opted_out') { results.skipped++; continue }
@@ -1061,7 +1066,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         // agent_handed_off_at let Mia send a proactive check-in into a thread
         // an operator had explicitly paused or switched off.
         const { data: convRows, error: convError } = await db.from('whatsapp_conversations')
-          .select('id, contact_id, location_id, agent_active, agent_paused_at, agent_handed_off_at, staff_owned_since')
+          .select('id, contact_id, location_id, agent_active, agent_paused_at, agent_handed_off_at, staff_owned_since, snoozed_until')
           .eq('location_id', location.id)
           .eq('contact_id', contact.id)
           .order('last_message_at', { ascending: false })
@@ -1077,6 +1082,8 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         if (existingConv?.agent_handed_off_at) { bump('handed_off'); results.skipped++; continue }
         if (existingConv?.agent_paused_at) { bump('agent_paused'); results.skipped++; continue }
         if (existingConv?.staff_owned_since) { bump('staff_owned'); results.skipped++; continue } // INBOXFOLLOW.1
+        // INBOXFOLLOW.2 — an active snooze is a coach's hold on the thread.
+        if (existingConv?.snoozed_until && new Date(existingConv.snoozed_until).getTime() > nowMs) { bump('snoozed'); results.skipped++; continue }
         if (existingConv && existingConv.agent_active === false) { bump('agent_inactive'); results.skipped++; continue }
         let facts = { rows: [], lastInboundAtMs: null, humanSpokeAfterInbound: false, staffSpokeAfterInbound: false, readFailed: false }
         if (existingConv) facts = await lastInboundFacts(db, existingConv.id)
