@@ -1,26 +1,36 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { assertLocationAccess, getUserLocationIds, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccess, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
+import { inboxLocationIds } from '@/lib/inbox-location-ids'
 import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
 import { attachAssigneeNames } from '@/lib/inbox-assignment'
 import { INBOX_SEARCH_MIN_LENGTH, buildInboxSearchOr, searchInboxContactIds, searchWhatsAppMessageHits } from '@/lib/inbox-search-server'
-import { hasPermissionForLocation, hasMobilePermissionForLocation } from '@/lib/permissions'
 import { DEFAULT_FOLLOWUP_CFG } from '@/lib/inbox-queues'
 import { readInboxFollowupConfig } from '@/lib/inbox-followup-config'
 import { ACTIVE_SET_LIMIT, ACTIVE_SET_OR, mergeActiveSet } from '@/lib/inbox-active-set'
 
 // GET /api/whatsapp/conversations — list conversations (inbox)
-// ROUTEWRAP.R9 — withAuth only signs the caller in; the gates below are unchanged.
+// ROUTEWRAP.R9 — withAuth only signs the caller in; the gates below judge access.
+//
+// INBOXPERM.1 — the inbox key (web or phone) is judged at the studio asked for,
+// not at the active one: a coarse any-studio check first, then membership and
+// the key at ?location_id. Without ?location_id the list covers only the
+// studios where the caller holds the key, never every studio they merely
+// belong to. (The phone reads this table directly, not through this route.)
 export const GET = withAuth({ permission: null, location: false }, async ({ user, request }) => {
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'wa')
+  // Service-role client, so these gates ARE the access control (INBOX-PERM.1).
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
-  const guard = assertLocationAccess(user, locationId)
-  if (guard) return guard
+  if (locationId) {
+    const guard = assertLocationAccess(user, locationId)
+    if (guard) return guard
+    const permHere = requireWhatsAppInboxAt(user, locationId)
+    if (permHere) return permHere
+  }
 
   const db = createServerClient()
   const LIST_SELECT = '*, contacts!contact_id(id, name, first_name, phone, wa_phone, pipeline_stage_slug)'
@@ -32,7 +42,7 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = getUserLocationIds(user)
+    const userLocationIds = inboxLocationIds(user)
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, conversations: [], followup: DEFAULT_FOLLOWUP_CFG })
     query = query.in('location_id', userLocationIds)
   }
@@ -45,16 +55,12 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
   // WAMSGSEARCH.1 — snippet of the newest matching message, per thread.
   const snippets = new Map()
   if (q.length >= INBOX_SEARCH_MIN_LENGTH) {
-    const scopeIds = locationId ? [locationId] : getUserLocationIds(user)
-    // WAMSGSEARCH.1 — message TEXT (3+ characters) only at the studios where
-    // the caller holds WhatsApp (web or mobile), the thread routes' rule
-    // (requireWhatsAppInboxAt): membership alone does not open the bodies.
-    const messageScope = scopeIds.filter((id) => (
-      hasPermissionForLocation(user, id, 'whatsapp') || hasMobilePermissionForLocation(user, id, 'whatsapp')
-    ))
+    // The studios where the caller holds the inbox key (INBOXPERM.1): contacts
+    // and message text are searched there only; membership alone opens neither.
+    const scopeIds = locationId ? [locationId] : inboxLocationIds(user)
     const [contactIds, messageSearch] = await Promise.all([
       searchInboxContactIds(db, { q, locationIds: scopeIds }),
-      searchWhatsAppMessageHits(db, { q, locationIds: messageScope }),
+      searchWhatsAppMessageHits(db, { q, locationIds: scopeIds }),
     ])
     for (const hit of messageSearch.hits) snippets.set(hit.conversation_id, hit.snippet)
     query = query.or(buildInboxSearchOr('whatsapp_conversations', q, contactIds, [...snippets.keys()]))
@@ -73,7 +79,7 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
       // Oldest first: the longest-waiting threads must never be the ones cut at the limit.
       .order('last_message_at', { ascending: true, nullsFirst: false })
       .limit(ACTIVE_SET_LIMIT)
-    activeQuery = locationId ? activeQuery.eq('location_id', locationId) : activeQuery.in('location_id', getUserLocationIds(user))
+    activeQuery = locationId ? activeQuery.eq('location_id', locationId) : activeQuery.in('location_id', inboxLocationIds(user))
   }
 
   // INBOXFOLLOW.3 — the follow-up config reads alongside the lists, not after them

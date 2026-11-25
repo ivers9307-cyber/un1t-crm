@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { assertLocationAccess, getUserLocationIds, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
-import { hasPermissionForLocation, hasMobilePermissionForLocation } from '@/lib/permissions'
+import { assertLocationAccess, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
+import { inboxLocationIds } from '@/lib/inbox-location-ids'
 import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
 import { attachAssigneeNames } from '@/lib/inbox-assignment'
@@ -8,12 +8,6 @@ import { INBOX_SEARCH_MIN_LENGTH, buildInboxSearchOr, searchInboxContactIds } fr
 import { DEFAULT_FOLLOWUP_CFG } from '@/lib/inbox-queues'
 import { readInboxFollowupConfig } from '@/lib/inbox-followup-config'
 import { ACTIVE_SET_LIMIT, ACTIVE_SET_OR, mergeActiveSet } from '@/lib/inbox-active-set'
-
-// The studios where the caller holds the inbox key (web or phone), of those
-// they belong to.
-const inboxLocationIds = (user) => getUserLocationIds(user).filter((id) => (
-  hasPermissionForLocation(user, id, 'whatsapp') || hasMobilePermissionForLocation(user, id, 'whatsapp')
-))
 
 // GET /api/instagram/conversations — list IG conversations (operator inbox).
 // Mirrors the WhatsApp conversations list. Reads are location-scoped:

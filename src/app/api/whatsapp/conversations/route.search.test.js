@@ -72,8 +72,8 @@ describe('message text search', () => {
     createServerClient.mockReturnValue(makeDb([]).db)
     await get('q=refund')
     expect(searchWhatsAppMessageHits).toHaveBeenCalledWith(expect.anything(), { q: 'refund', locationIds: [A] })
-    // The contact lookup keeps its membership scope (unchanged).
-    expect(searchInboxContactIds).toHaveBeenCalledWith(expect.anything(), { q: 'refund', locationIds: [A, B] })
+    // INBOXPERM.1 — the contact lookup is scoped to the key-holding studios too.
+    expect(searchInboxContactIds).toHaveBeenCalledWith(expect.anything(), { q: 'refund', locationIds: [A] })
 
     vi.clearAllMocks()
     getCurrentUser.mockResolvedValue(caller(ON, MOBILE_ONLY))
