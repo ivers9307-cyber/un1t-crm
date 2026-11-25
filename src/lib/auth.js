@@ -933,9 +933,14 @@ export function assertLocationAccessOr404(user, locationId) {
 // `ig` deliberately still rides `whatsapp`: there is no Instagram
 // WEB_PERMISSIONS key to point it at, and inventing a mapping to a key
 // that does not exist would fail closed for everyone. When one is
-// added, change it here — and in the /api/instagram/conversations/[id]
-// thread routes, which since SECGAPS.1 judge the web `whatsapp` key at
-// the thread's own studio (requireWebWhatsAppInboxAnywhere / ...At).
+// added, change it here, in every /api/instagram/conversations route
+// (INBOXPERM.1: none calls requireInboxPermission any more; each judges the
+// key at the thread's own studio, or at ?location_id for the list), and in
+// the ig_conv_select / ig_msg_select policies (mig 875). The phone-called
+// routes (list, [id], agent, send, snooze) take the web OR phone key
+// (requireWhatsAppInboxAnywhere / ...At); assign, add-contact and link are
+// web-only (requireWebWhatsAppInboxAnywhere / ...At). The "WhatsApp" in those
+// helper names is the key, shared by both channels.
 const INBOX_CHANNEL_PERMISSION_KEYS = Object.freeze({
   wa: 'whatsapp',
   ig: 'whatsapp',

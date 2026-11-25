@@ -114,34 +114,59 @@ describe('inbox follow-up columns on whatsapp_conversations (INBOXFOLLOW.1, mig 
   })
 })
 
-describe('inbox follow-up columns on instagram_conversations (INBOXFOLLOW.1, mig 874)', () => {
-  // The Instagram twin of the WhatsApp cases above. Its read rule is
-  // ig_conv_select: any active member of the studio (no inbox permission is
-  // asked of a direct read); every write is denied to client sessions by the
-  // ig_conv_deny_* policies, so an update matches no rows rather than raising.
+describe('Instagram conversations and messages need the inbox key (INBOXPERM.1, mig 875)', () => {
+  // ig_conv_select / ig_msg_select mirror wa_conv_select / wa_msg_select: the
+  // studios where the session holds the phone `whatsapp` key (FRONT_DESK). Every
+  // write is denied to client sessions by the ig_*_deny_* policies, so an update
+  // matches no rows rather than raising.
+  //
+  // EXPECTED TO FAIL until mig 875 is applied and supabase/schema/access.json is
+  // refreshed (the role db is built from access.json, not from migrations), at
+  // the plain-staff expectation (staffA / staffB read nothing, who read their
+  // studio under the old policy), in exactly two cases: 'the inbox key opens
+  // them at its own studio...' and 'messages follow the same rule'. The others
+  // hold under both policies. Not skipped on purpose.
   const COLS = 'customer_waiting_since, staff_owned_since, staff_waiting_since, staff_nudged_at, staff_nudge_outcome, handoff_requested_at, snoozed_until, snoozed_by, snooze_note'
   const ig = R(480)
+  const msg = R(490)
   beforeAll(async () => {
     await db.seed('instagram_conversations', [[ig.a, A], [ig.b, B], [ig.c, C]].map(([rowId, location_id]) => ({ id: rowId, location_id })))
     await db.pg.query(`update public.instagram_conversations set staff_waiting_since = now(), snooze_note = 'later' where id in ('${ig.a}', '${ig.b}', '${ig.c}')`)
+    await db.seed('instagram_messages', [[msg.a, ig.a, A], [msg.b, ig.b, B], [msg.c, ig.c, C]].map(([rowId, conversation_id, location_id]) => ({ id: rowId, conversation_id, location_id, direction: 'inbound' })))
   })
-  it('inbox staff read them at their own studio and not at another', async () => {
+  it('the inbox key opens them at its own studio: reception reads A, a master reads every studio, plain staff read nothing', async () => {
     const own = await read('receptionA', `select id, ${COLS} from public.instagram_conversations`)
     expect(own.map((r) => r.id)).toEqual([ig.a])
     expect(own[0].snooze_note).toBe('later')
     expect(own[0].staff_waiting_since).toBeTruthy()
-    expect((await read('staffB', `select id from public.instagram_conversations`)).map((r) => r.id)).toEqual([ig.b])
     expect(letters(await read('master', `select id from public.instagram_conversations`), ig)).toBe('abc')
+    for (const who of ['staffA', 'staffB']) {
+      expect(await read(who, `select id from public.instagram_conversations`)).toEqual([])
+    }
+  })
+  it('every session the WhatsApp twin reads for reads the same Instagram conversations', async () => {
+    for (const who of ['ownerA', 'managerA', 'headA', 'receptionA']) {
+      expect((await read(who, `select id from public.instagram_conversations`)).map((r) => r.id)).toEqual([ig.a])
+    }
+  })
+  it('messages follow the same rule', async () => {
+    expect((await read('receptionA', `select id from public.instagram_messages`)).map((r) => r.id)).toEqual([msg.a])
+    expect(letters(await read('master', `select id from public.instagram_messages`), msg)).toBe('abc')
+    for (const who of ['staffA', 'staffB']) {
+      expect(await read(who, `select id from public.instagram_messages`)).toEqual([])
+    }
   })
   it('a session that is not an active member of the studio sees nothing', async () => {
     for (const who of ['inactiveA', 'deletedA', 'member', 'stranger']) {
       expect(await read(who, `select ${COLS} from public.instagram_conversations`)).toEqual([])
+      expect(await read(who, `select id from public.instagram_messages`)).toEqual([])
     }
   })
-  it('no signed-in session can update them: the write matches no row and the value stays', async () => {
+  it('no signed-in session can write them: the write matches no row and the value stays', async () => {
     expect(await read('receptionA', `update public.instagram_conversations set staff_waiting_since = null where id = '${ig.a}' returning id`)).toEqual([])
     expect(await read('managerA', `update public.instagram_conversations set snoozed_until = now() where id = '${ig.a}' returning id`)).toEqual([])
     expect(await read('master', `update public.instagram_conversations set snooze_note = 'x' returning id`)).toEqual([])
+    expect(await read('master', `update public.instagram_messages set body = 'x' returning id`)).toEqual([])
     const { rows } = await db.pg.query(`select staff_waiting_since, snoozed_until, snooze_note from public.instagram_conversations where id = '${ig.a}'`)
     expect(rows[0].staff_waiting_since).toBeTruthy()
     expect(rows[0].snoozed_until).toBeNull()
