@@ -27,9 +27,12 @@ import {
   Sparkles, Plus, Paperclip
 } from 'lucide-react'
 import { VOICE_TRANSCRIPT_SUBSCRIPTION, handleVoiceTranscriptUpdate } from '@/components/inbox/wa-voice-realtime'
+import { LIST_RELOAD_DEBOUNCE_MS } from '@/lib/inbox-list-reload'
 
 // WAINBOXLOOP.1 — a burst of realtime changes becomes one list reload.
-export const LIST_RELOAD_DEBOUNCE_MS = 400
+// INBOXPERM.1 — the value now lives in src/lib/inbox-list-reload.js, shared with
+// the unified inbox; re-exported so this module's export stays.
+export { LIST_RELOAD_DEBOUNCE_MS }
 
 function formatTime(dateStr) {
   if (!dateStr) return ''

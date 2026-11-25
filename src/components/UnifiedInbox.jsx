@@ -20,12 +20,13 @@
 // problem, not a convenience one. ?ch=em deep links redirect to
 // /communications/mail from the page above.
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
 import {
   DEFAULT_FOLLOWUP_CFG, QUEUES, needsReply, needsMiaHelp, filterByQueue, queueCounts, sortNeedsReply,
 } from '@/lib/inbox-queues'
 import { matchesSearch } from '@/lib/inbox-search'
+import { createListReloader } from '@/lib/inbox-list-reload'
 import {
   MessageCircle, RefreshCw, Check, Inbox as InboxIcon,
   ArrowLeft, Search,
@@ -123,7 +124,20 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
     setLoading(false)
   }, [locationId])
 
-  useEffect(() => { loadConversations() }, [loadConversations])
+  // INBOXPERM.1 — every list load goes through one reloader: realtime events
+  // are debounced (400 ms, at most 2 s of postponement) and every path shares
+  // one in-flight guard, so a burst is one request, never several at once.
+  // `reloadNow` (manual refresh, the poll, the post-action callbacks) is
+  // immediate; `reloadSoon` is for realtime. See src/lib/inbox-list-reload.js.
+  const loadRef = useRef(loadConversations)
+  loadRef.current = loadConversations
+  const reloaderRef = useRef(null)
+  if (!reloaderRef.current) reloaderRef.current = createListReloader(() => loadRef.current())
+  const reloadNow = useCallback(() => reloaderRef.current.now(), [])
+  const reloadSoon = useCallback(() => reloaderRef.current.request(), [])
+  useEffect(() => () => reloaderRef.current.cancel(), [])
+
+  useEffect(() => { reloadNow() }, [loadConversations, reloadNow])
 
   // UIX-POLISH.3 — Realtime push for the queue. The WA tables have
   // been published since mig 042; mig 256 added the Instagram tables,
@@ -147,17 +161,17 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
       'agent_membership_requests',
     ]) {
       channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => {
-        loadConversations()
+        reloadSoon()
       })
     }
     channel.subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [locationId, loadConversations])
+  }, [locationId, reloadSoon])
 
   useEffect(() => {
-    const t = setInterval(loadConversations, 60000)
+    const t = setInterval(reloadNow, 60000)
     return () => clearInterval(t)
-  }, [loadConversations])
+  }, [reloadNow])
 
   // INBOXFOLLOW.1 — re-render each minute so a snooze that ended, or a thread
   // that has been quiet long enough, changes queue (and its wait chip ticks)
@@ -276,7 +290,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
               </span>
             )}
           </div>
-          <button type="button" onClick={loadConversations} className="text-un1t-subtle hover:text-un1t-text" aria-label="Refresh">
+          <button type="button" onClick={reloadNow} className="text-un1t-subtle hover:text-un1t-text" aria-label="Refresh">
             <RefreshCw size={16} />
           </button>
         </div>
@@ -451,12 +465,12 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                   userId={userId}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
-                  onThreadChanged={loadConversations}
+                  onThreadChanged={reloadNow}
                   onMoved={(movedId) => {
                     // WAHOMESTUDIO.1 (R7) — the thread left this inbox: drop the
                     // selection (pane, command centre, mobile back bar) and reload the queue.
                     setSelected(prev => (prev && prev.id === movedId ? null : prev))
-                    loadConversations()
+                    reloadNow()
                   }}
                 />
               ) : (
@@ -466,7 +480,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                   timezone={timezone}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
-                  onThreadChanged={loadConversations}
+                  onThreadChanged={reloadNow}
                 />
               )}
             </div>
