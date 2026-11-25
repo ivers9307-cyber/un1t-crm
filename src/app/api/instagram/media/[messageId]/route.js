@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
-import { assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { mediaRenderKind } from '@shared/whatsapp-media'
 import { ensureInstagramMediaRehosted } from '@/lib/instagram-media-server'
 import { signedMediaUrl } from '@/lib/whatsapp-media-server'
@@ -13,17 +13,18 @@ import { signedMediaUrl } from '@/lib/whatsapp-media-server'
 // fetches this, then renders the URL as an <img>/<video>/file link. Mirrors
 // the WhatsApp media route; shares its signing helper + private bucket.
 //
-// Auth: any user with access to the conversation's location. 404 (not 403)
-// on a missing message or a location the caller can't see, so ids aren't
-// enumerable (matches the IDOR posture of the sibling routes).
+// Auth (INBOXPERM.1): the inbox key (the `whatsapp` key serves both channels;
+// web or phone, the phone calls this route) held at ANY studio before the read,
+// membership of the message's studio (404, not 403, so ids aren't enumerable),
+// then the key AT that studio. Nothing is re-hosted or signed before the decision.
 
 export const runtime = 'nodejs'
 
 // withAuth only signs the caller in; the channel permission and the
 // message's studio (404) run here, as before.
 export const GET = withAuth({ permission: null, location: false }, async ({ user, db, params }) => {
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'ig')
+  // Service-role client, so these gates ARE the access control (INBOXPERM.1).
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const { data: message, error } = await db.from('instagram_messages')
@@ -36,6 +37,8 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
 
   const guard = assertLocationAccessOr404(user, message.location_id)
   if (guard) return guard
+  const permHere = requireWhatsAppInboxAt(user, message.location_id)
+  if (permHere) return permHere
 
   // Only serve things that are actually media (never text/story-mention/etc).
   const kind = mediaRenderKind(message.message_type, message.media_mime_type)
