@@ -4,12 +4,14 @@
 -- instagram_conversations. Later tasks stamp them; this migration only adds
 -- them and backfills the two that existing data can answer.
 --
---   customer_waiting_since  the customer's unanswered inbound message
---   staff_owned_since       a person took the thread over
---   staff_waiting_since     staff owe the customer a reply (queue clock)
---   staff_nudged_at         last nudge sent to staff
---   staff_nudge_outcome     what the nudge led to
---   handoff_requested_at    Mia handed off and no person has answered
+--   customer_waiting_since  the first inbound message not yet answered
+--   staff_owned_since       a coach replied in the thread and keeps it until a
+--                           coach completes it
+--   staff_waiting_since     staff sent the last message and are waiting on the
+--                           CUSTOMER (queue clock)
+--   staff_nudged_at         when Mia nudged the CUSTOMER, or decided not to
+--   staff_nudge_outcome     'sent' or 'skipped:<reason>'
+--   handoff_requested_at    Mia asked for a human and no person has answered
 --   snoozed_until / snoozed_by / snooze_note   a staff snooze (note <= 140)
 --
 -- GRANT DECISION (docs/rules/data-access.md): both tables carry a table-level
