@@ -1,0 +1,98 @@
+// @vitest-environment jsdom
+// INBOXFOLLOW.2 — the Snooze control in a thread header.
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
+import SnoozeControl from './SnoozeControl.jsx'
+
+const NOW = Date.parse('2026-11-25T12:00:00Z') // Wednesday
+const reply = (body, ok = true, status = 200) => ({ ok, status, json: async () => body })
+let fetchMock
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(NOW)
+  fetchMock = vi.fn(async () => reply({ success: true, data: { snoozed_until: 'x', snooze_note: null } }))
+  vi.stubGlobal('fetch', fetchMock)
+})
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers() })
+
+const bodyOf = (i = 0) => JSON.parse(fetchMock.mock.calls[i][1].body)
+const open = () => fireEvent.click(screen.getByRole('button', { name: 'Snooze' }))
+const conv = (extra = {}) => ({ id: 'c1', resolved_at: null, snoozed_until: null, ...extra })
+
+describe('SnoozeControl', () => {
+  it('a preset posts its instant and the note to the channel route, then refreshes', async () => {
+    const onChanged = vi.fn()
+    render(<SnoozeControl channel="wa" conversation={conv()} zone="Europe/Dublin" onChanged={onChanged} />)
+    open()
+    fireEvent.change(screen.getByLabelText(/Note/), { target: { value: 'ring Friday' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Tomorrow 09:00' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/whatsapp/conversations/c1/snooze')
+    expect(bodyOf()).toEqual({ until: '2026-11-26T09:00:00.000Z', note: 'ring Friday' })
+  })
+
+  it('Instagram posts to its own route', async () => {
+    render(<SnoozeControl channel="ig" conversation={conv()} zone="Europe/Dublin" />)
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Later today' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/instagram/conversations/c1/snooze')
+  })
+
+  it("reads the custom time on the studio's clock, not the browser's", async () => {
+    render(<SnoozeControl channel="wa" conversation={conv()} zone="America/New_York" />)
+    open()
+    fireEvent.change(screen.getByLabelText(/Or pick a time/), { target: { value: '2026-11-27T09:00' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze until then' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(bodyOf().until).toBe('2026-11-27T14:00:00.000Z') // 09:00 EST
+  })
+
+  it('asks for a time when the custom field is empty, and sends nothing', () => {
+    render(<SnoozeControl channel="wa" conversation={conv()} zone="Europe/Dublin" />)
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze until then' }))
+    expect(screen.getByRole('alert').textContent).toBe('Pick a date and a time.')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("shows the route's reason under the control, never an alert", async () => {
+    const alertSpy = vi.fn()
+    vi.stubGlobal('alert', alertSpy)
+    fetchMock.mockResolvedValueOnce(reply({ success: false, error: 'Conversation is completed' }, false, 400))
+    render(<SnoozeControl channel="wa" conversation={conv()} zone="Europe/Dublin" />)
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'In 3 days' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Conversation is completed'))
+    expect(alertSpy).not.toHaveBeenCalled()
+  })
+
+  it('no answer shows a fixed message', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('offline'))
+    render(<SnoozeControl channel="wa" conversation={conv()} zone="Europe/Dublin" />)
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'In 3 days' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Could not change the snooze. Try again.'))
+  })
+
+  it('a snoozed thread shows when it returns, with the note, in the studio zone; Unsnooze posts until null', async () => {
+    const onChanged = vi.fn()
+    render(<SnoozeControl channel="wa" conversation={conv({ snoozed_until: '2026-11-27T09:00:00.000Z', snooze_note: 'ring back' })} zone="Europe/Dublin" onChanged={onChanged} />)
+    expect(screen.getByTestId('snoozed-state').textContent).toContain('Snoozed until Fri 27 Nov, 09:00 · ring back')
+    expect(screen.queryByRole('button', { name: 'Snooze' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Unsnooze' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(bodyOf()).toEqual({ until: null })
+  })
+
+  it('a snooze that has ended is not shown as snoozed', () => {
+    render(<SnoozeControl channel="wa" conversation={conv({ snoozed_until: '2026-11-25T11:00:00.000Z' })} zone="Europe/Dublin" />)
+    expect(screen.queryByTestId('snoozed-state')).toBeNull()
+  })
+
+  it('every button is type="button"', () => {
+    const { container } = render(<SnoozeControl channel="wa" conversation={conv()} zone="Europe/Dublin" />)
+    open()
+    for (const b of container.querySelectorAll('button')) expect(b.getAttribute('type')).toBe('button')
+  })
+})

@@ -451,6 +451,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                   userId={userId}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
+                  onThreadChanged={loadConversations}
                   onMoved={(movedId) => {
                     // WAHOMESTUDIO.1 (R7) — the thread left this inbox: drop the
                     // selection (pane, command centre, mobile back bar) and reload the queue.
@@ -465,6 +466,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                   timezone={timezone}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
+                  onThreadChanged={loadConversations}
                 />
               )}
             </div>

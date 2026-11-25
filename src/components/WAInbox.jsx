@@ -16,6 +16,7 @@ import WAMediaContent from '@/components/WAMediaContent'
 import ApprovalActionCard from '@/components/ApprovalActionCard'
 import { ChannelAvatar } from '@/components/inbox/ChannelBits'
 import HandledByControl from '@/components/inbox/HandledByControl'
+import SnoozeControl from '@/components/inbox/SnoozeControl'
 import AssignControl from '@/components/inbox/AssignControl'
 import MiaDecisionTrace from '@/components/inbox/MiaDecisionTrace'
 import WAAttachmentComposer from '@/components/inbox/WAAttachmentComposer'
@@ -93,7 +94,7 @@ function initialsOf(name) {
 // `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
 // the internal conversation list is hidden and selection is driven by
 // the `initialConversationId` prop (synced on change, not just mount).
-export default function WAInbox({ locationId, timezone = null, userId, initialConversationId, embedded = false, onOpenBookTab, onMoved }) {
+export default function WAInbox({ locationId, timezone = null, userId, initialConversationId, embedded = false, onOpenBookTab, onMoved, onThreadChanged }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [messages, setMessages] = useState([])
@@ -1006,6 +1007,15 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
                 )}
                 {conversation && (
                   <MiaDecisionTrace conversationId={conversation.id} />
+                )}
+                {/* INBOXFOLLOW.2 — snooze until a time; a snoozed thread waits. */}
+                {conversation && !conversation.resolved_at && (
+                  <SnoozeControl
+                    channel="wa"
+                    conversation={conversation}
+                    zone={timezone}
+                    onChanged={() => { threadSigRef.current = ''; fetchMessages(selectedId); fetchConversations(); onThreadChanged?.() }}
+                  />
                 )}
                 {conversation && (
                   <button
