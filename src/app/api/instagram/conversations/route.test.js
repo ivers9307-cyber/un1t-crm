@@ -65,3 +65,27 @@ describe('GET /api/instagram/conversations', () => {
     expect(await res.json()).toEqual({ success: false, error: 'Could not load the conversations.' })
   })
 })
+
+// INBOXFOLLOW.1 — the queues see every waiting thread, and the route returns the
+// studio's follow-up config (the defaults when none is named).
+describe('GET /api/instagram/conversations — queues and follow-up config', () => {
+  const id = (n) => `a2000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  const hoursAgo = (n) => new Date(Date.UTC(2026, 10, 25) - n * 3600_000).toISOString()
+
+  it('returns all 55 waiting threads of a 60-thread studio, not the latest 50', async () => {
+    const rows = []
+    for (let n = 1; n <= 55; n++) rows.push({ id: id(n), location_id: LOC_A, last_message_at: hoursAgo(n + 10), last_message_direction: 'inbound' })
+    for (let n = 56; n <= 60; n++) rows.push({ id: id(n), location_id: LOC_A, last_message_at: hoursAgo(n - 55), last_message_direction: 'outbound' })
+    db.tables.instagram_conversations = rows
+    getCurrentUser.mockResolvedValue(inbox(true))
+    const body = await (await get(`?location_id=${LOC_A}`)).json()
+    expect(body.conversations).toHaveLength(60)
+    expect(body.conversations.filter((c) => c.last_message_direction === 'inbound')).toHaveLength(55)
+  })
+
+  it('answers the follow-up config: the defaults with no studio named or none stored', async () => {
+    getCurrentUser.mockResolvedValue(inbox(true))
+    expect((await (await get()).json()).followup).toEqual({ quietHours: 48, nudgeEnabled: false })
+    expect((await (await get(`?location_id=${LOC_A}`)).json()).followup).toEqual({ quietHours: 48, nudgeEnabled: false })
+  })
+})

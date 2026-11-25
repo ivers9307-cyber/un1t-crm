@@ -16,6 +16,7 @@ vi.mock('@/lib/approvals/registry', () => ({
   getPendingApprovals: vi.fn(),
   getPendingApprovalsCount: vi.fn(),
 }))
+vi.mock('@/lib/inbox-followup-config', () => ({ readInboxFollowupConfig: vi.fn(async () => ({ quietHours: 48, nudgeEnabled: false })) }))
 vi.mock('@/lib/permissions', () => ({
   hasPermission: vi.fn(),
   hasPermissionForLocation: vi.fn(),
@@ -38,6 +39,7 @@ import {
 import { getPendingApprovals, getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
 import { loadVisibleMailboxes } from '@/app/api/email/mail/_conversation'
+import { readInboxFollowupConfig } from '@/lib/inbox-followup-config'
 
 const LOC = 'loc-1'
 const userAt = (over = {}) => ({ id: 'u1', role: 'staff', activeLocation: { id: LOC }, ...over })
@@ -258,6 +260,23 @@ describe('assembleHomeQueue — inbox source', () => {
       title: 'ig_user', href: '/communications/inbox?c=g1&ch=ig',
     })
     expect(result.counts.inbox).toBe(2)
+  })
+
+  // INBOXFOLLOW.1 — the queue rules read the follow-up columns and the studio's config.
+  it('leaves a thread a coach replied to out of the queue until it has been quiet for the studio\'s window', async () => {
+    hasPermission.mockReturnValue(true)
+    const repliedAt = Date.now() - 10 * 3600_000
+    const coachReplied = {
+      id: 'w9', wa_phone: '+353872222222', resolved_at: null, last_message_at: new Date(repliedAt).toISOString(),
+      last_message_direction: 'outbound', staff_owned_since: new Date(repliedAt).toISOString(),
+      staff_waiting_since: new Date(repliedAt).toISOString(), handoff_requested_at: null, contacts: null,
+    }
+    const db = makeDb({ whatsapp_conversations: { rows: [coachReplied] } })
+    expect((await assembleHomeQueue(db, userAt())).counts.inbox).toBe(0)
+    // A 4-hour quiet window has passed: the thread is back in "Needs reply".
+    readInboxFollowupConfig.mockResolvedValueOnce({ quietHours: 4, nudgeEnabled: false })
+    expect((await assembleHomeQueue(db, userAt())).counts.inbox).toBe(1)
+    expect(readInboxFollowupConfig).toHaveBeenCalledWith(expect.anything(), LOC)
   })
 
   it('falls back to phone/username when there is no linked contact', async () => {

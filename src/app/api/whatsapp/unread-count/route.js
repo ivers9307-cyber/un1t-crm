@@ -24,6 +24,7 @@ import { withAuth } from '@/lib/with-auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { needsAction } from '@/lib/inbox-queues'
+import { readInboxFollowupConfig } from '@/lib/inbox-followup-config'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,8 +45,14 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
   // Only the columns the needsAction predicate reads. Pre-filter to unresolved
   // rows in the query so the payload stays tiny; the predicate does the final
   // needs-reply-or-handoff decision (and drops empty conversation shells).
-  const cols = 'resolved_at, last_message_at, last_message_direction, agent_handed_off_at'
-  const countActionable = rows => (rows || []).filter(needsAction).length
+  // INBOXFOLLOW.1 — plus the follow-up columns it reads (customer_waiting_since,
+  // staff_*, handoff_requested_at, snoozed_until): a thread a coach replied to
+  // leaves the count until the customer or the quiet window brings it back.
+  const cols = 'resolved_at, last_message_at, last_message_direction, agent_handed_off_at, customer_waiting_since, staff_owned_since, staff_waiting_since, staff_nudged_at, staff_nudge_outcome, handoff_requested_at, snoozed_until, snooze_note'
+  const nowMs = Date.now()
+  const cfg = await readInboxFollowupConfig(db, locationId)
+  // Explicit arguments: Array.filter would pass its index as nowMs.
+  const countActionable = (rows, channel) => (rows || []).filter(c => needsAction(c, nowMs, cfg, channel)).length
   try {
     // INBOX-SPLIT.1 — email_conversations LEFT this count (Richard,
     // 2026-08-07). EMAIL-INBOX.1 had added it as a third channel, but the
@@ -61,8 +68,8 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
     ])
     // A failure on any channel degrades to that channel counting 0
     // rather than erroring the badge.
-    const count = countActionable(wa.error ? [] : wa.data)
-      + countActionable(ig.error ? [] : ig.data)
+    const count = countActionable(wa.error ? [] : wa.data, 'wa')
+      + countActionable(ig.error ? [] : ig.data, 'ig')
     return NextResponse.json({ success: true, data: { count } })
   } catch {
     return NextResponse.json({ success: true, data: { count: 0 } })

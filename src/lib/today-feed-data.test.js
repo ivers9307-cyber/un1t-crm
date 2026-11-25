@@ -15,6 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+vi.mock('@/lib/inbox-followup-config', () => ({ readInboxFollowupConfig: vi.fn(async () => ({ quietHours: 48, nudgeEnabled: false })) }))
 vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn() }))
 vi.mock('@/lib/approvals/registry', () => ({ getPendingApprovalsCount: vi.fn() }))
 vi.mock('@/lib/issues', () => ({ countInboxIssues: vi.fn() }))
@@ -33,6 +34,7 @@ import { countInboxIssues } from '@/lib/issues'
 import { loadRadar } from '@/lib/churn-radar-data'
 import { radarAvailability } from '@/lib/radar-availability'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
+import { readInboxFollowupConfig } from '@/lib/inbox-followup-config'
 
 const LOC = 'loc-1'
 
@@ -122,6 +124,20 @@ describe('fetchTodayFeed — WhatsApp row uses needsAction, not raw unread_count
     // resolved thread alone) or 5 total; the fix counts only the one
     // genuinely-unresolved needs-reply thread.
     expect(rows.find((r) => r.id === 'whatsapp')?.count).toBe(1)
+  })
+
+  // INBOXFOLLOW.1 — a thread a coach replied to is not "needs reply" until the
+  // studio's quiet window has passed; Mia's own handoff stamp is handoff_requested_at.
+  it('leaves a coach-replied thread out until the studio\'s quiet window has passed', async () => {
+    const repliedAt = new Date(Date.now() - 10 * 3600_000).toISOString()
+    const coachReplied = {
+      id: 'w9', location_id: LOC, resolved_at: null, last_message_at: repliedAt, last_message_direction: 'outbound',
+      staff_owned_since: repliedAt, staff_waiting_since: repliedAt, handoff_requested_at: null,
+    }
+    const db = makeDb({ whatsapp_conversations: tableStub([coachReplied]) })
+    expect((await fetchTodayFeed(db, { id: 'u1' }, LOC)).find((r) => r.id === 'whatsapp')?.count ?? 0).toBe(0)
+    readInboxFollowupConfig.mockResolvedValueOnce({ quietHours: 4, nudgeEnabled: false })
+    expect((await fetchTodayFeed(db, { id: 'u1' }, LOC)).find((r) => r.id === 'whatsapp')?.count).toBe(1)
   })
 
   it("counts an agent handoff whose last message was the agent's own holding line", async () => {

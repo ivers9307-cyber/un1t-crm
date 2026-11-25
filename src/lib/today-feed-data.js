@@ -17,6 +17,7 @@ import { countInboxIssues } from '@/lib/issues'
 import { loadRadar } from '@/lib/churn-radar-data'
 import { radarAvailability } from '@/lib/radar-availability'
 import { needsAction } from '@/lib/inbox-queues'
+import { readInboxFollowupConfig } from '@/lib/inbox-followup-config'
 import { formatInZone, getLocationZone, todayStrIn } from '@/lib/location-time'
 import { displayZoneFor } from '@/lib/display-zone'
 import {
@@ -85,14 +86,18 @@ async function safe(allowed, fn) {
 // "threads needing a reply or handoff" — a smaller, more meaningful number,
 // not a regression if today's email reads lower than yesterday's.
 async function fetchWhatsappNeedsAction(db, locationId) {
-  const cols = 'resolved_at, last_message_at, last_message_direction, agent_handed_off_at'
-  const { data, error } = await db
-    .from('whatsapp_conversations')
-    .select(cols)
-    .eq('location_id', locationId)
-    .is('resolved_at', null)
+  const cols = 'resolved_at, last_message_at, last_message_direction, agent_handed_off_at, customer_waiting_since, staff_owned_since, staff_waiting_since, staff_nudged_at, staff_nudge_outcome, handoff_requested_at, snoozed_until, snooze_note'
+  const nowMs = Date.now()
+  const [cfg, { data, error }] = await Promise.all([
+    readInboxFollowupConfig(db, locationId),
+    db.from('whatsapp_conversations')
+      .select(cols)
+      .eq('location_id', locationId)
+      .is('resolved_at', null),
+  ])
   if (error) return null
-  return (data || []).filter(needsAction).length
+  // Explicit arguments: Array.filter would pass its index as nowMs.
+  return (data || []).filter(c => needsAction(c, nowMs, cfg, 'wa')).length
 }
 
 async function fetchInvoicesPending(db, locationId) {
