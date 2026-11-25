@@ -55,6 +55,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { pushOutcome } from '@/lib/push-outcome'
 import { logWarn, logError } from '@/lib/log'
 import { resolveRearmPatch } from './core'
+import { completePatch } from '@/lib/inbox-state'
 import { WA_STAFF_OUTBOUND_OR_FILTER } from '@/lib/whatsapp-staff-sources'
 import { resolveAgentSettingsForLocation } from './settings-resolve'
 
@@ -340,6 +341,8 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
             .update({
               resolved_at: nowIso,
               ...resolveRearmPatch({ resolved: true, agent_handed_off_at: c.agent_handed_off_at }),
+              // INBOXFOLLOW.1 — an auto-resolve completes the thread like a coach's resolve.
+              ...completePatch(),
             })
             .eq('id', c.id)
           if (resolveErr) {

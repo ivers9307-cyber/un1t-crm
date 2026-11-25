@@ -79,6 +79,22 @@ describe('PATCH /api/instagram/conversations/[id]', () => {
     expect(db.tables.instagram_conversations[0].resolved_at).not.toBeNull()
   })
 
+  // INBOXFOLLOW.1 — resolve completes the follow-up state; reopen changes none of it.
+  it('resolve:true nulls the nine follow-up columns; resolve:false leaves them alone', async () => {
+    getCurrentUser.mockResolvedValue(INBOX_A)
+    Object.assign(db.tables.instagram_conversations[0], {
+      customer_waiting_since: 'x', staff_owned_since: 'x', staff_waiting_since: 'x', staff_nudged_at: 'x',
+      staff_nudge_outcome: 'sent', handoff_requested_at: 'x', snoozed_until: 'x', snoozed_by: 'u', snooze_note: 'n',
+    })
+    expect((await patch(CONV_A, { resolved: false })).status).toBe(200)
+    expect(db.tables.instagram_conversations[0]).toMatchObject({ staff_owned_since: 'x', snoozed_until: 'x', handoff_requested_at: 'x' })
+    expect((await patch(CONV_A, { resolved: true })).status).toBe(200)
+    expect(db.tables.instagram_conversations[0]).toMatchObject({
+      customer_waiting_since: null, staff_owned_since: null, staff_waiting_since: null, staff_nudged_at: null,
+      staff_nudge_outcome: null, handoff_requested_at: null, snoozed_until: null, snoozed_by: null, snooze_note: null,
+    })
+  })
+
   it('a failed write answers a fixed 500, never the database text', async () => {
     getCurrentUser.mockResolvedValue(INBOX_A)
     db.errors.instagram_conversations = { update: { message: 'column "resolved_at" is of type timestamptz' } }

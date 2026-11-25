@@ -153,6 +153,22 @@ describe('runHandoffAutoResolve — HANDOFFKEEP.1 an unreadable broadcast check 
   })
 })
 
+// INBOXFOLLOW.1 — an auto-resolve completes the thread like a coach's resolve.
+describe('runHandoffAutoResolve — INBOXFOLLOW.1 completes the follow-up state', () => {
+  it('the resolve write nulls all nine follow-up columns', async () => {
+    const stale = { id: 'conv-4', agent_active: false, agent_handed_off_at: new Date(NOW - 72 * H).toISOString(), agent_paused_at: null, resolved_at: null, last_message_at: null }
+    const { db, updates } = sweepDb({ convs: [stale], broadcastSends: [{ created_at: stale.agent_handed_off_at }] })
+    const out = await runHandoffAutoResolve(db, { nowMs: NOW })
+    expect(out).toMatchObject({ resolved: 1 })
+    const write = updates.find((u) => 'resolved_at' in u.patch)
+    expect(write.patch).toMatchObject({
+      customer_waiting_since: null, staff_owned_since: null, staff_waiting_since: null,
+      staff_nudged_at: null, staff_nudge_outcome: null, handoff_requested_at: null,
+      snoozed_until: null, snoozed_by: null, snooze_note: null,
+    })
+  })
+})
+
 describe('runHandoffAutoResolve — a failed resolve write is not counted as resolved', () => {
   it('logs, counts skipped, and leaves the thread for the next tick', async () => {
     const stale = { id: 'conv-2', agent_active: false, agent_handed_off_at: new Date(NOW - 72 * H).toISOString(), agent_paused_at: null, resolved_at: null, last_message_at: null }
