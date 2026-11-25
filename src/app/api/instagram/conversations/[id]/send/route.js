@@ -36,19 +36,28 @@ export async function POST(request, props) {
   const { text } = validation.data
 
   const db = createServerClient()
-  const { data: conversation, error } = await db.from('instagram_conversations')
-    .select('*, contacts!contact_id(id, name, first_name)')
+  // The gate reads the studio only; the full row is read after the decision.
+  const { data: thread, error } = await db.from('instagram_conversations')
+    .select('id, location_id')
     .eq('id', params.id)
     .single()
 
-  if (error || !conversation) {
+  if (error || !thread) {
     return NextResponse.json({ success: false, error: 'Conversation not found' }, { status: 404 })
   }
 
-  const guard = assertLocationAccessOr404(user, conversation.location_id)
+  const guard = assertLocationAccessOr404(user, thread.location_id)
   if (guard) return guard
-  const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
+  const permHere = requireWhatsAppInboxAt(user, thread.location_id)
   if (permHere) return permHere
+
+  const { data: conversation, error: readErr } = await db.from('instagram_conversations')
+    .select('*, contacts!contact_id(id, name, first_name)')
+    .eq('id', thread.id)
+    .single()
+  if (readErr || !conversation) {
+    return NextResponse.json({ success: false, error: 'Conversation not found' }, { status: 404 })
+  }
 
   if (!conversation.ig_user_id) {
     return NextResponse.json({ success: false, error: 'No Instagram recipient for this conversation' }, { status: 400 })

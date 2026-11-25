@@ -30,20 +30,29 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
   const { searchParams } = new URL(request.url)
   const limit = parseInt(searchParams.get('limit') || '50')
 
-  const { data: conversation, error } = await db.from('instagram_conversations')
-    .select('*, contacts!contact_id(id, name, first_name, email, pipeline_stage_slug)')
+  // The gate reads the studio only; the full row is read after the decision.
+  const { data: thread, error } = await db.from('instagram_conversations')
+    .select('id, location_id')
     .eq('id', params.id)
     .single()
 
-  if (error || !conversation) {
+  if (error || !thread) {
     return NextResponse.json({ success: false, error: 'Conversation not found' }, { status: 404 })
   }
 
   // Caller must belong to the conversation's location.
-  const guard = assertLocationAccessOr404(user, conversation.location_id)
+  const guard = assertLocationAccessOr404(user, thread.location_id)
   if (guard) return guard
-  const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
+  const permHere = requireWhatsAppInboxAt(user, thread.location_id)
   if (permHere) return permHere
+
+  const { data: conversation, error: readErr } = await db.from('instagram_conversations')
+    .select('*, contacts!contact_id(id, name, first_name, email, pipeline_stage_slug)')
+    .eq('id', thread.id)
+    .single()
+  if (readErr || !conversation) {
+    return NextResponse.json({ success: false, error: 'Conversation not found' }, { status: 404 })
+  }
 
   // Newest rows first then reversed for display — ascending+limit returns
   // the OLDEST rows, which froze the thread pane once a conversation
