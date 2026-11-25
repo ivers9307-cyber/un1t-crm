@@ -171,9 +171,18 @@ export function classifyBroadcastWait({
 //   (a) a human replied since the handoff and the thread has been quiet for
 //       auto_resolve_after_reply_hours (default 8 — Richard, 2026-08-20): the
 //       human engagement ran its course; hand the thread back to Mia.
-//   (b) NOTHING has happened for auto_resolve_stale_hours (default 48): the
-//       conversation is over; a parked thread only means the customer's NEXT
-//       message lands in silence.
+//   (b) NOTHING has happened for auto_resolve_stale_hours (default 48) on a
+//       thread NOBODY IS WAITING ON: a human replied (with case (a) off), or
+//       a broadcast took Mia off the thread and the customer never answered.
+//
+// HANDOFFKEEP.1 — case (b) used to fire on every quiet thread, including a
+// customer Mia had told "passing you to a team member" whom nobody answered.
+// On 22 Nov 2026 a Stillorgan lead asked about drop-in classes, got that
+// message, and 48 hours later this sweep took him out of the staff queue with
+// the question still open (six such threads in 30 days). An unanswered handoff
+// is the one thread the queue exists for, so it now stays until a person
+// replies or resolves it. It does not strand the customer: their next message
+// after handoff_cooldown_hours still re-arms Mia (shouldAgentReply).
 // Either case applies exactly the patch the inbox Resolve button applies
 // (resolved_at + resolveRearmPatch), so the SLA escalation stamp clears and
 // re-arm semantics are identical to the manual workflow. Operator-paused
@@ -213,6 +222,9 @@ export function classifyAutoResolve({
   resolvedAtMs,
   lastMessageAtMs,
   humanRepliedAtMs,
+  // HANDOFFKEEP.1 — false only when the caller KNOWS nobody is waiting (a
+  // broadcast handover the customer never answered). Unknown counts as waiting.
+  customerWaiting,
   nowMs,
   afterReplyHours = AUTO_RESOLVE_AFTER_REPLY_HOURS_DEFAULT,
   staleHours = AUTO_RESOLVE_STALE_HOURS_DEFAULT,
@@ -231,6 +243,9 @@ export function classifyAutoResolve({
     return { resolve: true, reason: 'human_replied_quiet' }
   }
   if (staleHours > 0 && nowMs - quietSinceMs >= staleHours * HOUR_MS) {
+    // HANDOFFKEEP.1 — nobody answered and the customer is (or may be) waiting:
+    // the thread stays in the staff queue, however old.
+    if (!humanReplied && customerWaiting !== false) return { resolve: false, reason: 'unanswered' }
     return { resolve: true, reason: 'stale' }
   }
   return { resolve: false, reason: 'waiting' }
@@ -242,7 +257,7 @@ export function classifyAutoResolve({
  * throws. First real run drains the accumulated backlog; that is the point.
  */
 export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
-  const results = { resolved: 0, skipped: 0, reply_unread: 0, locations_unread: 0 }
+  const results = { resolved: 0, skipped: 0, reply_unread: 0, locations_unread: 0, unanswered: 0, broadcast_unread: 0 }
   const nowIso = new Date(nowMs).toISOString()
 
   const locations = await readActiveLocations(db, 'auto-resolve', results)
@@ -291,7 +306,7 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
             })
             continue
           }
-          const decision = classifyAutoResolve({
+          const facts = {
             handedOffAtMs,
             pausedAt: c.agent_paused_at || null,
             agentActive: c.agent_active === true,
@@ -301,7 +316,24 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
             nowMs,
             afterReplyHours,
             staleHours,
-          })
+          }
+          let decision = classifyAutoResolve(facts)
+          // HANDOFFKEEP.1 — a stale thread nobody answered stays, unless a
+          // broadcast put it here and the customer never answered that (nobody
+          // is waiting). Read only for the threads it decides; a failed read
+          // keeps the thread: a queue row too many beats a customer dropped.
+          if (decision.reason === 'unanswered') {
+            const wait = await readBroadcastWait(db, channel, c.id, handedOffAtMs)
+            if (wait.error) {
+              results.broadcast_unread++
+              logWarn('handoff-sla', 'broadcast-handoff read failed; unanswered thread kept in the queue', {
+                channel: channel.name, conversationId: c.id, err: wait.error.message || String(wait.error),
+              })
+            } else if (wait.broadcast && !wait.customerRepliedAtMs) {
+              decision = classifyAutoResolve({ ...facts, customerWaiting: false })
+            }
+            if (decision.reason === 'unanswered') results.unanswered++
+          }
           if (!decision.resolve) { results.skipped++; continue }
 
           const { error: resolveErr } = await db.from(channel.conversationsTable)

@@ -141,12 +141,26 @@ describe('runHandoffSlaSweep — stamp after the send (C21 PUSHDONE.1)', () => {
   })
 })
 
+describe('runHandoffAutoResolve — HANDOFFKEEP.1 an unreadable broadcast check keeps the thread', () => {
+  it('does not resolve an unanswered stale thread when the broadcast read fails', async () => {
+    const stale = { id: 'conv-3', agent_active: false, agent_handed_off_at: new Date(NOW - 72 * H).toISOString(), agent_paused_at: null, resolved_at: null, last_message_at: null }
+    const { db, updates } = sweepDb({ convs: [stale], broadcastSends: [{ created_at: stale.agent_handed_off_at }], broadcastError: { message: 'down' } })
+    const out = await runHandoffAutoResolve(db, { nowMs: NOW })
+    expect(updates).toEqual([])
+    expect(out).toMatchObject({ resolved: 0, unanswered: 1, broadcast_unread: 1 })
+    expect(logWarn).toHaveBeenCalledWith('handoff-sla', 'broadcast-handoff read failed; unanswered thread kept in the queue',
+      expect.objectContaining({ channel: 'whatsapp', conversationId: 'conv-3', err: 'down' }))
+  })
+})
+
 describe('runHandoffAutoResolve — a failed resolve write is not counted as resolved', () => {
   it('logs, counts skipped, and leaves the thread for the next tick', async () => {
     const stale = { id: 'conv-2', agent_active: false, agent_handed_off_at: new Date(NOW - 72 * H).toISOString(), agent_paused_at: null, resolved_at: null, last_message_at: null }
-    const { db } = sweepDb({ convs: [stale], updateError: { message: 'down' } })
+    // HANDOFFKEEP.1: only a thread nobody is waiting on resolves when stale,
+    // here a broadcast handover the customer never answered.
+    const { db } = sweepDb({ convs: [stale], updateError: { message: 'down' }, broadcastSends: [{ created_at: stale.agent_handed_off_at }] })
     const out = await runHandoffAutoResolve(db, { nowMs: NOW })
-    expect(out).toEqual({ resolved: 0, skipped: 1, reply_unread: 0, locations_unread: 0 })
+    expect(out).toEqual({ resolved: 0, skipped: 1, reply_unread: 0, locations_unread: 0, unanswered: 0, broadcast_unread: 0 })
     expect(logWarn).toHaveBeenCalledWith('handoff-sla', 'auto-resolve write failed; retried next tick',
       expect.objectContaining({ channel: 'whatsapp', conversationId: 'conv-2', err: 'down' }))
   })
