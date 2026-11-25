@@ -76,8 +76,10 @@ export function needsReply(c, nowMs = Date.now(), cfg = DEFAULT_FOLLOWUP_CFG, ch
   return c.last_message_direction === 'inbound' || hasReturned(c, nowMs, cfg, channel)
 }
 
-export function needsMiaHelp(c) {
-  return !!c && !c.resolved_at && !!c.handoff_requested_at
+// A snoozed hand-off waits with the rest of the snoozed threads (Waiting), so
+// the chip count and the badge agree; it is back when the snooze ends.
+export function needsMiaHelp(c, nowMs = Date.now()) {
+  return !!c && !c.resolved_at && !!c.handoff_requested_at && !isSnoozed(c, nowMs)
 }
 
 export function isWaiting(c, nowMs = Date.now(), cfg = DEFAULT_FOLLOWUP_CFG, channel = 'wa') {
@@ -96,7 +98,7 @@ export function hasPendingApproval(c) {
 // last_message_at guard: empty conversation shells never inflate a badge.
 export function needsAction(c, nowMs = Date.now(), cfg = DEFAULT_FOLLOWUP_CFG, channel = 'wa') {
   if (!c || c.resolved_at || !c.last_message_at || isSnoozed(c, nowMs)) return false
-  return needsReply(c, nowMs, cfg, channel) || needsMiaHelp(c)
+  return needsReply(c, nowMs, cfg, channel) || needsMiaHelp(c, nowMs)
 }
 
 export function waitSinceMs(c, nowMs = Date.now(), cfg = DEFAULT_FOLLOWUP_CFG, channel = 'wa') {
@@ -140,7 +142,7 @@ function predicateFor(queue, nowMs, cfg) {
   const ch = c => channelKeyOf(c)
   switch (queue) {
     case 'needs_reply': return c => needsReply(c, nowMs, cfg, ch(c))
-    case 'mia_help': return needsMiaHelp
+    case 'mia_help': return c => needsMiaHelp(c, nowMs)
     case 'waiting': return c => isWaiting(c, nowMs, cfg, ch(c))
     case 'pending_approval': return hasPendingApproval
     default: return () => true

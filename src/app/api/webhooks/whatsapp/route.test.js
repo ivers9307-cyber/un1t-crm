@@ -507,7 +507,11 @@ describe('POST /api/webhooks/whatsapp — inbox follow-up stamps', () => {
 
   it('a snoozed thread that receives an inbound message is un-snoozed, staff wait cleared, customer wait set, resolved_at null', async () => {
     resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
-    const d = stampDb({ data: { customer_waiting_since: null }, error: null })
+    // The thread is snoozed as the message lands: the stamp must clear it.
+    const d = stampDb({
+      data: { customer_waiting_since: null, snoozed_until: '2099-01-01T09:00:00.000Z', snoozed_by: 'user-1', snooze_note: 'ring back Friday' },
+      error: null,
+    })
     createServerClient.mockReturnValue(d)
 
     const res = await POST(reqFor(inboundText(REGISTERED_PNI)))

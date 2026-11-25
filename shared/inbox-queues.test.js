@@ -161,6 +161,24 @@ describe('needsReply / isWaiting / needsAction', () => {
   })
 })
 
+describe('boundaries', () => {
+  it('a thread exactly at returnAt has returned', () => {
+    const c = staffReplied(10)
+    const at = returnAtMs(c, Q48, 'wa')
+    expect(isWaiting(c, at - 1, Q48, 'wa')).toBe(true)
+    expect(needsReply(c, at - 1, Q48, 'wa')).toBe(false)
+    expect(isWaiting(c, at, Q48, 'wa')).toBe(false)
+    expect(needsReply(c, at, Q48, 'wa')).toBe(true)
+    expect(returnReason(c, at, Q48, 'wa')).toBe('gone_quiet')
+  })
+  it('a snooze with snoozed_until === now is not snoozed', () => {
+    const c = inbound({ snoozed_until: new Date(NOW).toISOString() })
+    expect(isSnoozed(c, NOW)).toBe(false)
+    expect(needsReply(c, NOW, Q48, 'wa')).toBe(true)
+    expect(isSnoozed(c, NOW - 1)).toBe(true)
+  })
+})
+
 describe('needsMiaHelp', () => {
   it('reads handoff_requested_at on unresolved threads', () => {
     expect(needsMiaHelp({ handoff_requested_at: ago(1) })).toBe(true)
@@ -267,5 +285,26 @@ describe('filterByQueue / queueCounts', () => {
     const ig = staffReplied(60, { id: 'ig', _ch: 'ig' })
     const phoneIg = staffReplied(60, { id: 'pig', channel: 'instagram' })
     expect(filterByQueue([wa, ig, phoneIg], 'needs_reply', NOW, Q48N).map(c => c.id)).toEqual(['ig', 'pig'])
+  })
+})
+
+describe('a snoozed Mia hand-off', () => {
+  const handoff = (extra = {}) => staffReplied(1, { handoff_requested_at: ago(2), ...extra })
+  it('is Waiting, not Mia needs help, not needs-action, while snoozed', () => {
+    const c = handoff({ snoozed_until: ahead(5) })
+    expect(needsMiaHelp(c, NOW)).toBe(false)
+    expect(needsAction(c, NOW, Q48, 'wa')).toBe(false)
+    expect(isWaiting(c, NOW, Q48, 'wa')).toBe(true)
+    expect(filterByQueue([c], 'mia_help', NOW, Q48)).toEqual([])
+    expect(filterByQueue([c], 'waiting', NOW, Q48)).toEqual([c])
+    expect(queueCounts([c], NOW, Q48)).toMatchObject({ needs_reply: 0, mia_help: 0, waiting: 1 })
+  })
+  it('is back in Mia needs help when the snooze ends', () => {
+    const c = handoff({ snoozed_until: ahead(5) })
+    const later = NOW + 5 * H
+    expect(needsMiaHelp(c, later)).toBe(true)
+    expect(needsAction(c, later, Q48, 'wa')).toBe(true)
+    expect(filterByQueue([c], 'mia_help', later, Q48)).toEqual([c])
+    expect(queueCounts([c], later, Q48).mia_help).toBe(1)
   })
 })
