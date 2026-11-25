@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
-import { assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { logError } from '@/lib/log'
 import { resolveRearmPatch } from '@/lib/agent/core'
 import { completePatch } from '@/lib/inbox-state'
@@ -19,10 +19,12 @@ const PatchConversationBody = z.object({
 export const GET = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  // SECGAPS.1 — 'ig' rides the web `whatsapp` key: a coarse any-studio check
-  // here, the decision at the conversation's own studio once it is read (the
-  // WhatsApp thread routes' INBOXLOC.1 rule).
-  const perm = requireWebWhatsAppInboxAnywhere(user)
+  // SECGAPS.1 — 'ig' rides the `whatsapp` key (no Instagram key exists): a
+  // coarse any-studio check here, the decision at the conversation's own
+  // studio once it is read (the WhatsApp thread routes' INBOXLOC.1 rule).
+  // INBOXPERM.1 — web OR phone key (the phone calls this route), the pair the
+  // WhatsApp thread routes take. The "WhatsApp" in the helper names is the key.
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const { searchParams } = new URL(request.url)
@@ -40,7 +42,7 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
   // Caller must belong to the conversation's location.
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
-  const permHere = requireWebWhatsAppInboxAt(user, conversation.location_id)
+  const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
   if (permHere) return permHere
 
   // Newest rows first then reversed for display — ascending+limit returns
@@ -79,10 +81,12 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
 export const PATCH = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
 
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  // SECGAPS.1 — 'ig' rides the web `whatsapp` key: a coarse any-studio check
-  // here, the decision at the conversation's own studio once it is read (the
-  // WhatsApp thread routes' INBOXLOC.1 rule).
-  const perm = requireWebWhatsAppInboxAnywhere(user)
+  // SECGAPS.1 — 'ig' rides the `whatsapp` key (no Instagram key exists): a
+  // coarse any-studio check here, the decision at the conversation's own
+  // studio once it is read (the WhatsApp thread routes' INBOXLOC.1 rule).
+  // INBOXPERM.1 — web OR phone key (the phone calls this route), the pair the
+  // WhatsApp thread routes take. The "WhatsApp" in the helper names is the key.
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, PatchConversationBody)
@@ -98,7 +102,7 @@ export const PATCH = withAuth({ permission: null, location: false }, async ({ us
   }
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
-  const permHere = requireWebWhatsAppInboxAt(user, conversation.location_id)
+  const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
   if (permHere) return permHere
 
   // AGENT-REARM.1 — resolving a handed-off thread hands it straight back

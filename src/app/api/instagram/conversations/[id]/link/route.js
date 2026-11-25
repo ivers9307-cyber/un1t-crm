@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { rankContactSuggestions } from '@/lib/instagram-contact-link'
@@ -17,6 +17,11 @@ import { linkThreadToContact } from '@/lib/instagram-contact-link-server'
 // GET    ?q=  → ranked suggestions (or a search) for the picker
 // POST   { contact_id } → link this thread to an existing contact
 // DELETE → unlink (clears the thread's contact and the stored IGSID)
+//
+// INBOXPERM.1 — web-only (the phone never calls it): the inbox key ('ig' rides
+// the `whatsapp` key) held at ANY studio first, then at the thread's own studio
+// once the row is read and membership has passed (404). The "WhatsApp" in the
+// helper names is the key, shared by both channels.
 
 const LinkSchema = z.object({ contact_id: uuidLike })
 
@@ -32,7 +37,7 @@ export async function GET(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const perm = requireInboxPermission(user, 'ig')
+  const perm = requireWebWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const db = createServerClient()
@@ -40,6 +45,8 @@ export async function GET(request, props) {
   if (!conversation) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  const permHere = requireWebWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   const q = (new URL(request.url).searchParams.get('q') || '').trim()
   const select = 'id, name, first_name, last_name, email, phone, instagram_igsid'
@@ -97,7 +104,7 @@ export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const perm = requireInboxPermission(user, 'ig')
+  const perm = requireWebWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, LinkSchema)
@@ -108,6 +115,8 @@ export async function POST(request, props) {
   if (!conversation) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  const permHere = requireWebWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   // The contact must belong to this location — never link across studios.
   const { data: contact } = await db.from('contacts')
@@ -133,7 +142,7 @@ export async function DELETE(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const perm = requireInboxPermission(user, 'ig')
+  const perm = requireWebWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const db = createServerClient()
@@ -141,6 +150,8 @@ export async function DELETE(request, props) {
   if (!conversation) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  const permHere = requireWebWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   // Forget the identity FIRST, then drop the thread's contact_id.
   //

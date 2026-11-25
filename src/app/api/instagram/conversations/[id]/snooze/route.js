@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { SnoozeSchema } from '@/lib/schemas'
@@ -8,11 +8,12 @@ import { snoozeUpdateFor, NEW_MESSAGE_ERROR } from '@/lib/inbox-snooze-request'
 
 // POST /api/instagram/conversations/[id]/snooze — snooze a thread until a time
 // ({ until, note? }) or clear the snooze ({ until: null }). The phone calls it
-// too, so the gates are the send route's: the Instagram inbox permission
-// (requireInboxPermission 'ig', INBOX-PERM.1) before the body and the read,
-// then the thread's studio (404). withAuth only signs the caller in.
+// too, so the gates are the send route's: the inbox key (the `whatsapp` key
+// serves both channels; web or phone) held at ANY studio before the body and
+// the read, the thread's studio (404), then the key at that studio
+// (INBOXPERM.1). withAuth only signs the caller in.
 export const POST = withAuth({ permission: null, location: false }, async ({ user, db, request, params }) => {
-  const perm = requireInboxPermission(user, 'ig')
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, SnoozeSchema)
@@ -28,6 +29,8 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
 
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   const update = snoozeUpdateFor(validation.data, conversation, { userId: user.id })
   if (update.error) return NextResponse.json({ success: false, error: update.error }, { status: update.status })

@@ -147,3 +147,29 @@ describe('SECGAPS.1 — the inbox key is judged at the conversation\'s studio', 
     expect((await get(CONV_A)).status).toBe(403)
   })
 })
+
+describe('INBOXPERM.1 — web OR phone key, judged at the thread\'s studio; the phone calls these routes', () => {
+  const phoneOnly = person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false, mobile: { whatsapp: true } } } }, LOC_A)
+  const memberNoKeyAtB = person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: true } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: false } } }, LOC_A)
+  const writes = () => db.calls.filter((c) => c.op !== 'select')
+
+  it('the phone key alone opens and resolves a thread at its studio', async () => {
+    getCurrentUser.mockResolvedValue(phoneOnly)
+    expect((await get(CONV_A)).status).toBe(200)
+    expect((await patch(CONV_A)).status).toBe(200)
+  })
+
+  it('a member without the key at the thread\'s studio is refused after the gate select only: nothing written, nothing else read', async () => {
+    getCurrentUser.mockResolvedValue(memberNoKeyAtB)
+    expect((await get(CONV_B)).status).toBe(403)
+    expect((await patch(CONV_B)).status).toBe(403)
+    expect(writes()).toEqual([])
+    expect(db.calls.every((c) => c.table === 'instagram_conversations' && c.op === 'select')).toBe(true)
+  })
+
+  it('a non-member gets 404, never 403', async () => {
+    getCurrentUser.mockResolvedValue(INBOX_A)
+    expect((await get(CONV_B)).status).toBe(404)
+    expect((await patch(CONV_B)).status).toBe(404)
+  })
+})

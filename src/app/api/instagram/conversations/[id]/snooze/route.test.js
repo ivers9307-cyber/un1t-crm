@@ -170,3 +170,25 @@ describe('POST /api/instagram/conversations/[id]/snooze', () => {
     expect(thread().snoozed_until).toBeNull()
   })
 })
+
+describe('INBOXPERM.1 — the inbox key is judged at the thread\'s studio, web OR phone', () => {
+  const at = (a, b, active = LOC_A) => person({ [LOC_A]: { role: 'staff', permissions: a }, [LOC_B]: { role: 'staff', permissions: b } }, active)
+
+  it('the phone key alone is enough (the phone calls this route)', async () => {
+    getCurrentUser.mockResolvedValue(inbox({ whatsapp: false, mobile: { whatsapp: true } }))
+    expect((await post({ until: iso(H) })).status).toBe(200)
+  })
+
+  it('403 at a member studio where the key is off (key held only at the active studio): only the gate select ran', async () => {
+    getCurrentUser.mockResolvedValue(at({ whatsapp: true }, { whatsapp: false }))
+    expect((await post({ until: iso(H) }, T_B)).status).toBe(403)
+    expect(thread(T_B).snoozed_until).toBeNull()
+    expect(db.calls.every((c) => c.table === 'instagram_conversations' && c.op === 'select')).toBe(true)
+  })
+
+  it('passes at the thread\'s studio when the key is held there but not at the active studio', async () => {
+    getCurrentUser.mockResolvedValue(at({ whatsapp: false }, { whatsapp: true }))
+    expect((await post({ until: iso(H) }, T_B)).status).toBe(200)
+    expect(thread(T_B).snoozed_until).not.toBeNull()
+  })
+})

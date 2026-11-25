@@ -107,3 +107,17 @@ describe('SECGAPS.1 — the inbox key is judged at the thread\'s studio', () => 
     expect(thread(T_B).agent_active).toBe(false)
   })
 })
+
+describe('INBOXPERM.1 — web OR phone key (the phone calls this route), nothing read beyond the gate select when refused', () => {
+  it('the phone key alone is enough at the thread\'s studio', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false, mobile: { whatsapp: true } } } }, LOC_A))
+    expect((await patch()).status).toBe(200)
+    expect(thread(T_A).agent_active).toBe(false)
+  })
+
+  it('a member without the key at the thread\'s studio: 403, only the gate select ran', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: true } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: false } } }, LOC_A))
+    expect((await patch(T_B)).status).toBe(403)
+    expect(db.calls.every((c) => c.table === 'instagram_conversations' && c.op === 'select')).toBe(true)
+  })
+})

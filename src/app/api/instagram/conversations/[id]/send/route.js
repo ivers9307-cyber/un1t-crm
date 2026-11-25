@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendInstagramMessage, markInstagramSeen } from '@/lib/agent/instagram'
 import { resolveChannelConnection } from '@/lib/agent/channels'
@@ -24,7 +24,11 @@ export async function POST(request, props) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'ig')
+  // INBOXPERM.1 — 'ig' rides the `whatsapp` key: a coarse any-studio check here
+  // (web or phone key, the phone calls this route), the decision at the
+  // thread's own studio once it is read, the WhatsApp send route's order. The
+  // "WhatsApp" in the helper names is the key, shared by both channels.
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, SendSchema)
@@ -43,6 +47,8 @@ export async function POST(request, props) {
 
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
+  const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
+  if (permHere) return permHere
 
   if (!conversation.ig_user_id) {
     return NextResponse.json({ success: false, error: 'No Instagram recipient for this conversation' }, { status: 400 })
