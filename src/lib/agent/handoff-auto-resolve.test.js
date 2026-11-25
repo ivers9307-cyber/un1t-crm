@@ -14,6 +14,7 @@ import {
   runHandoffAutoResolve,
 } from './handoff-sla'
 import { resolveRearmPatch } from './core'
+import { completePatch } from '@/lib/inbox-state'
 
 const H = 3_600_000
 const NOW = Date.parse('2026-08-25T12:00:00Z')
@@ -65,6 +66,22 @@ describe('classifyAutoResolve', () => {
   it('never touches an operator-paused thread', () => {
     expect(classifyAutoResolve({ ...base, pausedAt: '2026-08-23T19:40:44Z' }))
       .toEqual({ resolve: false, reason: 'paused' })
+  })
+
+  // INBOXFOLLOW.1 — a coach's thread stays theirs until a coach completes it.
+  it('never auto-resolves a coach-owned thread, however long it is quiet', () => {
+    expect(classifyAutoResolve({ ...base, staffOwned: true }))
+      .toEqual({ resolve: false, reason: 'staff_owned' }) // human reply, 10 h quiet: case (a) today
+    expect(classifyAutoResolve({ ...base, staffOwned: true, humanRepliedAtMs: null, customerWaiting: false, lastMessageAtMs: NOW - 49 * H }))
+      .toEqual({ resolve: false, reason: 'staff_owned' }) // 49 h of nothing: case (b) today
+    expect(classifyAutoResolve({ ...base, staffOwned: true, lastMessageAtMs: NOW - 60 * H }))
+      .toEqual({ resolve: false, reason: 'staff_owned' })
+  })
+
+  it('keeps today\'s results when the thread is not coach-owned', () => {
+    expect(classifyAutoResolve({ ...base, staffOwned: false })).toEqual({ resolve: true, reason: 'human_replied_quiet' })
+    expect(classifyAutoResolve({ ...base, humanRepliedAtMs: null, customerWaiting: false, lastMessageAtMs: NOW - 49 * H, staffOwned: false }))
+      .toEqual({ resolve: true, reason: 'stale' })
   })
 
   it('skips threads the cooldown already re-armed', () => {
@@ -189,7 +206,25 @@ describe('runHandoffAutoResolve', () => {
     expect(patch).toEqual({
       resolved_at: new Date(NOW).toISOString(),
       ...resolveRearmPatch({ resolved: true, agent_handed_off_at: 'x' }),
+      ...completePatch(), // INBOXFOLLOW.1 — an auto-resolve completes the thread
     })
+  })
+
+  it('leaves a coach-owned thread alone, however stale', async () => {
+    const { db, updates } = sweepDb({
+      convs: [{
+        id: 'c2',
+        agent_active: false,
+        agent_handed_off_at: new Date(NOW - 80 * H).toISOString(),
+        agent_paused_at: null,
+        resolved_at: null,
+        last_message_at: new Date(NOW - 60 * H).toISOString(),
+        staff_owned_since: new Date(NOW - 79 * H).toISOString(),
+      }],
+    })
+    const out = await runHandoffAutoResolve(db, { nowMs: NOW })
+    expect(out.resolved).toBe(0)
+    expect(updates).toHaveLength(0)
   })
 
   // HANDOFFKEEP.1 — the live case (22 Nov 2026): Mia told a customer she was

@@ -642,6 +642,8 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
       // INBOX-REDESIGN.2.3 — a sticky operator pause (mig 435) gets no
       // proactive nudges either, same as a handed-off thread.
       .is('agent_paused_at', null)
+      // INBOXFOLLOW.1 — a coach's thread stays theirs: no proactive nudge either.
+      .is('staff_owned_since', null)
       .lt('agent_followup_stage', 2)
       .gte('last_message_at', sinceIso)
       .order('last_message_at', { ascending: false })
@@ -1059,7 +1061,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         // agent_handed_off_at let Mia send a proactive check-in into a thread
         // an operator had explicitly paused or switched off.
         const { data: convRows, error: convError } = await db.from('whatsapp_conversations')
-          .select('id, contact_id, location_id, agent_active, agent_paused_at, agent_handed_off_at')
+          .select('id, contact_id, location_id, agent_active, agent_paused_at, agent_handed_off_at, staff_owned_since')
           .eq('location_id', location.id)
           .eq('contact_id', contact.id)
           .order('last_message_at', { ascending: false })
@@ -1074,6 +1076,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         const existingConv = convRows?.[0] || null
         if (existingConv?.agent_handed_off_at) { bump('handed_off'); results.skipped++; continue }
         if (existingConv?.agent_paused_at) { bump('agent_paused'); results.skipped++; continue }
+        if (existingConv?.staff_owned_since) { bump('staff_owned'); results.skipped++; continue } // INBOXFOLLOW.1
         if (existingConv && existingConv.agent_active === false) { bump('agent_inactive'); results.skipped++; continue }
         let facts = { rows: [], lastInboundAtMs: null, humanSpokeAfterInbound: false, staffSpokeAfterInbound: false, readFailed: false }
         if (existingConv) facts = await lastInboundFacts(db, existingConv.id)

@@ -603,7 +603,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   // unconditionally would 400 the whole conv fetch for every Instagram turn.
   const isWhatsApp = adapter.name === 'whatsapp'
   const { data: conv } = await db.from(adapter.conversationsTable)
-    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at, agent_activity_notified_at, agent_verify_attempts${nameCol ? `, ${nameCol}` : ''}${isWhatsApp ? ', agent_paused_at, agent_chosen_location_id' : ''}`)
+    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at, agent_activity_notified_at, agent_verify_attempts, staff_owned_since${nameCol ? `, ${nameCol}` : ''}${isWhatsApp ? ', agent_paused_at, agent_chosen_location_id' : ''}`)
     .eq('id', conversationId)
     .single()
 
