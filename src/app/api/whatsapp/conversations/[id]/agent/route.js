@@ -4,6 +4,8 @@ import { withAuth } from '@/lib/with-auth'
 import { z } from 'zod'
 import { assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
+import { logError } from '@/lib/log'
+import { handBackPatch } from '@/lib/inbox-state'
 
 const ToggleSchema = z.object({ active: z.boolean() })
 
@@ -44,9 +46,16 @@ export const PATCH = withAuth({ permission: null, location: false }, async ({ us
   const now = new Date().toISOString()
   const agent_paused_at = active ? null : now
 
-  await db.from('whatsapp_conversations')
-    .update({ agent_paused_at, updated_at: now })
+  // INBOXFOLLOW.1 — resuming Mia is a hand-back: the coach's ownership, the
+  // hand-off and the wait clocks all clear so she answers the thread again and
+  // the queues stop counting it as the coach's.
+  const { error: updateError } = await db.from('whatsapp_conversations')
+    .update({ agent_paused_at, updated_at: now, ...(active ? handBackPatch() : {}) })
     .eq('id', params.id)
+  if (updateError) {
+    logError('whatsapp', 'agent state not changed', { conversationId: params.id, code: updateError.code ?? null })
+    return NextResponse.json({ success: false, error: 'Could not change the agent state on this conversation. Try again.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, agent_paused_at })
 })

@@ -28,7 +28,7 @@ const caller = (perms) => ({
 })
 
 let updates
-function fakeDb(row) {
+function fakeDb(row, updateError = null) {
   updates = []
   return {
     from: (table) => {
@@ -36,7 +36,7 @@ function fakeDb(row) {
         select: () => b, eq: () => b,
         single: async () => (row ? { data: row, error: null } : { data: null, error: { code: 'PGRST116', message: 'no rows' } }),
         update: (patch) => { updates.push({ table, patch }); return b },
-        then: (ok, bad) => Promise.resolve({ data: null, error: null }).then(ok, bad),
+        then: (ok, bad) => Promise.resolve({ data: null, error: updateError }).then(ok, bad),
       }
       return b
     },
@@ -80,7 +80,30 @@ describe('PATCH /api/whatsapp/conversations/[id]/agent', () => {
     expect(paused.status).toBe(200)
     expect((await paused.json()).agent_paused_at).toEqual(expect.any(String))
     expect(updates[0]).toMatchObject({ table: 'whatsapp_conversations', patch: { agent_paused_at: expect.any(String) } })
+    // pausing is exactly today's payload: no hand-back columns
+    expect(Object.keys(updates[0].patch).sort()).toEqual(['agent_paused_at', 'updated_at'])
     const resumed = await patch({ active: true })
     expect(await resumed.json()).toMatchObject({ success: true, agent_paused_at: null })
+  })
+
+  it('resuming hands a staff-owned thread back: the clocks clear and Mia is re-armed', async () => {
+    getCurrentUser.mockResolvedValue(caller({ [A]: OFF, [B]: WEB }))
+    const res = await patch({ active: true })
+    expect(res.status).toBe(200)
+    expect(updates[0].patch).toEqual({
+      agent_paused_at: null, updated_at: expect.any(String),
+      customer_waiting_since: null, staff_owned_since: null, staff_waiting_since: null,
+      staff_nudged_at: null, staff_nudge_outcome: null, handoff_requested_at: null,
+      snoozed_until: null, snoozed_by: null, snooze_note: null,
+      agent_active: true, agent_handed_off_at: null, handoff_escalated_at: null,
+    })
+  })
+
+  it('a failed update answers 500, not success', async () => {
+    createServerClient.mockReturnValue(fakeDb({ id: CONV, location_id: B }, { code: '57014', message: 'timeout' }))
+    getCurrentUser.mockResolvedValue(caller({ [A]: OFF, [B]: WEB }))
+    const res = await patch({ active: true })
+    expect(res.status).toBe(500)
+    expect(await res.json()).toMatchObject({ success: false, error: expect.any(String) })
   })
 })

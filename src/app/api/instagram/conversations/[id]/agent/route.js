@@ -4,6 +4,7 @@ import { assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebW
 import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
+import { handBackPatch } from '@/lib/inbox-state'
 
 const ToggleSchema = z.object({ active: z.boolean() })
 
@@ -41,6 +42,9 @@ export const PATCH = withAuth({ permission: null, location: false }, async ({ us
   const update = { agent_active: active, updated_at: now }
   // Stamp the first hand-off only; re-enabling keeps history.
   if (!active && !conversation.agent_handed_off_at) update.agent_handed_off_at = now
+  // INBOXFOLLOW.1 — resuming Mia is a hand-back: ownership, hand-off and wait
+  // clocks clear (active:true is applied last so agent_active stays true).
+  if (active) Object.assign(update, handBackPatch())
 
   // BAREWRITE.1 — the response echoes the new agent state, so a silently
   // failed write left the operator believing Mia had been paused (or resumed)
