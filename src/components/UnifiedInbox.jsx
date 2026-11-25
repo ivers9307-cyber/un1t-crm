@@ -20,7 +20,7 @@
 // problem, not a convenience one. ?ch=em deep links redirect to
 // /communications/mail from the page above.
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
 import {
   DEFAULT_FOLLOWUP_CFG, QUEUES, needsReply, needsMiaHelp, filterByQueue, queueCounts, sortNeedsReply,
@@ -129,13 +129,13 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
   // one in-flight guard, so a burst is one request, never several at once.
   // `reloadNow` (manual refresh, the poll, the post-action callbacks) is
   // immediate; `reloadSoon` is for realtime. See src/lib/inbox-list-reload.js.
-  const loadRef = useRef(loadConversations)
-  loadRef.current = loadConversations
-  const reloaderRef = useRef(null)
-  if (!reloaderRef.current) reloaderRef.current = createListReloader(() => loadRef.current())
-  const reloadNow = useCallback(() => reloaderRef.current.now(), [])
-  const reloadSoon = useCallback(() => reloaderRef.current.request(), [])
-  useEffect(() => () => reloaderRef.current.cancel(), [])
+  const [reloader] = useState(() => createListReloader(() => {}))
+  const reloadNow = useCallback(() => reloader.now(), [reloader])
+  const reloadSoon = useCallback(() => reloader.request(), [reloader])
+  // Declared before the initial load below: effects run in order, so the
+  // reloader holds the current load (it changes with the studio) by then.
+  useEffect(() => { reloader.setLoad(loadConversations) }, [reloader, loadConversations])
+  useEffect(() => () => reloader.cancel(), [reloader])
 
   useEffect(() => { reloadNow() }, [loadConversations, reloadNow])
 

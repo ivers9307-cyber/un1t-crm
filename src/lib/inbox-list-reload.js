@@ -10,7 +10,8 @@
 //              still refreshes;
 //   now()      manual refresh, the 60-second poll and the post-action
 //              callbacks: immediate, and drops any pending debounce;
-//   cancel()   unmount: drops the pending reload and any queued follow-up.
+//   cancel()   unmount: drops the pending reload and any queued follow-up;
+//   setLoad()  swaps the load function (a component's changes with its props).
 // Both paths share one in-flight guard: never two list loads at once. A reload
 // asked for while one runs becomes exactly ONE more run when it finishes.
 
@@ -20,10 +21,11 @@ export const LIST_RELOAD_DEBOUNCE_MS = 400
 export const LIST_RELOAD_MAX_WAIT_MS = 2000
 
 /**
- * @param {() => (Promise<unknown> | unknown)} load  the list load; its errors are swallowed here (it keeps the prior list on failure)
+ * @param {() => (Promise<unknown> | unknown)} initialLoad  the list load; its errors are swallowed here (it keeps the prior list on failure)
  * @param {{ debounceMs?: number, maxWaitMs?: number }} [opts]
  */
-export function createListReloader(load, { debounceMs = LIST_RELOAD_DEBOUNCE_MS, maxWaitMs = LIST_RELOAD_MAX_WAIT_MS } = {}) {
+export function createListReloader(initialLoad, { debounceMs = LIST_RELOAD_DEBOUNCE_MS, maxWaitMs = LIST_RELOAD_MAX_WAIT_MS } = {}) {
+  let load = initialLoad
   let timer = null
   let firstRequestAt = null // when the pending burst's first event arrived
   let running = false
@@ -63,5 +65,6 @@ export function createListReloader(load, { debounceMs = LIST_RELOAD_DEBOUNCE_MS,
       clearPending()
       again = false
     },
+    setLoad(fn) { load = fn },
   }
 }
