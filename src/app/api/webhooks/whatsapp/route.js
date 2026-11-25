@@ -771,10 +771,10 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
       .select('customer_waiting_since')
       .eq('id', conversationId)
       .maybeSingle()
-    if (waitErr) console.error(`[wa-webhook] customer_waiting_since read failed for ${conversationId} (stamping it as now):`, waitErr.message)
+    if (waitErr) console.error(`[wa-webhook] customer_waiting_since read failed for ${conversationId} (falling back to the message's own time):`, waitErr.message)
     else existingWaiting = waitRow
   } catch (e) {
-    console.error(`[wa-webhook] customer_waiting_since read threw for ${conversationId} (stamping it as now):`, e?.message || String(e))
+    console.error(`[wa-webhook] customer_waiting_since read threw for ${conversationId} (falling back to the message's own time):`, e?.message || String(e))
   }
 
   // Update conversation
