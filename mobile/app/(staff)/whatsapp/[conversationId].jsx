@@ -42,7 +42,7 @@ import {
 } from '../../../lib/whatsapp-api'
 import { listConversationApprovals } from '../../../lib/inbox-approvals-api'
 import { sendWarningsNotice } from '../../../lib/wa-send-warnings'
-import { needsReply, isAgentHandoff } from '../../../lib/inbox'
+import { needsReply, needsMiaHelp } from '../../../lib/inbox'
 import { threadLocationId } from '../../../lib/wa-thread-location'
 import { mergeTimeline } from 'shared/approval-cards'
 import { groupWaTemplates, UNGROUPED_LABEL, templateBodyText } from 'shared/wa-template-groups'
@@ -363,7 +363,7 @@ export default function Conversation() {
                         />
                       )}
                   </Pressable>
-                  {!conv.resolved_at && (needsReply(conv) || isAgentHandoff(conv)) && (
+                  {!conv.resolved_at && (needsReply(conv) || needsMiaHelp(conv)) && (
                     <Pressable onPress={resolve} disabled={resolving} hitSlop={10}>
                       {resolving
                         ? <ActivityIndicator size="small" />
@@ -384,7 +384,7 @@ export default function Conversation() {
         <>
           {/* Agent handoff banner — Mia escalated this thread and is
               muted until a human resolves it. */}
-          {isAgentHandoff(conv) && (
+          {needsMiaHelp(conv) && (
             <View className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 flex-row items-center">
               <Ionicons name="hand-left-outline" size={16} color="#B45309" />
               <Text className="text-xs text-amber-800 flex-1 ml-2">

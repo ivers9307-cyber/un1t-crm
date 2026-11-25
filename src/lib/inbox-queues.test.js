@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { needsReply, isAgentHandoff, needsAction } from './inbox-queues'
+import { needsReply, needsMiaHelp, needsAction } from './inbox-queues'
 
 const base = { last_message_at: '2026-07-07T11:00:00Z', resolved_at: null, last_message_direction: 'inbound', handoff_requested_at: null }
 
@@ -13,13 +13,13 @@ describe('needsReply', () => {
   })
 })
 
-describe('isAgentHandoff', () => {
+describe('needsMiaHelp', () => {
   it('true when handed off and not resolved', () => {
-    expect(isAgentHandoff({ ...base, handoff_requested_at: '2026-07-07T11:24:00Z' })).toBe(true)
+    expect(needsMiaHelp({ ...base, handoff_requested_at: '2026-07-07T11:24:00Z' })).toBe(true)
   })
   it('false when resolved or never handed off', () => {
-    expect(isAgentHandoff({ ...base, handoff_requested_at: '2026-07-07T11:24:00Z', resolved_at: '2026-07-07T12:00:00Z' })).toBe(false)
-    expect(isAgentHandoff(base)).toBe(false)
+    expect(needsMiaHelp({ ...base, handoff_requested_at: '2026-07-07T11:24:00Z', resolved_at: '2026-07-07T12:00:00Z' })).toBe(false)
+    expect(needsMiaHelp(base)).toBe(false)
   })
 })
 

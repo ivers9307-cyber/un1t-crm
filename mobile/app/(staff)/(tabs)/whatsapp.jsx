@@ -34,7 +34,7 @@ import { useAuth } from '../../../lib/auth-context'
 import { listConversations, isWindowOpen } from '../../../lib/whatsapp-api'
 import { listConversations as listInstagram, igDisplayName } from '../../../lib/instagram-api'
 import { listPendingApprovalConversationIds } from '../../../lib/inbox-approvals-api'
-import { isAgentHandoff, hasPendingApproval, queueCounts, filterByQueue, QUEUES } from '../../../lib/inbox'
+import { needsMiaHelp, hasPendingApproval, queueCounts, filterByQueue, QUEUES } from '../../../lib/inbox'
 
 const CHANNEL_GLYPHS = {
   whatsapp: { icon: 'logo-whatsapp', color: '#25D366' },
@@ -89,7 +89,7 @@ function ConversationRow({ conv, onPress }) {
           <Text className="text-sm text-un1t-subtle flex-1" numberOfLines={1}>
             {conv.last_message_preview || '—'}
           </Text>
-          {isAgentHandoff(conv) && (
+          {needsMiaHelp(conv) && (
             <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20 flex-row items-center">
               <Ionicons name="hand-left-outline" size={10} color="#B45309" style={{ marginRight: 3 }} />
               <Text className="text-[10px] uppercase text-amber-700 font-semibold">Needs human</Text>
@@ -100,7 +100,7 @@ function ConversationRow({ conv, onPress }) {
               <Text className="text-[10px] uppercase text-purple-700 font-semibold">Approval</Text>
             </View>
           )}
-          {!windowOpen && !isAgentHandoff(conv) && (
+          {!windowOpen && !needsMiaHelp(conv) && (
             <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
               <Text className="text-[10px] uppercase text-amber-700 font-medium">Closed</Text>
             </View>

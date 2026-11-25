@@ -80,9 +80,6 @@ export function needsMiaHelp(c) {
   return !!c && !c.resolved_at && !!c.handoff_requested_at
 }
 
-// Old name; Task 4 removes its callers. Meaning now follows handoff_requested_at.
-export const isAgentHandoff = needsMiaHelp
-
 export function isWaiting(c, nowMs = Date.now(), cfg = DEFAULT_FOLLOWUP_CFG, channel = 'wa') {
   if (!c || c.resolved_at) return false
   if (isSnoozed(c, nowMs)) return true

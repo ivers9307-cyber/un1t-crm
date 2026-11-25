@@ -5,7 +5,7 @@
 
 export {
   DEFAULT_FOLLOWUP_CFG, NUDGE_GRACE_HOURS, QUEUES,
-  isSnoozed, returnAtMs, returnReason, needsReply, needsMiaHelp, isAgentHandoff,
+  isSnoozed, returnAtMs, returnReason, needsReply, needsMiaHelp,
   isWaiting, needsAction, hasPendingApproval, waitSinceMs, sortNeedsReply,
   windowState, handledBy, filterByQueue, queueCounts,
 } from 'shared/inbox-queues'

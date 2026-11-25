@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  needsReply, isAgentHandoff, needsAction, hasPendingApproval,
+  needsReply, needsMiaHelp, needsAction, hasPendingApproval,
   queueCounts, filterByQueue, mediaLabel, QUEUES,
 } from './inbox'
 
@@ -35,20 +35,20 @@ describe('needsReply', () => {
   })
 })
 
-describe('isAgentHandoff', () => {
+describe('needsMiaHelp', () => {
   it('true when handed off and not resolved', () => {
-    expect(isAgentHandoff({ ...base, handoff_requested_at: '2026-06-13T09:00:00Z' })).toBe(true)
+    expect(needsMiaHelp({ ...base, handoff_requested_at: '2026-06-13T09:00:00Z' })).toBe(true)
   })
   it('false once resolved (resolve hands the thread back to the agent)', () => {
-    expect(isAgentHandoff({
+    expect(needsMiaHelp({
       ...base,
       handoff_requested_at: '2026-06-13T09:00:00Z',
       resolved_at: '2026-06-13T10:00:00Z',
     })).toBe(false)
   })
   it('false when never handed off', () => {
-    expect(isAgentHandoff({ ...base })).toBe(false)
-    expect(isAgentHandoff(null)).toBe(false)
+    expect(needsMiaHelp({ ...base })).toBe(false)
+    expect(needsMiaHelp(null)).toBe(false)
   })
 })
 

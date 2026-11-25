@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   DEFAULT_FOLLOWUP_CFG, NUDGE_GRACE_HOURS, QUEUES,
-  isSnoozed, returnAtMs, returnReason, needsReply, needsMiaHelp, isAgentHandoff,
+  isSnoozed, returnAtMs, returnReason, needsReply, needsMiaHelp,
   isWaiting, needsAction, hasPendingApproval, waitSinceMs, sortNeedsReply,
   windowState, handledBy, filterByQueue, queueCounts,
 } from './inbox-queues'
@@ -152,11 +152,10 @@ describe('needsReply / isWaiting / needsAction', () => {
 })
 
 describe('needsMiaHelp', () => {
-  it('reads handoff_requested_at on unresolved threads; isAgentHandoff is an alias', () => {
+  it('reads handoff_requested_at on unresolved threads', () => {
     expect(needsMiaHelp({ handoff_requested_at: ago(1) })).toBe(true)
     expect(needsMiaHelp({ handoff_requested_at: ago(1), resolved_at: ago(0.5) })).toBe(false)
     expect(needsMiaHelp({ agent_handed_off_at: ago(1) })).toBe(false)
-    expect(isAgentHandoff).toBe(needsMiaHelp)
   })
   it('a handed-off thread needs action even when we replied last', () => {
     const c = staffReplied(1, { handoff_requested_at: ago(2) })
