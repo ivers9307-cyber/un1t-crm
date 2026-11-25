@@ -88,4 +88,17 @@ describe('GET /api/instagram/conversations — queues and follow-up config', () 
     expect((await (await get()).json()).followup).toEqual({ quietHours: 48, nudgeEnabled: false })
     expect((await (await get(`?location_id=${LOC_A}`)).json()).followup).toEqual({ quietHours: 48, nudgeEnabled: false })
   })
+
+  it('keeps the oldest waiting threads when 400 are waiting, and logs the truncation', async () => {
+    const rows = []
+    for (let n = 1; n <= 400; n++) rows.push({ id: id(n), location_id: LOC_A, last_message_at: hoursAgo(n), last_message_direction: 'inbound' })
+    db.tables.instagram_conversations = rows
+    getCurrentUser.mockResolvedValue(inbox(true))
+    const ids = (await (await get(`?location_id=${LOC_A}`)).json()).conversations.map((c) => c.id)
+    expect(ids).toContain(id(400)) // the longest-waiting thread
+    expect(ids).toContain(id(1))
+    expect(ids).not.toContain(id(75))
+    const { logError } = await import('@/lib/log')
+    expect(logError).toHaveBeenCalledWith('instagram-conversations', expect.stringMatching(/limit/), expect.anything())
+  })
 })

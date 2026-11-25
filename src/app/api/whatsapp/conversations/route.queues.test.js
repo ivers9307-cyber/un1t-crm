@@ -78,6 +78,17 @@ describe('GET /api/whatsapp/conversations — the queues see every waiting threa
     expect(ids).not.toContain(id(73))
   })
 
+  it('keeps the oldest waiting threads when 400 are waiting, and logs the truncation', async () => {
+    db.tables.whatsapp_conversations.length = 0
+    for (let n = 1; n <= 400; n++) db.tables.whatsapp_conversations.push({ id: id(n), location_id: LOC_A, last_message_at: day(n), last_message_direction: 'inbound' })
+    const body = await (await get(`?location_id=${LOC_A}`)).json()
+    const ids = body.conversations.map((c) => c.id)
+    expect(ids).toContain(id(400)) // the longest-waiting thread
+    expect(ids).toContain(id(1)) // the newest, via the latest-50 read
+    expect(ids).not.toContain(id(75)) // newer than the 300 oldest, older than the latest 50: the cut
+    expect(logError).toHaveBeenCalledWith('wa-inbox', expect.stringMatching(/limit/), expect.anything())
+  })
+
   it('keeps search as it was: the latest 50 matches, no extra read', async () => {
     const res = await get(`?location_id=${LOC_A}&q=ab`)
     const body = await res.json()

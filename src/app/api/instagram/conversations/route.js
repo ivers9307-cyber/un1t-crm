@@ -57,7 +57,8 @@ export const GET = withAuth({ permission: null, location: false }, async ({ requ
       .select(LIST_SELECT)
       .is('resolved_at', null)
       .or(ACTIVE_SET_OR)
-      .order('last_message_at', { ascending: false, nullsFirst: false })
+      // Oldest first: the longest-waiting threads must never be the ones cut at the limit.
+      .order('last_message_at', { ascending: true, nullsFirst: false })
       .limit(ACTIVE_SET_LIMIT)
     activeQuery = locationId ? activeQuery.eq('location_id', locationId) : activeQuery.in('location_id', getUserLocationIds(user))
   }
@@ -74,6 +75,9 @@ export const GET = withAuth({ permission: null, location: false }, async ({ requ
     if (activeRes.error) {
       logError('instagram-conversations', 'active set read failed; serving the latest 50', { err: activeRes.error, locationId })
     } else {
+      if ((activeRes.data || []).length >= ACTIVE_SET_LIMIT) {
+        logError('instagram-conversations', 'active set hit its limit; the newest waiting threads beyond it are not listed', { limit: ACTIVE_SET_LIMIT, locationId })
+      }
       data = mergeActiveSet(latestData, activeRes.data)
     }
   }
