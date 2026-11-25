@@ -10,6 +10,7 @@ vi.mock('@/lib/agent/handoff-sla', () => ({
   runHandoffSlaSweep: vi.fn(async () => ({})), runHandoffAutoResolve: vi.fn(async () => ({})),
 }))
 vi.mock('@/lib/agent/approvals-sla', () => ({ runApprovalsSlaSweep: vi.fn(async () => ({})) }))
+vi.mock('@/lib/agent/staff-nudges', () => ({ runStaffThreadNudges: vi.fn() }))
 vi.mock('@/lib/agent/trial-done-runner', () => ({ runTrialDoneOutreach: vi.fn() }))
 vi.mock('@/lib/agent/checkin-day-rollup', async (importOriginal) => {
   const real = await importOriginal()
@@ -20,6 +21,7 @@ import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { runAgentFollowups, runFirstClassCheckins } from '@/lib/agent/followups'
+import { runStaffThreadNudges } from '@/lib/agent/staff-nudges'
 import { runTrialDoneOutreach } from '@/lib/agent/trial-done-runner'
 import { runHandoffSlaSweep } from '@/lib/agent/handoff-sla'
 import { rollupCheckinDay } from '@/lib/agent/checkin-day-rollup'
@@ -41,6 +43,7 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
   runAgentFollowups.mockResolvedValue({ nudges: 0, templates: 0, skipped: 0 })
   runFirstClassCheckins.mockResolvedValue({ candidates: 2, freeform: 0, templates: 1, skipped: 1, reasons: { human_active: 1 } })
+  runStaffThreadNudges.mockResolvedValue({ freeform: 1, templates: 0, skipped: 0, waiting: 2 })
   runTrialDoneOutreach.mockResolvedValue({ openers: 1, followups: 0, skipped: 2, reasons: { too_soon: 2 } })
 })
 afterEach(() => { vi.useRealTimers(); console.error.mockRestore?.() })
@@ -61,7 +64,7 @@ describe('GET /api/cron/agent-followups — checkins_day', () => {
     createServerClient.mockReturnValue(hbDb({ data: null, error: null }))
     await GET(req())
     expect(stampHeartbeat).toHaveBeenCalledWith('agent-followups', expect.any(Object))
-    expect(Object.keys(outcome()).sort()).toEqual(['approvalsSla', 'autoResolve', 'checkins', 'checkins_day', 'followups', 'handoffSla', 'trial_done'])
+    expect(Object.keys(outcome()).sort()).toEqual(['approvalsSla', 'autoResolve', 'checkins', 'checkins_day', 'followups', 'handoffSla', 'staff_nudges', 'trial_done'])
     expect(outcome().followups).toEqual({ nudges: 0, templates: 0, skipped: 0 })
     expect(outcome().handoffSla).toEqual({})
     expect(outcome().autoResolve).toEqual({})
@@ -217,6 +220,24 @@ describe('GET /api/cron/agent-followups — defineCron stamp paths', () => {
     expect(JSON.stringify(body)).not.toContain('secret down')
     expect(outcome()).toMatchObject({ arm_errors: ['handoff_sla'], handoffSla: null })
     expect(stampHeartbeat.mock.calls.map(([n]) => n)).toEqual(['agent-followups', 'trial-done-outreach'])
+  })
+
+  it('INBOXFOLLOW.3 — the staff-thread nudge counts ride on the heartbeat outcome', async () => {
+    await GET(req())
+    expect(runStaffThreadNudges).toHaveBeenCalledTimes(1)
+    expect(outcome().staff_nudges).toEqual({ freeform: 1, templates: 0, skipped: 0, waiting: 2 })
+  })
+
+  it('INBOXFOLLOW.3 — a staff-nudge runner that throws is its own failure domain: named, and the other arms still run and stamp', async () => {
+    runStaffThreadNudges.mockRejectedValue(new Error('staff nudges: secret detail'))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, arm_errors: ['staff_nudges'] })
+    expect(JSON.stringify(body)).not.toContain('secret detail')
+    expect(outcome()).toMatchObject({ arm_errors: ['staff_nudges'], staff_nudges: null })
+    expect(runTrialDoneOutreach).toHaveBeenCalled()
+    expect(runHandoffSlaSweep).toHaveBeenCalled()
   })
 
   it('a follow-ups tick that throws answers a fixed 500 and stamps nothing', async () => {

@@ -76,7 +76,11 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
     activeQuery = locationId ? activeQuery.eq('location_id', locationId) : activeQuery.in('location_id', getUserLocationIds(user))
   }
 
-  const [latestRes, activeRes] = await Promise.all([query, activeQuery])
+  // INBOXFOLLOW.3 — the follow-up config reads alongside the lists, not after them
+  // (it never throws: a failed read answers the defaults). Several studios at
+  // once (no location_id) use the defaults.
+  const followupPromise = locationId ? readInboxFollowupConfig(db, locationId) : Promise.resolve(DEFAULT_FOLLOWUP_CFG)
+  const [latestRes, activeRes, followup] = await Promise.all([query, activeQuery, followupPromise])
   const { data: latestData, error } = latestRes
   if (error) {
     logError('wa-inbox', 'conversation list failed', { err: error, locationId })
@@ -126,10 +130,6 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
   // INBOXASSIGN.1 — each row's owner name for the queue (best effort;
   // profiles has no client grant, so the name resolves here or nowhere).
   await attachAssigneeNames(db, conversations)
-
-  // INBOXFOLLOW.1 — the studio's follow-up config, for the queue rules. Several
-  // studios at once (no location_id) use the defaults.
-  const followup = locationId ? await readInboxFollowupConfig(db, locationId) : DEFAULT_FOLLOWUP_CFG
 
   return NextResponse.json({ success: true, conversations, followup })
 })

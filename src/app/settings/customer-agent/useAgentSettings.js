@@ -163,7 +163,9 @@ export function useAgentSettings({ canEdit = false } = {}) {
   function setField(path, value) {
     setSettings(s => setIn(s, path, value))
     const key = path.split('.')[0]
-    if (!NO_OVERRIDE_KEYS.has(key)) setOverridden(o => withOverride(o, path))
+    // INBOXFOLLOW.3 — the staff-thread trio is one stored object, overridden whole.
+    const overridePath = path.startsWith('followups.staff_threads.') ? 'followups.staff_threads' : path
+    if (!NO_OVERRIDE_KEYS.has(key)) setOverridden(o => withOverride(o, overridePath))
     setServerFieldErrors(e => (path in e ? Object.fromEntries(Object.entries(e).filter(([f]) => f !== path)) : e))
   }
 

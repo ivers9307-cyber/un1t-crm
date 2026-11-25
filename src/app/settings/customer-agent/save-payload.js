@@ -10,6 +10,7 @@
 // `overridden` (an older editor) still gets today's code defaults server-side.
 
 import { HATCH_COPY_FIELDS } from './hatch-copy-fields'
+import { withoutStudioOnlyStaffThreads } from '@/lib/agent/settings-overrides'
 
 // Echo the whole cancellation-form block back exactly as edited: strings as
 // typed (the contract trims/nulls blanks), numbers as numbers, the toggle as a
@@ -122,6 +123,15 @@ export function buildQuietHoursPayload(q) {
   return q?.start && q?.end ? { start: q.start, end: q.end, tz: q.tz || null } : null
 }
 
+export function buildStaffThreadsPayload(st) {
+  if (st === null || typeof st !== 'object' || Array.isArray(st)) return undefined
+  return {
+    quiet_after_hours: numberOrOmit(st.quiet_after_hours),
+    nudge_enabled: st.nudge_enabled === true,
+    template_name: st.template_name || null,
+  }
+}
+
 /**
  * @param {object} settings  the editor's state (the resolved settings, as edited)
  * @param {string[]} overridden  the fields this studio sets itself
@@ -199,6 +209,10 @@ export function buildSavePayload(settings, overridden) {
       nudge_after_hours: numberOrOmit(settings.followups?.nudge_after_hours),
       template_name: settings.followups?.template_name || null,
       daily_cap: numberOrOmit(settings.followups?.daily_cap),
+      // INBOXFOLLOW.3 — threads a coach took over. Sent only once the studio
+      // has the block (undefined: JSON drops it, nothing is written over a
+      // stored one). A quiet period outside 4..336 is the contract's 400.
+      staff_threads: buildStaffThreadsPayload(settings.followups?.staff_threads),
     },
     first_class_checkin: {
       enabled: !!settings.first_class_checkin?.enabled,
@@ -237,6 +251,12 @@ export const ORG_PAYLOAD_DROPPED_KEYS = Object.freeze([
 export function buildOrgSavePayload(values, set, organizationId) {
   const { overridden: _o, ...full } = buildSavePayload(values || {}, set)
   for (const k of ORG_PAYLOAD_DROPPED_KEYS) delete full[k]
+  // INBOXFOLLOW.3 — the nudge switch and template are studio-only: the org PUT refuses them.
+  if (full.followups?.staff_threads) {
+    const st = withoutStudioOnlyStaffThreads(full.followups.staff_threads)
+    if (st) full.followups.staff_threads = st
+    else delete full.followups.staff_threads
+  }
   const q = values?.quiet_hours
   full.quiet_hours = q?.start && q?.end ? { start: q.start, end: q.end, tz: null } : null
   return {

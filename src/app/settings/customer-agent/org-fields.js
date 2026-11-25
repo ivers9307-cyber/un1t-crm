@@ -65,4 +65,5 @@ export const ORG_FIELDS = ORG_FIELD_GROUPS.flatMap((g) => g.fields)
 // (buildOrgSavePayload). A whole object key stands for all of its fields.
 // org-fields.test.js pins ORG_FIELDS + this list to the inheritable catalogue,
 // so a new inheritable setting fails CI until it is shown here or listed.
-export const ORG_FIELDS_NOT_EDITED = Object.freeze(['handoff_sla_minutes', 'limits'])
+// INBOXFOLLOW.3 — followups.staff_threads: only its quiet period is inheritable (the switch and template are studio-only, STAFF_THREADS_STUDIO_ONLY_FIELDS); the organisation editor never shows it.
+export const ORG_FIELDS_NOT_EDITED = Object.freeze(['handoff_sla_minutes', 'limits', 'followups.staff_threads'])

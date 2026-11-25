@@ -101,6 +101,38 @@ describe('a cleared number is "not stored", never the code default', () => {
     expect(resolved.followups.daily_cap).toBe(80)
   })
 
+  // INBOXFOLLOW.3 — the staff-thread trio round-trips through the real payload and PUT.
+  it('staff_threads: quiet period, switch and template survive the save and resolve', () => {
+    const st = { quiet_after_hours: 72, nudge_enabled: true, template_name: 'staff_check_in' }
+    const { blob } = saveThroughPut({ ...shown, followups: { ...shown.followups, staff_threads: st } }, ['followups.staff_threads'])
+    expect(blob.followups.staff_threads).toEqual(st)
+    expect(mergeAgentSettings({ org: null, studio: blob }).settings.followups.staff_threads).toEqual(st)
+  })
+
+  it('staff_threads: a studio that never touched it sends nothing, and the switch defaults off', () => {
+    expect(JSON.parse(JSON.stringify(buildSavePayload(shown, []))).followups.staff_threads).toBeUndefined()
+    const sent = JSON.parse(JSON.stringify(buildSavePayload({ ...shown, followups: { staff_threads: { quiet_after_hours: '' } } }, [])))
+    expect(sent.followups.staff_threads).toEqual({ nudge_enabled: false, template_name: null })
+  })
+
+  it('staff_threads: hours outside 4..336 are refused by the contract', () => {
+    for (const bad of [3, 337]) {
+      const sent = JSON.parse(JSON.stringify(buildSavePayload({ ...shown, followups: { staff_threads: { quiet_after_hours: bad } } }, ['followups.staff_threads'])))
+      expect(StudioSettingsSchema.safeParse(sent).success).toBe(false)
+    }
+    for (const ok of [4, 336]) {
+      const sent = JSON.parse(JSON.stringify(buildSavePayload({ ...shown, followups: { staff_threads: { quiet_after_hours: ok } } }, ['followups.staff_threads'])))
+      expect(StudioSettingsSchema.safeParse(sent).success).toBe(true)
+    }
+  })
+
+  it('staff_threads: the organisation save carries the quiet period only', () => {
+    const body = buildOrgSavePayload({ ...shown, followups: { staff_threads: { quiet_after_hours: 24, nudge_enabled: true, template_name: 'x' } } }, ['followups.staff_threads'], 'org-1')
+    expect(body.settings.followups.staff_threads).toEqual({ quiet_after_hours: 24 })
+    const none = buildOrgSavePayload({ ...shown, followups: { staff_threads: { nudge_enabled: true } } }, [], 'org-1')
+    expect(none.settings.followups.staff_threads).toBeUndefined()
+  })
+
   it('the legacy path (no overridden) still gets today\'s code defaults for the same body', () => {
     const sent = JSON.parse(JSON.stringify(buildSavePayload({ ...shown, handoff_cooldown_hours: null, followups: { enabled: true, daily_cap: null } }, [])))
     delete sent.overridden

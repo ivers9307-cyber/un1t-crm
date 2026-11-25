@@ -274,7 +274,7 @@ export function summariseThread(rows) {
 
 // CHECKINSTALL.1 — a failed read is never "nobody spoke": callers skip on
 // readFailed and the next tick retries (both runners ride a 15-minute cron).
-async function lastInboundFacts(db, conversationId) {
+export async function lastInboundFacts(db, conversationId) {
   const { data, error } = await db.from('whatsapp_messages')
     .select('direction, source, sent_by, body, created_at, message_type, transcript, transcript_status')
     .eq('conversation_id', conversationId)
@@ -288,14 +288,20 @@ async function lastInboundFacts(db, conversationId) {
   return { readFailed: false, rows, ...summariseThread(rows) }
 }
 
-async function intentFlags(db, conversationId, lastInboundAtMs) {
+export async function intentFlags(db, conversationId, lastInboundAtMs) {
   if (!lastInboundAtMs) return { sensitiveIntent: false, intentClosed: false }
   const sinceIso = new Date(lastInboundAtMs).toISOString()
-  const { data } = await db.from('agent_membership_requests')
+  const { data, error } = await db.from('agent_membership_requests')
     .select('kind, status')
     .eq('conversation_id', conversationId)
     .gte('created_at', sinceIso)
     .limit(10)
+  // INBOXFOLLOW.3 — a failed read is never "not sensitive": callers skip or wait
+  // on readFailed (a pause/cancel request must never be chased by a blind read).
+  if (error) {
+    logError('agent-followups', 'intent read failed; thread skipped this tick', { conversationId, err: error })
+    return { sensitiveIntent: false, intentClosed: false, readFailed: true }
+  }
   const rows = data || []
   return {
     // never chase someone who asked to pause or cancel
@@ -305,17 +311,46 @@ async function intentFlags(db, conversationId, lastInboundAtMs) {
   }
 }
 
-async function sentTodayCount(db, locationId, nowMs) {
+export async function sentTodayCount(db, locationId, nowMs) {
   const d = new Date(nowMs)
   const dayStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString()
-  const { count } = await db.from('whatsapp_conversations')
+  const { count, error } = await db.from('whatsapp_conversations')
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
     .gte('agent_followup_sent_at', dayStart)
-  return count || 0
+  // INBOXFOLLOW.3 — an unreadable ladder count fails closed like the staff one:
+  // Infinity, so neither runner sends for this location this tick.
+  if (error || typeof count !== 'number') {
+    logError('agent-followups', 'ladder send count unreadable; location sends nothing this tick', { locationId, err: error })
+    return Infinity
+  }
+  // INBOXFOLLOW.3 — ONE daily cap for everything Mia starts: the ladder's own
+  // sends plus today's staff-thread nudges. Infinity when the staff count is
+  // unreadable, so the location sends nothing this tick (fail closed).
+  const staff = await staffNudgesSentToday(db, locationId, dayStart)
+  return count + staff
 }
 
-function skipLog(conversationId, reason) {
+// Staff-thread nudges sent (or in flight) today. KNOWN UNDER-COUNT: it reads
+// staff_nudged_at/outcome on the conversation, and a customer reply or a coach
+// reply clears both, so a nudge that was answered drops out of today's count.
+// No existing column on the recorded whatsapp_messages row can mark a nudge
+// reliably (a free-text nudge is source 'agent', message_type 'text', like any
+// Mia message), and this task adds no column.
+async function staffNudgesSentToday(db, locationId, dayStart) {
+  const { count, error } = await db.from('whatsapp_conversations')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId)
+    .gte('staff_nudged_at', dayStart)
+    .in('staff_nudge_outcome', ['sent', 'sending'])
+  if (error || typeof count !== 'number') {
+    logError('agent-followups', 'staff nudge count unreadable; location sends nothing this tick', { locationId, err: error })
+    return Infinity
+  }
+  return count
+}
+
+export function skipLog(conversationId, reason) {
   console.warn('[radar-agent] followup-skip', JSON.stringify({ conversationId, reason }))
 }
 
@@ -463,67 +498,93 @@ export async function composeAgentText({ location, settings, historyRows, instru
   }
 }
 
-async function sendNudge(db, conv, location, settings, facts, zone) {
+// INBOXFOLLOW.3 — `instruction` and `stamp` let the staff-thread nudge reuse
+// this exact compose-and-send path: it passes its own instruction and stamp:
+// false (it must not touch agent_followup_stage / agent_followup_sent_at, which
+// belong to Mia's own ladder). Returns { sent: 'nudge' } or { skipped: reason }.
+export async function sendNudge(db, conv, location, settings, facts, zone, { instruction = NUDGE_INSTRUCTION, stamp = true } = {}) {
+  const skip = (reason) => { skipLog(conv.id, reason); return { skipped: reason } }
   const branding = await getLocationBranding(db, location.id)
   const composed = await composeAgentText({
-    location, settings, historyRows: facts.rows, instruction: NUDGE_INSTRUCTION, zone,
+    location, settings, historyRows: facts.rows, instruction, zone,
     companyName: branding.companyName,
     knowledge: await loadAgentKnowledge(db, location.id),
     ...promptCapabilityFor(location, settings),
   })
-  if (composed.error) return skipLog(conv.id, `nudge_${composed.error}`)
+  if (composed.error) return skip(`nudge_${composed.error}`)
   const text = composed.text
 
   if (!text || isSkipResponse(text)) {
-    await stampStage(db, conv.id, 3, false) // nothing open — close the cycle quietly
-    return skipLog(conv.id, 'nothing_open')
+    if (stamp) await stampStage(db, conv.id, 3, false) // nothing open — close the cycle quietly
+    return skip('nothing_open')
   }
   const parsed = parseAgentResponse(text)
   if (parsed.handoff || !parsed.text) {
-    await stampStage(db, conv.id, 3, false)
-    return skipLog(conv.id, 'nudge_not_sendable')
+    if (stamp) await stampStage(db, conv.id, 3, false)
+    return skip('nudge_not_sendable')
   }
 
   const { sendTextMessage } = await import('@/lib/whatsapp')
   const res = await sendTextMessage(conv.to, parsed.text, { locationId: conv.location_id })
-  if (!res?.messageId) return skipLog(conv.id, 'nudge_send_failed')
+  if (!res?.messageId) return skip('nudge_send_failed')
   await recordProactiveMessage(db, conv, { body: parsed.text, waMessageId: res.messageId, messageType: 'text' })
-  await stampStage(db, conv.id, 1, true)
+  if (stamp) await stampStage(db, conv.id, 1, true)
   return { sent: 'nudge' }
 }
 
-async function sendFollowupTemplate(db, conv, settings, facts) {
-  const followups = { ...FOLLOWUP_DEFAULTS, ...(settings?.followups || {}) }
-  if (!followups.template_name) return skipLog(conv.id, 'no_template_configured')
-
-  // Marketing template ⇒ marketing consent, exactly like a campaign.
-  // WAORGNUMBER.3 (R6) — consent is the THREAD'S STUDIO's, not the contact's
-  // global flag: one number can serve two studios, and a STOP at one must not
-  // be undone by a yes at the other. Row absent = no. A failed read is not "no"
-  // (the no-branch stamps the cycle closed): skip unstamped, the next tick retries.
-  const { data: prefs, error: prefsError } = await db.from('contact_location_preferences')
+/**
+ * Does this thread's studio hold the contact's WhatsApp marketing consent?
+ * WAORGNUMBER.3 (R6) — consent is the THREAD'S STUDIO's, not the contact's
+ * global flag: one number can serve two studios, and a STOP at one must not be
+ * undone by a yes at the other. Row absent = no. A failed read is `{ error }`,
+ * never "no": callers skip unstamped and the next tick retries.
+ * Shared by the follow-up ladder, the staff-thread nudge and their template send.
+ */
+export async function readStudioMarketingConsent(db, { contact_id, location_id }) {
+  const { data: prefs, error } = await db.from('contact_location_preferences')
     .select('whatsapp_marketing')
-    .eq('contact_id', conv.contact_id)
-    .eq('location_id', conv.location_id)
+    .eq('contact_id', contact_id)
+    .eq('location_id', location_id)
     .maybeSingle()
-  if (prefsError) {
-    logError('agent-followups', 'follow-up consent read failed; skipped this tick', { conversationId: conv.id, err: prefsError })
-    return skipLog(conv.id, 'consent_read_failed')
+  if (error) return { error }
+  // INBOXFOLLOW.3 — `refused` is an EXPLICIT false (an opt-out at this studio);
+  // no row, or a row with no decision, is neither consented nor refused.
+  return { consented: prefs?.whatsapp_marketing === true, refused: prefs?.whatsapp_marketing === false }
+}
+
+/**
+ * Send one approved template to a thread (marketing template, so marketing
+ * consent is re-checked here). INBOXFOLLOW.3 — split out of the ladder's
+ * sendFollowupTemplate so the staff-thread nudge can name its own template.
+ * `stamp: false` leaves Mia's ladder columns alone. Returns { sent: 'template' }
+ * or { skipped: reason }.
+ */
+export async function sendApprovedTemplate(db, conv, { templateName, facts, stamp = true }) {
+  const skip = (reason) => { skipLog(conv.id, reason); return { skipped: reason } }
+  if (!templateName) return skip('no_template_configured')
+
+  // Marketing template ⇒ marketing consent, exactly like a campaign. A failed
+  // read is not "no" (the no-branch stamps the cycle closed): skip unstamped,
+  // the next tick retries.
+  const consent = await readStudioMarketingConsent(db, conv)
+  if (consent.error) {
+    logError('agent-followups', 'follow-up consent read failed; skipped this tick', { conversationId: conv.id, err: consent.error })
+    return skip('consent_read_failed')
   }
-  if (prefs?.whatsapp_marketing !== true) {
-    await stampStage(db, conv.id, 3, false)
-    return skipLog(conv.id, 'no_studio_whatsapp_consent')
+  if (!consent.consented) {
+    if (stamp) await stampStage(db, conv.id, 3, false)
+    return skip('no_studio_whatsapp_consent')
   }
 
   const { data: rows } = await db.from('whatsapp_templates')
     .select('name, language, status, components, header_media_url, business_account_id')
     .eq('location_id', conv.location_id)
-    .eq('name', followups.template_name)
+    .eq('name', templateName)
     .order('created_at', { ascending: false })
     .limit(1)
   const template = rows?.[0]
   if (!template || String(template.status || '').toUpperCase() !== 'APPROVED') {
-    return skipLog(conv.id, 'template_not_approved')
+    return skip('template_not_approved')
   }
 
   const { extractTemplateBody } = await import('@/lib/radar-outreach')
@@ -536,22 +597,28 @@ async function sendFollowupTemplate(db, conv, settings, facts) {
 
   const res = await sendTemplateMessage(conv.to, template.name, template.language || 'en', components,
     { locationId: conv.location_id, ...(template.business_account_id && { businessAccountId: template.business_account_id }) })
-  if (!res?.messageId) return skipLog(conv.id, 'template_send_failed')
+  if (!res?.messageId) return skip('template_send_failed')
   await recordProactiveMessage(db, conv, {
     body: renderFollowupBody(template, values) || `[Template: ${template.name}]`,
     waMessageId: res.messageId,
     messageType: 'template',
     templateName: template.name,
   })
-  await stampStage(db, conv.id, 2, true)
+  if (stamp) await stampStage(db, conv.id, 2, true)
   return { sent: 'template' }
+}
+
+// The follow-up ladder's own template: the name comes from followups.template_name.
+export async function sendFollowupTemplate(db, conv, settings, facts) {
+  const followups = { ...FOLLOWUP_DEFAULTS, ...(settings?.followups || {}) }
+  return sendApprovedTemplate(db, conv, { templateName: followups.template_name, facts })
 }
 
 // TZ.5 — every studio's zone, read ONCE per tick (getLocationZones). A failed
 // read is a DB outage, never a silent Dublin: it answers null, and each
 // location it covered is skipped this tick (the next tick reads again; the
 // resolver never caches a failure).
-async function readTickZones(db, locations, runner) {
+export async function readTickZones(db, locations, runner) {
   try {
     return await getLocationZones(db, (locations || []).map((l) => l?.id))
   } catch (e) {
@@ -579,7 +646,7 @@ function anyStudioInDaytime(nowMs, locations, zones) {
 // tick already read). enabled / test_mode / test_phones are studio-only, so an
 // org layer with follow-ups or check-ins on can never start sends at a studio
 // that is off: the runners' own gate below reads the studio's switches.
-async function tickSettings(db, location, orgCache) {
+export async function tickSettings(db, location, orgCache) {
   const resolved = await resolveAgentSettingsForLocation(db, location, { orgCache })
   return resolved.ok ? resolved.settings : null
 }
@@ -673,6 +740,8 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
         // CHECKINSTALL.1 — logged once, inside lastInboundFacts (logError).
         if (facts.readFailed) { results.skipped++; continue }
         const flags = await intentFlags(db, c.id, facts.lastInboundAtMs)
+        // INBOXFOLLOW.3 — logged once, inside intentFlags; the next tick retries.
+        if (flags.readFailed) { results.skipped++; continue }
         const decision = classifyFollowupCandidate({
           stage: c.agent_followup_stage,
           lastInboundAtMs: facts.lastInboundAtMs,

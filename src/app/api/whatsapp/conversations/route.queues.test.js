@@ -118,9 +118,14 @@ describe('GET /api/whatsapp/conversations — the queues see every waiting threa
 
 describe('GET /api/whatsapp/conversations — follow-up config', () => {
   it('returns the studio config for one studio', async () => {
-    db.tables.locations.push({ id: LOC_A, name: 'Studio A', timezone: 'Europe/Dublin', settings: { customer_agent: { followups: { staff_threads: { quiet_after_hours: 24, nudge_enabled: true } } } } })
+    db.tables.locations.push({ id: LOC_A, name: 'Studio A', timezone: 'Europe/Dublin', settings: { customer_agent: { enabled: true, followups: { staff_threads: { quiet_after_hours: 24, nudge_enabled: true } } } } })
     const body = await (await get(`?location_id=${LOC_A}`)).json()
     expect(body.followup).toEqual({ quietHours: 24, nudgeEnabled: true })
+  })
+  it('a studio whose agent is off has no nudge, so no grace day', async () => {
+    db.tables.locations.push({ id: LOC_A, name: 'Studio A', timezone: 'Europe/Dublin', settings: { customer_agent: { enabled: false, followups: { staff_threads: { quiet_after_hours: 24, nudge_enabled: true } } } } })
+    const body = await (await get(`?location_id=${LOC_A}`)).json()
+    expect(body.followup).toEqual({ quietHours: 24, nudgeEnabled: false })
   })
 
   it('falls back to the defaults when the studio has no config, or none is named', async () => {

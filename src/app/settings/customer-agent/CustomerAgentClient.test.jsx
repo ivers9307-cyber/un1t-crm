@@ -339,6 +339,29 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     expect(putBody().followups.daily_cap).toBe(80)
   })
 
+  // INBOXFOLLOW.3 — the staff-thread group shows with the follow-ups switch off.
+  it('Threads your team is waiting on: shown beside a switched-off follow-ups card, saved as one block', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    openSection('Follow-ups')
+    expect(screen.getByRole('heading', { name: 'Threads your team is waiting on' })).toBeTruthy()
+    expect(screen.getByText('After a coach replies, the thread waits this long for the customer. Then it comes back to Needs reply. This applies whether or not Mia nudges.')).toBeTruthy()
+    expect(screen.getByText('Mia sends one message when the quiet period ends. If the customer replies, the reply goes to your team, and Mia stays silent.')).toBeTruthy()
+    expect(screen.getByText('Used when the 24-hour WhatsApp window has closed, and only for customers with marketing consent. With no approved template chosen, Mia skips the nudge and the thread comes back to your team.')).toBeTruthy()
+    const hours = screen.getByLabelText('Quiet period (hours)')
+    expect(hours.min).toBe('4'); expect(hours.max).toBe('336'); expect(hours.placeholder).toBe('48')
+    expect(screen.getByRole('checkbox', { name: 'Mia nudges quiet threads your team took over' }).checked).toBe(false)
+    expect(screen.getByText('Nudge template').closest('div').parentElement.querySelector('select')).toBeTruthy()
+    fireEvent.change(hours, { target: { value: '72' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Mia nudges quiet threads your team took over' }))
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toContain('followups.staff_threads')
+    expect(putBody().followups.staff_threads).toEqual({ quiet_after_hours: 72, nudge_enabled: true, template_name: null })
+    expect(putBody().followups.enabled).toBe(false)
+  })
+
   it('"Use organisation default" removes the override and shows the inherited value', async () => {
     mockFetch([answer()])
     render(<CustomerAgentClient canEdit />)

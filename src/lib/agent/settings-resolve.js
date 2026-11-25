@@ -1,5 +1,6 @@
 import { logError, logWarn } from '@/lib/log'
 import { DEFAULTS, STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS, OrgSettingsSchema } from './settings-contract'
+import { withoutStudioOnlyStaffThreads } from './settings-overrides'
 
 // MIAORG.1 — the ONE place Mia's effective settings for a studio are decided:
 //
@@ -27,6 +28,17 @@ import { DEFAULTS, STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS, OrgSettingsSchema 
 //   says": the effective quiet_hours is start/end null (so
 //   core.isWithinQuietHours is never true) and its source is 'studio'. Any
 //   other `off` value, and `off` at the org layer, is ignored.
+
+// INBOXFOLLOW.3 — the org layer's followups carry only the staff-thread quiet
+// period; the nudge switch and template are studio-only (see
+// STAFF_THREADS_STUDIO_ONLY_FIELDS). Returns the layer without them.
+function orgWithoutStaffNudge(org) {
+  const st = org?.followups?.staff_threads
+  if (st === undefined) return org
+  const { staff_threads: _s, ...followups } = org.followups
+  const only = withoutStudioOnlyStaffThreads(st)
+  return { ...org, followups: only ? { ...followups, staff_threads: only } : followups }
+}
 
 // The quiet-hours opt-out read off one layer (see the header).
 function withoutOff(q) {
@@ -81,6 +93,7 @@ export function mergeAgentSettings({ org = null, studio = null } = {}) {
       orgValue = withoutOff(orgValue)
       studioValue = withoutOff(studioValue)
     }
+    if (key === 'followups' && isPlainObject(orgValue)) orgValue = orgWithoutStaffNudge({ followups: orgValue }).followups
 
     if (INHERITABLE_OBJECT_KEYS.includes(key)) {
       const hasStudio = Object.keys(setFields(studioValue)).length > 0
@@ -90,6 +103,11 @@ export function mergeAgentSettings({ org = null, studio = null } = {}) {
       const merged = isPlainObject(DEFAULTS[key]) ? structuredClone(DEFAULTS[key]) : {}
       overlayFields(merged, orgValue)
       overlayFields(merged, studioValue)
+      // INBOXFOLLOW.3 — staff_threads merges per field too: the org's quiet
+      // period shows through a studio object that sets only its own switch.
+      if (key === 'followups' && isPlainObject(orgValue?.staff_threads) && isPlainObject(studioValue?.staff_threads)) {
+        merged.staff_threads = { ...setFields(orgValue.staff_threads), ...setFields(studioValue.staff_threads) }
+      }
       settings[key] = merged
       sources[key] = hasStudio ? 'studio' : 'org'
       continue
@@ -185,7 +203,7 @@ async function readOrgLayer(db, organizationId, locationId) {
       })
       return null
     }
-    return layer
+    return orgWithoutStaffNudge(layer)
   } catch (err) {
     logError('agent-settings', 'org settings read threw; resolving without the org layer', { locationId, organizationId, err })
     return null

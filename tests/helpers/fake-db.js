@@ -335,7 +335,10 @@ class Builder {
   run() {
     const { db, table, op } = this
     db.calls.push({ table, op, filters: this.log })
-    const injected = db.errors?.[table]?.[op]
+    // An injected error may be a function of the query ({ options, filters }) that
+    // answers the error or nothing, to fail one query on a table and not its siblings.
+    const raw = db.errors?.[table]?.[op]
+    const injected = typeof raw === 'function' ? raw({ options: this.options, filters: this.log }) : raw
     if (injected) return { data: null, error: injected, count: null }
     const rows = (db.tables[table] ||= [])
     if (op === 'select') {

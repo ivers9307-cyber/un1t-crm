@@ -58,7 +58,7 @@ export const INHERITABLE_OBJECT_KEYS = ['limits', 'followups', 'first_class_chec
 // settings-contract.test.js).
 export const INHERITABLE_OBJECT_FIELDS = Object.freeze({
   limits: Object.freeze(['max_replies_per_conversation_per_hour', 'max_replies_per_location_per_day']),
-  followups: Object.freeze(['enabled', 'nudge_after_hours', 'template_name', 'daily_cap']),
+  followups: Object.freeze(['enabled', 'nudge_after_hours', 'template_name', 'daily_cap', 'staff_threads']),
   first_class_checkin: Object.freeze(['enabled', 'delay_hours', 'template_name', 'daily_cap']),
   inline_suggestion: Object.freeze(['enabled']),
   // MIAORG.1 Task 4 (T4-A) — `off` is studio-only IN EFFECT: a studio sets
@@ -67,6 +67,20 @@ export const INHERITABLE_OBJECT_FIELDS = Object.freeze({
   // resolver ignores it at the org layer and the org editor refuses it.
   quiet_hours: Object.freeze(['start', 'end', 'tz', 'off']),
 })
+
+// INBOXFOLLOW.3 — followups.staff_threads is inheritable ONLY for its quiet
+// period. The switch that lets Mia message customers on threads a coach took
+// over, and its template, are set per studio: the resolver ignores them at the
+// org layer, the org editor's PUT refuses them, and an org save never stores
+// them (same shape as quiet_hours.off above, but one level deeper).
+export const STAFF_THREADS_STUDIO_ONLY_FIELDS = Object.freeze(['nudge_enabled', 'template_name'])
+
+/** A staff_threads object with the studio-only fields removed; null when nothing is left. */
+export function withoutStudioOnlyStaffThreads(st) {
+  if (st === null || typeof st !== 'object' || Array.isArray(st)) return null
+  const rest = Object.fromEntries(Object.entries(st).filter(([k, v]) => !STAFF_THREADS_STUDIO_ONLY_FIELDS.includes(k) && v !== null && v !== undefined))
+  return Object.keys(rest).length ? rest : null
+}
 
 // Every other DEFAULTS key: a plain value the org may supply (pinned against
 // DEFAULTS by settings-contract.test.js).
@@ -208,7 +222,8 @@ export function valueAt(obj, path) {
   const dot = path.indexOf('.')
   if (dot < 0) return obj[path]
   const inner = obj[path.slice(0, dot)]
-  return isPlainObject(inner) ? inner[path.slice(dot + 1)] : undefined
+  // The rest of the path may itself be dotted ('followups.staff_threads.quiet_after_hours').
+  return isPlainObject(inner) ? valueAt(inner, path.slice(dot + 1)) : undefined
 }
 
 /**
