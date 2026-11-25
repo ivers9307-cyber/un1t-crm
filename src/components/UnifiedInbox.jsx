@@ -20,7 +20,7 @@
 // problem, not a convenience one. ?ch=em deep links redirect to
 // /communications/mail from the page above.
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
 import {
   DEFAULT_FOLLOWUP_CFG, QUEUES, needsReply, needsMiaHelp, filterByQueue, queueCounts, sortNeedsReply,
@@ -73,6 +73,8 @@ function initialsOf(name) {
 }
 
 const VALID_CHANNELS = new Set(['wa', 'ig'])
+// A list fetch that has not answered in this long is aborted and treated as failed.
+const LIST_FETCH_TIMEOUT_MS = 20000
 
 export default function UnifiedInbox({ locationId, timezone = null, userId, initialConversationId, initialChannel, canEditConsent = false }) {
   const [waConvs, setWaConvs] = useState([])
@@ -99,23 +101,59 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
   )
   const [ccTab, setCcTab] = useState('profile')
 
-  const loadConversations = useCallback(async () => {
-    const qs = locationId ? `?location_id=${encodeURIComponent(locationId)}` : ''
-    const [wa, ig] = await Promise.all([
-      fetch(`/api/whatsapp/conversations${qs}`).then(r => r.json()).then(
-        d => {
-          if (!d.success) return null
-          const f = d.followup
-          setCfg(f && Number.isFinite(f.quietHours) ? { quietHours: f.quietHours, nudgeEnabled: !!f.nudgeEnabled } : DEFAULT_FOLLOWUP_CFG)
-          return d.conversations || []
-        },
-        () => null
-      ),
-      fetch(`/api/instagram/conversations${qs}`).then(r => r.json()).then(
-        d => (d.success ? d.conversations || [] : null),
-        () => null
-      ),
-    ])
+  // INBOXPERM.1 — a list load that never settles (a laptop that slept, a network
+  // switch) must not freeze the inbox: each list fetch carries a 20 s timeout
+  // (an aborted load is a failed load, the current lists stay), the reloader's
+  // watchdog frees its guard after 30 s, and the result of a load that is no
+  // longer current (abandoned, superseded, or for a studio that is no longer the
+  // active one) is dropped instead of set. Search fetches get the same timeout.
+  const locationIdRef = useRef(locationId)
+  const listAbortRef = useRef(null)
+  // The studio on screen. Declared before the reloader's effects below, so it is
+  // current when the new studio's first load starts; the old studio's pending
+  // request is aborted rather than left to finish for nobody.
+  useEffect(() => {
+    locationIdRef.current = locationId
+    return () => { if (listAbortRef.current) listAbortRef.current.abort() }
+  }, [locationId])
+
+  const loadConversations = useCallback(async ({ isCurrent } = {}) => {
+    const forLocation = locationId
+    const qs = forLocation ? `?location_id=${encodeURIComponent(forLocation)}` : ''
+    // A load that starts while an abandoned one is still pending cancels it.
+    if (listAbortRef.current) listAbortRef.current.abort()
+    const controller = new AbortController()
+    listAbortRef.current = controller
+    const timeout = setTimeout(() => controller.abort(), LIST_FETCH_TIMEOUT_MS)
+    let waDone = null
+    let wa = null
+    let ig = null
+    try {
+      ;[wa, ig] = await Promise.all([
+        fetch(`/api/whatsapp/conversations${qs}`, { signal: controller.signal }).then(r => r.json()).then(
+          d => {
+            if (!d.success) return null
+            waDone = d
+            return d.conversations || []
+          },
+          () => null
+        ),
+        fetch(`/api/instagram/conversations${qs}`, { signal: controller.signal }).then(r => r.json()).then(
+          d => (d.success ? d.conversations || [] : null),
+          () => null
+        ),
+      ])
+    } finally {
+      clearTimeout(timeout)
+      if (listAbortRef.current === controller) listAbortRef.current = null
+    }
+    // Stale: another load has taken over, or the studio changed while this one
+    // ran. Its rows belong to a studio that is not on screen: set nothing.
+    if ((isCurrent && !isCurrent()) || locationIdRef.current !== forLocation) return
+    if (waDone) {
+      const f = waDone.followup
+      setCfg(f && Number.isFinite(f.quietHours) ? { quietHours: f.quietHours, nudgeEnabled: !!f.nudgeEnabled } : DEFAULT_FOLLOWUP_CFG)
+    }
     // Transient per-channel failures keep the prior list rather than
     // blanking part of the queue.
     if (wa) setWaConvs(wa)
@@ -191,10 +229,17 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
     const t = setTimeout(async () => {
       const base = locationId ? `location_id=${encodeURIComponent(locationId)}&` : ''
       const qs = `?${base}q=${encodeURIComponent(q)}`
-      const [wa, ig] = await Promise.all([
-        fetch(`/api/whatsapp/conversations${qs}`).then(r => r.json()).then(d => (d.success ? d.conversations || [] : null), () => null),
-        fetch(`/api/instagram/conversations${qs}`).then(r => r.json()).then(d => (d.success ? d.conversations || [] : null), () => null),
-      ])
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), LIST_FETCH_TIMEOUT_MS)
+      let wa, ig
+      try {
+        ;[wa, ig] = await Promise.all([
+          fetch(`/api/whatsapp/conversations${qs}`, { signal: controller.signal }).then(r => r.json()).then(d => (d.success ? d.conversations || [] : null), () => null),
+          fetch(`/api/instagram/conversations${qs}`, { signal: controller.signal }).then(r => r.json()).then(d => (d.success ? d.conversations || [] : null), () => null),
+        ])
+      } finally {
+        clearTimeout(timeout)
+      }
       if (cancelled) return
       // A failed channel degrades to no server hits for that channel —
       // the client filter over its loaded rows still applies via merge.
