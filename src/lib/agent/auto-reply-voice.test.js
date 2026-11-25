@@ -2,6 +2,8 @@
 // auto-reply-no-credits.test.js.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
+
 vi.mock('@/lib/whatsapp', () => ({
   sendTextMessage: vi.fn(),
   getOrCreateConversation: vi.fn(),
@@ -20,8 +22,9 @@ vi.mock('@/lib/person-links', () => ({
 import { runChannelAgent, whatsappAdapter, markVoiceNoteForStaff, VOICE_HANDOFF_REASON } from './auto-reply'
 import { instagramAdapter } from './instagram'
 import { sendPushToRolesAtLocation } from '@/lib/push'
+import { logError } from '@/lib/log'
 
-function agentDb({ conv, history, calls, settings, selects = [], claimHeld = false }) {
+function agentDb({ conv, history, calls, settings, selects = [], claimHeld = false, rearmError = null }) {
   const mk = (table) => {
     const state = { op: 'select', patch: null, selectOpts: null }
     const finish = () => {
@@ -29,6 +32,7 @@ function agentDb({ conv, history, calls, settings, selects = [], claimHeld = fal
         calls.push({ table, op: 'update', patch: state.patch })
         // Another turn holds the agent_processing_at claim: the claim matches no row.
         if (claimHeld && state.patch?.agent_processing_at) return { data: [], error: null }
+        if (rearmError && state.patch?.agent_active === true && state.patch?.agent_handed_off_at === null) return { data: null, error: rearmError }
         return { data: [{ id: 'conv-1' }], error: null }
       }
       if (table === 'locations') return { data: { name: 'Stillorgan', membership_source: 'glofox', settings: { customer_agent: settings } }, error: null }
@@ -249,5 +253,15 @@ describe('cooldown re-arm', () => {
     const rearm = calls.find((c) => c.op === 'update' && c.patch?.agent_active === true && c.patch?.agent_handed_off_at === null)
     expect(rearm).toBeTruthy()
     expect(rearm.patch).toMatchObject({ handoff_escalated_at: null, handoff_requested_at: null })
+  })
+  it('logs a failed re-arm write and does not throw (the next turn retries)', async () => {
+    vi.stubGlobal('fetch', modelReplies('Sure.'))
+    const calls = []
+    const longAgo = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()
+    const handedOff = { ...conv, agent_active: false, agent_handed_off_at: longAgo }
+    const db = agentDb({ conv: handedOff, history: [{ direction: 'inbound', body: 'Hi', message_type: 'text', created_at: now() }], calls, settings: { enabled: true }, rearmError: { code: '57014', message: 'statement timeout' } })
+    const adapter = makeAdapter()
+    await runChannelAgent(db, adapter, { conversationId: 'conv-1', locationId: 'loc-1', recipient: '353870000000', contactId: 'c-1', messageType: 'text', body: 'Hi', connection: null })
+    expect(logError).toHaveBeenCalledWith('agent', expect.stringMatching(/re-arm write failed/), expect.objectContaining({ channel: 'whatsapp', conversationId: 'conv-1', error: 'statement timeout' }))
   })
 })
