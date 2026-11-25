@@ -58,7 +58,8 @@ import ThreadFollowupBar from '../../../components/ThreadFollowupBar'
 export default function Conversation() {
   const { conversationId } = useLocalSearchParams()
   const router = useRouter()
-  const { activeLocation, locations } = useAuth()
+  const { activeLocation } = useAuth()
+  const { locations } = useAuth()
   const headerHeight = useHeaderHeight()
   const insets = useSafeAreaInsets()
   const [conv, setConv] = useState(null)
@@ -384,13 +385,13 @@ export default function Conversation() {
         </View>
       ) : (
         <>
-          {/* INBOXFOLLOW.4 — who has the thread, and Snooze. The studio's
-              zone is the conversation's own studio when it is one the phone
-              holds, else the active studio's. */}
+          {/* INBOXFOLLOW.4 — who has the thread, and Snooze. The zone is
+              the thread's own studio (locationId, as every call here), never
+              the active one. */}
           <ThreadFollowupBar
             conv={conv}
             channel="wa"
-            zone={locationZoneResolver({ locations, activeLocation })(conv?.location_id)}
+            zone={locationZoneResolver({ locations })(locationId)}
             snooze={body => snoozeConversation(conversationId, body, locationId)}
             onChanged={refresh}
           />
