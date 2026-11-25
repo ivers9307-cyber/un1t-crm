@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { durationLabel, waitChipInfo, windowChipInfo, stateLineText, dayTime } from './inbox-row-text'
+import { durationLabel, waitChipInfo, windowChipInfo, stateLineText, dayTime, snoozeUntilLabel } from './inbox-row-text'
 
 const H = 3600_000
 const NOW = Date.parse('2026-11-25T12:00:00Z') // a Wednesday
@@ -75,5 +75,12 @@ describe('stateLineText', () => {
   })
   it('dayTime falls back to Dublin for a bad zone', () => {
     expect(dayTime(Date.parse('2026-11-27T09:00:00Z'), 'nope')).toBe('Fri 09:00')
+  })
+})
+
+describe('snoozeUntilLabel', () => {
+  it('weekday, day, month and time in the studio zone', () => {
+    expect(snoozeUntilLabel('2026-11-27T09:00:00Z', 'Europe/Dublin')).toBe('Fri 27 Nov, 09:00')
+    expect(snoozeUntilLabel('2026-11-27T09:00:00Z', 'America/New_York')).toBe('Fri 27 Nov, 04:00')
   })
 })

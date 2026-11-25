@@ -64,6 +64,14 @@ export function dayTime(ms, zone) {
   return `${formatInZone(ms, z, { weekday: 'short' })} ${formatInZone(ms, z, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}`
 }
 
+// "Fri 27 Nov, 09:00" in the studio's zone: when a snooze ends, in a thread's
+// snooze strip (web SnoozeControl and the phone's thread bar).
+export function snoozeUntilLabel(iso, zone) {
+  const z = resolveZone(zone)
+  const ms = new Date(iso).getTime()
+  return `${formatInZone(ms, z, { weekday: 'short' })} ${formatInZone(ms, z, { day: 'numeric', month: 'short' })}, ${formatInZone(ms, z, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}`
+}
+
 // The text of the line that replaces the message preview when the thread's
 // state matters more than its last words; null when the preview should stay.
 export function stateLineText({ conv, nowMs, cfg, zone }) {

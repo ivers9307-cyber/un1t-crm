@@ -90,6 +90,24 @@ describe('SnoozeControl', () => {
     expect(screen.queryByTestId('snoozed-state')).toBeNull()
   })
 
+  it('a snooze that has ended but is still set shows "Snooze ended · Dismiss" beside Snooze; Dismiss posts until null and refreshes', async () => {
+    const onChanged = vi.fn()
+    render(<SnoozeControl channel="wa" conversation={conv({ snoozed_until: '2026-11-25T11:00:00.000Z', snooze_note: 'ring back' })} zone="Europe/Dublin" onChanged={onChanged} />)
+    expect(screen.getByTestId('snooze-ended').textContent).toContain('Snooze ended · ring back')
+    expect(screen.getByRole('button', { name: 'Snooze' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/whatsapp/conversations/c1/snooze')
+    expect(bodyOf()).toEqual({ until: null })
+  })
+
+  it('no Dismiss on a thread that was never snoozed or is snoozed now', () => {
+    const { rerender } = render(<SnoozeControl channel="wa" conversation={conv()} zone="Europe/Dublin" />)
+    expect(screen.queryByTestId('snooze-ended')).toBeNull()
+    rerender(<SnoozeControl channel="wa" conversation={conv({ snoozed_until: '2026-11-27T09:00:00.000Z' })} zone="Europe/Dublin" />)
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull()
+  })
+
   it('sends the last message the coach saw, so the route can refuse a message that landed since', async () => {
     render(<SnoozeControl channel="wa" conversation={conv({ last_message_at: '2026-11-25T11:30:00.000Z' })} zone="Europe/Dublin" />)
     open()

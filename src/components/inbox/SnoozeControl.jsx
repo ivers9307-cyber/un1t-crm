@@ -4,7 +4,8 @@
 // Instagram threads. A snoozed thread leaves Needs reply and waits until the
 // chosen time (shared/inbox-queues.js). Closed: a Snooze button. Open: an
 // optional note, four presets, and a date and time of your own. Snoozed: "Snoozed
-// until … · Unsnooze".
+// until … · Unsnooze". A snooze that has run out but is still set shows "Snooze
+// ended · Dismiss" beside the Snooze button; Dismiss clears it like Unsnooze.
 //
 // Every clock time is the STUDIO's (the `zone` prop, locations.timezone), never
 // the browser's: presets come from shared/inbox-snooze, and the custom field's
@@ -14,8 +15,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Clock } from 'lucide-react'
 import { Button } from '@/components/ui'
-import { isSnoozed } from '@/lib/inbox-queues'
-import { formatInZone, resolveZone, zonedWallClockToInstant } from '@/lib/location-time'
+import { isSnoozed, snoozeEnded } from '@/lib/inbox-queues'
+import { resolveZone, zonedWallClockToInstant } from '@/lib/location-time'
+import { snoozeUntilLabel } from '@shared/inbox-row-text'
 import { snoozePresets, SNOOZE_NOTE_MAX } from '@shared/inbox-snooze'
 
 const SAVE_FAILED = 'Could not change the snooze. Try again.'
@@ -24,12 +26,6 @@ const PICK_TIME = 'Pick a date and a time.'
 const ENDPOINT = {
   wa: (id) => `/api/whatsapp/conversations/${id}/snooze`,
   ig: (id) => `/api/instagram/conversations/${id}/snooze`,
-}
-
-// "Fri 27 Nov, 09:00" in the studio's zone.
-function untilLabel(iso, zone) {
-  const ms = new Date(iso).getTime()
-  return `${formatInZone(ms, zone, { weekday: 'short' })} ${formatInZone(ms, zone, { day: 'numeric', month: 'short' })}, ${formatInZone(ms, zone, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}`
 }
 
 export default function SnoozeControl({ channel, conversation, zone, onChanged }) {
@@ -41,6 +37,8 @@ export default function SnoozeControl({ channel, conversation, zone, onChanged }
   const studioZone = resolveZone(zone)
   const buildUrl = ENDPOINT[channel]
   const snoozed = isSnoozed(conversation)
+  // The time has passed but the snooze is still on the row: offer to dismiss it.
+  const ended = !snoozed && snoozeEnded(conversation)
   const rootRef = useRef(null)
 
   // Open: Escape closes it and puts focus back on the Snooze button; a press
@@ -114,15 +112,23 @@ export default function SnoozeControl({ channel, conversation, zone, onChanged }
         <div className="flex items-center gap-1.5 text-xs text-un1t-subtle" data-testid="snoozed-state">
           <Clock size={12} aria-hidden="true" />
           <span>
-            Snoozed until {untilLabel(conversation.snoozed_until, studioZone)}
+            Snoozed until {snoozeUntilLabel(conversation.snoozed_until, studioZone)}
             {conversation.snooze_note ? ` · ${conversation.snooze_note}` : ''}
           </span>
           <Button type="button" variant="ghost" size="sm" loading={busy} onClick={() => send(null)}>Unsnooze</Button>
         </div>
       ) : (
-        <Button type="button" variant="secondary" size="sm" icon={Clock} aria-expanded={open} onClick={() => { setOpen(o => !o); setError(null) }}>
-          Snooze
-        </Button>
+        <div className="flex items-center gap-1.5">
+          {ended && (
+            <div className="flex items-center gap-1.5 text-xs text-un1t-subtle" data-testid="snooze-ended">
+              <span>Snooze ended{conversation.snooze_note ? ` · ${conversation.snooze_note}` : ''}</span>
+              <Button type="button" variant="ghost" size="sm" loading={busy} onClick={() => send(null)}>Dismiss</Button>
+            </div>
+          )}
+          <Button type="button" variant="secondary" size="sm" icon={Clock} aria-expanded={open} onClick={() => { setOpen(o => !o); setError(null) }}>
+            Snooze
+          </Button>
+        </div>
       )}
 
       {open && !snoozed && (
