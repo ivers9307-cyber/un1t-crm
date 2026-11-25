@@ -133,6 +133,7 @@ function makeDb({
   templateRows = null,
   templateEq = [],
   updateResult = { error: null },
+  updateSpy = null,
   // WAATTACH.1 — what Storage holds at an attachment slot, and the link.
   stored = [],
   listError = null,
@@ -156,9 +157,10 @@ function makeDb({
             })),
           })),
           // 2) last-message + manual-takeover patch
-          update: vi.fn(() => ({
-            eq: vi.fn(() => Promise.resolve(updateResult)),
-          })),
+          update: vi.fn((patch) => {
+            if (updateSpy) updateSpy(patch)
+            return { eq: vi.fn(() => Promise.resolve(updateResult)) }
+          }),
         }
       }
       if (table === 'whatsapp_templates') {
@@ -489,6 +491,26 @@ describe('after Meta accepted, a bookkeeping failure never reports the send as f
     expect(json.success).toBe(true)
     expect(json.warnings).toEqual([expect.stringMatching(/could not be updated.*Mia may still reply/)])
     expect(logError).toHaveBeenCalledWith('wa-conv-send', expect.stringContaining('conversation update failed'), expect.objectContaining({ conversationId: CONV_ID }))
+  })
+
+  // INBOXFOLLOW.1 — a coach's reply from the thread starts the follow-up ladder.
+  it('a reply from the thread stamps staff ownership and the wait on the customer', async () => {
+    const updateSpy = vi.fn()
+    createServerClient.mockReturnValue(makeDb({
+      updateSpy,
+      conversation: { ...CONVERSATION, customer_waiting_since: '2026-11-24T09:00:00.000Z', staff_owned_since: '2026-11-20T09:00:00.000Z', snoozed_until: '2999-01-01T00:00:00.000Z' },
+    }))
+    await POST(postReq({ type: 'text', text: 'hello' }), props)
+    const patch = updateSpy.mock.calls[0][0]
+    expect(patch).toMatchObject({
+      last_message_direction: 'outbound',
+      staff_owned_since: '2026-11-20T09:00:00.000Z',
+      customer_waiting_since: null,
+      handoff_requested_at: null,
+      snoozed_until: null, snoozed_by: null, snooze_note: null,
+      staff_nudged_at: null, staff_nudge_outcome: null,
+    })
+    expect(typeof patch.staff_waiting_since).toBe('string')
   })
 
   it('a clean send carries no warnings field', async () => {

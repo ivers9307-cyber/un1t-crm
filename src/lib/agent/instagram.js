@@ -13,6 +13,7 @@
 import { resolveLocationByExternalAccount, isAgentEnabledForConnection, IG_GRAPH_URL } from './channels'
 import { runChannelAgent } from './auto-reply'
 import { AGENT_MESSAGE_SOURCE } from './core'
+import { inboundPatch, staffReplyPatch } from '@/lib/inbox-state'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { stampConnectionOk, stampConnectionError, isMetaAuthError } from '@/lib/connection-health'
@@ -292,7 +293,7 @@ export async function handleInstagramInbound(db, event) {
 
   // Find-or-create the conversation (one per location + customer IGSID).
   const { data: existingConv } = await db.from('instagram_conversations')
-    .select('id, contact_id, agent_handed_off_at, customer_name, ig_username')
+    .select('id, contact_id, agent_handed_off_at, customer_name, ig_username, customer_waiting_since, staff_owned_since, last_message_at')
     .eq('location_id', locationId)
     .eq('ig_user_id', event.customerId)
     .maybeSingle()
@@ -433,14 +434,21 @@ export async function handleInstagramInbound(db, event) {
     // route exactly: take over (stop Mia) and flip the thread to
     // answered, so app-replies and CRM-replies behave identically in the
     // inbox queues. No agent trigger, no push (this is our own outbound).
-    await db.from('instagram_conversations').update({
+    // INBOXFOLLOW.1 — a coach replying from the Instagram app owns the thread
+    // like a reply from the inbox, but only when this echo is not older than
+    // what the thread already holds (a late echo must not clear a newer
+    // customer message's wait).
+    const echoIsNewest = !existingConv?.last_message_at || new Date(ts).getTime() >= new Date(existingConv.last_message_at).getTime()
+    const { error: echoStampErr } = await db.from('instagram_conversations').update({
       last_message_at: ts,
       last_message_direction: 'outbound',
       last_message_preview: previewText,
       agent_active: false,
       agent_handed_off_at: existingHandoffAt || ts,
       updated_at: ts,
+      ...(echoIsNewest ? staffReplyPatch(existingConv, ts) : {}),
     }).eq('id', conversationId)
+    if (echoStampErr) console.error(`[instagram echo] conversation stamp failed for ${conversationId}:`, echoStampErr.message)
     return { handled: true, conversationId, echo: true }
   }
 
@@ -502,7 +510,9 @@ export async function handleInstagramInbound(db, event) {
   // timestamp + preview (so the thread list stays truthful) — leaving
   // resolved_at and last_message_direction alone keeps an answered thread
   // answered and out of the needs-action queues (src/lib/inbox-queues.js).
-  await db.from('instagram_conversations').update(lowSignal
+  // INBOXFOLLOW.1 — a real inbound also starts the customer's wait; the
+  // low-signal branch gets no stamp.
+  const { error: inboundStampErr } = await db.from('instagram_conversations').update(lowSignal
     ? {
         last_message_at: ts,
         last_message_preview: previewText,
@@ -512,7 +522,9 @@ export async function handleInstagramInbound(db, event) {
         last_message_direction: 'inbound',
         resolved_at: null,
         last_message_preview: previewText,
+        ...inboundPatch(existingConv, new Date().toISOString()),
       }).eq('id', conversationId)
+  if (inboundStampErr) console.error(`[instagram inbound] conversation stamp failed for ${conversationId}:`, inboundStampErr.message)
   // Atomic unread bump (best-effort) — replaces the read-modify-write above.
   if (!lowSignal) {
     try { await db.rpc('increment_instagram_conversation_unread', { p_conversation_id: conversationId }) } catch {}

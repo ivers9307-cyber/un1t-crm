@@ -222,6 +222,8 @@ describe('markVoiceNoteForStaff', () => {
     expect(upd[0].patch).not.toHaveProperty('agent_active')
     expect(typeof upd[0].patch.agent_handed_off_at).toBe('string')
     expect(upd[0].patch.handoff_escalated_at).toBeNull()
+    // INBOXFOLLOW.1 — a request for a human lands in the "Mia needs help" queue.
+    expect(upd[0].patch.handoff_requested_at).toBe(upd[0].patch.agent_handed_off_at)
     expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
     const push = vi.mocked(sendPushToRolesAtLocation).mock.calls[0][2]
     expect(push.title).toBe('WhatsApp · voice note needs a look')

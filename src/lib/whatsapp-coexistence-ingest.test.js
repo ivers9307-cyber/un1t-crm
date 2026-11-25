@@ -288,7 +288,7 @@ describe('ingestCoexistenceMessage — phone-app echoes are staff (C106 d)', () 
     const r = await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: { ...echo, body: 'y'.repeat(150) } })
     expect(r).toEqual({ inserted: true, conversationId: 'conv1', contactId: null })
     const stamp = stampOf(writes)
-    expect(stamp.values).toEqual({
+    expect(stamp.values).toMatchObject({
       last_message_at: new Date(1700000000 * 1000).toISOString(),
       last_message_direction: 'outbound',
       last_message_preview: 'y'.repeat(100),
@@ -427,5 +427,73 @@ describe('ingestCoexistenceMessage — an existing unstamped thread is stamped (
     expect(logError).toHaveBeenCalledWith('wa-coexistence', 'number stamp on the existing thread failed (replies into it have no number)', {
       conversationId: 'conv-h', locationId: 'loc-hatch', numberId: 'wn-1', err: 'boom',
     })
+  })
+})
+
+// INBOXFOLLOW.1 — a coach replying from the phone app owns the thread, but only
+// when the echo is newer than what the thread holds. The ordering guard lives
+// in the database (`.or(last_message_at.is.null,last_message_at.lt.<echo>)`),
+// so this fake applies it to a stored thread row and the assertions read the
+// row afterwards.
+describe('ingestCoexistenceMessage — echo follow-up stamps (INBOXFOLLOW.1)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  const echo = { waMessageId: 'wamid.F1', peerPhone: '353000', direction: 'outbound', messageType: 'text', body: 'x', tsSeconds: 1700000000, origin: 'echo' }
+  const ECHO_ISO = new Date(1700000000 * 1000).toISOString()
+
+  function threadDb(thread) {
+    const row = { ...thread }
+    const db = makeDb((ctx) => {
+      if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
+      if (ctx.table === 'contacts') return { data: null, error: null }
+      if (ctx.table === 'whatsapp_conversations') {
+        if (ctx.op === 'update') {
+          const or = ctx.filters.find((f) => f[0] === 'or')
+          if (or) {
+            const m = /last_message_at\.lt\.(.+)$/.exec(or[1])
+            const newer = row.last_message_at == null || new Date(row.last_message_at) < new Date(m[1])
+            if (!newer) return { data: null, error: null } // zero rows
+          }
+          Object.assign(row, ctx.values)
+          return { data: null, error: null }
+        }
+        return { data: row, error: null }
+      }
+      return { data: null, error: null }
+    })
+    return { db, row }
+  }
+
+  it('a newer echo starts staff ownership and moves the wait to the customer', async () => {
+    const { db, row } = threadDb({
+      id: 'conv1', whatsapp_number_id: null, last_message_at: '2023-01-01T00:00:00.000Z',
+      customer_waiting_since: '2023-01-01T00:00:00.000Z', staff_owned_since: null, staff_waiting_since: null,
+    })
+    await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: echo })
+    expect(row.customer_waiting_since).toBeNull()
+    expect(row.staff_owned_since).toBe(ECHO_ISO)
+    expect(row.staff_waiting_since).toBe(ECHO_ISO)
+    expect(row).toMatchObject({ handoff_requested_at: null, snoozed_until: null, staff_nudged_at: null })
+  })
+
+  it('an existing staff_owned_since is kept', async () => {
+    const { db, row } = threadDb({
+      id: 'conv1', whatsapp_number_id: null, last_message_at: '2023-01-01T00:00:00.000Z',
+      staff_owned_since: '2023-01-01T00:00:00.000Z',
+    })
+    await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: echo })
+    expect(row.staff_owned_since).toBe('2023-01-01T00:00:00.000Z')
+    expect(row.staff_waiting_since).toBe(ECHO_ISO)
+  })
+
+  it('an echo older than the thread\'s last inbound leaves staff_waiting_since null and customer_waiting_since set', async () => {
+    const { db, row } = threadDb({
+      id: 'conv1', whatsapp_number_id: null, last_message_at: '2999-01-01T00:00:00.000Z',
+      customer_waiting_since: '2999-01-01T00:00:00.000Z', staff_waiting_since: null, staff_owned_since: null,
+    })
+    await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: echo })
+    expect(row.staff_waiting_since).toBeNull()
+    expect(row.customer_waiting_since).toBe('2999-01-01T00:00:00.000Z')
+    expect(row.staff_owned_since).toBeNull()
   })
 })

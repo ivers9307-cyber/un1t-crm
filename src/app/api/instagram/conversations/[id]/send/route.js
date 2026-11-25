@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } fro
 import { validateBody } from '@/lib/validate'
 import { sendInstagramMessage, markInstagramSeen } from '@/lib/agent/instagram'
 import { resolveChannelConnection } from '@/lib/agent/channels'
+import { staffReplyPatch } from '@/lib/inbox-state'
 
 const SendSchema = z.object({
   text: z.string().trim().min(1).max(1000),
@@ -117,6 +118,8 @@ export async function POST(request, props) {
     agent_active: false,
     agent_handed_off_at: conversation.agent_handed_off_at || now,
     updated_at: now,
+    // INBOXFOLLOW.1 — a coach replied from the thread (the row read above is select('*')).
+    ...staffReplyPatch(conversation, now),
   }).eq('id', params.id)
   if (threadError) {
     console.error('[ig-send] take-over stamp failed — Mia may still be active on this thread:', threadError.message)

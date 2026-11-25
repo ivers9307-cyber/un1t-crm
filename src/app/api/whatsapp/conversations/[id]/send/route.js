@@ -9,6 +9,7 @@ import { validateBody } from '@/lib/validate'
 import { url } from '@/lib/schemas'
 import { manualTakeoverPatch } from '@/lib/agent/core'
 import { logError } from '@/lib/log'
+import { staffReplyPatch } from '@/lib/inbox-state'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { flowButtonIndex, flowButtonComponentFor } from '@/lib/whatsapp-template-buttons'
 import { flowTokenFor } from '@/lib/whatsapp-flow/config'
@@ -308,6 +309,8 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
       last_message_direction: 'outbound',
       last_message_preview: (previewText || messageBody)?.substring(0, 100),
       ...manualTakeoverPatch(conversation.agent_handed_off_at),
+      // INBOXFOLLOW.1 — a coach replied from the thread (the row read above is select('*')).
+      ...staffReplyPatch(conversation, now),
     }).eq('id', params.id)
     updateError = err
   } catch (err) {

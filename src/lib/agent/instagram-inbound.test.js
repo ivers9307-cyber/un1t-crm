@@ -235,3 +235,54 @@ describe('handleInstagramInbound — lookup failure propagates', () => {
     expect(db.inserts).toHaveLength(0)
   })
 })
+
+// INBOXFOLLOW.1 — follow-up queue stamps on the Instagram write points.
+describe('handleInstagramInbound — inbox follow-up stamps', () => {
+  const NOW_ISH = 1790000000000 // far in the future of any fixture timestamp
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW_ISH) })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a real inbound keeps customer_waiting_since, nulls the staff wait and the snooze, and keeps resolved_at null', async () => {
+    const db = igDb({ convLookups: [{ id: 'conv-1', customer_waiting_since: '2026-11-24T09:00:00.000Z' }] })
+    await handleInstagramInbound(db, EVENT)
+    const row = db.updates.find((u) => u.table === 'instagram_conversations').row
+    expect(row).toMatchObject({
+      resolved_at: null, last_message_direction: 'inbound',
+      customer_waiting_since: '2026-11-24T09:00:00.000Z',
+      staff_waiting_since: null, staff_nudged_at: null, staff_nudge_outcome: null,
+      snoozed_until: null, snoozed_by: null, snooze_note: null,
+    })
+  })
+
+  it('a first inbound starts the customer wait now', async () => {
+    const db = igDb({ convLookups: [{ id: 'conv-1' }] })
+    await handleInstagramInbound(db, EVENT)
+    const row = db.updates.find((u) => u.table === 'instagram_conversations').row
+    expect(row.customer_waiting_since).toBe(new Date(NOW_ISH).toISOString())
+  })
+
+  it('a low-signal inbound carries no follow-up stamp', async () => {
+    const db = igDb({ convLookups: [{ id: 'conv-1' }] })
+    await handleInstagramInbound(db, { accountId: 'IGBIZ1', customerId: 'CUST1', messageId: 'mid-sm2', text: '', type: 'story_mention', mediaUrl: 'https://cdn.ig/s.jpg', isEcho: false, isStoryReply: false })
+    const row = db.updates.find((u) => u.table === 'instagram_conversations').row
+    for (const k of ['customer_waiting_since', 'staff_waiting_since', 'snoozed_until', 'staff_nudged_at']) expect(row).not.toHaveProperty(k)
+  })
+
+  it('an echo reply from the Instagram app starts staff ownership and the wait on the customer', async () => {
+    const db = igDb({ convLookups: [{ id: 'conv-1', customer_waiting_since: '2026-11-24T09:00:00.000Z', last_message_at: '2020-01-01T00:00:00.000Z' }] })
+    await handleInstagramInbound(db, { accountId: 'IGBIZ1', customerId: 'CUST1', messageId: 'mid-e2', text: 'hello', type: 'text', isEcho: true })
+    const row = db.updates.find((u) => u.table === 'instagram_conversations').row
+    expect(row.customer_waiting_since).toBeNull()
+    expect(typeof row.staff_owned_since).toBe('string')
+    expect(row.staff_waiting_since).toBe(row.staff_owned_since)
+    expect(row).toMatchObject({ handoff_requested_at: null, snoozed_until: null })
+  })
+
+  it('an echo older than the thread\'s last message leaves the waits alone', async () => {
+    const db = igDb({ convLookups: [{ id: 'conv-1', customer_waiting_since: '2026-11-24T09:00:00.000Z', last_message_at: '2999-01-01T00:00:00.000Z' }] })
+    await handleInstagramInbound(db, { accountId: 'IGBIZ1', customerId: 'CUST1', messageId: 'mid-e3', text: 'late', type: 'text', isEcho: true })
+    const row = db.updates.find((u) => u.table === 'instagram_conversations').row
+    expect(row).not.toHaveProperty('customer_waiting_since')
+    expect(row).not.toHaveProperty('staff_waiting_since')
+  })
+})

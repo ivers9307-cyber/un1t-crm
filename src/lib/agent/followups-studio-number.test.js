@@ -178,6 +178,16 @@ describe('T6-A — a studio with its own number sends exactly as before', () => 
     expect(rec.patch).toMatchObject({ conversation_id: 'conv-still', location_id: STILL, source: 'agent', message_type: 'text' })
   })
 
+  // INBOXFOLLOW.1 — Mia's proactive message clears the customer's wait, and only that.
+  it('a recorded proactive message clears customer_waiting_since and touches nothing staff-owned', async () => {
+    const db = stubDb({ location: STILL_LOC, ownsNumber: true, followConvs: [CONV(STILL)], messages: NUDGE_THREAD })
+    await runAgentFollowups(db, { nowMs: NOW })
+    const clears = writes(db, 'whatsapp_conversations', 'update').filter((q) => 'customer_waiting_since' in q.patch)
+    expect(clears).toHaveLength(1)
+    expect(clears[0].patch).toEqual({ customer_waiting_since: null })
+    expect(clears[0].filters).toContainEqual(['eq', 'id', 'conv-still'])
+  })
+
   it('follow-up template: its own studio’s template row, sendTemplateMessage(..., { locationId })', async () => {
     const db = stubDb({ location: STILL_LOC, ownsNumber: true, followConvs: [CONV(STILL)], messages: TEMPLATE_THREAD, templateStudio: STILL })
     const res = await runAgentFollowups(db, { nowMs: NOW })

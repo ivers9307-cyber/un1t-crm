@@ -36,6 +36,7 @@ import { countCheckinSends, readCheckinSendsToday, checkinDayStartIso } from './
 import { isWhatsAppStaffOutbound } from '@/lib/whatsapp-staff-sources'
 import { resolveAgentSettingsForLocation } from './settings-resolve'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
+import { agentReplyPatch } from '@/lib/inbox-state'
 
 // MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
 // like the same person who answers the thread.
@@ -333,6 +334,12 @@ export async function recordProactiveMessage(db, conv, { body, waMessageId, mess
     sent_at: new Date().toISOString(),
   })
   if (error) console.error('[radar-agent] followup record failed (history will be incomplete):', error.message)
+  // INBOXFOLLOW.1 — a proactive Mia message is Mia speaking: the customer is not
+  // waiting on a person. agentReplyPatch touches customer_waiting_since only.
+  const { error: waitErr } = await db.from('whatsapp_conversations')
+    .update(agentReplyPatch())
+    .eq('id', conv.id)
+  if (waitErr) console.error('[radar-agent] followup customer_waiting_since clear failed:', waitErr.message)
 }
 
 async function stampStage(db, conversationId, stage, sent) {

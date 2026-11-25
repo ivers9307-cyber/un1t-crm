@@ -7,6 +7,7 @@
 
 import { normalizeWaPhone } from './whatsapp-coexistence'
 import { manualTakeoverPatch } from './agent/core'
+import { staffReplyPatch } from './inbox-state'
 import { WA_APP_ECHO_SOURCE } from './whatsapp-staff-sources'
 import { logError } from './log'
 import { orgLocationIdsFor, scopeFor } from './inbound-contact-match'
@@ -176,6 +177,11 @@ export async function ingestCoexistenceMessage(db, { locationId, numberId = null
       last_message_at: sentAt,
       last_message_direction: 'outbound',
       last_message_preview: (body || `[${messageType}]`).substring(0, 100),
+      // INBOXFOLLOW.1 — a coach replying from the phone app owns the thread and
+      // the wait moves to the customer, but ONLY inside this guard: an echo
+      // older than what the thread holds must not clear a newer customer
+      // message's wait (and the guard makes this a zero-row update).
+      ...staffReplyPatch(existingConv, sentAt),
     })
     .eq('id', conversationId)
     .or(`last_message_at.is.null,last_message_at.lt.${sentAt}`)
