@@ -211,6 +211,18 @@ const FIELDS = [
       help: 'The approved WhatsApp template\'s name. Each studio needs an approved template with this name on its own number.' } },
   { id: 'followups.daily_cap', paths: ['followups.daily_cap'], kind: 'number', section: 'followups', scope: 'both',
     min: 1, max: 500, fallback: 50, label: 'Daily cap (per studio)', help: 'Hard ceiling on proactive sends per day.' },
+  // INBOXFOLLOW.3 — threads a coach took over. Studio-only: the nudge sends to
+  // customers, so it is switched on per studio (the organisation can share the
+  // quiet period through the API, never the switch or the template).
+  { id: 'followups.staff_threads.quiet_after_hours', paths: ['followups.staff_threads.quiet_after_hours'], kind: 'number',
+    section: 'followups', scope: 'studio', min: 4, max: 336, fallback: 48, label: 'Quiet period (hours)',
+    help: 'After a coach replies, the thread waits this long for the customer. Then it comes back to Needs reply. This applies whether or not Mia nudges.' },
+  { id: 'followups.staff_threads.nudge_enabled', paths: ['followups.staff_threads.nudge_enabled'], kind: 'checkbox',
+    section: 'followups', scope: 'studio', label: 'Mia nudges quiet threads your team took over',
+    help: 'Mia sends one message when the quiet period ends. If the customer replies, the reply goes to your team, and Mia stays silent.' },
+  { id: 'followups.staff_threads.template_name', paths: ['followups.staff_threads.template_name'], kind: 'custom', component: 'TemplatePicker',
+    section: 'followups', scope: 'studio', maxLength: 512, label: 'Nudge template', noneLabel: 'None (Mia skips the nudge outside the window)',
+    help: 'Used when the 24-hour WhatsApp window has closed, and only for customers with marketing consent. With no approved template chosen, Mia skips the nudge and the thread comes back to your team.' },
   { id: 'first_class_checkin.enabled', paths: ['first_class_checkin.enabled'], kind: 'checkbox', section: 'followups', scope: 'both',
     label: 'Enable first-class check-ins' },
   { id: 'first_class_checkin.delay_hours', paths: ['first_class_checkin.delay_hours'], kind: 'number', section: 'followups', scope: 'both',

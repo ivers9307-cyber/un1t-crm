@@ -90,6 +90,7 @@ export default function FollowupsSection({ agent, renderField, canEdit }) {
   const { settings, setField, sourceTag, templates, checkinStats, location, membershipSourceKey, ctx } = agent
   const followupTemplate = registryField('followups.template_name', ctx)
   const checkinTemplate = registryField('first_class_checkin.template_name', ctx)
+  const staffNudgeTemplate = registryField('followups.staff_threads.template_name', ctx)
   // TRIALDONE.3 — the trial finisher is studio-only and a un1t.online studio only.
   const showTrialDone = membershipSourceKey === 'un1t_online'
   const trialErrors = showTrialDone ? trialDoneErrors(settings) : {}
@@ -113,6 +114,26 @@ export default function FollowupsSection({ agent, renderField, canEdit }) {
           {renderField('followups.daily_cap')}
         </div>
       </FoldCard>
+
+      {/* ── Threads your team is waiting on (INBOXFOLLOW.3) ──
+          Studio-only, and it does not depend on the follow-ups switch above:
+          the quiet period moves a thread back to Needs reply whether or not
+          Mia nudges. */}
+      <section className={CARD} data-testid="staff-threads-card">
+        <h3 className="text-base font-semibold text-un1t-text mb-1">Threads your team is waiting on</h3>
+        <p className="text-sm text-un1t-muted mb-4">
+          When a coach has replied and the customer goes quiet.
+        </p>
+        <fieldset disabled={!canEdit} className="m-0 min-w-0 border-0 p-0">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {renderField('followups.staff_threads.quiet_after_hours')}
+            {renderField('followups.staff_threads.nudge_enabled')}
+            <TemplatePicker field={staffNudgeTemplate} value={settings.followups?.staff_threads?.template_name}
+              onChange={(v) => setField('followups.staff_threads.template_name', v)} templates={templates}
+              tag={undefined} keyPrefix="stn:" />
+          </div>
+        </fieldset>
+      </section>
 
       {/* ── First-class check-in (AGENT-CHECKIN.1) ────────── */}
       <FoldCard canEdit={canEdit} title="First-class check-in" on={!!settings.first_class_checkin?.enabled}

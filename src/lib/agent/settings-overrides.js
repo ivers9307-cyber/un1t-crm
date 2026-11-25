@@ -222,7 +222,8 @@ export function valueAt(obj, path) {
   const dot = path.indexOf('.')
   if (dot < 0) return obj[path]
   const inner = obj[path.slice(0, dot)]
-  return isPlainObject(inner) ? inner[path.slice(dot + 1)] : undefined
+  // The rest of the path may itself be dotted ('followups.staff_threads.quiet_after_hours').
+  return isPlainObject(inner) ? valueAt(inner, path.slice(dot + 1)) : undefined
 }
 
 /**

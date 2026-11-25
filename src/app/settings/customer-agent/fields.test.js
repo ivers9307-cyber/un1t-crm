@@ -30,6 +30,7 @@ const STUDIO_PATHS = [
   'quiet_hours',
   'glofox_auto_cancel', 'cancellation_form',
   'followups.enabled', 'followups.nudge_after_hours', 'followups.template_name', 'followups.daily_cap',
+  'followups.staff_threads.quiet_after_hours', 'followups.staff_threads.nudge_enabled', 'followups.staff_threads.template_name',
   'first_class_checkin.enabled', 'first_class_checkin.delay_hours', 'first_class_checkin.template_name', 'first_class_checkin.daily_cap',
   'trial_done',
   'inline_suggestion.enabled',
@@ -179,6 +180,7 @@ describe('fields.js, the one registry', () => {
     expect(ids('member-app')).toEqual(['monthly_points_target', 'social_enabled', 'membership_cta_label'])
     expect(fieldsFor('studio', 'followups', HATCH).flatMap((f) => f.paths)).toEqual([
       'followups.enabled', 'followups.nudge_after_hours', 'followups.template_name', 'followups.daily_cap',
+      'followups.staff_threads.quiet_after_hours', 'followups.staff_threads.nudge_enabled', 'followups.staff_threads.template_name',
       'first_class_checkin.enabled', 'first_class_checkin.delay_hours', 'first_class_checkin.template_name', 'first_class_checkin.daily_cap',
       'trial_done', 'inline_suggestion.enabled',
     ])
