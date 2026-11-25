@@ -112,7 +112,7 @@ const KEY_CHUNK = 200
 const OUTREACH_COLS = 'id, location_id, contact_id, deal_id, trigger_kind, trigger_at, opener_claimed_at, opener_sent_at, opener_wa_message_id, followup_kind, followup_claimed_at, followup_sent_at, closed_at, closed_reason'
 const CONTACT_COLS = 'id, first_name, name, email, wa_phone, phone, wa_status, last_marketing_touch_at'
 const TEMPLATE_COLS = 'name, language, status, components, header_media_url, business_account_id'
-const CONVERSATION_COLS = 'id, agent_active, agent_handed_off_at, agent_paused_at'
+const CONVERSATION_COLS = 'id, agent_active, agent_handed_off_at, agent_paused_at, staff_owned_since'
 const HISTORY_COLS = 'direction, source, sent_by, body, created_at, message_type'
 
 // The two send stages share one claim/send/record path on their own columns.
@@ -936,9 +936,11 @@ async function threadFacts(ctx, contact, openerSentAt) {
   return { ok: true, conversation, lastInboundAtMs: atMs(inbound), lastOutboundAtMs: atMs(outbound) }
 }
 
-// Mia may write on this thread: not handed to a person, not paused.
+// Mia may write on this thread: not handed to a person, not paused, and not a
+// thread a coach has replied in and not yet completed (staff_owned_since).
 const miaOwnsThread = (conversation) => Boolean(conversation)
   && conversation.agent_active !== false && !conversation.agent_handed_off_at && !conversation.agent_paused_at
+  && !conversation.staff_owned_since
 
 async function followupStage(ctx, { contactId, snapshot, row }) {
   const { td, nowMs, skip } = ctx

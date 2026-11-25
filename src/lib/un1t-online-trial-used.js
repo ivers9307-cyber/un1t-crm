@@ -123,7 +123,7 @@ export async function trialUsedHandoff(db, { request, contact, locationId } = {}
 
     // 4. The thread: this contact's, this studio's, Mia not paused, window open.
     const { data: conv, error } = await db.from('whatsapp_conversations')
-      .select('id, location_id, contact_id, wa_phone, window_expires_at, agent_active, agent_paused_at, contacts!contact_id ( id, wa_phone )')
+      .select('id, location_id, contact_id, wa_phone, window_expires_at, agent_active, agent_paused_at, staff_owned_since, contacts!contact_id ( id, wa_phone )')
       .eq('id', conversationId)
       .maybeSingle()
     if (error) {
@@ -131,7 +131,8 @@ export async function trialUsedHandoff(db, { request, contact, locationId } = {}
       return NOT_HANDLED
     }
     if (!conv || conv.location_id !== locationId || conv.contact_id !== contact.id) return NOT_HANDLED
-    if (conv.agent_active === false || conv.agent_paused_at) return NOT_HANDLED
+    // A coach's thread (staff_owned_since) gets no Mia text; the email goes.
+    if (conv.agent_active === false || conv.agent_paused_at || conv.staff_owned_since) return NOT_HANDLED
     const { isWindowOpen } = await import('@/lib/whatsapp')
     if (!isWindowOpen(conv)) return NOT_HANDLED
 

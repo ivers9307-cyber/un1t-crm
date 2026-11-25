@@ -239,6 +239,7 @@ describe('trialUsedHandoff', () => {
     const conv = { id: CONV, location_id: HATCH, contact_id: CONTACT, wa_phone: PHONE, window_expires_at: futureIso(), agent_active: true, agent_paused_at: null }
     expect(await handoff(fakeDb({ whatsapp_conversations: [{ ...conv, agent_paused_at: pastIso() }] }).db)).toEqual({ handled: false })
     expect(await handoff(fakeDb({ whatsapp_conversations: [{ ...conv, agent_active: false }] }).db)).toEqual({ handled: false })
+    expect(await handoff(fakeDb({ whatsapp_conversations: [{ ...conv, staff_owned_since: pastIso() }] }).db)).toEqual({ handled: false })
     expect(await handoff(fakeDb({ whatsapp_conversations: [{ ...conv, location_id: OTHER }] }).db)).toEqual({ handled: false })
     expect(await handoff(fakeDb({ whatsapp_conversations: [{ ...conv, contact_id: 'c1000000-0000-0000-0000-000000000099' }] }).db)).toEqual({ handled: false })
     expect(await handoff(fakeDb({ whatsapp_conversations: [] }).db)).toEqual({ handled: false })

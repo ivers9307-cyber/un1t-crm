@@ -971,6 +971,18 @@ describe('runTrialDoneOutreach — the one follow-up', () => {
     expect(outreach(db, C1)).toMatchObject({ followup_claimed_at: null, closed_at: null })
   })
 
+  it('a nudge does not compose into a thread a coach owns (staff_owned_since)', async () => {
+    const lastIn = NOW - 3 * H
+    const tables = followupTables({ openerAt: NOW - 10 * H, messages: [msg('inbound', lastIn), msg('outbound', lastIn + MIN)] })
+    tables.whatsapp_conversations[0].staff_owned_since = iso(NOW - 2 * H)
+    const db = makeDb(tables)
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ mia_not_active: 1 })
+    expect(m.composeAgentText).not.toHaveBeenCalled()
+    expect(m.sendTextMessage).not.toHaveBeenCalled()
+    expect(outreach(db, C1)).toMatchObject({ followup_claimed_at: null, closed_at: null })
+  })
+
   it('a nudge Mia cannot compose releases the claim for the next tick', async () => {
     m.composeAgentText = vi.fn(async () => ({ error: 'model_http_529' }))
     const lastIn = NOW - 3 * H
