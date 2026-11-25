@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // INBOXFOLLOW.2 — the Snooze control in a thread header.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import SnoozeControl from './SnoozeControl.jsx'
 
 const NOW = Date.parse('2026-11-25T12:00:00Z') // Wednesday
@@ -28,7 +28,7 @@ describe('SnoozeControl', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Tomorrow 09:00' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(fetchMock.mock.calls[0][0]).toBe('/api/whatsapp/conversations/c1/snooze')
-    expect(bodyOf()).toEqual({ until: '2026-11-26T09:00:00.000Z', note: 'ring Friday' })
+    expect(bodyOf()).toEqual({ until: '2026-11-26T09:00:00.000Z', note: 'ring Friday', seen_last_message_at: null })
   })
 
   it('Instagram posts to its own route', async () => {
@@ -88,6 +88,40 @@ describe('SnoozeControl', () => {
   it('a snooze that has ended is not shown as snoozed', () => {
     render(<SnoozeControl channel="wa" conversation={conv({ snoozed_until: '2026-11-25T11:00:00.000Z' })} zone="Europe/Dublin" />)
     expect(screen.queryByTestId('snoozed-state')).toBeNull()
+  })
+
+  it('sends the last message the coach saw, so the route can refuse a message that landed since', async () => {
+    render(<SnoozeControl channel="wa" conversation={conv({ last_message_at: '2026-11-25T11:30:00.000Z' })} zone="Europe/Dublin" />)
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Later today' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(bodyOf().seen_last_message_at).toBe('2026-11-25T11:30:00.000Z')
+  })
+
+  it("shows the 409's message under the control", async () => {
+    fetchMock.mockResolvedValueOnce(reply({ success: false, error: 'A new message arrived. Check it before snoozing.' }, false, 409))
+    render(<SnoozeControl channel="wa" conversation={conv({ last_message_at: '2026-11-25T11:30:00.000Z' })} zone="Europe/Dublin" />)
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Later today' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('A new message arrived. Check it before snoozing.'))
+  })
+
+  it('Escape closes the popover and returns focus to the Snooze button', () => {
+    render(<SnoozeControl channel="wa" conversation={conv()} zone="Europe/Dublin" />)
+    open()
+    expect(screen.getByRole('group', { name: 'Snooze this conversation' })).toBeTruthy()
+    act(() => { fireEvent.keyDown(document, { key: 'Escape' }) })
+    expect(screen.queryByRole('group', { name: 'Snooze this conversation' })).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Snooze' }))
+  })
+
+  it('a press outside closes the popover; a press inside does not', () => {
+    render(<div><span data-testid="outside">elsewhere</span><SnoozeControl channel="wa" conversation={conv()} zone="Europe/Dublin" /></div>)
+    open()
+    fireEvent.mouseDown(screen.getByLabelText(/Note/))
+    expect(screen.getByRole('group', { name: 'Snooze this conversation' })).toBeTruthy()
+    fireEvent.mouseDown(screen.getByTestId('outside'))
+    expect(screen.queryByRole('group', { name: 'Snooze this conversation' })).toBeNull()
   })
 
   it('every button is type="button"', () => {

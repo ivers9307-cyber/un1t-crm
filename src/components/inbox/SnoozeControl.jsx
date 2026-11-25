@@ -11,7 +11,7 @@
 // wall-clock value is turned into an instant with zonedWallClockToInstant.
 // A refusal shows the route's reason under the control; nothing is assumed saved.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Clock } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { isSnoozed } from '@/lib/inbox-queues'
@@ -41,13 +41,38 @@ export default function SnoozeControl({ channel, conversation, zone, onChanged }
   const studioZone = resolveZone(zone)
   const buildUrl = ENDPOINT[channel]
   const snoozed = isSnoozed(conversation)
+  const rootRef = useRef(null)
+
+  // Open: Escape closes it and puts focus back on the Snooze button; a press
+  // outside the control closes it (focus stays where the person clicked).
+  useEffect(() => {
+    if (!open) return undefined
+    const onKeyDown = (e) => {
+      if (e.key !== 'Escape') return
+      setOpen(false)
+      rootRef.current?.querySelector('button[aria-expanded]')?.focus()
+    }
+    const onMouseDown = (e) => {
+      if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('mousedown', onMouseDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('mousedown', onMouseDown)
+    }
+  }, [open])
 
   async function send(until) {
     if (busy || !conversation?.id || !buildUrl) return
     setBusy(true)
     setError(null)
     try {
-      const body = until === null ? { until: null } : { until, note }
+      // seen_last_message_at: the route refuses if a customer message landed
+      // after the one on screen, so a snooze cannot bury it.
+      const body = until === null
+        ? { until: null }
+        : { until, note, seen_last_message_at: conversation.last_message_at ?? null }
       const res = await fetch(buildUrl(conversation.id), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -81,7 +106,7 @@ export default function SnoozeControl({ channel, conversation, zone, onChanged }
   const presets = open ? snoozePresets(Date.now(), studioZone) : []
 
   return (
-    <div className="relative flex flex-col items-end gap-1">
+    <div ref={rootRef} className="relative flex flex-col items-end gap-1">
       {snoozed ? (
         <div className="flex items-center gap-1.5 text-xs text-un1t-subtle" data-testid="snoozed-state">
           <Clock size={12} aria-hidden="true" />
