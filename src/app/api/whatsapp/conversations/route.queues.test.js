@@ -133,3 +133,15 @@ describe('GET /api/whatsapp/conversations — follow-up config', () => {
     expect(res.status).toBe(403)
   })
 })
+
+describe('GET /api/whatsapp/conversations — approval badges are best effort', () => {
+  it('a failed badge read is logged and the list still loads', async () => {
+    db.errors.agent_membership_requests = { select: { message: 'statement timeout' } }
+    const res = await get(`?location_id=${LOC_A}`)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.conversations).toHaveLength(60)
+    expect(body.conversations.every((c) => c.pending_approval === false)).toBe(true)
+    expect(logError).toHaveBeenCalledWith('wa-inbox', expect.stringContaining('approval badges'), expect.anything())
+  })
+})

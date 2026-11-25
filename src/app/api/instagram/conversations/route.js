@@ -89,11 +89,19 @@ export const GET = withAuth({ permission: null, location: false }, async ({ requ
     // Chunked: 350 ids in one in() would run past a URL's length limit.
     const pendingSet = new Set()
     const ids = conversations.map(c => c.id)
-    for (let i = 0; i < ids.length; i += 100) {
-      const { data: pend } = await db.from('agent_membership_requests')
-        .select('conversation_id')
-        .eq('status', 'pending')
-        .in('conversation_id', ids.slice(i, i + 100))
+    const chunks = []
+    for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100))
+    // INBOXFOLLOW.2 — the chunks run together; the badges are best effort, so a
+    // failed chunk is logged and its rows simply show no badge.
+    const results = await Promise.all(chunks.map((chunk) => db.from('agent_membership_requests')
+      .select('conversation_id')
+      .eq('status', 'pending')
+      .in('conversation_id', chunk)))
+    for (const { data: pend, error: pendErr } of results) {
+      if (pendErr) {
+        logError('instagram-conversations', 'approval badges read failed; the list loads without them for this chunk', { err: pendErr.message })
+        continue
+      }
       for (const r of pend || []) pendingSet.add(r.conversation_id)
     }
     for (const c of conversations) c.pending_approval = pendingSet.has(c.id)
