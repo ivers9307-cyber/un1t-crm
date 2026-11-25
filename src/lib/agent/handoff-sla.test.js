@@ -83,6 +83,12 @@ describe('classifyHandoffBreach', () => {
   it('a resolve from before the handoff does not count', () => {
     expect(classifyHandoffBreach({ ...base, resolvedAtMs: base.handedOffAtMs - H }).breach).toBe(true)
   })
+  it('waits while the thread is snoozed, then is judged as today once the snooze has ended (INBOXFOLLOW.2)', () => {
+    expect(classifyHandoffBreach({ ...base, snoozedUntilMs: NOW + H })).toEqual({ breach: false, reason: 'snoozed' })
+    expect(classifyHandoffBreach({ ...base, snoozedUntilMs: NOW })).toEqual({ breach: true })
+    expect(classifyHandoffBreach({ ...base, snoozedUntilMs: NOW - H })).toEqual({ breach: true })
+    expect(classifyHandoffBreach({ ...base, snoozedUntilMs: null })).toEqual({ breach: true })
+  })
   it('sla 0 disables entirely', () => {
     expect(classifyHandoffBreach({ ...base, slaMinutes: 0 }).reason).toBe('sla_disabled')
   })
