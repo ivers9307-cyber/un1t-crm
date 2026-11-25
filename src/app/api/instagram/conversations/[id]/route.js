@@ -6,6 +6,7 @@ import { logError } from '@/lib/log'
 import { resolveRearmPatch } from '@/lib/agent/core'
 import { completePatch } from '@/lib/inbox-state'
 import { validateBody } from '@/lib/validate'
+import { readHandledByName } from '@/lib/handled-by-name'
 
 const PatchConversationBody = z.object({
   resolved: z.boolean(),
@@ -61,6 +62,10 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
     .update({ unread_count: 0 })
     .eq('id', params.id)
   if (readError) console.error('[ig-conversation] clearing unread_count failed (non-fatal):', readError.message)
+
+  // INBOXFOLLOW.2 — the assignee's first name for "Handled by" (Instagram
+  // messages record no sender, so there is no newest-sender fallback here).
+  conversation.handled_by_name = await readHandledByName(db, 'ig', conversation)
 
   return NextResponse.json({ success: true, conversation, messages: messages || [] })
 })

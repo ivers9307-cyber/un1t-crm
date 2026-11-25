@@ -33,6 +33,7 @@ beforeEach(() => {
     ],
     instagram_messages: [],
     contacts: [],
+    profiles: [],
   } })
   createServerClient.mockReturnValue(db)
 })
@@ -61,6 +62,29 @@ describe('GET /api/instagram/conversations/[id]', () => {
     const res = await get(CONV_A)
     expect(res.status).toBe(200)
     expect(db.tables.instagram_conversations[0].unread_count).toBe(0)
+  })
+
+  it('INBOXFOLLOW.2 — handled_by_name is the assignee\'s first name when a person has the thread, else null', async () => {
+    getCurrentUser.mockResolvedValue(INBOX_A)
+    db.tables.profiles = [{ id: '5c000000-0000-4000-8000-000000000001', full_name: 'Anna Murphy', email: 'a@x.test', role: 'staff' }]
+    db.tables.instagram_conversations[0].agent_active = false
+    db.tables.instagram_conversations[0].assigned_to = '5c000000-0000-4000-8000-000000000001'
+    const body = await (await get(CONV_A)).json()
+    expect(body.conversation.handled_by_name).toBe('Anna')
+    expect(body.conversation).not.toHaveProperty('profiles')
+
+    db.tables.instagram_conversations[0].agent_active = true
+    expect((await (await get(CONV_A)).json()).conversation.handled_by_name).toBeNull()
+  })
+
+  it('INBOXFOLLOW.2 — a failed name read still opens the thread, with a null name', async () => {
+    getCurrentUser.mockResolvedValue(INBOX_A)
+    db.tables.instagram_conversations[0].agent_active = false
+    db.tables.instagram_conversations[0].assigned_to = '5c000000-0000-4000-8000-000000000001'
+    db.errors.profiles = { select: { message: 'boom' } }
+    const res = await get(CONV_A)
+    expect(res.status).toBe(200)
+    expect((await res.json()).conversation.handled_by_name).toBeNull()
   })
 })
 
