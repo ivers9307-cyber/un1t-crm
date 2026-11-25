@@ -29,7 +29,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(NOW)
   db = createFakeDb({ tables: { instagram_conversations: [
-    { id: T_A, location_id: LOC_A, resolved_at: null, snoozed_until: null, snoozed_by: null, snooze_note: null },
+    { id: T_A, location_id: LOC_A, resolved_at: null, snoozed_until: null, snoozed_by: null, snooze_note: null, last_message_at: iso(-2 * H), last_message_direction: 'inbound' },
     { id: T_B, location_id: LOC_B, resolved_at: null, snoozed_until: null, snoozed_by: null, snooze_note: null },
     { id: T_DONE, location_id: LOC_A, resolved_at: '2026-11-25T09:00:00Z', snoozed_until: null, snoozed_by: null, snooze_note: null },
   ] } })
@@ -106,6 +106,58 @@ describe('POST /api/instagram/conversations/[id]/snooze', () => {
   it('unsnoozing a thread that is not snoozed succeeds', async () => {
     expect((await post({ until: null })).status).toBe(200)
     expect((await post({ until: null }, T_DONE)).status).toBe(200)
+  })
+
+  describe('a message that arrived before the click (seen_last_message_at)', () => {
+    const NEWER = { message: 'A new message arrived. Check it before snoozing.' }
+
+    it('409 and nothing written when a newer inbound message landed after what the coach saw', async () => {
+      const res = await post({ until: iso(H), seen_last_message_at: iso(-3 * H) })
+      expect(res.status).toBe(409)
+      expect(await res.json()).toEqual({ success: false, error: NEWER.message })
+      expect(thread().snoozed_until).toBeNull()
+    })
+
+    it('200 when the coach saw the latest inbound message', async () => {
+      expect((await post({ until: iso(H), seen_last_message_at: iso(-2 * H) })).status).toBe(200)
+      expect(thread().snoozed_until).toBe(iso(H))
+    })
+
+    it('200 when the last message is outbound, however new', async () => {
+      thread().last_message_direction = 'outbound'
+      expect((await post({ until: iso(H), seen_last_message_at: iso(-3 * H) })).status).toBe(200)
+    })
+
+    it('200 when the field is omitted, as before', async () => {
+      expect((await post({ until: iso(H) })).status).toBe(200)
+    })
+
+    it('unsnoozing ignores the field', async () => {
+      expect((await post({ until: null, seen_last_message_at: iso(-3 * H) })).status).toBe(200)
+    })
+
+    it('400 for a malformed seen_last_message_at', async () => {
+      expect((await post({ until: iso(H), seen_last_message_at: 'yesterday' })).status).toBe(400)
+    })
+
+    it('409 when a message lands between the read and the write (zero rows from the conditional update)', async () => {
+      const realFrom = db.from.bind(db)
+      db.from = (t) => {
+        const b = realFrom(t)
+        const update = b.update.bind(b)
+        b.update = (...a) => { thread().last_message_at = iso(-1000); return update(...a) }
+        return b
+      }
+      const res = await post({ until: iso(H), seen_last_message_at: iso(-2 * H) })
+      expect(res.status).toBe(409)
+      expect((await res.json()).error).toBe(NEWER.message)
+      expect(thread().snoozed_until).toBeNull()
+    })
+
+    it('a thread with no last message is snoozed with the null guard', async () => {
+      Object.assign(thread(), { last_message_at: null, last_message_direction: null })
+      expect((await post({ until: iso(H), seen_last_message_at: iso(-3 * H) })).status).toBe(200)
+    })
   })
 
   it('a failed update is a 500 with a fixed message, never success', async () => {

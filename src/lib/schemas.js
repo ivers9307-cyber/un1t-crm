@@ -647,4 +647,7 @@ export const entryOptionsQuerySchema = z.object({
 export const SnoozeSchema = z.object({
   until: z.iso.datetime({ offset: true }).nullable(),
   note: z.string().trim().max(SNOOZE_NOTE_MAX).nullish().transform((v) => v || null),
+  // The last_message_at the coach had on screen when they clicked Snooze: the
+  // route refuses (409) when a customer message landed after it.
+  seen_last_message_at: z.iso.datetime({ offset: true }).nullish(),
 })
