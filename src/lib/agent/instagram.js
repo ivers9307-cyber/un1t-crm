@@ -12,7 +12,7 @@
 
 import { resolveLocationByExternalAccount, isAgentEnabledForConnection, IG_GRAPH_URL } from './channels'
 import { runChannelAgent } from './auto-reply'
-import { AGENT_MESSAGE_SOURCE } from './core'
+import { AGENT_MESSAGE_SOURCE, AGENT_HANDOFF_PUSH_CATEGORY } from './core'
 import { inboundPatch, staffReplyPatch } from '@/lib/inbox-state'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -250,7 +250,7 @@ export const instagramAdapter = {
   // VOICENOTE.1 — Instagram has no transcript columns: never name them here.
   historyColumns: 'direction, body, message_type, created_at, source',
   nameColumn: 'customer_name',
-  pushCategory: 'instagram',
+  pushCategory: AGENT_HANDOFF_PUSH_CATEGORY, // HANDOFFALERT.1
   handoffType: 'instagram_agent_handoff',
   // AGENT-REARM.2 — IG has no sequence/automation traffic, so any non-agent
   // outbound is an operator send.

@@ -54,7 +54,7 @@ import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { pushOutcome } from '@/lib/push-outcome'
 import { logWarn, logError } from '@/lib/log'
-import { resolveRearmPatch } from './core'
+import { resolveRearmPatch, AGENT_HANDOFF_PUSH_CATEGORY } from './core'
 import { completePatch } from '@/lib/inbox-state'
 import { WA_STAFF_OUTBOUND_OR_FILTER } from '@/lib/whatsapp-staff-sources'
 import { resolveAgentSettingsForLocation } from './settings-resolve'
@@ -379,7 +379,7 @@ const CHANNELS = [
     label: 'WhatsApp',
     conversationsTable: 'whatsapp_conversations',
     messagesTable: 'whatsapp_messages',
-    pushCategory: 'whatsapp',
+    pushCategory: AGENT_HANDOFF_PUSH_CATEGORY, // HANDOFFALERT.1
     handoffType: 'whatsapp_agent_handoff',
     // HANDOFFWAIT.1 — whatsapp_messages.broadcast_id marks a broadcast send.
     broadcastAware: true,
@@ -393,7 +393,7 @@ const CHANNELS = [
     label: 'Instagram',
     conversationsTable: 'instagram_conversations',
     messagesTable: 'instagram_messages',
-    pushCategory: 'instagram',
+    pushCategory: AGENT_HANDOFF_PUSH_CATEGORY,
     handoffType: 'instagram_agent_handoff',
     humanFilter: (q) => q.neq('source', 'agent'),
   },

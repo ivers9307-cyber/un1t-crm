@@ -680,3 +680,24 @@ describe('notify_sale — SALEALERT.1', () => {
     expect(out.mobile.notify_sale).toBe(true)
   })
 })
+
+// HANDOFFALERT.1 — "a customer needs a person" has its own switch, so turning
+// ordinary WhatsApp pings off for a role no longer silences Mia's handoffs.
+describe('notify_agent_handoff — HANDOFFALERT.1', () => {
+  const entry = MOBILE_PERMISSIONS.find((p) => p.key === 'notify_agent_handoff')
+  const APPROVERS = ['master', 'owner', 'manager', 'head_coach']
+
+  it('is a registered notify key', () => {
+    expect(entry).toMatchObject({ mobileOnly: true, isNotify: true, onlyRoles: APPROVERS })
+  })
+
+  it('defaults on for the roles the handoff push goes to and off for the rest', () => {
+    for (const role of ROLES) {
+      expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE[role].notify_agent_handoff, role).toBe(APPROVERS.includes(role))
+    }
+  })
+
+  it('is offered in the editors to those roles only', () => {
+    for (const role of ROLES) expect(permissionOfferedToRole(entry, role), role).toBe(APPROVERS.includes(role))
+  })
+})
