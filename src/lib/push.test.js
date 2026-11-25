@@ -187,6 +187,31 @@ describe('sendPush — permission filtering (reads profile_locations, mig 058)',
     expect(global.fetch).toHaveBeenCalledOnce()
   })
 
+  // HANDOFFALERT.1 — the live miss (Stillorgan, 22 Nov 2026): the head coach
+  // role template had WhatsApp pings off, and the handoff alert rode the same
+  // switch, so "a customer needs a person" reached the two owners only.
+  it('a role with WhatsApp pings off still gets the handoff alert (its own category)', async () => {
+    fakeProfiles = [{ id: 'a', active: true }]
+    fakeLinks = [{ profile_id: 'a', location_id: 'loc1', role: 'head_coach', permissions: {} }]
+    fakeTemplates = [{ location_id: 'loc1', role: 'head_coach', employment_type: 'all', permissions: { mobile: { notify_whatsapp: false } } }]
+    fakeTokens = [{ id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' }]
+
+    const chat = await sendPush(['a'], { title: 't', body: 'b', category: 'whatsapp' }, { locationId: 'loc1' })
+    expect(chat.sent).toBe(0)
+    const handoff = await sendPush(['a'], { title: 't', body: 'b', category: 'agent_handoff' }, { locationId: 'loc1' })
+    expect(handoff.sent).toBe(1)
+  })
+
+  it('the handoff alert has its own opt-out', async () => {
+    fakeProfiles = [{ id: 'a', active: true }]
+    fakeLinks = [{ profile_id: 'a', location_id: 'loc1', role: 'owner', permissions: { mobile: { notify_agent_handoff: false } } }]
+    fakeTokens = [{ id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' }]
+
+    const handoff = await sendPush(['a'], { title: 't', body: 'b', category: 'agent_handoff' }, { locationId: 'loc1' })
+    expect(handoff.sent).toBe(0)
+    expect(handoff.skipped).toBe(1)
+  })
+
   it('requireMobileKey gates on an extra capability (AGENT-ACTIVITY.1 inbox access) beyond the category', async () => {
     // Category flag on, but no WhatsApp inbox access → no "chatting with Mia" ping.
     fakeProfiles = [{ id: 'a', active: true }]

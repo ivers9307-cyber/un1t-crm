@@ -52,6 +52,7 @@ import {
   shouldHandoffAfterVerifyFail,
   nextVerifyAttempts,
   warnLiveDespiteTestMode,
+  AGENT_HANDOFF_PUSH_CATEGORY,
 } from './core'
 import { personGroupResolver } from '@/lib/person-links'
 import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
@@ -2099,7 +2100,7 @@ export const whatsappAdapter = {
   // VOICENOTE.1 — WhatsApp rows carry the voice-note transcript (mig 808).
   historyColumns: `${BASE_HISTORY_COLUMNS}, transcript, transcript_status, voice_kind`,
   nameColumn: 'wa_profile_name',
-  pushCategory: 'whatsapp',
+  pushCategory: AGENT_HANDOFF_PUSH_CATEGORY, // HANDOFFALERT.1
   handoffType: 'whatsapp_agent_handoff',
   // Meta authenticates the sender's phone number — safe to use as identity.
   trustsSenderIdentity: true,

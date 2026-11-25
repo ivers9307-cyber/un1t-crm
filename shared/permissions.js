@@ -723,6 +723,11 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // on its mailbox, or elevated); this key is only the personal opt-out.
   { key: 'notify_email',       label: '… Inbound email',          hint: 'Notify when new inbound email lands in a mailbox you can open (subject to inbox permission)', mobileOnly: true, isNotify: true },
   { key: 'notify_agent_activity', label: '… Mia is handling a chat', hint: 'One quiet ping per active chat when the AI agent is handling a customer (subject to inbox permission)', mobileOnly: true, isNotify: true },
+  // HANDOFFALERT.1 — Mia handed a chat to the team (or a handed-over customer
+  // is still waiting). Its own switch: it used to ride notify_whatsapp /
+  // notify_instagram, so a role with chat pings off never heard that a
+  // customer needed a person. Sent to MANAGER_ROLES only, hence onlyRoles.
+  { key: 'notify_agent_handoff', label: '… Customer needs a person', hint: 'Notify when Mia hands a chat to the team, or a handed-over customer is still waiting (owners, managers and head coaches)', mobileOnly: true, isNotify: true, onlyRoles: ['master', 'owner', 'manager', 'head_coach'] },
   // APPROVALS-STUDIO.1 — a customer approval landed in the queue (Mia
   // booking issue, /start funnel review, pause/cancel request). Fans out
   // to owner/manager (+masters); defaults on for approver roles only.
@@ -834,6 +839,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
     notify_sale: true,
     notify_agent_requests: true,
+    notify_agent_handoff: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
@@ -875,6 +881,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_lead: false, notify_whatsapp: false, notify_instagram: false, notify_email: false, notify_agent_activity: false,
     notify_sale: false,
     notify_agent_requests: false,
+    notify_agent_handoff: false,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
     // Staff submit expenses — outcomes on, but not the approval-queue
@@ -923,6 +930,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_lead: false, notify_whatsapp: true, notify_instagram: false, notify_email: false, notify_agent_activity: true,
     notify_sale: false,
     notify_agent_requests: false,
+    notify_agent_handoff: false,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_expense_submitted: false, notify_expense_approved: true, notify_expense_declined: true,
@@ -961,6 +969,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: false, notify_agent_activity: true,
     notify_sale: false,
     notify_agent_requests: true,
+    notify_agent_handoff: true,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
     // Approval-queue ping on by default (senior role covering the
@@ -1005,6 +1014,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
     notify_sale: true,
     notify_agent_requests: true,
+    notify_agent_handoff: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
     // Managers run the approval queue day-to-day — submitted ping on;
@@ -1051,6 +1061,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
     notify_sale: true,
     notify_agent_requests: true,
+    notify_agent_handoff: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
     // Owner IS the expense approver (per the routes: owner-at-location

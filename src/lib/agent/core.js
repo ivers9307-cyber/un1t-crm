@@ -134,6 +134,14 @@ export function isHandoffExpired(handedOffAt, cooldownHours, now = new Date()) {
   return now.getTime() - t >= hours * 60 * 60 * 1000
 }
 
+// HANDOFFALERT.1 — the push category of every "a customer needs a person"
+// alert (Mia's handoff, a reply she could not give, the SLA escalation), on
+// WhatsApp and Instagram alike. It used to be the channel's chat category, so
+// notify_whatsapp off for a role also silenced the handoff: at Stillorgan on
+// 22 Nov 2026 only the two owners could be told, and a lead waited unanswered.
+// Gate: notify_agent_handoff (shared/permissions.js).
+export const AGENT_HANDOFF_PUSH_CATEGORY = 'agent_handoff'
+
 /**
  * Extra conversation-update fields when an operator resolves a thread:
  * resolving a handed-off conversation hands it straight back to the
