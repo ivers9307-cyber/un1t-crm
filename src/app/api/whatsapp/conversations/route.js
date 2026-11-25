@@ -131,6 +131,5 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
   // profiles has no client grant, so the name resolves here or nowhere).
   await attachAssigneeNames(db, conversations)
 
-
   return NextResponse.json({ success: true, conversations, followup })
 })
