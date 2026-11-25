@@ -2,7 +2,8 @@
 // inbox resolves ever recorded (re-audit 25 Aug): the design assumed a manual
 // step nobody takes. The sweep auto-resolves in two cases (Richard, 20 Aug):
 //   (a) a human replied and the thread then went quiet for 8h
-//   (b) nothing at all for 48h since the last activity
+//   (b) nothing at all for 48h since the last activity, on a thread nobody is
+//       waiting on (HANDOFFKEEP.1: an unanswered Mia handoff stays queued)
 // Both apply the EXACT patch the inbox Resolve button applies
 // (resolveRearmPatch + resolved_at), so semantics match the intended workflow.
 // Threads an operator sticky-paused are never touched.
@@ -76,14 +77,35 @@ describe('classifyAutoResolve', () => {
       .toEqual({ resolve: false, reason: 'already_resolved' })
   })
 
-  it('resolves a fully stale thread even with no human reply (case b)', () => {
+  // HANDOFFKEEP.1 — a customer Mia handed over, whom nobody answered, is still
+  // waiting however long ago it was: the thread stays in the staff queue.
+  it('keeps a stale handoff nobody answered in the queue (case b no longer applies)', () => {
     const stale = {
       ...base,
       humanRepliedAtMs: null,
       lastMessageAtMs: NOW - 50 * H,
       handedOffAtMs: NOW - 50 * H,
     }
+    expect(classifyAutoResolve(stale)).toEqual({ resolve: false, reason: 'unanswered' })
+    expect(classifyAutoResolve({ ...stale, customerWaiting: true })).toEqual({ resolve: false, reason: 'unanswered' })
+    // However old it gets.
+    expect(classifyAutoResolve({ ...stale, lastMessageAtMs: NOW - 900 * H, handedOffAtMs: NOW - 900 * H }).resolve).toBe(false)
+  })
+
+  it('still resolves a stale thread nobody is waiting on (a broadcast nobody answered)', () => {
+    const stale = {
+      ...base,
+      humanRepliedAtMs: null,
+      customerWaiting: false,
+      lastMessageAtMs: NOW - 50 * H,
+      handedOffAtMs: NOW - 50 * H,
+    }
     expect(classifyAutoResolve(stale)).toEqual({ resolve: true, reason: 'stale' })
+  })
+
+  it('still resolves a stale thread a human did reply to when case a is off', () => {
+    const replied = { ...base, afterReplyHours: 0, lastMessageAtMs: NOW - 50 * H, humanRepliedAtMs: NOW - 50 * H, handedOffAtMs: NOW - 60 * H }
+    expect(classifyAutoResolve(replied)).toEqual({ resolve: true, reason: 'stale' })
   })
 
   it('a human reply older than the handoff does not count for case a', () => {
@@ -98,18 +120,21 @@ describe('classifyAutoResolve', () => {
 
   it('0 disables each case independently', () => {
     expect(classifyAutoResolve({ ...base, afterReplyHours: 0 }).resolve).toBe(false)
-    const stale = { ...base, humanRepliedAtMs: null, lastMessageAtMs: NOW - 60 * H, afterReplyHours: 0, staleHours: 0 }
+    const stale = { ...base, humanRepliedAtMs: null, customerWaiting: false, lastMessageAtMs: NOW - 60 * H, afterReplyHours: 0, staleHours: 0 }
     expect(classifyAutoResolve(stale).resolve).toBe(false)
   })
 
   it('falls back to the handoff time when the thread has no messages', () => {
-    const noMsgs = { ...base, humanRepliedAtMs: null, lastMessageAtMs: null, handedOffAtMs: NOW - 49 * H }
+    const noMsgs = { ...base, humanRepliedAtMs: null, customerWaiting: false, lastMessageAtMs: null, handedOffAtMs: NOW - 49 * H }
     expect(classifyAutoResolve(noMsgs)).toEqual({ resolve: true, reason: 'stale' })
   })
 })
 
 describe('runHandoffAutoResolve', () => {
-  function sweepDb({ convs }) {
+  // `messages(state)` answers a *_messages read; state.filters lists the
+  // filter calls made, so a test can tell the human-reply read (or), the
+  // broadcast read (not broadcast_id) and the customer-answer read (inbound).
+  function sweepDb({ convs, messages = () => [] }) {
     const updates = []
     const db = {
       from(table) {
@@ -121,13 +146,15 @@ describe('runHandoffAutoResolve', () => {
           }
           if (table === 'whatsapp_conversations') return { data: convs, error: null }
           if (table === 'instagram_conversations') return { data: [], error: null }
-          if (table.endsWith('_messages')) return { data: [], error: null }
+          if (table.endsWith('_messages')) return { data: messages(state), error: null }
           return { data: [], error: null }
         }
+        state.filters = []
+        const note = (name) => (...args) => { state.filters.push([name, ...args]); return b }
         const b = {
           select: () => b,
           update: (patch) => { state.op = 'update'; updates.push({ table, patch }); return b },
-          eq: () => b, not: () => b, or: () => b, is: () => b, lt: () => b, gte: () => b,
+          eq: note('eq'), not: note('not'), or: note('or'), is: note('is'), lt: note('lt'), lte: note('lte'), gt: note('gt'), gte: note('gte'), neq: note('neq'),
           order: () => b, limit: () => b,
           then: (res, rej) => Promise.resolve(finish()).then(res, rej),
         }
@@ -137,8 +164,14 @@ describe('runHandoffAutoResolve', () => {
     return { db, updates }
   }
 
+  const isBroadcastRead = (state) => state.filters.some(f => f[0] === 'not' && f[1] === 'broadcast_id')
+  const isInboundRead = (state) => state.filters.some(f => f[0] === 'eq' && f[1] === 'direction' && f[2] === 'inbound')
+  // A broadcast sits on the handoff stamp and the customer never answered it.
+  const unansweredBroadcast = (state) => (isBroadcastRead(state) ? [{ created_at: new Date(NOW - 80 * H).toISOString() }] : [])
+
   it('applies exactly the inbox-Resolve patch to a stale thread', async () => {
     const { db, updates } = sweepDb({
+      messages: unansweredBroadcast,
       convs: [{
         id: 'c1',
         agent_active: false,
@@ -157,6 +190,48 @@ describe('runHandoffAutoResolve', () => {
       resolved_at: new Date(NOW).toISOString(),
       ...resolveRearmPatch({ resolved: true, agent_handed_off_at: 'x' }),
     })
+  })
+
+  // HANDOFFKEEP.1 — the live case (22 Nov 2026): Mia told a customer she was
+  // passing him to the team, nobody replied, and 48 hours later this sweep
+  // took the thread out of the staff queue with his question still open.
+  it('leaves a Mia handoff nobody answered in the queue, however stale', async () => {
+    const { db, updates } = sweepDb({
+      convs: [{
+        id: 'c1',
+        agent_active: false,
+        agent_handed_off_at: new Date(NOW - 80 * H).toISOString(),
+        agent_paused_at: null,
+        resolved_at: null,
+        last_message_at: new Date(NOW - 80 * H).toISOString(),
+      }],
+    })
+    const out = await runHandoffAutoResolve(db, { nowMs: NOW })
+    expect(out.resolved).toBe(0)
+    expect(out.unanswered).toBe(1)
+    expect(updates).toHaveLength(0)
+  })
+
+  it('keeps a broadcast handover the customer answered and nobody replied to', async () => {
+    const { db, updates } = sweepDb({
+      messages: (state) => {
+        if (isBroadcastRead(state)) return [{ created_at: new Date(NOW - 80 * H).toISOString() }]
+        if (isInboundRead(state)) return [{ created_at: new Date(NOW - 79 * H).toISOString() }]
+        return []
+      },
+      convs: [{
+        id: 'c1',
+        agent_active: false,
+        agent_handed_off_at: new Date(NOW - 80 * H).toISOString(),
+        agent_paused_at: null,
+        resolved_at: null,
+        last_message_at: new Date(NOW - 79 * H).toISOString(),
+      }],
+    })
+    const out = await runHandoffAutoResolve(db, { nowMs: NOW })
+    expect(out.resolved).toBe(0)
+    expect(out.unanswered).toBe(1)
+    expect(updates).toHaveLength(0)
   })
 
   it('leaves a paused thread alone even when stale', async () => {
