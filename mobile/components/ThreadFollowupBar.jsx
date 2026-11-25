@@ -52,7 +52,7 @@ export default function ThreadFollowupBar({ conv, channel, zone, snooze, onChang
     <View className="bg-un1t-bg border-b border-un1t-border px-4 py-2">
       <View className="flex-row items-center">
         <Text className="text-xs text-un1t-subtle flex-1" testID="handled-by-line">{handledByLine(conv, channel)}</Text>
-        {mode === 'none' && !conv.resolved_at && (
+        {mode !== 'snoozed' && !conv.resolved_at && (
           <Pressable
             onPress={() => { setError(null); setOpen(true) }}
             accessibilityRole="button"
