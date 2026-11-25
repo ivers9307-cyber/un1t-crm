@@ -76,6 +76,10 @@ export function stateLineText({ conv, nowMs, cfg, zone }) {
   const reason = returnReason(conv, nowMs, cfg, ch)
   if (reason === 'no_reply_after_nudge') return 'No reply after nudge'
   if (reason === 'gone_quiet') return 'Gone quiet'
+  if (reason === 'snooze_ended') {
+    const note = (conv.snooze_note || '').trim()
+    return note ? `Snooze ended · ${note}` : 'Snooze ended'
+  }
   if (conv.staff_waiting_since && (conv.staff_nudge_outcome === 'sent' || conv.staff_nudge_outcome === 'sending') && conv.staff_nudged_at) {
     return `Mia nudged ${dayTime(new Date(conv.staff_nudged_at).getTime(), zone)}`
   }

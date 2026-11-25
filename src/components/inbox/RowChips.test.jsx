@@ -110,6 +110,18 @@ describe('StateLine', () => {
     expect(stateText()).toBe('No reply after nudge')
   })
 
+  it('says "Snooze ended · <note>" once a snooze ends on a thread nobody is waiting on', () => {
+    const conv = { ...wa, last_message_direction: 'outbound', snoozed_until: ago(2 * H), snooze_note: 'check paid Friday' }
+    render(<StateLine conv={conv} nowMs={NOW} cfg={CFG} zone="Europe/Dublin" />)
+    expect(stateText()).toBe('Snooze ended · check paid Friday')
+  })
+
+  it('says just "Snooze ended" when there is no note', () => {
+    const conv = { ...wa, last_message_direction: 'outbound', snoozed_until: ago(2 * H), snooze_note: '  ' }
+    render(<StateLine conv={conv} nowMs={NOW} cfg={CFG} zone="Europe/Dublin" />)
+    expect(stateText()).toBe('Snooze ended')
+  })
+
   it('says "Gone quiet" when an un-nudged thread comes back', () => {
     const conv = { ...wa, staff_waiting_since: ago(50 * H) }
     render(<StateLine conv={conv} nowMs={NOW} cfg={CFG} zone="Europe/Dublin" />)
