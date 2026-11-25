@@ -613,3 +613,42 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
     for (const [k, [, reason]] of Object.entries(EXPECTED)) expect([k, reason.length > 10]).toEqual([k, true])
   })
 })
+
+// INBOXPERM.1 — the GET handlers the table above skips (it covers mutations):
+// the two inbox reads that were judged at the ACTIVE studio or by membership
+// alone. Each runs on the service role, so the gate is in code: the inbox key
+// (web or phone) anywhere before the read, then (list) membership and the key
+// at ?location_id, or (media) membership of the message's studio and the key
+// at that studio, all before any re-host or signing. Exact: a handler that
+// changes its gate fails here until the table says so.
+describe('WhatsApp inbox GET handlers — the inbox key is judged at the studio read (INBOXPERM.1)', () => {
+  const READS = {
+    'whatsapp/conversations/route.js': { kind: 'list' },
+    'whatsapp/media/[messageId]/route.js': { kind: 'row', at: /requireWhatsAppInboxAt\(\s*user\s*,\s*message\.location_id\s*\)/ },
+  }
+  for (const [file, spec] of Object.entries(READS)) {
+    const src = () => fs.readFileSync(path.join(API, file), 'utf8')
+    it(`${file}: the any-studio key check, membership, then the key at the studio, web or phone`, () => {
+      const code = blankNonCode(src())
+      const gets = handlers(src()).filter((h) => h.method === 'GET')
+      expect(gets).toHaveLength(1)
+      expect(code).not.toMatch(/requireInboxPermission\s*\(/)
+      expect(code).not.toMatch(/requireWebWhatsApp/)
+      const anywhere = code.search(/requireWhatsAppInboxAnywhere\(\s*user\s*\)/)
+      const member = code.search(/assertLocationAccess(Or404)?\(\s*user\s*,/)
+      const at = code.search(spec.at || /requireWhatsAppInboxAt\(\s*user\s*,\s*locationId\s*\)/)
+      expect(anywhere).toBeGreaterThan(-1)
+      expect(member).toBeGreaterThan(anywhere)
+      expect(at).toBeGreaterThan(member)
+      if (spec.kind === 'row') {
+        // Nothing is re-hosted or signed before the decision.
+        expect(code.search(/ensureMediaRehosted\(/)).toBeGreaterThan(at)
+        expect(code.search(/signedMediaUrl\(/)).toBeGreaterThan(at)
+      } else {
+        // The unscoped list covers only the studios holding the key.
+        expect(code).toMatch(/inboxLocationIds\(\s*user\s*\)/)
+        expect(code).not.toMatch(/getUserLocationIds\(/)
+      }
+    })
+  }
+})
