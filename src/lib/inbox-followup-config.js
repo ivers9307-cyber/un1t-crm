@@ -16,9 +16,11 @@ export function followupConfigFromSettings(customerAgentSettings) {
   const hours = typeof raw === 'number' && Number.isFinite(raw)
     ? Math.min(MAX_HOURS, Math.max(MIN_HOURS, raw))
     : DEFAULT_FOLLOWUP_CFG.quietHours
+  // Agent off means no nudge, so the queue must not hold a thread for the grace day.
+  const agentOn = customerAgentSettings?.enabled === true || customerAgentSettings?.test_mode === true
   return {
     quietHours: hours,
-    nudgeEnabled: !!st && typeof st === 'object' && st.nudge_enabled === true,
+    nudgeEnabled: agentOn && !!st && typeof st === 'object' && st.nudge_enabled === true,
   }
 }
 

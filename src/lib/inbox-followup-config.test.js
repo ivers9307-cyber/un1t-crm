@@ -7,7 +7,7 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 import { followupConfigFromSettings, readInboxFollowupConfig } from './inbox-followup-config'
 
 const DEF = { quietHours: 48, nudgeEnabled: false }
-const withSt = st => ({ followups: { staff_threads: st } })
+const withSt = (st, agent = { enabled: true }) => ({ ...agent, followups: { staff_threads: st } })
 
 describe('followupConfigFromSettings', () => {
   it('missing settings or section gives the default', () => {
@@ -24,6 +24,14 @@ describe('followupConfigFromSettings', () => {
   it('reads hours and the nudge switch', () => {
     expect(followupConfigFromSettings(withSt({ quiet_after_hours: 72, nudge_enabled: true })))
       .toEqual({ quietHours: 72, nudgeEnabled: true })
+  })
+  it('the nudge switch counts only while the agent is on (enabled or test mode)', () => {
+    const st = { quiet_after_hours: 72, nudge_enabled: true }
+    expect(followupConfigFromSettings(withSt(st, { enabled: false })).nudgeEnabled).toBe(false)
+    expect(followupConfigFromSettings(withSt(st, {})).nudgeEnabled).toBe(false)
+    expect(followupConfigFromSettings(withSt(st, { enabled: false, test_mode: true })).nudgeEnabled).toBe(true)
+    expect(followupConfigFromSettings(withSt(st, { enabled: true })).nudgeEnabled).toBe(true)
+    expect(followupConfigFromSettings({ followups: { staff_threads: st } }).quietHours).toBe(72) // quiet hours still read
   })
   it('clamps hours to 4..336', () => {
     expect(followupConfigFromSettings(withSt({ quiet_after_hours: 2 })).quietHours).toBe(4)
