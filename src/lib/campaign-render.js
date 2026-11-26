@@ -13,6 +13,7 @@
 //   5. the hidden preheader (preview text, merge tags applied), first in the body.
 // The subject gets the same extras as the body.
 
+import { tagOwnSiteLinks, siteUrlFromUnsubscribe } from '@/lib/email-link-utm'
 import { applyMergeTags, appendUnsubscribeFooter } from '@/lib/postmark'
 import { prependViewInBrowserLink } from '@/lib/campaign-web-view'
 import { injectPreheader, htmlToPlainText } from '@/lib/email-content'
@@ -29,8 +30,14 @@ import { injectPreheader, htmlToPlainText } from '@/lib/email-content'
  * @returns {{ html: string, text: string, subject: string }}
  */
 export function renderCampaignEmail({ campaign, subject, contact, extras, broadcast, viewUrl = null, emailCopy = null }) {
-  const merged = applyMergeTags(campaign.html_content, contact, extras)
   const unsubscribeUrl = extras.unsubscribe_url || null
+  // EMAILUTM.1 — marketing sends tag links back to the studio's own site with
+  // utm_source=email and utm_medium=campaign (measurement only; never an ad
+  // signal). Transactional renders are left exactly as written.
+  const filled = applyMergeTags(campaign.html_content, contact, extras)
+  const merged = broadcast
+    ? tagOwnSiteLinks(filled, { siteUrl: siteUrlFromUnsubscribe(unsubscribeUrl), medium: 'campaign' })
+    : filled
   const withFooter = broadcast && unsubscribeUrl ? appendUnsubscribeFooter(merged, unsubscribeUrl) : merged
   const text = htmlToPlainText(withFooter)
   const withWebView = broadcast && viewUrl ? prependViewInBrowserLink(withFooter, viewUrl, emailCopy) : withFooter

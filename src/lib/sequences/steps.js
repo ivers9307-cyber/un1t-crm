@@ -23,6 +23,7 @@
 // `wait` is not a handler — the runner just bumps next_step_at and
 // returns; nothing to send.
 
+import { tagOwnSiteLinks, siteUrlFromUnsubscribe } from '@/lib/email-link-utm'
 import {
   sendMarketingEmail,
   sendTransactionalEmail,
@@ -419,7 +420,12 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     })
     return accountResult?.messageId || null
   }
-  const mergedHtml = appendUnsubscribeFooter(merged, unsubscribeUrl)
+  // EMAILUTM.1 — links back to the studio's own site carry utm_source=email
+  // and utm_medium=automation (measurement only; never an ad signal).
+  const mergedHtml = appendUnsubscribeFooter(
+    tagOwnSiteLinks(merged, { siteUrl: siteUrlFromUnsubscribe(unsubscribeUrl), medium: 'automation' }),
+    unsubscribeUrl,
+  )
 
   // Attribution (source_type='sequence', sequence_id, sequence_step_id) is
   // passed in so the email_sends row is inserted WITH it — atomically. The
