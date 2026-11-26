@@ -145,3 +145,42 @@ describe('delivered and clicked columns (MKTSHELL.2)', () => {
     expect(cells[4]).toBe('5 · 2.5%')
   })
 })
+
+describe('search, status filter and Show more (SENTSEARCH.1)', () => {
+  function recordingChain(rows, log) {
+    const o = {
+      select: () => o, eq: () => o, order: () => o,
+      ilike: (...a) => { log.push(['ilike', ...a]); return o },
+      in: (...a) => { log.push(['in', ...a]); return o },
+      limit: (n) => { log.push(['limit', n]); return o },
+      then: (resolve) => resolve({ data: rows, count: rows.length }),
+    }
+    return o
+  }
+  const row = (i) => ({ id: `c${i}`, name: `Send ${i}`, status: 'draft', created_at: new Date(Date.UTC(2031, 0, 1, 0, i)).toISOString() })
+
+  it('searches by name with the pattern escaped, and filters by status', async () => {
+    const log = []
+    createServerClient.mockReturnValue({ from: (t) => recordingChain(t === 'campaigns' ? [row(1)] : [], log) })
+    render(await SendsHistoryPage({ searchParams: Promise.resolve({ q: '50%_off', status: 'drafts' }) }))
+    expect(log).toContainEqual(['ilike', 'name', '%50\\%\\_off%'])
+    expect(log).toContainEqual(['in', 'status', ['draft']])
+    expect(screen.getByText('Send 1')).toBeTruthy()
+  })
+
+  it('shows 50 by default and offers Show more when there are more', async () => {
+    const log = []
+    const many = Array.from({ length: 51 }, (_, i) => row(i))
+    createServerClient.mockReturnValue({ from: (t) => recordingChain(t === 'campaigns' ? many : [], log) })
+    const { container } = render(await SendsHistoryPage({ searchParams: Promise.resolve({}) }))
+    expect(log).toContainEqual(['limit', 51])
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(50)
+    expect(screen.getByRole('link', { name: 'Show more' }).getAttribute('href')).toBe('/communications/sent?limit=100')
+  })
+
+  it('says nothing matches when a search finds nothing', async () => {
+    createServerClient.mockReturnValue({ from: () => recordingChain([], []) })
+    render(await SendsHistoryPage({ searchParams: Promise.resolve({ q: 'zzz' }) }))
+    expect(screen.getByText(/Nothing matches/)).toBeTruthy()
+  })
+})
