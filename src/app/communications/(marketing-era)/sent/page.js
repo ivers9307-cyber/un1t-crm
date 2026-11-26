@@ -9,6 +9,7 @@
 // (/communications/sent/[channel]/[id]) instead of one of three unrelated URL
 // spaces, so the detail views inherit this hub's shell and tab strip.
 // COMMS-IA.3 — the label is "Sent", matching the route it has always had.
+import { escapeLikePattern } from '@/lib/like-escape'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -29,7 +30,38 @@ function fmtDate(iso) {
 
 const SELECT = 'id, name, status, total_recipients, total_sent, total_failed, created_at, scheduled_at, sent_at'
 
-export default async function SendsHistoryPage() {
+// SENTSEARCH.1 — search by name, filter by status, and "Show more". Each
+// source is read newest-first up to `limit` rows (50 a step, 500 at most), then
+// the two lists are merged and cut to `limit`, so the newest `limit` sends
+// across both channels are always the ones shown.
+const PAGE = 50
+const MAX_LIMIT = 500
+export const SENT_STATUS_FILTERS = Object.freeze({
+  all: null,
+  drafts: ['draft'],
+  scheduled: ['scheduled', 'queued', 'sending'],
+  sent: ['sent', 'failed', 'cancelled'],
+})
+
+function readParams(searchParams) {
+  const q = typeof searchParams?.q === 'string' ? searchParams.q.trim().slice(0, 100) : ''
+  const status = Object.hasOwn(SENT_STATUS_FILTERS, searchParams?.status) ? searchParams.status : 'all'
+  const n = Number.parseInt(searchParams?.limit, 10)
+  const limit = Number.isFinite(n) ? Math.min(MAX_LIMIT, Math.max(PAGE, Math.round(n / PAGE) * PAGE)) : PAGE
+  return { q, status, limit }
+}
+
+function narrow(query, { q, status }) {
+  let out = query
+  if (q) out = out.ilike('name', `%${escapeLikePattern(q)}%`)
+  const statuses = SENT_STATUS_FILTERS[status]
+  if (statuses) out = out.in('status', statuses)
+  return out
+}
+
+export default async function SendsHistoryPage(props) {
+  const searchParams = (await props?.searchParams) || {}
+  const params = readParams(searchParams)
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   const canWa = hasPermission(user, 'whatsapp')
@@ -41,8 +73,8 @@ export default async function SendsHistoryPage() {
   const rows = []
 
   if (canWa && locationId) {
-    const { data } = await db.from('whatsapp_broadcasts').select(`${SELECT}, delivery_summary, delivery_mode`)
-      .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
+    const { data } = await narrow(db.from('whatsapp_broadcasts').select(`${SELECT}, delivery_summary, delivery_mode`)
+      .eq('location_id', locationId), params).order('created_at', { ascending: false }).limit(params.limit + 1)
     for (const b of data || []) {
       const row = { ...b, channel: 'whatsapp', detail: `/communications/sent/whatsapp/${b.id}` }
       // An in-flight drip's total_sent is a per-tick snapshot that lags the live
@@ -62,9 +94,10 @@ export default async function SendsHistoryPage() {
     // campaigns has its own count columns (total_bounced, not total_failed).
     // COMMSFIX.C.5 — last_error (mig 509) is why a campaign is 'failed', or why
     // one still sitting at 'queued' is not moving.
-    const { data } = await db.from('campaigns')
+    const campaignQuery = db.from('campaigns')
       .select('id, name, status, total_recipients, total_sent, total_bounced, created_at, scheduled_at, sent_at, parent_campaign_id, resend_enabled, last_error, created_via')
-      .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
+      .eq('location_id', locationId)
+    const { data } = await narrow(campaignQuery, params).order('created_at', { ascending: false }).limit(params.limit + 1)
     // REPORT-SOT.2 — the displayed counts come from campaign_recipients, one
     // RPC for the whole page rather than one per row. The stored counters stay
     // in the select: campaignDisplayStats falls back to them if the RPC fails,
@@ -92,6 +125,18 @@ export default async function SendsHistoryPage() {
     }
   }
   rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  const moreAvailable = rows.length > params.limit
+  rows.splice(params.limit)
+  const filtering = !!params.q || params.status !== 'all'
+  const hrefWith = (patch) => {
+    const qs = new URLSearchParams()
+    const next = { ...params, ...patch }
+    if (next.q) qs.set('q', next.q)
+    if (next.status !== 'all') qs.set('status', next.status)
+    if (next.limit !== PAGE) qs.set('limit', String(next.limit))
+    const str = qs.toString()
+    return `/communications/sent${str ? `?${str}` : ''}`
+  }
 
   return (
     <div>
@@ -115,7 +160,29 @@ export default async function SendsHistoryPage() {
         </div>
       </div>
 
-      {rows.length === 0 ? (
+      {/* SENTSEARCH.1 — a plain GET form: the page is a server component, so
+          the search and the status chips are links and need no client JS. */}
+      <form method="get" action="/communications/sent" className="flex flex-wrap items-center gap-2 mb-4">
+        <input type="search" name="q" defaultValue={params.q} placeholder="Search by name" maxLength={100}
+          className="w-64 max-w-full rounded-lg border border-un1t-border bg-un1t-surface px-3 py-2 text-sm text-un1t-text" />
+        {params.status !== 'all' && <input type="hidden" name="status" value={params.status} />}
+        <button type="submit" className="rounded-lg border border-un1t-border px-3 py-2 text-sm text-un1t-text hover:border-un1t-text/30">Search</button>
+        <div className="flex items-center gap-1 ml-2">
+          {[['all', 'All'], ['drafts', 'Drafts'], ['scheduled', 'Scheduled'], ['sent', 'Sent']].map(([key, label]) => (
+            <Link key={key} href={hrefWith({ status: key, limit: PAGE })}
+              className={`text-xs px-2.5 py-1 rounded-full border ${params.status === key ? 'bg-un1t-text text-un1t-bg border-un1t-text' : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'}`}>
+              {label}
+            </Link>
+          ))}
+        </div>
+        {filtering && <Link href="/communications/sent" className="text-xs text-un1t-subtle underline ml-1">Clear</Link>}
+      </form>
+
+      {rows.length === 0 && filtering ? (
+        <div className="text-center text-sm text-un1t-subtle py-12 border border-dashed border-un1t-border rounded-2xl">
+          Nothing matches. <Link href="/communications/sent" className="text-un1t-text underline">Show everything</Link>.
+        </div>
+      ) : rows.length === 0 ? (
         <div className="text-center py-16 border border-dashed border-un1t-border rounded-2xl">
           <Send size={28} className="mx-auto mb-3 text-un1t-subtle" />
           <h2 className="text-base font-semibold text-un1t-text mb-1">Nothing sent from this studio yet</h2>
@@ -204,6 +271,14 @@ export default async function SendsHistoryPage() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+      {moreAvailable && params.limit < MAX_LIMIT && (
+        <div className="mt-4 text-center">
+          <Link href={hrefWith({ limit: params.limit + PAGE })} scroll={false}
+            className="inline-block rounded-lg border border-un1t-border px-4 py-2 text-sm text-un1t-text hover:border-un1t-text/30">
+            Show more
+          </Link>
         </div>
       )}
     </div>
