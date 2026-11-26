@@ -36,7 +36,12 @@
 // filter can special-case a field being absent (`!t.perms ||`) rather
 // than needing HubTabs itself to know about it.
 //
-// Chrome: reuses CommsShell (its `fullWidth` check only matches
+// MKTSHELL.1 supersedes the chrome described below: the "Marketing sends"
+// title, its subtitle and the five-tab strip are replaced by MarketingHeader
+// (title + the full seven-tab Marketing strip on one row), shared with
+// (marketing)/layout.js. CommsShell is unchanged.
+//
+// Chrome (before MKTSHELL.1): reuses CommsShell (its `fullWidth` check only matches
 // /communications/inbox and /communications/tickets, both still in
 // (hub), so it's a no-op boxed `max-w-7xl` wrapper here) + a lighter h1
 // than (hub)'s "Messages" — "Marketing sends" names what actually lives
@@ -50,15 +55,18 @@
 
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import HubTabs from '@/components/HubTabs'
-import { MARKETING_SEND_TABS } from '@/lib/hub-tabs'
+import MarketingHeader from '@/components/marketing/MarketingHeader'
+import { MARKETING_TABS } from '@/lib/hub-tabs'
 import CommsShell from '@/components/communications/CommsShell'
 
 export const dynamic = 'force-dynamic'
 
 // PALETTE.1 — the tab list lives in src/lib/hub-tabs.js (unchanged), shared
 // with the ⌘K palette so every tab is a jump target there too.
-const TABS = MARKETING_SEND_TABS
+// MKTSHELL.1 — the FULL Marketing strip (Automations and Landing page too),
+// the same one (marketing)/layout.js renders, so the strip keeps its shape
+// when you move between Automations and these pages.
+const TABS = MARKETING_TABS
 
 export default async function MarketingEraLayout({ children }) {
   const user = await getCurrentUser()
@@ -70,11 +78,7 @@ export default async function MarketingEraLayout({ children }) {
 
   return (
     <CommsShell>
-      <h1 className="text-2xl font-bold text-un1t-text mb-1">Marketing sends</h1>
-      <p className="text-sm text-un1t-subtle mb-5">
-        Campaigns, one-off sends, audiences and list health for {user.activeLocation?.name || 'your studio'}
-      </p>
-      {tabs.length > 1 && <HubTabs tabs={tabs} />}
+      <MarketingHeader tabs={tabs} />
       {children}
     </CommsShell>
   )

@@ -51,7 +51,7 @@ export default async function ShellyPage() {
   const glofox = await readGlofoxAutomationStatus(createServerClient(), location.id)
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="px-6 pb-6 max-w-7xl space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-un1t-text">Smart plugs · {location.name || 'your studio'}</h1>
         <p className="text-sm text-un1t-subtle mt-1">

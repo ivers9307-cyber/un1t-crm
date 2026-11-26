@@ -88,8 +88,7 @@ export default async function SendsHistoryPage() {
     <div>
       <div className="flex items-start justify-between gap-4 mb-5">
         <div>
-          <Link href="/communications" className="text-xs text-un1t-subtle hover:text-un1t-text">← Communications</Link>
-          <h1 className="text-xl font-semibold text-un1t-text mt-1">Sent</h1>
+          <h1 className="text-xl font-semibold text-un1t-text">Sent</h1>
           <p className="text-sm text-un1t-subtle">One-off WhatsApp and email sends at this location.</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">

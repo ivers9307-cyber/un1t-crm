@@ -48,7 +48,7 @@
 
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import HubTabs from '@/components/HubTabs'
+import MarketingHeader from '@/components/marketing/MarketingHeader'
 import { MARKETING_TABS } from '@/lib/hub-tabs'
 import { staffTabMetadata } from '@/lib/staff-tab-title'
 
@@ -75,8 +75,10 @@ export default async function MarketingHubLayout({ children }) {
   return (
     <>
       {tabs.length > 1 && (
-        <div className="px-8 pt-6 print:hidden">
-          <HubTabs tabs={tabs} />
+        // MKTSHELL.1 — the shared title + strip row, at the same `p-6` inset
+        // CommsShell gives the communications half of this hub.
+        <div className="px-6 pt-6 print:hidden">
+          <MarketingHeader tabs={tabs} />
         </div>
       )}
       {children}
