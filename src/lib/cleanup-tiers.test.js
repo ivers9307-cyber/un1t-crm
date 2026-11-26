@@ -60,3 +60,32 @@ describe('activeWithinClause', () => {
     expect(c).not.toContain('open')
   })
 })
+
+describe('countCleanupTiers at a un1t.online studio (HATCHTIERS.1)', () => {
+  const ago = (d) => new Date(NOW.getTime() - d * 86400000).toISOString()
+  function page(rows) {
+    const q = { order: () => q, range: (from) => Promise.resolve({ data: from === 0 ? rows : [], error: null }) }
+    return q
+  }
+  function clientsDb(clients) {
+    const q = { select: () => q, eq: () => q, not: () => q, order: () => q, range: (from) => Promise.resolve({ data: from === 0 ? clients : [], error: null }) }
+    return { from: () => q }
+  }
+
+  it('counts a recent un1t.online visit or an unlimited plan as active', async () => {
+    const old = { created_at: ago(400), total_emails_sent: 10 }
+    buildAudienceQueryAsync.mockImplementation(async () => ({ query: page([
+      { id: 'visited', ...old },
+      { id: 'unlimited', ...old },
+      { id: 'quiet', ...old, last_email_click_at: ago(120) },
+      { id: 'dormant', ...old },
+      { id: 'new', created_at: ago(10), total_emails_sent: 0 },
+    ]) }))
+    const db = clientsDb([
+      { contact_id: 'visited', last_attended_at: ago(20), credit_unlimited: false },
+      { contact_id: 'unlimited', last_attended_at: null, credit_unlimited: true },
+    ])
+    const r = await countCleanupTiers(db, 'loc-h', { now: NOW, un1tOnline: true })
+    expect(r).toEqual({ ok: true, mailable: 5, tiers: { keep: 3, less: 1, reengage: 0, seasonal: 1 } })
+  })
+})

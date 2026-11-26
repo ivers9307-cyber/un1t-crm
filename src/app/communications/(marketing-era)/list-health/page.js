@@ -81,7 +81,7 @@ function CleanupTiers({ cleanup, hasGlofox }) {
       <p className="text-xs text-un1t-subtle mb-3 max-w-3xl">
         The people a marketing send would reach, split by their most recent booking, visit, payment or email
         click. Opens are not counted: many are recorded by mail apps, not people.
-        {!hasGlofox && ' This studio has no Glofox link, so visits, bookings and payments are not on record here and members can show as lapsed or dormant.'}
+        {!hasGlofox && ' This studio has no membership system linked, so visits, bookings and payments are not on record here and members can show as lapsed or dormant.'}
       </p>
       {!cleanup.ok ? (
         <p className="text-sm text-un1t-subtle">These counts could not be loaded just now.</p>
@@ -160,8 +160,10 @@ export default async function ListHealthPage() {
   const mailable = mailableCount || 0
 
   // CLEANTIERS.1 — read-only sizes of the contact cleanup tiers.
-  const cleanup = await countCleanupTiers(db, locationId)
-  const hasGlofox = user.activeLocation?.membership_source === 'glofox'
+  const membershipSource = user.activeLocation?.membership_source
+  // HATCHTIERS.1 — un1t.online studios count visits from un1t_clients.
+  const cleanup = await countCleanupTiers(db, locationId, { un1tOnline: membershipSource === 'un1t_online' })
+  const hasGlofox = membershipSource === 'glofox' || membershipSource === 'un1t_online'
 
   // Bounce events by type for this location. campaign_recipients carries no
   // location_id, so the join to campaigns happens in Postgres (mig 515) rather
