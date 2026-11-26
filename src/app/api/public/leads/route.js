@@ -24,7 +24,8 @@ import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { LeadSchema, normaliseLead, leadConfigFromBlocks } from '@/lib/leads'
-import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { findOrCreateRaceContactWithOutcome } from '@/lib/race-contact-linking'
+import { applyOfferFormConsent } from '@/lib/offer-form-consent'
 import { stampLeadSource } from '@/lib/lead-source-stamp'
 import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
@@ -35,12 +36,22 @@ import { resolvePublicPageRequest, pageRequestRefusal } from '@/lib/landing-page
 export const runtime = 'nodejs'
 
 // LeadSchema with the page form: `public_path` is required only without `page`.
+// EMBEDFORM.1 — `form: 'embed'` is the paste-anywhere form at
+// /embed/lead/<studio>. Its marketing box is optional (pre-ticked, the
+// owner's choice, 26 Nov 2026), so `consent` may be false there and is
+// applied through applyOfferFormConsent like the other optional-box forms.
+// Every other caller still needs consent === true, exactly as before.
 const RouteLeadSchema = LeadSchema.extend({
   public_path: z.string().trim().min(1).max(120).optional(),
   page: z.string().trim().max(40).optional(),
   studio: z.string().trim().max(40).optional(),
+  form: z.enum(['embed']).optional(),
+  consent: z.boolean(),
 }).superRefine((v, ctx) => {
   if (!v.page && !v.public_path) ctx.addIssue({ code: 'custom', path: ['public_path'], message: 'Required' })
+  if (v.form !== 'embed' && v.consent !== true) {
+    ctx.addIssue({ code: 'custom', path: ['consent'], message: 'Please tick the consent box to continue' })
+  }
 })
 
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
@@ -128,7 +139,8 @@ export async function POST(request) {
   // W0.6 (mig 712, unique per organisation) it is also the helper's default.
   // SOURCE-LABEL.1 — see class-booking: a website lead form is not a race
   // signup. CREATE only; matched contacts are untouched.
-  const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone, restrictToOrg: true, insertFields: { source: 'lead_form' } })
+  const isEmbed = body.form === 'embed'
+  const { contactId, created: contactCreated } = await findOrCreateRaceContactWithOutcome({ db, locationId, email, name: firstName, phone, restrictToOrg: true, insertFields: { source: 'lead_form' } })
   if (!contactId) {
     return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
   }
@@ -166,8 +178,13 @@ export async function POST(request) {
 
   // Marketing consent (best-effort; helper short-circuits ClassPass).
   try {
-    const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
-    await applyFormMarketingConsent(db, { contactId, consent: true, source: 'waitlist_form', ipAddress: ip, locationId })
+    if (isEmbed) {
+      const r = await applyOfferFormConsent(db, { contactId, created: contactCreated, consent: body.consent, source: 'embed_form', ipAddress: ip, locationId })
+      if (r?.result && r.result.ok === false) logWarn('leads', 'embed consent write failed', { err: r.result.error })
+    } else {
+      const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
+      await applyFormMarketingConsent(db, { contactId, consent: true, source: 'waitlist_form', ipAddress: ip, locationId })
+    }
   } catch (e) { logWarn('leads', 'consent write failed', { err: e }) }
 
   // Nurture-seam tag (idempotent; fires tag_added sequences exactly once).

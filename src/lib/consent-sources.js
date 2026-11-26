@@ -85,6 +85,7 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   start_class:                    VOLUNTARY,
   paid_trial:                     VOLUNTARY, // PAIDTRIAL.1 — the /trial purchase form's consent tick
   corp_promo:                     VOLUNTARY, // CORPPROMO.1 — the /corp claim form's consent tick
+  embed_form:                     VOLUNTARY, // EMBEDFORM.1 — the pasted-in website form's marketing box
   donation:                       VOLUNTARY, // CHARITY.5 — the Donate card's marketing opt-in tick
   host_mailing_list:              VOLUNTARY,
   mailing_list:                   VOLUNTARY,
