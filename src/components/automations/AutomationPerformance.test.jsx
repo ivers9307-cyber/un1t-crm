@@ -15,6 +15,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
 import AutomationPerformance, { exitReasonLabel } from './AutomationPerformance.jsx'
+// SEQOUTCOME.1 — the results card fetches on its own; these tests are about the run log.
+vi.mock('./AutomationOutcomes', () => ({ default: () => null }))
+
 
 describe('exitReasonLabel', () => {
   it('names the SEQEXIT.1 audience exit in operator language', () => {
