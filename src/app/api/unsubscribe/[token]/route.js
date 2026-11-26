@@ -76,7 +76,9 @@ export async function POST(request, props) {
   // shape of security scanners that run JavaScript. This records the evidence;
   // it changes nothing about what is applied.
   //   header     - no JSON body (RFC 8058 POST from the mail provider)
-  //   page_auto  - the page's on-arrival submit (UNSUBAUTO.1)
+  //   page_auto  - the page's on-arrival submit (UNSUBAUTO.1). Retired by
+  //                UNSUBCLICK.1 (26 Nov 2026): the page now waits for a
+  //                press, so new rows are header or page_click only.
   //   page_click - a button press on the page
   let path = 'header'
   try {

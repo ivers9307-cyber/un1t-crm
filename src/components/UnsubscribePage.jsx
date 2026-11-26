@@ -16,7 +16,7 @@
 // The route preserves back-compat with the empty-body List-Unsubscribe
 // header path (defaults to email_marketing only when no body is sent).
 
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { Mail, MessageCircle, MessageSquare, Check } from 'lucide-react'
 
@@ -42,40 +42,26 @@ const CHANNEL_OPTIONS = [
 ]
 
 export default function UnsubscribePage({ token, locationId = null, campaignId = null, brandName = '' }) {
-  // UNSUBAUTO.1 — the opt-out fires on ARRIVAL, not on a button press.
+  // UNSUBCLICK.1 — the opt-out waits for the person to press the button.
   //
-  // The previous flow was a GET landing on a confirm button. Measured live on
-  // 2026-08-14: 161 contacts had clicked an unsubscribe link and were still
-  // mailable, 96 of them more than once, one six times across four days. They
-  // clicked "Unsubscribe", saw a page, and closed the tab — which is what
-  // "unsubscribe" means to everyone who is not an email engineer.
+  // UNSUBAUTO.1 (Aug 2026) made this page opt out on arrival, from a
+  // useEffect, on the theory that link scanners do not run JavaScript.
+  // UNSUBPATH.1's evidence says some do: 79 of 263 page-or-header opt-outs in
+  // 90 days landed within two minutes of the send, and those were later
+  // resubscribed at about eight times the rate of the rest. Opening the page
+  // is not consent to leave the list, so the owner decided on 26 Nov 2026
+  // that a person must press Unsubscribe. The mail provider's one-click
+  // List-Unsubscribe POST (RFC 8058) is a separate door, handled by the API
+  // route without this page, and is unchanged.
   //
-  // Auto-submitting on GET server-side was rejected: Outlook Safe Links and
-  // antivirus scanners issue GETs and would opt people out who never clicked.
-  // Firing from a useEffect means it only runs in a real browser that executes
-  // JS, which no link scanner does.
-  //
-  // email_marketing ONLY. They clicked a link in an EMAIL; silently ending
-  // their WhatsApp class reminders is not what they asked for. The other two
-  // channels stay available on the manual controls.
-  const [selected, setSelected] = useState(
-    () => new Set(CHANNEL_OPTIONS.map(c => c.key))
-  )
-  const [status, setStatus] = useState('working')
+  // Email marketing is the only channel ticked to start with: they followed a
+  // link in an EMAIL, and silently ending their WhatsApp class reminders is
+  // not what they asked for. The other two are a tick away.
+  const [selected, setSelected] = useState(() => new Set(['email_marketing']))
+  const [status, setStatus] = useState('idle')
   const [errorMsg, setErrorMsg] = useState(null)
   const [unsubChannels, setUnsubChannels] = useState([])
   const [resubStatus, setResubStatus] = useState('idle')
-  const autoSubmitted = useRef(false)
-
-  useEffect(() => {
-    // React 18/19 StrictMode double-invokes effects in dev. The route is
-    // idempotent (a repeat opt-out is a 200 no-op) so a second POST is
-    // harmless, but the ref keeps the network log honest.
-    if (autoSubmitted.current) return
-    autoSubmitted.current = true
-    submitOptOut(['email_marketing'], { auto: true })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   function toggle(key) {
     setSelected(prev => {
@@ -86,7 +72,7 @@ export default function UnsubscribePage({ token, locationId = null, campaignId =
     })
   }
 
-  async function submitOptOut(channels, { auto = false } = {}) {
+  async function submitOptOut(channels) {
     if (channels.length === 0) {
       setErrorMsg('Pick at least one channel to unsubscribe from.')
       return
@@ -117,14 +103,14 @@ export default function UnsubscribePage({ token, locationId = null, campaignId =
       const res = await fetch(`/api/unsubscribe/${token}${qs ? `?${qs}` : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // UNSUBPATH.1 — `auto` tells the route this was the arrival submit.
-        body: JSON.stringify({ channels, auto }),
+        // UNSUBPATH.1 — a body with `channels` and no `auto` is logged by the
+        // route as path=page_click.
+        body: JSON.stringify({ channels }),
         // UNSUBAUTO.3 — "Processing…" has no controls and no escape, so an
         // unbounded fetch can hold a flaky mobile connection there for minutes;
         // a visitor who gives up and closes the tab is unrecorded, which is a
-        // narrow re-entry of the very harm the auto-submit removes. On timeout
-        // the existing catch routes to 'idle', which drops them onto the manual
-        // button — a screen they can act on. No new branch needed.
+        // unrecorded opt-out. On timeout the catch shows the error screen, whose
+        // Try again button puts them back on the form.
         signal: AbortSignal.timeout(15000),
       })
       const data = await res.json()
@@ -132,15 +118,14 @@ export default function UnsubscribePage({ token, locationId = null, campaignId =
         setUnsubChannels(prev => [...new Set([...prev, ...(data.unsubscribed_channels || channels)])])
         setStatus('done')
       } else {
-        // UNSUBAUTO.1 — a failed AUTO submit must drop the person into the
-        // manual flow, never into a success screen. Claiming "you've been
-        // unsubscribed" when the write failed is the exact harm this fixes.
+        // A failed submit must never show the success screen: claiming
+        // "you've been unsubscribed" when the write failed leaves them mailed.
         setErrorMsg(data.error || 'Could not process your request.')
-        setStatus(auto ? 'idle' : 'error')
+        setStatus('error')
       }
     } catch {
       setErrorMsg('Network error — please try again.')
-      setStatus(auto ? 'idle' : 'error')
+      setStatus('error')
     }
   }
 
@@ -183,7 +168,7 @@ export default function UnsubscribePage({ token, locationId = null, campaignId =
           <div className="bg-un1t-surface border border-un1t-border rounded-lg p-6 text-left">
             <h2 className="text-lg font-semibold mb-2 text-center">Manage your unsubscribe</h2>
             <p className="text-sm text-un1t-subtle mb-4 text-center">
-              Pick which marketing channels you'd like to stop hearing from. Untick anything you want to keep.
+              Press Unsubscribe to stop marketing emails. Tick WhatsApp or SMS too if you'd like to stop those.
             </p>
 
             <div className="space-y-2 mb-4">
