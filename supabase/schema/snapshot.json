@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "through_migration": 874,
+  "through_migration": 875,
   "latest_applied_version": "20261122223601",
   "relations": {
     "ac_devices": {"kind":"table","rls":true,"columns":[["id","uuid",false,true],["location_id","uuid",false,false],["label","text",false,false],["provider","text",false,false],["provider_device_id","text",false,false],["default_mode","text",true,true],["default_temp_c","integer",true,true],["default_fan","text",true,true],["session_minutes","integer",true,true],["enabled","boolean",false,true],["created_at","timestamp with time zone",false,true],["updated_at","timestamp with time zone",false,true],["device_group","text",true,false],["external_auto_off_minutes","integer",true,false],["last_state","jsonb",true,false],["last_state_at","timestamp with time zone",true,false]]},

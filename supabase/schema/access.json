@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "through_migration": 874,
+  "through_migration": 875,
   "latest_applied_version": "20261122223601",
   "policies": [
     ["ac_sessions","no_anon_or_authenticated_access",false,["anon","authenticated"],"*","false","false"],
@@ -168,12 +168,12 @@
     ["instagram_conversations","ig_conv_deny_delete",false,["authenticated"],"d","false",null],
     ["instagram_conversations","ig_conv_deny_insert",false,["authenticated"],"a",null,"false"],
     ["instagram_conversations","ig_conv_deny_update",false,["authenticated"],"w","false","false"],
-    ["instagram_conversations","ig_conv_select",true,["public"],"r","(( SELECT private.auth_is_master() AS auth_is_master) OR (EXISTS ( SELECT 1\n   FROM profile_locations pl\n  WHERE ((pl.location_id = instagram_conversations.location_id) AND (pl.profile_id = ( SELECT auth.uid() AS uid)) AND ( SELECT private.auth_is_active_staff() AS auth_is_active_staff)))))",null],
+    ["instagram_conversations","ig_conv_select",true,["authenticated"],"r","(location_id = ANY (( SELECT private.auth_mobile_can_location_ids('whatsapp'::text) AS auth_mobile_can_location_ids)::uuid[]))",null],
     ["instagram_messages","ig_msg_deny_anon",false,["anon"],"*","false","false"],
     ["instagram_messages","ig_msg_deny_delete",false,["authenticated"],"d","false",null],
     ["instagram_messages","ig_msg_deny_insert",false,["authenticated"],"a",null,"false"],
     ["instagram_messages","ig_msg_deny_update",false,["authenticated"],"w","false","false"],
-    ["instagram_messages","ig_msg_select",true,["public"],"r","(( SELECT private.auth_is_master() AS auth_is_master) OR (EXISTS ( SELECT 1\n   FROM profile_locations pl\n  WHERE ((pl.location_id = instagram_messages.location_id) AND (pl.profile_id = ( SELECT auth.uid() AS uid)) AND ( SELECT private.auth_is_active_staff() AS auth_is_active_staff)))))",null],
+    ["instagram_messages","ig_msg_select",true,["authenticated"],"r","(location_id = ANY (( SELECT private.auth_mobile_can_location_ids('whatsapp'::text) AS auth_mobile_can_location_ids)::uuid[]))",null],
     ["invoices_queue","inbound_invoices_read",true,["authenticated"],"r","((EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND (p.role = 'master'::text) AND ( SELECT private.auth_is_active_staff() AS auth_is_active_staff)))) OR (EXISTS ( SELECT 1\n   FROM profile_locations pl\n  WHERE ((pl.profile_id = ( SELECT auth.uid() AS uid)) AND (pl.location_id = invoices_queue.location_id) AND (pl.role = 'owner'::text) AND ( SELECT private.auth_is_active_staff() AS auth_is_active_staff)))))",null],
     ["lead_radar_actions","Staff can view lead radar actions",true,["public"],"r","private.auth_is_in_location(location_id)",null],
     ["lead_radar_snapshots","Staff can view lead radar snapshots",true,["public"],"r","private.auth_is_in_location(location_id)",null],
