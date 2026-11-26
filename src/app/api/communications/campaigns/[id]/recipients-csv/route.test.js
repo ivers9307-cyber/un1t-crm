@@ -55,6 +55,11 @@ describe('GET …/recipients-csv', () => {
   it('records the export, and exports nothing when it cannot be recorded', async () => {
     await call(CAMP_A)
     expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'campaign_recipients_exported' }))
+    // The campaign rides in target.resource. target.id is a profile FK, so a
+    // campaign id there failed every insert and every export 503'd.
+    const target = logAuditEvent.mock.calls[0][0].target
+    expect(target.id).toBeUndefined()
+    expect(target.resource).toMatch(/^campaigns\//)
     logAuditEvent.mockResolvedValueOnce({ logged: false, error: 'x' })
     const res = await call(CAMP_A)
     expect(res.status).toBe(503)
