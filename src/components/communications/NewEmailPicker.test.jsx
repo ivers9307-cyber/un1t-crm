@@ -51,7 +51,7 @@ describe('NewEmailPicker', () => {
     const { rerender } = render(<NewEmailPicker locationId="loc-1" templates={[]} readFailed />)
     expect(screen.getByText(/could not be read just now/)).toBeTruthy()
     rerender(<NewEmailPicker locationId="loc-1" templates={[]} />)
-    expect(screen.getByText(/No marketing templates yet/)).toBeTruthy()
+    expect(screen.getByText(/No saved templates yet/)).toBeTruthy()
   })
 
   // QUICKEMAIL-RETIRE.1 — a Segments "Email these" link starts the draft with that audience.
