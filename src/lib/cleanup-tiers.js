@@ -28,6 +28,7 @@
 // fall into the lower tiers. The page says so.
 
 import { buildAudienceQueryAsync } from '@/lib/postmark'
+import { selectAll } from '@/lib/select-all'
 
 const DAY = 24 * 60 * 60 * 1000
 export const MIN_MARKETING_EMAILS = 5
@@ -58,7 +59,56 @@ export function activeWithinClause(now, days) {
  * @param {{ now?: Date }} [opts]
  * @returns {Promise<{ ok: boolean, mailable: number, tiers: { keep: number, less: number, reengage: number, seasonal: number } }>}
  */
-export async function countCleanupTiers(db, locationId, { now = new Date() } = {}) {
+// HATCHTIERS.1 — a studio whose members live in un1t.online (Hatch Street)
+// has no Glofox dates on its contacts; its visits are un1t_clients rows. Its
+// list is small, so the tiers are counted in JS over the mailable ids, with a
+// un1t.online visit (or an unlimited plan, the nearest thing to a current
+// membership there) counting as activity alongside clicks and the contact's
+// own dates.
+const DAY_MS = 24 * 60 * 60 * 1000
+async function countUn1tTiers(db, locationId, now) {
+  const rows = await selectAll((from, to) => {
+    return buildAudienceQueryAsync(db, { logic: 'and', filters: [] }, locationId, {
+      columns: 'id, created_at, total_emails_sent, last_attended_at, last_booked_at, last_payment_at, last_email_click_at',
+    }).then(({ query }) => query.order('id', { ascending: true }).range(from, to))
+  })
+  const clients = await selectAll((from, to) => db
+    .from('un1t_clients')
+    .select('contact_id, last_attended_at, credit_unlimited')
+    .eq('location_id', locationId)
+    .not('contact_id', 'is', null)
+    .order('contact_id', { ascending: true })
+    .range(from, to))
+  const visit = new Map()
+  const unlimited = new Set()
+  for (const c of clients) {
+    if (c.credit_unlimited) unlimited.add(c.contact_id)
+    const t = c.last_attended_at ? Date.parse(c.last_attended_at) : NaN
+    if (Number.isFinite(t) && t > (visit.get(c.contact_id) || 0)) visit.set(c.contact_id, t)
+  }
+  const tiers = { keep: 0, less: 0, reengage: 0, seasonal: 0 }
+  for (const r of rows) {
+    const ageDays = (iso) => { const t = iso ? Date.parse(iso) : NaN; return Number.isFinite(t) ? (now.getTime() - t) / DAY_MS : Infinity }
+    const newish = ageDays(r.created_at) <= 90 || (r.total_emails_sent ?? 0) < MIN_MARKETING_EMAILS
+    const latest = Math.min(
+      ageDays(r.last_attended_at), ageDays(r.last_booked_at), ageDays(r.last_payment_at), ageDays(r.last_email_click_at),
+      visit.has(r.id) ? (now.getTime() - visit.get(r.id)) / DAY_MS : Infinity,
+    )
+    if (newish || unlimited.has(r.id) || latest <= 90) tiers.keep++
+    else if (latest <= 180) tiers.less++
+    else if (latest <= 365) tiers.reengage++
+    else tiers.seasonal++
+  }
+  return { ok: true, mailable: rows.length, tiers }
+}
+
+export async function countCleanupTiers(db, locationId, { now = new Date(), un1tOnline = false } = {}) {
+  if (un1tOnline) {
+    try { return await countUn1tTiers(db, locationId, now) } catch (e) {
+      console.error('[cleanup tiers] un1t count failed:', e?.message)
+      return { ok: false, mailable: 0, tiers: { keep: 0, less: 0, reengage: 0, seasonal: 0 } }
+    }
+  }
   const count = async (days) => {
     const { query } = await buildAudienceQueryAsync(db, { logic: 'and', filters: [] }, locationId, {
       columns: 'id',
