@@ -177,6 +177,24 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
   // composer uses. It (re)inits whenever the Design tab shows in visual mode and
   // loads the design held in state then, so a Design → Audience → Design round
   // trip keeps the operator's work (stashUnlayerToState puts it in state first).
+  // FULLCANVAS.1 — the canvas fills the window from wherever it starts down to
+  // the bottom edge, measured, not guessed: the header above it differs by
+  // campaign (status pill, buttons wrapping, banners). Still a DEFINITE pixel
+  // height, which the Unlayer iframe needs (UNLAYER-H.1); 75vh until measured.
+  const [canvasHeight, setCanvasHeight] = useState(null)
+  useEffect(() => {
+    if (tab !== 'design' || editorMode !== 'visual') return undefined
+    const measure = () => {
+      const el = document.getElementById('unlayer-editor')
+      if (!el) return
+      const top = el.getBoundingClientRect().top + window.scrollY
+      setCanvasHeight(Math.max(600, Math.round(window.innerHeight - top - 16)))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [tab, editorMode])
+
   const { ref: unlayerRef } = useUnlayerEditor({
     mountId: 'unlayer-editor',
     active: tab === 'design' && editorMode === 'visual',
@@ -964,7 +982,7 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
               // `flex-1` and 600px without. No `flex-1` here — same shape as
               // the two mounts that never broke (UnifiedSendComposer
               // `h-[560px]`, HostEmails `height: 620`).
-              <div id="unlayer-editor" ref={unlayerRef} style={{ height: '75vh', minHeight: '600px' }} />
+              <div id="unlayer-editor" ref={unlayerRef} style={{ height: canvasHeight ? `${canvasHeight}px` : '75vh', minHeight: '600px' }} />
             ) : (
               <textarea
                 value={htmlContent}

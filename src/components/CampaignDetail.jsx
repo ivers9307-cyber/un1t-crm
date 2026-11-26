@@ -562,6 +562,16 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
 
         {tab === 'recipients' && (
           <div className="p-6">
+            {/* EXPORTCSV.1 — the list below shows the newest 100; the CSV has everyone. */}
+            {recipients.length > 0 && (
+              <div className="flex items-center justify-between gap-3 mb-3 text-xs text-un1t-subtle">
+                <span>{totalSent > recipients.length ? `Showing the latest ${recipients.length} of ${totalSent.toLocaleString()}.` : null}</span>
+                <a href={`/api/communications/campaigns/${campaign.id}/recipients-csv`}
+                  className="rounded-md border border-un1t-border px-2.5 py-1.5 font-medium text-un1t-text hover:border-un1t-text/30">
+                  Download all recipients (CSV)
+                </a>
+              </div>
+            )}
             {recipients.length === 0 ? (
               <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center">
                 <Users size={32} className="mx-auto mb-3 text-un1t-subtle" />
