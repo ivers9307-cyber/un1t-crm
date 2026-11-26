@@ -475,3 +475,47 @@ describe('CampaignEditor — saved segments, presets and resend', () => {
   })
 })
 
+
+describe('CampaignEditor — autosave of a changed draft (AUTOSAVE.1)', () => {
+  const puts = () => fetch.mock.calls.filter(([, opts]) => opts?.method === 'PUT')
+  afterEach(() => vi.useRealTimers())
+
+  async function tick() {
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+  }
+
+  it('records a baseline first, then saves a saved draft only after it changes', async () => {
+    vi.useFakeTimers()
+    renderEditor({ html_content: CODE_HTML, design_json: null })
+    await tick()
+    expect(puts()).toHaveLength(0)
+    await tick()
+    expect(puts()).toHaveLength(0)
+    fireEvent.change(screen.getByPlaceholderText('Campaign name...'), { target: { value: 'Weekend offer v2' } })
+    await tick()
+    expect(puts()).toHaveLength(1)
+    expect(JSON.parse(puts()[0][1].body).name).toBe('Weekend offer v2')
+    await tick()
+    expect(puts()).toHaveLength(1)
+  })
+
+  it('never autosaves a scheduled campaign', async () => {
+    vi.useFakeTimers()
+    renderEditor({ html_content: CODE_HTML, design_json: null, status: 'scheduled' })
+    await tick()
+    fireEvent.change(screen.getByPlaceholderText('Campaign name...'), { target: { value: 'Changed' } })
+    await tick()
+    await tick()
+    expect(puts()).toHaveLength(0)
+  })
+
+  it('never creates a campaign that was never saved', async () => {
+    vi.useFakeTimers()
+    renderEditor({ id: undefined, html_content: CODE_HTML, design_json: null })
+    await tick()
+    fireEvent.change(screen.getByPlaceholderText('Campaign name...'), { target: { value: 'New' } })
+    await tick()
+    await tick()
+    expect(fetch.mock.calls.filter(([, opts]) => opts?.method === 'POST' || opts?.method === 'PUT')).toHaveLength(0)
+  })
+})
