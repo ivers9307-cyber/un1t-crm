@@ -344,7 +344,12 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
 
   // ── composer ────────────────────────────────────────────────────
   return (
-    <div className="max-w-2xl mx-auto space-y-5">
+    // MKTSHELL.1 — two columns from `lg` up: who and what on the left, how and
+    // when (and the Send button) in a sticky column on the right, so the
+    // button is on screen without scrolling past five stacked cards. One
+    // column below `lg`, in the same DOM order as before.
+    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-5 items-start">
+      <div className="space-y-5 min-w-0">
       {/* QUICKEMAIL-RETIRE.1 — email moved to the full editor. */}
       <div className="flex items-center justify-between gap-3">
         <span className="flex items-center gap-1.5 text-sm font-medium text-un1t-text"><MessageCircle size={15} />WhatsApp</span>
@@ -457,6 +462,9 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
           </>
       </Section>
 
+      </div>
+
+      <div className="space-y-5 min-w-0 lg:sticky lg:top-6">
       {/* Pacing — WhatsApp only (WA-DRIP) */}
       {channel === 'whatsapp' && (
         <Section title="Pacing" sub="Send all at once, or drip a capped number per day until everyone's been messaged — the safe way to work a large list without tripping WhatsApp's per-day limits.">
@@ -562,6 +570,7 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
               : 'No contacts match this filter.'}
           </span>
         )}
+      </div>
       </div>
     </div>
   )

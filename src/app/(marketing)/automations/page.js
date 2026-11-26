@@ -176,7 +176,7 @@ export default async function AutomationsPage() {
   const canClone = canFlows && canCloneSequenceAt(user, location?.id || null)
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-10">
+    <div className="px-6 pb-6 max-w-7xl space-y-10">
       <div>
         <h1 className="text-xl font-semibold text-un1t-text">Automations</h1>
         <p className="text-sm text-un1t-subtle mt-1">Things that run by themselves for {location?.name || 'your studio'}</p>

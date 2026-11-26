@@ -35,7 +35,9 @@ function TabBadge({ url }) {
   )
 }
 
-export default function HubTabs({ tabs }) {
+// `className` replaces the strip's own bottom margin and width cap, for a
+// caller that places the strip inside a header row (MarketingHeader).
+export default function HubTabs({ tabs, className = 'mb-6 max-w-3xl' }) {
   const pathname = usePathname()
   const activeRef = useRef(null)
   const scrollerRef = useRef(null)
@@ -92,7 +94,7 @@ export default function HubTabs({ tabs }) {
   return (
     // print:hidden — nav chrome never prints (found via the (team) group
     // wrapping the contract print surface, HUBS.2d review).
-    <div className="relative mb-6 max-w-3xl print:hidden">
+    <div className={clsx('relative print:hidden', className)}>
       <div
         ref={scrollerRef}
         data-testid="tabs-scroller"

@@ -7,7 +7,6 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
 import UnifiedSendComposer from '@/components/communications/UnifiedSendComposer'
 import { zoneOfLocation } from '@/lib/location-time'
 
@@ -61,8 +60,7 @@ export default async function SendPage(props) {
   return (
     <div>
       <div className="mb-5">
-        <Link href="/communications" className="text-xs text-un1t-subtle hover:text-un1t-text">← Communications</Link>
-        <h1 className="text-xl font-semibold text-un1t-text mt-1">Send a WhatsApp</h1>
+        <h1 className="text-xl font-semibold text-un1t-text">Send a WhatsApp</h1>
         <p className="text-sm text-un1t-subtle">Pick who, write once, send now or schedule.</p>
       </div>
       <UnifiedSendComposer locationId={locationId} locationTimeZone={zoneOfLocation(user.activeLocation)} canEmail={canEmail} templates={templates} initialAudienceFilter={initialAudienceFilter} initialSegmentId={initialSegmentId} />
