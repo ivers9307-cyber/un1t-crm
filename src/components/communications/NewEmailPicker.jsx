@@ -80,9 +80,17 @@ export default function NewEmailPicker({ locationId, studioName = '', templates 
       {readFailed ? (
         <p className="mt-4 text-xs text-amber-700">The studio&apos;s templates could not be read just now, so only Blank is offered. Reload to try again.</p>
       ) : templates.length === 0 ? (
-        <p className="mt-4 text-xs text-un1t-subtle">
-          No marketing templates yet. <Link href="/communications/templates" className="underline hover:text-un1t-text">Save one under Templates</Link> and it shows up here.
-        </p>
+        // EMPTYSTATES.1 — an invitation, not a footnote.
+        <div className="mt-4 rounded-xl border border-dashed border-un1t-border p-5 max-w-md">
+          <p className="text-sm font-medium text-un1t-text mb-1">No saved templates yet</p>
+          <p className="text-xs text-un1t-subtle mb-3">
+            Start from Blank for a one-off. For emails you send again and again, design a template once and it
+            will show up here as a starting point.
+          </p>
+          <Link href="/communications/templates/email/new" className="text-xs font-medium underline text-un1t-text">
+            New email template
+          </Link>
+        </div>
       ) : null}
     </div>
   )

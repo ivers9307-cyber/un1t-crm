@@ -9,7 +9,7 @@
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { Plus, FileText, Mail, MessageCircle } from 'lucide-react'
+import { Plus, Mail, MessageCircle } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -130,6 +130,26 @@ export default async function TemplatesListPage(props) {
         </section>
       )}
 
+      {/* EMPTYSTATES.1 — an email channel with no templates said nothing at all
+          when WhatsApp templates were also shown. Say what a template is for
+          and where to start. */}
+      {canEmail && (channel === 'all' || channel === 'email') && !emailRes.error && (emailRes.data?.length ?? 0) === 0 && (
+        <section className="mb-6">
+          <div className="bg-un1t-surface border border-dashed border-un1t-border rounded-2xl p-8 text-center">
+            <Mail size={24} className="mx-auto mb-2 text-un1t-subtle" />
+            <h3 className="text-base font-semibold text-un1t-text mb-1">Start your first email template</h3>
+            <p className="text-sm text-un1t-subtle max-w-md mx-auto mb-4">
+              Design an email once with your studio&apos;s logo and colours, then start any campaign or automation
+              email from it instead of a blank page.
+            </p>
+            <Link href="/communications/templates/email/new"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-un1t-text text-un1t-bg px-3 py-2 text-sm font-medium hover:bg-un1t-accent">
+              New email template
+            </Link>
+          </div>
+        </section>
+      )}
+
       {(channel === 'all' || channel === 'whatsapp') && canWhatsapp && (
         <section className="mb-6">
           {channel === 'all' && (
@@ -143,13 +163,6 @@ export default async function TemplatesListPage(props) {
         </section>
       )}
 
-      {((emailRes.data?.length ?? 0) === 0) && !canWhatsapp && (
-        <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-10 text-center">
-          <FileText size={32} className="mx-auto mb-3 text-un1t-subtle" />
-          <h3 className="text-base font-semibold mb-2">No templates yet</h3>
-          <p className="text-sm text-un1t-subtle">Create your first reusable email or WhatsApp template using the buttons above.</p>
-        </div>
-      )}
     </div>
   )
 }
