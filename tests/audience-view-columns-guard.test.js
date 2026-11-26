@@ -35,7 +35,7 @@ const CLP_COLS = ['audience_location_id', 'loc_email_marketing', 'loc_sms_market
 // kind / status AT the audience studio (per-studio stage from contact_studios).
 // Not contacts columns: (a) and (b) never ask for them; pinned present here.
 const STUDIO_COLS = ['studio_stage_slug', 'studio_kind', 'studio_status']
-const VIRTUAL_TYPES = new Set(['tag', 'event', 'location_list'])
+const VIRTUAL_TYPES = new Set(['tag', 'event', 'location_list', 'un1t_visit'])
 
 /**
  * contacts columns deliberately NOT on the view: column → { why, expires }
