@@ -83,3 +83,21 @@ export const POST = withAuth({ permission: null, location: false }, async ({ use
   const from_address = await fromAddressReport(db, body.location_id, body)
   return NextResponse.json({ success: true, data, ...(from_address ? { from_address } : {}) })
 })
+
+// CAMPFILTER.1 — GET: the active studio's SENT email campaigns, newest first,
+// for the audience builder's "opened / clicked campaign" pickers. Names, ids
+// and send dates only. `email` at the active studio.
+export const GET = withAuth({ permission: 'email', location: true }, async ({ db, locationId }) => {
+  const { data, error } = await db
+    .from('campaigns')
+    .select('id, name, sent_at')
+    .eq('location_id', locationId)
+    .eq('status', 'sent')
+    .order('sent_at', { ascending: false })
+    .limit(200)
+  if (error) {
+    logError('communications', 'sent campaign list failed', { locationId, err: error })
+    return serverError()
+  }
+  return NextResponse.json({ success: true, data: data || [] })
+})

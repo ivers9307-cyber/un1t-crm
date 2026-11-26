@@ -225,6 +225,13 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // asked: "who is on the Hatch list" is a roll-call, not a send estimate.
   location_list:             { type: 'location_list', ops: ['eq', 'neq'] },
 
+  // CAMPFILTER.1 — virtual fields. Value = a campaigns UUID at the audience's
+  // own studio. `eq` keeps people who opened / clicked that campaign, `neq`
+  // removes them. Opens include mail-app machine opens (Apple Mail Privacy
+  // Protection), so "opened" overstates readers; clicks are the firmer signal.
+  campaign_opened:           { type: 'campaign_opened',  ops: ['eq', 'neq'] },
+  campaign_clicked:          { type: 'campaign_clicked', ops: ['eq', 'neq'] },
+
   // HATCHVISIT.1 — virtual field. Visits at a studio whose members live in
   // un1t.online (Hatch Street) are on un1t_clients.last_attended_at, not on
   // contacts.last_attended_at (which the Glofox sync owns and would
@@ -487,7 +494,7 @@ export function applyAudienceFilter(query, filter, { fields = AUDIENCE_FIELDS } 
     // participate in an OR disjunction with the scalar predicates, so under
     // OR logic we fail loudly rather than silently dropping them (which
     // would widen the audience to everyone matching the scalar OR).
-    if (fieldConfig.type === 'tag' || fieldConfig.type === 'event' || fieldConfig.type === 'location_list' || fieldConfig.type === 'un1t_visit') {
+    if (fieldConfig.type === 'tag' || fieldConfig.type === 'event' || fieldConfig.type === 'location_list' || fieldConfig.type === 'campaign_opened' || fieldConfig.type === 'campaign_clicked' || fieldConfig.type === 'un1t_visit') {
       if (useOr) {
         throw new InvalidAudienceFilterError(
           'OR logic is not supported together with tag, event or studio-list filters. Use AND, or send these as separate audiences.'
@@ -711,7 +718,7 @@ function virtualClauses(filter) {
   if (!filter?.filters?.length) return []
   return filter.filters.filter(f => {
     const cfg = AUDIENCE_FIELDS[f?.field]
-    return cfg && (cfg.type === 'tag' || cfg.type === 'event' || cfg.type === 'location_list' || cfg.type === 'un1t_visit')
+    return cfg && (cfg.type === 'tag' || cfg.type === 'event' || cfg.type === 'location_list' || cfg.type === 'campaign_opened' || cfg.type === 'campaign_clicked' || cfg.type === 'un1t_visit')
   })
 }
 
@@ -841,6 +848,40 @@ async function contactIdsOnList(db, locationId) {
 const TAG_EMPTY = 'tag filter requires a non-empty string value'
 const EVENT_EMPTY = 'event filter requires a non-empty event id'
 const LIST_EMPTY = 'studio-list filter requires a non-empty location id'
+const CAMPAIGN_EMPTY = 'campaign filter requires a campaign id'
+
+// CAMPFILTER.1 — contact ids that opened (or clicked) one campaign. The
+// campaign must belong to the audience's studio: another studio's id is an
+// error, never a silent read of its recipients.
+async function contactIdsEngagedWithCampaign(db, campaignId, locationId, kind) {
+  if (!locationId) throw new InvalidAudienceFilterError('campaign filter needs a studio')
+  const { data: campaign, error: campErr } = await db
+    .from('campaigns').select('id, location_id').eq('id', campaignId).maybeSingle()
+  if (campErr) throw new InvalidAudienceFilterError(`campaign lookup failed: ${campErr.message}`)
+  if (!campaign || campaign.location_id !== locationId) {
+    throw new InvalidAudienceFilterError('campaign filter: that campaign is not at this studio')
+  }
+  let rows
+  try {
+    rows = await selectAll((from, to) => {
+      let q = db.from('campaign_recipients').select('contact_id').eq('campaign_id', campaignId)
+      q = kind === 'clicked' ? q.not('clicked_at', 'is', null) : q.or('opened_at.not.is.null,clicked_at.not.is.null')
+      return q.order('contact_id', { ascending: true }).range(from, to)
+    })
+  } catch (err) {
+    throw new InvalidAudienceFilterError(`campaign engagement lookup failed: ${err.message}`)
+  }
+  return [...new Set(rows.map(r => r?.contact_id).filter(Boolean))]
+}
+
+/** `campaign_opened` / `campaign_clicked` `eq|neq <campaignId>` → id sets. */
+export async function campaignEngagementIdSets({ db, filter, locationId }) {
+  const opened = await idSetsFor({ filter, type: 'campaign_opened', onEmpty: CAMPAIGN_EMPTY, load: (id) => contactIdsEngagedWithCampaign(db, id, locationId, 'opened') })
+  const clicked = await idSetsFor({ filter, type: 'campaign_clicked', onEmpty: CAMPAIGN_EMPTY, load: (id) => contactIdsEngagedWithCampaign(db, id, locationId, 'clicked') })
+  let include = opened.include
+  if (clicked.include !== null) include = intersect(include, clicked.include)
+  return { include, exclude: new Set([...opened.exclude, ...clicked.exclude]) }
+}
 const VISIT_DAYS_INVALID = 'visited-within filter requires one of 30, 60, 90, 180 or 365 days'
 /** HATCHVISIT.1 — the windows the visited-within filter accepts. */
 export const UN1T_VISIT_DAYS = Object.freeze(['30', '60', '90', '180', '365'])
@@ -921,6 +962,7 @@ export async function resolveVirtualIdSets({ db, filter, locationId }) {
     await eventIdSets({ db, filter }),
     await locationListIdSets({ db, filter }),
     await un1tVisitIdSets({ db, filter, locationId }),
+    await campaignEngagementIdSets({ db, filter, locationId }),
   ]) {
     if (sets.include !== null) include = intersect(include, sets.include)
     for (const id of sets.exclude) exclude.add(id)
@@ -1078,6 +1120,9 @@ export function validateAudienceFilter(filter) {
     }
     if (cfg.type === 'location_list' && (typeof f.value !== 'string' || !f.value.trim())) {
       throw new InvalidAudienceFilterError(LIST_EMPTY)
+    }
+    if ((cfg.type === 'campaign_opened' || cfg.type === 'campaign_clicked') && (typeof f.value !== 'string' || !f.value.trim())) {
+      throw new InvalidAudienceFilterError(CAMPAIGN_EMPTY)
     }
     if (cfg.type === 'un1t_visit' && !UN1T_VISIT_DAYS.includes(String(f.value ?? '').trim())) {
       throw new InvalidAudienceFilterError(VISIT_DAYS_INVALID)
