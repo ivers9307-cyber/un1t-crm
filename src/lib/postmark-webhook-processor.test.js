@@ -1469,3 +1469,29 @@ describe('processPostmarkEvent — SubscriptionChange reactivation reaches every
     }
   })
 })
+
+// ── MACHINEOPEN.1 — privacy-proxy opens are not counted ─────────────────────
+describe('processPostmarkEvent — machine opens (MACHINEOPEN.1)', () => {
+  it('isMachineOpen: bare Mozilla/5.0 with no client is a machine; a named client is a person', async () => {
+    const { isMachineOpen } = await import('./postmark-webhook-processor.js')
+    expect(isMachineOpen({ UserAgent: 'Mozilla/5.0', Client: { Name: null } })).toBe(true)
+    expect(isMachineOpen({ UserAgent: 'Mozilla/5.0', Client: { Name: 'Gmail ' } })).toBe(false)
+    expect(isMachineOpen({ UserAgent: 'YahooMailProxy; https://help.yahoo.com', Client: {} })).toBe(false)
+    expect(isMachineOpen({ UserAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15' })).toBe(false)
+  })
+
+  it('a machine open stamps nothing as opened and calls no engagement RPC', async () => {
+    const db = stubRpcFailureDb({ send: { id: 's1', contact_id: 'c1', campaign_id: 'camp-1' }, failing: null })
+    const r = await processPostmarkEvent(db, { RecordType: 'Open', MessageID: 'pm-1', FirstOpen: true, UserAgent: 'Mozilla/5.0', Client: { Name: null } })
+    expect(r.ok).toBe(true)
+    for (const fn of ['stamp_contact_email_open', 'increment_contact_opens', 'increment_email_send_opens', 'increment_campaign_metric']) {
+      expect(db.calls).not.toContain(fn)
+    }
+  })
+
+  it('a person open still counts', async () => {
+    const db = stubRpcFailureDb({ send: { id: 's1', contact_id: 'c1', campaign_id: null }, failing: null })
+    await processPostmarkEvent(db, { RecordType: 'Open', MessageID: 'pm-1', FirstOpen: true, UserAgent: 'Mozilla/5.0 (Windows NT 10.0)', Client: { Name: 'Gmail' } })
+    expect(db.calls).toContain('stamp_contact_email_open')
+  })
+})
