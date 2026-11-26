@@ -225,6 +225,15 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // asked: "who is on the Hatch list" is a roll-call, not a send estimate.
   location_list:             { type: 'location_list', ops: ['eq', 'neq'] },
 
+  // HATCHVISIT.1 — virtual field. Visits at a studio whose members live in
+  // un1t.online (Hatch Street) are on un1t_clients.last_attended_at, not on
+  // contacts.last_attended_at (which the Glofox sync owns and would
+  // overwrite). Value = a number of days as a string ('30' … '365'):
+  // `eq N` keeps people who visited THIS studio in the last N days, `neq N`
+  // removes them (so it also keeps people who never visited). Resolved to ids
+  // against the audience's own studio, like the other virtual fields.
+  un1t_visited_within:       { type: 'un1t_visit', ops: ['eq', 'neq'] },
+
   // PILLAR2 — explicit recipients. Deliberately NOT in AudienceBuilder's
   // FIELD_OPTIONS (operators don't filter on raw UUIDs): the unified send
   // composer's "pick people" mode constructs `{ field:'id', op:'in',
@@ -478,7 +487,7 @@ export function applyAudienceFilter(query, filter, { fields = AUDIENCE_FIELDS } 
     // participate in an OR disjunction with the scalar predicates, so under
     // OR logic we fail loudly rather than silently dropping them (which
     // would widen the audience to everyone matching the scalar OR).
-    if (fieldConfig.type === 'tag' || fieldConfig.type === 'event' || fieldConfig.type === 'location_list') {
+    if (fieldConfig.type === 'tag' || fieldConfig.type === 'event' || fieldConfig.type === 'location_list' || fieldConfig.type === 'un1t_visit') {
       if (useOr) {
         throw new InvalidAudienceFilterError(
           'OR logic is not supported together with tag, event or studio-list filters. Use AND, or send these as separate audiences.'
@@ -702,7 +711,7 @@ function virtualClauses(filter) {
   if (!filter?.filters?.length) return []
   return filter.filters.filter(f => {
     const cfg = AUDIENCE_FIELDS[f?.field]
-    return cfg && (cfg.type === 'tag' || cfg.type === 'event' || cfg.type === 'location_list')
+    return cfg && (cfg.type === 'tag' || cfg.type === 'event' || cfg.type === 'location_list' || cfg.type === 'un1t_visit')
   })
 }
 
@@ -832,6 +841,36 @@ async function contactIdsOnList(db, locationId) {
 const TAG_EMPTY = 'tag filter requires a non-empty string value'
 const EVENT_EMPTY = 'event filter requires a non-empty event id'
 const LIST_EMPTY = 'studio-list filter requires a non-empty location id'
+const VISIT_DAYS_INVALID = 'visited-within filter requires one of 30, 60, 90, 180 or 365 days'
+/** HATCHVISIT.1 — the windows the visited-within filter accepts. */
+export const UN1T_VISIT_DAYS = Object.freeze(['30', '60', '90', '180', '365'])
+
+// HATCHVISIT.1 — contact ids with a un1t.online visit at the studio within
+// `days`. Paginated like the other loaders; a DB failure is a 400-path error.
+async function contactIdsVisitedWithin(db, locationId, days) {
+  if (!locationId) throw new InvalidAudienceFilterError('visited-within filter needs a studio')
+  if (!UN1T_VISIT_DAYS.includes(String(days))) throw new InvalidAudienceFilterError(VISIT_DAYS_INVALID)
+  const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000).toISOString()
+  let rows
+  try {
+    rows = await selectAll((from, to) => db
+      .from('un1t_clients')
+      .select('contact_id')
+      .eq('location_id', locationId)
+      .gte('last_attended_at', since)
+      .not('contact_id', 'is', null)
+      .order('contact_id', { ascending: true })
+      .range(from, to))
+  } catch (err) {
+    throw new InvalidAudienceFilterError(`visit lookup failed: ${err.message}`)
+  }
+  return [...new Set(rows.map(r => r?.contact_id).filter(Boolean))]
+}
+
+/** `un1t_visited_within eq N` / `neq N` → id sets at the audience's studio. */
+export async function un1tVisitIdSets({ db, filter, locationId }) {
+  return idSetsFor({ filter, type: 'un1t_visit', onEmpty: VISIT_DAYS_INVALID, load: (days) => contactIdsVisitedWithin(db, locationId, days) })
+}
 
 /** `tag eq X` / `tag neq X` → id sets (mig 085 retargeting tags). */
 export async function tagIdSets({ db, filter, locationId }) {
@@ -881,6 +920,7 @@ export async function resolveVirtualIdSets({ db, filter, locationId }) {
     await tagIdSets({ db, filter, locationId }),
     await eventIdSets({ db, filter }),
     await locationListIdSets({ db, filter }),
+    await un1tVisitIdSets({ db, filter, locationId }),
   ]) {
     if (sets.include !== null) include = intersect(include, sets.include)
     for (const id of sets.exclude) exclude.add(id)
@@ -1038,6 +1078,9 @@ export function validateAudienceFilter(filter) {
     }
     if (cfg.type === 'location_list' && (typeof f.value !== 'string' || !f.value.trim())) {
       throw new InvalidAudienceFilterError(LIST_EMPTY)
+    }
+    if (cfg.type === 'un1t_visit' && !UN1T_VISIT_DAYS.includes(String(f.value ?? '').trim())) {
+      throw new InvalidAudienceFilterError(VISIT_DAYS_INVALID)
     }
   }
 }

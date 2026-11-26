@@ -229,6 +229,13 @@ export const FIELD_OPTIONS = [
   // Options load from /api/locations. Value is a locations id.
   { value: 'location_list',         label: "On another studio's list", type: 'location-select', group: 'Studios',
     hint: 'Who holds a comms record at that studio — a waitlist or registered-interest roll-call, not a send estimate. Consent is applied separately by the send itself.' },
+  // HATCHVISIT.1 — virtual field, resolved server-side from un1t_clients at
+  // THIS studio. For studios on un1t.online (Hatch Street), whose visits are
+  // not on the contact record.
+  { value: 'un1t_visited_within',   label: 'Visited here in the last (un1t.online)', type: 'select', group: 'Studios',
+    hint: 'Visits recorded by un1t.online at this studio. "is" keeps people who came in within that many days; "is not" keeps everyone else, including people who never came. Studios on Glofox use Last Attended instead.',
+    options: ['30', '60', '90', '180', '365'],
+    valueLabels: { 30: '30 days', 60: '60 days', 90: '90 days', 180: '180 days', 365: '365 days' } },
   // ── Dates & tenure ──────────────────────────────────────────────
   { value: 'created_at',            label: 'Contact Created',       type: 'date',
     group: 'Dates & tenure',
