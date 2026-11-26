@@ -258,3 +258,35 @@ describe('NodeConfig — branch predicate picker', () => {
     expect(reply.container.textContent).not.toContain('—')
   })
 })
+
+describe('NodeConfig — email step template picker (FLOWEMAIL.1)', () => {
+  const emailNode = (config) => ({ id: 'e1', type: 'email', config })
+  const EMAIL_TEMPLATES = [{ id: 'tpl-1', name: 'Welcome' }, { id: 'tpl-2', name: 'Win-back' }]
+
+  it('lists saved templates and starts on "Write HTML here" with the HTML box', () => {
+    const onPatch = vi.fn()
+    const u = render(<NodeConfig node={emailNode({ subject: 'Hi', html_content: '<p>x</p>' })} onPatch={onPatch} templates={[]} emailTemplates={EMAIL_TEMPLATES} />)
+    expect(u.getByRole('option', { name: 'Welcome' })).toBeTruthy()
+    expect(u.getByDisplayValue('<p>x</p>')).toBeTruthy()
+  })
+
+  it('picking a template sets template_id and clears the inline HTML', () => {
+    const onPatch = vi.fn()
+    const u = render(<NodeConfig node={emailNode({ subject: '', html_content: '<p>old</p>' })} onPatch={onPatch} templates={[]} emailTemplates={EMAIL_TEMPLATES} />)
+    fireEvent.change(u.getByDisplayValue('Write HTML here'), { target: { value: 'tpl-2' } })
+    expect(onPatch).toHaveBeenCalledWith({ template_id: 'tpl-2', html_content: '' })
+  })
+
+  it('with a template chosen, hides the HTML box and links to the designer', () => {
+    const u = render(<NodeConfig node={emailNode({ subject: '', template_id: 'tpl-1' })} onPatch={vi.fn()} templates={[]} emailTemplates={EMAIL_TEMPLATES} />)
+    expect(u.queryByPlaceholderText('<p>Hello {{first_name}}</p>')).toBeNull()
+    expect(u.getByRole('link', { name: /open the template in the designer/i }).getAttribute('href')).toBe('/communications/templates/email/tpl-1')
+  })
+
+  it('switching back to "Write HTML here" clears the template', () => {
+    const onPatch = vi.fn()
+    const u = render(<NodeConfig node={emailNode({ subject: '', template_id: 'tpl-1' })} onPatch={onPatch} templates={[]} emailTemplates={EMAIL_TEMPLATES} />)
+    fireEvent.change(u.getByDisplayValue('Welcome'), { target: { value: '' } })
+    expect(onPatch).toHaveBeenCalledWith({ template_id: null })
+  })
+})

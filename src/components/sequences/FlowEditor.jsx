@@ -41,6 +41,7 @@ export default function FlowEditor({ initialGraph, sequence }) {
   const [feedback, setFeedback] = useState(null)
   const [issues, setIssues] = useState([])
   const [templates, setTemplates] = useState([])
+  const [emailTemplates, setEmailTemplates] = useState([])
   const status = sequence?.status || 'draft'
 
   // Approved WhatsApp templates for this location, for the whatsapp-node picker.
@@ -51,6 +52,20 @@ export default function FlowEditor({ initialGraph, sequence }) {
     fetch(`/api/whatsapp/templates?location_id=${loc}&status=APPROVED`)
       .then(r => r.json())
       .then(d => { if (active && d?.success) setTemplates(d.templates || []) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [sequence?.location_id])
+
+  // FLOWEMAIL.1 — saved email templates at this location, for the email-node
+  // picker. A step that names a template sends the template's designed HTML
+  // (steps.js resolves template_id when html_content is empty).
+  useEffect(() => {
+    const loc = sequence?.location_id
+    if (!loc) return
+    let active = true
+    fetch(`/api/templates?location_id=${loc}`)
+      .then(r => r.json())
+      .then(d => { if (active && d?.success) setEmailTemplates(d.templates || []) })
       .catch(() => {})
     return () => { active = false }
   }, [sequence?.location_id])
@@ -90,7 +105,7 @@ export default function FlowEditor({ initialGraph, sequence }) {
     })); touch()
   }
   const toggle = (id) => setExpandedId(prev => prev === id ? null : id)
-  const ctx = { expandedId, errorsByNode, add, patch, remove, move, toggle, templates, tagVocabulary }
+  const ctx = { expandedId, errorsByNode, add, patch, remove, move, toggle, templates, emailTemplates, tagVocabulary, sequenceId: sequence?.id || null }
 
   const saveDraft = async () => {
     setBusy('save')
@@ -186,7 +201,7 @@ function LaneView({ lane, lanePath, ctx }) {
                   expanded={ctx.expandedId === item.id} errors={ctx.errorsByNode.get(item.id) || []}
                   onToggle={() => ctx.toggle(item.id)} onMove={(dir) => ctx.move(lanePath, i, dir)}
                   onRemove={() => ctx.remove(lanePath, i)} onPatch={(p) => ctx.patch(lanePath, i, p)}
-                  templates={ctx.templates} />}
+                  templates={ctx.templates} emailTemplates={ctx.emailTemplates} sequenceId={ctx.sequenceId} />}
           </div>
         )
       })}

@@ -19,7 +19,8 @@ trial-no-show follow-ups, "we miss you", booking nudges — we need a
 a coach. That template lives in this doc.
 
 The other half of the fix is domain reputation: SPF/DKIM/DMARC aligned,
-marketing on a subdomain, suppress dead addresses.
+marketing on a subdomain, suppress dead addresses (bounces and complaints,
+not people who have stopped opening; see Engagement hygiene).
 
 ## What signals Promotions to Gmail
 
@@ -90,8 +91,19 @@ and a bad day on marketing doesn't break the trial-confirmation flow.
 
 ## Engagement hygiene
 
-- Suppress addresses that haven't opened in 90 days. Sending to dead
-  addresses is the fastest way to wreck domain reputation.
+- **Do not suppress people for not opening.** An earlier version of this
+  section said to suppress addresses that had not opened in 90 days. That
+  rule was built (mig 395) and then retired deliberately (NOENGSUP.1, mig
+  537, 12 Aug 2026): in a gym a member who goes quiet for a season is
+  exactly who a win-back email is for, and opens are unreliable anyway
+  (Apple Mail Privacy Protection records opens nobody made). Not opening
+  lowers how often someone is mailed; it never stops them being mailed.
+- Contacts who have shown no activity (no booking, payment, attendance or
+  click) for a long stretch get a short re-engagement pass and a person's
+  review, then seasonal sends only. Nothing removes them automatically.
+- Dead addresses are a different thing and do get suppressed: hard bounces
+  and spam complaints at once (Postmark webhook), and repeat soft bounces
+  with no delivery ever through the nightly repeat-bounce sweep (mig 515).
 - Remove hard-bounce addresses immediately.
 - Don't reuse purchased / scraped lists. Ever.
 - If we ever do a re-engagement push to dormant addresses, do it as a
