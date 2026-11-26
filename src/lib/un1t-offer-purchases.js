@@ -71,7 +71,10 @@ export const OFFER_SET_PASSWORD_BODY = "Thanks for your Black Friday purchase at
 
 const OFFER_COLS = 'id, location_id, name, bonus_headline, un1t_product_id, starts_at, ends_at'
 const TX_COLS = 'un1t_id, un1t_user_id, contact_id, product_id, type, amount_cents, currency, refunded, remote_created_at'
-const PAGE_ROW_COLS = 'id, offer_id, location_id, contact_id, buyer_name, buyer_email, buyer_phone, amount_cents, currency, un1t_user_id, un1t_product_id, state, last_error, created_at'
+// payment_provider rides along to notifyStaffOfPaidPurchase: without it the
+// sale push is keyed on the row (sale:offer:<id>) instead of the transaction
+// (sale:un1t:<tx>) the Hatch sync rings under, and one sale rings twice.
+const PAGE_ROW_COLS = 'id, offer_id, location_id, contact_id, buyer_name, buyer_email, buyer_phone, amount_cents, currency, payment_provider, un1t_user_id, un1t_product_id, state, last_error, created_at'
 
 class ReadFailed extends Error {
   constructor(what, code) {

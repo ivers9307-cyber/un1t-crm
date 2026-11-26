@@ -75,6 +75,7 @@ function makeDb({ offers = [OFFER_3M], txs = [], purchases = [], clients = [{ lo
       let kind = 'select'
       let payload = null
       let returning = false
+      let cols = null
       const settle = async (mode) => {
         if (kind === 'update') {
           writes.push({ table, kind, fields: payload, filters: [...filters] })
@@ -103,11 +104,16 @@ function makeDb({ offers = [OFFER_3M], txs = [], purchases = [], clients = [{ lo
           out = [...out].sort((a, b) => (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * (asc ? 1 : -1))
         }
         if (range) out = out.slice(range[0], range[1] + 1)
-        out = out.map((r) => ({ ...r }))
+        // Like PostgREST, hand back only the columns the select named.
+        out = out.map((r) => (cols ? Object.fromEntries(cols.filter((c) => c in r).map((c) => [c, r[c]])) : { ...r }))
         return { data: mode === 'one' ? out[0] ?? null : out, error: null }
       }
       const b = {
-        select: () => { if (kind !== 'select') returning = true; return b },
+        select: (list) => {
+          if (kind !== 'select') returning = true
+          else if (typeof list === 'string' && list.trim() !== '*') cols = list.split(',').map((c) => c.trim())
+          return b
+        },
         update: (p) => { kind = 'update'; payload = p; return b },
         insert: (p) => { kind = 'insert'; payload = p; return b },
         order: (col, { ascending = true } = {}) => { orders.push([col, ascending]); return b },
@@ -217,6 +223,16 @@ describe('sweepUn1tOfferPurchases', () => {
     })
     expect(deps).toEqual({ sendUn1tAccountEmail: mocks.sendAccountEmail })
     expect(OFFER_SET_PASSWORD_BODY).toBe("Thanks for your Black Friday purchase at UN1T Hatch Street. We've set up your un1t.online account. Check your inbox for a code to set your password, then book your first class in the app.")
+  })
+
+  it('a settled page row reaches the staff alert as a un1t.online sale, so its push shares the sync\'s key', async () => {
+    const { db } = makeDb({
+      purchases: [pageRow({ created_at: '2026-11-30T23:50:00.000Z' })],
+      txs: [tx({ remote_created_at: '2026-12-01T00:30:00.000Z' })],
+    })
+    await sweepUn1tOfferPurchases(db, LOC, { now: () => Date.parse('2026-12-01T01:00:00.000Z') })
+    expect(mocks.notify).toHaveBeenCalledTimes(1)
+    expect(mocks.notify.mock.calls[0][1]).toMatchObject({ id: 'op1', payment_provider: 'un1t_online', un1t_transaction_id: 'tx1' })
   })
 
   it('a page row created after the window closed is not honoured', async () => {
