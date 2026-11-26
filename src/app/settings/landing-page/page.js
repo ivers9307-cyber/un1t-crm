@@ -10,6 +10,8 @@
 //      GET /api/chooser-settings reads them (scoped by the organisation id).
 // Any other query (the retired ?location_id= studio editor) gets the list.
 
+import EmbedFormSnippets from '@/components/settings/EmbedFormSnippets'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import Link from 'next/link'
@@ -58,6 +60,14 @@ async function pagesListMode(db, user) {
     .map((l) => ({ id: l.id, name: l.name || 'Studio' }))
     .sort((a, b) => a.name.localeCompare(b.name))
   const canCreateAll = isActiveOrgAdmin(user)
+  // EMBEDFORM.1 — one pasteable sign-up form per visible studio page.
+  const studioPages = (pages || []).filter((p) => p.kind === 'studio' && p.slug && p.publish_state === 'live' && p.primary_location_id)
+  const forms = await Promise.all(studioPages.map(async (p) => {
+    let baseUrl = ''
+    try { baseUrl = await resolveCustomerBaseUrl(db, p.primary_location_id) } catch { baseUrl = '' }
+    const studio = (p.studios || []).find((st) => st.location_id === p.primary_location_id)
+    return { slug: p.slug, name: studio?.name || p.title || p.slug, baseUrl }
+  }))
   return (
     <div className="p-6 max-w-[1800px]">
       <PagesList
@@ -67,6 +77,7 @@ async function pagesListMode(db, user) {
         canCreateAll={canCreateAll}
         showFrontPage={canCreateAll}
       />
+      <EmbedFormSnippets forms={forms.filter((f) => f.baseUrl)} />
     </div>
   )
 }
