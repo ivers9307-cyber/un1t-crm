@@ -117,7 +117,8 @@ export default function UnsubscribePage({ token, locationId = null, campaignId =
       const res = await fetch(`/api/unsubscribe/${token}${qs ? `?${qs}` : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channels }),
+        // UNSUBPATH.1 — `auto` tells the route this was the arrival submit.
+        body: JSON.stringify({ channels, auto }),
         // UNSUBAUTO.3 — "Processing…" has no controls and no escape, so an
         // unbounded fetch can hold a flaky mobile connection there for minutes;
         // a visitor who gives up and closes the tab is unrecorded, which is a

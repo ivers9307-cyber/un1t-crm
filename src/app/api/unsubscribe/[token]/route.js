@@ -66,11 +66,27 @@ export async function POST(request, props) {
   // Parse the body if any. Tolerate empty / non-JSON for the
   // List-Unsubscribe path which doesn't always send a content-type.
   let requested = null
+  // UNSUBPATH.1 — which door the opt-out came through, written to the consent
+  // row's `note` with the user agent. Both doors write source
+  // 'one_click_unsubscribe', so until now a mail provider's header POST and
+  // the page's arrival auto-submit were indistinguishable in consent_log, and
+  // neither stored a user agent. Measured 26 Nov 2026: 79 of 263 page-or-header
+  // opt-outs in 90 days landed within two minutes of the send, and those were
+  // later resubscribed at about eight times the rate of the rest, which is the
+  // shape of security scanners that run JavaScript. This records the evidence;
+  // it changes nothing about what is applied.
+  //   header     - no JSON body (RFC 8058 POST from the mail provider)
+  //   page_auto  - the page's on-arrival submit (UNSUBAUTO.1)
+  //   page_click - a button press on the page
+  let path = 'header'
   try {
     const text = await request.text()
     if (text) {
       const json = JSON.parse(text)
-      if (Array.isArray(json?.channels)) requested = json.channels
+      if (Array.isArray(json?.channels)) {
+        requested = json.channels
+        path = json?.auto === true ? 'page_auto' : 'page_click'
+      }
     }
   } catch {
     // Ignore — fall through to the default below.
@@ -221,6 +237,8 @@ export async function POST(request, props) {
         action: CONSENT_ACTIONS.OPT_OUT,
         source: 'one_click_unsubscribe',
         ip_address: ipAddress,
+        user_agent: userAgent ? userAgent.slice(0, 500) : null,
+        note: `path=${path}`,
       })
     }
   }
