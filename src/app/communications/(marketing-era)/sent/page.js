@@ -142,7 +142,7 @@ export default async function SendsHistoryPage() {
                 const Icon = r.channel === 'email' ? Mail : MessageCircle
                 return (
                   <tr key={`${r.channel}-${r.id}`} className="border-t border-un1t-border hover:bg-un1t-bg/30">
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 max-w-0 w-full">
                       <Link href={r.detail} className="flex items-center gap-2 min-w-0">
                         <Icon size={15} className="text-un1t-subtle shrink-0" />
                         <span className="text-un1t-text truncate">{r.name || 'Untitled'}</span>
@@ -171,7 +171,8 @@ export default async function SendsHistoryPage() {
                         )
                       })()}
                     </td>
-                    <td className="px-4 py-3 text-right text-un1t-subtle tabular-nums">
+                    {/* MKTSHELL.3 — one line per campaign: the counts and the date never wrap. */}
+                    <td className="px-4 py-3 text-right text-un1t-subtle tabular-nums whitespace-nowrap">
                       {(r.status === 'sent' || r.status === 'sending')
                         ? <>
                             {(r.total_sent || 0).toLocaleString()}
@@ -185,17 +186,17 @@ export default async function SendsHistoryPage() {
                         : '—'}
                     </td>
                     {/* MKTSHELL.2 — email only; WhatsApp rows and anything not yet sent read as a dash. */}
-                    <td className="px-4 py-3 text-right text-un1t-subtle hidden lg:table-cell tabular-nums">
+                    <td className="px-4 py-3 text-right text-un1t-subtle hidden lg:table-cell tabular-nums whitespace-nowrap">
                       {r.channel === 'email' && r.status === 'sent' && r.delivered != null
                         ? r.delivered.toLocaleString()
                         : '—'}
                     </td>
-                    <td className="px-4 py-3 text-right text-un1t-subtle hidden lg:table-cell tabular-nums">
+                    <td className="px-4 py-3 text-right text-un1t-subtle hidden lg:table-cell tabular-nums whitespace-nowrap">
                       {r.channel === 'email' && r.status === 'sent' && r.clicked != null
                         ? <>{r.clicked.toLocaleString()}{r.click_rate != null ? <span className="text-un1t-subtle/70"> · {pct(r.click_rate)}</span> : null}</>
                         : '—'}
                     </td>
-                    <td className="px-4 py-3 text-right text-un1t-subtle hidden sm:table-cell tabular-nums">
+                    <td className="px-4 py-3 text-right text-un1t-subtle hidden sm:table-cell tabular-nums whitespace-nowrap">
                       {r.status === 'scheduled' ? `⏱ ${fmtDate(r.scheduled_at)}` : fmtDate(r.sent_at || r.created_at)}
                     </td>
                   </tr>
