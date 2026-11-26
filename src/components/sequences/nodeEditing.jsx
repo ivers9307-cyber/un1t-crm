@@ -48,7 +48,7 @@ export function NodeCardHeader({ node, isFirst, isLast, expanded, onToggle, onMo
 }
 
 // Full step card (non-branch). Branch cards are assembled in FlowEditor.
-export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onToggle, onMove, onRemove, onPatch, templates, tagVocabulary }) {
+export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onToggle, onMove, onRemove, onPatch, templates, emailTemplates, tagVocabulary }) {
   const hasErr = errors.length > 0
   return (
     <div className={`w-72 bg-un1t-surface border rounded-lg shadow-sm ${hasErr ? 'border-rose-500/40' : 'border-un1t-border'}`}>
@@ -56,7 +56,7 @@ export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onTo
       {hasErr && !expanded && <p className="px-4 pb-2 -mt-1 text-xs text-rose-700">{errors[0]}</p>}
       {expanded && (
         <div className="border-t border-un1t-border px-4 py-3 space-y-3">
-          <NodeConfig node={node} onPatch={onPatch} templates={templates} tagVocabulary={tagVocabulary} />
+          <NodeConfig node={node} onPatch={onPatch} templates={templates} emailTemplates={emailTemplates} tagVocabulary={tagVocabulary} />
           {hasErr && <ul className="text-xs text-rose-700 list-disc pl-4">{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
         </div>
       )}
@@ -136,18 +136,47 @@ export function variablesAfterTemplateChange(currentVariables, prevTemplateId, n
   return carried
 }
 
-export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
+export function NodeConfig({ node, onPatch, templates, emailTemplates, tagVocabulary }) {
   const c = node.config || {}
   switch (node.type) {
-    case 'email':
+    case 'email': {
+      // FLOWEMAIL.1 — a saved template (designed in the full editor) or HTML
+      // written here. Picking a template clears html_content, because the
+      // sender uses html_content first and only falls back to template_id
+      // when it is empty (steps.js); keeping both would silently send the
+      // old HTML. A blank subject uses the template's own subject.
+      const list = emailTemplates || []
+      const tplId = c.template_id || ''
+      const usingTemplate = !!tplId
+      const missing = usingTemplate && list.length > 0 && !list.some(t => t.id === tplId)
       return (
         <>
-          <Labeled label="Subject"><Text value={c.subject} onChange={v => onPatch({ subject: v })} placeholder="Email subject" /></Labeled>
-          <Labeled label="Body (HTML)" hint="Plain HTML. Use the classic editor for the rich designer.">
-            <Area value={c.html_content} onChange={v => onPatch({ html_content: v })} rows={4} placeholder="<p>Hello {{first_name}}</p>" />
+          <Labeled label="Content" hint={list.length ? 'A saved template uses the full designer. Or write HTML here.' : 'No saved email templates at this location yet. Write HTML here, or make one under Templates.'}>
+            <select className={fieldCls} value={tplId} onChange={e => {
+              const next = e.target.value || null
+              onPatch(next ? { template_id: next, html_content: '' } : { template_id: null })
+            }}>
+              <option value="">Write HTML here</option>
+              {list.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              {missing && <option value={tplId}>Template no longer available</option>}
+            </select>
           </Labeled>
+          <Labeled label="Subject" hint={usingTemplate ? "Leave blank to use the template's subject." : undefined}>
+            <Text value={c.subject} onChange={v => onPatch({ subject: v })} placeholder={usingTemplate ? "Template's subject" : 'Email subject'} />
+          </Labeled>
+          {usingTemplate ? (
+            <p className="text-[11px] text-un1t-subtle">
+              <a href={`/communications/templates/email/${tplId}`} target="_blank" rel="noopener noreferrer" className="underline text-un1t-text">Open the template in the designer</a>
+              {' '}to change what this step sends. Changes apply to the next email this step sends.
+            </p>
+          ) : (
+            <Labeled label="Body (HTML)" hint="Plain HTML. For the full designer, save a template and pick it above.">
+              <Area value={c.html_content} onChange={v => onPatch({ html_content: v })} rows={4} placeholder="<p>Hello {{first_name}}</p>" />
+            </Labeled>
+          )}
         </>
       )
+    }
     case 'whatsapp': {
       const list = templates || []
       const selected = list.find(t => t.id === c.template_id)
