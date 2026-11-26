@@ -1,7 +1,7 @@
 {
   "format": 1,
-  "through_migration": 875,
-  "latest_applied_version": "20261122223601",
+  "through_migration": 876,
+  "latest_applied_version": "20261126224744",
   "relations": {
     "ac_devices": {"kind":"table","rls":true,"columns":[["id","uuid",false,true],["location_id","uuid",false,false],["label","text",false,false],["provider","text",false,false],["provider_device_id","text",false,false],["default_mode","text",true,true],["default_temp_c","integer",true,true],["default_fan","text",true,true],["session_minutes","integer",true,true],["enabled","boolean",false,true],["created_at","timestamp with time zone",false,true],["updated_at","timestamp with time zone",false,true],["device_group","text",true,false],["external_auto_off_minutes","integer",true,false],["last_state","jsonb",true,false],["last_state_at","timestamp with time zone",true,false]]},
     "ac_external_starts": {"kind":"table","rls":true,"columns":[["device_id","uuid",false,false],["first_seen_at","timestamp with time zone",false,true],["expected_off_at","timestamp with time zone",false,false],["created_at","timestamp with time zone",false,true],["updated_at","timestamp with time zone",false,true]]},
@@ -424,6 +424,7 @@
     ["roster_publish_snapshots_refuse_update","","trigger",false],
     ["scan_straps_for_contact","","TABLE(device_key text, protocol text, name text, rssi integer, last_bpm integer, seen_at timestamp with time zone, bridge_name text)",true],
     ["sell_raffle_tickets","p_raffle_id uuid, p_request_id uuid, p_contact_id uuid, p_buyer_name text, p_buyer_email text, p_quantity integer, p_payment_method text, p_sold_by uuid","raffle_sales",true],
+    ["sequence_outcome_stats","p_sequence_id uuid, p_window_days integer","TABLE(cohort text, contacts bigint, event_registrations bigint, class_attendances bigint, purchases bigint, purchase_cents bigint)",false],
     ["shift_assignments_warn_overlap","","trigger",false],
     ["stamp_contact_email_click","p_contact_id uuid, p_at timestamp with time zone","void",false],
     ["stamp_contact_email_open","p_contact_id uuid, p_at timestamp with time zone","void",false],
