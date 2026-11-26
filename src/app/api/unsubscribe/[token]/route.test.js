@@ -170,3 +170,38 @@ describe('POST /api/unsubscribe/[token] — Postmark suppression (PMSUPP.1)', ()
     expect(suppressAtPostmark).not.toHaveBeenCalled()
   })
 })
+
+describe('POST /api/unsubscribe/[token] — records the path and user agent (UNSUBPATH.1)', () => {
+  const logRows = (db) => db.statements
+    .filter((s) => s.table === 'consent_log' && s.op === 'insert')
+    .flatMap((s) => (Array.isArray(s.payload) ? s.payload : [s.payload]))
+
+  const reqWithUa = (body, ua) => ({
+    url: `https://crm.test/api/unsubscribe/${TOKEN}`,
+    headers: { get: (h) => (h === 'user-agent' ? ua : null) },
+    text: async () => body,
+  })
+
+  it('marks a body-less POST as the mail provider header path', async () => {
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    await POST(reqWithUa('', 'GoogleOneClick/1.0'), { params: Promise.resolve({ token: TOKEN }) })
+    const rows = logRows(db)
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows[0]).toMatchObject({ source: 'one_click_unsubscribe', note: 'path=header', user_agent: 'GoogleOneClick/1.0' })
+  })
+
+  it('marks the page arrival submit as page_auto', async () => {
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    await POST(reqWithUa(JSON.stringify({ channels: ['email_marketing'], auto: true }), 'Mozilla/5.0'), { params: Promise.resolve({ token: TOKEN }) })
+    expect(logRows(db)[0]).toMatchObject({ note: 'path=page_auto', user_agent: 'Mozilla/5.0' })
+  })
+
+  it('marks a button press on the page as page_click', async () => {
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    await POST(reqWithUa(JSON.stringify({ channels: ['email_marketing'] }), null), { params: Promise.resolve({ token: TOKEN }) })
+    expect(logRows(db)[0]).toMatchObject({ note: 'path=page_click', user_agent: null })
+  })
+})

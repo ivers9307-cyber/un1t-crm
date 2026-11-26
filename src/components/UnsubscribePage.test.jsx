@@ -114,7 +114,7 @@ describe('UnsubscribePage — auto-submit on arrival (UNSUBAUTO.1)', () => {
     // centre and records nothing. Asserting the verb is the difference between
     // "the page called the API" and "the page opted the person out".
     expect(opts.method).toBe('POST')
-    expect(JSON.parse(opts.body)).toEqual({ channels: ['email_marketing'] })
+    expect(JSON.parse(opts.body)).toEqual({ channels: ['email_marketing'], auto: true })
   })
 
   it('POSTs exactly once under a real StrictMode double-mount', async () => {
