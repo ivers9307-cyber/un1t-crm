@@ -6,7 +6,7 @@
 // Merge tags pass through untouched; applyMergeTags() fills them at send time.
 // No footer, unsubscribe link or preheader is added here (the send path owns them).
 import { z } from 'zod'
-import { OFFERED_MERGE_TAGS } from '@/lib/merge-tags'
+import { OFFERED_MERGE_TAGS, MERGE_CONDITIONS } from '@/lib/merge-tags'
 
 const TEXT_MAX = 5000
 const URL_MAX = 2000
@@ -50,6 +50,70 @@ function isOfferedWithFallback(inner) {
   return !!m && OFFERED_NAMES.has(m[1])
 }
 
+// CONDBLOCKS.2 — conditional blocks (CONDBLOCKS.1, applyConditionalBlocks):
+// `{{#if member}}…{{else}}…{{/if}}`, `{{#unless first_name}}…{{/unless}}`,
+// `{{#if stage=dormant}}…{{/if}}`. The send path leaves a block it cannot read
+// as literal braces, so an agent's block must be exactly well formed: a known
+// condition, one space after #if / #unless, opened and closed inside the same
+// text, no nesting, at most one {{else}}.
+const CONDITIONS = new Map(MERGE_CONDITIONS.map((c) => [c.name, c]))
+const COND_OPEN_RE = /^#(if|unless) ([a-z_]+)(?:=([a-z0-9_-]+))?$/
+const CONDITION_EXAMPLE = 'Write it like {{#if member}}, {{#unless first_name}} or {{#if stage=dormant}}.'
+
+function isConditionToken(inner) {
+  return inner.startsWith('#') || inner.startsWith('/') || inner === 'else'
+}
+
+function isWellFormedConditionToken(inner) {
+  if (inner === 'else' || inner === '/if' || inner === '/unless') return true
+  const m = COND_OPEN_RE.exec(inner)
+  const c = m && CONDITIONS.get(m[2])
+  return !!c && c.takesValue === (m[3] !== undefined)
+}
+
+/**
+ * The first problem with the conditional blocks in one text, as a plain
+ * sentence, or null. Plain merge tags are not judged here (unknownMergeTags).
+ */
+export function conditionalBlockProblem(value) {
+  const text = String(value ?? '')
+  let open = null
+  let sawElse = false
+  for (const m of text.matchAll(TAG_RE)) {
+    const inner = m[1]
+    if (!isConditionToken(inner)) continue
+    if (inner.startsWith('#')) {
+      const o = COND_OPEN_RE.exec(inner)
+      if (!o) return `The condition {{${inner}}} is not written correctly. ${CONDITION_EXAMPLE}`
+      const c = CONDITIONS.get(o[2])
+      if (!c) {
+        return `The condition "${o[2]}" in {{${inner}}} is not one emails understand. `
+          + 'Use member, first_name or stage=<stage slug>.'
+      }
+      if (c.takesValue && o[3] === undefined) return `The condition {{${inner}}} needs a value, e.g. {{#${o[1]} ${c.name}=dormant}}.`
+      if (!c.takesValue && o[3] !== undefined) return `The condition {{${inner}}} takes no value; write {{#${o[1]} ${c.name}}}.`
+      if (open) return `Conditional blocks cannot be nested: close {{/${open}}} before opening {{${inner}}}.`
+      open = o[1]
+      sawElse = false
+    } else if (inner === 'else') {
+      if (!open) return '{{else}} must sit inside an {{#if …}} or {{#unless …}} block.'
+      if (sawElse) return 'A conditional block can have only one {{else}}.'
+      sawElse = true
+    } else {
+      const kind = inner.slice(1)
+      if (kind !== 'if' && kind !== 'unless') return `{{${inner}}} is not a block ending; close a block with {{/if}} or {{/unless}}.`
+      if (!open) return `{{${inner}}} has no {{#${kind} …}} to close.`
+      if (kind !== open) return `A {{#${open} …}} block must be closed with {{/${open}}}, not {{${inner}}}.`
+      open = null
+    }
+  }
+  if (open) {
+    return `A {{#${open} …}} block is never closed. Add {{/${open}}} in the same text `
+      + '(the same paragraph, heading, list item, button label or subject).'
+  }
+  return null
+}
+
 /** Raw inner text of every tag in `value` that is not an exact offered tag (unique, in order). */
 export function unknownMergeTags(value) {
   const out = []
@@ -59,9 +123,21 @@ export function unknownMergeTags(value) {
   const nested = /\{\{[^{}]*\|[^{}]*\{\{/.exec(text)
   if (nested) out.push(nested[0].slice(2))
   for (const m of text.matchAll(TAG_RE)) {
+    if (isWellFormedConditionToken(m[1])) continue
     if (!OFFERED_NAMES.has(m[1]) && !isOfferedWithFallback(m[1]) && !out.includes(m[1])) out.push(m[1])
   }
   return out
+}
+
+/**
+ * The first merge-tag problem in one text (a subject, a paragraph, a label):
+ * a badly formed conditional block, then an unknown tag. Null when clean.
+ */
+export function mergeTagProblem(value) {
+  const cond = conditionalBlockProblem(value)
+  if (cond) return cond
+  const unknown = unknownMergeTags(value)
+  return unknown.length ? tagSentence(unknown[0]) : null
 }
 
 function tagSentence(inner) {
@@ -114,8 +190,8 @@ export function validateBlocks(blocks, { allowedImageUrls } = {}) {
   const allowed = allowedImageUrls ?? new Set()
   for (const b of blocks) {
     for (const t of textsOf(b)) {
-      const unknown = unknownMergeTags(t)
-      if (unknown.length) return tagSentence(unknown[0])
+      const tagProblem = mergeTagProblem(t)
+      if (tagProblem) return tagProblem
     }
     if (b.type === 'button') {
       const p = urlProblem(b.url)
