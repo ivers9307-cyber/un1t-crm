@@ -7,7 +7,7 @@ import { uuidLike, audienceFilterSchema } from '@/lib/schemas'
 import { defineTool } from './registry.js'
 import { emailAudienceCounts } from '@/lib/email-audience-counts'
 import { emailGate, resolveAudienceFilter } from './_email-campaign.js'
-import { EmailBlocksSchema, ResendSchema, buildBody, resendColumns, checkReplyTo, sendsAs, throwWriteError } from './_email-draft.js'
+import { EmailBlocksSchema, ResendSchema, MERGE_TAG_HELP, buildBody, checkSubject, resendColumns, checkReplyTo, sendsAs, throwWriteError } from './_email-draft.js'
 
 export default defineTool({
   name: 'create_email_draft',
@@ -20,11 +20,11 @@ export default defineTool({
   inputSchema: z.object({
     studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     name: z.string().trim().min(1).max(200).describe('Internal campaign name.'),
-    subject: z.string().trim().min(1).max(200).describe('The email subject line.'),
+    subject: z.string().trim().min(1).max(200).describe(`The email subject line. ${MERGE_TAG_HELP}`),
     preview_text: z.string().trim().max(500).optional().describe('Inbox preview text.'),
     from_name: z.string().trim().max(100).optional().describe('Sender display name.'),
     reply_to: z.string().trim().email().max(254).optional().describe('Reply-to address on the studio\'s verified domain.'),
-    blocks: EmailBlocksSchema.describe('The email body, 1 to 60 blocks.'),
+    blocks: EmailBlocksSchema.describe(`The email body, 1 to 60 blocks. ${MERGE_TAG_HELP}`),
     segment_id: uuidLike.optional().describe('A saved segment at this studio, instead of filter.'),
     filter: audienceFilterSchema.describe('An inline audience filter, instead of segment_id.'),
     resend: ResendSchema.describe('Optional: after_hours (1 to 168) and an optional subject. Resends to people who did not open it. A person approves it with the send.'),
@@ -37,6 +37,7 @@ export default defineTool({
     const wantsAudience = input.segment_id != null || input.filter != null
     const audienceFilter = wantsAudience ? await resolveAudienceFilter(db, studio, user, input) : null
     const resend = resendColumns(input.resend)
+    checkSubject(input.subject)
     const body = await buildBody(db, user, studio, input.blocks)
 
     const row = {
