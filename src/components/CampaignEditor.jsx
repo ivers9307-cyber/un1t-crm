@@ -334,7 +334,8 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
   // (its content is already stashed in state by switchTab).
   const autosaveBaseline = useRef(null)
   const autosaveTick = useRef(null)
-  autosaveTick.current = async () => {
+  // Refreshed after every render so the interval always sees current state.
+  useEffect(() => { autosaveTick.current = async () => {
     if (campaignStatus !== 'draft' || !campaignId || saving || !contentEditable) return
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
     const { html } = tab === 'design' ? await stashUnlayerToState() : { html: htmlContent }
@@ -346,7 +347,7 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
     if (fingerprint === autosaveBaseline.current) return
     const ok = await handleSave()
     if (ok) autosaveBaseline.current = fingerprint
-  }
+  } })
   useEffect(() => {
     const t = setInterval(() => { autosaveTick.current?.() }, AUTOSAVE_MS)
     return () => clearInterval(t)
