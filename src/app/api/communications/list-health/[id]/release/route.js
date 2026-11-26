@@ -10,12 +10,11 @@
 //   • An operator release is PERMANENT as far as the sweep is concerned — it
 //     never re-suppresses that contact for repeat bounces again. A rule that
 //     overrules a human every night is not a rule, it is a nag.
-//   • The stamp is shared with the nightly engagement sweep (mig 395), so
-//     clearing it also clears an inactivity suppression the contact may have
-//     been carrying. That is self-correcting rather than lossy: if they still
-//     qualify as a 90-day non-opener, the engagement sweep re-stamps them the
-//     same night, with its own reason. stamp_was_already_set on the row
-//     records whether that was the case when we decided.
+//   • The stamp was once shared with a nightly engagement sweep (mig 395)
+//     that suppressed 90-day non-openers. That sweep is retired (NOENGSUP.1,
+//     mig 537), so the stamp now means repeat bounces only and nothing
+//     re-stamps a released contact for inactivity. stamp_was_already_set on
+//     the row records whether a stamp was present when we decided.
 //
 // Dismissing a `review` row uses the same endpoint: there is no stamp to
 // clear, so it is purely an acknowledgement that the operator has looked.
