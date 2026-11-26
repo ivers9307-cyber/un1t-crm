@@ -29,6 +29,7 @@ import OpenWeekPickStep from './OpenWeekPickStep'
 import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERROR, TRIAL_LINK, TRIAL_SUMMARY } from './trial-card'
 import { customerErrorText } from '@/lib/page-request-errors'
 import { cleanAdValue } from '@/lib/campaign-funnel-attribution'
+import EmailTypoHint from '@/components/EmailTypoHint'
 
 const CLAIM_PATH = '/api/public/corp-claims'
 
@@ -238,6 +239,7 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
           <input className={TRIAL_INPUT} placeholder="Last name" value={form.last_name} onChange={set('last_name')} maxLength={120} autoComplete="family-name" aria-label="Last name" />
         </div>
         <input className={TRIAL_INPUT} type="email" placeholder="Email" value={form.email} onChange={set('email')} maxLength={320} autoComplete="email" aria-label="Email" />
+        <EmailTypoHint email={form.email} onAccept={(v) => setForm((f) => ({ ...f, email: v }))} />
         <input className={TRIAL_INPUT} type="tel" placeholder="Mobile" value={form.phone} onChange={set('phone')} maxLength={50} autoComplete="tel" aria-label="Mobile" />
         <label className={`flex items-start gap-2.5 text-sm pt-1 ${TRIAL_MUTED}`}>
           <input type="checkbox" checked={form.consent} onChange={set('consent')} className="mt-0.5 w-4 h-4 accent-black" />
