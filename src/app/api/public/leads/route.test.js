@@ -6,11 +6,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const m = vi.hoisted(() => ({
-  rateLimit: vi.fn(), contact: vi.fn(), stamp: vi.fn(), tag: vi.fn(), deal: vi.fn(), capi: vi.fn(), consent: vi.fn(),
+  rateLimit: vi.fn(), contact: vi.fn(), offerConsent: vi.fn(), stamp: vi.fn(), tag: vi.fn(), deal: vi.fn(), capi: vi.fn(), consent: vi.fn(),
   resolve: vi.fn(),
 }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: m.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
-vi.mock('@/lib/race-contact-linking', () => ({ findOrCreateRaceContact: m.contact }))
+// EMBEDFORM.1 — the route reads whether THIS call created the contact.
+vi.mock('@/lib/race-contact-linking', () => ({
+  findOrCreateRaceContactWithOutcome: async (args) => {
+    const r = await m.contact(args)
+    return r && typeof r === 'object' ? r : { contactId: r, created: false }
+  },
+}))
+vi.mock('@/lib/offer-form-consent', () => ({ applyOfferFormConsent: m.offerConsent }))
 vi.mock('@/lib/lead-source-stamp', () => ({ stampLeadSource: m.stamp }))
 vi.mock('@/lib/contact-tags', () => ({ writeContactTag: m.tag }))
 vi.mock('@/lib/waitlist-entry', () => ({ placeWaitlistEntry: m.deal }))
@@ -146,5 +153,35 @@ describe('POST /api/public/leads — page (PAGES.1)', () => {
   it('legacy: a body with neither page nor public_path is a 400', async () => {
     expect((await POST(req(BODY))).status).toBe(400)
     expect(m.rateLimit).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('POST /api/public/leads — embed form (EMBEDFORM.1)', () => {
+  const embedBody = (consent) => ({ first_name: 'Anne', email: 'anne@example.ie', phone: '0871234567', consent, public_path: 'stillorgan', form: 'embed' })
+  const post = (b) => POST(new Request('http://localhost/api/public/leads', { method: 'POST', headers: { 'content-type': 'application/json', host: 'un1tdublin.com' }, body: JSON.stringify(b) }))
+
+  beforeEach(() => { m.resolve.mockResolvedValue({ ...pageOk([{ type: 'lead_form', tag: 't', lead_source: 's' }]), page: { id: 'p', slug: 'stillorgan', kind: 'studio' }, attribution: {} }) })
+
+  it('accepts an unticked box on the embed form and records the choice through the optional-box rule', async () => {
+    m.contact.mockResolvedValue({ contactId: 'c1', created: true })
+    m.offerConsent.mockResolvedValue({ applied: 'opt_out' })
+    const res = await post(embedBody(false))
+    expect(res.status).toBe(200)
+    expect(m.offerConsent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'c1', created: true, consent: false, source: 'embed_form' }))
+    expect(m.consent).not.toHaveBeenCalled()
+  })
+
+  it('passes a ticked box through as consent', async () => {
+    m.contact.mockResolvedValue({ contactId: 'c1', created: false })
+    m.offerConsent.mockResolvedValue({ applied: 'opt_in' })
+    await post(embedBody(true))
+    expect(m.offerConsent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ consent: true, created: false }))
+  })
+
+  it('still refuses an unticked box on every other form', async () => {
+    const res = await post({ ...embedBody(false), form: undefined })
+    expect(res.status).toBe(400)
+    expect(m.contact).not.toHaveBeenCalled()
   })
 })
