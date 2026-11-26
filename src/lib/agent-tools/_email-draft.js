@@ -64,7 +64,7 @@ export const ResendSchema = z.object({
   after_hours: z.number().int().min(RESEND_MIN_WAIT_HOURS).max(RESEND_MAX_WAIT_HOURS)
     .describe(`Hours after the send to resend to people who did not open it, ${RESEND_MIN_WAIT_HOURS} to ${RESEND_MAX_WAIT_HOURS}.`),
   subject: z.string().trim().min(1).max(200).optional()
-    .describe('Subject for the resend; omit to reuse the campaign subject. Merge tags exactly like {{first_name}}.'),
+    .describe('Subject for the resend; omit to reuse the campaign subject. Merge tags exactly like {{first_name}}, or {{first_name|there}} for a fallback when the value is blank.'),
 }).nullable().optional()
 
 /**
