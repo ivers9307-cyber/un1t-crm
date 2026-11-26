@@ -26,6 +26,7 @@
 // src/lib/legacy-redirects.test.js — those URLs are bookmarked and one of
 // them is linked from notification email, so a 404 was never an option.
 
+import { canExportContactsAt } from '@/lib/contact-export-gate'
 import { notFound, redirect } from 'next/navigation'
 import { zoneOfLocation } from '@/lib/location-time'
 import { createServerClient } from '@/lib/supabase'
@@ -262,6 +263,7 @@ async function renderEmail(db, user, id, searchParams) {
       resendParent={resendParent}
       locationId={campaign.location_id}
       userId={user.id}
+      canExportRecipients={canExportContactsAt(user, campaign.location_id)}
     />
   )
 }
