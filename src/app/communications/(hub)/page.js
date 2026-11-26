@@ -22,9 +22,8 @@ import { canUseCommunicationsHere } from '@/lib/communications-access'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { tierLabel, qualityAccent } from '@/lib/whatsapp-number-health'
-import { loadEmailHubStats } from './email-hub-stats.js'
 import { loadWhatsAppHubHealth } from './wa-hub-health.js'
-import { Mail, MessageCircle, Megaphone, Repeat, FileText, Inbox, Send, ShieldCheck, Gauge } from 'lucide-react'
+import { Mail, MessageCircle, Inbox, ShieldCheck, Gauge } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -74,16 +73,11 @@ export default async function CommunicationsHub() {
   const db = createServerClient()
   const locationId = user.activeLocation?.id
 
-  // Email stats — COMMSFIX.C.6 moved the queries into loadEmailHubStats so the
-  // filters (status not the dead `active` column; broadcast-stream-only open
-  // rate) are unit-testable.
-  let totalSent = 0, openRate = 0, activeSequences = 0
-  if (canEmail && locationId) {
-    ({ totalSent, openRate, activeSequences } = await loadEmailHubStats(db, locationId))
-  }
+  // SPLITNAV.1 — Messages is for conversations; campaign stats live under
+  // Marketing (Sent, List health), so they are not loaded here any more.
 
   // WhatsApp stats
-  let unreadConvos = 0, draftBroadcasts = 0, waHealth = null
+  let unreadConvos = 0, waHealth = null
   if (canWhatsapp && locationId) {
     // Number health (Meta quality rating + messaging tier) — stored by the
     // refresh-whatsapp-health cron (mig 329). The studio's default switched-on
@@ -98,25 +92,12 @@ export default async function CommunicationsHub() {
       .gt('unread_count', 0)
     unreadConvos = unread || 0
 
-    const { count: drafts } = await db
-      .from('whatsapp_broadcasts')
-      .select('id', { count: 'exact', head: true })
-      .eq('location_id', locationId)
-      .eq('status', 'draft')
-    draftBroadcasts = drafts || 0
   }
 
   return (
     <div>
       {/* Stats row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        {canEmail && (
-          <>
-            <StatCard label="Emails sent" value={totalSent.toLocaleString()} icon={Mail} />
-            <StatCard label="Open rate" value={`${openRate}%`} accent="text-green-700" />
-            <StatCard label="Active sequences" value={activeSequences} icon={Repeat} />
-          </>
-        )}
         {canWhatsapp && (
           <>
             <StatCard label="Unread WhatsApp" value={unreadConvos} icon={Inbox} accent={unreadConvos > 0 ? 'text-amber-700' : undefined} />
@@ -133,7 +114,6 @@ export default async function CommunicationsHub() {
                 <StatCard label="Daily conversation limit" value={tierLabel(waHealth.messaging_limit_tier)} icon={Gauge} />
               </>
             )}
-            {!canEmail && <StatCard label="Draft broadcasts" value={draftBroadcasts} icon={Megaphone} />}
           </>
         )}
       </div>
@@ -161,61 +141,16 @@ export default async function CommunicationsHub() {
             desc="Read and answer studio email (accounts@, sales@…)"
           />
         )}
-        {canEmail && (
-          <ActionCard
-            href="/automations"
-            icon={Repeat}
-            color="bg-purple-500/20 text-purple-700"
-            title="Sequences"
-            desc={`${activeSequences} active drip flow${activeSequences === 1 ? '' : 's'}`}
-          />
-        )}
-        {/* DEEP.4 Task 2 — the four cards below are cross-links: same URLs
-            as always, but they now land in communications/(marketing-era),
-            a Marketing-owned chrome (its own HubTabs strip), not this page's. */}
-        {(canWhatsapp || canEmail) && (
-          <ActionCard
-            href="/communications/send"
-            icon={Send}
-            color="bg-un1t-text/10 text-un1t-text"
-            title="Send a message"
-            desc="Pick an audience, write once, send via WhatsApp or email — now in Marketing"
-          />
-        )}
-        {(canWhatsapp || canEmail) && (
-          <ActionCard
-            href="/communications/sent"
-            icon={Megaphone}
-            color="bg-cyan-500/20 text-cyan-700"
-            title="Sent"
-            desc="History of one-off WhatsApp & email sends — now in Marketing"
-          />
-        )}
-        {/* Rider (DEEP.4 Task 3) — templates/page.js redirects to /communications
-            when !canEmail && !canWhatsapp, so such a user must not see a card
-            that bounces. */}
-        {(canEmail || canWhatsapp) && (
-          <ActionCard
-            href="/communications/templates"
-            icon={FileText}
-            color="bg-un1t-border/40 text-un1t-subtle"
-            title="Templates"
-            desc="Reusable email + WhatsApp content — now in Marketing"
-          />
-        )}
-        {/* GAPS-P5 — list-health also has a (marketing-era) tab now; this
-            card stays as the landing's own pointer to it, same reasoning as
-            every other cross-link card above. */}
-        {canEmail && (
-          <ActionCard
-            href="/communications/list-health"
-            icon={ShieldCheck}
-            color="bg-amber-500/20 text-amber-700"
-            title="List health"
-            desc="Who can be emailed, bounces, and suppressed contacts — now in Marketing"
-          />
-        )}
       </div>
+
+      {/* SPLITNAV.1 — one way into the marketing side from here, not five
+          duplicate cards: Messages is conversations, Marketing is sends. */}
+      {(canEmail || canWhatsapp) && (
+        <p className="mt-6 text-sm text-un1t-subtle">
+          Campaigns, automations, templates and list health are under{' '}
+          <Link href="/communications/send" className="underline text-un1t-text">Marketing</Link>.
+        </p>
+      )}
     </div>
   )
 }
