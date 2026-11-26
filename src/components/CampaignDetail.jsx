@@ -538,10 +538,19 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
                           {campaign.audience_filter.logic || 'and'}
                         </span>
                       )}
-                      <span className="text-un1t-text">{f.field.replace(/_/g, ' ')}</span>
-                      <span className="text-un1t-muted">{f.op.replace(/_/g, ' ')}</span>
-                      {!['is_null', 'not_null'].includes(f.op) && (
-                        <span className="text-blue-700">{f.value}</span>
+                      {/* SEGGROUPS.1 — a group row reads as (a OR b). */}
+                      {f?.group ? (
+                        <span className="text-un1t-text">
+                          ({(f.group.filters || []).map((r) => [String(r.field || '').replace(/_/g, ' '), String(r.op || '').replace(/_/g, ' '), ['is_null', 'not_null'].includes(r.op) ? '' : String(r.value ?? '')].filter(Boolean).join(' ')).join(` ${(f.group.logic || 'and').toUpperCase()} `)})
+                        </span>
+                      ) : (
+                        <>
+                          <span className="text-un1t-text">{String(f.field || '').replace(/_/g, ' ')}</span>
+                          <span className="text-un1t-muted">{String(f.op || '').replace(/_/g, ' ')}</span>
+                          {!['is_null', 'not_null'].includes(f.op) && (
+                            <span className="text-blue-700">{f.value}</span>
+                          )}
+                        </>
                       )}
                     </div>
                   ))}
