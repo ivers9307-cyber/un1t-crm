@@ -224,6 +224,12 @@ export const FIELD_OPTIONS = [
   // resolveEventFilters (race_registrations → contacts.id). Options load
   // dynamically from /api/communications/events. Value is a race_events id.
   { value: 'event_registration',    label: 'Registered for event',  type: 'event-select', group: 'Events' },
+  // CAMPFILTER.1 — virtual fields over campaign_recipients, resolved
+  // server-side; options are this studio's sent campaigns.
+  { value: 'campaign_clicked',      label: 'Clicked a campaign',    type: 'campaign-click-select', group: 'Email behaviour',
+    hint: 'People who clicked a link in that campaign. The firmer of the two signals.' },
+  { value: 'campaign_opened',       label: 'Opened a campaign',     type: 'campaign-open-select', group: 'Email behaviour',
+    hint: 'Includes opens recorded by mail apps rather than people (Apple Mail Privacy Protection), so it overstates who read it. Prefer Clicked where you can.' },
   // LISTFILTER.1 — virtual field. Resolved server-side via
   // resolveLocationListFilters (contact_location_preferences → contacts.id).
   // Options load from /api/locations. Value is a locations id.
@@ -283,6 +289,15 @@ const OPS_BY_TYPE = {
   'event-select': [
     { value: 'eq',  label: 'registered for' },
     { value: 'neq', label: 'not registered for' },
+  ],
+  // CAMPFILTER.1 — opened / clicked one of this studio's sent campaigns.
+  'campaign-open-select': [
+    { value: 'eq',  label: 'opened' },
+    { value: 'neq', label: 'did not open' },
+  ],
+  'campaign-click-select': [
+    { value: 'eq',  label: 'clicked' },
+    { value: 'neq', label: 'did not click' },
   ],
   // location-select — on / not on a given studio's list.
   'location-select': [
@@ -413,7 +428,7 @@ function needsValue(op) {
 // a PENDING row (field chosen, value not yet) and a committed row render the
 // identical control. Without the extraction the pending row would need its own
 // copy and the two would drift.
-function DynamicValueSelect({ type, value, disabled, onChange, tagOptions, planOptions, eventOptions, locationOptions, className }) {
+function DynamicValueSelect({ type, value, disabled, onChange, tagOptions, planOptions, eventOptions, locationOptions, campaignOptions, className }) {
   const cls = className || 'bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text flex-1'
   if (type === 'tag-select') {
     return (
@@ -435,6 +450,16 @@ function DynamicValueSelect({ type, value, disabled, onChange, tagOptions, planO
       <select value={value || ''} disabled={disabled} onChange={onChange} aria-label="Membership plan" className={cls}>
         <option value="">{planOptions === null ? 'Loading plans…' : '— pick a plan —'}</option>
         {(planOptions || []).map(plan => <option key={plan} value={plan}>{plan}</option>)}
+      </select>
+    )
+  }
+  if (type === 'campaign-open-select' || type === 'campaign-click-select') {
+    return (
+      <select value={value || ''} disabled={disabled} onChange={onChange} aria-label="Campaign" className={cls}>
+        <option value="">{campaignOptions === null ? 'Loading campaigns…' : '— pick a campaign —'}</option>
+        {(campaignOptions || []).map(c => (
+          <option key={c.id} value={c.id}>{c.name || 'Untitled'}{c.sent_at ? ` — ${String(c.sent_at).slice(0, 10)}` : ''}</option>
+        ))}
       </select>
     )
   }
@@ -628,7 +653,7 @@ export function euroTextToCents(text) {
 // filter requires a non-empty string value") and which a plan row compiles to
 // `plan = ''` — a filter that matches nobody, silently. Either way the row is
 // born broken. It stays UNSET (and therefore inert) until a value is picked.
-const AWAITS_A_VALUE = ['tag-select', 'event-select', 'plan-select', 'location-select']
+const AWAITS_A_VALUE = ['tag-select', 'event-select', 'plan-select', 'location-select', 'campaign-open-select', 'campaign-click-select']
 
 // FILTER-B.1 / FILTER-FOUND row 2 — `audienceCount` DEFAULTS TO NULL. The
 // footer below renders on a non-null count, so a host that simply OMITTED the
@@ -759,6 +784,21 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
     }).catch(() => { if (!cancelled) setEventOptions([]) })
     return () => { cancelled = true }
   }, [usesEventField, eventOptions])
+
+  // CAMPFILTER.1 — the active studio's sent campaigns, loaded once a
+  // "Opened / Clicked a campaign" row exists.
+  const [campaignOptions, setCampaignOptions] = useState(null)
+  const usesCampaignField = filters.some(f => f.field === 'campaign_opened' || f.field === 'campaign_clicked')
+    || pendingList.includes('campaign_opened') || pendingList.includes('campaign_clicked')
+  useEffect(() => {
+    if (!usesCampaignField || campaignOptions !== null) return
+    let cancelled = false
+    fetch('/api/communications/campaigns').then(r => r.json()).then(j => {
+      if (!cancelled && j?.success) setCampaignOptions(j.data || [])
+      else if (!cancelled) setCampaignOptions([])
+    }).catch(() => { if (!cancelled) setCampaignOptions([]) })
+    return () => { cancelled = true }
+  }, [usesCampaignField, campaignOptions])
 
   // LISTFILTER.1 — studio options, loaded once the operator adds an
   // "On another studio's list" row. Mirrors the tag/plan/event loaders.
@@ -1026,7 +1066,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
                     type={pendingConfig.type}
                     value=""
                     disabled={disabled}
-                    tagOptions={tagOptions} planOptions={planOptions} eventOptions={eventOptions} locationOptions={locationOptions}
+                    tagOptions={tagOptions} planOptions={planOptions} eventOptions={eventOptions} locationOptions={locationOptions} campaignOptions={campaignOptions}
                     onChange={e => commitPendingRow(index, pending, e.target.value)}
                   />
                 )}
@@ -1145,7 +1185,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
                   type={fieldConfig.type}
                   value={f.value}
                   disabled={disabled}
-                  tagOptions={tagOptions} planOptions={planOptions} eventOptions={eventOptions} locationOptions={locationOptions}
+                  tagOptions={tagOptions} planOptions={planOptions} eventOptions={eventOptions} locationOptions={locationOptions} campaignOptions={campaignOptions}
                   onChange={e => updateRow(index, { value: e.target.value })}
                 />
               ) : showValue && fieldConfig.type === 'number' ? (
