@@ -41,11 +41,25 @@ const TAG_ONLY_RE = /^\{\{([^{}]*)\}\}$/
 const URL_ONLY_TAGS = Object.freeze(new Set(['unsubscribe_url', 'preference_url']))
 const URL_INNER_TAGS = Object.freeze(new Set(['booking_token']))
 
+// MERGEFALLBACK.2 — `{{name|fallback}}` (MERGEFALLBACK.1, applyMergeTags):
+// an offered tag, no spaces before the bar, and a plain-text fallback with no
+// braces. The fallback is the agent's text, so it may not carry another tag.
+const FALLBACK_RE = /^([a-z_]+)\|([^{}|]*)$/
+function isOfferedWithFallback(inner) {
+  const m = FALLBACK_RE.exec(inner)
+  return !!m && OFFERED_NAMES.has(m[1])
+}
+
 /** Raw inner text of every tag in `value` that is not an exact offered tag (unique, in order). */
 export function unknownMergeTags(value) {
   const out = []
-  for (const m of String(value ?? '').matchAll(TAG_RE)) {
-    if (!OFFERED_NAMES.has(m[1]) && !out.includes(m[1])) out.push(m[1])
+  const text = String(value ?? '')
+  // A tag inside a fallback ({{first_name|{{last_name}}}}) would be half
+  // filled and leave a literal {{…}} in the email, so it is refused.
+  const nested = /\{\{[^{}]*\|[^{}]*\{\{/.exec(text)
+  if (nested) out.push(nested[0].slice(2))
+  for (const m of text.matchAll(TAG_RE)) {
+    if (!OFFERED_NAMES.has(m[1]) && !isOfferedWithFallback(m[1]) && !out.includes(m[1])) out.push(m[1])
   }
   return out
 }
