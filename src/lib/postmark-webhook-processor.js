@@ -217,6 +217,13 @@ async function reportRpc(db, fn, args) {
  * @param {object} body — raw Postmark webhook JSON
  * @returns {Promise<{ ok: boolean, error?: string, deduped?: boolean }>}
  */
+/** MACHINEOPEN.1 — true for an Open fetched by a privacy proxy, not a person. */
+export function isMachineOpen(body) {
+  const ua = String(body?.UserAgent ?? '').trim()
+  const client = String(body?.Client?.Name ?? '').trim()
+  return ua === 'Mozilla/5.0' && !client
+}
+
 export async function processPostmarkEvent(db, body) {
   const messageId = body?.MessageID
   const recordType = body?.RecordType
@@ -393,6 +400,22 @@ export async function processPostmarkEvent(db, body) {
 
       case 'Open': {
         const now = new Date().toISOString()
+
+        // MACHINEOPEN.1 — an open fetched by a mail app's privacy proxy, not
+        // by a person (Apple Mail Privacy Protection fetches every image when
+        // the email arrives). Measured 26 Nov 2026: ~58% of 30 days' opens
+        // carried the bare user agent `Mozilla/5.0` with no client, from
+        // US/Swedish data centres. Owner's decision (26 Nov): leave them out
+        // of open rates and of the contact's "last opened". The fetch still
+        // proves the email was delivered, so a row still at 'sent' moves to
+        // 'delivered'; nothing is stamped as opened. Earlier opens are not
+        // rewritten. Gmail's and Yahoo's proxies fetch on a real open, carry
+        // their own user agents, and still count.
+        if (isMachineOpen(body)) {
+          await db.from('email_sends').update({ status: 'delivered' }).eq('postmark_message_id', messageId).eq('status', 'sent')
+          await db.from('campaign_recipients').update({ status: 'delivered' }).eq('postmark_message_id', messageId).eq('status', 'sent')
+          break
+        }
 
         await db.from('email_sends')
           .update({ status: 'opened', opened_at: now })
