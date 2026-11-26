@@ -36,7 +36,7 @@
  *   retired     — substitutes to '' only (kept for old bodies)
  */
 export const MERGE_TAGS = Object.freeze([
-  { tag: '{{first_name}}', name: 'First Name', description: "Contact's first name", offered: true },
+  { tag: '{{first_name}}', name: 'First Name', description: "Contact's first name. For a fallback when it is blank, write {{first_name|there}}", offered: true },
   { tag: '{{last_name}}', name: 'Last Name', description: "Contact's last name", offered: true },
   { tag: '{{name}}', name: 'Full Name', description: "Contact's full name", offered: true },
   { tag: '{{email}}', name: 'Email', description: "Contact's email", offered: true },

@@ -561,7 +561,19 @@ export function applyMergeTags(html, contact, extras = {}) {
     '{{studio_logo}}': extras.studio_logo || '',
   }
 
-  let result = html
+  // MERGEFALLBACK.1 — `{{first_name|there}}` renders the value, or the text
+  // after the bar when the value is empty, so "Hi {{first_name|there}}" never
+  // goes out as "Hi ,". Only for the tags above: an unknown `{{x|y}}` is left
+  // exactly as written, like an unknown `{{x}}`. The fallback is the
+  // operator's own text and is used as written (it sits in their HTML). Runs
+  // before the plain replacements so `{{first_name}}` without a bar is
+  // unchanged.
+  let result = html.replace(/\{\{\s*([a-z_]+)\s*\|([^{}]*)\}\}/g, (whole, key, fallback) => {
+    const tag = `{{${key}}}`
+    if (!Object.hasOwn(replacements, tag)) return whole
+    const value = replacements[tag]
+    return value ? value : fallback.trim()
+  })
   for (const [tag, value] of Object.entries(replacements)) {
     result = result.replaceAll(tag, value)
   }
