@@ -97,7 +97,7 @@ function AbVariantRow({ label, subject, stats, isWinner }) {
   )
 }
 
-export default function CampaignDetail({ campaign, recipients = [], stats = null, abStats = null, resendChild = null, resendParent = null, locationId, userId: _userId }) {
+export default function CampaignDetail({ campaign, recipients = [], stats = null, abStats = null, resendChild = null, resendParent = null, locationId, userId: _userId, canExportRecipients = false }) {
   // W1.S2 — the From NAME is the operator's or the studio's brand. The From
   // ADDRESS (campaign.from_email) applies only when it is on the org's
   // verified sending domain; otherwise the platform address sends with the
@@ -566,10 +566,10 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
             {recipients.length > 0 && (
               <div className="flex items-center justify-between gap-3 mb-3 text-xs text-un1t-subtle">
                 <span>{totalSent > recipients.length ? `Showing the latest ${recipients.length} of ${totalSent.toLocaleString()}.` : null}</span>
-                <a href={`/api/communications/campaigns/${campaign.id}/recipients-csv`}
+                {canExportRecipients && <a href={`/api/communications/campaigns/${campaign.id}/recipients-csv`}
                   className="rounded-md border border-un1t-border px-2.5 py-1.5 font-medium text-un1t-text hover:border-un1t-text/30">
                   Download all recipients (CSV)
-                </a>
+                </a>}
               </div>
             )}
             {recipients.length === 0 ? (
