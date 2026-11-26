@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { assertLocationAccess, getUserLocationIds, requireInboxPermission } from '@/lib/auth'
+import { assertLocationAccess, requireWhatsAppInboxAnywhere, requireWhatsAppInboxAt } from '@/lib/auth'
+import { inboxLocationIds } from '@/lib/inbox-location-ids'
 import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
 import { attachAssigneeNames } from '@/lib/inbox-assignment'
@@ -17,9 +18,15 @@ import { ACTIVE_SET_LIMIT, ACTIVE_SET_OR, mergeActiveSet } from '@/lib/inbox-act
 //
 // withAuth only signs the caller in; the channel permission (403), the
 // ?location_id membership (403) and the query keep their order here.
+//
+// INBOXPERM.1 — the inbox key ('ig' rides the `whatsapp` key; web or phone, the
+// phone calls this route) is judged at the studio asked for, not at the active
+// one: a coarse any-studio check first, then the key at ?location_id once its
+// membership has passed. Without ?location_id the list covers only the studios
+// where the caller holds the key, never every studio they merely belong to.
 export const GET = withAuth({ permission: null, location: false }, async ({ request, user, db }) => {
   // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'ig')
+  const perm = requireWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const { searchParams } = new URL(request.url)
@@ -34,9 +41,11 @@ export const GET = withAuth({ permission: null, location: false }, async ({ requ
   if (locationId) {
     const guard = assertLocationAccess(user, locationId)
     if (guard) return guard
+    const permHere = requireWhatsAppInboxAt(user, locationId)
+    if (permHere) return permHere
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = getUserLocationIds(user)
+    const userLocationIds = inboxLocationIds(user)
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, conversations: [], followup: DEFAULT_FOLLOWUP_CFG })
     query = query.in('location_id', userLocationIds)
   }
@@ -44,7 +53,7 @@ export const GET = withAuth({ permission: null, location: false }, async ({ requ
   // INBOX-SEARCH.1 — see whatsapp/conversations: ?q= = most-recent 50 MATCHES.
   const q = (searchParams.get('q') || '').trim()
   if (q.length >= INBOX_SEARCH_MIN_LENGTH) {
-    const scopeIds = locationId ? [locationId] : getUserLocationIds(user)
+    const scopeIds = locationId ? [locationId] : inboxLocationIds(user)
     const contactIds = await searchInboxContactIds(db, { q, locationIds: scopeIds })
     query = query.or(buildInboxSearchOr('instagram_conversations', q, contactIds))
   }
@@ -60,7 +69,7 @@ export const GET = withAuth({ permission: null, location: false }, async ({ requ
       // Oldest first: the longest-waiting threads must never be the ones cut at the limit.
       .order('last_message_at', { ascending: true, nullsFirst: false })
       .limit(ACTIVE_SET_LIMIT)
-    activeQuery = locationId ? activeQuery.eq('location_id', locationId) : activeQuery.in('location_id', getUserLocationIds(user))
+    activeQuery = locationId ? activeQuery.eq('location_id', locationId) : activeQuery.in('location_id', inboxLocationIds(user))
   }
 
   // INBOXFOLLOW.3 — the follow-up config reads alongside the lists, not after them

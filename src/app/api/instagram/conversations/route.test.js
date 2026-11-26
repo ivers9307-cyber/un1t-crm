@@ -116,3 +116,42 @@ describe('GET /api/instagram/conversations — queues and follow-up config', () 
     expect(logError).toHaveBeenCalledWith('instagram-conversations', expect.stringMatching(/limit/), expect.anything())
   })
 })
+
+describe('INBOXPERM.1 — the inbox key (web or phone) is judged at the requested studio, and the unscoped list covers only studios holding it', () => {
+  const two = (a, b, active = LOC_A) => person({ [LOC_A]: { role: 'staff', permissions: a }, [LOC_B]: { role: 'staff', permissions: b } }, active)
+
+  it('403 for ?location_id at a member studio without the key, nothing read', async () => {
+    getCurrentUser.mockResolvedValue(two({ whatsapp: true }, { whatsapp: false }))
+    expect((await get(`?location_id=${LOC_B}`)).status).toBe(403)
+    expect(db.calls).toEqual([])
+  })
+
+  it('403 for a non-member studio, as before', async () => {
+    getCurrentUser.mockResolvedValue(inbox(true))
+    expect((await get(`?location_id=${LOC_B}`)).status).toBe(403)
+  })
+
+  it('the key at the requested studio is enough when the active studio is another one', async () => {
+    getCurrentUser.mockResolvedValue(two({ whatsapp: false }, { whatsapp: true }))
+    const res = await get(`?location_id=${LOC_B}`)
+    expect(res.status).toBe(200)
+    expect((await res.json()).conversations.map((c) => c.location_id)).toEqual([LOC_B])
+  })
+
+  it('the phone key alone is enough (the phone calls this route)', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false, mobile: { whatsapp: true } } } }, LOC_A))
+    expect((await get(`?location_id=${LOC_A}`)).status).toBe(200)
+  })
+
+  it('without ?location_id the list holds only the studios where the caller has the key', async () => {
+    getCurrentUser.mockResolvedValue(two({ whatsapp: true }, { whatsapp: false }))
+    const res = await get()
+    expect(res.status).toBe(200)
+    expect((await res.json()).conversations.map((c) => c.location_id)).toEqual([LOC_A])
+  })
+
+  it('403 when the key is held at no studio at all, even for a member of two', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: false, mobile: { whatsapp: false } } } }, LOC_A))
+    expect((await get()).status).toBe(403)
+  })
+})

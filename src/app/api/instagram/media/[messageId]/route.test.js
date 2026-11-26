@@ -9,6 +9,8 @@ vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/instagram-media-server', () => ({ ensureInstagramMediaRehosted: vi.fn(async (_db, m) => m.media_storage_path) }))
 vi.mock('@/lib/whatsapp-media-server', () => ({ signedMediaUrl: vi.fn(async (_db, p) => `https://signed.example/${p}`) }))
+const { ensureInstagramMediaRehosted } = await import('@/lib/instagram-media-server')
+const { signedMediaUrl } = await import('@/lib/whatsapp-media-server')
 
 const { getCurrentUser } = await import('@/lib/auth')
 const { createServerClient } = await import('@/lib/supabase')
@@ -56,5 +58,38 @@ describe('GET /api/instagram/media/[messageId]', () => {
     const res = await get(M_A)
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ success: true, url: 'https://signed.example/ig/a.jpg', kind: 'image' })
+  })
+})
+
+describe('INBOXPERM.1 — the inbox key is judged at the message\'s studio, web OR phone', () => {
+  const at = (a, b, active = LOC_A) => person({ [LOC_A]: { role: 'staff', permissions: a }, [LOC_B]: { role: 'staff', permissions: b } }, active)
+  const nothingDone = () => {
+    expect(ensureInstagramMediaRehosted).not.toHaveBeenCalled()
+    expect(signedMediaUrl).not.toHaveBeenCalled()
+  }
+
+  it('403 when the key is held only at studio A and the message is at studio B (plain member): no re-host, no signed URL', async () => {
+    getCurrentUser.mockResolvedValue(at({ whatsapp: true }, { whatsapp: false }))
+    const res = await get(M_B)
+    expect(res.status).toBe(403)
+    nothingDone()
+  })
+
+  it('allowed when the key is held at the message\'s studio though another studio is active', async () => {
+    getCurrentUser.mockResolvedValue(at({ whatsapp: false }, { whatsapp: true }))
+    const res = await get(M_B)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ url: 'https://signed.example/ig/b.jpg' })
+  })
+
+  it('the phone key alone is enough (WAMediaThumb calls this route)', async () => {
+    getCurrentUser.mockResolvedValue(at({ whatsapp: false, mobile: { whatsapp: true } }, { whatsapp: false }))
+    expect((await get(M_A)).status).toBe(200)
+  })
+
+  it('404 for a non-member of the message\'s studio, nothing re-hosted or signed', async () => {
+    getCurrentUser.mockResolvedValue(staff())
+    expect((await get(M_B)).status).toBe(404)
+    nothingDone()
   })
 })

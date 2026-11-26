@@ -139,6 +139,45 @@ describe('GET /api/whatsapp/conversations — follow-up config', () => {
   })
 })
 
+describe('INBOXPERM.1 — GET /api/whatsapp/conversations judges the inbox key (web or phone) at the requested studio', () => {
+  const two = (a, b, active = LOC_A) => person({ [LOC_A]: { role: 'staff', permissions: a }, [LOC_B]: { role: 'staff', permissions: b } }, active)
+  const seed = () => db.tables.whatsapp_conversations.push({ id: id(900), location_id: LOC_B, last_message_at: day(1), last_message_direction: 'inbound' })
+
+  it('403 for ?location_id at a member studio without the key (key held at the active studio only), nothing read', async () => {
+    getCurrentUser.mockResolvedValue(two({ whatsapp: true }, { whatsapp: false }))
+    seed()
+    const before = db.calls.length
+    expect((await get(`?location_id=${LOC_B}`)).status).toBe(403)
+    expect(db.calls.length).toBe(before)
+  })
+
+  it('the key at the requested studio is enough when the active studio is another one', async () => {
+    getCurrentUser.mockResolvedValue(two({ whatsapp: false }, { whatsapp: true }))
+    seed()
+    const res = await get(`?location_id=${LOC_B}`)
+    expect(res.status).toBe(200)
+    expect((await res.json()).conversations.map((c) => c.id)).toEqual([id(900)])
+  })
+
+  it('without ?location_id the list holds only the studios where the caller has the key', async () => {
+    getCurrentUser.mockResolvedValue(two({ whatsapp: true }, { whatsapp: false }))
+    seed()
+    const body = await (await get()).json()
+    expect(body.conversations.length).toBeGreaterThan(0)
+    expect(new Set(body.conversations.map((c) => c.location_id))).toEqual(new Set([LOC_A]))
+  })
+
+  it('the phone key alone at the studio is allowed', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false, mobile: { whatsapp: true } } } }, LOC_A))
+    expect((await get(`?location_id=${LOC_A}`)).status).toBe(200)
+  })
+
+  it('403 when the key is held at no studio at all', async () => {
+    getCurrentUser.mockResolvedValue(two({ whatsapp: false }, { whatsapp: false }))
+    expect((await get()).status).toBe(403)
+  })
+})
+
 describe('GET /api/whatsapp/conversations — approval badges are best effort', () => {
   it('a failed badge read is logged and the list still loads', async () => {
     db.errors.agent_membership_requests = { select: { message: 'statement timeout' } }

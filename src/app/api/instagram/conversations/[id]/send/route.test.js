@@ -3,11 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(async () => ({ id: 'user-1' })),
-  assertLocationAccessOr404: vi.fn(() => null),
-  requireInboxPermission: vi.fn(() => null),
-}))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/agent/instagram', () => ({
   sendInstagramMessage: vi.fn(async () => ({ messageId: 'mid-1' })),
   markInstagramSeen: vi.fn(async () => true),
@@ -16,26 +12,31 @@ vi.mock('@/lib/agent/channels', () => ({ resolveChannelConnection: vi.fn(async (
 
 import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
+import { person, LOC_A, LOC_B } from '../../../../../../../tests/helpers/role-sweep-callers.js'
 
 const CONVERSATION = {
-  id: 'ig-conv-1', location_id: 'loc-1', ig_user_id: 'CUST1', contact_id: null,
+  id: 'ig-conv-1', location_id: LOC_A, ig_user_id: 'CUST1', contact_id: null,
   agent_handed_off_at: null,
   customer_waiting_since: '2026-11-24T09:00:00.000Z',
   staff_owned_since: null,
   snoozed_until: '2999-01-01T00:00:00.000Z',
 }
 
-function makeDb(updateError = null) {
+function makeDb(updateError = null, conversation = CONVERSATION) {
   const updates = []
+  const reads = []
   const db = {
     updates,
+    reads,
     from: vi.fn((table) => {
       if (table === 'instagram_conversations') {
         return {
-          select: () => ({ eq: () => ({ single: async () => ({ data: CONVERSATION, error: null }) }) }),
+          select: () => { reads.push('instagram_conversations'); return { eq: () => ({ single: async () => ({ data: conversation, error: null }) }) } },
           update: (patch) => { updates.push(patch); return { eq: async () => ({ error: updateError }) } },
         }
       }
+      reads.push(table)
       return { insert: async () => ({ error: null }) }
     }),
   }
@@ -46,7 +47,12 @@ const req = () => new Request('http://localhost/api/instagram/conversations/ig-c
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'hi there' }),
 })
 
-beforeEach(() => { vi.clearAllMocks(); vi.spyOn(console, 'error').mockImplementation(() => {}) })
+const withKey = (perms = { whatsapp: true }) => person({ [LOC_A]: { role: 'staff', permissions: perms } }, LOC_A)
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  getCurrentUser.mockResolvedValue(withKey())
+})
 
 describe('POST /api/instagram/conversations/[id]/send — follow-up stamps', () => {
   it('stamps staff ownership, moves the wait to the customer and clears snooze', async () => {
@@ -63,5 +69,53 @@ describe('POST /api/instagram/conversations/[id]/send — follow-up stamps', () 
     })
     expect(typeof patch.staff_owned_since).toBe('string')
     expect(patch.staff_waiting_since).toBe(patch.staff_owned_since)
+  })
+})
+
+describe('POST /api/instagram/conversations/[id]/send — INBOXPERM.1 gates', () => {
+  const callSend = () => POST(req(), { params: Promise.resolve({ id: 'ig-conv-1' }) })
+  const atB = { ...CONVERSATION, location_id: LOC_B }
+  const noKeyAtB = () => person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: true } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: false } } }, LOC_A)
+
+  it('401 signed out', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await callSend()).status).toBe(401)
+  })
+
+  it('403 without the key at any studio, before anything is read', async () => {
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    getCurrentUser.mockResolvedValue(withKey({ whatsapp: false }))
+    expect((await callSend()).status).toBe(403)
+    expect(db.reads).toEqual([])
+  })
+
+  it('403 at a member studio without the key (held only at the active studio): the gate select ran, nothing was written or sent', async () => {
+    const db = makeDb(null, atB)
+    createServerClient.mockReturnValue(db)
+    getCurrentUser.mockResolvedValue(noKeyAtB())
+    expect((await callSend()).status).toBe(403)
+    expect(db.updates).toEqual([])
+    expect(db.reads).toEqual(['instagram_conversations'])
+  })
+
+  it('404, never 403, for a thread at a studio the caller is not a member of', async () => {
+    const db = makeDb(null, atB)
+    createServerClient.mockReturnValue(db)
+    expect((await callSend()).status).toBe(404)
+    expect(db.updates).toEqual([])
+  })
+
+  it('the key held at the thread\'s studio but not the active one is enough', async () => {
+    const db = makeDb(null, atB)
+    createServerClient.mockReturnValue(db)
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false } }, [LOC_B]: { role: 'staff', permissions: { whatsapp: true } } }, LOC_A))
+    expect((await callSend()).status).toBe(200)
+  })
+
+  it('the phone key alone is enough (the phone calls this route)', async () => {
+    createServerClient.mockReturnValue(makeDb())
+    getCurrentUser.mockResolvedValue(withKey({ whatsapp: false, mobile: { whatsapp: true } }))
+    expect((await callSend()).status).toBe(200)
   })
 })

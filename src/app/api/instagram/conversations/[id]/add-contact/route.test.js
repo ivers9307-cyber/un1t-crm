@@ -90,3 +90,11 @@ describe('SECGAPS.1 — the inbox key is judged at the conversation\'s studio', 
     expect(db.tables.contacts[0].location_id).toBe(LOC_B)
   })
 })
+
+describe('INBOXPERM.1 — web-only: the phone key alone is refused', () => {
+  it('403 for a caller holding only the phone key, nothing created', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: false, mobile: { whatsapp: true } } } }, LOC_A))
+    expect((await add(CONV_A)).status).toBe(403)
+    expect(db.tables.contacts).toEqual([])
+  })
+})

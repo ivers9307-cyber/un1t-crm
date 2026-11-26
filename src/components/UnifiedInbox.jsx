@@ -20,12 +20,13 @@
 // problem, not a convenience one. ?ch=em deep links redirect to
 // /communications/mail from the page above.
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
 import {
   DEFAULT_FOLLOWUP_CFG, QUEUES, needsReply, needsMiaHelp, filterByQueue, queueCounts, sortNeedsReply,
 } from '@/lib/inbox-queues'
 import { matchesSearch } from '@/lib/inbox-search'
+import { createListReloader } from '@/lib/inbox-list-reload'
 import {
   MessageCircle, RefreshCw, Check, Inbox as InboxIcon,
   ArrowLeft, Search,
@@ -72,6 +73,8 @@ function initialsOf(name) {
 }
 
 const VALID_CHANNELS = new Set(['wa', 'ig'])
+// A list fetch that has not answered in this long is aborted and treated as failed.
+const LIST_FETCH_TIMEOUT_MS = 20000
 
 export default function UnifiedInbox({ locationId, timezone = null, userId, initialConversationId, initialChannel, canEditConsent = false }) {
   const [waConvs, setWaConvs] = useState([])
@@ -98,23 +101,59 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
   )
   const [ccTab, setCcTab] = useState('profile')
 
-  const loadConversations = useCallback(async () => {
-    const qs = locationId ? `?location_id=${encodeURIComponent(locationId)}` : ''
-    const [wa, ig] = await Promise.all([
-      fetch(`/api/whatsapp/conversations${qs}`).then(r => r.json()).then(
-        d => {
-          if (!d.success) return null
-          const f = d.followup
-          setCfg(f && Number.isFinite(f.quietHours) ? { quietHours: f.quietHours, nudgeEnabled: !!f.nudgeEnabled } : DEFAULT_FOLLOWUP_CFG)
-          return d.conversations || []
-        },
-        () => null
-      ),
-      fetch(`/api/instagram/conversations${qs}`).then(r => r.json()).then(
-        d => (d.success ? d.conversations || [] : null),
-        () => null
-      ),
-    ])
+  // INBOXPERM.1 — a list load that never settles (a laptop that slept, a network
+  // switch) must not freeze the inbox: each list fetch carries a 20 s timeout
+  // (an aborted load is a failed load, the current lists stay), the reloader's
+  // watchdog frees its guard after 30 s, and the result of a load that is no
+  // longer current (abandoned, superseded, or for a studio that is no longer the
+  // active one) is dropped instead of set. Search fetches get the same timeout.
+  const locationIdRef = useRef(locationId)
+  const listAbortRef = useRef(null)
+  // The studio on screen. Declared before the reloader's effects below, so it is
+  // current when the new studio's first load starts; the old studio's pending
+  // request is aborted rather than left to finish for nobody.
+  useEffect(() => {
+    locationIdRef.current = locationId
+    return () => { if (listAbortRef.current) listAbortRef.current.abort() }
+  }, [locationId])
+
+  const loadConversations = useCallback(async ({ isCurrent } = {}) => {
+    const forLocation = locationId
+    const qs = forLocation ? `?location_id=${encodeURIComponent(forLocation)}` : ''
+    // A load that starts while an abandoned one is still pending cancels it.
+    if (listAbortRef.current) listAbortRef.current.abort()
+    const controller = new AbortController()
+    listAbortRef.current = controller
+    const timeout = setTimeout(() => controller.abort(), LIST_FETCH_TIMEOUT_MS)
+    let waDone = null
+    let wa = null
+    let ig = null
+    try {
+      ;[wa, ig] = await Promise.all([
+        fetch(`/api/whatsapp/conversations${qs}`, { signal: controller.signal }).then(r => r.json()).then(
+          d => {
+            if (!d.success) return null
+            waDone = d
+            return d.conversations || []
+          },
+          () => null
+        ),
+        fetch(`/api/instagram/conversations${qs}`, { signal: controller.signal }).then(r => r.json()).then(
+          d => (d.success ? d.conversations || [] : null),
+          () => null
+        ),
+      ])
+    } finally {
+      clearTimeout(timeout)
+      if (listAbortRef.current === controller) listAbortRef.current = null
+    }
+    // Stale: another load has taken over, or the studio changed while this one
+    // ran. Its rows belong to a studio that is not on screen: set nothing.
+    if ((isCurrent && !isCurrent()) || locationIdRef.current !== forLocation) return
+    if (waDone) {
+      const f = waDone.followup
+      setCfg(f && Number.isFinite(f.quietHours) ? { quietHours: f.quietHours, nudgeEnabled: !!f.nudgeEnabled } : DEFAULT_FOLLOWUP_CFG)
+    }
     // Transient per-channel failures keep the prior list rather than
     // blanking part of the queue.
     if (wa) setWaConvs(wa)
@@ -123,7 +162,20 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
     setLoading(false)
   }, [locationId])
 
-  useEffect(() => { loadConversations() }, [loadConversations])
+  // INBOXPERM.1 — every list load goes through one reloader: realtime events
+  // are debounced (400 ms, at most 2 s of postponement) and every path shares
+  // one in-flight guard, so a burst is one request, never several at once.
+  // `reloadNow` (manual refresh, the poll, the post-action callbacks) is
+  // immediate; `reloadSoon` is for realtime. See src/lib/inbox-list-reload.js.
+  const [reloader] = useState(() => createListReloader(() => {}))
+  const reloadNow = useCallback(() => reloader.now(), [reloader])
+  const reloadSoon = useCallback(() => reloader.request(), [reloader])
+  // Declared before the initial load below: effects run in order, so the
+  // reloader holds the current load (it changes with the studio) by then.
+  useEffect(() => { reloader.setLoad(loadConversations) }, [reloader, loadConversations])
+  useEffect(() => () => reloader.cancel(), [reloader])
+
+  useEffect(() => { reloadNow() }, [loadConversations, reloadNow])
 
   // UIX-POLISH.3 — Realtime push for the queue. The WA tables have
   // been published since mig 042; mig 256 added the Instagram tables,
@@ -147,17 +199,17 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
       'agent_membership_requests',
     ]) {
       channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => {
-        loadConversations()
+        reloadSoon()
       })
     }
     channel.subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [locationId, loadConversations])
+  }, [locationId, reloadSoon])
 
   useEffect(() => {
-    const t = setInterval(loadConversations, 60000)
+    const t = setInterval(reloadNow, 60000)
     return () => clearInterval(t)
-  }, [loadConversations])
+  }, [reloadNow])
 
   // INBOXFOLLOW.1 — re-render each minute so a snooze that ended, or a thread
   // that has been quiet long enough, changes queue (and its wait chip ticks)
@@ -177,10 +229,17 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
     const t = setTimeout(async () => {
       const base = locationId ? `location_id=${encodeURIComponent(locationId)}&` : ''
       const qs = `?${base}q=${encodeURIComponent(q)}`
-      const [wa, ig] = await Promise.all([
-        fetch(`/api/whatsapp/conversations${qs}`).then(r => r.json()).then(d => (d.success ? d.conversations || [] : null), () => null),
-        fetch(`/api/instagram/conversations${qs}`).then(r => r.json()).then(d => (d.success ? d.conversations || [] : null), () => null),
-      ])
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), LIST_FETCH_TIMEOUT_MS)
+      let wa, ig
+      try {
+        ;[wa, ig] = await Promise.all([
+          fetch(`/api/whatsapp/conversations${qs}`, { signal: controller.signal }).then(r => r.json()).then(d => (d.success ? d.conversations || [] : null), () => null),
+          fetch(`/api/instagram/conversations${qs}`, { signal: controller.signal }).then(r => r.json()).then(d => (d.success ? d.conversations || [] : null), () => null),
+        ])
+      } finally {
+        clearTimeout(timeout)
+      }
       if (cancelled) return
       // A failed channel degrades to no server hits for that channel —
       // the client filter over its loaded rows still applies via merge.
@@ -276,7 +335,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
               </span>
             )}
           </div>
-          <button type="button" onClick={loadConversations} className="text-un1t-subtle hover:text-un1t-text" aria-label="Refresh">
+          <button type="button" onClick={reloadNow} className="text-un1t-subtle hover:text-un1t-text" aria-label="Refresh">
             <RefreshCw size={16} />
           </button>
         </div>
@@ -451,12 +510,12 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                   userId={userId}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
-                  onThreadChanged={loadConversations}
+                  onThreadChanged={reloadNow}
                   onMoved={(movedId) => {
                     // WAHOMESTUDIO.1 (R7) — the thread left this inbox: drop the
                     // selection (pane, command centre, mobile back bar) and reload the queue.
                     setSelected(prev => (prev && prev.id === movedId ? null : prev))
-                    loadConversations()
+                    reloadNow()
                   }}
                 />
               ) : (
@@ -466,7 +525,7 @@ export default function UnifiedInbox({ locationId, timezone = null, userId, init
                   timezone={timezone}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
-                  onThreadChanged={loadConversations}
+                  onThreadChanged={reloadNow}
                 />
               )}
             </div>

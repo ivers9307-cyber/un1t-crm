@@ -15,18 +15,15 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  assertLocationAccessOr404: vi.fn(() => null),
-  requireInboxPermission: vi.fn(() => null),
-}))
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/instagram-contact-link', () => ({ rankContactSuggestions: vi.fn(() => []) }))
 vi.mock('@/lib/instagram-contact-link-server', () => ({ linkThreadToContact: vi.fn() }))
 
-import { DELETE } from './route.js'
+import { GET, POST, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { person } from '../../../../../../../tests/helpers/role-sweep-callers.js'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const CONV = 'c0000000-0000-0000-0000-0000000000aa'
@@ -35,9 +32,10 @@ const IGSID = '17841400000000000'
 
 // A tiny world that behaves like the real tables: the conversation row and the
 // contact row are STATE, so a second DELETE call sees whatever the first left.
-function makeWorld({ failContactUpdateTimes = 0, failConversationUpdate = false } = {}) {
+function makeWorld({ failContactUpdateTimes = 0, failConversationUpdate = false, location = LOC } = {}) {
   const state = {
-    conversation: { id: CONV, contact_id: CONTACT, location_id: LOC, ig_user_id: IGSID, ig_username: 'someone', customer_name: 'Someone' },
+    reads: [],
+    conversation: { id: CONV, contact_id: CONTACT, location_id: location, ig_user_id: IGSID, ig_username: 'someone', customer_name: 'Someone' },
     contactIgsid: IGSID,
     contactUpdateAttempts: 0,
   }
@@ -47,7 +45,7 @@ function makeWorld({ failContactUpdateTimes = 0, failConversationUpdate = false 
     from(table) {
       if (table === 'instagram_conversations') {
         return {
-          select: () => ({ eq: () => ({ single: async () => ({ data: { ...state.conversation }, error: null }) }) }),
+          select: () => { state.reads.push('instagram_conversations'); return { eq: () => ({ single: async () => ({ data: { ...state.conversation }, error: null }) }) } },
           update: (patch) => ({
             eq: async () => {
               if (failConversationUpdate) return { error: { message: 'conversation write failed' } }
@@ -93,7 +91,7 @@ const props = { params: Promise.resolve({ id: CONV }) }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  getCurrentUser.mockResolvedValue({ id: 'u1', isMaster: true, locations: [{ id: LOC }] })
+  getCurrentUser.mockResolvedValue(person({ [LOC]: { role: 'staff', permissions: { whatsapp: true } } }, LOC))
 })
 
 describe('DELETE /api/instagram/conversations/[id]/link', () => {
@@ -151,5 +149,67 @@ describe('DELETE /api/instagram/conversations/[id]/link', () => {
     // guard turns it into a legitimate zero-row no-op.
     expect(state.contactIgsid).toBeNull()
     expect(state.conversation.contact_id).toBe(CONTACT)
+  })
+})
+
+// INBOXPERM.1 — web-only (the phone never calls it): the inbox key ('ig' rides
+// `whatsapp`) at the thread's own studio.
+describe('INBOXPERM.1 — the link routes judge the web inbox key at the thread\'s studio', () => {
+  const OTHER = 'b0000000-0000-0000-0000-000000000002'
+  const at = (a, b, active = LOC) => person({ [LOC]: { role: 'staff', permissions: a }, [OTHER]: { role: 'staff', permissions: b } }, active)
+  const getReq = () => new Request(`http://localhost/api/instagram/conversations/${CONV}/link`)
+  const postReq = () => new Request(`http://localhost/api/instagram/conversations/${CONV}/link`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contact_id: CONTACT }),
+  })
+  const calls = { GET: () => GET(getReq(), props), POST: () => POST(postReq(), props), DELETE: () => DELETE(req(), props) }
+
+  for (const verb of ['GET', 'POST', 'DELETE']) {
+    describe(verb, () => {
+      it('401 signed out', async () => {
+        getCurrentUser.mockResolvedValue(null)
+        expect((await calls[verb]()).status).toBe(401)
+      })
+
+      it('403 with the key at no studio, before anything is read', async () => {
+        const { db, state } = makeWorld()
+        createServerClient.mockReturnValue(db)
+        getCurrentUser.mockResolvedValue(person({ [LOC]: { role: 'staff', permissions: { whatsapp: false } } }, LOC))
+        expect((await calls[verb]()).status).toBe(403)
+        expect(state.reads).toEqual([])
+      })
+
+      it('403 at a member studio without the key (held only elsewhere): only the gate select ran, nothing written', async () => {
+        const { db, state } = makeWorld({ location: OTHER })
+        createServerClient.mockReturnValue(db)
+        getCurrentUser.mockResolvedValue(at({ whatsapp: true }, { whatsapp: false }))
+        expect((await calls[verb]()).status).toBe(403)
+        expect(state.reads).toEqual(['instagram_conversations'])
+        expect(state.contactIgsid).toBe(IGSID)
+        expect(state.conversation.contact_id).toBe(CONTACT)
+      })
+
+      it('404, never 403, for a thread at a studio the caller is not a member of', async () => {
+        const { db, state } = makeWorld({ location: OTHER })
+        createServerClient.mockReturnValue(db)
+        expect((await calls[verb]()).status).toBe(404)
+        expect(state.contactIgsid).toBe(IGSID)
+      })
+
+      it('403 for a caller holding only the phone key (web-only route)', async () => {
+        const { db, state } = makeWorld()
+        createServerClient.mockReturnValue(db)
+        getCurrentUser.mockResolvedValue(person({ [LOC]: { role: 'staff', permissions: { whatsapp: false, mobile: { whatsapp: true } } } }, LOC))
+        expect((await calls[verb]()).status).toBe(403)
+        expect(state.reads).toEqual([])
+      })
+    })
+  }
+
+  it('DELETE passes at the thread\'s studio when the key is held there but not at the active studio', async () => {
+    const { db, state } = makeWorld({ location: OTHER })
+    createServerClient.mockReturnValue(db)
+    getCurrentUser.mockResolvedValue(at({ whatsapp: false }, { whatsapp: true }))
+    expect((await DELETE(req(), props)).status).toBe(200)
+    expect(state.contactIgsid).toBeNull()
   })
 })
