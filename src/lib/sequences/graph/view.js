@@ -74,7 +74,7 @@ export function describeNode(node) {
   const typeLabel = TYPE_LABELS[node?.type] || humanise(node?.type || 'step')
   let summary
   switch (node?.type) {
-    case 'email': summary = c.subject || 'Email'; break
+    case 'email': summary = c.subject || (c.template_id ? 'Saved email template' : 'Email'); break
     case 'whatsapp': summary = c.template_id || c.whatsapp_template_id ? 'WhatsApp template' : 'WhatsApp message'; break
     case 'sms': summary = (c.body && String(c.body).trim()) || 'SMS message'; break
     case 'wait': summary = humaniseDelay(c); break
