@@ -32,6 +32,7 @@ import { metaPixelIdsForPath, pageLocationIdFromDocument } from '@/lib/meta-pixe
 import { stripDashes } from '@/lib/un1t-online-funnel-copy'
 import { readAttributionFromUrl, buildAttribution, readFbpCookie, funnelSessionId } from '@/lib/campaign-funnel-attribution'
 import { customerErrorText } from '@/lib/page-request-errors'
+import EmailTypoHint from '@/components/EmailTypoHint'
 
 // The card words the editor's preview may edit in place (onEditCopy).
 export const EDITABLE_COPY_KEYS = Object.freeze(['pick_title', 'pick_body', 'done_title', 'done_body'])
@@ -211,6 +212,7 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
           <input className={inputCls} placeholder="First name" value={form.first_name} onChange={set('first_name')} maxLength={120} autoComplete="given-name" />
           <input className={inputCls} placeholder="Last name" value={form.last_name} onChange={set('last_name')} maxLength={120} autoComplete="family-name" />
           <input className={inputCls} type="email" placeholder="Email" value={form.email} onChange={set('email')} maxLength={320} autoComplete="email" />
+          <EmailTypoHint email={form.email} onAccept={(v) => setForm((f) => ({ ...f, email: v }))} />
           <input className={inputCls} type="tel" placeholder="Phone" value={form.phone} onChange={set('phone')} maxLength={50} autoComplete="tel" />
           <label className="flex items-start gap-2.5 text-sm text-black/65 pt-1">
             <input type="checkbox" checked={form.consent} onChange={set('consent')} className="mt-0.5 w-4 h-4 accent-black" />
