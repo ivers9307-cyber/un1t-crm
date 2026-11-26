@@ -105,7 +105,7 @@ export default function FlowEditor({ initialGraph, sequence }) {
     })); touch()
   }
   const toggle = (id) => setExpandedId(prev => prev === id ? null : id)
-  const ctx = { expandedId, errorsByNode, add, patch, remove, move, toggle, templates, emailTemplates, tagVocabulary }
+  const ctx = { expandedId, errorsByNode, add, patch, remove, move, toggle, templates, emailTemplates, tagVocabulary, sequenceId: sequence?.id || null }
 
   const saveDraft = async () => {
     setBusy('save')
@@ -201,7 +201,7 @@ function LaneView({ lane, lanePath, ctx }) {
                   expanded={ctx.expandedId === item.id} errors={ctx.errorsByNode.get(item.id) || []}
                   onToggle={() => ctx.toggle(item.id)} onMove={(dir) => ctx.move(lanePath, i, dir)}
                   onRemove={() => ctx.remove(lanePath, i)} onPatch={(p) => ctx.patch(lanePath, i, p)}
-                  templates={ctx.templates} emailTemplates={ctx.emailTemplates} />}
+                  templates={ctx.templates} emailTemplates={ctx.emailTemplates} sequenceId={ctx.sequenceId} />}
           </div>
         )
       })}
