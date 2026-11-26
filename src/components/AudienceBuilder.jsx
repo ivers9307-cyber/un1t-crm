@@ -533,14 +533,16 @@ function fieldMatchesSearch(opt, term) {
 //    FILTER-A.2 hit with the retired `active_member` stage value.
 //  - Enter is swallowed. These pickers sit inside host <form>s (the campaign
 //    editor), where Enter in a text input submits.
-function FieldSelect({ value, onChange, disabled, describedBy, className, cellClassName, inputRef }) {
+function FieldSelect({ value, onChange, disabled, describedBy, className, cellClassName, inputRef, hideFields = null }) {
   const uid = useId()
   const selectId = `${uid}-field`
   const [search, setSearch] = useState('')
   const term = search.trim().toLowerCase()
 
-  const matchCount = term ? FIELD_OPTIONS.filter(o => fieldMatchesSearch(o, term)).length : FIELD_OPTIONS.length
-  const isVisible = (opt) => fieldMatchesSearch(opt, term) || opt.value === value
+  // SEGGROUPS.2 — inside a group, fields the engine refuses there are hidden.
+  const offered = hideFields ? FIELD_OPTIONS.filter(o => !hideFields.has(o.value)) : FIELD_OPTIONS
+  const matchCount = term ? offered.filter(o => fieldMatchesSearch(o, term)).length : offered.length
+  const isVisible = (opt) => (!hideFields || !hideFields.has(opt.value)) && (fieldMatchesSearch(opt, term) || opt.value === value)
   const groups = FIELD_GROUPS
     .map(group => ({ group, options: FIELD_OPTIONS.filter(o => o.group === group && isVisible(o)) }))
     .filter(g => g.options.length > 0)
@@ -662,7 +664,13 @@ const AWAITS_A_VALUE = ['tag-select', 'event-select', 'plan-select', 'location-s
 // for the next embed; the default closes it at the component. Hosts wanting a
 // live number now mount the shared <AudienceCount> instead of feeding this
 // footer, which survives only for CampaignEditor's own count state.
-export default function AudienceBuilder({ filter, onChange, audienceCount = null, disabled = false, defaultFilterRow = null, presets = null, locationId = null, timeZone = null }) {
+// SEGGROUPS.2 — virtual fields resolve to id sets and cannot sit inside a
+// group (applyAudienceFilter refuses them there), so the group's picker
+// does not offer them.
+const FIELDS_NOT_IN_GROUPS = new Set(['tag', 'event_registration', 'location_list', 'campaign_opened', 'campaign_clicked', 'un1t_visited_within'])
+
+// `nested` renders a group's rows: no presets, no count, no "Add group".
+export default function AudienceBuilder({ filter, onChange, audienceCount = null, disabled = false, defaultFilterRow = null, presets = null, locationId = null, timeZone = null, nested = false }) {
   const { stages: studioStages } = useStudioStages(locationId)
   // Keyed by the studio it was fetched for, so switching studio refetches.
   const [leadSourceState, setLeadSourceState] = useState({ locationId: null, sources: null })
@@ -858,6 +866,22 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
     updateFilter(filters.filter((_, i) => i !== index))
   }
 
+  // SEGGROUPS.2 — a group starts with two empty rows and ANY, the common
+  // case ("members AND (lapsed OR never attended)").
+  function addGroup() {
+    if (disabled) return
+    const newKey = mintRowKey()
+    setRowKeyState(k => [...k, newKey])
+    updateFilter([
+      ...filters,
+      { group: { logic: 'or', filters: [{ field: '', op: '', value: '' }, { field: '', op: '', value: '' }] } },
+    ])
+  }
+
+  function replaceGroup(index, g) {
+    updateFilter(filters.map((f, i) => (i === index ? { group: { logic: g.logic || 'and', filters: g.filters || [] } } : f)))
+  }
+
   function updateRow(index, updates) {
     const updated = filters.map((f, i) => (i === index ? { ...f, ...updates } : f))
     updateFilter(updated)
@@ -962,7 +986,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
       {/* FILTER-A.1 — preset audiences. Opt-in per host: the send composer
           passes them, sequences and /contacts must not (a sequence audience is
           a CONTINUING condition, so these rows would mean something else). */}
-      {presets?.length > 0 && (
+      {!nested && presets?.length > 0 && (
         <div
           role="group"
           aria-label="Preset audiences"
@@ -1035,6 +1059,31 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
 
       <div className="space-y-2">
         {filters.map((f, index) => {
+          // SEGGROUPS.2 — a group row: its own little builder, one level deep.
+          if (f?.group) {
+            const rowKey = rowKeys[index]
+            return (
+              <div key={rowKey} role="group" aria-label={`${rowLabel(index)} (group)`} className="border border-dashed border-un1t-border rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <RowConnector index={index} logic={logic} />
+                  <span className="text-xs font-medium text-un1t-subtle">Group: match {f.group.logic === 'or' ? 'any' : 'all'} of these</span>
+                  <button type="button" disabled={disabled} onClick={() => removeFilter(index)}
+                    aria-label={`Remove group ${index + 1}`}
+                    className="ml-auto text-un1t-muted hover:text-red-700 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text disabled:opacity-50">
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
+                </div>
+                <AudienceBuilder
+                  nested
+                  filter={f.group}
+                  onChange={(g) => replaceGroup(index, g)}
+                  disabled={disabled}
+                  locationId={locationId}
+                  timeZone={timeZone}
+                />
+              </div>
+            )
+          }
           const fieldConfig = getFieldConfig(f.field)
 
           // FILTER-P1.1 — a row the operator has not given a field to yet.
@@ -1052,7 +1101,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
               <div key={rowKey} role="group" aria-label={rowLabel(index)} className="bg-un1t-surface border border-un1t-border rounded-lg p-3">
                <div className="flex flex-wrap items-center gap-2">
                 <RowConnector index={index} logic={logic} />
-                <FieldSelect
+                <FieldSelect hideFields={nested ? FIELDS_NOT_IN_GROUPS : null}
                   value={pending}
                   disabled={disabled}
                   inputRef={registerField(rowKey)}
@@ -1138,7 +1187,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
               <RowConnector index={index} logic={logic} />
 
               {/* Field */}
-              <FieldSelect
+              <FieldSelect hideFields={nested ? FIELDS_NOT_IN_GROUPS : null}
                 value={f.field}
                 disabled={disabled}
                 inputRef={registerField(rowKey)}
@@ -1321,6 +1370,17 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
             <Plus size={14} aria-hidden="true" />
             Add filter
           </button>
+          {!nested && (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={addGroup}
+              className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text disabled:opacity-50"
+            >
+              <Plus size={14} aria-hidden="true" />
+              Add group
+            </button>
+          )}
           {/* FILTER-A.4 — at 30 rows the only way out was 30 clicks. */}
           {filters.length > 0 && (
             <button
@@ -1340,7 +1400,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
             announced when that first number arrives. The `!= null` guard also
             covers the FILTER-B.1 omitted-prop case (now defaulted). */}
         <span aria-live="polite" aria-atomic="true" className="text-sm text-un1t-subtle">
-          {audienceCount != null && (
+          {!nested && audienceCount != null && (
             <>
               <Users size={14} className="inline mr-1.5" aria-hidden="true" />
               <strong className="text-un1t-text">{audienceCount}</strong> contacts match

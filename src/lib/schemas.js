@@ -343,13 +343,21 @@ export function validatePasswordComplexity(password) {
 // Audience filter: { logic: 'and'|'or', filters: [...] }. The actual
 // per-filter validation lives in src/lib/audience-filter.js (because it
 // depends on the field/op whitelist), so here we just shape-check.
+const audienceFilterRowSchema = z.object({
+  field: z.string().max(100),
+  op: z.string().max(50),
+  value: z.unknown().optional(),
+})
+// SEGGROUPS.1 — a row may also be ONE level of group with its own logic.
+const audienceFilterGroupSchema = z.object({
+  group: z.object({
+    logic: z.enum(['and', 'or']),
+    filters: z.array(audienceFilterRowSchema).max(50),
+  }),
+})
 export const audienceFilterSchema = z.object({
   logic: z.enum(['and', 'or']).optional(),
-  filters: z.array(z.object({
-    field: z.string().max(100),
-    op: z.string().max(50),
-    value: z.unknown().optional(),
-  })).optional(),
+  filters: z.array(z.union([audienceFilterRowSchema, audienceFilterGroupSchema])).optional(),
 }).optional()
 
 // =============================================================

@@ -290,14 +290,34 @@ const NUMERIC_COMPARE_OPS = new Set(['gt', 'lt', 'gte', 'lte'])
 // validation error, no persisted meaning. Only a BLANK field is skipped — any
 // other unrecognised field still throws (a typo must never widen an audience).
 export function isUnsetFilterRow(f) {
+  if (isGroupRow(f)) return false
   return !f || typeof f !== 'object' || f.field == null || f.field === ''
 }
+
+// SEGGROUPS.1 — a group row: `{ group: { logic: 'and'|'or', filters: [rows] } }`.
+// One level only: a group's rows are plain field rows, never groups.
+export function isGroupRow(f) {
+  return !!f && typeof f === 'object' && !!f.group && typeof f.group === 'object'
+}
+
+/** The virtual field types: resolved to contact-id sets, never to a column. */
+export const VIRTUAL_FIELD_TYPES = new Set(['tag', 'event', 'location_list', 'campaign_opened', 'campaign_clicked', 'un1t_visit'])
 
 // Drop unset rows before a filter leaves the builder for the count endpoint or
 // the database, so neither ever sees a half-built row.
 export function stripUnsetFilterRows(filter) {
   if (!filter || !Array.isArray(filter.filters)) return filter
-  return { ...filter, filters: filter.filters.filter(f => !isUnsetFilterRow(f)) }
+  // SEGGROUPS.1 — strip inside groups too, and drop a group left empty.
+  const rows = []
+  for (const f of filter.filters) {
+    if (isGroupRow(f)) {
+      const inner = Array.isArray(f.group.filters) ? f.group.filters.filter(r => !isUnsetFilterRow(r) && !isGroupRow(r)) : []
+      if (inner.length) rows.push({ group: { ...f.group, filters: inner } })
+    } else if (!isUnsetFilterRow(f)) {
+      rows.push(f)
+    }
+  }
+  return { ...filter, filters: rows }
 }
 
 // ── OR support (PostgREST .or()) ─────────────────────────────────
@@ -424,6 +444,70 @@ function toOrCondition(field, op, v, fieldConfig) {
   }
 }
 
+// SEGGROUPS.1 — validate and coerce ONE scalar row; shared by top-level rows
+// and rows inside a group so both obey exactly the same rules. Returns
+// { field, op, v, fieldConfig }. Virtual fields are reported by `virtual: true`
+// and left to the caller (they cannot be expressed as a PostgREST condition).
+function normalizeRow(f, fields) {
+  const { field: fieldName, op, value } = f
+  const fieldConfig = fields[fieldName]
+  if (!fieldConfig) {
+    throw new InvalidAudienceFilterError(`Unknown audience field: ${fieldName}`)
+  }
+  if (!fieldConfig.ops.includes(op)) {
+    throw new InvalidAudienceFilterError(`Operator "${op}" is not allowed on field "${fieldName}"`)
+  }
+  // The column the predicate lands on: the field's own name unless the
+  // registry maps it elsewhere (`column`, ORGCONTACTS.4).
+  const field = fieldConfig.column ?? fieldName
+  if (VIRTUAL_FIELD_TYPES.has(fieldConfig.type)) return { field, op, v: value, fieldConfig, virtual: true }
+
+  // Parse + validate value where required.
+  let v = value
+  const wantsNumber = DAYS_SINCE_OPS.has(op)
+    || (fieldConfig.type === 'number'
+        && (NUMERIC_COMPARE_OPS.has(op) || op === 'eq' || op === 'neq'))
+  if (wantsNumber) {
+    // COMMSFIX.B.2 — Number('') / Number(null) are 0 and Number(true) is 1,
+    // so a blank builder row silently became "= 0" (a large real cohort)
+    // and "more than [blank] days ago" meant "ever". Reject them before
+    // the coercion; only real numbers / numeric strings pass.
+    if (v === '' || v === null || v === undefined || typeof v === 'boolean') {
+      throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a numeric value`)
+    }
+    const n = Number(v)
+    if (!Number.isFinite(n)) {
+      throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a numeric value`)
+    }
+    v = n
+  }
+  // FILTER-P1.4 — date fields compared against a real date, or nothing.
+  // gt/lt on a date field with value '' passed validation, persisted onto
+  // the campaign, and only surfaced at SEND time as a raw Postgres
+  // `invalid input syntax for type timestamp`. The builder CREATED that
+  // state: switching a row to a date field defaulted to 'after' with an
+  // empty value. Reject it here so the count 400s visibly and
+  // validateAudienceFilter (which reuses this) refuses to save it.
+  // days_since_* are excluded — they carry a day COUNT, already guarded
+  // by the numeric branch above.
+  if (fieldConfig.type === 'date'
+      && !DAYS_SINCE_OPS.has(op)
+      && (NUMERIC_COMPARE_OPS.has(op) || op === 'eq' || op === 'neq')) {
+    if (typeof v !== 'string' || !v.trim() || Number.isNaN(Date.parse(v))) {
+      throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a date value`)
+    }
+  }
+  // Boolean fields — the builder sends 'true' / 'false' strings.
+  // Coerce to a real boolean for eq / neq; reject anything else.
+  if (fieldConfig.type === 'boolean' && (op === 'eq' || op === 'neq')) {
+    if (v === true || v === 'true') v = true
+    else if (v === false || v === 'false') v = false
+    else throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a boolean value`)
+  }
+
+  return { field, op, v, fieldConfig, virtual: false }
+}
+
 /**
  * Apply a whitelisted audience filter to a Supabase query.
  *
@@ -474,27 +558,53 @@ export function applyAudienceFilter(query, filter, { fields = AUDIENCE_FIELDS } 
       throw new InvalidAudienceFilterError('Each filter must be an object')
     }
 
+    // SEGGROUPS.1 — a group of rows with its own AND/OR, as ONE condition:
+    // `and(a,b)` or `or(a,b)` via the same per-row OR builder the top-level
+    // OR mode uses. Under top-level AND it is one more chained .or() (chained
+    // calls AND together); under top-level OR it is one more disjunct.
+    // Virtual fields cannot be expressed as a condition, so they are refused
+    // inside a group, the same way they are refused under OR.
+    if (isGroupRow(f)) {
+      const g = f.group
+      if (g.logic !== 'and' && g.logic !== 'or') {
+        throw new InvalidAudienceFilterError(`A filter group's logic must be "and" or "or" (got ${JSON.stringify(g.logic)})`)
+      }
+      if (!Array.isArray(g.filters)) {
+        throw new InvalidAudienceFilterError('A filter group must have a filters array')
+      }
+      const parts = []
+      for (const r of g.filters) {
+        if (isGroupRow(r)) {
+          throw new InvalidAudienceFilterError('Filter groups cannot contain other groups')
+        }
+        if (isUnsetFilterRow(r)) continue
+        const n = normalizeRow(r, fields)
+        if (n.virtual) {
+          throw new InvalidAudienceFilterError(
+            'Tag, event, studio-list, campaign and visit filters cannot go inside a group. Put them on their own line.'
+          )
+        }
+        parts.push(toOrCondition(n.field, n.op, n.v, n.fieldConfig))
+      }
+      if (!parts.length) continue
+      const cond = `${g.logic}(${parts.join(',')})`
+      if (useOr) orParts.push(cond)
+      else query = query.or(cond)
+      continue
+    }
+
     // FILTER-P1.1 — a row with no field chosen yet is inert, not an error.
     if (isUnsetFilterRow(f)) continue
 
-    const { field: fieldName, op, value } = f
-    const fieldConfig = fields[fieldName]
-    if (!fieldConfig) {
-      throw new InvalidAudienceFilterError(`Unknown audience field: ${fieldName}`)
-    }
-    if (!fieldConfig.ops.includes(op)) {
-      throw new InvalidAudienceFilterError(`Operator "${op}" is not allowed on field "${fieldName}"`)
-    }
-    // The column the predicate lands on: the field's own name unless the
-    // registry maps it elsewhere (`column`, ORGCONTACTS.4).
-    const field = fieldConfig.column ?? fieldName
+    const norm = normalizeRow(f, fields)
+    const { field, op, fieldConfig, v } = norm
 
     // 'tag' / 'event' are virtual fields resolved separately (resolveTag/
     // EventFilters) into AND-combined contacts.id constraints. They cannot
     // participate in an OR disjunction with the scalar predicates, so under
     // OR logic we fail loudly rather than silently dropping them (which
     // would widen the audience to everyone matching the scalar OR).
-    if (fieldConfig.type === 'tag' || fieldConfig.type === 'event' || fieldConfig.type === 'location_list' || fieldConfig.type === 'campaign_opened' || fieldConfig.type === 'campaign_clicked' || fieldConfig.type === 'un1t_visit') {
+    if (norm.virtual) {
       if (useOr) {
         throw new InvalidAudienceFilterError(
           'OR logic is not supported together with tag, event or studio-list filters. Use AND, or send these as separate audiences.'
@@ -503,49 +613,6 @@ export function applyAudienceFilter(query, filter, { fields = AUDIENCE_FIELDS } 
       // AND: skip here — the scalar-filter loop must not apply a virtual
       // field as `query.eq('tag', …)`; the resolver injected its id-set.
       continue
-    }
-
-    // Parse + validate value where required.
-    let v = value
-    const wantsNumber = DAYS_SINCE_OPS.has(op)
-      || (fieldConfig.type === 'number'
-          && (NUMERIC_COMPARE_OPS.has(op) || op === 'eq' || op === 'neq'))
-    if (wantsNumber) {
-      // COMMSFIX.B.2 — Number('') / Number(null) are 0 and Number(true) is 1,
-      // so a blank builder row silently became "= 0" (a large real cohort)
-      // and "more than [blank] days ago" meant "ever". Reject them before
-      // the coercion; only real numbers / numeric strings pass.
-      if (v === '' || v === null || v === undefined || typeof v === 'boolean') {
-        throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a numeric value`)
-      }
-      const n = Number(v)
-      if (!Number.isFinite(n)) {
-        throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a numeric value`)
-      }
-      v = n
-    }
-    // FILTER-P1.4 — date fields compared against a real date, or nothing.
-    // gt/lt on a date field with value '' passed validation, persisted onto
-    // the campaign, and only surfaced at SEND time as a raw Postgres
-    // `invalid input syntax for type timestamp`. The builder CREATED that
-    // state: switching a row to a date field defaulted to 'after' with an
-    // empty value. Reject it here so the count 400s visibly and
-    // validateAudienceFilter (which reuses this) refuses to save it.
-    // days_since_* are excluded — they carry a day COUNT, already guarded
-    // by the numeric branch above.
-    if (fieldConfig.type === 'date'
-        && !DAYS_SINCE_OPS.has(op)
-        && (NUMERIC_COMPARE_OPS.has(op) || op === 'eq' || op === 'neq')) {
-      if (typeof v !== 'string' || !v.trim() || Number.isNaN(Date.parse(v))) {
-        throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a date value`)
-      }
-    }
-    // Boolean fields — the builder sends 'true' / 'false' strings.
-    // Coerce to a real boolean for eq / neq; reject anything else.
-    if (fieldConfig.type === 'boolean' && (op === 'eq' || op === 'neq')) {
-      if (v === true || v === 'true') v = true
-      else if (v === false || v === 'false') v = false
-      else throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a boolean value`)
     }
 
     // OR logic — accumulate a PostgREST condition string instead of
