@@ -21,6 +21,7 @@ import { classFunnelConsentDefault } from '@/lib/landing-page-blocks'
 import { termsLabelSegments, stripDashes } from '@/lib/un1t-online-funnel-copy'
 import { customerErrorText } from '@/lib/page-request-errors'
 import { cleanAdValue } from '@/lib/campaign-funnel-attribution'
+import EmailTypoHint from '@/components/EmailTypoHint'
 
 // MATCHQUALITY.1 — Meta's `_fbp` cookie, or null. Never throws (no document
 // during SSR, cookies blocked, no Pixel yet).
@@ -474,6 +475,7 @@ export default function ClassFunnel(props) {
           <input className={inputCls} placeholder="First name" value={form.first_name} onChange={set('first_name')} maxLength={120} autoComplete="given-name" />
           <input className={inputCls} placeholder="Last name" value={form.last_name} onChange={set('last_name')} maxLength={120} autoComplete="family-name" />
           <input className={inputCls} type="email" placeholder="Email" value={form.email} onChange={set('email')} maxLength={320} autoComplete="email" />
+          <EmailTypoHint email={form.email} onAccept={(v) => setForm((f) => ({ ...f, email: v }))} />
           <input className={inputCls} type="tel" placeholder="Phone" value={form.phone} onChange={set('phone')} maxLength={50} autoComplete="tel" />
           <label className="flex items-start gap-2.5 text-xs text-white/65 pt-1">
             <input type="checkbox" checked={form.consent} onChange={set('consent')} className="mt-0.5 w-4 h-4 accent-white" />

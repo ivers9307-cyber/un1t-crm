@@ -26,6 +26,7 @@ import { newLeadEventId, pixelUserData, fireBrowserLead, fireBrowserInitiateChec
 import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import { loadRevolutSdk, revolutMode, revolutPublicKey } from '@/lib/revolut-embed'
 import { termsLabelSegments } from '@/lib/un1t-online-funnel-copy'
+import EmailTypoHint from '@/components/EmailTypoHint'
 
 function readFbpCookie() {
   try {
@@ -319,6 +320,7 @@ export default function OfferCheckout({ studio, slug, priceLabel, provider = 're
         <input id="ofr-email" name="email" className="ofr-input" type="email" required maxLength={200} autoComplete="email" enterKeyHint="next"
           autoCapitalize="none" autoCorrect="off" spellCheck={false}
           value={fields.email} onChange={(e) => setFields((f) => ({ ...f, email: e.target.value }))} />
+        <EmailTypoHint email={fields.email} onAccept={(v) => setFields((f) => ({ ...f, email: v }))} className="ofr-hint" />
       </div>
       <div className="mt-5">
         <label className="ofr-label" htmlFor="ofr-phone">Phone</label>

@@ -101,6 +101,7 @@ import { customerErrorText } from '@/lib/page-request-errors'
 import { classFirstStepCopy, classLine } from '@/lib/class-first-funnel'
 import { inAppBrowserFromUserAgent } from '@/lib/trial-checkout-window'
 import { readAttributionFromUrl, buildAttribution as buildAdAttribution } from '@/lib/campaign-funnel-attribution'
+import EmailTypoHint from '@/components/EmailTypoHint'
 
 const STATUS_PATH = '/api/public/trial-purchases'
 const HELP_PATH = '/api/public/trial-purchases/help'
@@ -850,6 +851,7 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
           <input className={TRIAL_INPUT} disabled={preview} placeholder="Last name" value={form.last_name} onChange={set('last_name')} maxLength={120} autoComplete="family-name" aria-label="Last name" />
         </div>
         <input className={TRIAL_INPUT} disabled={preview} type="email" placeholder="Email" value={form.email} onChange={set('email')} maxLength={320} autoComplete="email" aria-label="Email" />
+        <EmailTypoHint email={form.email} onAccept={(v) => setForm((f) => ({ ...f, email: v }))} />
         <input className={TRIAL_INPUT} disabled={preview} type="tel" placeholder="Phone" value={form.phone} onChange={set('phone')} maxLength={50} autoComplete="tel" aria-label="Phone" />
         <label className={`flex items-start gap-2.5 text-xs pt-1 ${TRIAL_MUTED}`}>
           <input type="checkbox" disabled={preview} checked={form.consent} onChange={set('consent')} className="mt-0.5 w-4 h-4 accent-black" />
