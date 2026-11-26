@@ -91,7 +91,7 @@ export const POST = withAuth({ permission: 'email', location: false }, async ({ 
 
   const { data: own } = await db
     .from('contacts')
-    .select('id, name, first_name, last_name, email, phone, pipeline_stage_slug')
+    .select('id, name, first_name, last_name, email, phone, pipeline_stage_slug, glofox_membership_status, glofox_membership_state')
     .eq('email', recipient)
     .eq('location_id', sequence.location_id)
     .maybeSingle()

@@ -506,6 +506,7 @@ export async function tickCampaignSend(db, campaign) {
       ab_variant,
       contact:contacts!inner(
         id, email, first_name, last_name, name, phone, pipeline_stage_slug,
+        glofox_membership_status, glofox_membership_state,
         email_status,
         last_marketing_touch_at,
         contact_preferences(unsubscribe_token)
