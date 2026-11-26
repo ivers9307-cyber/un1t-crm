@@ -110,6 +110,8 @@ export const CLOSED_FUNCTIONS = [
   // that file.
   { fn: 'public.campaign_outcome_stats', args: '(uuid, int)', closedBy: 737,
     why: 'INVOKER campaign outcome report over a bare campaign id; only the service-role outcomes route calls it, after its own access check' },
+  { fn: 'public.sequence_outcome_stats', args: '(uuid, int)', closedBy: 876,
+    why: 'SEQOUTCOME.1: automation outcome report over a bare sequence id; only the service-role outcomes route calls it, after its own access check' },
   { fn: 'private.location_whatsapp_numbers_same_org', args: '()', closedBy: 743,
     why: 'WAORGNUMBER.1: the cross-organisation fence trigger on location_whatsapp_numbers; a trigger fires without EXECUTE' },
   { fn: 'private.whatsapp_numbers_fill_organization', args: '()', closedBy: 743,

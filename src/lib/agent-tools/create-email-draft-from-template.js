@@ -4,14 +4,18 @@
 
 import { z } from 'zod'
 import { uuidLike, audienceFilterSchema } from '@/lib/schemas'
-import { unknownMergeTags } from '@/lib/agent-email-blocks'
+import { unknownMergeTags, conditionalBlockProblem } from '@/lib/agent-email-blocks'
 import { loadMarketingTemplate } from '@/lib/email-templates-for-agents'
 import { emailAudienceCounts } from '@/lib/email-audience-counts'
 import { defineTool, ToolRefusal } from './registry.js'
 import { emailGate, resolveAudienceFilter } from './_email-campaign.js'
-import { ResendSchema, resendColumns, checkReplyTo, sendsAs, throwWriteError } from './_email-draft.js'
+import { ResendSchema, resendColumns, checkReplyTo, sendsAs, throwWriteError, MERGE_TAG_HELP } from './_email-draft.js'
 
 function refuseUnknownTags(where, text) {
+  // CONDBLOCKS.2 — a conditional block the send path cannot read would go out
+  // as literal braces.
+  const cond = conditionalBlockProblem(text)
+  if (cond) throw new ToolRefusal('invalid_input', `${where}: ${cond} Pick another template or edit this one in the CRM.`)
   const unknown = unknownMergeTags(text)
   if (unknown.length) {
     throw new ToolRefusal('invalid_input', `${where} has {{${unknown[0]}}}, which a campaign cannot fill `
@@ -31,7 +35,7 @@ export default defineTool({
     studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     template_id: uuidLike.describe('A template id from list_email_templates.'),
     name: z.string().trim().min(1).max(200).describe('Internal campaign name.'),
-    subject: z.string().trim().min(1).max(200).optional().describe('The subject line; omit to use the template\'s.'),
+    subject: z.string().trim().min(1).max(200).optional().describe(`The subject line; omit to use the template's. ${MERGE_TAG_HELP}`),
     preview_text: z.string().trim().max(500).optional().describe('Inbox preview text.'),
     from_name: z.string().trim().max(100).optional().describe('Sender display name.'),
     reply_to: z.string().trim().email().max(254).optional().describe('Reply-to address on the studio\'s verified domain.'),

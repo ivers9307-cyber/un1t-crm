@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { describeNode } from '@/lib/sequences/graph'
 import { describeNextStep } from '@/lib/sequences/run-history'
+import AutomationOutcomes from './AutomationOutcomes'
 
 // Friendly labels for sequence_enrollments.source_type (how they got in).
 const SOURCE_LABELS = {
@@ -263,6 +264,9 @@ export default function AutomationPerformance({ sequenceId, steps = [], canManag
           )}
         </>
       )}
+
+      {/* SEQOUTCOME.1 — bookings and purchases after a click, with a control. */}
+      {!loading && <AutomationOutcomes sequenceId={sequenceId} />}
 
       {/* Enrolled contacts — the per-person run log */}
       {!loading && (

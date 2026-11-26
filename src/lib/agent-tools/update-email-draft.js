@@ -8,7 +8,7 @@ import { defineTool, ToolRefusal } from './registry.js'
 import { EDITABLE_CAMPAIGN_STATUSES } from '@/lib/campaign-editability'
 import { voidApprovals } from '@/lib/campaign-approval'
 import { emailGate, loadCampaignAtStudio, resolveAudienceFilter, htmlSha256 } from './_email-campaign.js'
-import { BODY_EDITED_IN_CRM, EmailBlocksSchema, ResendSchema, buildBody, resendColumns, checkReplyTo, sendsAs, throwWriteError } from './_email-draft.js'
+import { BODY_EDITED_IN_CRM, EmailBlocksSchema, ResendSchema, buildBody, resendColumns, checkReplyTo, sendsAs, throwWriteError, MERGE_TAG_HELP, checkSubject } from './_email-draft.js'
 
 const FIELDS = ['name', 'subject', 'preview_text', 'from_name', 'reply_to', 'blocks', 'segment_id', 'filter', 'resend']
 
@@ -28,11 +28,11 @@ export default defineTool({
     studio_id: uuidLike.optional().describe('A studio id; omit for the default studio.'),
     campaign_id: uuidLike.describe('The campaign id (see list_email_campaigns).'),
     name: z.string().trim().min(1).max(200).optional(),
-    subject: z.string().trim().min(1).max(200).optional(),
+    subject: z.string().trim().min(1).max(200).optional().describe(`The email subject line. ${MERGE_TAG_HELP}`),
     preview_text: z.string().trim().max(500).optional(),
     from_name: z.string().trim().max(100).optional(),
     reply_to: z.string().trim().email().max(254).optional().describe('On the studio\'s verified domain.'),
-    blocks: EmailBlocksSchema.optional().describe('The whole new body, 1 to 60 blocks.'),
+    blocks: EmailBlocksSchema.optional().describe(`The whole new body, 1 to 60 blocks. ${MERGE_TAG_HELP}`),
     segment_id: uuidLike.optional().describe('A saved segment at this studio, instead of filter.'),
     filter: audienceFilterSchema.describe('An inline audience filter, instead of segment_id.'),
     resend: ResendSchema.describe('after_hours (1 to 168) and an optional subject to resend to people who did not open it; null switches the resend off; omit to leave it.'),
@@ -47,6 +47,7 @@ export default defineTool({
     const campaign = await loadCampaignAtStudio(db, studio, input.campaign_id)
     if (!EDITABLE_CAMPAIGN_STATUSES.includes(campaign.status)) throw notEditable(campaign.status)
 
+    checkSubject(input.subject)
     const patch = {}
     for (const k of ['name', 'subject', 'preview_text', 'from_name']) if (input[k] !== undefined) patch[k] = input[k]
 
