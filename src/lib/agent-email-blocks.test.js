@@ -159,3 +159,13 @@ describe('agent email blocks', () => {
     expect(render(blocks)).toBe(render(JSON.parse(JSON.stringify(blocks))))
   })
 })
+
+describe('merge-tag fallbacks for agents (MERGEFALLBACK.2)', () => {
+  it('accepts {{offered|fallback}} and still rejects unknown or malformed ones', async () => {
+    const { unknownMergeTags } = await import('./agent-email-blocks')
+    expect(unknownMergeTags('Hi {{first_name|there}}, see {{location_name|the studio}}')).toEqual([])
+    expect(unknownMergeTags('{{nickname|pal}}')).toEqual(['nickname|pal'])
+    expect(unknownMergeTags('{{first_name |there}}')).toEqual(['first_name |there'])
+    expect(unknownMergeTags('{{first_name|{{last_name}}}}')).not.toEqual([])
+  })
+})
