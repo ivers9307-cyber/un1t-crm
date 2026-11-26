@@ -5,6 +5,7 @@ import { Music2, Plug } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { loadRunsNeedingAttention, STOPPED_DAYS } from '@/lib/sequences/runs-needing-attention'
 import { logError } from '@/lib/log'
 import { zoneOfLocation } from '@/lib/location-time'
 import { canCloneSequenceAt } from '@/lib/sequence-access'
@@ -171,6 +172,12 @@ export default async function AutomationsPage() {
     }
   }
 
+  // STUCKRUNS.1 — runs that need a person to look; read only.
+  // A failure here must never blank the page: no card, and the list renders.
+  const attention = canFlows && !flowsLoadFailed
+    ? await loadRunsNeedingAttention(db, sequences).catch(() => ({ ok: false, rows: [] }))
+    : { ok: true, rows: [] }
+
   // C123 GATES-4 (b) — the list is the ACTIVE studio's sequences, so the
   // clone route's rule is asked there.
   const canClone = canFlows && canCloneSequenceAt(user, location?.id || null)
@@ -265,6 +272,25 @@ export default async function AutomationsPage() {
             </div>
             <p className="text-sm text-un1t-subtle mt-1">Shelly plugs and relays — power schedules, live switching, energy use.</p>
           </Link>
+        </div>
+      )}
+      {canFlows && attention.rows.length > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5">
+          <h2 className="text-sm font-semibold text-amber-700 mb-1">Runs that need a look</h2>
+          <p className="text-xs text-un1t-subtle mb-3">
+            People whose next step is overdue by more than two hours, or whose run stopped on an error in the
+            last {STOPPED_DAYS} days. Open an automation and its Performance tab to see who.
+          </p>
+          <ul className="divide-y divide-amber-500/20">
+            {attention.rows.map((r) => (
+              <li key={r.sequence_id} className="py-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <Link href={`/automations/${r.sequence_id}`} className="text-sm font-medium text-un1t-text underline">{r.name}</Link>
+                {r.overdue > 0 && <span className="text-xs text-amber-700">{r.overdue} overdue</span>}
+                {r.stopped > 0 && <span className="text-xs text-rose-700">{r.stopped} stopped on an error</span>}
+                {r.sample_error && <span className="text-xs text-un1t-subtle truncate max-w-full">Latest: {r.sample_error}</span>}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {canFlows && (
