@@ -29,20 +29,20 @@ export async function loadRunsNeedingAttention(db, sequences, { now = new Date()
   const stoppedSince = new Date(now.getTime() - STOPPED_DAYS * 86400_000).toISOString()
 
   const [overdue, stopped] = await Promise.all([
+    // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- deliberate cap: a warning card, not a report; 26 Nov 2026 there were 0 such rows
     db.from('sequence_enrollments')
       .select('sequence_id')
       .in('sequence_id', ids)
       .eq('status', 'active')
       .lt('next_step_at', overdueBefore)
-      // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- deliberate cap: a warning card, not a report; 26 Nov 2026 there were 0 such rows
       .limit(1000),
+    // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- deliberate cap: a warning card, not a report; 26 Nov 2026 there were ~44 such rows in 30 days
     db.from('sequence_enrollments')
       .select('sequence_id, exit_reason, last_error')
       .in('sequence_id', ids)
       .eq('status', 'exited')
       .not('last_error', 'is', null)
       .gte('last_processed_at', stoppedSince)
-      // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- deliberate cap: a warning card, not a report; 26 Nov 2026 there were ~44 such rows in 30 days
       .limit(1000),
   ])
   if (overdue.error || stopped.error) {
