@@ -3,7 +3,7 @@
 
 import { z } from 'zod'
 import { ToolRefusal } from './registry.js'
-import { EmailBlocksSchema, validateBlocks, renderAgentEmail, unknownMergeTags } from '@/lib/agent-email-blocks'
+import { EmailBlocksSchema, validateBlocks, renderAgentEmail, mergeTagProblem } from '@/lib/agent-email-blocks'
 import { getEmailLogoUrl } from '@/lib/email-logo'
 import { RESEND_MIN_WAIT_HOURS, RESEND_MAX_WAIT_HOURS } from '@/lib/campaign-resend'
 import { getLocationBranding } from '@/lib/location-branding'
@@ -18,6 +18,24 @@ export const CHECK_VIOLATION = '23514'
 export const BODY_EDITED_IN_CRM = 'The body was edited in the CRM. Edit the body there.'
 
 export { EmailBlocksSchema }
+
+/**
+ * CONDBLOCKS.2 — how an agent writes merge tags and conditional text, shared by
+ * every email-draft tool description so they cannot drift.
+ * mergeTagProblem() (agent-email-blocks.js) enforces exactly this.
+ */
+export const MERGE_TAG_HELP = 'Merge tags are written exactly like {{first_name}}, or {{first_name|there}} for a fallback when the value is blank. '
+  + 'Conditional text: {{#if member}}…{{else}}…{{/if}} (a current member), {{#if first_name}}…{{/if}} (has a first name), '
+  + '{{#if stage=dormant}}…{{/if}} (pipeline stage is that slug); {{#unless …}}…{{/unless}} is the opposite. '
+  + '{{else}} is optional. A block opens and closes inside one text (a paragraph, heading, list item, button label or the subject), '
+  + 'blocks do not nest, and an unknown or badly written condition is refused. Links and image addresses take no conditions.'
+
+/** A subject with an unknown tag or a badly formed conditional block is refused. */
+export function checkSubject(subject, where = 'The subject') {
+  if (subject == null) return
+  const problem = mergeTagProblem(subject)
+  if (problem) throw new ToolRefusal('invalid_input', `${where}: ${problem}`)
+}
 
 /** A refused write: a status trigger fired, or the supabase error is thrown as a failure. */
 export function throwWriteError(error, what) {
@@ -64,20 +82,17 @@ export const ResendSchema = z.object({
   after_hours: z.number().int().min(RESEND_MIN_WAIT_HOURS).max(RESEND_MAX_WAIT_HOURS)
     .describe(`Hours after the send to resend to people who did not open it, ${RESEND_MIN_WAIT_HOURS} to ${RESEND_MAX_WAIT_HOURS}.`),
   subject: z.string().trim().min(1).max(200).optional()
-    .describe('Subject for the resend; omit to reuse the campaign subject. Merge tags exactly like {{first_name}}, or {{first_name|there}} for a fallback when the value is blank.'),
+    .describe(`Subject for the resend; omit to reuse the campaign subject. ${MERGE_TAG_HELP}`),
 }).nullable().optional()
 
 /**
  * The campaigns columns for a `resend` input. Enabled always carries its hours
- * (the spawner needs them). Refuses a subject with an unknown or spaced tag.
+ * (the spawner needs them). Refuses a subject with an unknown or spaced tag
+ * or a badly formed conditional block.
  */
 export function resendColumns(resend) {
   if (resend === undefined) return {}
   if (resend === null) return { resend_enabled: false, resend_wait_hours: null, resend_subject: null }
-  const unknown = unknownMergeTags(resend.subject)
-  if (unknown.length) {
-    throw new ToolRefusal('invalid_input', `The resend subject has {{${unknown[0]}}}, which is not a merge tag we offer `
-      + 'or has spaces inside the braces. Write tags exactly, like {{first_name}}.')
-  }
+  checkSubject(resend.subject, 'The resend subject')
   return { resend_enabled: true, resend_wait_hours: resend.after_hours, resend_subject: resend.subject ?? null }
 }

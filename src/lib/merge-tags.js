@@ -138,3 +138,13 @@ export const UNLAYER_MERGE_TAGS = Object.freeze(
 export const MERGE_TAG_REFERENCE = Object.freeze(
   OFFERED_MERGE_TAGS.map((t) => Object.freeze([t.tag, t.description])),
 )
+
+// CONDBLOCKS.2 — the conditions a `{{#if …}}` / `{{#unless …}}` block can test.
+// evaluateMergeCondition() in src/lib/postmark.js is what decides them at send
+// time; merge-tag-conditions.test.js fails if the two disagree. `takesValue`
+// means the condition is written `name=<value>` (stage=dormant).
+export const MERGE_CONDITIONS = Object.freeze([
+  { name: 'member', takesValue: false, description: 'the contact is a current member (Glofox member or credit member)' },
+  { name: 'first_name', takesValue: false, description: 'the contact has a first name' },
+  { name: 'stage', takesValue: true, description: 'the contact\'s pipeline stage is that slug, e.g. stage=dormant' },
+])
