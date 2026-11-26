@@ -1,4 +1,3 @@
-// @ts-check
 // CLEANTIERS.1 — how many of a studio's mailable contacts sit in each contact
 // cleanup tier, for the List health page. READ ONLY: nothing here suppresses,
 // tags or changes a contact. The tiers are the ones the owner agreed on
