@@ -4,7 +4,8 @@
 // (FlowEditor): the editable node card, the icon button, and the per-type config
 // form incl. the branch predicate. Field primitives live here too so any future
 // editor reuses the exact same inputs.
-import { ChevronUp, ChevronDown, Trash2, Pencil, AlertTriangle } from 'lucide-react'
+import { useState } from 'react'
+import { ChevronUp, ChevronDown, Trash2, Pencil, AlertTriangle, Send } from 'lucide-react'
 import { describeNode, BRANCH_PREDICATE_TYPES } from '@/lib/sequences/graph'
 import { isPhantomTag } from '@/lib/sequences/tag-vocabulary'
 import { styleForType } from './nodeStyles'
@@ -47,8 +48,44 @@ export function NodeCardHeader({ node, isFirst, isLast, expanded, onToggle, onMo
   )
 }
 
+// FLOWTEST.1 — sends the step as it stands in the editor (saved or not) to
+// the signed-in staff member, via /api/sequences/[id]/test-email.
+export function EmailTestButton({ sequenceId, config }) {
+  const [state, setState] = useState({ status: 'idle', message: '' })
+  async function send() {
+    setState({ status: 'sending', message: '' })
+    try {
+      const res = await fetch(`/api/sequences/${sequenceId}/test-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subject: config.subject || null,
+          html_content: config.html_content || null,
+          template_id: config.template_id || null,
+        }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (res.ok && d?.success) setState({ status: 'sent', message: `Sent to ${d.data?.to || 'your inbox'}.` })
+      else setState({ status: 'error', message: d?.error || 'The test could not be sent.' })
+    } catch {
+      setState({ status: 'error', message: 'The test could not be sent.' })
+    }
+  }
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <button type="button" onClick={send} disabled={state.status === 'sending'}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-un1t-border px-2.5 py-1.5 text-xs font-medium text-un1t-text hover:border-un1t-text/30 disabled:opacity-60">
+        <Send size={12} />{state.status === 'sending' ? 'Sending…' : 'Send me a test'}
+      </button>
+      {state.message && (
+        <span className={`text-[11px] ${state.status === 'error' ? 'text-rose-700' : 'text-un1t-subtle'}`}>{state.message}</span>
+      )}
+    </div>
+  )
+}
+
 // Full step card (non-branch). Branch cards are assembled in FlowEditor.
-export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onToggle, onMove, onRemove, onPatch, templates, emailTemplates, tagVocabulary }) {
+export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onToggle, onMove, onRemove, onPatch, templates, emailTemplates, tagVocabulary, sequenceId }) {
   const hasErr = errors.length > 0
   return (
     <div className={`w-72 bg-un1t-surface border rounded-lg shadow-sm ${hasErr ? 'border-rose-500/40' : 'border-un1t-border'}`}>
@@ -57,6 +94,7 @@ export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onTo
       {expanded && (
         <div className="border-t border-un1t-border px-4 py-3 space-y-3">
           <NodeConfig node={node} onPatch={onPatch} templates={templates} emailTemplates={emailTemplates} tagVocabulary={tagVocabulary} />
+          {node.type === 'email' && sequenceId && <EmailTestButton sequenceId={sequenceId} config={node.config || {}} />}
           {hasErr && <ul className="text-xs text-rose-700 list-disc pl-4">{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
         </div>
       )}
