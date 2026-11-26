@@ -90,6 +90,26 @@ describe('POST /api/whatsapp/conversations/[id]/add-contact', () => {
     expect(writes).toContainEqual({ table: 'whatsapp_conversations', op: 'update', row: { contact_id: NEW_CONTACT } })
   })
 
+  // ADDCONTACTBLANK.1 — the form's optional email arrives as '' when left
+  // empty; that used to fail the email check, so no contact could be added
+  // without an address.
+  it('a blank email or phone is "not given": the contact is created with no email', async () => {
+    getCurrentUser.mockResolvedValue(caller({ [B]: WEB }))
+    const res = await post({ name: 'Synthetic Person', first_name: 'Synthetic', email: '', phone: '  ', add_to_pipeline: false, pipeline_stage: 'new' })
+    expect(res.status).toBe(200)
+    expect(writes[0]).toMatchObject({ table: 'contacts', op: 'insert', row: { name: 'Synthetic Person', email: null, phone: PHONE, wa_phone: PHONE } })
+  })
+
+  it('a malformed email is still refused, naming the field, and nothing is written', async () => {
+    getCurrentUser.mockResolvedValue(caller({ [B]: WEB }))
+    const res = await post({ name: 'Synthetic Person', email: 'not-an-email' })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(String(body.issues?.[0]?.path)).toContain('email')
+    expect(writes).toEqual([])
+  })
+
   it('a failed insert: 500 with a fixed line, the database text logged', async () => {
     getCurrentUser.mockResolvedValue(caller({ [B]: WEB }))
     createServerClient.mockReturnValue(fakeDb({ conversation: CONVERSATION, insertError: { message: 'duplicate key value violates unique constraint "contacts_email_key"' } }))

@@ -65,6 +65,14 @@ export const hexColor = z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Use #RRGGBB hex')
 // Email — same constraint Postmark and Supabase auth apply.
 export const email = z.string().email().max(320)
 
+// ADDCONTACTBLANK.1 — a form's optional field arrives as '' when left empty.
+// Read a blank (or whitespace) string as "not given" so an optional email or
+// phone does not fail its own format check. Wrap the optional schema with it.
+export const blankToNull = (schema) => z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? null : v),
+  schema,
+)
+
 // Permissive phone: free-form, length-bounded. Don't try to enforce E.164
 // since trial leads sometimes type local numbers without country codes.
 export const phone = z.string().min(3).max(50)

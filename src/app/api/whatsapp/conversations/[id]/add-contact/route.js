@@ -5,13 +5,13 @@ import { logError } from '@/lib/log'
 import { z } from 'zod'
 import { assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { email as emailSchema, phone as phoneSchema } from '@/lib/schemas'
+import { email as emailSchema, phone as phoneSchema, blankToNull } from '@/lib/schemas'
 
 const AddContactSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   first_name: z.string().max(100).optional(),
-  email: emailSchema.nullable().optional(),
-  phone: phoneSchema.nullable().optional(),
+  email: blankToNull(emailSchema.nullable().optional()),
+  phone: blankToNull(phoneSchema.nullable().optional()),
   pipeline_stage: z.string().max(100).optional(),
   add_to_pipeline: z.boolean().optional(),
 })
