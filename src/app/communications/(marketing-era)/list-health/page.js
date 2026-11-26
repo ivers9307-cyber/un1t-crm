@@ -41,6 +41,7 @@ import OtherEmailDeliverability from '@/components/communications/OtherEmailDeli
 import { buildListHealthTrend } from '@/lib/list-health-trend'
 import { buildEmailSourceTrend } from '@/lib/email-source-trend'
 import { consentSourceRpcArgs } from '@/lib/consent-sources'
+import { countCleanupTiers } from '@/lib/cleanup-tiers'
 
 export const dynamic = 'force-dynamic'
 
@@ -60,6 +61,37 @@ function Stat({ label, value, hint }) {
       <div className="text-xs uppercase tracking-wider text-un1t-subtle mb-2">{label}</div>
       <div className="text-2xl font-bold text-un1t-text">{value}</div>
       {hint && <div className="text-xs text-un1t-subtle mt-1">{hint}</div>}
+    </div>
+  )
+}
+
+// CLEANTIERS.1 — how the mailable list splits by recent activity. Counts
+// only; nothing on this page moves anyone between tiers.
+const TIER_CARDS = [
+  { key: 'keep', label: 'Active', hint: 'Member, or booked, attended, paid or clicked in the last 90 days, or new to the list. Mail normally.' },
+  { key: 'less', label: 'Quietening', hint: 'Last activity 90 to 180 days ago. Main announcements and offers only.' },
+  { key: 'reengage', label: 'Lapsed', hint: 'Last activity 6 to 12 months ago. Worth a short re-engagement pass.' },
+  { key: 'seasonal', label: 'Dormant', hint: 'Nothing for a year or more. Seasonal sends only; never removed for this.' },
+]
+
+function CleanupTiers({ cleanup, hasGlofox }) {
+  return (
+    <div className="mb-8">
+      <h3 className="text-sm font-semibold text-un1t-text mb-1">Who is still engaged</h3>
+      <p className="text-xs text-un1t-subtle mb-3 max-w-3xl">
+        The people a marketing send would reach, split by their most recent booking, visit, payment or email
+        click. Opens are not counted: many are recorded by mail apps, not people.
+        {!hasGlofox && ' This studio has no Glofox link, so visits, bookings and payments are not on record here and members can show as lapsed or dormant.'}
+      </p>
+      {!cleanup.ok ? (
+        <p className="text-sm text-un1t-subtle">These counts could not be loaded just now.</p>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {TIER_CARDS.map((t) => (
+            <Stat key={t.key} label={t.label} value={cleanup.tiers[t.key].toLocaleString()} hint={t.hint} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -126,6 +158,10 @@ export default async function ListHealthPage() {
   })
   const { count: mailableCount } = await eligibleQuery
   const mailable = mailableCount || 0
+
+  // CLEANTIERS.1 — read-only sizes of the contact cleanup tiers.
+  const cleanup = await countCleanupTiers(db, locationId)
+  const hasGlofox = user.activeLocation?.membership_source === 'glofox'
 
   // Bounce events by type for this location. campaign_recipients carries no
   // location_id, so the join to campaigns happens in Postgres (mig 515) rather
@@ -209,6 +245,8 @@ export default async function ListHealthPage() {
         <Stat label="Bounced or complained" value={bouncedOrComplained.toLocaleString()} hint="Hard bounce or spam report" />
         <Stat label="Suppressed" value={suppressed.toLocaleString()} hint="Opted in, but held back for list hygiene" />
       </div>
+
+      <CleanupTiers cleanup={cleanup} hasGlofox={hasGlofox} />
 
       <ListHealthTrend trend={trend} />
 
