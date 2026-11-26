@@ -33,6 +33,9 @@ const AUDIENCE_GATES = {
 // One POST per pause, not one per keystroke.
 const COUNT_DEBOUNCE_MS = 400
 
+// AUTOSAVE.1 — how often a changed draft is saved without a click.
+export const AUTOSAVE_MS = 60_000
+
 export default function CampaignEditor({ campaign, locationId, locationTimeZone = null, userId: _userId, initialAudienceFilter = null }) {
   const router = useRouter()
 
@@ -319,6 +322,36 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
       setSaving(false)
     }
   }
+
+  // AUTOSAVE.1 — a saved DRAFT is saved again every AUTOSAVE_MS when anything
+  // the Save button would send has changed. Drafts only: a scheduled campaign
+  // is left to an explicit Save, because an autosave there would change what
+  // goes out at the scheduled time. A never-saved campaign is not created by
+  // autosave either (the first Save is the operator's). The first tick only
+  // records a baseline, so opening a draft and walking away never re-writes
+  // it with Unlayer's re-export of the same design. Skipped while a save is in
+  // flight, while the tab is hidden, and while the Design tab is not showing
+  // (its content is already stashed in state by switchTab).
+  const autosaveBaseline = useRef(null)
+  const autosaveTick = useRef(null)
+  // Refreshed after every render so the interval always sees current state.
+  useEffect(() => { autosaveTick.current = async () => {
+    if (campaignStatus !== 'draft' || !campaignId || saving || !contentEditable) return
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+    const { html } = tab === 'design' ? await stashUnlayerToState() : { html: htmlContent }
+    const fingerprint = JSON.stringify([
+      name, subject, previewText, fromName, fromEmail, replyTo, html,
+      stripUnsetFilterRows(audienceFilter), emailType, abEnabled, abSubjectB, abTestPct, abWaitHours, resend,
+    ])
+    if (autosaveBaseline.current === null) { autosaveBaseline.current = fingerprint; return }
+    if (fingerprint === autosaveBaseline.current) return
+    const ok = await handleSave()
+    if (ok) autosaveBaseline.current = fingerprint
+  } })
+  useEffect(() => {
+    const t = setInterval(() => { autosaveTick.current?.() }, AUTOSAVE_MS)
+    return () => clearInterval(t)
+  }, [])
 
   // CAMPAIGN.2 — wrap setTab so leaving the Design tab stashes the
   // current Unlayer content into React state. Without this, switching
