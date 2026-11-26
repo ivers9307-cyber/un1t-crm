@@ -96,7 +96,7 @@ export async function POST(request, props) {
   if (user.email) {
     const { data } = await db
       .from('contacts')
-      .select('id, name, first_name, last_name, email, phone, pipeline_stage_slug')
+      .select('id, name, first_name, last_name, email, phone, pipeline_stage_slug, glofox_membership_status, glofox_membership_state')
       .eq('email', user.email.toLowerCase())
       .eq('location_id', campaign.location_id)
       .maybeSingle()

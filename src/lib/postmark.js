@@ -509,8 +509,41 @@ export async function sendBatch(emails, { locationId, sender } = {}) {
  *     passwords are no longer stored, so it always renders empty. It stays in
  *     the table so an old body renders nothing rather than literal braces.
  */
+// CONDBLOCKS.1 — conditional blocks in an email body or subject:
+//   {{#if member}}…{{else}}…{{/if}}        current Glofox member or credit member
+//   {{#if first_name}}…{{/if}}              the contact has a first name
+//   {{#if stage=dormant}}…{{/if}}           pipeline stage (studio stage) is that slug
+// `{{#unless X}}…{{/unless}}` is the opposite. One level: blocks do not nest.
+// An unknown condition keeps neither branch out: the whole block is left as
+// written so the test send shows it, instead of silently picking a side.
+const COND_RE = /\{\{#(if|unless)\s+([a-z_]+)(?:=([a-z0-9_-]+))?\s*\}\}([\s\S]*?)\{\{\/\1\}\}/g
+export function evaluateMergeCondition(name, value, contact) {
+  switch (name) {
+    case 'member':
+      return contact?.glofox_membership_state === 'active'
+        && ['member', 'credit_member'].includes(contact?.glofox_membership_status)
+    case 'first_name':
+      return !!String(contact?.first_name || contact?.name?.split(' ')[0] || '').trim()
+    case 'stage':
+      return value != null && String(contact?.pipeline_stage_slug || '') === value
+    default:
+      return null
+  }
+}
+export function applyConditionalBlocks(text, contact) {
+  if (!text || !text.includes('{{#')) return text
+  return text.replace(COND_RE, (whole, kind, name, value, inner) => {
+    const result = evaluateMergeCondition(name, value ?? null, contact)
+    if (result === null) return whole
+    const [yes, no = ''] = inner.split('{{else}}')
+    const show = kind === 'if' ? result : !result
+    return show ? yes : no
+  })
+}
+
 export function applyMergeTags(html, contact, extras = {}) {
   if (!html) return html
+  html = applyConditionalBlocks(html, contact)
 
   const stageLabel = contact.pipeline_stage_slug?.replaceAll('_', ' ') || ''
   const replacements = {
