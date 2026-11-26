@@ -4,7 +4,7 @@ import { withAuth } from '@/lib/with-auth'
 import { assertLocationAccessOr404, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
-import { email as emailSchema, phone as phoneSchema } from '@/lib/schemas'
+import { email as emailSchema, phone as phoneSchema, blankToNull } from '@/lib/schemas'
 import { linkThreadToContact } from '@/lib/instagram-contact-link-server'
 
 // IG-LINK.1 — promote an unknown Instagram sender to a full contact.
@@ -15,8 +15,8 @@ import { linkThreadToContact } from '@/lib/instagram-contact-link-server'
 const AddContactSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   first_name: z.string().max(100).optional(),
-  email: emailSchema.nullable().optional(),
-  phone: phoneSchema.nullable().optional(),
+  email: blankToNull(emailSchema.nullable().optional()),
+  phone: blankToNull(phoneSchema.nullable().optional()),
 })
 
 // withAuth only signs the caller in (the same 401); the channel permission, the

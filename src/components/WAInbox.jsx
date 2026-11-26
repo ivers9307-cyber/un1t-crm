@@ -20,6 +20,7 @@ import SnoozeControl from '@/components/inbox/SnoozeControl'
 import AssignControl from '@/components/inbox/AssignControl'
 import MiaDecisionTrace from '@/components/inbox/MiaDecisionTrace'
 import WAAttachmentComposer from '@/components/inbox/WAAttachmentComposer'
+import { addContactPayload, addContactErrorText } from '@/lib/add-contact-form'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image as ImageIcon, FileText, Mic, AlertCircle, RefreshCw,
@@ -132,6 +133,7 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
     name: '', first_name: '', email: '', add_to_pipeline: true, pipeline_stage: 'new',
   })
   const [addingContact, setAddingContact] = useState(false)
+  const [addContactError, setAddContactError] = useState(null)
   // Header overflow (⋯) menu — Block/Unblock + Add to contacts/View contact.
   // No dropdown/menu primitive exists yet in src/components/ui, so this is a
   // minimal click-toggled popover (ref pattern mirrors PersonActionBar.jsx).
@@ -587,24 +589,26 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
     if (!addContactForm.name.trim()) return
 
     setAddingContact(true)
+    setAddContactError(null)
     try {
       const res = await fetch(`/api/whatsapp/conversations/${selectedId}/add-contact`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(addContactForm),
+        body: JSON.stringify(addContactPayload(addContactForm)),
       })
 
-      const data = await res.json()
-      if (data.success) {
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.success) {
         setShowAddContact(false)
         await fetchMessages(selectedId)
         await fetchApprovals(selectedId)
         await fetchConversations()
       } else {
-        alert(data.error || 'Failed to add contact')
+        // ADDCONTACTBLANK.1 — shown in the form, not a browser dialog.
+        setAddContactError(addContactErrorText(data))
       }
     } catch {
-      alert('Failed to add contact')
+      setAddContactError(addContactErrorText(null))
     } finally {
       setAddingContact(false)
     }
@@ -1090,7 +1094,7 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
                           <button
                             type="button"
                             role="menuitem"
-                            onClick={() => { setShowMoreMenu(false); setShowAddContact(!showAddContact) }}
+                            onClick={() => { setShowMoreMenu(false); setAddContactError(null); setShowAddContact(!showAddContact) }}
                             className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 flex items-center gap-2 transition-colors"
                           >
                             <UserPlus size={13} />
@@ -1201,6 +1205,9 @@ export default function WAInbox({ locationId, timezone = null, userId, initialCo
                     {addingContact ? 'Adding...' : 'Add Contact'}
                   </button>
                 </div>
+                {addContactError && (
+                  <p role="alert" className="mt-2 text-xs text-red-700">{addContactError}</p>
+                )}
               </div>
             )}
 
