@@ -4,6 +4,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
+// STUCKRUNS.1 — the attention card has its own tests; keep these to the flow list's reads.
+vi.mock('@/lib/sequences/runs-needing-attention', () => ({
+  loadRunsNeedingAttention: async () => ({ ok: true, rows: [] }),
+  STOPPED_DAYS: 30,
+}))
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn((u, k) => k === 'automations') }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
