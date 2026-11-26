@@ -18,7 +18,7 @@ import { MessageCircle, Mail, Send } from 'lucide-react'
 import { sendStatusChip } from './send-status.js'
 // REPORT-SOT.2 — the email rows on this list are counted from
 // campaign_recipients, not from campaigns.total_*.
-import { loadCampaignRecipientStats, campaignDisplayStats } from '@/lib/campaign-display-stats'
+import { loadCampaignRecipientStats, campaignDisplayStats, pct } from '@/lib/campaign-display-stats'
 
 export const dynamic = 'force-dynamic'
 
@@ -78,6 +78,15 @@ export default async function SendsHistoryPage() {
         total_recipients: d.recipients,
         total_sent: d.sent,
         total_failed: d.bounced,
+        // MKTSHELL.2 — delivered and clicked in the row, so campaigns can be
+        // compared without opening each one. Only from campaign_recipients:
+        // the select above does not carry the stored delivered/clicked
+        // counters, so a counters-fallback render shows a dash, not a zero.
+        // `delivered` is null when the count is provably incomplete
+        // (REPORT-SOT.3), and that reads as a dash too.
+        delivered: d.source === 'recipients' ? d.delivered : null,
+        clicked: d.source === 'recipients' ? d.clicked : null,
+        click_rate: d.source === 'recipients' ? d.click_rate : null,
         detail: `/communications/sent/email/${c.id}`,
       })
     }
@@ -107,8 +116,13 @@ export default async function SendsHistoryPage() {
       </div>
 
       {rows.length === 0 ? (
-        <div className="text-center text-sm text-un1t-subtle py-16 border border-dashed border-un1t-border rounded-2xl">
-          No sends yet. <Link href="/communications/send" className="text-un1t-text underline">Send your first message</Link>.
+        <div className="text-center py-16 border border-dashed border-un1t-border rounded-2xl">
+          <Send size={28} className="mx-auto mb-3 text-un1t-subtle" />
+          <h2 className="text-base font-semibold text-un1t-text mb-1">Nothing sent from this studio yet</h2>
+          <p className="text-sm text-un1t-subtle max-w-md mx-auto">
+            Every WhatsApp and email send shows here with who it went to and how it did.{' '}
+            <Link href="/communications/send" className="text-un1t-text underline">Send your first message</Link>.
+          </p>
         </div>
       ) : (
         <div className="rounded-2xl border border-un1t-border overflow-hidden">
@@ -118,6 +132,8 @@ export default async function SendsHistoryPage() {
                 <th className="text-left font-medium px-4 py-2.5">Message</th>
                 <th className="text-left font-medium px-4 py-2.5">Status</th>
                 <th className="text-right font-medium px-4 py-2.5">Sent</th>
+                <th className="text-right font-medium px-4 py-2.5 hidden lg:table-cell">Delivered</th>
+                <th className="text-right font-medium px-4 py-2.5 hidden lg:table-cell">Clicked</th>
                 <th className="text-right font-medium px-4 py-2.5 hidden sm:table-cell">When</th>
               </tr>
             </thead>
@@ -166,6 +182,17 @@ export default async function SendsHistoryPage() {
                               return k > 0 ? <span className="text-amber-700"> · {k} excluded</span> : null
                             })()}
                           </>
+                        : '—'}
+                    </td>
+                    {/* MKTSHELL.2 — email only; WhatsApp rows and anything not yet sent read as a dash. */}
+                    <td className="px-4 py-3 text-right text-un1t-subtle hidden lg:table-cell tabular-nums">
+                      {r.channel === 'email' && r.status === 'sent' && r.delivered != null
+                        ? r.delivered.toLocaleString()
+                        : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-right text-un1t-subtle hidden lg:table-cell tabular-nums">
+                      {r.channel === 'email' && r.status === 'sent' && r.clicked != null
+                        ? <>{r.clicked.toLocaleString()}{r.click_rate != null ? <span className="text-un1t-subtle/70"> · {pct(r.click_rate)}</span> : null}</>
                         : '—'}
                     </td>
                     <td className="px-4 py-3 text-right text-un1t-subtle hidden sm:table-cell tabular-nums">

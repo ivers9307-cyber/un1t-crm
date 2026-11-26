@@ -228,7 +228,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
           // UNLAYER-H.1 — definite height required (see CampaignEditor): the
           // embed's iframe is `height: 100%`, and h-full resolves through an
           // indefinite ancestor chain, so the iframe collapsed to 150px.
-          <div id="unlayer-template-editor" ref={editorRef} style={{ height: '75vh', minHeight: '600px' }} />
+          <div id="unlayer-template-editor" ref={editorRef} style={{ height: 'calc(100vh - 144px)', minHeight: '600px' }} />
         ) : (
           <textarea
             value={htmlContent}

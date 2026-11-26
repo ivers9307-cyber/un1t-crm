@@ -16,12 +16,14 @@ vi.mock('next/navigation', () => ({
 }))
 vi.mock('@/lib/campaign-display-stats', () => ({
   loadCampaignRecipientStats: async () => ({}),
-  campaignDisplayStats: () => ({ recipients: 0, sent: 0, bounced: 0 }),
+  campaignDisplayStats: vi.fn(() => ({ recipients: 0, sent: 0, bounced: 0 })),
+  pct: (r) => `${(Number(r) * 100).toFixed(1)}%`,
 }))
 
 import SendsHistoryPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { campaignDisplayStats } from '@/lib/campaign-display-stats'
 
 // Every builder method returns the same object; awaiting it yields no rows.
 function emptyChain() {
@@ -93,5 +95,53 @@ describe('"Made in Claude" marker (MCPEMAIL.1)', () => {
     expect(container.textContent).not.toContain('—Made')
     // named columns only: the read must ask for created_via
     expect(chains.campaigns.cols).toMatch(/\bcreated_via\b/)
+  })
+})
+
+describe('delivered and clicked columns (MKTSHELL.2)', () => {
+  function chainWith(rows) {
+    const o = {
+      select: () => o, eq: () => o, in: () => o, order: () => o, limit: () => o,
+      then: (resolve) => resolve({ data: rows, count: rows.length }),
+    }
+    return o
+  }
+  const sentRow = { id: 'c1', name: 'Autumn offer', status: 'sent', created_at: '2031-07-01T00:00:00Z', sent_at: '2031-07-01T00:00:00Z' }
+  const useRows = () => createServerClient.mockReturnValue({
+    from: (t) => chainWith(t === 'campaigns' ? [sentRow] : []),
+  })
+  afterEach(() => campaignDisplayStats.mockImplementation(() => ({ recipients: 0, sent: 0, bounced: 0 })))
+
+  it('shows delivered and clicked for a sent email, from the recipient figures', async () => {
+    useRows()
+    campaignDisplayStats.mockImplementation(() => ({
+      source: 'recipients', recipients: 200, sent: 200, bounced: 2, delivered: 196, clicked: 8, click_rate: 0.04,
+    }))
+    render(await SendsHistoryPage())
+    const cells = [...screen.getByText('Autumn offer').closest('tr').querySelectorAll('td')].map((td) => td.textContent)
+    expect(cells[3]).toBe('196')
+    expect(cells[4]).toBe('8 · 4.0%')
+  })
+
+  it('shows a dash, not a zero, when the figures fell back to the stored counters', async () => {
+    useRows()
+    campaignDisplayStats.mockImplementation(() => ({
+      source: 'counters', recipients: 200, sent: 200, bounced: 2, delivered: 0, clicked: 0, click_rate: 0,
+    }))
+    render(await SendsHistoryPage())
+    const cells = [...screen.getByText('Autumn offer').closest('tr').querySelectorAll('td')].map((td) => td.textContent)
+    expect(cells[3]).toBe('—')
+    expect(cells[4]).toBe('—')
+  })
+
+  it('shows a dash for delivered when the delivered count is incomplete', async () => {
+    useRows()
+    campaignDisplayStats.mockImplementation(() => ({
+      source: 'recipients', recipients: 200, sent: 200, bounced: 0, delivered: null, clicked: 5, click_rate: 0.025,
+    }))
+    render(await SendsHistoryPage())
+    const cells = [...screen.getByText('Autumn offer').closest('tr').querySelectorAll('td')].map((td) => td.textContent)
+    expect(cells[3]).toBe('—')
+    expect(cells[4]).toBe('5 · 2.5%')
   })
 })
