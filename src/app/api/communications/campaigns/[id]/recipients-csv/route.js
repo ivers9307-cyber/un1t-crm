@@ -47,7 +47,9 @@ export const GET = withAuth({ permission: null, location: false }, async ({ user
     category: 'business',
     action: 'campaign_recipients_exported',
     actor: user,
-    target: { resource: 'campaigns', id: campaign.id, label: `${rows.length} recipient${rows.length === 1 ? '' : 's'} of ${campaign.name || 'a campaign'}` },
+    // target.id is a PROFILE id (audit_events.target_profile_id FK); a campaign
+    // goes in resource, or the insert fails and every export is refused.
+    target: { resource: `campaigns/${campaign.id}`, label: `${rows.length} recipient${rows.length === 1 ? '' : 's'} of ${campaign.name || 'a campaign'}` },
     locationId: campaign.location_id,
     details: { exported: rows.length, campaign_id: campaign.id },
     request,
