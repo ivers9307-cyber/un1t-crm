@@ -1752,7 +1752,11 @@ describe('HATCH39 — un1t path: Acquisition + €39 Trial boards', () => {
   })
 
   it('the acquisition classify is the un1t one (TRIALDONE.2): two attended and an expired free trial is trial_done', async () => {
-    const twoDone = { ...leadSnap(), recent_bookings: [attendedBooking(5), attendedBooking(3)], last_attended_at: isoBefore(3), joined_at: isoBefore(20), trial_expires_at: isoBefore(1) }
+    // Relative to NOW, like attendedBooking: isoBefore counts back from a fixed
+    // 1 Oct 2026, so from late Nov 2026 "last attended 3 days ago" read as
+    // ~60 days and the contact classified dormant.
+    const ago = (d) => new Date(Date.now() - d * 86_400_000).toISOString()
+    const twoDone = { ...leadSnap(), recent_bookings: [attendedBooking(5), attendedBooking(3)], last_attended_at: ago(3), joined_at: ago(20), trial_expires_at: ago(1) }
     seamWith(vi.fn().mockResolvedValue(hatchInputs({ contacts: [{ id: 'c-two', name: 'Two', email: null, location_id: HATCH }], snapshots: [['c-two', twoDone]] })))
     const { db } = recordingDb({ pipelines: PIPES, pipeline_stages: [...STAGES, { id: 'h-trial-done', slug: 'trial_done', pipeline_id: 'p-h-acq', location_id: HATCH }], deals: [] })
     const out = await reclassifyAllContacts(db, { locationId: HATCH, dryRun: true })
