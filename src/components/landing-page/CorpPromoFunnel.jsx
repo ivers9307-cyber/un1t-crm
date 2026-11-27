@@ -30,6 +30,7 @@ import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERRO
 import { customerErrorText } from '@/lib/page-request-errors'
 import { cleanAdValue } from '@/lib/campaign-funnel-attribution'
 import EmailTypoHint from '@/components/EmailTypoHint'
+import { useTurnstile } from '@/components/useTurnstile'
 
 const CLAIM_PATH = '/api/public/corp-claims'
 
@@ -64,6 +65,7 @@ function utmFromUrl() {
  *   screen lists the classes under copy.class_list_heading.
  */
 export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, studio = null, stepCopy = null, openWeek = null }) {
+  const turnstile = useTurnstile()
   const words = stepCopy && typeof stepCopy === 'object' ? classFirstStepCopy(stepCopy, 'corp_promo') : classFirstStepCopy({}, 'corp_promo')
   const [step, setStep] = useState('pick') // pick | form
   const [chosen, setChosen] = useState(null)
@@ -98,7 +100,7 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
       const visit = readVisitOrigin()
       const res = await fetch(CLAIM_PATH, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await turnstile.headers()) },
         body: JSON.stringify({
           ...(page ? { page, ...(studio ? { studio } : {}) } : {}),
           promo: promoKey,

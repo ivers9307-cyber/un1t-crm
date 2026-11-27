@@ -60,6 +60,7 @@ import { claimWaitlistOnRegistration, claimWaitlistByEmail } from '@/lib/event-w
 import { resolveFindTeamSettings, soloTeamName, isSoloClosedForWave } from '@/lib/find-team'
 import { resolveEventTeam } from '@/lib/event-team'
 import { holdingPlaces, pendingLapsed } from '@/lib/entry-policy'
+import { refuseUnlessHuman } from '@/lib/turnstile'
 
 export const runtime = 'nodejs'
 
@@ -215,6 +216,9 @@ export async function POST(request, props) {
 
   const validation = await validateBody(request, RegisterSchema)
   if (!validation.ok) return validation.response
+  // TURNSTILE.1 — bot check before anything is written (src/lib/turnstile.js).
+  const notHuman = await refuseUnlessHuman(request, 'event-register')
+  if (notHuman) return notHuman
   const body = validation.data
 
   // Look up the race — must be active. Joins waves so we can validate

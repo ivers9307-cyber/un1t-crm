@@ -17,12 +17,14 @@
 // are granted by joining; either can be left independently.
 
 import { useState } from 'react'
+import { useTurnstile } from '@/components/useTurnstile'
 
 const INPUT_CLASS =
   'w-full rounded-lg border border-white/15 bg-white/5 px-4 py-3 text-sm text-white ' +
   'placeholder:text-white/40 focus:outline-none focus:border-white/40'
 
 export default function HostListSignup({ slug, hostName, orgName, headline, blurb, buttonLabel, successMessage }) {
+  const turnstile = useTurnstile()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -47,7 +49,7 @@ export default function HostListSignup({ slug, hostName, orgName, headline, blur
     try {
       const res = await fetch(`/api/public/host-list/${encodeURIComponent(slug)}/subscribe`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await turnstile.headers()) },
         body: JSON.stringify({
           email: trimmedEmail,
           name: trimmedName,

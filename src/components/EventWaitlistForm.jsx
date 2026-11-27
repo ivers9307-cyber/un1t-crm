@@ -14,6 +14,7 @@
 
 import { useState } from 'react'
 import { AlertCircle, Check, Loader2 } from 'lucide-react'
+import { useTurnstile } from '@/components/useTurnstile'
 
 export const WAITLIST_SUCCESS_COPY =
   "You're on the list. If a spot opens, we'll email you (and WhatsApp if you gave a number); the first to book gets it."
@@ -23,6 +24,7 @@ function validEmail(s) {
 }
 
 export default function EventWaitlistForm({ slug, allowedTeamSizes, sizeLabel = 'Group size', hostName = null, organizationName = null }) {
+  const turnstile = useTurnstile()
   const sizes = (Array.isArray(allowedTeamSizes) && allowedTeamSizes.length ? [...allowedTeamSizes] : [1]).sort((a, b) => a - b)
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -43,7 +45,7 @@ export default function EventWaitlistForm({ slug, allowedTeamSizes, sizeLabel = 
     try {
       const res = await fetch(`/api/public/events/${slug}/waitlist`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await turnstile.headers()) },
         body: JSON.stringify({
           name: name.trim(),
           email: email.trim().toLowerCase(),

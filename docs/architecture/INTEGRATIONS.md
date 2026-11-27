@@ -67,6 +67,11 @@ INBODY_WEBHOOK_SECRET=           # shared secret we set as a custom header (x-in
 
 # IMAP/SMTP mailbox connector — see "Mailbox connector (IMAP/SMTP) — secrets at rest"
 MAILBOX_SECRET_KEY=              # base64, EXACTLY 32 random bytes (44 chars) — the AES-256-GCM master key for customer mailbox credentials in email_mailbox_credentials. NO plaintext fallback: unset = the connect route refuses and every connected mailbox resolves not_configured. Generate with `openssl rand -base64 32`. Never commit it, never put it in the database it protects (not Supabase Vault), never reuse a value across environments.
+
+# Cloudflare Turnstile bot check on the public forms (TURNSTILE.1) — see src/lib/turnstile.js
+NEXT_PUBLIC_TURNSTILE_SITE_KEY=  # the widget's site key. Unset = no widget loads and the forms behave as before
+TURNSTILE_SECRET_KEY=            # the widget's secret. Unset = the server check is OFF (deliberate until the widget exists)
+TURNSTILE_MODE=                  # 'monitor' (verify + log what would be refused, refuse nothing) or 'enforce'. Anything else runs as monitor and logs an error. Cloudflare being down always lets the request through
 ```
 
 

@@ -7,6 +7,7 @@ import { validateCustomResponses } from '@/lib/booking-validation'
 import { logWarn, logError } from '@/lib/log'
 import { createBooking } from '@/lib/bookings-write'
 import { stampFirstTouchSource } from '@/lib/contact-first-touch-source'
+import { refuseUnlessHuman } from '@/lib/turnstile'
 
 export const runtime = 'nodejs'
 
@@ -53,6 +54,9 @@ export async function POST(request) {
 
   const validation = await validateBody(request, BookingSchema)
   if (!validation.ok) return validation.response
+  // TURNSTILE.1 — bot check before anything is written (src/lib/turnstile.js).
+  const notHuman = await refuseUnlessHuman(request, 'book')
+  if (notHuman) return notHuman
   const body = validation.data
 
   // Look up event to calculate end_time and validate custom_responses

@@ -39,6 +39,7 @@ import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 import { resolvePublicPageRequest, pageRequestRefusal } from '@/lib/landing-pages'
 import { offerConfigured } from '@/lib/landing-page-offers'
+import { refuseUnlessHuman } from '@/lib/turnstile'
 
 export const runtime = 'nodejs'
 
@@ -163,6 +164,9 @@ export async function POST(request) {
   // the limiter — a malformed body 400s without consuming any tenant's window.
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
+  // TURNSTILE.1 — bot check before anything is written (src/lib/turnstile.js).
+  const notHuman = await refuseUnlessHuman(request, 'class-booking')
+  if (notHuman) return notHuman
   // TRIALLEAK.1 — an unfilled Meta macro in an ad value is no value.
   const b = { ...validation.data, attribution: cleanAttribution(validation.data.attribution) }
 
