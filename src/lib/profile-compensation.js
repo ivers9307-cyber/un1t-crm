@@ -29,6 +29,11 @@ const COMP_COLS = [
   'overtime_rate',
 ]
 
+// LEAVEPRORATA.1 (mig 877) — employment dates ride the same owner/master-only
+// table. Kept apart from COMP_COLS because they are dates, not numbers.
+const DATE_COLS = ['employment_start_date', 'employment_end_date']
+const ALL_COLS = [...COMP_COLS, ...DATE_COLS]
+
 /**
  * Read one profile's comp row. Returns the same shape the old
  * inline columns had, with all-null defaults if no row exists yet.
@@ -47,7 +52,7 @@ export async function getCompensationForProfile(db, profileId) {
   if (!db || !profileId) return emptyComp()
   const { data, error } = await db
     .from('profile_compensation')
-    .select(COMP_COLS.join(', '))
+    .select(ALL_COLS.join(', '))
     .eq('profile_id', profileId)
     .maybeSingle()
   if (error || !data) return emptyComp()
@@ -57,6 +62,8 @@ export async function getCompensationForProfile(db, profileId) {
     contracted_hours_per_week: toNum(data.contracted_hours_per_week),
     annual_leave_entitlement:  toNum(data.annual_leave_entitlement),
     overtime_rate:             toNum(data.overtime_rate),
+    employment_start_date:     toDate(data.employment_start_date),
+    employment_end_date:       toDate(data.employment_end_date),
   }
 }
 
@@ -85,7 +92,7 @@ export async function getCompensationForProfiles(db, profileIds) {
     const slice = profileIds.slice(i, i + CHUNK)
     const { data, error } = await db
       .from('profile_compensation')
-      .select(`profile_id, ${COMP_COLS.join(', ')}`)
+      .select(`profile_id, ${ALL_COLS.join(', ')}`)
       .in('profile_id', slice)
     if (error) throw new Error(`profile_compensation read failed: ${error.message || error}`)
     for (const row of (data || [])) {
@@ -95,6 +102,8 @@ export async function getCompensationForProfiles(db, profileIds) {
         contracted_hours_per_week: toNum(row.contracted_hours_per_week),
         annual_leave_entitlement:  toNum(row.annual_leave_entitlement),
         overtime_rate:             toNum(row.overtime_rate),
+        employment_start_date:     toDate(row.employment_start_date),
+        employment_end_date:       toDate(row.employment_end_date),
       })
     }
   }
@@ -118,7 +127,7 @@ export async function upsertCompensationForProfile(db, profileId, patch, opts = 
     return { ok: false, error: 'invalid args' }
   }
   const row = { profile_id: profileId, updated_at: new Date().toISOString() }
-  for (const col of COMP_COLS) {
+  for (const col of ALL_COLS) {
     if (Object.prototype.hasOwnProperty.call(patch, col)) {
       row[col] = patch[col] === '' ? null : patch[col]
     }
@@ -147,7 +156,7 @@ export function splitCompFromProfilePatch(patch) {
   const compFields = {}
   const profileFields = {}
   for (const [k, v] of Object.entries(patch || {})) {
-    if (COMP_COLS.includes(k)) compFields[k] = v
+    if (ALL_COLS.includes(k)) compFields[k] = v
     else profileFields[k] = v
   }
   return { profileFields, compFields }
@@ -160,6 +169,8 @@ function emptyComp() {
     contracted_hours_per_week: null,
     annual_leave_entitlement: null,
     overtime_rate: null,
+    employment_start_date: null,
+    employment_end_date: null,
   }
 }
 
@@ -169,4 +180,9 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null
 }
 
+function toDate(v) {
+  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null
+}
+
 export const COMPENSATION_FIELDS = [...COMP_COLS]
+export const EMPLOYMENT_DATE_FIELDS = [...DATE_COLS]

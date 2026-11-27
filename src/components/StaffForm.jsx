@@ -11,6 +11,7 @@ import LeadTimeOverrideRow from './settings/LeadTimeOverrideRow'
 import MobileBarPlanner from './MobileBarPlanner'
 import AcDeviceAllowlistPicker from './AcDeviceAllowlistPicker'
 import { describeTombstoneImpact, describeAuthOutcome, describeDeleteResult, needsAuthRetry } from '@/lib/staff-tombstone'
+import { proratedEntitlementDays } from '@/lib/leave-prorata'
 import {
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
@@ -69,6 +70,10 @@ export default function StaffForm({
   // `locations` is empty for a reason other than "there are none". The form
   // still renders (never louder than before); it just says so.
   locationsLoadFailed = false,
+  // LEAVEPRORATA.1 — { start, end, loadFailed } from profile_compensation
+  // (mig 877). Kept off `staff` on purpose: STAFF_EDITOR_FIELDS are profiles
+  // columns. The new-staff page passes nothing.
+  employmentDates = null,
   // C18 ORGROLE.1 — the staff device fleet (GET /api/staff-devices) is for
   // organisation admins of the active org; the page decides and passes it.
   canSeeDevices = false,
@@ -147,6 +152,8 @@ export default function StaffForm({
     contracted_hours_per_week: staff?.contracted_hours_per_week ?? 40,
     annual_leave_entitlement: staff?.annual_leave_entitlement ?? 20,
     overtime_rate: staff?.overtime_rate || '',
+    employment_start_date: employmentDates?.start || '',
+    employment_end_date: employmentDates?.end || '',
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -452,6 +459,12 @@ export default function StaffForm({
       contracted_hours_per_week: form.employment_type === 'fte' ? Number(form.contracted_hours_per_week) : null,
       annual_leave_entitlement: form.employment_type === 'fte' ? Number(form.annual_leave_entitlement) : null,
       overtime_rate: form.employment_type === 'fte' && form.overtime_rate ? Number(form.overtime_rate) : null,
+    }
+    // LEAVEPRORATA.1 — dates only for FTE, and never when they failed to
+    // load (blank would clear the real ones).
+    if (form.employment_type === 'fte' && !employmentDates?.loadFailed) {
+      payload.employment_start_date = form.employment_start_date || null
+      payload.employment_end_date = form.employment_end_date || null
     }
 
     if (!isEdit) {
@@ -905,6 +918,48 @@ export default function StaffForm({
                 Effective hourly rate: <span className="text-un1t-text font-medium">€{(Number(form.annual_salary) / (Number(form.contracted_hours_per_week) * 52)).toFixed(2)}</span>/hr
               </div>
             )}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="employment_start_date" className="block text-sm text-un1t-subtle mb-1">Start date</label>
+                <input
+                  id="employment_start_date"
+                  type="date"
+                  value={form.employment_start_date}
+                  disabled={!!employmentDates?.loadFailed}
+                  onChange={e => setForm(prev => ({ ...prev, employment_start_date: e.target.value }))}
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
+                />
+              </div>
+              <div>
+                <label htmlFor="employment_end_date" className="block text-sm text-un1t-subtle mb-1">
+                  Last day <span className="text-un1t-muted">— if leaving</span>
+                </label>
+                <input
+                  id="employment_end_date"
+                  type="date"
+                  value={form.employment_end_date}
+                  min={form.employment_start_date || undefined}
+                  disabled={!!employmentDates?.loadFailed}
+                  onChange={e => setForm(prev => ({ ...prev, employment_end_date: e.target.value }))}
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
+                />
+              </div>
+            </div>
+            {employmentDates?.loadFailed && (
+              <p className="text-xs text-red-700">Start and leaving dates could not be loaded, so they are locked for this save. Reload to edit them.</p>
+            )}
+            {(() => {
+              const year = new Date().getFullYear()
+              const ent = Number(form.annual_leave_entitlement)
+              if (!Number.isFinite(ent) || !(form.employment_start_date || form.employment_end_date)) return null
+              const days = proratedEntitlementDays(ent, year, form.employment_start_date || null, form.employment_end_date || null)
+              if (days === ent) return null
+              return (
+                <div className="text-xs text-un1t-subtle bg-black/30 rounded-md px-3 py-2">
+                  {year} holiday allowance: <span className="text-un1t-text font-medium">{days} days</span> (pro-rated from {ent} by these dates, to the nearest half day)
+                </div>
+              )
+            })()}
             <div>
               <label className="block text-sm text-un1t-subtle mb-1">Annual Leave Entitlement (days)</label>
               <input

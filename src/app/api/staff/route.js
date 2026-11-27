@@ -6,7 +6,7 @@ import { listStaffForUser } from '@/lib/staff'
 import { validateBody } from '@/lib/validate'
 import { getAppUrl } from '@/lib/app-url'
 import {
-  employmentTypeSchema, money, hours, days, permissionsSchema,
+  employmentTypeSchema, money, hours, days, realIsoDate, permissionsSchema,
   assignmentSchema, uuidLike,
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
@@ -39,6 +39,9 @@ const CreateStaffSchema = z.object({
   contracted_hours_per_week: hours.nullable().optional(),
   annual_leave_entitlement: days.nullable().optional(),
   overtime_rate: money.nullable().optional(),
+  // LEAVEPRORATA.1 (mig 877) — pro-rate the holiday allowance.
+  employment_start_date: realIsoDate.nullable().optional(),
+  employment_end_date: realIsoDate.nullable().optional(),
 })
 
 // GET /api/staff — List staff in the caller's locations.
@@ -271,6 +274,8 @@ export async function POST(request) {
   if (body.contracted_hours_per_week != null) compFields.contracted_hours_per_week = body.contracted_hours_per_week
   if (body.annual_leave_entitlement != null)  compFields.annual_leave_entitlement  = body.annual_leave_entitlement
   if (body.overtime_rate !== undefined)       compFields.overtime_rate             = body.overtime_rate
+  if (body.employment_start_date)             compFields.employment_start_date     = body.employment_start_date
+  if (body.employment_end_date)               compFields.employment_end_date       = body.employment_end_date
   if (Object.keys(compFields).length > 0) {
     const { upsertCompensationForProfile } = await import('@/lib/profile-compensation')
     await upsertCompensationForProfile(db, newUserId, compFields, { actorId: user.id })

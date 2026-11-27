@@ -10,7 +10,7 @@ import {
   getNonWorkingDates, findLeaveClashes, decidingLocationIds, countLeaveClashes,
   ownShiftPreviewRow, findOwnPublishedShifts, chargeableLeaveSegments,
   getOrgAdminLocationIdsByProfile, getProfileLocationIds,
-  getPendingHolidayDays,
+  getPendingHolidayDays, recalcAllowancesForYears,
 } from './time-off-leave.js'
 import { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } from './time-off.test-helpers.js'
 
@@ -104,6 +104,49 @@ describe('entitlement + allowance', () => {
     db = fakeDb((q) => (q.table === 'staff_allowances' && q.action === 'select' ? { data: { total_days: 20, used_days: 5, carried_over: 0 }, error: null } : { data: null, error: null }))
     await ensureHolidayAllowanceRow(db, 'p', 2026)
     expect(db.queries.filter((q) => q.action !== 'select')).toHaveLength(0)
+  })
+})
+
+describe('LEAVEPRORATA.1 — pro-rated by start and leaving date', () => {
+  const comp = { annual_leave_entitlement: 20, employment_start_date: '2026-09-01', employment_end_date: '2026-12-14' }
+
+  it('getHolidayAllowance: no row in a starting year → the pro-rated entitlement', async () => {
+    const db = fakeDb((q) => (q.table === 'profile_compensation' ? { data: comp, error: null } : { data: null, error: null }))
+    expect((await getHolidayAllowance(db, 'p', 2026)).allowance.total_days).toBe(6)
+    // A later year they are not employed in is 0; a year with no dates touching it is whole.
+    expect((await getHolidayAllowance(db, 'p', 2027)).allowance.total_days).toBe(0)
+  })
+
+  it('ensureHolidayAllowanceRow seeds the pro-rated figure', async () => {
+    const db = fakeDb((q) => (q.table === 'profile_compensation' ? { data: { ...comp, employment_end_date: null }, error: null } : { data: null, error: null }))
+    await ensureHolidayAllowanceRow(db, 'p', 2026)
+    expect(queriesOf(db, 'staff_allowances', 'insert')[0].payload.total_days).toBe(6.5)
+  })
+
+  it('recalcAllowancesForYears rewrites only saved rows whose total moved, keeping used days', async () => {
+    const db = fakeDb((q) => {
+      if (q.table === 'profile_compensation') return { data: comp, error: null }
+      if (q.table === 'staff_allowances' && q.action === 'select') {
+        return q.eq.year === 2026 ? { data: { id: 'r26', total_days: 20 }, error: null } : { data: null, error: null }
+      }
+      return { data: null, error: null }
+    })
+    const { updated, error } = await recalcAllowancesForYears(db, 'p', [2026, 2027])
+    expect(error).toBeNull()
+    expect(updated).toEqual([2026])
+    const [write] = queriesOf(db, 'staff_allowances', 'update')
+    expect(write.payload.total_days).toBe(6)
+    expect(write.payload).not.toHaveProperty('used_days')
+    expect(write.eq.id).toBe('r26')
+  })
+
+  it('recalcAllowancesForYears leaves an unchanged total alone and reports a read error', async () => {
+    let db = fakeDb((q) => (q.table === 'profile_compensation' ? { data: comp, error: null } : { data: { id: 'r', total_days: 6 }, error: null }))
+    expect((await recalcAllowancesForYears(db, 'p', [2026])).updated).toEqual([])
+    expect(queriesOf(db, 'staff_allowances', 'update')).toHaveLength(0)
+
+    db = fakeDb(() => ({ data: null, error: { message: 'down' } }))
+    expect((await recalcAllowancesForYears(db, 'p', [2026])).error.message).toBe('down')
   })
 })
 

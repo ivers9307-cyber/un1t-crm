@@ -12,7 +12,8 @@
 //   • Holiday balance: the allowance row, or — before the first approved
 //     holiday has created one — the person's contract entitlement
 //     (profile_compensation.annual_leave_entitlement, mig 152), 20 only when
-//     that is null.
+//     that is null, pro-rated for a year the person started or left in
+//     (LEAVEPRORATA.1, src/lib/leave-prorata.js).
 //   • Shift clashes: live assignments of the requester, at any studio OF THE
 //     ORGANISATION(S) THE DECIDER ACTS IN (ORGSCOPE.1), on a day the leave
 //     covers, from today on. Past shifts are history (worked or not, payroll
@@ -32,6 +33,7 @@ import { nonWorkingDateSet, countLeaveDays, splitAtYearEnd } from '@/lib/time-of
 import { uncoveredHolidayYears } from '@/lib/bank-holidays'
 import { logWarn } from '@/lib/log'
 import { siblingLocationIds } from '@/lib/sibling-locations'
+import { proratedEntitlementDays } from '@/lib/leave-prorata'
 
 export const TIME_OFF_APPROVE_PERMISSION = APPROVAL_CATEGORY_PERMISSION.time_off
 export const DEFAULT_LEAVE_ENTITLEMENT = 20
@@ -291,15 +293,57 @@ export function entitlementDays(value) {
  * moved it there and marked `profiles.annual_leave_entitlement` DEPRECATED
  * (its SELECT is revoked and it is due to be dropped), so this does not fall
  * back to the old column.
+ *
+ * LEAVEPRORATA.1 — with `year`, the days for THAT year: pro-rated by
+ * employment_start_date / employment_end_date (mig 877) when the person
+ * started or left during it. Without `year`, the yearly contract figure.
  */
-export async function getLeaveEntitlement(db, profileId) {
+export async function getLeaveEntitlement(db, profileId, year) {
   const { data, error } = await db
     .from('profile_compensation')
-    .select('annual_leave_entitlement')
+    .select('annual_leave_entitlement, employment_start_date, employment_end_date')
     .eq('profile_id', profileId)
     .maybeSingle()
   if (error) return { days: null, error }
-  return { days: entitlementDays(data?.annual_leave_entitlement), error: null }
+  const yearly = entitlementDays(data?.annual_leave_entitlement)
+  if (year === undefined || year === null) return { days: yearly, error: null }
+  return {
+    days: proratedEntitlementDays(yearly, Number(year), data?.employment_start_date ?? null, data?.employment_end_date ?? null),
+    error: null,
+  }
+}
+
+/**
+ * LEAVEPRORATA.1 — after a start or leaving date is saved, set each SAVED
+ * allowance in `years` to the pro-rated entitlement for that year. Used days
+ * and carry-over are kept; a year with no saved row is left alone (it is
+ * seeded pro-rated when first needed). This is the one action that overwrites
+ * a manager's own total for those years, by Richard's choice (27 Nov 2026).
+ *
+ * @returns {Promise<{ updated: number[], error: object|null }>}
+ */
+export async function recalcAllowancesForYears(db, profileId, years) {
+  const updated = []
+  for (const year of years || []) {
+    const { data: row, error: readErr } = await db
+      .from('staff_allowances')
+      .select('id, total_days')
+      .eq('profile_id', profileId)
+      .eq('year', year)
+      .maybeSingle()
+    if (readErr) return { updated, error: readErr }
+    if (!row) continue
+    const { days, error: entErr } = await getLeaveEntitlement(db, profileId, year)
+    if (entErr) return { updated, error: entErr }
+    if (Number(row.total_days) === days) continue
+    const { error: writeErr } = await db
+      .from('staff_allowances')
+      .update({ total_days: days, updated_at: new Date().toISOString() })
+      .eq('id', row.id)
+    if (writeErr) return { updated, error: writeErr }
+    updated.push(year)
+  }
+  return { updated, error: null }
 }
 
 /**
@@ -326,7 +370,7 @@ export async function getHolidayAllowance(db, profileId, year) {
       error: null,
     }
   }
-  const ent = await getLeaveEntitlement(db, profileId)
+  const ent = await getLeaveEntitlement(db, profileId, year)
   if (ent.error) return { allowance: null, error: ent.error }
   return {
     allowance: { exists: false, total_days: ent.days, used_days: 0, carried_over: 0 },

@@ -81,6 +81,7 @@ function makeDb({ targetLocationIds = [LOC_THEIRS], locError = null, locationRow
     // locations / location_role_permissions / profile_organizations
     const chain = {}
     for (const op of ['select', 'eq', 'order', 'in']) chain[op] = () => chain
+    chain.maybeSingle = () => Promise.resolve({ data: null, error: null })
     chain.then = (res) => Promise.resolve(
       table === 'locations'
         ? { data: locationsError ? null : locationRows, error: locationsError }

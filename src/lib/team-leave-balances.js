@@ -27,6 +27,7 @@ import { excludeTombstones } from '@/lib/staff-tombstone'
 import { entitlementDays } from '@/lib/time-off-leave'
 import { readLieuLedgerForProfiles } from '@/lib/lieu-credits'
 import { lieuBalanceFrom, round2 } from '@/lib/lieu-rules'
+import { proratedEntitlementDays } from '@/lib/leave-prorata'
 
 const PAGE = 1000
 const ID_CHUNK = 200
@@ -114,13 +115,14 @@ export async function readStudioStaff(db, locationId) {
  * @param {object} args
  * @param {StaffRow[]} args.staff
  * @param {Array<{ profile_id: string, total_days: number, used_days: number, carried_over: number }>|null} args.allowances  staff_allowances rows for the year
- * @param {Array<{ profile_id: string, annual_leave_entitlement: number | null }>|null} args.entitlements  profile_compensation rows
+ * @param {Array<{ profile_id: string, annual_leave_entitlement: number | null, employment_start_date?: string | null, employment_end_date?: string | null }>|null} args.entitlements  profile_compensation rows
+ * @param {number} [args.year]  the allowance year: with it, an unstored allowance is pro-rated (LEAVEPRORATA.1)
  * @param {Array<{ profile_id: string, total_days: number | null }>|null} args.pending  pending holiday time_off_requests rows
  * @param {Array<any>|null} args.lieuRows  staff_lieu_credits rows dated in the year
  */
-export function buildTeamLeaveRows({ staff, allowances, entitlements, pending, lieuRows }) {
+export function buildTeamLeaveRows({ staff, allowances, entitlements, pending, lieuRows, year }) {
   const allowanceBy = allowances ? new Map(allowances.map((r) => [r.profile_id, r])) : null
-  const entitlementBy = entitlements ? new Map(entitlements.map((r) => [r.profile_id, r.annual_leave_entitlement])) : null
+  const entitlementBy = entitlements ? new Map(entitlements.map((r) => [r.profile_id, r])) : null
   const pendingBy = new Map()
   for (const r of pending || []) pendingBy.set(r.profile_id, (pendingBy.get(r.profile_id) || 0) + Number(r.total_days || 0))
   const lieuBy = new Map()
@@ -147,8 +149,13 @@ export function buildTeamLeaveRows({ staff, allowances, entitlements, pending, l
       const used = Number(stored.used_days)
       holiday = { stored: true, total_days: total, carried_over: carried, used_days: used, remaining: round2(total + carried - used) }
     } else if (allowanceBy && entitlementBy) {
-      // No row yet: the contract entitlement, as the per-person GET answers.
-      const total = entitlementDays(entitlementBy.get(p.id))
+      // No row yet: the contract entitlement, as the per-person GET answers,
+      // pro-rated for a year they started or left in (LEAVEPRORATA.1).
+      const comp = entitlementBy.get(p.id)
+      const yearly = entitlementDays(comp?.annual_leave_entitlement)
+      const total = Number.isInteger(year)
+        ? proratedEntitlementDays(yearly, /** @type {number} */ (year), comp?.employment_start_date ?? null, comp?.employment_end_date ?? null)
+        : yearly
       holiday = { stored: false, total_days: total, carried_over: 0, used_days: 0, remaining: total }
     }
 
@@ -186,7 +193,7 @@ export async function readTeamLeaveBalances(db, locationId, year) {
       .order('profile_id')
       .range(a, b)),
     readByIds(ids, (part, a, b) => db.from('profile_compensation')
-      .select('profile_id, annual_leave_entitlement')
+      .select('profile_id, annual_leave_entitlement, employment_start_date, employment_end_date')
       .in('profile_id', part)
       .order('profile_id')
       .range(a, b)),
@@ -221,6 +228,7 @@ export async function readTeamLeaveBalances(db, locationId, year) {
     entitlements: ok('entitlements', entitlements),
     pending: ok('pending', pending),
     lieuRows: ok('lieu', lieu),
+    year: y,
   })
   return { rows, unreadable, error: null }
 }

@@ -102,7 +102,8 @@ export async function GET(request) {
   }
 
   if (!data) {
-    const { days, error: entError } = await getLeaveEntitlement(db, profileId)
+    // LEAVEPRORATA.1 — pro-rated for a year they started or left in.
+    const { days, error: entError } = await getLeaveEntitlement(db, profileId, year)
     if (entError) {
       return NextResponse.json({ success: false, error: entError.message }, { status: 500 })
     }

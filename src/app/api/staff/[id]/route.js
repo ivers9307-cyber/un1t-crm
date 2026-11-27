@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import {
-  employmentTypeSchema, money, hours, days, permissionsSchema,
+  employmentTypeSchema, money, hours, days, realIsoDate, permissionsSchema,
   assignmentSchema,
 } from '@/lib/schemas'
 import { canEditStaffMember } from '@/lib/staff-access'
@@ -39,6 +39,9 @@ const UpdateStaffSchema = z.object({
   contracted_hours_per_week: hours.nullable().optional(),
   annual_leave_entitlement: days.nullable().optional(),
   overtime_rate: money.nullable().optional(),
+  // LEAVEPRORATA.1 (mig 877) — pro-rate the holiday allowance.
+  employment_start_date: realIsoDate.nullable().optional(),
+  employment_end_date: realIsoDate.nullable().optional(),
 })
 
 // GET /api/staff/[id] — fetch one staff member (scoped to the caller's
