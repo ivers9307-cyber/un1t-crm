@@ -51,6 +51,7 @@ function makeDb(row) {
       }
       const chain = {}
       for (const op of ['select', 'eq', 'order', 'in']) chain[op] = () => chain
+      chain.maybeSingle = () => Promise.resolve({ data: null, error: null })
       chain.then = (res) => Promise.resolve({ data: [], error: null }).then(res)
       return chain
     },

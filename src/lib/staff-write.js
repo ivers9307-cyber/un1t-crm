@@ -7,7 +7,10 @@
 
 import { OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES } from '@/lib/schemas'
 import { diffPermissionsBlob, hydratePermissions, mergeTemplates } from '@shared/permissions'
-import { splitCompFromProfilePatch, upsertCompensationForProfile } from '@/lib/profile-compensation'
+import { splitCompFromProfilePatch, upsertCompensationForProfile, getCompensationForProfile } from '@/lib/profile-compensation'
+import { recalcAllowancesForYears } from '@/lib/time-off-leave'
+import { yearsTouchedByDates } from '@/lib/leave-prorata'
+import { allowanceYearIn } from '@/lib/allowance-year'
 import { logError } from '@/lib/log'
 import {
   getUnifiConfig, findOrCreateUnifiUser,
@@ -229,13 +232,44 @@ export async function applyStaffProfileWrite({ db, id, body, actorId, extraPatch
     contracted_hours_per_week: body.contracted_hours_per_week,
     annual_leave_entitlement:  body.annual_leave_entitlement,
     overtime_rate:             body.overtime_rate,
+    employment_start_date:     body.employment_start_date,
+    employment_end_date:       body.employment_end_date,
   })
   const cleanComp = Object.fromEntries(
     Object.entries(compFields).filter(([, v]) => v !== undefined)
   )
+  // LEAVEPRORATA.1 — a changed start or leaving date recalculates the saved
+  // allowances it moves. Read the old dates first so a year the person no
+  // longer starts in is recalculated back too.
+  const datesInPatch = 'employment_start_date' in cleanComp || 'employment_end_date' in cleanComp
+  const before = datesInPatch ? await getCompensationForProfile(db, id) : null
   if (Object.keys(cleanComp).length > 0) {
     const compResult = await upsertCompensationForProfile(db, id, cleanComp, { actorId })
-    if (!compResult.ok) return { ok: false, error: `compensation: ${compResult.error}`, profileWritten }
+    if (!compResult.ok) {
+      const msg = /employment_dates_order/.test(compResult.error || '')
+        ? 'The last day must be on or after the start date'
+        : `compensation: ${compResult.error}`
+      return { ok: false, error: msg, profileWritten }
+    }
+  }
+  if (before) {
+    const after = {
+      start: 'employment_start_date' in cleanComp ? cleanComp.employment_start_date || null : before.employment_start_date,
+      end: 'employment_end_date' in cleanComp ? cleanComp.employment_end_date || null : before.employment_end_date,
+    }
+    if (after.start !== before.employment_start_date || after.end !== before.employment_end_date) {
+      const years = yearsTouchedByDates(
+        [{ start: before.employment_start_date, end: before.employment_end_date }, after],
+        allowanceYearIn(),
+      )
+      const { error: recalcErr } = await recalcAllowancesForYears(db, id, years)
+      // The dates are saved; a failed recalc leaves the old totals, which a
+      // second save repairs. Say so rather than report success.
+      if (recalcErr) {
+        logError('staff-write', 'allowance recalc after date change failed', { id, err: recalcErr.message })
+        return { ok: false, error: 'Dates saved, but the holiday allowance could not be recalculated. Save again to retry.', profileWritten }
+      }
+    }
   }
   return { ok: true, profileWritten }
 }

@@ -29,6 +29,22 @@ describe('buildTeamLeaveRows', () => {
     expect(rows.find((r) => r.profile_id === 'a').holiday).toEqual({ stored: false, total_days: 20, carried_over: 0, used_days: 0, remaining: 20 })
   })
 
+  it('LEAVEPRORATA.1 — no row: pro-rated for the year by start and leaving date', () => {
+    const rows = buildTeamLeaveRows({
+      staff: staff.slice(0, 2),
+      allowances: [],
+      entitlements: [
+        { profile_id: 'b', annual_leave_entitlement: 20, employment_start_date: '2026-09-01', employment_end_date: null },
+        { profile_id: 'a', annual_leave_entitlement: 20, employment_start_date: '2024-01-01', employment_end_date: null },
+      ],
+      pending: [],
+      lieuRows: [],
+      year: 2026,
+    })
+    expect(rows.find((r) => r.profile_id === 'b').holiday.total_days).toBe(6.5)
+    expect(rows.find((r) => r.profile_id === 'a').holiday.total_days).toBe(20)
+  })
+
   it('contractors are not applicable for both holiday and lieu, even with stray rows', () => {
     const [cat] = buildTeamLeaveRows({
       staff: [staff[2]],

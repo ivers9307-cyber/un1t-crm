@@ -24,6 +24,7 @@ describe('getCompensationForProfiles', () => {
       data: [{
         profile_id: 'p1', annual_salary: '36000.00', hourly_rate: null,
         contracted_hours_per_week: '39.0', annual_leave_entitlement: null, overtime_rate: null,
+        employment_start_date: '2026-09-01', employment_end_date: null,
       }],
       error: null,
     })
@@ -31,6 +32,7 @@ describe('getCompensationForProfiles', () => {
     expect(out.get('p1')).toEqual({
       annual_salary: 36000, hourly_rate: null, contracted_hours_per_week: 39,
       annual_leave_entitlement: null, overtime_rate: null,
+      employment_start_date: '2026-09-01', employment_end_date: null,
     })
     expect(db.seen).toContainEqual(['profile_compensation', 'in', 'profile_id', ['p1']])
   })

@@ -115,8 +115,13 @@ import { vi, beforeEach } from 'vitest'
 vi.mock('@/lib/profile-compensation', () => ({
   splitCompFromProfilePatch: vi.fn((p) => ({ compFields: p })),
   upsertCompensationForProfile: vi.fn(async () => ({ ok: true })),
+  getCompensationForProfile: vi.fn(async () => ({ employment_start_date: null, employment_end_date: null })),
 }))
-import { splitCompFromProfilePatch, upsertCompensationForProfile } from '@/lib/profile-compensation'
+vi.mock('@/lib/time-off-leave', () => ({
+  recalcAllowancesForYears: vi.fn(async () => ({ updated: [], error: null })),
+}))
+import { splitCompFromProfilePatch, upsertCompensationForProfile, getCompensationForProfile } from '@/lib/profile-compensation'
+import { recalcAllowancesForYears } from '@/lib/time-off-leave'
 
 function mockDb({ updateError = null } = {}) {
   const eq = vi.fn(async () => ({ error: updateError }))
@@ -211,6 +216,50 @@ describe('staff-write — characterization completeness (C2b.1 review)', () => {
       existingLinks: [],
     })
     expect(out.find(a => a.location_id === 'loc-9')).toBeUndefined()
+  })
+})
+
+describe('applyStaffProfileWrite — LEAVEPRORATA.1 dates', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    splitCompFromProfilePatch.mockImplementation((p) => ({ compFields: p }))
+    upsertCompensationForProfile.mockResolvedValue({ ok: true })
+    getCompensationForProfile.mockResolvedValue({ employment_start_date: null, employment_end_date: null })
+    recalcAllowancesForYears.mockResolvedValue({ updated: [2026], error: null })
+  })
+
+  it('a changed start date saves it and recalculates the years it touches', async () => {
+    const res = await applyStaffProfileWrite({ db: mockDb(), id: 'p1', body: { employment_start_date: '2025-11-03' }, actorId: 'u1' })
+    expect(res.ok).toBe(true)
+    expect(upsertCompensationForProfile).toHaveBeenCalledWith(expect.anything(), 'p1', { employment_start_date: '2025-11-03' }, { actorId: 'u1' })
+    const years = recalcAllowancesForYears.mock.calls[0][2]
+    expect(years).toContain(2025)
+  })
+
+  it('unchanged dates recalculate nothing', async () => {
+    getCompensationForProfile.mockResolvedValue({ employment_start_date: '2026-09-01', employment_end_date: null })
+    await applyStaffProfileWrite({ db: mockDb(), id: 'p1', body: { employment_start_date: '2026-09-01', employment_end_date: null }, actorId: 'u1' })
+    expect(recalcAllowancesForYears).not.toHaveBeenCalled()
+  })
+
+  it('a body with no dates never reads or recalculates', async () => {
+    await applyStaffProfileWrite({ db: mockDb(), id: 'p1', body: { hourly_rate: 12 }, actorId: 'u1' })
+    expect(getCompensationForProfile).not.toHaveBeenCalled()
+    expect(recalcAllowancesForYears).not.toHaveBeenCalled()
+  })
+
+  it('an end before the start says so in words', async () => {
+    upsertCompensationForProfile.mockResolvedValue({ ok: false, error: 'new row violates check constraint "profile_compensation_employment_dates_order"' })
+    const res = await applyStaffProfileWrite({ db: mockDb(), id: 'p1', body: { employment_end_date: '2020-01-01' }, actorId: 'u1' })
+    expect(res).toMatchObject({ ok: false, error: 'The last day must be on or after the start date' })
+    expect(recalcAllowancesForYears).not.toHaveBeenCalled()
+  })
+
+  it('a failed recalc is reported, not hidden', async () => {
+    recalcAllowancesForYears.mockResolvedValue({ updated: [], error: { message: 'down' } })
+    const res = await applyStaffProfileWrite({ db: mockDb(), id: 'p1', body: { employment_end_date: '2026-12-14' }, actorId: 'u1' })
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/could not be recalculated/)
   })
 })
 

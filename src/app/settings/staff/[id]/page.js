@@ -72,7 +72,7 @@ export default async function EditStaffPage(props) {
     if (!targetLocationIds.some(id => ownedByCaller.includes(id))) notFound()
   }
 
-  const [profileRes, staffFormLocations, templatesRes, orgsRes, orgGrantsRes] = await Promise.all([
+  const [profileRes, staffFormLocations, templatesRes, orgsRes, orgGrantsRes, datesRes] = await Promise.all([
     // CRITICAL: profile_locations(*) — EVERY link column — so
     // mapProfileLocationToAssignment() always receives the full row.
     // History: a narrowed explicit column list silently dropped a
@@ -113,6 +113,13 @@ export default async function EditStaffPage(props) {
     user.isMaster
       ? db.from('profile_organizations').select('organization_id').eq('profile_id', params.id)
       : Promise.resolve({ data: null }),
+    // LEAVEPRORATA.1 (mig 877) — start and leaving dates live on the
+    // owner/master-only pay table, so they come as their own prop, never on
+    // `staff`. Only the two dates are read.
+    db.from('profile_compensation')
+      .select('employment_start_date, employment_end_date')
+      .eq('profile_id', params.id)
+      .maybeSingle(),
   ])
 
   // STAFFDELETE.1 — a permanently deleted staff member has no editable profile.
@@ -180,6 +187,13 @@ export default async function EditStaffPage(props) {
         organizations={orgsRes?.data || []}
         orgAdminOrgIds={(orgGrantsRes?.data || []).map(g => g.organization_id)}
         canSeeDevices={isActiveOrgAdmin(user)}
+        employmentDates={{
+          start: datesRes?.data?.employment_start_date || '',
+          end: datesRes?.data?.employment_end_date || '',
+          // An unreadable answer must not render as blank dates that a save
+          // then writes back over the real ones.
+          loadFailed: !!datesRes?.error,
+        }}
       />
       <div className="mt-8">
         <WidgetTokensCard profileId={staff.id} />
