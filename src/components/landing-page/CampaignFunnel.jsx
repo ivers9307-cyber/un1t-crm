@@ -33,6 +33,7 @@ import { stripDashes } from '@/lib/un1t-online-funnel-copy'
 import { readAttributionFromUrl, buildAttribution, readFbpCookie, funnelSessionId } from '@/lib/campaign-funnel-attribution'
 import { customerErrorText } from '@/lib/page-request-errors'
 import EmailTypoHint from '@/components/EmailTypoHint'
+import { useTurnstile } from '@/components/useTurnstile'
 
 // The card words the editor's preview may edit in place (onEditCopy).
 export const EDITABLE_COPY_KEYS = Object.freeze(['pick_title', 'pick_body', 'done_title', 'done_body'])
@@ -51,6 +52,7 @@ const ctaCls = PICK_CTA_CLS
 export { cadenceGroups, ctaLabelFor, campaignFunnelTarget, campaignFunnelClassesUrl }
 
 export default function CampaignFunnel({ publicPath, campaign, page = null, copy, locationName = '', onEditCopy = null }) {
+  const turnstile = useTurnstile()
   const c = copy && typeof copy === 'object' ? copy : {}
   const words = (key, multiline = false) => (onEditCopy && EDITABLE_COPY_KEYS.includes(key)
     ? <EditableText value={c[key] || ''} multiline={multiline} onChange={(v) => onEditCopy(key, v)} />
@@ -142,7 +144,7 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
     const leadEventId = newLeadEventId()
     try {
       const r = await fetch('/api/public/class-booking', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await turnstile.headers()) },
         body: JSON.stringify({
           ...campaignFunnelTarget({ page, publicPath, campaign }),
           event_id: chosen.event_id, class_name: chosen.name, starts_at: chosen.starts_at,

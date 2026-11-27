@@ -46,6 +46,7 @@ import { grantHostConsent, resubscribeHost } from '@/lib/host-consent'
 import { unsuppressAtPostmark } from '@/lib/postmark-suppressions'
 import { hostServerToken } from '@/lib/postmark-server-for-location'
 import { logWarn, logError } from '@/lib/log'
+import { refuseUnlessHuman } from '@/lib/turnstile'
 
 export const runtime = 'nodejs'
 
@@ -69,6 +70,9 @@ export async function POST(request, props) {
 
   const validation = await validateBody(request, SubscribeSchema)
   if (!validation.ok) return validation.response
+  // TURNSTILE.1 — bot check before anything is written (src/lib/turnstile.js).
+  const notHuman = await refuseUnlessHuman(request, 'host-list')
+  if (notHuman) return notHuman
   const body = validation.data
 
   // Host by slug. Signup is allowed pre-verification (the list can grow

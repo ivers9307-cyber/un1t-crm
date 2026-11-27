@@ -22,6 +22,7 @@ import { eventIsPublic } from '@/lib/host-events'
 import { eventToday } from '@/lib/event-day'
 import { joinWaitlist, loadEventHasRoom, registrationWindowOpen, WAITLIST_EVENT_COLUMNS } from '@/lib/event-waitlist'
 import { logError } from '@/lib/log'
+import { refuseUnlessHuman } from '@/lib/turnstile'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -54,6 +55,9 @@ export async function POST(request, props) {
 
   const validation = await validateBody(request, WaitlistJoinSchema)
   if (!validation.ok) return validation.response
+  // TURNSTILE.1 — bot check before anything is written (src/lib/turnstile.js).
+  const notHuman = await refuseUnlessHuman(request, 'event-waitlist')
+  if (notHuman) return notHuman
   const body = validation.data
 
   // race_events.slug is unique (mig 451): at most one row.
