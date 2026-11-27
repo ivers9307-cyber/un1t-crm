@@ -3,18 +3,18 @@
 // `verifyMcpToken` is what the /api/mcp route hands to mcp-handler's
 // `withMcpAuth` as `(req, token) => verifyMcpToken(token)`. The token is a
 // Supabase OAuth-server access token, which is an ordinary Supabase session
-// JWT plus a `client_id` claim. `getCurrentUser()` already knows how to turn
-// a Bearer JWT into the signed-in person (and refuses an inactive or
-// tombstoned profile), so this module reuses it instead of re-implementing
-// the profile read.
+// JWT plus a `client_id` claim. `getCurrentUserForMcp()` turns that Bearer
+// into the signed-in person (and refuses an inactive or tombstoned profile)
+// exactly as `getCurrentUser()` does; it is the one resolver that accepts an
+// OAuth-issued token, since getCurrentUser() refuses one (MCPBEARER.1).
 //
 // Two acceptances, both deliberate and written down in the MCP.1 design:
 //
 // 1. REACH. Because the token is a normal session JWT, outside this app it
 //    can reach whatever that person's phone session can (the RLS-bound
 //    tables the phone reads directly). We document that and do not fence it
-//    further in v1; src/proxy.js already refuses it on every /api route but
-//    /api/mcp.
+//    further in v1; src/proxy.js refuses it on every /api route but
+//    /api/mcp, and getCurrentUser() refuses it everywhere (MCPBEARER.1).
 // 2. AUDIENCE. Supabase tokens carry `aud: authenticated`, so there is no
 //    audience to check. The `client_id` claim stands in for audience
 //    validation: a token minted for some OTHER MCP server on this Supabase
@@ -27,7 +27,7 @@
 // `enabledOrgIds` and `mcpAccessAnywhere` rather than refusing on them.
 
 import { createClient } from '@supabase/supabase-js'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUserForMcp } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { hasPermissionAtAnyLocation } from '@/lib/permissions'
 import { jwtClientId } from '@/lib/oauth-token-edge'
@@ -40,11 +40,11 @@ import { mcpEnabledOrgIds } from '@/lib/mcp/org-switch'
 export { mcpEnabledOrgIds }
 
 /**
- * Ask Supabase Auth who this exact token belongs to. getCurrentUser() takes
+ * Ask Supabase Auth who this exact token belongs to. getCurrentUserForMcp() takes
  * no token: it reads the request itself and, when the Bearer fails, falls
  * back to the SSR cookie session and the studio PIN cookie. So the token has
  * to be verified here, on its own, and the result bound to what
- * getCurrentUser() resolved.
+ * getCurrentUserForMcp() resolved.
  *
  * @param {string} token
  * @returns {Promise<{ id: string } | null>} null for a bad token or an
@@ -67,7 +67,7 @@ export async function defaultVerifyToken(token) {
 
 /**
  * Order: client_id claim -> verify the token with Supabase Auth -> resolve
- * the person with getCurrentUser() -> require both to be the same person and
+ * the person with getCurrentUserForMcp() -> require both to be the same person and
  * not a master "View as" session (impersonation is forbidden on this path).
  *
  * @param {string} token the raw Bearer token
@@ -75,7 +75,7 @@ export async function defaultVerifyToken(token) {
  * @returns {Promise<null | { token: string, clientId: string, scopes: string[],
  *   extra: { user: object, enabledOrgIds: string[], mcpAccessAnywhere: boolean } }>}
  */
-export async function verifyMcpToken(token, { getUser = getCurrentUser, verifyToken = defaultVerifyToken, db } = {}) {
+export async function verifyMcpToken(token, { getUser = getCurrentUserForMcp, verifyToken = defaultVerifyToken, db } = {}) {
   const clientId = jwtClientId(token)
   if (!clientId) return null
 
