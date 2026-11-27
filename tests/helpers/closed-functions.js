@@ -181,6 +181,8 @@ export const CLOSED_FUNCTIONS = [
     why: 'INVOICEPREP.3: writes supplier coding memory for any studio; only the service-role invoice routes call it' },
   { fn: 'public.claim_invoice_analysis_batch', args: '(integer)', closedBy: 872,
     why: 'INVOICEPREP.3: claims queued invoice rows across studios for reading; only the service-role cron calls it' },
+  { fn: 'public.prorated_leave_days', args: '(numeric, int, date, date)', closedBy: 877,
+    why: 'LEAVEPRORATA.1: the pro-rata rule for a holiday allowance; called only by the service-role-written approval trigger and mig 877 backfill' },
 ]
 
 /** The client roles a closed function is closed to. */
