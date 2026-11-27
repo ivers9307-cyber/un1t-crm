@@ -64,6 +64,7 @@ import { resolveChosenClass, classColumnsFor, chosenClassRefusal } from '@/lib/c
 import { classFirstStepCopy } from '@/lib/class-first-funnel'
 import { isOpenWeek } from '@/lib/open-week'
 import { resolveOpenWeekPicks, insertClaimClasses } from '@/lib/open-week-claim'
+import { refuseUnlessHuman } from '@/lib/turnstile'
 
 export const runtime = 'nodejs'
 
@@ -137,6 +138,9 @@ export async function POST(request) {
 
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
+  // TURNSTILE.1 — bot check before anything is written (src/lib/turnstile.js).
+  const notHuman = await refuseUnlessHuman(request, 'corp-claims')
+  if (notHuman) return notHuman
   // TRIALLEAK.1 — an unfilled Meta macro in an ad value is no value.
   const b = { ...validation.data, attribution: cleanAttribution(validation.data.attribution) }
 

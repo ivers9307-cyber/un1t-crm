@@ -41,6 +41,7 @@ import { eurosToCents, validateEntryAmount } from '@/lib/charity-entry-amount'
 import EventWaitlistForm from './EventWaitlistForm.jsx'
 import DonateCard, { CharityRaisedStrip, DonateJumpLink, OrDivider } from './DonateCard.jsx'
 import RaffleBuyCard from './RaffleBuyCard.jsx'
+import { useTurnstile } from '@/components/useTurnstile'
 
 // Kind-keyed copy. Adding a new kind = one entry. The 'race' entry
 // holds the original strings so the operator-visible UX for races
@@ -242,6 +243,7 @@ function QuestionField({ q, fieldKey, value, onChange, error, inputCls, errCls }
 }
 
 export default function RaceSignupWidget({ slug, embedded = false }) {
+  const turnstile = useTurnstile()
   // When embedded in a cross-site iframe, post-submit navigation must
   // break OUT of the iframe (otherwise the confirmation / payment page
   // renders trapped inside the embed). go() targets the top window when
@@ -570,7 +572,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     setSubmitting(true)
     const res = await fetch(`/api/public/events/${slug}/register`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(await turnstile.headers()) },
       body: JSON.stringify({
         // FINDTEAM.4 — a solo entry sends find_team and no team_name, team_size
         // or members: the server forces size 1 and names the team itself.

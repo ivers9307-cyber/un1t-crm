@@ -35,8 +35,10 @@ import { formatDate } from '@/lib/roster'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { dayHasWindows } from '@/lib/booking-windows'
 import { resolveZone } from '@shared/zoned-time'
+import { useTurnstile } from '@/components/useTurnstile'
 
 export default function BookingWidget({ slug }) {
+  const turnstile = useTurnstile()
   const [event, setEvent] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -210,7 +212,7 @@ export default function BookingWidget({ slug }) {
     setSubmitting(true)
     const res = await fetch('/api/public/book', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(await turnstile.headers()) },
       body: JSON.stringify({
         event_type_id: event.id,
         booking_date: formatDate(selectedDate),

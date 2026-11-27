@@ -6,8 +6,10 @@
 // the fallback contact). Styles live in page.js's scoped stylesheet.
 
 import { useState } from 'react'
+import { useTurnstile } from '@/components/useTurnstile'
 
 export default function EnquiryForm() {
+  const turnstile = useTurnstile()
   const [status, setStatus] = useState('idle') // idle | sending | sent | error
   const [error, setError] = useState('')
 
@@ -20,7 +22,7 @@ export default function EnquiryForm() {
     try {
       const res = await fetch('/api/public/givers-enquiry', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await turnstile.headers()) },
         body: JSON.stringify({
           name: (form.get('name') || '').toString(),
           phone: (form.get('phone') || '').toString(),

@@ -32,6 +32,7 @@ import { writeContactTag } from '@/lib/contact-tags'
 import { logWarn } from '@/lib/log'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 import { resolvePublicPageRequest, pageRequestRefusal } from '@/lib/landing-pages'
+import { refuseUnlessHuman } from '@/lib/turnstile'
 
 export const runtime = 'nodejs'
 
@@ -79,6 +80,9 @@ export async function POST(request) {
 
   const validation = await validateBody(request, RouteLeadSchema)
   if (!validation.ok) return validation.response
+  // TURNSTILE.1 — bot check before anything is written (src/lib/turnstile.js).
+  const notHuman = await refuseUnlessHuman(request, 'leads')
+  if (notHuman) return notHuman
   const body = validation.data
 
   const normalised = normaliseLead({ ...body, public_path: body.public_path ?? '' })

@@ -7,10 +7,12 @@
 
 import { useState } from 'react'
 import EmailTypoHint from '@/components/EmailTypoHint'
+import { useTurnstile } from '@/components/useTurnstile'
 
 const input = 'w-full rounded-lg border border-neutral-300 px-3 py-2.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900'
 
 export default function EmbedLeadForm({ publicPath, studioName }) {
+  const turnstile = useTurnstile()
   const [form, setForm] = useState({ first_name: '', email: '', phone: '', consent: true })
   const [state, setState] = useState({ status: 'idle', error: '' })
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
@@ -25,7 +27,7 @@ export default function EmbedLeadForm({ publicPath, studioName }) {
     try {
       const res = await fetch('/api/public/leads', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await turnstile.headers()) },
         body: JSON.stringify({ ...form, public_path: publicPath, form: 'embed' }),
       })
       const d = await res.json().catch(() => ({}))

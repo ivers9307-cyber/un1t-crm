@@ -22,6 +22,7 @@ import { termsLabelSegments, stripDashes } from '@/lib/un1t-online-funnel-copy'
 import { customerErrorText } from '@/lib/page-request-errors'
 import { cleanAdValue } from '@/lib/campaign-funnel-attribution'
 import EmailTypoHint from '@/components/EmailTypoHint'
+import { useTurnstile } from '@/components/useTurnstile'
 
 // MATCHQUALITY.1 — Meta's `_fbp` cookie, or null. Never throws (no document
 // during SSR, cookies blocked, no Pixel yet).
@@ -56,6 +57,7 @@ export function defaultsFor(locationName) {
 const inputCls ='w-full bg-white/[0.06] border border-white/15 rounded-xl px-4 py-3.5 text-base text-white placeholder-white/40 focus:outline-none focus:border-white/50'
 
 export default function ClassFunnel(props) {
+  const turnstile = useTurnstile()
   const DEFAULTS = defaultsFor(props?.locationName)
   // Copy props: an empty string falls back to the default, so an operator who
   // leaves a field blank keeps our copy rather than a blank line.
@@ -322,7 +324,7 @@ export default function ClassFunnel(props) {
     setSubmitting(true); setError(null)
     try {
       const r = await fetch('/api/public/book', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await turnstile.headers()) },
         body: JSON.stringify({
           event_type_id: event.id, booking_date: selectedDate, start_time: slot.start,
           customer_name: `${form.first_name.trim()} ${form.last_name.trim()}`.trim(),
@@ -348,7 +350,7 @@ export default function ClassFunnel(props) {
     const leadEventId = newLeadEventId()
     try {
       const r = await fetch('/api/public/class-booking', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await turnstile.headers()) },
         body: JSON.stringify({
           ...(where || { path: publicPath }),
           event_id: c.event_id, class_name: c.name, starts_at: c.starts_at,

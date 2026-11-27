@@ -12,12 +12,16 @@ import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { giversEnquirySchema } from '@/lib/schemas'
+import { refuseUnlessHuman } from '@/lib/turnstile'
 
 export const runtime = 'nodejs'
 
 export async function POST(request) {
   const validation = await validateBody(request, giversEnquirySchema)
   if (!validation.ok) return validation.response
+  // TURNSTILE.1 — bot check before anything is written (src/lib/turnstile.js).
+  const notHuman = await refuseUnlessHuman(request, 'givers-enquiry')
+  if (notHuman) return notHuman
   const { name, phone, email, message } = validation.data
 
   const db = createServerClient()

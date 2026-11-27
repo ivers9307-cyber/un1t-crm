@@ -20,6 +20,7 @@ import { readVisitOrigin } from '@/lib/visit-origin'
 import { leadFormConsentDefault } from '@/lib/landing-page-blocks'
 import { TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_LINK } from '@/components/landing-page/trial-card'
 import { customerErrorText } from '@/lib/page-request-errors'
+import { useTurnstile } from '@/components/useTurnstile'
 
 // TRIALFIRST.1 — `tone`: 'dark' (the default, the form on the black lead
 // section, unchanged) or 'light' (the compact "not ready yet" strip on the
@@ -53,6 +54,7 @@ const TONES = {
 }
 
 export default function WaitlistWidget({ publicPath, page = null, buttonLabel, successMessage, consentLabel, brandName = '', tone = 'dark' }) {
+  const turnstile = useTurnstile()
   const t = TONES[tone] || TONES.dark
   const [form, setForm] = useState({ first_name: '', email: '', phone: '', consent: false })
   const [status, setStatus] = useState('idle') // idle | submitting | done | error
@@ -67,7 +69,7 @@ export default function WaitlistWidget({ publicPath, page = null, buttonLabel, s
     try {
       const r = await fetch('/api/public/leads', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await turnstile.headers()) },
         // VISIT-ORIGIN.1 — first page of the visit + referrer, if remembered.
         body: JSON.stringify({
           ...form,
