@@ -61,10 +61,19 @@ export async function loadRunsNeedingAttention(db, sequences, { now = new Date()
     if (r.exit_reason != null && !STOPPED_REASONS.includes(r.exit_reason)) continue
     const x = row(r.sequence_id)
     x.stopped += 1
-    if (!x.sample_error && r.last_error) x.sample_error = String(r.last_error).slice(0, 160)
+    if (!x.sample_error && r.last_error) x.sample_error = maskEmails(String(r.last_error)).slice(0, 160)
   }
   const rows = [...by.values()]
     .filter((r) => r.overdue > 0 || r.stopped > 0)
     .sort((a, b) => (b.overdue - a.overdue) || (b.stopped - a.stopped))
   return { ok: true, rows }
+}
+
+// STUCKMASK.1 — Postmark's error text names the recipient ("You tried to send
+// to recipient(s) that have been marked as inactive. Found inactive addresses:
+// someone@example.com."). The card is a list-wide summary, not a contact page,
+// so the address is replaced; the automation's Performance tab shows who.
+const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi
+export function maskEmails(text) {
+  return text.replace(EMAIL_RE, '[email hidden]')
 }

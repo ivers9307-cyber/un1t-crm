@@ -61,3 +61,12 @@ describe('loadRunsNeedingAttention (STUCKRUNS.1)', () => {
     expect(await loadRunsNeedingAttention(db, SEQS, { now: NOW })).toEqual({ ok: false, rows: [] })
   })
 })
+
+describe('maskEmails (STUCKMASK.1)', () => {
+  it('hides every address in a Postmark error and keeps the rest', async () => {
+    const { maskEmails } = await import('./runs-needing-attention.js')
+    expect(maskEmails('Found inactive addresses: a.b+x@example.com, C@Mail.IE.'))
+      .toBe('Found inactive addresses: [email hidden], [email hidden].')
+    expect(maskEmails('boom')).toBe('boom')
+  })
+})
