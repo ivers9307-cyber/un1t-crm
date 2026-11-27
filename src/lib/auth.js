@@ -4,6 +4,7 @@ import { createServerClient as createSSRClient } from '@supabase/ssr'
 import { cookies, headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { isApiKeyToken } from './api-keys'
+import { jwtClientId } from './oauth-token-edge.js'
 import {
   hasPermission, hasPermissionForLocation, hasPermissionAtAnyLocation,
   hasMobilePermissionForLocation, hasMobilePermissionAtAnyLocation,
@@ -247,7 +248,15 @@ export async function createAuthClient() {
 // return the corresponding auth user. Used by getCurrentUser() to support
 // the iOS app's Authorization: Bearer <jwt> header without setting cookies.
 // Returns null on any failure (malformed, expired, network blip).
-async function getUserFromBearer() {
+// MCPBEARER.1 — an OAuth-issued token (a Bearer JWT whose payload carries
+// `client_id`, minted by Supabase's OAuth server for a connector such as
+// Claude) opens /api/mcp ONLY. src/proxy.js refuses it on every other /api
+// path, but a route the proxy leaves public that calls getCurrentUser() used
+// to accept it here, letting a connector client act as the person outside the
+// MCP server. So the bearer path refuses one unless the caller is the MCP door
+// (getCurrentUserForMcp below). Refusing is the only use of the unverified
+// claim: a forged `client_id` can only make this stricter, never let anyone in.
+async function getUserFromBearer({ allowOAuthToken = false } = {}) {
   let auth = ''
   try {
     auth = (await headers()).get('authorization') || ''
@@ -262,6 +271,7 @@ async function getUserFromBearer() {
   // user — skip the doomed auth.getUser() round-trip; routes resolve
   // them via authenticateApiKey()/requireApiKeyOrManager() instead.
   if (isApiKeyToken(token)) return null
+  if (!allowOAuthToken && jwtClientId(token)) return null
   try {
     const sb = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -327,7 +337,21 @@ async function getUserFromStudioSession(db) {
 // now share the same Promise instead of each running the auth lookup
 // from scratch. On a typical page that meant 2-3x the same 3-5 query
 // roundtrip; now it's once per request.
-export const getCurrentUser = cache(async function getCurrentUser() {
+export const getCurrentUser = cache(function getCurrentUser() {
+  return resolveCurrentUser({ allowOAuthToken: false })
+})
+
+/**
+ * MCPBEARER.1 — getCurrentUser() for the staff MCP server's door
+ * (`verifyMcpToken` in src/lib/mcp/auth.js) and nothing else: the one caller
+ * that may resolve the person from an OAuth-issued Bearer token.
+ * `tests/oauth-token-reach-guard.test.js` fails any other importer.
+ */
+export const getCurrentUserForMcp = cache(function getCurrentUserForMcp() {
+  return resolveCurrentUser({ allowOAuthToken: true })
+})
+
+async function resolveCurrentUser({ allowOAuthToken }) {
   // Try Bearer JWT first (mobile). If absent or invalid, fall back to
   // the cookie-based session (web). If that's also absent, try the
   // studio_session cookie (Mac shell / paired iPad).
@@ -335,7 +359,7 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // The service-role client is built lazily on demand so unauthenticated
   // requests (e.g. Next prerendering /_not-found at build time, when
   // env vars may not be present) don't try to construct one.
-  let user = await getUserFromBearer()
+  let user = await getUserFromBearer({ allowOAuthToken })
   if (!user) {
     const supabase = await createAuthClient()
     const result = await supabase.auth.getUser()
@@ -787,7 +811,7 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     // ENFORCEMENT is in src/proxy.js, not here.
     supportSession,
   }
-})
+}
 
 /**
  * Returns an array of the user's assigned location IDs. Defensive against

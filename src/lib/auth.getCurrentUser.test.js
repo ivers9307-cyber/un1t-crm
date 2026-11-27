@@ -53,7 +53,7 @@ vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
 // PROFILESPREAD.1 — auth.js logs a failed profile read.
 vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
-import { getCurrentUser, getOwnerOrganizationIds, userAtLocation } from './auth.js'
+import { getCurrentUser, getCurrentUserForMcp, getOwnerOrganizationIds, userAtLocation } from './auth.js'
 import { createClient } from '@supabase/supabase-js'
 import { USER_LOCATION_COLUMNS } from './location-secrets.js'
 import { PROFILE_AUTH_SELECT, USER_PROFILE_COLUMNS } from './user-profile.js'
@@ -914,5 +914,49 @@ describe('userAtLocation (APPROVALSQ.6)', () => {
     expect(JSON.stringify(user)).toBe(before)
     expect(user.activeLocation.id).toBe('loc-a1')
     expect(queries.length).toBe(queriesBefore)
+  })
+})
+
+// MCPBEARER.1 — an OAuth-issued token (a Bearer JWT carrying `client_id`)
+// opens /api/mcp ONLY. The proxy refused it everywhere else, but
+// getCurrentUser() accepted it, so a route the proxy leaves public that calls
+// getCurrentUser() would have let a connector client act as the person. Now
+// getCurrentUser() never accepts one; only getCurrentUserForMcp() does.
+describe('getCurrentUser — an OAuth-issued token (MCPBEARER.1)', () => {
+  const person = { id: 'coach-3', role: 'staff', full_name: 'Agent User', email: 'agent@example.test', employment_type: 'fte', active: true }
+  const scenario = { profile: person, links: [link({ loc: LOC_A1, role: 'staff', is_default: true })], orgLinks: [], orgs: [ORG_A] }
+  const b64url = (o) => Buffer.from(JSON.stringify(o)).toString('base64').replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const oauthJwt = `${b64url({ alg: 'HS256' })}.${b64url({ sub: person.id, client_id: 'claude-connector' })}.sig`
+
+  function setupBearer(token, { cookieUser = null } = {}) {
+    const { db, queries } = makeDb(respondFor(scenario))
+    const getUser = vi.fn(async () => ({ data: { user: { id: person.id, email: person.email } } }))
+    createClient.mockReturnValue({ ...db, auth: { getUser } })
+    authUser = cookieUser
+    headerMap.set('authorization', `Bearer ${token}`)
+    return { getUser, queries }
+  }
+
+  it('control: a plain mobile Bearer JWT still resolves', async () => {
+    setupBearer('a.supabase.jwt')
+    expect((await getCurrentUser())?.id).toBe('coach-3')
+  })
+
+  it('refuses an OAuth token: null, and the token is never sent to Supabase Auth', async () => {
+    const { getUser } = setupBearer(oauthJwt)
+    expect(await getCurrentUser()).toBeNull()
+    expect(getUser).not.toHaveBeenCalledWith(oauthJwt)
+  })
+
+  it('an OAuth token beside a real web cookie session resolves the cookie person, never the token', async () => {
+    const { getUser } = setupBearer(oauthJwt, { cookieUser: { id: person.id, email: person.email } })
+    expect((await getCurrentUser())?.id).toBe('coach-3')
+    expect(getUser).not.toHaveBeenCalledWith(oauthJwt)
+  })
+
+  it('getCurrentUserForMcp() accepts the OAuth token (the MCP door only)', async () => {
+    const { getUser } = setupBearer(oauthJwt)
+    expect((await getCurrentUserForMcp())?.id).toBe('coach-3')
+    expect(getUser).toHaveBeenCalledWith(oauthJwt)
   })
 })

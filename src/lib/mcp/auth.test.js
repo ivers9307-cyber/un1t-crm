@@ -4,7 +4,7 @@ const logError = vi.fn()
 vi.mock('@/lib/log', () => ({ logError: (...a) => logError(...a) }))
 // auth.js defaults to the real getCurrentUser and createServerClient; every
 // test injects both, so neither (next/headers, supabase) may ever load.
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(() => { throw new Error('real getCurrentUser called') }) }))
+vi.mock('@/lib/auth', () => ({ getCurrentUserForMcp: vi.fn(() => { throw new Error('real getCurrentUserForMcp called') }) }))
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => { throw new Error('real db created') }) }))
 
