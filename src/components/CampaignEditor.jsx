@@ -192,7 +192,17 @@ export default function CampaignEditor({ campaign, locationId, locationTimeZone 
     }
     measure()
     window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
+    // CANVASFIT.1 — banners above the canvas (quiet hours, warnings) load
+    // after the first measure and push it down, so it overshot the window by
+    // ~122px. Re-measure whenever the page's height changes. Only the canvas
+    // TOP feeds the height, so the canvas resizing itself converges: the same
+    // top gives the same value and React skips the update.
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null
+    ro?.observe(document.body)
+    return () => {
+      window.removeEventListener('resize', measure)
+      ro?.disconnect()
+    }
   }, [tab, editorMode])
 
   const { ref: unlayerRef } = useUnlayerEditor({
