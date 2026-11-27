@@ -70,6 +70,20 @@ describe('refuseUnlessHuman (TURNSTILE.1)', () => {
     expect(await refuseUnlessHuman(req('tok'), 'leads', { env: ENFORCE, fetchImpl: answer({}, { ok: false, status: 503 }) })).toBeNull()
   })
 
+  it('a caller cannot fake an outage: 4xx, unreadable 2xx and malformed tokens fail', async () => {
+    expect((await refuseUnlessHuman(req('tok'), 'leads', { env: ENFORCE, fetchImpl: answer({}, { ok: false, status: 400 }) })).status).toBe(400)
+    const garbage = vi.fn(async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('x') } }))
+    expect((await refuseUnlessHuman(req('tok'), 'leads', { env: ENFORCE, fetchImpl: garbage })).status).toBe(400)
+    const fetchImpl = vi.fn()
+    expect((await refuseUnlessHuman(req('x'.repeat(2049)), 'leads', { env: ENFORCE, fetchImpl })).status).toBe(400)
+    expect((await refuseUnlessHuman(req('bad token!'), 'leads', { env: ENFORCE, fetchImpl })).status).toBe(400)
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('a 429 from Cloudflare is an outage and lets through', async () => {
+    expect(await refuseUnlessHuman(req('tok'), 'leads', { env: ENFORCE, fetchImpl: answer({}, { ok: false, status: 429 }) })).toBeNull()
+  })
+
   it('a bad SECRET is our mistake: let through, never refuse', async () => {
     const res = await refuseUnlessHuman(req('tok'), 'leads', { env: ENFORCE, fetchImpl: answer({ success: false, 'error-codes': ['invalid-input-secret'] }) })
     expect(res).toBeNull()

@@ -20,8 +20,9 @@
 // 'enforce'. A TURNSTILE_MODE that is neither value is treated as monitor and
 // logged as an error: refusing real people on a typo is the worse failure.
 //
-// FAIL OPEN on Cloudflare itself. If siteverify is unreachable, slow or
-// answers garbage, the request goes through and is logged. Never trade a rare
+// FAIL OPEN on Cloudflare itself. If siteverify is unreachable, times out or
+// answers 5xx/429, the request goes through and is logged. A malformed token,
+// a 4xx or an unreadable 2xx is a FAIL, so a caller cannot fake an outage. Never trade a rare
 // bot for a certain lost customer (CLAUDE.md, supabase-traps): a sign-up
 // turned away by our own outage is gone, a bot row can be cleaned up.
 
@@ -46,6 +47,12 @@ export function turnstileConfig(env = process.env) {
  */
 export async function verifyTurnstileToken(token, { secret, ip = null, fetchImpl = fetch } = {}) {
   if (!token) return { verdict: 'fail', codes: ['missing-input-response'] }
+  // Cloudflare's tokens are at most 2048 characters. Refuse anything else
+  // here, so a caller cannot provoke an error answer that would read as an
+  // outage and slip through the fail-open below.
+  if (typeof token !== 'string' || token.length > 2048 || !/^[A-Za-z0-9._-]+$/.test(token)) {
+    return { verdict: 'fail', codes: ['malformed-token'] }
+  }
   try {
     const form = new URLSearchParams({ secret, response: token })
     if (ip) form.set('remoteip', ip)
@@ -54,8 +61,18 @@ export async function verifyTurnstileToken(token, { secret, ip = null, fetchImpl
       body: form,
       signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
     })
-    if (!res.ok) return { verdict: 'unavailable', codes: [`http-${res.status}`] }
-    const data = await res.json()
+    // Only a real outage fails open: 5xx or 429. Any other error status is
+    // about the request the caller shaped, so it is a fail.
+    if (!res.ok) {
+      const outage = res.status >= 500 || res.status === 429
+      return { verdict: outage ? 'unavailable' : 'fail', codes: [`http-${res.status}`] }
+    }
+    let data
+    try {
+      data = await res.json()
+    } catch {
+      return { verdict: 'fail', codes: ['unparseable-response'] }
+    }
     if (data?.success === true) return { verdict: 'pass' }
     const codes = Array.isArray(data?.['error-codes']) ? data['error-codes'] : []
     // A bad SECRET is our misconfiguration, not a bot: never refuse on it.
@@ -64,6 +81,7 @@ export async function verifyTurnstileToken(token, { secret, ip = null, fetchImpl
     }
     return { verdict: 'fail', codes }
   } catch (err) {
+    // Network error or timeout reaching Cloudflare: an outage.
     return { verdict: 'unavailable', codes: [err?.name || 'error'] }
   }
 }
